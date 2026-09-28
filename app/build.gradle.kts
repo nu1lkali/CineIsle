@@ -24,7 +24,10 @@ android {
       ?: if (project.hasProperty("arm64Only")) "arm64-v8a" else null
 
   defaultConfig {
-    applicationId = "app.marlboroadvance.mpvex"
+    // 应用标识（安装包名）：不再沿用上游的 app.marlboroadvance.mpvex，
+    // 改为项目自身的 app.cineisle.player。namespace 保持不动 ——
+    // 它只决定 R / BuildConfig 的生成包名，改名会牵动全量源码，收益为零。
+    applicationId = "app.cineisle.player"
     minSdk = 26
     targetSdk = 36
     versionCode = 131

@@ -139,6 +139,8 @@ fun EmbyPosterCard(
  *
  * @param progress 播放进度 0f~1f
  * @param remainingText 左下角剩余时长角标文案（如「剩余 12分30秒」），null 时不显示
+ * @param showPlayButton 是否在封面正中显示播放按钮。首页「继续观看」单击是进详情页而不是
+ *   直接播放，中间那个三角形会让人误以为「点了就播」，所以关闭；历史页仍是点击即播，保留。
  */
 @Composable
 fun EmbyWideCard(
@@ -152,6 +154,7 @@ fun EmbyWideCard(
   onLongClick: (() -> Unit)? = null,
   fallbackImageUrl: String? = null,
   remainingText: String? = null,
+  showPlayButton: Boolean = true,
 ) {
   Column(modifier = modifier.width(WIDE_WIDTH)) {
     Card(
@@ -177,21 +180,24 @@ fun EmbyWideCard(
           contentScale = ContentScale.Crop,
         )
 
-        // 居中播放按钮
-        Surface(
-          modifier = Modifier
-            .align(Alignment.Center)
-            .size(36.dp),
-          shape = RoundedCornerShape(50),
-          color = Color.Black.copy(alpha = 0.45f),
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.Default.PlayArrow,
-              contentDescription = null,
-              tint = Color.White,
-              modifier = Modifier.size(22.dp),
-            )
+        // 居中播放按钮：首页「继续观看」不需要（单击进详情页，三角按钮会误导），
+        // 由 showPlayButton 关闭，避免中央那个图标压住剧照主体
+        if (showPlayButton) {
+          Surface(
+            modifier = Modifier
+              .align(Alignment.Center)
+              .size(36.dp),
+            shape = RoundedCornerShape(50),
+            color = Color.Black.copy(alpha = 0.45f),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Default.PlayArrow,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(22.dp),
+              )
+            }
           }
         }
 
@@ -476,56 +482,42 @@ fun EmbyLibraryCard(
         contentScale = ContentScale.Crop,
         placeholder = icon,
       )
-      // 底部深色遮罩：库名/数量整块落在遮罩里，而不是浮在封面上。
-      // 封面图深浅不可控（浅色海报上白字几乎看不见），所以遮罩从卡片 35% 处开始渐入、
-      // 到文字区域已经是接近不透明的黑，标题一定在「深色遮罩里面」。
+      // 库名不再靠「整片渐变遮罩」压暗，而是直接给文字垫一块实心底色
+      // —— 跟「继续观看」卡片左下角那个「剩余 XX分XX秒」角标同一套做法：
+      // 深蓝底 + 圆角 + 半透明，只盖住文字那一小块。
       //
-      // 之前用「整卡渐变 + BottomStart 文字块」，文字块顶部其实还落在半透明区
-      // （卡片只有 90dp 高，两行文字加内边距占了近一半），标题看着浮在遮罩上沿。
-      // 现在改成固定高度的底部遮罩带，文字块在带内**垂直居中** —— 标题落在遮罩正中，
-      // 位置也比原来更低。
+      // 好处：遮罩面积从「半张卡片」降到「一小条」，封面主体完整露出来；
+      // 文字一定落在实色底上，不会出现「上半截压在渐变半透明区」的问题。
       Box(
-        modifier = Modifier
-          .align(Alignment.BottomCenter)
-          .fillMaxWidth()
-          .height(LIBRARY_MASK_BAND_HEIGHT)
-          .background(
-            androidx.compose.ui.graphics.Brush.verticalGradient(
-              colorStops = arrayOf(
-                0.00f to Color.Transparent,
-                0.45f to Color.Black.copy(alpha = 0.72f),
-                1.00f to Color.Black.copy(alpha = 0.94f),
-              ),
-            ),
-          ),
-      )
-      Column(
         modifier = Modifier
           .align(Alignment.BottomStart)
           .fillMaxWidth()
-          .height(LIBRARY_MASK_BAND_HEIGHT)
-          .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.Center,
+          .padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
       ) {
-        Text(
-          text = name,
-          style = MaterialTheme.typography.titleMedium.copy(
-            // 遮罩再厚也可能压不住极亮的封面边缘，补一点描边阴影兜底
-            shadow = androidx.compose.ui.graphics.Shadow(
-              color = Color.Black.copy(alpha = 0.8f),
-              blurRadius = 6f,
-            ),
-          ),
-          color = Color.White,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        if (itemCount != null && itemCount > 0) {
-          Text(
-            text = "$itemCount 项",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color.White.copy(alpha = 0.85f),
-          )
+        Surface(
+          shape = RoundedCornerShape(6.dp),
+          color = LIBRARY_TITLE_BG,
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = name,
+              style = MaterialTheme.typography.titleSmall,
+              color = Color.White,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+            if (itemCount != null && itemCount > 0) {
+              Text(
+                text = "  $itemCount 项",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.8f),
+                maxLines = 1,
+              )
+            }
+          }
         }
       }
     }
@@ -583,4 +575,10 @@ private val LIBRARY_CARD_WIDTH = 150.dp
 private val LIBRARY_CARD_HEIGHT = 90.dp
 
 /** 首页媒体库卡片底部遮罩带的高度（标题块在带内垂直居中）。 */
-private val LIBRARY_MASK_BAND_HEIGHT = 48.dp
+/**
+ * 媒体库卡片上「库名」的垫底色。
+ *
+ * 与「继续观看」卡片左下角那个剩余时长角标同色（深蓝），保持同一套视觉语言；
+ * 半透明是为了让底下的封面还能透出一点点，不至于像贴了张死色纸。
+ */
+private val LIBRARY_TITLE_BG = Color(0xFF0B2E5B).copy(alpha = 0.85f)

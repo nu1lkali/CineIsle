@@ -395,6 +395,9 @@ class PlayerActivity :
     playlistId = intent.getIntExtra("playlist_id", -1).takeIf { it != -1 }
     playlistIndex = intent.getIntExtra("playlist_index", 0)
 
+    // Emby「从头播放」：本次启动的第一个视频不要从本地续播记录恢复进度
+    playFromStartOnce = intent.getBooleanExtra("play_from_start", false)
+
     // Load playlist from intent extras first (fast path - backward compatibility)
     playlist = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
       intent.getParcelableArrayListExtra("playlist", Uri::class.java) ?: emptyList()
@@ -2257,12 +2260,16 @@ class PlayerActivity :
    * @return true if saved state was found and applied, false otherwise
    */
   private suspend fun loadVideoPlaybackState(mediaTitle: String): Boolean {
+    // 「从头播放」是一次性标记：这里读出后立刻清掉，避免影响后面的剧集
+    val playFromStart = playFromStartOnce
+    playFromStartOnce = false
+
     if (mediaIdentifier.isBlank()) return false
 
     return runCatching {
       val state = playbackStateRepository.getVideoDataByTitle(mediaIdentifier)
 
-      applyPlaybackState(state)
+      applyPlaybackState(state, playFromStart)
       applyDefaultSettings(state)
 
       state != null
@@ -2278,8 +2285,12 @@ class PlayerActivity :
    * Also restores saved time position if enabled.
    *
    * @param state The saved playback state entity
+   * @param playFromStart true 表示用户显式点了「从头播放」，本地续播位置一律不恢复
    */
-  private fun applyPlaybackState(state: PlaybackStateEntity?) {
+  private fun applyPlaybackState(
+    state: PlaybackStateEntity?,
+    playFromStart: Boolean = false,
+  ) {
     if (state == null) return
 
     val subDelay = state.subDelay / DELAY_DIVISOR
@@ -2326,8 +2337,16 @@ class PlayerActivity :
     MPVLib.setPropertyDouble("video-zoom", state.videoZoom.toDouble())
     viewModel.setVideoZoom(state.videoZoom)
 
-    if (playerPreferences.savePositionOnQuit.get() && state.lastPosition != 0) {
-      MPVLib.setPropertyInt("time-pos", state.lastPosition)
+    when {
+      // 显式「从头播放」：本地续播记录一律不生效（详情页的「从头播放」按钮）
+      playFromStart -> {
+        MPVLib.setPropertyInt("time-pos", 0)
+        Log.d(TAG, "play_from_start: ignore saved position (${state.lastPosition}s), seek to 0")
+      }
+
+      playerPreferences.savePositionOnQuit.get() && state.lastPosition != 0 -> {
+        MPVLib.setPropertyInt("time-pos", state.lastPosition)
+      }
     }
   }
 
@@ -2481,6 +2500,9 @@ class PlayerActivity :
 
     // Update the intent first so getFileName uses the new intent data
     setIntent(intent)
+
+    // 每个新 intent 都重新判定「从头播放」标记（不跨 intent 存活）
+    playFromStartOnce = intent.getBooleanExtra("play_from_start", false)
 
     // Check if this intent has playlist information
     val hasPlaylistExtras = intent.hasExtra("playlist_id") ||

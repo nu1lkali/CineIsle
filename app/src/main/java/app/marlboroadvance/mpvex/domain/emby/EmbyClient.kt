@@ -741,6 +741,17 @@ object EmbyClient {
   }
 
   /**
+   * 构造「下载原始文件」URL。
+   *
+   * Emby 的 `/Items/{id}/Download` 会把服务器上的原文件以附件形式吐出（不转码），
+   * 是官方客户端「下载」用的接口；它支持 Range 请求，所以能断点续传。
+   */
+  fun itemDownloadUrl(server: EmbyServer, itemId: String): String {
+    val q = if (server.apiToken.isNotEmpty()) "?api_key=${server.apiToken}" else ""
+    return "${server.hostUrl}/emby/Items/$itemId/Download$q"
+  }
+
+  /**
    * 字幕下载 URL（用于把外挂字幕交给 mpv 用 sub-file 加载）。
    * Emby 字幕 API：GET /Videos/{itemId}/{mediaSourceId}/Subtitles/{index}/Stream.srt
    */

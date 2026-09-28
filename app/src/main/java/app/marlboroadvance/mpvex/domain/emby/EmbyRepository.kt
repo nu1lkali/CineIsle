@@ -372,6 +372,10 @@ class EmbyRepository(
     mediaSourceId: String? = null,
   ): String = EmbyClient.videoStreamUrl(server, itemId, static, mediaSourceId)
 
+  /** 离线下载原始文件的 URL（支持 Range，可断点续传）。 */
+  fun itemDownloadUrl(server: EmbyServer, itemId: String): String =
+    EmbyClient.itemDownloadUrl(server, itemId)
+
   fun subtitleUrl(
     server: EmbyServer,
     itemId: String,

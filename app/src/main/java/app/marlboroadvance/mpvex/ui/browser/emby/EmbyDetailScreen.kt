@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -62,6 +63,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.domain.emby.EmbyDownloadStatus
+import app.marlboroadvance.mpvex.domain.emby.EmbyEnqueueResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyMediaStream
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
@@ -99,6 +102,12 @@ data class EmbyDetailScreen(
     )
     val server by viewModel.currentServer.collectAsState()
     val scope = rememberCoroutineScope()
+
+    // 下载状态：用来把详情页的下载按钮显示成「下载 / 下载中 12% / 已下载」
+    val downloadViewModel: EmbyDownloadViewModel = viewModel(
+      factory = EmbyDownloadViewModel.factory(context.applicationContext as Application),
+    )
+    val downloadTasks by downloadViewModel.tasks.collectAsState()
 
     var item by remember { mutableStateOf<EmbyItem?>(null) }
     var isLoading by remember { mutableStateOf(true) }
@@ -168,6 +177,31 @@ data class EmbyDetailScreen(
             },
             onBack = { backStack.removeLastOrNull() },
             onDelete = { showDeleteConfirm = true },
+            onDownload = {
+              when (downloadViewModel.enqueue(currentServer, current)) {
+                EmbyEnqueueResult.STARTED ->
+                  Toast.makeText(context, "已加入下载队列", Toast.LENGTH_SHORT).show()
+
+                EmbyEnqueueResult.EXISTS ->
+                  Toast.makeText(context, "该媒体已在下载列表中", Toast.LENGTH_SHORT).show()
+
+                EmbyEnqueueResult.COMPLETED ->
+                  Toast.makeText(context, "该媒体已经下载过了", Toast.LENGTH_SHORT).show()
+
+                EmbyEnqueueResult.INVALID ->
+                  Toast.makeText(context, "该媒体不支持下载", Toast.LENGTH_SHORT).show()
+              }
+            },
+            downloadLabel = downloadTasks.firstOrNull { it.itemId == current.Id }?.let { task ->
+              when (task.status) {
+                EmbyDownloadStatus.COMPLETED -> "已下载"
+                EmbyDownloadStatus.PAUSED -> "已暂停"
+                EmbyDownloadStatus.FAILED -> "下载失败"
+                EmbyDownloadStatus.QUEUED -> "排队中"
+                EmbyDownloadStatus.RUNNING ->
+                  "下载中 ${((task.progressFraction ?: 0f) * 100).toInt()}%"
+              }
+            },
             moreMenuExpanded = showMoreMenu,
             onMoreMenuChange = { showMoreMenu = it },
           )
@@ -205,6 +239,8 @@ private fun DetailBody(
   onTogglePlayed: (played: Boolean) -> Unit,
   onBack: () -> Unit,
   onDelete: () -> Unit,
+  onDownload: () -> Unit,
+  downloadLabel: String?,
   moreMenuExpanded: Boolean,
   onMoreMenuChange: (Boolean) -> Unit,
 ) {
@@ -223,9 +259,15 @@ private fun DetailBody(
         BackdropHeader(item = item, backdropUrl = backdropUrl, posterUrl = posterUrl)
       }
 
-      // ── 播放 / 删除 ──
+      // ── 播放 / 删除 / 下载 ──
       item {
-        PlaySection(item = item, onPlay = onPlay, onDelete = onDelete)
+        PlaySection(
+          item = item,
+          onPlay = onPlay,
+          onDelete = onDelete,
+          onDownload = onDownload,
+          downloadLabel = downloadLabel,
+        )
       }
 
       // ── 类型标签 ──
@@ -504,6 +546,8 @@ private fun PlaySection(
   item: EmbyItem,
   onPlay: (resumeSeconds: Long) -> Unit,
   onDelete: () -> Unit,
+  onDownload: () -> Unit,
+  downloadLabel: String?,
 ) {
   val positionTicks = item.UserData?.PlaybackPositionTicks ?: 0L
   val runTimeTicks = item.RunTimeTicks ?: 0L
@@ -570,8 +614,14 @@ private fun PlaySection(
       )
     }
 
-    if (hasResume) {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    // 次要操作：从头播放 / 继续上次 / 下载。
+    // 三个按钮在窄屏上会挤，所以整行可横向滚动，避免被裁掉。
+    Row(
+      modifier = Modifier.horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      if (hasResume) {
         FilledTonalButton(onClick = { onPlay(0) }) {
           Text("从头播放")
         }
@@ -579,8 +629,42 @@ private fun PlaySection(
           Text("继续上次")
         }
       }
+      if (isDownloadable(item)) {
+        OutlinedButton(onClick = onDownload, enabled = downloadLabel == null) {
+          Icon(
+            imageVector = Icons.Default.Download,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(downloadLabel ?: "下载")
+        }
+      }
     }
   }
+}
+
+/**
+ * 能否下载。
+ *
+ * Series / Season / 文件夹这类条目本身没有视频文件（真正的内容在子条目上），
+ * 点下载只会拿到一个 404 或被服务器当成目录处理，所以直接不给按钮。
+ * 支持的类型里最常见的三类就是电影、剧集单集、以及家庭视频。
+ */
+private fun isDownloadable(item: EmbyItem): Boolean {
+  val type = item.Type ?: return false
+  return type !in setOf(
+    "Series",
+    "Season",
+    "BoxSet",
+    "Folder",
+    "CollectionFolder",
+    "PhotoAlbum",
+    "MusicAlbum",
+    "MusicArtist",
+    "Playlist",
+    "Photo",
+  )
 }
 
 // ════════════════════════════════════════════════════════════════════════

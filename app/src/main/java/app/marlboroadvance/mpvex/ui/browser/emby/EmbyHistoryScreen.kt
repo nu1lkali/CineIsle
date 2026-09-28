@@ -100,6 +100,8 @@ fun EmbyHistoryScreen() {
           IconButton(onClick = { scope.launch { load() } }) {
             Icon(Icons.Default.Refresh, contentDescription = "刷新")
           }
+          // 下载管理：有任务在跑时角标显示数量
+          EmbyDownloadEntryButton()
           // 与首页保持一致：Emby 图标进服务器维护，齿轮进 App 设置
           EmbyMaintainButton(onClick = { backStack.add(EmbyServerManageScreen) })
           IconButton(onClick = { backStack.add(app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen) }) {

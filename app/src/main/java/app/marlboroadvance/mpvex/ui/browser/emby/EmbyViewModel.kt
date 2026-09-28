@@ -323,7 +323,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       putExtra("launch_source", "emby")
       putExtra("title", displayTitle(item))
       putExtra("filename", item.Name ?: displayTitle(item))
-      if (resumeSeconds > 0) putExtra("position", (resumeSeconds * 1000).toInt())
+      if (resumeSeconds > 0) {
+        putExtra("position", (resumeSeconds * 1000).toInt())
+      } else {
+        // 显式「从头播放」：告知播放页别再拿本地续播记录覆盖进度。
+        // 否则 savePositionOnQuit 开启时，applyPlaybackState 会把上次停下
+        // 的位置套回 time-pos，「从头播放」就变成了「继续播放」。
+        putExtra("play_from_start", true)
+      }
       // 供播放页把进度回传给 Emby 服务器
       putEmbyPlaybackExtras(server, listOf(itemId))
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -357,7 +364,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       putExtra("launch_source", "emby")
       putExtra("title", displayTitle(first))
       putExtra("filename", first.Name ?: displayTitle(first))
-      if (resumeSeconds > 0) putExtra("position", (resumeSeconds * 1000).toInt())
+      if (resumeSeconds > 0) {
+        putExtra("position", (resumeSeconds * 1000).toInt())
+      } else {
+        // 显式「从头播放」：告知播放页别再拿本地续播记录覆盖进度。
+        // 否则 savePositionOnQuit 开启时，applyPlaybackState 会把上次停下
+        // 的位置套回 time-pos，「从头播放」就变成了「继续播放」。
+        putExtra("play_from_start", true)
+      }
       putParcelableArrayListExtra("playlist", uris)
       putStringArrayListExtra("playlist_titles", titles)
       putExtra("playlist_index", 0)

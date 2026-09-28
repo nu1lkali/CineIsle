@@ -148,6 +148,8 @@ fun EmbyHomeScreen(
             )
           }
         }
+        // 下载管理：有任务在跑时角标显示数量
+        EmbyDownloadEntryButton()
         // Emby 维护：用官方 Emby 图标（品牌绿），与下方齿轮明确区分
         EmbyMaintainButton(onClick = onManageServers)
         // 设置：统一进 App 设置页（播放器 / 外观 / 解码等偏好都在这里）
@@ -222,6 +224,8 @@ fun EmbyHomeScreen(
                     fallbackImageUrl = viewModel.imageUrl(server!!, item, "Primary", 640),
                     progress = playbackProgress(item),
                     remainingText = remainingLabel(item),
+                    // 单击是进详情页而非直接播放，去掉居中的播放三角，避免误导
+                    showPlayButton = false,
                     isFavorite = item.UserData?.IsFavorite == true,
                     // 单击进入详情页，播放由详情页发起
                     onClick = { onOpenDetail(item) },

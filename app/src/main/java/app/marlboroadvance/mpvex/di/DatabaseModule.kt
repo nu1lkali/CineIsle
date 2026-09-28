@@ -535,6 +535,13 @@ val DatabaseModule =
       )
     }
 
+    // Emby 离线下载管理器（支持暂停/续传，落盘到公共 Download/CineIsle）
+    single {
+      app.marlboroadvance.mpvex.domain.emby.EmbyDownloadManager(
+        context = androidContext(),
+      )
+    }
+
     singleOf(::PlaybackStateRepositoryImpl).bind(PlaybackStateRepository::class)
 
     single<RecentlyPlayedRepository> {
