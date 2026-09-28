@@ -1,0 +1,116 @@
+# ═══════════════════════════════════════════════════════════════
+#  Gradle / Android 构建产物
+# ═══════════════════════════════════════════════════════════════
+.gradle
+.kotlin
+build/
+/captures
+.externalNativeBuild
+.cxx
+/gradle/gradle-daemon-jvm.properties
+
+# 打包产物与中间件（全部可重新生成，没必要进仓库）
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+output-metadata.json
+release/
+app/release/
+# ABI 拆分后的 flavor 输出目录
+/app/standard/
+/app/fdroid/
+/app/playstore/
+
+# ═══════════════════════════════════════════════════════════════
+#  本地配置与签名（含绝对路径 / 私钥，严禁提交）
+# ═══════════════════════════════════════════════════════════════
+local.properties
+keystore.properties
+signing.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+release-keystore*
+
+# ═══════════════════════════════════════════════════════════════
+#  IDE / 编辑器
+# ═══════════════════════════════════════════════════════════════
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+# 例外：代码风格配置是团队共享的，需要提交
+!.idea/codeStyles/
+!.idea/codeStyles/**
+
+# ═══════════════════════════════════════════════════════════════
+#  操作系统
+# ═══════════════════════════════════════════════════════════════
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+*#
+.#*
+.fuse_hidden*
+$RECYCLE.BIN/
+
+# ═══════════════════════════════════════════════════════════════
+#  日志 / 崩溃日志 / 临时文件
+#  调试期的设备日志常常几百 KB 到几 MB，一律不入库
+# ═══════════════════════════════════════════════════════════════
+*.log
+*.hprof
+logcat*.txt
+mpvex_logs*.txt
+crash-reports/
+build*.txt
+seg*.txt
+
+# ═══════════════════════════════════════════════════════════════
+#  通用临时 / 备份文件
+# ═══════════════════════════════════════════════════════════════
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.swp
+*.swo
+
+# ═══════════════════════════════════════════════════════════════
+#  Python（仓库里有若干本地辅助脚本）
+# ═══════════════════════════════════════════════════════════════
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ═══════════════════════════════════════════════════════════════
+#  ⚠️ 以下内容【必须提交】，故不写忽略规则 —— 改动前请先读理由
+# ═══════════════════════════════════════════════════════════════
+#
+#  app/src/main/jniLibs/
+#      mpv / ffmpeg / libplayer 等原生库（4 个 ABI，共 40 个 .so，约 151MB）。
+#      这些库【无法从 Maven 获取】：依赖坐标
+#        io.github.marlboro-advance:mpv-android:1.0.0
+#      对应的 AAR 只有 0.2MB，内容仅为 classes.jar（MPVLib API）+ cacert.pem，
+#      里面一个 .so 都没有。原生库只能随仓库分发。
+#      ⇒ 一旦忽略该目录，任何新克隆的仓库打包出的 APK 都会在运行时报
+#        UnsatisfiedLinkError: dlopen failed: library "libavcodec.so"/"libmpv.so"
+#        not found，且问题只在真机运行时才暴露，非常难排查。
+#      （libmediainfo.so / libzen.so 例外：它们由 mediainfo-android 的 AAR 提供，
+#        jniLibs 里若同时存在会以 jniLibs 优先，两者保持一致即可。）
+#
+#  .github/workflows/、fastlane/、website/、docs/
+#      发布与文档相关，属于仓库的一部分。
+#
+#  如需缩小仓库体积（可选优化）：
+#      x86 / x86_64 两套库只服务于模拟器，约占 55MB。若只面向真机分发，
+#      可删掉 jniLibs/x86、jniLibs/x86_64 并同步收紧 app/build.gradle.kts
+#      里 splits.abi 的 include 列表；或在需要全 ABI 时改用 Git LFS 托管。
+# ═══════════════════════════════════════════════════════════════
