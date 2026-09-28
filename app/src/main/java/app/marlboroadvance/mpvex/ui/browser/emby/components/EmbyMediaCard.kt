@@ -574,7 +574,6 @@ private const val WIDE_RATIO = 16f / 9f
 private val LIBRARY_CARD_WIDTH = 150.dp
 private val LIBRARY_CARD_HEIGHT = 90.dp
 
-/** 首页媒体库卡片底部遮罩带的高度（标题块在带内垂直居中）。 */
 /**
  * 媒体库卡片上「库名」的垫底色。
  *

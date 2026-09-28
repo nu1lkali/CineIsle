@@ -1,5 +1,7 @@
 import com.android.build.api.variant.FilterConfiguration
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.io.File
+import java.util.Properties
 
 plugins {
   alias(libs.plugins.android.application)
@@ -90,8 +92,43 @@ android {
     }
   }
 
+  // ── Release 签名 ──
+  // 私钥路径与口令统一放在仓库根的 keystore.properties（.gitignore 已屏蔽），
+  // 避免把口令硬编码进构建脚本。该文件缺失时（例如 CI 只跑 assembleDebug / lint）
+  // 不抛异常，仅表现为 release 未签名，不让「有没有签名」变成「能不能构建」的硬依赖。
+  val keystorePropsFile = rootProject.file("keystore.properties")
+  val keystoreProps = Properties()
+  if (keystorePropsFile.exists()) {
+    keystorePropsFile.inputStream().use { keystoreProps.load(it) }
+  }
+  val releaseKeystoreFile: File? =
+    keystoreProps.getProperty("storeFile")?.trim()?.takeIf { it.isNotEmpty() }?.let { rootProject.file(it) }
+  val hasReleaseKeystore = releaseKeystoreFile?.exists() == true
+
+  if (!hasReleaseKeystore) {
+    logger.lifecycle(
+      "[CineIsle] 未找到 keystore.properties 或 jks 文件，release 变体将产出未签名 APK。"
+    )
+  }
+
+  signingConfigs {
+    if (hasReleaseKeystore) {
+      create("release") {
+        storeFile = releaseKeystoreFile
+        storePassword = keystoreProps.getProperty("storePassword")
+        keyAlias = keystoreProps.getProperty("keyAlias")
+        keyPassword = keystoreProps.getProperty("keyPassword")
+        // minSdk 26 → V2 已全线支持，无需 V1（省掉 META-INF 里的冗余签名文件）。
+        enableV1Signing = false
+        enableV2Signing = true
+        enableV3Signing = true
+      }
+    }
+  }
+
   buildTypes {
     named("release") {
+      signingConfig = signingConfigs.findByName("release")
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(

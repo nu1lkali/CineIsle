@@ -170,10 +170,8 @@ fun PlayerSheets(
     }
 
     Sheets.More -> {
-      // 「更多」面板里的播放开关：循环模式来自运行时状态（与底部那枚循环按钮同源），
-      // 随机播放同样走运行时状态；自动下一集 / 播完退出直接读写偏好。
-      val repeatMode by viewModel.repeatMode.composeCollectAsState()
-      val shuffleEnabled by viewModel.shuffleEnabled.composeCollectAsState()
+      // 「更多」面板里的播放开关只剩：自动下一集、播完退出（都直接读写偏好）。
+      // 循环 / 随机不在这里 —— 底部控件条上已有对应按钮，重复出现只会让两边状态对不上。
       MoreSheet(
         remainingTime = sleepTimerTimeRemaining,
         onStartTimer = onStartSleepTimer,
@@ -182,11 +180,6 @@ fun PlayerSheets(
         onAnime4KChanged = { },
         // 「快捷功能」宫格点一下直接切到对应面板（倍速 / 比例 / 缩放 / 逐帧 / 章节 / 音轨 / 字幕 / 解码器）
         onShowSheet = onShowSheet,
-        repeatMode = repeatMode,
-        hasPlaylist = viewModel.hasPlaylistSupport(),
-        onRepeatModeChange = viewModel::setRepeatMode,
-        shuffleEnabled = shuffleEnabled,
-        onToggleShuffle = viewModel::toggleShuffle,
       )
     }
 

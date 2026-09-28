@@ -29,8 +29,6 @@ import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.Camera
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.PowerSettingsNew
-import androidx.compose.material.icons.outlined.Repeat
-import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Subtitles
@@ -72,7 +70,6 @@ import app.marlboroadvance.mpvex.preferences.DecoderPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.components.PlayerSheet
-import app.marlboroadvance.mpvex.ui.player.RepeatMode
 import app.marlboroadvance.mpvex.ui.player.Sheets
 import app.marlboroadvance.mpvex.ui.theme.spacing
 import kotlinx.coroutines.Dispatchers
@@ -89,16 +86,6 @@ fun MoreSheet(
   onAnime4KChanged: () -> Unit = {},
   /** 用来从「更多」里直接打开其它面板/子页（快捷功能宫格） */
   onShowSheet: (Sheets) -> Unit = {},
-  /** 当前循环模式（开关的两态由它推导） */
-  repeatMode: RepeatMode = RepeatMode.OFF,
-  /** 是否有播放队列：决定「循环播放」打开时是循环队列还是单曲循环 */
-  hasPlaylist: Boolean = false,
-  /** 切换循环模式（经 ViewModel 落到运行时状态与偏好） */
-  onRepeatModeChange: (RepeatMode) -> Unit = {},
-  /** 随机播放是否开启 */
-  shuffleEnabled: Boolean = false,
-  /** 切换随机播放 */
-  onToggleShuffle: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val decoderPreferences = koinInject<DecoderPreferences>()
@@ -182,11 +169,10 @@ val scope = rememberCoroutineScope()
 
 
       // ── 播放 ──
-      // 三个「这一集放完之后干什么」的开关。以前只能在「设置 → 播放器」里改，
-      // 想临时换一下得退出播放页翻设置；放在「更多」里就能在播放页就地切。
-      // 循环播放是两态开关，映射到三态的 RepeatMode：
-      //   开 → 有队列就循环整个队列（ALL），单文件就单曲循环（ONE）；关 → OFF。
-      // （需要精确指定三态时，底部那枚循环按钮仍然是「循环切换」）
+      // 这里只留「这一集放完之后干什么」里、底部控件条上没有对应按钮的两项。
+      // 循环播放 / 随机播放原本也在这儿各占一行，但底部控件条上的循环按钮已经
+      // 是「关闭 → 单个视频循环 → 列表顺序循环」三态轮转（cycleRepeatMode），
+      // 随机也有独立按钮；同一功能在两处出现，两边状态不容易对应上，故从「更多」移除。
       Text(
         text = stringResource(R.string.player_sheets_more_playback),
         style = MaterialTheme.typography.titleMedium,
@@ -196,28 +182,6 @@ val scope = rememberCoroutineScope()
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.extraSmall),
       ) {
-        PlaybackToggleRow(
-          icon = Icons.Outlined.Repeat,
-          title = stringResource(R.string.player_toggle_repeat),
-          summary = stringResource(
-            when (repeatMode) {
-              RepeatMode.OFF -> R.string.player_toggle_repeat_off
-              RepeatMode.ONE -> R.string.player_toggle_repeat_one
-              RepeatMode.ALL -> R.string.player_toggle_repeat_all
-            },
-          ),
-          checked = repeatMode != RepeatMode.OFF,
-          onCheckedChange = { on ->
-            onRepeatModeChange(
-              when {
-                !on -> RepeatMode.OFF
-                hasPlaylist -> RepeatMode.ALL
-                else -> RepeatMode.ONE
-              },
-            )
-          },
-        )
-
         PlaybackToggleRow(
           icon = Icons.Outlined.SkipNext,
           title = stringResource(R.string.pref_autoplay_next_video_title),
@@ -230,21 +194,6 @@ val scope = rememberCoroutineScope()
           ),
           checked = autoplayNextVideo,
           onCheckedChange = { playerPreferences.autoplayNextVideo.set(it) },
-        )
-
-        // 随机播放：原本占着竖屏底部按钮条一个位置，属低频操作，移到这里。
-        PlaybackToggleRow(
-          icon = Icons.Outlined.Shuffle,
-          title = stringResource(R.string.player_toggle_shuffle),
-          summary = stringResource(
-            if (shuffleEnabled) {
-              R.string.player_toggle_shuffle_on
-            } else {
-              R.string.player_toggle_shuffle_off
-            },
-          ),
-          checked = shuffleEnabled,
-          onCheckedChange = { onToggleShuffle() },
         )
 
         PlaybackToggleRow(

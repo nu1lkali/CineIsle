@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -598,6 +599,31 @@ private fun PlaySection(
           tint = MaterialTheme.colorScheme.error,
         )
       }
+
+      // 下载：与播放按钮同一行，只保留图标（不放文字，避免窄屏把这行撑爆）。
+      // 已下载 / 下载中 / 排队中时置灰不可点，状态通过 downloadLabel 描述给无障碍服务。
+      if (isDownloadable(item)) {
+        IconButton(
+          onClick = onDownload,
+          enabled = downloadLabel == null,
+          modifier =
+            Modifier
+              .size(56.dp)
+              .clip(RoundedCornerShape(18.dp))
+              .background(
+                if (downloadLabel == null) {
+                  MaterialTheme.colorScheme.primaryContainer
+                } else {
+                  MaterialTheme.colorScheme.surfaceVariant
+                }
+              ),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Download,
+            contentDescription = downloadLabel ?: "下载",
+          )
+        }
+      }
     }
 
     // 进度：已观看百分比 + 剩余时长 + 总时长，三个数一起给，避免只看到一个百分比
@@ -614,8 +640,8 @@ private fun PlaySection(
       )
     }
 
-    // 次要操作：从头播放 / 继续上次 / 下载。
-    // 三个按钮在窄屏上会挤，所以整行可横向滚动，避免被裁掉。
+    // 次要操作：从头播放 / 继续上次。
+    // 窄屏上会挤，所以整行可横向滚动，避免被裁掉。
     Row(
       modifier = Modifier.horizontalScroll(rememberScrollState()),
       horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -627,17 +653,6 @@ private fun PlaySection(
         }
         OutlinedButton(onClick = { onPlay(resumeSeconds) }) {
           Text("继续上次")
-        }
-      }
-      if (isDownloadable(item)) {
-        OutlinedButton(onClick = onDownload, enabled = downloadLabel == null) {
-          Icon(
-            imageVector = Icons.Default.Download,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-          )
-          Spacer(modifier = Modifier.width(6.dp))
-          Text(downloadLabel ?: "下载")
         }
       }
     }

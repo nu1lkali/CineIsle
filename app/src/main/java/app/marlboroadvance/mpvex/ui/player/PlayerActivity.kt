@@ -176,6 +176,18 @@ class PlayerActivity :
   private var mediaIdentifier = ""
 
   /**
+   * 「从头播放」一次性标记。
+   *
+   * Emby 详情页的「从头播放」会带 `play_from_start=true` 发起播放。置位后，
+   * [applyPlaybackState] 不再把本地续播记录里的 lastPosition 套回 `time-pos`
+   * —— 否则「从头播放」会被本地续播覆盖成「继续播放」。
+   *
+   * 只对本次 intent 的第一个视频生效（[loadVideoPlaybackState] 读出后立刻清掉），
+   * 这样剧集连播时后面的剧集仍然能恢复各自的观看进度。
+   */
+  private var playFromStartOnce = false
+
+  /**
    * Playlist of URIs for sequential playback
    */
   internal var playlist: List<Uri> = emptyList()

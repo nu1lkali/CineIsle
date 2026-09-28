@@ -279,7 +279,7 @@ class EmbyDownloadManager(context: Context) {
       } finally {
         calls.remove(itemId)
         speedTrack.remove(itemId)
-        update(itemId) { it.copy(speedBps0()) }
+        update(itemId) { it.copy(speedBps = 0L) }
         pump()
       }
     }
@@ -312,7 +312,7 @@ class EmbyDownloadManager(context: Context) {
 
     call.execute().use { response ->
       if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-      val body = response.body ?: throw IOException("响应为空")
+      val body = response.body
 
       val partial = response.code == 206
       val offset = if (partial) existing else 0L
@@ -528,7 +528,7 @@ class EmbyDownloadManager(context: Context) {
   private fun totalFrom(response: okhttp3.Response, offset: Long): Long {
     response.header("Content-Range")?.substringAfterLast('/')?.trim()?.toLongOrNull()
       ?.let { if (it > 0) return it }
-    val length = response.body?.contentLength() ?: -1L
+    val length = response.body.contentLength()
     return when {
       length <= 0 -> -1L
       offset > 0 || response.code == 206 -> offset + length

@@ -491,60 +491,7 @@
   <string name="playlist_m3u_badge">M3U</string>
 
   <!-- ─────────── Emby 相关 ─────────── -->
-  <string name="emby_home">首页</string>
-  <string name="emby_favorites">收藏</string>
-  <string name="emby_history">历史</string>
-  <string name="emby_libraries">媒体库</string>
-  <string name="emby_continue_watching">继续观看</string>
-  <string name="emby_latest">最新加入</string>
-  <string name="emby_add_server">添加服务器</string>
-  <string name="emby_edit_server">编辑服务器</string>
-  <string name="emby_delete_server">删除服务器</string>
-  <string name="emby_delete_server_confirm">确定要删除服务器「%s」吗？</string>
-  <string name="emby_server_manage">Emby 服务器维护</string>
-  <string name="emby_no_server">还没有添加 Emby 服务器</string>
-  <string name="emby_no_server_hint">点击右上角按钮，添加一台 Emby 服务器后即可浏览媒体库</string>
-  <string name="emby_switch_server">切换服务器</string>
-  <string name="emby_not_logged_in">Emby 服务器未登录</string>
-  <string name="emby_login_failed">登录失败</string>
-  <string name="emby_load_failed">加载失败</string>
-  <string name="emby_retry">重试</string>
-  <string name="emby_play">播放</string>
-  <string name="emby_resume">继续播放</string>
-  <string name="emby_play_from_start">从头播放</string>
-  <string name="emby_shuffle_play">随机播放</string>
-  <string name="emby_shuffle_favorites">随机播放收藏</string>
-  <string name="emby_favorite">收藏</string>
-  <string name="emby_unfavorite">取消收藏</string>
-  <string name="emby_mark_played">标记为已播放</string>
-  <string name="emby_mark_unplayed">标记为未播放</string>
-  <string name="emby_delete_media">删除媒体</string>
-  <string name="emby_delete_media_confirm">确定要删除「%s」吗？</string>
-  <string name="emby_delete_media_hint">该媒体将从 Emby 服务器删除，此操作不可撤销。</string>
-  <string name="emby_more">更多</string>
-  <string name="emby_category_all">全部</string>
-  <string name="emby_category_resumable">继续播放</string>
-  <string name="emby_category_boxset">合集</string>
-  <string name="emby_category_favorite">收藏</string>
-  <string name="emby_category_folder">文件夹</string>
-  <string name="emby_view_style">视图样式</string>
-  <string name="emby_view_poster">海报</string>
-  <string name="emby_view_backdrop">背景图</string>
-  <string name="emby_view_banner">横幅</string>
-  <string name="emby_sort_by">排序</string>
-  <string name="emby_sort_random">随机</string>
-  <string name="emby_empty_library">这个媒体库还没有内容</string>
-  <string name="emby_no_favorites">还没有收藏内容</string>
-  <string name="emby_no_history">还没有播放记录</string>
-  <string name="emby_episode_prefix">第 %1$d 集</string>
-  <string name="emby_season_prefix">第 %1$d 季</string>
-  <string name="emby_item_count">%d 项</string>
-  <string name="emby_overview">简介</string>
-  <string name="emby_cast">演员</string>
-  <string name="emby_media_info">媒体信息</string>
-  <string name="emby_added_favorite">已加入收藏</string>
-  <string name="emby_removed_favorite">已取消收藏</string>
-  <string name="emby_operation_failed">操作失败</string>
+
 
   <!-- ===== 播放器：控件浮层提示 ===== -->
   <string name="player_update_repeat_off">循环：关闭</string>
