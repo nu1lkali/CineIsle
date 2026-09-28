@@ -196,7 +196,7 @@ object PlayerControlsPreferencesScreen : Screen {
               SeekbarStyle.entries.forEachIndexed { index, style ->
                 ListItem(
                   headlineContent = {
-                    Text(text = style.name)
+                    Text(text = stringResource(style.titleRes))
                   },
                   trailingContent = {
                     RadioButton(
@@ -291,7 +291,7 @@ object PlayerControlsPreferencesScreen : Screen {
                       .verticalScroll(rememberScrollState()),
                   ) {
                     Text(
-                      text = "Enter custom hide time in milliseconds",
+                      text = stringResource(R.string.i18n_enter_hide_ms),
                       modifier = Modifier.padding(bottom = 8.dp),
                     )
                     OutlinedTextField(
@@ -377,8 +377,7 @@ object PlayerControlsPreferencesScreen : Screen {
       verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
     ) {
       if (buttons.isEmpty()) {
-        Text(
-          "None", // TODO: strings
+        Text(stringResource(R.string.i18n_none), // TODO: strings
           style = MaterialTheme.typography.bodyMedium,
           color = MaterialTheme.colorScheme.outline,
         )

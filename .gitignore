@@ -29,6 +29,9 @@ app/release/
 local.properties
 keystore.properties
 signing.properties
+# 本机构建加速用的 Gradle init 脚本（注入阿里云镜像，路径/镜像随机器而变）
+jitpack-repo.init.gradle
+*.init.gradle
 *.jks
 *.keystore
 *.p12

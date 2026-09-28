@@ -2,11 +2,13 @@ package app.marlboroadvance.mpvex
 
 import android.os.Bundle
 import android.util.Log
+import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -15,18 +17,39 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideIn
 import androidx.compose.animation.slideOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavEntry
@@ -46,9 +69,13 @@ import app.marlboroadvance.mpvex.utils.permission.PermissionUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.inject
+
+/** 启动页停留时长（毫秒），之后开始淡出。 */
+private const val SPLASH_HOLD_MS = 700L
 
 /**
  * Main entry point for the application
@@ -94,7 +121,17 @@ class MainActivity : ComponentActivity() {
 
       MpvexTheme {
         Surface {
-          Navigator()
+          // 启动页盖在主界面之上：背后 Navigator 已经完成首帧布局，
+          // 淡出后直接是可用界面，避免「先白屏、再跳一下」的观感。
+          var showSplash by remember { mutableStateOf(true) }
+
+          Box(modifier = Modifier.fillMaxSize()) {
+            Navigator()
+
+            if (showSplash) {
+              AppSplashScreen(onFinished = { showSplash = false })
+            }
+          }
         }
 
         // 首帧成功渲染即标记 boot_ok，清除「上次启动卡在 Application 阶段」的疑似状态。
@@ -144,6 +181,70 @@ class MainActivity : ComponentActivity() {
         withContext(Dispatchers.Main) {
           Log.e("MainActivity", "Error during auto-connect", e)
         }
+      }
+    }
+  }
+
+  /**
+   * 启动页：应用 logo + 应用名（影屿 / CineIsle），短暂停留后淡出。
+   *
+   * 用覆盖层而不是替换内容：主界面在背后已经完成首帧布局，
+   * 淡出后直接是可用界面，避免「先白屏、再跳一下」的观感。
+   */
+  @Composable
+  private fun AppSplashScreen(onFinished: () -> Unit) {
+    val appName = stringResource(id = R.string.app_name)
+    val appNameEn = stringResource(id = R.string.i18n_project_name_en)
+
+    var visible by remember { mutableStateOf(true) }
+    val alpha by animateFloatAsState(
+      targetValue = if (visible) 1f else 0f,
+      animationSpec = tween(durationMillis = 350),
+      finishedListener = {
+        if (!visible) onFinished()
+      },
+    )
+
+    LaunchedEffect(Unit) {
+      delay(SPLASH_HOLD_MS)
+      visible = false
+    }
+
+    Box(
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .alpha(alpha)
+          .background(MaterialTheme.colorScheme.surface)
+          // 启动页展示期间吞掉点击，避免误触背后的界面
+          .pointerInput(Unit) { detectTapGestures { } },
+      contentAlignment = Alignment.Center,
+    ) {
+      Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // 用 ImageView 渲染启动器图标：adaptive-icon 无法通过 painterResource 加载
+        AndroidView(
+          modifier = Modifier.size(96.dp),
+          factory = { ctx ->
+            ImageView(ctx).apply { setImageResource(R.mipmap.ic_launcher) }
+          },
+        )
+
+        Spacer(Modifier.height(20.dp))
+
+        Text(
+          text = appName,
+          style = MaterialTheme.typography.headlineMedium,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+
+        Spacer(Modifier.height(4.dp))
+
+        Text(
+          text = appNameEn,
+          style = MaterialTheme.typography.titleMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
       }
     }
   }

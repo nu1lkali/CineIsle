@@ -138,6 +138,7 @@ fun EmbyPosterCard(
  * Emby 横版卡片（16:9），用于继续观看、剧集列表。
  *
  * @param progress 播放进度 0f~1f
+ * @param remainingText 左下角剩余时长角标文案（如「剩余 12分30秒」），null 时不显示
  */
 @Composable
 fun EmbyWideCard(
@@ -150,6 +151,7 @@ fun EmbyWideCard(
   modifier: Modifier = Modifier,
   onLongClick: (() -> Unit)? = null,
   fallbackImageUrl: String? = null,
+  remainingText: String? = null,
 ) {
   Column(modifier = modifier.width(WIDE_WIDTH)) {
     Card(
@@ -189,6 +191,27 @@ fun EmbyWideCard(
               contentDescription = null,
               tint = Color.White,
               modifier = Modifier.size(22.dp),
+            )
+          }
+        }
+
+        // 左下角剩余时长角标（深蓝底），仅「继续观看」等带进度的卡片传入
+        if (!remainingText.isNullOrBlank()) {
+          Surface(
+            modifier = Modifier
+              .align(Alignment.BottomStart)
+              // 留出底部进度条（3dp）空间，避免角标压住进度条
+              .padding(start = 6.dp, bottom = 8.dp),
+            shape = RoundedCornerShape(6.dp),
+            color = Color(0xFF0B2E5B).copy(alpha = 0.92f),
+          ) {
+            Text(
+              text = remainingText,
+              style = MaterialTheme.typography.labelSmall,
+              color = Color.White,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
             )
           }
         }
@@ -453,24 +476,46 @@ fun EmbyLibraryCard(
         contentScale = ContentScale.Crop,
         placeholder = icon,
       )
+      // 底部深色遮罩：库名/数量整块落在遮罩里，而不是浮在封面上。
+      // 封面图深浅不可控（浅色海报上白字几乎看不见），所以遮罩从卡片 35% 处开始渐入、
+      // 到文字区域已经是接近不透明的黑，标题一定在「深色遮罩里面」。
+      //
+      // 之前用「整卡渐变 + BottomStart 文字块」，文字块顶部其实还落在半透明区
+      // （卡片只有 90dp 高，两行文字加内边距占了近一半），标题看着浮在遮罩上沿。
+      // 现在改成固定高度的底部遮罩带，文字块在带内**垂直居中** —— 标题落在遮罩正中，
+      // 位置也比原来更低。
       Box(
         modifier = Modifier
-          .fillMaxSize()
+          .align(Alignment.BottomCenter)
+          .fillMaxWidth()
+          .height(LIBRARY_MASK_BAND_HEIGHT)
           .background(
             androidx.compose.ui.graphics.Brush.verticalGradient(
-              colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f)),
+              colorStops = arrayOf(
+                0.00f to Color.Transparent,
+                0.45f to Color.Black.copy(alpha = 0.72f),
+                1.00f to Color.Black.copy(alpha = 0.94f),
+              ),
             ),
           ),
       )
       Column(
         modifier = Modifier
           .align(Alignment.BottomStart)
-          .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+          .fillMaxWidth()
+          .height(LIBRARY_MASK_BAND_HEIGHT)
+          .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.Center,
       ) {
         Text(
           text = name,
-          style = MaterialTheme.typography.titleMedium,
+          style = MaterialTheme.typography.titleMedium.copy(
+            // 遮罩再厚也可能压不住极亮的封面边缘，补一点描边阴影兜底
+            shadow = androidx.compose.ui.graphics.Shadow(
+              color = Color.Black.copy(alpha = 0.8f),
+              blurRadius = 6f,
+            ),
+          ),
           color = Color.White,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
@@ -479,7 +524,7 @@ fun EmbyLibraryCard(
           Text(
             text = "$itemCount 项",
             style = MaterialTheme.typography.bodySmall,
-            color = Color.White.copy(alpha = 0.8f),
+            color = Color.White.copy(alpha = 0.85f),
           )
         }
       }
@@ -536,3 +581,6 @@ private val WIDE_WIDTH = 160.dp
 private const val WIDE_RATIO = 16f / 9f
 private val LIBRARY_CARD_WIDTH = 150.dp
 private val LIBRARY_CARD_HEIGHT = 90.dp
+
+/** 首页媒体库卡片底部遮罩带的高度（标题块在带内垂直居中）。 */
+private val LIBRARY_MASK_BAND_HEIGHT = 48.dp

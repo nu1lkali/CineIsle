@@ -154,7 +154,7 @@ object AudioPreferencesScreen : Screen {
             value = audioChannel,
             onValueChange = { preferences.audioChannels.set(it) },
             values = AudioChannels.entries,
-            valueToText = { AnnotatedString(context.getString(it.title)) },
+            valueToText = { value -> AnnotatedString(stringResource(value.title)) },
             title = { Text(text = stringResource(id = R.string.pref_audio_channels)) },
             summary = { 
               Text(

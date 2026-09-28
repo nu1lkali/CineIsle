@@ -26,10 +26,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -449,7 +451,7 @@ fun UpdateDialog(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(text = "Downloading...", style = MaterialTheme.typography.bodySmall)
+                        Text(text = stringResource(R.string.i18n_downloading), style = MaterialTheme.typography.bodySmall)
                         Text(text = "${progress.toInt()}%", style = MaterialTheme.typography.bodySmall)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -474,11 +476,11 @@ fun UpdateDialog(
                 Row {
                     if (actionLabel != "Install") {
                         TextButton(onClick = onIgnore) {
-                            Text("Ignore")
+                            Text(stringResource(R.string.i18n_ignore))
                         }
                     }
                     TextButton(onClick = onDismiss) {
-                        Text("Cancel")
+                        Text(stringResource(R.string.i18n_cancel))
                     }
                 }
             }

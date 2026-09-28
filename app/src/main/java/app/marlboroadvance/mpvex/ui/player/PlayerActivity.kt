@@ -55,9 +55,14 @@ import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.koin.android.ext.android.inject
 import java.io.File
 
@@ -174,6 +179,42 @@ class PlayerActivity :
    * Playlist of URIs for sequential playback
    */
   internal var playlist: List<Uri> = emptyList()
+
+  /**
+   * 与 [playlist] 下标一一对应的显示标题。
+   *
+   * 网络流（尤其 Emby 的 `/Videos/{id}/stream`）URL 末段没有可用片名，
+   * 只能从 URL 猜 → 猜出来是 "stream"。发起播放的一方知道真实片名，
+   * 通过 intent extra `playlist_titles` 传进来，切集时优先用它。
+   */
+  private var playlistTitles: List<String> = emptyList()
+
+  /**
+   * 视频预加载：对下一集的流地址做 HTTP Range 预取的协程。
+   *
+   * 目标是在当前视频起播 [PlayerPreferences.PRELOAD_TRIGGER_SECONDS] 秒后，
+   * 提前把下一集开头一段数据拉过来（预热 DNS / 连接 / 服务端转码会话），
+   * 用户切集时更无缝。受「视频预加载」偏好开关控制。
+   */
+  private var preloadJob: Job? = null
+
+  /**
+   * 已经为哪个 playlistIndex 发起过预加载。
+   *
+   * 用下标（而不是 URI）做去重键：切集时下标必变，保证每集只预加载一次；
+   * -1 表示还没预加载过。
+   */
+  private var preloadRequestedForIndex: Int = -1
+
+  /**
+   * 预加载专用的 HTTP 客户端：超时压得很短，失败也不影响正常播放。
+   */
+  private val preloadHttpClient: OkHttpClient by lazy {
+    OkHttpClient.Builder()
+      .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+      .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+      .build()
+  }
 
   /**
    * Current index in the playlist
@@ -361,6 +402,11 @@ class PlayerActivity :
       @Suppress("DEPRECATION")
       intent.getParcelableArrayListExtra("playlist") ?: emptyList()
     }
+
+    // 与 playlist 一一对应的显示标题（由发起方写入，如 Emby 的「S01E05 剧集名」）。
+    // 没有这个列表时只能从 URL 末段猜标题 —— Emby 的流地址末段固定是 "stream"，
+    // 于是从第二个视频起标题全变成 "stream"（用户反馈的 bug）。有它就优先用它。
+    playlistTitles = intent.getStringArrayListExtra("playlist_titles") ?: emptyList()
 
     // If playlist is empty but playlist_id is provided, load asynchronously from database
     // Load all items - LazyColumn handles pagination/virtualization efficiently
@@ -1333,12 +1379,29 @@ class PlayerActivity :
   }
 
   /**
+   * 取播放下标对应的显示标题。
+   *
+   * @return 标题；下标越界或标题为空时返回 null，交由调用方回落到 URL 解析。
+   */
+  private fun getPlaylistTitleAt(index: Int): String? =
+    playlistTitles.getOrNull(index)?.takeIf { it.isNotBlank() }
+
+  /**
    * Gets the display title for a playlist item URI.
    *
    * @param uri The URI to get the title for
+   * @param index 该 URI 在 [playlist] 中的下标；传 -1 表示未知，直接走 URL 解析
    * @return The display name/title of the file
    */
-  internal fun getPlaylistItemTitle(uri: Uri): String {
+  internal fun getPlaylistItemTitle(
+    uri: Uri,
+    index: Int = -1,
+  ): String {
+    // 发起方给的标题最准：Emby 的流地址末段固定是 "stream"，从 URL 猜不出片名
+    if (index >= 0) {
+      getPlaylistTitleAt(index)?.let { return it }
+    }
+
     // Try content resolver first for content:// URIs
     getDisplayNameFromUri(uri)?.let { return it }
 
@@ -1538,28 +1601,19 @@ class PlayerActivity :
 
         // Check if autoplay next video is enabled
         val autoplayEnabled = playerPreferences.autoplayNextVideo.get()
+        // 整列表循环 == 永远有"下一集"（playNext 内部会把末尾接回开头）
+        val repeatPlaylist = viewModel.shouldRepeatPlaylist()
 
-        if (hasNextItem && (autoplayEnabled || viewModel.shouldRepeatPlaylist())) {
+        if (repeatPlaylist || (hasNextItem && autoplayEnabled)) {
           // Play next item in playlist
           playNext()
-        } else if (viewModel.shouldRepeatPlaylist()) {
-          // At end of playlist with repeat ALL: restart from beginning
-          if (viewModel.shuffleEnabled.value) {
-            // Regenerate shuffle order and start from beginning
-            generateShuffledIndices()
-            shuffledPosition = 0
-            playlistIndex = shuffledIndices[0]
-            loadPlaylistItem(playlistIndex)
-          } else {
-            // Normal mode: restart from index 0
-            playlistIndex = 0
-            loadPlaylistItem(0)
-          }
-        } else if (playerPreferences.closeAfterReachingEndOfVideo.get()) {
-          // No autoplay or no next item, end of playlist: close if setting is enabled
+        } else if (!hasNextItem && playerPreferences.closeAfterReachingEndOfVideo.get()) {
+          // 只有"真的没有下一集可播"时才退出播放器（整个队列/单文件播放结束）。
+          // autoplay 关闭但队列里还有后续时，属于"等用户手动切"，不能算播放结束，
+          // 因此停住而不是退出 —— 否则会和"自动下一集"抢同一段判断。
           finishAndRemoveTask()
         }
-        // If autoplay is off and closeAfterReachingEndOfVideo is off, just stay on current video
+        // 其余情况（autoplay 关 且 队列还有后续）：停在当前视频，等用户手动切集
       } else {
         // Single video playback (no playlist)
         if (playerPreferences.closeAfterReachingEndOfVideo.get()) {
@@ -1747,7 +1801,10 @@ class PlayerActivity :
 
     // Only set orientation immediately if NOT in Video mode
     // For Video mode, wait for video-params/aspect to become available
-    if (playerPreferences.orientation.get() != PlayerOrientation.Video) {
+    // 用户手动指定过方向时直接沿用（setOrientation 内部处理覆盖值），不做宽高比推导
+    if (viewModel.manualOrientationOverrideValue != null ||
+      playerPreferences.orientation.get() != PlayerOrientation.Video
+    ) {
       setOrientation()
     } else {
       // For Video mode, try to set orientation after a short delay to ensure
@@ -1808,6 +1865,110 @@ class PlayerActivity :
 
     // Asynchronously fetch better filename from HTTP headers for network streams
     fetchNetworkStreamTitle()
+
+    // 起播后按需预热下一集（受「视频预加载」开关控制）
+    maybeStartNextVideoPreload()
+  }
+
+  // ==================== Next Video Preload ====================
+
+  /**
+   * 在视频加载完成后启动「下一集预加载」的等待协程。
+   *
+   * 只有在开关打开、确实存在下一集、且下一集是 http(s) 流时才动作；
+   * 本地文件 / content:// 不需要预热。
+   */
+  private fun maybeStartNextVideoPreload() {
+    preloadJob?.cancel()
+    preloadJob = null
+
+    if (!playerPreferences.preloadNextVideo.get()) return
+
+    // 本集已经发起过预加载，避免 seek 回开头时重复触发
+    if (preloadRequestedForIndex == playlistIndex) return
+
+    val nextIndex = peekNextPlaylistIndex() ?: return
+    val nextUri = playlist.getOrNull(nextIndex) ?: return
+    val scheme = nextUri.scheme?.lowercase()
+    if (scheme != "http" && scheme != "https") return
+
+    val uriString = nextUri.toString()
+    preloadRequestedForIndex = playlistIndex
+    Log.d(TAG, "preloadNextVideo: scheduled for playlist index $nextIndex")
+
+    preloadJob =
+      lifecycleScope.launch(Dispatchers.IO) {
+        val self = coroutineContext[Job]
+        // 等当前视频真正播起来，避免起播瞬间和首帧解码抢带宽
+        while (self?.isActive == true) {
+          if (isFinishing || player.isExiting) return@launch
+          val pos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
+          if (pos >= PlayerPreferences.PRELOAD_TRIGGER_SECONDS) break
+          delay(250)
+        }
+        if (self?.isActive != true) return@launch
+        preloadUrl(uriString, self)
+      }
+  }
+
+  /**
+   * 计算「下一集」在 [playlist] 中的下标，语义与 playNext 保持一致；
+   * 没有下一集（且未开启整列表循环）时返回 null。
+   */
+  private fun peekNextPlaylistIndex(): Int? {
+    if (playlist.isEmpty()) return null
+    val effectiveSize = if (playlistTotalCount > 0) playlistTotalCount else playlist.size
+
+    return if (viewModel.shuffleEnabled.value) {
+      if (shuffledIndices.isEmpty()) generateShuffledIndices()
+      when {
+        shuffledPosition < shuffledIndices.size - 1 -> shuffledIndices[shuffledPosition + 1]
+        viewModel.shouldRepeatPlaylist() && shuffledIndices.isNotEmpty() -> shuffledIndices[0]
+        else -> null
+      }
+    } else {
+      when {
+        playlistIndex < effectiveSize - 1 -> playlistIndex + 1
+        viewModel.shouldRepeatPlaylist() -> 0
+        else -> null
+      }
+    }
+  }
+
+  /**
+   * 对 [url] 发一个带 Range 头的 GET，读完开头 [PlayerPreferences.PRELOAD_BYTES] 字节后立即断开。
+   *
+   * 走的是直链（Emby 的 URL 里已带 api_key），因此无需额外鉴权头。
+   * 任何异常（含切集导致的中止）都只记日志，绝不影响正常播放。
+   */
+  private suspend fun preloadUrl(
+    url: String,
+    job: Job?,
+  ) {
+    val bytesToRead = PlayerPreferences.PRELOAD_BYTES
+    try {
+      val request =
+        Request.Builder()
+          .url(url)
+          .header("Range", "bytes=0-${bytesToRead - 1}")
+          .get()
+          .build()
+
+      preloadHttpClient.newCall(request).execute().use { response ->
+        response.body.byteStream().use { stream ->
+          val buffer = ByteArray(64 * 1024)
+          var readTotal = 0L
+          while (readTotal < bytesToRead && job?.isActive == true) {
+            val n = stream.read(buffer)
+            if (n <= 0) break
+            readTotal += n
+          }
+          Log.d(TAG, "preloadNextVideo: read ${readTotal}B (code=${response.code})")
+        }
+      }
+    } catch (e: Exception) {
+      Log.d(TAG, "preloadNextVideo: aborted (${e.javaClass.simpleName}: ${e.message})")
+    }
   }
 
   /**
@@ -2342,6 +2503,10 @@ class PlayerActivity :
       playlistWindowOffset = 0
       playlistTotalCount = -1
       playlist = playlistFromIntent
+      // 标题列表必须和 playlist 同步替换，否则切集时会用到上一批的标题
+      playlistTitles = intent.getStringArrayListExtra("playlist_titles") ?: emptyList()
+      // 换了播放队列，允许对新的下一集重新预加载
+      preloadRequestedForIndex = -1
     }
 
     // If playlist is empty but playlist_id is provided, load from database
@@ -3072,7 +3237,8 @@ class PlayerActivity :
     playlistIndex = index
 
     // Extract and set the new file name
-    fileName = getFileNameFromUri(uri)
+    // 优先用发起方给的标题（Emby 等网络流 URL 末段是 "stream"，直译会得到假标题）
+    fileName = getPlaylistTitleAt(index) ?: getFileNameFromUri(uri)
     // Generate new media identifier for playback state
     mediaIdentifier = getMediaIdentifierFromUri(uri, fileName)
 

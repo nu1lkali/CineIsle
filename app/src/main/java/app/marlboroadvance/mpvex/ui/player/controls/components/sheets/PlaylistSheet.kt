@@ -44,6 +44,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -62,6 +63,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.geometry.Offset
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.presentation.components.PlayerSheet
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.theme.spacing
@@ -336,7 +338,7 @@ fun PlaylistSheet(
           ) {
             if (currentItem != null) {
               Text(
-                text = "Now Playing",
+                text = stringResource(R.string.i18n_now_playing),
                 style = MaterialTheme.typography.titleSmall.copy(
                   fontWeight = FontWeight.Bold,
                   color = accentColor,
@@ -491,7 +493,7 @@ fun PlaylistTrackListItem(
         thumbnail?.let { bmp ->
           Image(
             bitmap = bmp.asImageBitmap(),
-            contentDescription = "Thumbnail",
+            contentDescription = stringResource(R.string.i18n_thumbnail),
             modifier = Modifier.matchParentSize(),
             contentScale = ContentScale.Crop,
           )
@@ -681,7 +683,7 @@ fun PlaylistTrackGridItem(
         thumbnail?.let { bmp ->
           Image(
             bitmap = bmp.asImageBitmap(),
-            contentDescription = "Thumbnail",
+            contentDescription = stringResource(R.string.i18n_thumbnail),
             modifier = Modifier.matchParentSize(),
             contentScale = ContentScale.Crop,
           )

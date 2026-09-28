@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.components
 
+import app.marlboroadvance.mpvex.R
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -25,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 
 /**
@@ -93,7 +95,7 @@ fun BrowserBottomBar(
         ) {
           Icon(
             Icons.AutoMirrored.Filled.DriveFileMove, 
-            contentDescription = "Move",
+            contentDescription = stringResource(R.string.i18n_move),
             modifier = Modifier.size(24.dp)
           )
         }
@@ -122,7 +124,7 @@ fun BrowserBottomBar(
         ) {
           Icon(
             Icons.AutoMirrored.Filled.PlaylistAdd, 
-            contentDescription = "Add to Playlist",
+            contentDescription = stringResource(R.string.i18n_add_to_playlist),
             modifier = Modifier.size(24.dp)
           )
         }

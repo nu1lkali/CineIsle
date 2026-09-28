@@ -131,7 +131,7 @@ fun PermissionDeniedState(
 
         // Title
         Text(
-          text = "Storage Access Required",
+          text = stringResource(R.string.i18n_storage_required),
           style = MaterialTheme.typography.headlineMedium,
           fontWeight = FontWeight.Bold,
           textAlign = TextAlign.Center,
@@ -203,7 +203,7 @@ fun PermissionDeniedState(
           shape = RoundedCornerShape(16.dp),
         ) {
           Text(
-            text = "ALLOW ACCESS",
+            text = stringResource(R.string.i18n_allow_access),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
           )
@@ -222,7 +222,7 @@ fun PermissionDeniedState(
           )
           Spacer(modifier = Modifier.width(6.dp))
           Text(
-            text = "Why do I see this?",
+            text = stringResource(R.string.i18n_why_see_this),
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
           )
@@ -249,7 +249,7 @@ fun PermissionDeniedState(
       },
       title = {
         Text(
-          text = "Why this permission is needed",
+          text = stringResource(R.string.i18n_why_permission),
           style = MaterialTheme.typography.headlineSmall,
           fontWeight = FontWeight.Bold,
         )
@@ -281,7 +281,7 @@ fun PermissionDeniedState(
             )
 
             Text(
-              text = "The permission is used exclusively for:",
+              text = stringResource(R.string.i18n_permission_usage),
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               fontWeight = FontWeight.Medium,

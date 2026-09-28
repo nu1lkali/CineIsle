@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.dialogs
 
+import app.marlboroadvance.mpvex.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -42,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -202,7 +204,7 @@ private fun SortTypeSelector(
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     Text(
-      text = "Sort by",
+      text = stringResource(R.string.i18n_sort_by),
       style = MaterialTheme.typography.titleMedium,
       fontWeight = FontWeight.Medium,
       color = MaterialTheme.colorScheme.onSurface,
@@ -508,7 +510,7 @@ private fun GridColumnsSection(
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     Text(
-      text = "Grid Columns",
+      text = stringResource(R.string.i18n_grid_columns),
       style = MaterialTheme.typography.titleMedium,
       fontWeight = FontWeight.Medium,
       color = MaterialTheme.colorScheme.onSurface,
@@ -525,7 +527,7 @@ private fun GridColumnsSection(
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           Text(
-            text = "Folder Grid",
+            text = stringResource(R.string.i18n_folder_grid),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -551,7 +553,7 @@ private fun GridColumnsSection(
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           Text(
-            text = "Video Grid",
+            text = stringResource(R.string.i18n_video_grid),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )

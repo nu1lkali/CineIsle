@@ -339,10 +339,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   ) {
     val uris = ArrayList<android.net.Uri>()
     val ids = ArrayList<String>()
+    // 与 uris 下标一一对应的显示标题。播放器侧切集时用它，避免从
+    // `/Videos/{id}/stream` 这种 URL 里猜出统一是 "stream" 的假标题。
+    val titles = ArrayList<String>()
     items.forEach { item ->
       val id = item.Id ?: return@forEach
       uris.add(android.net.Uri.parse(repository.videoStreamUrl(server, id, static = true)))
       ids.add(id)
+      titles.add(displayTitle(item))
     }
     if (uris.isEmpty()) return
 
@@ -355,6 +359,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       putExtra("filename", first.Name ?: displayTitle(first))
       if (resumeSeconds > 0) putExtra("position", (resumeSeconds * 1000).toInt())
       putParcelableArrayListExtra("playlist", uris)
+      putStringArrayListExtra("playlist_titles", titles)
       putExtra("playlist_index", 0)
       // 播放列表的 ID 顺序与 uris 一致，切集时据此把"正在播放"同步给服务器
       putEmbyPlaybackExtras(server, ids)

@@ -30,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -102,10 +103,11 @@ object DecoderPreferencesScreen : Screen {
                 value = currentProfile,
                 onValueChange = { preferences.profile.set(it.value) },
                 values = MPVProfile.entries,
+                valueToText = { value -> AnnotatedString(stringResource(value.displayNameRes)) },
                 title = { Text(stringResource(R.string.pref_decoder_profile_title)) },
                 summary = {
                   Text(
-                    currentProfile.displayName,
+                    stringResource(currentProfile.displayNameRes),
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },
@@ -230,6 +232,7 @@ object DecoderPreferencesScreen : Screen {
                 value = debanding,
                 onValueChange = { preferences.debanding.set(it) },
                 values = Debanding.entries,
+                valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
                 title = { Text(stringResource(R.string.pref_decoder_debanding_title)) },
                 summary = {
                   Text(

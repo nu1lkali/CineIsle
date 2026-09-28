@@ -55,12 +55,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.database.repository.PlaylistRepository
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.MediaLayoutMode
@@ -188,7 +190,7 @@ object PlaylistScreen : Screen {
                   leadingIcon = {
                     Icon(
                       imageVector = Icons.Filled.Search,
-                      contentDescription = "Search",
+                      contentDescription = stringResource(R.string.i18n_search),
                     )
                   },
                   trailingIcon = {

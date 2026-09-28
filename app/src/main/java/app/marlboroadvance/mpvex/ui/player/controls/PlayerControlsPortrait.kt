@@ -1,218 +1,123 @@
 package app.marlboroadvance.mpvex.ui.player.controls
 
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import app.marlboroadvance.mpvex.preferences.PlayerButton
-import app.marlboroadvance.mpvex.ui.player.Panels
-import app.marlboroadvance.mpvex.ui.player.PlayerActivity
-import app.marlboroadvance.mpvex.ui.player.PlayerViewModel
-import app.marlboroadvance.mpvex.ui.player.Sheets
-import app.marlboroadvance.mpvex.ui.player.VideoAspect
 import app.marlboroadvance.mpvex.ui.player.controls.components.ControlsButton
-import app.marlboroadvance.mpvex.ui.player.controls.components.ControlsGroup
-import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassBorder
-import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassFill
 import app.marlboroadvance.mpvex.ui.theme.controlColor
 import app.marlboroadvance.mpvex.ui.theme.spacing
-import dev.vivvvek.seeker.Segment
 
+/**
+ * 竖屏顶栏。
+ *
+ * 只有两段：左侧返回键，右侧一串快捷开关（解码器 / 音轨 / 字幕 / 收藏 / 更多）。
+ *
+ * **标题不在这里** —— 竖屏顶栏要塞下返回键 + 5 个开关，剩给标题的宽度只有 ~95dp，
+ * 再长的片名都会被压成省略号（用户反馈「视频标题看不全」）。标题改由
+ * [PortraitBottomTitle] 渲染在进度条正上方，能独占整行宽度。
+ */
 @Composable
 fun TopPlayerControlsPortrait(
-  mediaTitle: String?,
   hideBackground: Boolean,
   onBackPress: () -> Unit,
-  onOpenSheet: (Sheets) -> Unit,
-  viewModel: PlayerViewModel,
-  /** 顶栏右侧的快捷开关（竖屏把「锁屏 / 收藏 / 更多」这类低频按钮放这里，底部就不会挤成一排） */
+  /** 顶栏右侧的快捷开关（竖屏把「解码器 / 音轨 / 字幕 / 收藏 / 更多」放这里） */
   trailing: (@Composable () -> Unit)? = null,
 ) {
-  val playlistModeEnabled = viewModel.hasPlaylistSupport()
-  val clickEvent = LocalPlayerButtonsClickEvent.current
-
-  Column {
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      // weight(1f)：标题组吃掉除右侧快捷开关以外的空间，标题过长时自己省略号收尾
-      ControlsGroup(modifier = Modifier.weight(1f)) {
-        ControlsButton(
-          icon = Icons.AutoMirrored.Default.ArrowBack,
-          onClick = onBackPress,
-          color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
-        )
-
-        val titleInteractionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-
-        androidx.compose.foundation.layout.Box(
-          modifier =
-            Modifier
-              .clip(RoundedCornerShape(50))
-              .clickable(
-                enabled = playlistModeEnabled,
-                onClick = {
-                  clickEvent()
-                  onOpenSheet(Sheets.Playlist)
-                },
-              ),
-        ) {
-          Surface(
-            shape = RoundedCornerShape(50),
-            color =
-              if (hideBackground) {
-                Color.Transparent
-              } else {
-                MaterialTheme.colorScheme.surfaceContainer.copy(
-                  alpha = 0.55f,
-                )
-              },
-            contentColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 0.dp,
-            shadowElevation = 0.dp,
-            border =
-              if (hideBackground) {
-                null
-              } else {
-                BorderStroke(
-                  1.dp,
-                  PlayerControlGlassBorder,
-                )
-              },
-          ) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.extraSmall),
-              modifier =
-                Modifier.padding(
-                  horizontal = MaterialTheme.spacing.medium,
-                  vertical = MaterialTheme.spacing.small,
-                ),
-            ) {
-              viewModel.getPlaylistInfo()?.let { playlistInfo ->
-                Text(
-                  text = playlistInfo,
-                  textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                  style = MaterialTheme.typography.bodyMedium,
-                  maxLines = 1,
-                  overflow = TextOverflow.Visible,
-                  fontFamily = FontFamily.Monospace,
-                  color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                  text = Typography.bullet.toString(),
-                  textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                  style = MaterialTheme.typography.bodyMedium,
-                  maxLines = 1,
-                  color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
-                  overflow = TextOverflow.Clip,
-                )
-              }
-              Text(
-                text = mediaTitle ?: "",
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
-                color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f, fill = false),
-              )
-            }
-          }
-        }
-      }
-
-      if (trailing != null) {
-        Spacer(modifier = Modifier.width(MaterialTheme.spacing.extraSmall))
-        trailing()
-      }
-    }
-  }
-}
-
-@Composable
-fun BottomPlayerControlsPortrait(
-  buttons: List<PlayerButton>,
-  chapters: List<Segment>,
-  currentChapter: Int?,
-  isSpeedNonOne: Boolean,
-  currentZoom: Float,
-  aspect: VideoAspect,
-  mediaTitle: String?,
-  hideBackground: Boolean,
-  decoder: app.marlboroadvance.mpvex.ui.player.Decoder,
-  playbackSpeed: Float,
-  onBackPress: () -> Unit,
-  onOpenSheet: (Sheets) -> Unit,
-  onOpenPanel: (Panels) -> Unit,
-  viewModel: PlayerViewModel,
-  activity: PlayerActivity,
-) {
-  val spacing = MaterialTheme.spacing
-
-  // 竖屏底部只保留「一条按钮带」，位置落在屏幕下缘的视频黑边里，不压画面。
-  //
-  // 形态沿用官方客户端的经典做法：单行、按钮 44dp、间距收紧。
-  // 外层 Box 负责对齐策略 —— 放得下时整条居中；放不下时贴左（首屏就能看见最常用的几个）并可横向滑动，
-  // 避免换行堆成两三排把画面吃掉一大块。
-  Box(
+  Row(
     modifier = Modifier.fillMaxWidth(),
-    contentAlignment = Alignment.Center,
+    verticalAlignment = Alignment.CenterVertically,
   ) {
-    Row(
-      modifier = Modifier.horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(spacing.extraSmall),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      buttons.forEach { button ->
-        RenderPlayerButton(
-          button = button,
-          chapters = chapters,
-          currentChapter = currentChapter,
-          isPortrait = true,
-          isSpeedNonOne = isSpeedNonOne,
-          currentZoom = currentZoom,
-          aspect = aspect,
-          mediaTitle = mediaTitle,
-          hideBackground = hideBackground,
-          onBackPress = onBackPress,
-          onOpenSheet = onOpenSheet,
-          onOpenPanel = onOpenPanel,
-          viewModel = viewModel,
-          activity = activity,
-          decoder = decoder,
-          playbackSpeed = playbackSpeed,
-          buttonSize = 44.dp,
-        )
-      }
+    ControlsButton(
+      icon = Icons.AutoMirrored.Default.ArrowBack,
+      onClick = onBackPress,
+      color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+    )
+
+    // 返回键与快捷开关各占一端，中间留白
+    Spacer(modifier = Modifier.weight(1f))
+
+    if (trailing != null) {
+      Spacer(modifier = Modifier.width(MaterialTheme.spacing.extraSmall))
+      trailing()
     }
   }
 }
 
+/**
+ * 竖屏底部的媒体标题，压在进度条正上方、占满整行。
+ *
+ * 为什么挪到下面：
+ * 顶栏场景下标题可用的宽度只有 ~95dp（返回键 + 5 个快捷开关之后），中文片名 7~8 个字
+ * 就到头了。放到进度条上方后可用宽度约 380dp，常见片名基本能一次显示完；
+ * 仍然超长的用跑马灯滚一遍（[basicMarquee]），保证「完整标题一定看得到」。
+ *
+ * 有播放队列时整行可点击 → 打开队列面板（原顶栏标题胶囊就是这个行为）。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun PortraitBottomTitle(
+  mediaTitle: String?,
+  playlistInfo: String?,
+  hideBackground: Boolean,
+  clickable: Boolean,
+  onClick: () -> Unit,
+) {
+  val textColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface
+  // 底部控件层下面就是画面，加一层阴影让白字在任何底图上都看得清
+  val textShadow = Shadow(color = Color.Black.copy(alpha = 0.7f), blurRadius = 8f)
+
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(8.dp))
+        .clickable(enabled = clickable, onClick = onClick)
+        .padding(horizontal = MaterialTheme.spacing.extraSmall),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    if (!playlistInfo.isNullOrBlank()) {
+      Text(
+        text = playlistInfo,
+        style = MaterialTheme.typography.labelMedium.copy(shadow = textShadow),
+        fontFamily = FontFamily.Monospace,
+        color = MaterialTheme.colorScheme.primary,
+        maxLines = 1,
+      )
+      Text(
+        text = " · ",
+        style = MaterialTheme.typography.labelMedium.copy(shadow = textShadow),
+        color = textColor.copy(alpha = 0.7f),
+        maxLines = 1,
+      )
+    }
+
+    Text(
+      text = mediaTitle ?: "",
+      style = MaterialTheme.typography.bodyMedium.copy(shadow = textShadow),
+      fontFamily = FontFamily.Monospace,
+      color = textColor,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.basicMarquee(),
+    )
+  }
+}

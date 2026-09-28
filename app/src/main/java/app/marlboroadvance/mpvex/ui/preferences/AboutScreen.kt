@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.CurrencyRupee
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MonetizationOn
@@ -189,10 +190,16 @@ object AboutScreen : Screen {
 
                 Column(modifier = Modifier.weight(1f)) {
                   Text(
-                    text = "mpvExtended",
+                    text = stringResource(id = R.string.app_name),
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
                     color = cs.onPrimaryContainer,
+                  )
+                  Text(
+                    text = stringResource(id = R.string.i18n_project_name_en),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = cs.onPrimaryContainer.copy(alpha = 0.9f),
                   )
                   Spacer(Modifier.height(4.dp))
                   Text(
@@ -275,13 +282,13 @@ object AboutScreen : Screen {
                 ) {
                   Icon(
                     imageVector = Icons.Filled.Info,
-                    contentDescription = "Device Info",
+                    contentDescription = stringResource(R.string.i18n_device_info),
                     modifier = Modifier.size(20.dp),
                     tint = cs.onPrimaryContainer,
                   )
                   Spacer(modifier = Modifier.width(8.dp))
                   Text(
-                    text = "Device Info",
+                    text = stringResource(R.string.i18n_device_info),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = cs.onPrimaryContainer,
@@ -299,89 +306,29 @@ object AboutScreen : Screen {
 
         Spacer(Modifier.height(8.dp))
 
-        // Updates Section (only show if update feature is enabled)
-        if (BuildConfig.ENABLE_UPDATE_FEATURE && updateViewModel != null) {
-          PreferenceSectionHeader(title = "更新")
-          PreferenceCard {
-                val isAutoUpdateEnabled by updateViewModel.isAutoUpdateEnabled.collectAsState()
-                Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { updateViewModel.toggleAutoUpdate(!isAutoUpdateEnabled) }
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(
-                                text = "Auto Check for Updates",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = cs.onSurface
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "Check on startup",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = cs.outline
-                            )
-                        }
-                        androidx.compose.material3.Switch(
-                            checked = isAutoUpdateEnabled,
-                            onCheckedChange = { updateViewModel.toggleAutoUpdate(it) }
-                        )
-                    }
-                    
-                    PreferenceDivider()
-                    
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Button(
-                            onClick = { updateViewModel.checkForUpdate(manual = true) },
-                            modifier = Modifier.fillMaxWidth().height(50.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = cs.secondaryContainer, 
-                                contentColor = cs.onSecondaryContainer
-                            ),
-                            elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
-                        ) {
-                             Icon(Icons.Default.Update, null, modifier = Modifier.size(18.dp))
-                             Spacer(Modifier.width(8.dp))
-                             Text("立即检查更新", fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
-          }
-          
-          Spacer(Modifier.height(8.dp))
-        }
-
-        // Donate Section
+        // Acknowledgments Section
         PreferenceSectionHeader(
-          title = stringResource(id = R.string.pref_about_donate_title)
+          title = stringResource(id = R.string.i18n_ack_title),
         )
 
         PreferenceCard {
-          // Ko-fi
           Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .clickable {
-                context.startActivity(
-                  Intent(
-                    Intent.ACTION_VIEW,
-                    context.getString(R.string.pref_about_donate_kofi_url).toUri(),
-                  ),
-                )
-              }
-              .padding(16.dp),
+            modifier =
+              Modifier
+                .fillMaxWidth()
+                .clickable {
+                  context.startActivity(
+                    Intent(
+                      Intent.ACTION_VIEW,
+                      context.getString(R.string.github_repo_url).toUri(),
+                    ),
+                  )
+                }
+                .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
             Icon(
-              imageVector = Icons.Filled.MonetizationOn,
+              imageVector = Icons.Filled.Code,
               contentDescription = null,
               modifier = Modifier.size(24.dp),
               tint = MaterialTheme.colorScheme.primary,
@@ -389,91 +336,24 @@ object AboutScreen : Screen {
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = stringResource(id = R.string.pref_about_donate_kofi),
+                text = stringResource(id = R.string.i18n_ack_mpvex_title),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Medium,
               )
               Text(
-                text = stringResource(id = R.string.pref_about_donate_kofi_summary),
+                text = stringResource(id = R.string.i18n_ack_mpvex_summary),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.outline,
               )
-            }
-          }
-
-          PreferenceDivider()
-
-          // PayPal
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .clickable {
-                context.startActivity(
-                  Intent(
-                    Intent.ACTION_VIEW,
-                    context.getString(R.string.pref_about_donate_paypal_url).toUri(),
-                  ),
-                )
-              }
-              .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Icon(
-              imageVector = Icons.Filled.AccountBalance,
-              contentDescription = null,
-              modifier = Modifier.size(24.dp),
-              tint = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = stringResource(id = R.string.pref_about_donate_paypal),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium,
-              )
-              Text(
-                text = stringResource(id = R.string.pref_about_donate_paypal_summary),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.outline,
-              )
-            }
-          }
-
-          PreferenceDivider()
-
-          // UPI
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .clickable {
-                clipboardManager.setText(
-                  AnnotatedString(context.getString(R.string.pref_about_donate_upi_id)),
-                )
-              }
-              .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Icon(
-              imageVector = Icons.Filled.CurrencyRupee,
-              contentDescription = null,
-              modifier = Modifier.size(24.dp),
-              tint = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = stringResource(id = R.string.pref_about_donate_upi),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium,
-              )
-              Text(
-                text = stringResource(id = R.string.pref_about_donate_upi_id),
-                style = MaterialTheme.typography.bodyMedium,
+                text = stringResource(id = R.string.i18n_ack_tap_to_open),
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline,
               )
             }
           }
         }
+
 
         Spacer(Modifier.height(12.dp))
       }

@@ -1,7 +1,9 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
 
+import `is`.xyz.mpv.MPVLib
 import android.text.format.DateUtils
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -11,14 +13,29 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.AspectRatio
+import androidx.compose.material.icons.outlined.Audiotrack
+import androidx.compose.material.icons.outlined.Bookmarks
+import androidx.compose.material.icons.outlined.Camera
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.PowerSettingsNew
+import androidx.compose.material.icons.outlined.Repeat
+import androidx.compose.material.icons.outlined.Shuffle
+import androidx.compose.material.icons.outlined.SkipNext
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,6 +44,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimeInput
@@ -39,19 +57,24 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.anime4k.Anime4KManager
-import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.DecoderPreferences
+import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.components.PlayerSheet
+import app.marlboroadvance.mpvex.ui.player.RepeatMode
+import app.marlboroadvance.mpvex.ui.player.Sheets
 import app.marlboroadvance.mpvex.ui.theme.spacing
-import `is`.xyz.mpv.MPVLib
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -64,19 +87,33 @@ fun MoreSheet(
   onDismissRequest: () -> Unit,
   onEnterFiltersPanel: () -> Unit,
   onAnime4KChanged: () -> Unit = {},
+  /** 用来从「更多」里直接打开其它面板/子页（快捷功能宫格） */
+  onShowSheet: (Sheets) -> Unit = {},
+  /** 当前循环模式（开关的两态由它推导） */
+  repeatMode: RepeatMode = RepeatMode.OFF,
+  /** 是否有播放队列：决定「循环播放」打开时是循环队列还是单曲循环 */
+  hasPlaylist: Boolean = false,
+  /** 切换循环模式（经 ViewModel 落到运行时状态与偏好） */
+  onRepeatModeChange: (RepeatMode) -> Unit = {},
+  /** 随机播放是否开启 */
+  shuffleEnabled: Boolean = false,
+  /** 切换随机播放 */
+  onToggleShuffle: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
-  val advancedPreferences = koinInject<AdvancedPreferences>()
   val decoderPreferences = koinInject<DecoderPreferences>()
   val anime4kManager = koinInject<Anime4KManager>()
-  val statisticsPage by advancedPreferences.enabledStatisticsPage.collectAsState()
-  
+  val playerPreferences = koinInject<PlayerPreferences>()
+
+  val autoplayNextVideo by playerPreferences.autoplayNextVideo.collectAsState()
+  val closeAfterEof by playerPreferences.closeAfterReachingEndOfVideo.collectAsState()
+
   val enableAnime4K by decoderPreferences.enableAnime4K.collectAsState()
   val anime4kMode by decoderPreferences.anime4kMode.collectAsState()
   val anime4kQuality by decoderPreferences.anime4kQuality.collectAsState()
   val gpuNext by decoderPreferences.gpuNext.collectAsState()
   val useVulkan by decoderPreferences.useVulkan.collectAsState()
-  
+
   val context = LocalContext.current
 val scope = rememberCoroutineScope()
 
@@ -144,39 +181,142 @@ val scope = rememberCoroutineScope()
       }
 
 
+      // ── 播放 ──
+      // 三个「这一集放完之后干什么」的开关。以前只能在「设置 → 播放器」里改，
+      // 想临时换一下得退出播放页翻设置；放在「更多」里就能在播放页就地切。
+      // 循环播放是两态开关，映射到三态的 RepeatMode：
+      //   开 → 有队列就循环整个队列（ALL），单文件就单曲循环（ONE）；关 → OFF。
+      // （需要精确指定三态时，底部那枚循环按钮仍然是「循环切换」）
       Text(
-        text = stringResource(R.string.player_sheets_stats_page_title),
+        text = stringResource(R.string.player_sheets_more_playback),
         style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.primary
+        color = MaterialTheme.colorScheme.primary,
       )
-      LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.extraSmall),
       ) {
-        items(6) { page ->
-          FilterChip(
-            label = {
-              Text(
-                stringResource(
-                  if (page ==
-                    0
-                  ) {
-                    R.string.player_sheets_tracks_off
-                  } else {
-                    R.string.player_sheets_stats_page_chip
-                  },
-                  page,
-                ),
-              )
+        PlaybackToggleRow(
+          icon = Icons.Outlined.Repeat,
+          title = stringResource(R.string.player_toggle_repeat),
+          summary = stringResource(
+            when (repeatMode) {
+              RepeatMode.OFF -> R.string.player_toggle_repeat_off
+              RepeatMode.ONE -> R.string.player_toggle_repeat_one
+              RepeatMode.ALL -> R.string.player_toggle_repeat_all
             },
-            onClick = {
-              if ((page == 0) xor (statisticsPage == 0)) MPVLib.command("script-binding", "stats/display-stats-toggle")
-              if (page != 0) MPVLib.command("script-binding", "stats/display-page-$page")
-              advancedPreferences.enabledStatisticsPage.set(page)
+          ),
+          checked = repeatMode != RepeatMode.OFF,
+          onCheckedChange = { on ->
+            onRepeatModeChange(
+              when {
+                !on -> RepeatMode.OFF
+                hasPlaylist -> RepeatMode.ALL
+                else -> RepeatMode.ONE
+              },
+            )
+          },
+        )
+
+        PlaybackToggleRow(
+          icon = Icons.Outlined.SkipNext,
+          title = stringResource(R.string.pref_autoplay_next_video_title),
+          summary = stringResource(
+            if (autoplayNextVideo) {
+              R.string.player_toggle_autoplay_on
+            } else {
+              R.string.player_toggle_autoplay_off
             },
-            selected = statisticsPage == page,
-            leadingIcon = null,
-          )
-        }
+          ),
+          checked = autoplayNextVideo,
+          onCheckedChange = { playerPreferences.autoplayNextVideo.set(it) },
+        )
+
+        // 随机播放：原本占着竖屏底部按钮条一个位置，属低频操作，移到这里。
+        PlaybackToggleRow(
+          icon = Icons.Outlined.Shuffle,
+          title = stringResource(R.string.player_toggle_shuffle),
+          summary = stringResource(
+            if (shuffleEnabled) {
+              R.string.player_toggle_shuffle_on
+            } else {
+              R.string.player_toggle_shuffle_off
+            },
+          ),
+          checked = shuffleEnabled,
+          onCheckedChange = { onToggleShuffle() },
+        )
+
+        PlaybackToggleRow(
+          icon = Icons.Outlined.PowerSettingsNew,
+          title = stringResource(R.string.player_toggle_close_eof),
+          summary = stringResource(
+            if (closeAfterEof) {
+              R.string.player_toggle_close_eof_on
+            } else {
+              R.string.player_toggle_close_eof_off
+            },
+          ),
+          checked = closeAfterEof,
+          onCheckedChange = { playerPreferences.closeAfterReachingEndOfVideo.set(it) },
+        )
+      }
+
+      // ── 快捷功能 ──
+      // 这里原本是「默认统计页面」选择器（关闭 + 第 1~5 页共 6 个 chip）。
+      // 统计浮层本身是给开发者看帧时序/缓存用的，属于极低频功能，整块移除；
+      // 腾出的位置改成这些「不常用、但需要时得能找到」的功能入口，
+      // 播放页的竖屏控件条上就不用再为它们各占一个按钮位置了。
+      // 每一项都是「打开对应面板」，不改动播放状态，因此行为可预期、不会误触。
+      Text(
+        text = stringResource(R.string.player_sheets_more_quick_actions),
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.primary,
+      )
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
+        verticalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
+      ) {
+        QuickActionItem(
+          icon = Icons.Outlined.Speed,
+          label = stringResource(R.string.player_control_playback_speed),
+          onClick = { onShowSheet(Sheets.PlaybackSpeed) },
+        )
+        QuickActionItem(
+          icon = Icons.Outlined.AspectRatio,
+          label = stringResource(R.string.player_sheets_video_settings_title),
+          onClick = { onShowSheet(Sheets.AspectRatios) },
+        )
+        QuickActionItem(
+          icon = Icons.Outlined.ZoomIn,
+          label = stringResource(R.string.player_control_video_zoom),
+          onClick = { onShowSheet(Sheets.VideoZoom) },
+        )
+        QuickActionItem(
+          icon = Icons.Outlined.Camera,
+          label = stringResource(R.string.player_sheets_frame_navigation_title),
+          onClick = { onShowSheet(Sheets.FrameNavigation) },
+        )
+        QuickActionItem(
+          icon = Icons.Outlined.Bookmarks,
+          label = stringResource(R.string.player_sheets_more_chapters),
+          onClick = { onShowSheet(Sheets.Chapters) },
+        )
+        QuickActionItem(
+          icon = Icons.Outlined.Audiotrack,
+          label = stringResource(R.string.pref_audio),
+          onClick = { onShowSheet(Sheets.AudioTracks) },
+        )
+        QuickActionItem(
+          icon = Icons.Outlined.Subtitles,
+          label = stringResource(R.string.pref_subtitles),
+          onClick = { onShowSheet(Sheets.SubtitleTracks) },
+        )
+        QuickActionItem(
+          icon = Icons.Outlined.Memory,
+          label = stringResource(R.string.pref_decoder),
+          onClick = { onShowSheet(Sheets.Decoders) },
+        )
       }
       
       // Shaders Controls
@@ -195,7 +335,7 @@ val scope = rememberCoroutineScope()
         
         if (isHighRes) {
             Text(
-                text = "Not available for 4K/8K video",
+                text = stringResource(R.string.i18n_not_available_4k8k),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(bottom = 4.dp)
@@ -349,8 +489,7 @@ fun TimePickerDialog(
             horizontalAlignment = Alignment.Start,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(
-                "Quick Presets",
+            Text(stringResource(R.string.i18n_quick_presets),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(bottom = 8.dp)
@@ -409,5 +548,98 @@ fun TimePickerDialog(
   }
 
 
+/**
+ * 「更多」面板里的单个快捷功能入口。
+ *
+ * 图标放在圆形浅底上、下方一行小号标签 —— 宫格排布（外层 FlowRow），
+ * 与播放页控件条上的圆形按钮形成区分：这里点一下是「打开面板」，不会改变播放状态。
+ */
+@Composable
+private fun QuickActionItem(
+  icon: ImageVector,
+  label: String,
+  onClick: () -> Unit,
+) {
+  Column(
+    horizontalAlignment = Alignment.CenterHorizontally,
+    modifier =
+      Modifier
+        .width(76.dp)
+        .clip(RoundedCornerShape(16.dp))
+        .clickable(onClick = onClick)
+        .padding(vertical = MaterialTheme.spacing.small),
+  ) {
+    Surface(
+      shape = CircleShape,
+      color = MaterialTheme.colorScheme.surfaceContainerHighest,
+      contentColor = MaterialTheme.colorScheme.onSurface,
+      tonalElevation = 0.dp,
+      shadowElevation = 0.dp,
+    ) {
+      Icon(
+        imageVector = icon,
+        contentDescription = null,
+        modifier =
+          Modifier
+            .padding(11.dp)
+            .size(20.dp),
+      )
+    }
+    Spacer(Modifier.height(MaterialTheme.spacing.extraSmall))
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      textAlign = TextAlign.Center,
+      modifier = Modifier.fillMaxWidth(),
+    )
+  }
+}
 
-
+/**
+ * 「更多」面板里的一行播放开关：图标 + 标题/说明 + 右侧 Switch。
+ *
+ * 整行可点（点行内空白处即切换），和点 Switch 本身等价；
+ * 说明文字随开关状态变化，避免「这个开关开着到底代表什么」的歧义
+ * （尤其是「播完退出播放器」这种反向表述）。
+ */
+@Composable
+private fun PlaybackToggleRow(
+  icon: ImageVector,
+  title: String,
+  summary: String,
+  checked: Boolean,
+  onCheckedChange: (Boolean) -> Unit,
+) {
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(16.dp))
+        .clickable { onCheckedChange(!checked) }
+        .padding(horizontal = MaterialTheme.spacing.small, vertical = MaterialTheme.spacing.smaller),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Icon(
+      imageVector = icon,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.size(22.dp),
+    )
+    Spacer(Modifier.width(MaterialTheme.spacing.small))
+    Column(modifier = Modifier.weight(1f)) {
+      Text(
+        text = title,
+        style = MaterialTheme.typography.bodyLarge,
+      )
+      Text(
+        text = summary,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+    Switch(checked = checked, onCheckedChange = onCheckedChange)
+  }
+}

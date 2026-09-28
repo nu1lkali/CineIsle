@@ -28,11 +28,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.presentation.components.PlayerSheet
 import app.marlboroadvance.mpvex.ui.theme.spacing
 
@@ -73,7 +75,7 @@ fun AspectRatioSheet(
           .padding(vertical = MaterialTheme.spacing.medium),
     ) {
       Text(
-        text = "Aspect Ratio",
+        text = stringResource(R.string.i18n_aspect_ratio),
         style = MaterialTheme.typography.headlineSmall,
         modifier =
           Modifier
@@ -166,7 +168,7 @@ private fun AddCustomRatioRow(
         .padding(horizontal = MaterialTheme.spacing.medium),
   ) {
     Text(
-      text = "Add Custom Ratio (e.g. 16:9)",
+      text = stringResource(R.string.i18n_add_custom_ratio),
       style = MaterialTheme.typography.titleSmall,
       modifier = Modifier.padding(bottom = MaterialTheme.spacing.small),
     )

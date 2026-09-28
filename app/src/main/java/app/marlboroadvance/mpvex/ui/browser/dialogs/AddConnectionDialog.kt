@@ -29,10 +29,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkProtocol
 
@@ -83,7 +85,7 @@ fun AddConnectionSheet(
     modifier = Modifier.widthIn(min = 400.dp, max = 600.dp),
     title = {
       Text(
-        text = "Add Network Connection",
+        text = stringResource(R.string.i18n_add_network_connection),
         style = MaterialTheme.typography.headlineSmall,
         fontWeight = FontWeight.Medium,
       )
@@ -250,7 +252,7 @@ fun AddConnectionSheet(
         enabled = host.isNotBlank() && (isAnonymous || username.isNotBlank()),
       ) {
         Text(
-          text = "Save",
+          text = stringResource(R.string.i18n_save),
           fontWeight = FontWeight.SemiBold,
         )
       }

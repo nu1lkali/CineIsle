@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.sheets
 
+import app.marlboroadvance.mpvex.R
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,6 +41,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -77,7 +79,7 @@ fun PlaylistActionSheet(
     ) {
       // Title
       Text(
-        text = "Playlist Options",
+        text = stringResource(R.string.i18n_playlist_options),
         style = MaterialTheme.typography.headlineSmall,
         fontWeight = FontWeight.Medium,
         color = MaterialTheme.colorScheme.onSurface,
@@ -110,12 +112,12 @@ fun PlaylistActionSheet(
           )
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              text = "Create Empty Playlist",
+              text = stringResource(R.string.i18n_create_empty_playlist),
               style = MaterialTheme.typography.bodyLarge,
               fontWeight = FontWeight.Medium,
             )
             Text(
-              text = "Create a new blank playlist",
+              text = stringResource(R.string.i18n_create_blank_playlist_hint),
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -147,12 +149,12 @@ fun PlaylistActionSheet(
           )
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              text = "Add M3U Playlist from URL",
+              text = stringResource(R.string.i18n_add_m3u_from_url),
               style = MaterialTheme.typography.bodyLarge,
               fontWeight = FontWeight.Medium,
             )
             Text(
-              text = "Import a playlist from a web URL",
+              text = stringResource(R.string.i18n_import_m3u_hint),
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -280,7 +282,7 @@ fun PlaylistActionSheet(
           verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
           Text(
-            text = "Add M3U Playlist",
+            text = stringResource(R.string.i18n_add_m3u_playlist),
             style = MaterialTheme.typography.headlineSmall,
           )
 

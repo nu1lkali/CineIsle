@@ -37,7 +37,13 @@ class PlayerPreferences(
   val showLoadingCircle = preferenceStore.getBoolean("show_loading_circle", true)
   val savePositionOnQuit = preferenceStore.getBoolean("save_position", true)
 
-  val closeAfterReachingEndOfVideo = preferenceStore.getBoolean("close_after_eof", true)
+  /**
+   * 播完是否自动退出播放器。
+   *
+   * 默认 **false**（播完停在最后一帧，不退出），这也是「更多」面板里那个开关的默认状态；
+   * 想要「看完就回列表」的用户可以在开关里打开它。
+   */
+  val closeAfterReachingEndOfVideo = preferenceStore.getBoolean("close_after_eof", false)
 
   val rememberBrightness = preferenceStore.getBoolean("remember_brightness")
   val defaultBrightness = preferenceStore.getFloat("default_brightness", -1f)
@@ -66,6 +72,16 @@ class PlayerPreferences(
   // New: autoplay next video when current file ends
   val autoplayNextVideo = preferenceStore.getBoolean("autoplay_next_video", true)
 
+  /**
+   * 视频预加载。
+   *
+   * 打开后：当前视频播放满 [PRELOAD_TRIGGER_SECONDS] 秒时，后台取下一个视频**开头**一段数据，
+   * 等用户真的切过去时首帧来得更快，观感更接近「无缝」。
+   *
+   * 默认关闭 —— 预加载会额外占一点带宽，弱网或流量环境应由用户自己决定。
+   */
+  val preloadNextVideo = preferenceStore.getBoolean("preload_next_video", false)
+
   val autoPiPOnNavigation = preferenceStore.getBoolean("auto_pip_on_navigation", false)
 
   val keepScreenOnWhenPaused = preferenceStore.getBoolean("keep_screen_on_when_paused", false)
@@ -78,4 +94,12 @@ class PlayerPreferences(
     serializer = { it.toString() },
     deserializer = { it.toDoubleOrNull() ?: -1.0 }
   )
+
+  companion object {
+    /** 播放满多少秒后开始预加载下一个视频（用户需求：2 秒）。 */
+    const val PRELOAD_TRIGGER_SECONDS = 2
+
+    /** 预取的数据量：够覆盖容器头 + 开头关键帧即可，取多了反而挤占当前视频的带宽。 */
+    const val PRELOAD_BYTES = 2L * 1024 * 1024
+  }
 }

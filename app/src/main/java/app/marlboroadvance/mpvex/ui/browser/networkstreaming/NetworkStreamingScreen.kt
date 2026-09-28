@@ -48,10 +48,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
@@ -177,7 +179,7 @@ object NetworkStreamingScreen : Screen {
           item {
             Spacer(modifier = Modifier.height(24.dp))
             Text(
-              text = "Local Network",
+              text = stringResource(R.string.i18n_local_network),
               style = MaterialTheme.typography.titleLarge,
               fontWeight = FontWeight.Bold,
               color = MaterialTheme.colorScheme.primary,
@@ -208,14 +210,14 @@ object NetworkStreamingScreen : Screen {
                   )
                   Spacer(modifier = Modifier.height(16.dp))
                   Text(
-                    text = "No network connections",
+                    text = stringResource(R.string.i18n_no_network_connections),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface, // a
                   )
                   Spacer(modifier = Modifier.height(8.dp))
                   Text(
-                    text = "Add SMB, FTP, or WebDAV connections to browse network files",
+                    text = stringResource(R.string.i18n_network_empty_hint),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -295,7 +297,7 @@ private fun StreamLinkSection(
     modifier = Modifier.fillMaxWidth(),
   ) {
     Text(
-      text = "Stream Link",
+      text = stringResource(R.string.i18n_stream_link),
       style = MaterialTheme.typography.titleLarge,
       fontWeight = FontWeight.Bold,
       color = MaterialTheme.colorScheme.primary,
@@ -383,7 +385,7 @@ private fun StreamLinkSection(
               modifier = Modifier.padding(end = 8.dp),
             )
             Text(
-              text = "Play",
+              text = stringResource(R.string.i18n_play),
               fontWeight = FontWeight.Bold,
             )
           }

@@ -61,6 +61,7 @@ import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshGridBox
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyFavoriteRandomIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
@@ -292,7 +293,9 @@ data class EmbyLibraryScreen(
             }
           }
         }) {
-          Icon(Icons.Default.ShuffleOn, contentDescription = "随机播放收藏")
+          // 区别于上面的「随机播放」：用它自己的 Emby 收藏随机图标，
+          // 原先用的 ShuffleOn 只比 Shuffle 多一条下划线，并排根本分不出来
+          Icon(EmbyFavoriteRandomIcon, contentDescription = "随机播放收藏")
         }
         IconButton(onClick = { showStyleDialog = true }) {
           Icon(Icons.Default.GridView, contentDescription = "视图样式")

@@ -234,8 +234,8 @@ fun SubtitleSettingsTypographyCard(modifier: Modifier = Modifier) {
             MPVLib.setPropertyString("sub-border-style", it.value)
           },
           title = { Text(stringResource(R.string.player_sheets_subtitles_border_style)) },
-          valueToText = { AnnotatedString(context.getString(it.titleRes)) },
           values = SubtitlesBorderStyle.entries,
+          valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
           type = ListPreferenceType.DROPDOWN_MENU,
           summary = { Text(stringResource(borderStyle.titleRes)) },
           icon = { Icon(Icons.Default.BorderStyle, null) },

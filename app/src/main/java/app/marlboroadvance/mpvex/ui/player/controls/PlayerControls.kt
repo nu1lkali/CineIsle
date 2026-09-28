@@ -92,6 +92,7 @@ import androidx.constraintlayout.compose.Dimension
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
+import app.marlboroadvance.mpvex.preferences.PlayerButton
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.preferences.preference.deleteAndGet
@@ -131,6 +132,45 @@ import kotlin.math.abs
 
 @Suppress("CompositionLocalAllowlist")
 val LocalPlayerButtonsClickEvent = staticCompositionLocalOf { {} }
+
+/**
+ * 竖屏顶栏右侧的「快捷开关」集合。
+ *
+ * 这几个都是「设一次就不用再碰」的低频项：解码器 / 音轨 / 字幕 / 收藏 / 更多。
+ * 放右上角既不占底部空间，也不影响常用操作。
+ *
+ * 刻意只保留 5 个：5 × 40dp + 间距 ≈ 220dp，竖屏顶栏还能给标题留出可读宽度；
+ * 再多会把标题压成省略号。章节类按钮不在这里（它们落到左簇），避免顶栏被撑满。
+ *
+ * 用户仍然可以在「播放器控件」设置里自由增删 —— 这里只决定「显示在哪个区域」，
+ * 不是硬性订阅；把某一项移出竖屏列表，顶栏自然也不会出现它。
+ */
+private val PORTRAIT_TOP_SHORTCUTS =
+  setOf(
+    PlayerButton.DECODER,
+    PlayerButton.AUDIO_TRACK,
+    PlayerButton.SUBTITLES,
+    PlayerButton.EMBY_FAVORITE,
+    PlayerButton.MORE_OPTIONS,
+  )
+
+/**
+ * 竖屏底部的**排列顺序**分组：画面类工具排在按钮条的右半边。
+ *
+ * 竖屏底部已经合并成一条连续按钮条（见 [CenteredBottomPlayerControlsPortrait]），
+ * 这里不再决定「左右簇」的坐标，而是决定**谁排在右边**：
+ * 这一组里的排在按钮条末尾，其余按用户配置的先后顺序排在前面。
+ *
+ * 屏幕旋转的按钮按用户反馈挪到了右边（原来画中画的位置），画中画则回到左边，
+ * 两者位置对调 —— 旋转是「换一个视角看」的动作，和比例/缩放这类画面工具放一起更顺。
+ */
+private val PORTRAIT_RIGHT_CLUSTER =
+  setOf(
+    PlayerButton.FRAME_NAVIGATION,
+    PlayerButton.VIDEO_ZOOM,
+    PlayerButton.ASPECT_RATIO,
+    PlayerButton.SCREEN_ROTATION,
+  )
 
 fun <T> playerControlsExitAnimationSpec(): FiniteAnimationSpec<T> =
   tween(
@@ -233,14 +273,23 @@ fun PlayerControls(
       listOf(topR, bottomR, bottomL)
     }
 
-  // 竖屏把竖屏控件列表拆成两组：
-  //   ① 顶栏右侧的「低频开关」——锁屏 / 画中画 / 逐帧 / 更多，设一次就不用再碰；
-  //   ② 底部按钮带——其余常用项。
-  // 这样底部一条带就能放得下，不再需要左右滑（之前 18 个按钮 ≈ 936dp，远超屏宽，两端被裁掉）。
-  val (portraitTopButtons, portraitBottomButtons) = remember(portraitBottomControlsPref) {
+  // 竖屏控件列表按用途拆开：
+  //   ① 顶栏右侧快捷开关：解码器 / 音轨 / 字幕 / 收藏 / 更多；
+  //   ② 底部按钮条：剩下的全部，按「播放状态类 → 画面类」排成一条，居中显示。
+  // 上一版是左右两簇分别贴边，中间空出一大块，看起来像被一条分割线切开；
+  // 现在合并成一条连续（必要时可横向滚动）的按钮条，标题单独一行压在进度条上方。
+  val (portraitTopButtons, portraitSideButtons) = remember(portraitBottomControlsPref) {
     appearancePreferences
       .parseButtons(portraitBottomControlsPref, mutableSetOf())
       .partition { it in PORTRAIT_TOP_SHORTCUTS }
+  }
+  // 上/下一集固定显示在屏幕正中的播放键两侧，从底部按钮条里剔除，避免重复出现；
+  // 同时把「画面类」统一挪到按钮条末尾，保证它们始终在右半边。
+  val portraitBottomButtons = remember(portraitSideButtons) {
+    val playState = portraitSideButtons.filter { it !in PORTRAIT_RIGHT_CLUSTER }
+    val displayState = portraitSideButtons.filter { it in PORTRAIT_RIGHT_CLUSTER }
+    (playState + displayState)
+      .filter { it != PlayerButton.PREVIOUS && it != PlayerButton.NEXT }
   }
 
   var isUnlockSliderDragging by remember { mutableStateOf(false) }
@@ -307,6 +356,8 @@ fun PlayerControls(
         val (bottomRightControls, bottomLeftControls) = createRefs()
         val playerPauseButton = createRef()
         val seekbar = createRef()
+        // 竖屏：标题放在进度条上方，单独一条约束（横屏不使用）
+        val portraitBottomTitle = createRef()
         val (playerUpdates) = createRefs()
 
         val isBrightnessSliderShown by viewModel.isBrightnessSliderShown.collectAsState()
@@ -539,7 +590,7 @@ fun PlayerControls(
             is PlayerUpdates.VideoZoom -> {
               val zoomPercentage = (videoZoom * 100).toInt()
               TextPlayerUpdate(
-                text = String.format("Zoom:%3d%%", zoomPercentage), 
+                text = stringResource(R.string.player_update_zoom, zoomPercentage), 
                 modifier = Modifier, // Let content size determine width
               )
             }
@@ -556,13 +607,13 @@ fun PlayerControls(
             is PlayerUpdates.RepeatMode -> {
               val mode = (currentPlayerUpdate as PlayerUpdates.RepeatMode).mode
               val text = when (mode) {
-                app.marlboroadvance.mpvex.ui.player.RepeatMode.OFF -> "Repeat: Off"
-                app.marlboroadvance.mpvex.ui.player.RepeatMode.ONE -> "Repeat: Current file"
+                app.marlboroadvance.mpvex.ui.player.RepeatMode.OFF -> stringResource(R.string.player_update_repeat_off)
+                app.marlboroadvance.mpvex.ui.player.RepeatMode.ONE -> stringResource(R.string.player_update_repeat_one)
                 app.marlboroadvance.mpvex.ui.player.RepeatMode.ALL -> {
                   if (playlistMode && viewModel.hasPlaylistSupport()) {
-                    "Repeat: All playlist"
+                    stringResource(R.string.player_update_repeat_all)
                   } else {
-                    "Repeat: Current file"
+                    stringResource(R.string.player_update_repeat_one)
                   }
                 }
               }
@@ -573,12 +624,12 @@ fun PlayerControls(
               val enabled = (currentPlayerUpdate as PlayerUpdates.Shuffle).enabled
               val text = if (enabled) {
                 if (playlistMode && viewModel.hasPlaylistSupport()) {
-                  "Shuffle: On"
+                  stringResource(R.string.player_update_shuffle_on)
                 } else {
-                  "Shuffle: Not available"
+                  stringResource(R.string.player_update_shuffle_unavailable)
                 }
               } else {
-                "Shuffle: Off"
+                stringResource(R.string.player_update_shuffle_off)
               }
               TextPlayerUpdate(text)
             }
@@ -586,9 +637,9 @@ fun PlayerControls(
             is PlayerUpdates.FrameInfo -> {
               val frameInfo = (currentPlayerUpdate as PlayerUpdates.FrameInfo)
               val text = if (frameInfo.totalFrames > 0) {
-                "Frame: ${frameInfo.currentFrame}/${frameInfo.totalFrames}"
+                stringResource(R.string.player_update_frame_with_total, frameInfo.currentFrame, frameInfo.totalFrames)
               } else {
-                "Frame: ${frameInfo.currentFrame}"
+                stringResource(R.string.player_update_frame, frameInfo.currentFrame)
               }
               TextPlayerUpdate(text)
             }
@@ -625,12 +676,9 @@ fun PlayerControls(
             Modifier.constrainAs(playerPauseButton) {
               end.linkTo(parent.absoluteRight)
               start.linkTo(parent.absoluteLeft)
-              if (isPortrait) {
-                bottom.linkTo(bottomRightControls.top, spacing.medium)
-              } else {
-                top.linkTo(parent.top)
-                bottom.linkTo(parent.bottom)
-              }
+              // 竖屏与横屏一致：播放键（含上/下一集）压在屏幕垂直中线上
+              top.linkTo(parent.top)
+              bottom.linkTo(parent.bottom)
             },
         ) {
           val showLoadingCircle by playerPreferences.showLoadingCircle.collectAsState()
@@ -695,7 +743,7 @@ fun PlayerControls(
                   ) {
                     Icon(
                       imageVector = Icons.Default.SkipPrevious,
-                      contentDescription = "Previous",
+                      contentDescription = stringResource(R.string.player_control_previous),
                       tint =
                         if (viewModel.hasPrevious()) {
                           if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface
@@ -793,7 +841,7 @@ fun PlayerControls(
                   ) {
                     Icon(
                       imageVector = Icons.Default.SkipNext,
-                      contentDescription = "Next",
+                      contentDescription = stringResource(R.string.player_control_next),
                       tint =
                         if (viewModel.hasNext()) {
                           if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface
@@ -888,11 +936,9 @@ fun PlayerControls(
                 }
               )
               .constrainAs(seekbar) {
-                if (isPortrait) {
-                  bottom.linkTo(playerPauseButton.top, spacing.small)
-                } else {
-                  bottom.linkTo(parent.bottom, spacing.small)
-                }
+                // 竖屏与横屏一致：进度条贴屏幕最底（左右两端是已播/总时长），
+                // 按钮簇压在它上方 —— 与参考版式相同，按钮不会跟进度条抢位置。
+                bottom.linkTo(parent.bottom, spacing.small)
                 start.linkTo(parent.start, spacing.large)
                 end.linkTo(parent.end, spacing.large)
               },
@@ -988,12 +1034,36 @@ fun PlayerControls(
               },
         ) {
           if (isPortrait) {
+            // 竖屏顶栏只有「返回 + 快捷开关」两段：标题挪到进度条上方单独一行（见下方 portraitBottomTitle），
+            // 这样顶栏不会因为标题和 5 个开关抢宽度而把标题压成省略号。
             TopPlayerControlsPortrait(
-              mediaTitle = mediaTitle,
               hideBackground = hideBackground,
               onBackPress = onBackPress,
-              onOpenSheet = onOpenSheet,
-              viewModel = viewModel,
+              // 顶栏右侧挂快捷开关（解码器 / 音轨 / 字幕 / 收藏 / 更多），
+              // 复用横屏那一行的渲染，只是缩到 40dp 适配竖屏顶栏高度
+              trailing = {
+                if (portraitTopButtons.isNotEmpty()) {
+                  TopRightPlayerControlsLandscape(
+                    buttons = portraitTopButtons,
+                    chapters = chapters,
+                    currentChapter = currentChapter,
+                    isSpeedNonOne = isSpeedNonOne,
+                    currentZoom = currentZoom,
+                    aspect = aspect,
+                    mediaTitle = mediaTitle,
+                    hideBackground = hideBackground,
+                    decoder = decoder,
+                    playbackSpeed = playbackSpeed ?: 1f,
+                    onBackPress = onBackPress,
+                    onOpenSheet = onOpenSheet,
+                    onOpenPanel = onOpenPanel,
+                    viewModel = viewModel,
+                    activity = activity,
+                    isPortrait = true,
+                    buttonSize = 40.dp,
+                  )
+                }
+              },
             )
           } else {
             TopLeftPlayerControlsLandscape(
@@ -1066,50 +1136,96 @@ fun PlayerControls(
           )
         }
 
-        AnimatedVisibility(
-          visible = controlsShown && !areControlsLocked && !areSlidersShown,
-          enter =
-            if (!reduceMotion) {
-              slideInHorizontally(playerControlsEnterAnimationSpec()) { it } +
+        if (isPortrait) {
+          // ── 竖屏底部：标题（进度条上方，占满整行） ──
+          AnimatedVisibility(
+            visible = controlsShown && !areControlsLocked,
+            enter =
+              if (!reduceMotion) {
+                slideInVertically(playerControlsEnterAnimationSpec()) { it } +
+                  fadeIn(playerControlsEnterAnimationSpec())
+              } else {
                 fadeIn(playerControlsEnterAnimationSpec())
-            } else {
-              fadeIn(playerControlsEnterAnimationSpec())
-            },
-          exit =
-            if (!reduceMotion) {
-              slideOutHorizontally(playerControlsExitAnimationSpec()) { it } +
+              },
+            exit =
+              if (!reduceMotion) {
+                slideOutVertically(playerControlsExitAnimationSpec()) { it } +
+                  fadeOut(playerControlsExitAnimationSpec())
+              } else {
                 fadeOut(playerControlsExitAnimationSpec())
-            } else {
-              fadeOut(playerControlsExitAnimationSpec())
-            },
-          modifier =
-            Modifier
-              .then(
-                if (showSystemNavigationBar) {
-                  val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
-                  Modifier.padding(
-                    start = navBarPadding.calculateLeftPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
-                    end = navBarPadding.calculateRightPadding(androidx.compose.ui.unit.LayoutDirection.Ltr)
-                  )
-                } else {
-                  Modifier
-                }
-              )
-              .constrainAs(bottomRightControls) {
-                if (isPortrait) {
-                  bottom.linkTo(parent.bottom, spacing.large)
+              },
+            modifier =
+              Modifier
+                .then(
+                  if (showSystemNavigationBar) {
+                    val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
+                    Modifier.padding(
+                      start = navBarPadding.calculateLeftPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
+                      end = navBarPadding.calculateRightPadding(androidx.compose.ui.unit.LayoutDirection.Ltr)
+                    )
+                  } else {
+                    Modifier
+                  }
+                )
+                .constrainAs(portraitBottomTitle) {
+                  bottom.linkTo(seekbar.top, spacing.smaller)
                   start.linkTo(parent.start, spacing.large)
                   end.linkTo(parent.end, spacing.large)
-                  width = Dimension.fillToConstraints
-                } else {
-                  bottom.linkTo(seekbar.top, spacing.small)
-                  end.linkTo(parent.end, spacing.large)
-                }
+                },
+          ) {
+            PortraitBottomTitle(
+              mediaTitle = mediaTitle,
+              playlistInfo = viewModel.getPlaylistInfo(),
+              hideBackground = hideBackground,
+              // 有播放队列时点标题打开队列（与横屏顶栏那枚标题胶囊行为一致）
+              clickable = playlistMode && viewModel.hasPlaylistSupport(),
+              onClick = {
+                resetControlsTimestamp = System.currentTimeMillis()
+                onOpenSheet(Sheets.Playlist)
               },
-        ) {
-          if (isPortrait) {
-            BottomPlayerControlsPortrait(
+            )
+          }
+
+          // ── 竖屏底部按钮条：原来的左右两簇合并成一条连续按钮条，整体居中 ──
+          AnimatedVisibility(
+            visible = controlsShown && !areControlsLocked && !areSlidersShown,
+            enter =
+              if (!reduceMotion) {
+                slideInVertically(playerControlsEnterAnimationSpec()) { it } +
+                  fadeIn(playerControlsEnterAnimationSpec())
+              } else {
+                fadeIn(playerControlsEnterAnimationSpec())
+              },
+            exit =
+              if (!reduceMotion) {
+                slideOutVertically(playerControlsExitAnimationSpec()) { it } +
+                  fadeOut(playerControlsExitAnimationSpec())
+              } else {
+                fadeOut(playerControlsExitAnimationSpec())
+              },
+            modifier =
+              Modifier
+                .then(
+                  if (showSystemNavigationBar) {
+                    val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
+                    Modifier.padding(
+                      start = navBarPadding.calculateLeftPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
+                      end = navBarPadding.calculateRightPadding(androidx.compose.ui.unit.LayoutDirection.Ltr)
+                    )
+                  } else {
+                    Modifier
+                  }
+                )
+                .constrainAs(bottomLeftControls) {
+                  bottom.linkTo(portraitBottomTitle.top, spacing.smaller)
+                  start.linkTo(parent.start, spacing.medium)
+                  end.linkTo(parent.end, spacing.medium)
+                  width = Dimension.fillToConstraints
+                },
+          ) {
+            CenteredBottomPlayerControlsPortrait(
               buttons = portraitBottomButtons,
+              buttonSize = 42.dp,
               chapters = chapters,
               currentChapter = currentChapter,
               isSpeedNonOne = isSpeedNonOne,
@@ -1125,7 +1241,43 @@ fun PlayerControls(
               viewModel = viewModel,
               activity = activity,
             )
-          } else {
+          }
+        } else {
+          AnimatedVisibility(
+            visible = controlsShown && !areControlsLocked && !areSlidersShown,
+            enter =
+              if (!reduceMotion) {
+                slideInHorizontally(playerControlsEnterAnimationSpec()) { it } +
+                  fadeIn(playerControlsEnterAnimationSpec())
+              } else {
+                fadeIn(playerControlsEnterAnimationSpec())
+              },
+            exit =
+              if (!reduceMotion) {
+                slideOutHorizontally(playerControlsExitAnimationSpec()) { it } +
+                  fadeOut(playerControlsExitAnimationSpec())
+              } else {
+                fadeOut(playerControlsExitAnimationSpec())
+              },
+            modifier =
+              Modifier
+                .then(
+                  if (showSystemNavigationBar) {
+                    val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
+                    Modifier.padding(
+                      start = navBarPadding.calculateLeftPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
+                      end = navBarPadding.calculateRightPadding(androidx.compose.ui.unit.LayoutDirection.Ltr)
+                    )
+                  } else {
+                    Modifier
+                  }
+                )
+                .constrainAs(bottomRightControls) {
+                  // 横屏保持原有分区：右簇压在进度条之上、贴屏幕右缘（宽度随内容，不拉满）
+                  bottom.linkTo(seekbar.top, spacing.medium)
+                  end.linkTo(parent.end, spacing.large)
+                },
+          ) {
             BottomRightPlayerControlsLandscape(
               buttons = bottomRightButtons,
               chapters = chapters,
@@ -1144,61 +1296,63 @@ fun PlayerControls(
               activity = activity,
             )
           }
-        }
 
-        AnimatedVisibility(
-          visible = controlsShown && !areControlsLocked && !isPortrait && !areSlidersShown,
-          enter =
-            if (!reduceMotion) {
-              slideInHorizontally(playerControlsEnterAnimationSpec()) { -it } +
+          AnimatedVisibility(
+            visible = controlsShown && !areControlsLocked && !areSlidersShown,
+            enter =
+              if (!reduceMotion) {
+                slideInHorizontally(playerControlsEnterAnimationSpec()) { -it } +
+                  fadeIn(playerControlsEnterAnimationSpec())
+              } else {
                 fadeIn(playerControlsEnterAnimationSpec())
-            } else {
-              fadeIn(playerControlsEnterAnimationSpec())
-            },
-          exit =
-            if (!reduceMotion) {
-              slideOutHorizontally(playerControlsExitAnimationSpec()) { -it } +
-                fadeOut(playerControlsExitAnimationSpec())
-            } else {
-              fadeOut(playerControlsExitAnimationSpec())
-            },
-          modifier =
-            Modifier
-              .then(
-                if (showSystemNavigationBar) {
-                  val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
-                  Modifier.padding(
-                    start = navBarPadding.calculateLeftPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
-                    end = navBarPadding.calculateRightPadding(androidx.compose.ui.unit.LayoutDirection.Ltr)
-                  )
-                } else {
-                  Modifier
-                }
-              )
-              .constrainAs(bottomLeftControls) {
-                bottom.linkTo(seekbar.top, spacing.small)
-                start.linkTo(parent.start, spacing.large)
-                width = Dimension.fillToConstraints
-                end.linkTo(bottomRightControls.start, spacing.small)
               },
-        ) {
-          BottomLeftPlayerControlsLandscape(
-            buttons = bottomLeftButtons,
-            chapters = chapters,
-            currentChapter = currentChapter,
-            isSpeedNonOne = isSpeedNonOne,
-            currentZoom = currentZoom,
-            aspect = aspect,
-            mediaTitle = mediaTitle,
-            hideBackground = hideBackground,
-            decoder = decoder,
-            playbackSpeed = playbackSpeed ?: 1f,
-            onBackPress = onBackPress,
-            onOpenSheet = onOpenSheet,
-            onOpenPanel = onOpenPanel,
-            viewModel = viewModel,
-            activity = activity,
-          )
+            exit =
+              if (!reduceMotion) {
+                slideOutHorizontally(playerControlsExitAnimationSpec()) { -it } +
+                  fadeOut(playerControlsExitAnimationSpec())
+              } else {
+                fadeOut(playerControlsExitAnimationSpec())
+              },
+            modifier =
+              Modifier
+                .then(
+                  if (showSystemNavigationBar) {
+                    val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
+                    Modifier.padding(
+                      start = navBarPadding.calculateLeftPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
+                      end = navBarPadding.calculateRightPadding(androidx.compose.ui.unit.LayoutDirection.Ltr)
+                    )
+                  } else {
+                    Modifier
+                  }
+                )
+                .constrainAs(bottomLeftControls) {
+                  // 横屏保持原有分区：左簇压在进度条之上、贴屏幕左缘，
+                  // 宽度吃满到右簇左侧，行内内容靠左对齐
+                  bottom.linkTo(seekbar.top, spacing.medium)
+                  start.linkTo(parent.start, spacing.large)
+                  width = Dimension.fillToConstraints
+                  end.linkTo(bottomRightControls.start, spacing.medium)
+                },
+          ) {
+            BottomLeftPlayerControlsLandscape(
+              buttons = bottomLeftButtons,
+              chapters = chapters,
+              currentChapter = currentChapter,
+              isSpeedNonOne = isSpeedNonOne,
+              currentZoom = currentZoom,
+              aspect = aspect,
+              mediaTitle = mediaTitle,
+              hideBackground = hideBackground,
+              decoder = decoder,
+              playbackSpeed = playbackSpeed ?: 1f,
+              onBackPress = onBackPress,
+              onOpenSheet = onOpenSheet,
+              onOpenPanel = onOpenPanel,
+              viewModel = viewModel,
+              activity = activity,
+            )
+          }
         }
 
       }

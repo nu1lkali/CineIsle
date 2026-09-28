@@ -221,6 +221,7 @@ fun EmbyHomeScreen(
                     imageUrl = viewModel.imageUrl(server!!, item, "Backdrop", 640),
                     fallbackImageUrl = viewModel.imageUrl(server!!, item, "Primary", 640),
                     progress = playbackProgress(item),
+                    remainingText = remainingLabel(item),
                     isFavorite = item.UserData?.IsFavorite == true,
                     // 单击进入详情页，播放由详情页发起
                     onClick = { onOpenDetail(item) },
@@ -277,6 +278,26 @@ private fun playbackProgress(item: EmbyItem): Float? {
   val position = item.UserData?.PlaybackPositionTicks ?: 0L
   if (position <= 0) return null
   return (position.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+}
+
+/**
+ * 剩余时长文案：「剩余 XX分XX秒」。
+ *
+ * 只有「已开始播放且尚未看完」的条目才返回非空；
+ * 超过 1 小时的用「剩余 X小时XX分」，避免数字太长撑破角标。
+ */
+private fun remainingLabel(item: EmbyItem): String? {
+  val total = item.RunTimeTicks ?: return null
+  if (total <= 0) return null
+  val position = item.UserData?.PlaybackPositionTicks ?: 0L
+  if (position <= 0) return null
+  val remain = EmbyTicks.ticksToSeconds(total - position)
+  if (remain <= 0) return null
+  return if (remain >= 3600) {
+    "剩余 ${remain / 3600}小时${(remain % 3600) / 60}分"
+  } else {
+    "剩余 ${remain / 60}分${remain % 60}秒"
+  }
 }
 
 /** 按媒体库类型挑选图标 */

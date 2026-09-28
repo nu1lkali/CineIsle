@@ -14,10 +14,14 @@ android {
   namespace = "app.marlboroadvance.mpvex"
   compileSdk = 37
 
-  // 开发期快速出包开关：加 -Parm64Only 时只打 arm64 单包。
-  // 4 个 ABI × 151MB 的 mpv/ffmpeg 原生库合并太慢，单次构建会被超时掐断；
-  // 不带该参数时，构建行为与原来完全一致。
-  val arm64OnlyBuild = project.hasProperty("arm64Only")
+  // 开发期快速出包开关（只打单个 ABI 包，避免 4×151MB 原生库合并把构建拖超时）：
+  //   -Pabi=x86_64      只出 x86_64 单包（模拟器用这个）
+  //   -Pabi=arm64-v8a   只出 arm64 单包（真机用这个）
+  //   -Parm64Only       等价于 -Pabi=arm64-v8a（保留旧用法，向后兼容）
+  // 不带任何参数时，构建行为与原来完全一致（4 个 ABI 拆包 + universal）。
+  val singleAbi: String? =
+    (project.findProperty("abi") as String?)?.takeIf { it.isNotBlank() }
+      ?: if (project.hasProperty("arm64Only")) "arm64-v8a" else null
 
   defaultConfig {
     applicationId = "app.marlboroadvance.mpvex"
@@ -58,8 +62,8 @@ android {
       buildConfigField("boolean", "SCOPED_STORAGE_ONLY", "false")
 
       ndk {
-        // 与 splits 的 ABI 过滤互斥：单包模式（arm64Only）下必须留空，否则 AGP 直接报配置冲突
-        if (!arm64OnlyBuild) abiFilters += "arm64-v8a"
+        // 与 splits 的 ABI 过滤互斥：单包模式（-Pabi / -Parm64Only）下必须留空，否则 AGP 直接报配置冲突
+        if (singleAbi == null) abiFilters += "arm64-v8a"
       }
     }
   }
@@ -73,8 +77,8 @@ android {
     abi {
       isEnable = true
       reset()
-      if (arm64OnlyBuild) {
-        include("arm64-v8a")
+      if (singleAbi != null) {
+        include(singleAbi)
         isUniversalApk = false
       } else {
         include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")

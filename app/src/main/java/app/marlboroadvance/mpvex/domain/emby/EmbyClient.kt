@@ -126,11 +126,41 @@ data class EmbyMediaStream(
   val Index: Int? = null,
   val Type: String? = null,
   val Codec: String? = null,
+  /** 编码档次，如 HEVC 的 "Main 10"、AAC 的 "LC" */
+  val Profile: String? = null,
+  /** 编码级别，如 H.264 的 41（对应 4.1） */
+  val Level: Double? = null,
+  val CodecTag: String? = null,
   val Language: String? = null,
   val DisplayTitle: String? = null,
   val Width: Int? = null,
   val Height: Int? = null,
+  val AspectRatio: String? = null,
   val BitRate: Long? = null,
+  /** 标称帧率（帧/秒） */
+  val FrameRate: Double? = null,
+  val AverageFrameRate: Double? = null,
+  val RealFrameRate: Double? = null,
+  val IsInterlaced: Boolean? = null,
+  /** 位深度（8 / 10 / 12） */
+  val BitDepth: Int? = null,
+  /** 像素格式，如 yuv420p10le */
+  val PixelFormat: String? = null,
+  /** 动态范围，如 SDR / HDR */
+  val VideoRange: String? = null,
+  /** 更细的动态范围类型，如 HDR10 / HLG / DolbyVision */
+  val VideoRangeType: String? = null,
+  val ColorSpace: String? = null,
+  val ColorTransfer: String? = null,
+  val ColorPrimaries: String? = null,
+  /** 参考帧数 */
+  val RefFrames: Int? = null,
+  // ── 音频流 ──
+  val Channels: Int? = null,
+  val ChannelLayout: String? = null,
+  val SampleRate: Int? = null,
+  // ── 字幕流 ──
+  val IsExternal: Boolean? = null,
   val IsDefault: Boolean? = null,
   val IsForced: Boolean? = null,
 )

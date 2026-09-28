@@ -32,9 +32,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.utils.history.RecentlyPlayedOps
 import app.marlboroadvance.mpvex.utils.media.MediaUtils
 import kotlinx.coroutines.launch
@@ -100,7 +102,7 @@ fun PlayLinkSheet(
     ) {
       // Title
       Text(
-        text = "Play Link",
+        text = stringResource(R.string.i18n_play_link),
         style = MaterialTheme.typography.headlineSmall,
         fontWeight = FontWeight.Medium,
         color = MaterialTheme.colorScheme.onSurface,
@@ -130,7 +132,7 @@ fun PlayLinkSheet(
 
         if (linkInputUrl.isNotBlank() && !isLinkInputUrlValid) {
           Text(
-            text = "Invalid URL protocol",
+            text = stringResource(R.string.i18n_invalid_url_protocol),
             color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
@@ -159,7 +161,7 @@ fun PlayLinkSheet(
             ),
         ) {
           Text(
-            text = "Play",
+            text = stringResource(R.string.i18n_play),
             fontWeight = FontWeight.SemiBold,
           )
         }
@@ -175,13 +177,13 @@ private fun ValidationIcon(isValid: Boolean) {
   if (isValid) {
     Icon(
       Icons.Filled.CheckCircle,
-      contentDescription = "Valid URL",
+      contentDescription = stringResource(R.string.i18n_valid_url),
       tint = MaterialTheme.colorScheme.primary,
     )
   } else {
     Icon(
       Icons.Filled.Info,
-      contentDescription = "Invalid URL",
+      contentDescription = stringResource(R.string.i18n_invalid_url),
       tint = MaterialTheme.colorScheme.error,
     )
   }

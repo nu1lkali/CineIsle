@@ -42,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -49,6 +50,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.utils.storage.StorageVolumeUtils
 import java.io.File
 
@@ -182,7 +184,7 @@ fun FilePickerDialog(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                   Column(modifier = Modifier.fillMaxWidth()) {
                       Text(
-                        text = "Select Subtitle",
+                        text = stringResource(R.string.i18n_select_subtitle),
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                       )
@@ -220,7 +222,7 @@ fun FilePickerDialog(
                   ) {
                       Column(modifier = Modifier.weight(1f)) {
                           Text(
-                            text = "Select Subtitle",
+                            text = stringResource(R.string.i18n_select_subtitle),
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold,
                           )

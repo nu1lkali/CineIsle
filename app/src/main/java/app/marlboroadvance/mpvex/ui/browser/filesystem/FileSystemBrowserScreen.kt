@@ -10,6 +10,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.utils.media.OpenDocumentTreeContract
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -453,7 +454,7 @@ fun FileSystemBrowserScreen(path: String? = null) {
                 leadingIcon = {
                   Icon(
                     imageVector = Icons.Filled.Search,
-                    contentDescription = "Search",
+                    contentDescription = stringResource(R.string.i18n_search),
                   )
                 },
                 trailingIcon = {
@@ -683,7 +684,7 @@ fun FileSystemBrowserScreen(path: String? = null) {
                 filePicker.launch(arrayOf("video/*"))
               },
               icon = { Icon(Icons.Filled.FileOpen, contentDescription = null) },
-              text = { Text(text = "Open File") },
+              text = { Text(text = stringResource(R.string.i18n_open_file)) },
             )
 
             FloatingActionButtonMenuItem(
@@ -707,7 +708,7 @@ fun FileSystemBrowserScreen(path: String? = null) {
                 showLinkDialog.value = true
               },
               icon = { Icon(Icons.Filled.Link, contentDescription = null) },
-              text = { Text(text = "Open Link") },
+              text = { Text(text = stringResource(R.string.i18n_open_link)) },
             )
           }
         }

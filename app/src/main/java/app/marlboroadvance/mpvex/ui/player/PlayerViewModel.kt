@@ -1012,10 +1012,22 @@ class PlayerViewModel(
 
   // ==================== Screen Rotation ====================
 
+  /**
+   * 本次播放会话中用户通过旋转按钮手动指定的屏幕方向。
+   *
+   * null 表示未手动覆盖，跟随偏好设置。切集（playNext / playPrevious）时沿用该值，
+   * 避免用户手动转到的方向被偏好设置强制拉回。
+   */
+  private var manualOrientationOverride: Int? = null
+
+  /** 当前生效的手动方向覆盖值；null 表示未覆盖（应跟随偏好设置） */
+  val manualOrientationOverrideValue: Int?
+    get() = manualOrientationOverride
+
   fun cycleScreenRotations() {
-    // Temporarily cycle orientation WITHOUT modifying preferences
-    // Preferences remain the single source of truth and will be reapplied on next video
-    host.hostRequestedOrientation =
+    // 临时切换方向但**不修改偏好设置**：偏好仍是持久化的事实来源，
+    // 但本次会话内会记住用户的选择，切集时沿用而不是回退到偏好。
+    val next =
       when (host.hostRequestedOrientation) {
         ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
         ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE,
@@ -1027,6 +1039,9 @@ class PlayerViewModel(
           ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
       }
+
+    manualOrientationOverride = next
+    host.hostRequestedOrientation = next
   }
 
   // ==================== Gesture Handling ====================
@@ -1354,7 +1369,7 @@ class PlayerViewModel(
     } else 0f
 
     return activity.playlist.mapIndexed { index, uri ->
-      val title = activity.getPlaylistItemTitle(uri)
+      val title = activity.getPlaylistItemTitle(uri, index)
       // Path is not used for thumbnail loading - thumbnails are loaded directly from URI
       // Keep it for cache key compatibility
       val path = uri.toString()
@@ -1680,6 +1695,19 @@ class PlayerViewModel(
 
     // Show overlay update instead of toast
     playerUpdate.value = PlayerUpdates.RepeatMode(_repeatMode.value)
+  }
+
+  /**
+   * 直接设置循环模式（「更多」面板里的「循环播放」开关走这条路径）。
+   *
+   * 与 [cycleRepeatMode] 的区别：这里是「置为指定值」而不是「下一档」，
+   * 开关的两态（开 / 关）才能和循环模式一一对应；同样会持久化并弹出浮层提示。
+   */
+  fun setRepeatMode(mode: RepeatMode) {
+    if (_repeatMode.value == mode) return
+    _repeatMode.value = mode
+    playerPreferences.repeatMode.set(mode)
+    playerUpdate.value = PlayerUpdates.RepeatMode(mode)
   }
 
   fun toggleShuffle() {

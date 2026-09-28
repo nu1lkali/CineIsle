@@ -31,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
@@ -163,7 +165,7 @@ data class ConfigEditorScreen(
             )
             if (hasUnsavedChanges) {
               Text(
-                text  = "Unsaved changes",
+                text = stringResource(R.string.i18n_unsaved_changes),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.secondary,
               )
@@ -174,7 +176,7 @@ data class ConfigEditorScreen(
           IconButton(onClick = backStack::removeLastOrNull) {
             Icon(
               Icons.AutoMirrored.Default.ArrowBack,
-              contentDescription = "Back",
+              contentDescription = stringResource(R.string.i18n_back),
               tint = MaterialTheme.colorScheme.secondary,
             )
           }
@@ -194,7 +196,7 @@ data class ConfigEditorScreen(
             ),
             shape = RoundedCornerShape(8.dp),
           ) {
-            Icon(Icons.Default.Check, contentDescription = "Save")
+            Icon(Icons.Default.Check, contentDescription = stringResource(R.string.i18n_save))
           }
         },
       )

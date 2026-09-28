@@ -97,12 +97,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.PlayerButton
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlayerActions
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
@@ -175,9 +177,7 @@ fun RenderPlayerButton(
           if (hideBackground) {
             Color.Transparent
           } else {
-            MaterialTheme.colorScheme.surfaceContainer.copy(
-              alpha = 0.55f,
-            )
+            PlayerControlGlassFill
           },
         contentColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
         tonalElevation = 0.dp,
@@ -278,7 +278,7 @@ fun RenderPlayerButton(
           ) {
             Icon(
               imageVector = Icons.Default.Speed,
-              contentDescription = "Playback Speed",
+              contentDescription = stringResource(R.string.player_control_playback_speed),
               tint = MaterialTheme.colorScheme.primary,
               modifier = Modifier.size(20.dp),
             )
@@ -307,9 +307,7 @@ fun RenderPlayerButton(
           if (hideBackground) {
             Color.Transparent
           } else {
-            MaterialTheme.colorScheme.surfaceContainer.copy(
-              alpha = 0.55f,
-            )
+            PlayerControlGlassFill
           },
         contentColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
         tonalElevation = 0.dp,
@@ -405,7 +403,7 @@ fun RenderPlayerButton(
                 Box(contentAlignment = Alignment.Center) {
                   Icon(
                     imageVector = Icons.Default.FastRewind,
-                    contentDescription = "Previous Frame",
+                    contentDescription = stringResource(R.string.player_control_previous_frame),
                     tint = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(20.dp),
                   )
@@ -448,7 +446,7 @@ fun RenderPlayerButton(
                   Box(contentAlignment = Alignment.Center) {
                     Icon(
                       imageVector = Icons.Default.CameraAlt,
-                      contentDescription = "Take Screenshot",
+                      contentDescription = stringResource(R.string.player_control_take_screenshot),
                       tint = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
                       modifier = Modifier.size(20.dp),
                     )
@@ -471,7 +469,7 @@ fun RenderPlayerButton(
                 Box(contentAlignment = Alignment.Center) {
                   Icon(
                     imageVector = Icons.Default.FastForward,
-                    contentDescription = "Next Frame",
+                    contentDescription = stringResource(R.string.player_control_next_frame),
                     tint = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(20.dp),
                   )
@@ -531,7 +529,7 @@ fun RenderPlayerButton(
           ) {
             Icon(
               imageVector = Icons.Default.ZoomIn,
-              contentDescription = "Video Zoom",
+              contentDescription = stringResource(R.string.player_control_video_zoom),
               tint = MaterialTheme.colorScheme.primary,
               modifier = Modifier.size(20.dp),
             )
@@ -730,7 +728,7 @@ fun RenderPlayerButton(
         Box(contentAlignment = Alignment.Center) {
           Icon(
             imageVector = Icons.Default.Flip,
-            contentDescription = "Vertical Flip",
+            contentDescription = stringResource(R.string.player_control_vertical_flip),
             tint = vFlipColor,
             modifier = Modifier
               .padding(MaterialTheme.spacing.small)
@@ -808,7 +806,7 @@ fun RenderPlayerButton(
                 Box(contentAlignment = Alignment.Center) {
                   Icon(
                     imageVector = Icons.Default.Close,
-                    contentDescription = "Clear Loop",
+                    contentDescription = stringResource(R.string.player_control_clear_loop),
                     tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(16.dp),
                   )
@@ -855,7 +853,7 @@ fun RenderPlayerButton(
             Box(contentAlignment = Alignment.Center) {
               Icon(
                 imageVector = Icons.Outlined.Autorenew,
-                contentDescription = "AB Loop",
+                contentDescription = stringResource(R.string.player_control_ab_loop),
                 tint = if (loopA != null && loopB != null) {
                   MaterialTheme.colorScheme.primary
                 } else {

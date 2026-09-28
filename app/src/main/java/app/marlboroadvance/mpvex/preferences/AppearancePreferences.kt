@@ -53,10 +53,35 @@ class AppearancePreferences(
       "PREVIOUS,NEXT,BACKGROUND_PLAYBACK,LOCK_CONTROLS,SCREEN_ROTATION,PLAYBACK_SPEED,REPEAT_MODE,SHUFFLE,AB_LOOP",
     )
 
+  /**
+   * 竖屏播放页的控件列表（默认值）。
+   *
+   * 竖屏屏宽有限（约 411dp）。顶栏是「返回 + 快捷开关」，标题不再占顶栏（见下），
+   * 所以顶栏能放 5 个：解码器 / 音轨 / 字幕 / 收藏 / 更多。
+   *
+   * 底部是**一条连续按钮条**（左簇 + 右簇已合并居中），默认 8 个：
+   * 倍速 / 循环 / 随机 / 锁屏 / 画中画 / 缩放 / 比例 / 旋转。
+   * 8 × 42dp + 7 × 4dp ≈ 364dp，411dp 屏刚好放得下；再多的项可以用「播放器控件」设置自行增删。
+   *
+   * 上/下一集固定在屏幕正中，标题移到进度条上方，都不占按钮条。
+   *
+   * 从这份默认里拿掉的低频项（AB 循环、后台播放、章节、逐帧导航、屏幕旋转以外的画面项等）
+   * 并没有消失 —— 它们可以在「播放器控件 → 竖屏控件」里加回来，
+   * 其中大部分也能从「更多」面板的「快捷功能」进入。
+   *
+   * 注意 key 带了 `_v3`：v2 的默认值（15 项）已经写进了老用户的本地存储，
+   * 只改默认值不会生效，换 key 才能让新布局落地。
+   *
+   * v3 相比 v2 又拿掉了 3 项挤在底部按钮条里的按钮（随机播放 / 缩放 / 画面比例）——
+   * 底部只剩「倍速 / 循环 / 锁屏 / 画中画 / 屏幕旋转」5 个高频操作，不再抢画面。
+   * 随机播放改到「更多」面板的「播放」分区，缩放与比例本来就在「更多 → 快捷功能」里。
+   */
   val portraitBottomControls =
     preferenceStore.getString(
-      "portrait_bottom_controls",
-      "PREVIOUS,NEXT,EMBY_FAVORITE,SCREEN_ROTATION,DECODER,AUDIO_TRACK,SUBTITLES,BOOKMARKS_CHAPTERS,PLAYBACK_SPEED,BACKGROUND_PLAYBACK,REPEAT_MODE,SHUFFLE,VIDEO_ZOOM,FRAME_NAVIGATION,ASPECT_RATIO,PICTURE_IN_PICTURE,LOCK_CONTROLS,MORE_OPTIONS",
+      "portrait_bottom_controls_v3",
+      "PREVIOUS,NEXT,EMBY_FAVORITE,DECODER,AUDIO_TRACK,SUBTITLES," +
+        "PLAYBACK_SPEED,REPEAT_MODE,LOCK_CONTROLS," +
+        "PICTURE_IN_PICTURE,SCREEN_ROTATION,MORE_OPTIONS",
     )
 
   fun parseButtons(

@@ -81,6 +81,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import android.util.Log
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.browser.FileSystemItem
 import app.marlboroadvance.mpvex.domain.media.model.VideoFolder
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
@@ -335,7 +336,7 @@ object FolderListScreen : Screen {
                 leadingIcon = {
                   Icon(
                     imageVector = Icons.Filled.Search,
-                    contentDescription = "Search",
+                    contentDescription = stringResource(R.string.i18n_search),
                   )
                 },
                 trailingIcon = {
@@ -479,7 +480,7 @@ object FolderListScreen : Screen {
               filePicker.launch(arrayOf("video/*"))
             },
             icon = { Icon(Icons.Filled.FileOpen, contentDescription = null) },
-            text = { Text(text = "Open File") },
+            text = { Text(text = stringResource(R.string.i18n_open_file)) },
           )
 
           FloatingActionButtonMenuItem(
@@ -503,7 +504,7 @@ object FolderListScreen : Screen {
               showLinkDialog.value = true
             },
             icon = { Icon(Icons.Filled.Link, contentDescription = null) },
-            text = { Text(text = "Open Link") },
+            text = { Text(text = stringResource(R.string.i18n_open_link)) },
           )
         }
       },

@@ -255,10 +255,10 @@ object AdvancedPreferencesScreen : Screen {
           item {
             PreferenceCard {
               Preference(
-                title = { Text(text = "Export Settings") },
+                title = { Text(text = stringResource(R.string.i18n_export_settings)) },
                 summary = { 
                   Text(
-                    text = "Export settings to an XML file",
+                    text = stringResource(R.string.i18n_export_settings_hint),
                     color = MaterialTheme.colorScheme.outline,
                   ) 
                 },
@@ -277,10 +277,10 @@ object AdvancedPreferencesScreen : Screen {
               PreferenceDivider()
               
               Preference(
-                title = { Text(text = "Import Settings") },
+                title = { Text(text = stringResource(R.string.i18n_import_settings)) },
                 summary = { 
                   Text(
-                    text = "Import settings from an XML file",
+                    text = stringResource(R.string.i18n_import_settings_hint),
                     color = MaterialTheme.colorScheme.outline,
                   ) 
                 },
@@ -400,8 +400,7 @@ object AdvancedPreferencesScreen : Screen {
                       color = MaterialTheme.colorScheme.outline,
                     )
                   } else {
-                    Text(
-                      "Tap to edit configuration",
+                    Text(stringResource(R.string.i18n_tap_to_edit_config),
                       color = MaterialTheme.colorScheme.outline,
                     )
                   }
@@ -423,8 +422,7 @@ object AdvancedPreferencesScreen : Screen {
                       color = MaterialTheme.colorScheme.outline,
                     )
                   } else {
-                    Text(
-                      "Tap to edit configuration",
+                    Text(stringResource(R.string.i18n_tap_to_edit_config),
                       color = MaterialTheme.colorScheme.outline,
                     )
                   }
@@ -517,10 +515,10 @@ object AdvancedPreferencesScreen : Screen {
               val thumbnailRepository = koinInject<ThumbnailRepository>()
               
               Preference(
-                title = { Text(text = "Clear config cache") },
+                title = { Text(text = stringResource(R.string.i18n_clear_config_cache)) },
                 summary = { 
                   Text(
-                    text = "Clear the cached mpv.conf settings",
+                    text = stringResource(R.string.i18n_clear_config_cache_hint),
                     color = MaterialTheme.colorScheme.outline,
                   ) 
                 },
@@ -546,10 +544,10 @@ object AdvancedPreferencesScreen : Screen {
               PreferenceDivider()
 
               Preference(
-                title = { Text(text = "Clear thumbnail cache") },
+                title = { Text(text = stringResource(R.string.i18n_clear_thumb_cache)) },
                 summary = {
                   Text(
-                    text = "Delete all cached video thumbnails (will regenerate as you browse folders)",
+                    text = stringResource(R.string.i18n_clear_thumb_cache_hint),
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },
@@ -587,7 +585,7 @@ object AdvancedPreferencesScreen : Screen {
                 title = { Text(text = stringResource(id = R.string.pref_advanced_clear_fonts_cache)) },
                 summary = { 
                   Text(
-                    text = "Remove all cached subtitle fonts",
+                    text = stringResource(R.string.i18n_clear_font_cache_hint),
                     color = MaterialTheme.colorScheme.outline,
                   ) 
                 },

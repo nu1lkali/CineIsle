@@ -84,7 +84,7 @@ object PlayerPreferencesScreen : Screen {
                 value = orientation,
                 onValueChange = preferences.orientation::set,
                 values = PlayerOrientation.entries,
-                valueToText = { AnnotatedString(context.getString(it.titleRes)) },
+                valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
                 title = { Text(text = stringResource(id = R.string.pref_player_orientation)) },
                 summary = { 
                   Text(
@@ -118,7 +118,7 @@ object PlayerPreferencesScreen : Screen {
               SwitchPreference(
                 value = autoplayNextVideo,
                 onValueChange = preferences.autoplayNextVideo::set,
-                title = { Text(text = "Autoplay next video") },
+                title = { Text(text = stringResource(R.string.i18n_autoplay_next_video)) },
                 summary = {
                   Text(
                     text = if (autoplayNextVideo)
@@ -132,11 +132,26 @@ object PlayerPreferencesScreen : Screen {
               
               PreferenceDivider()
               
+              val preloadNextVideo by preferences.preloadNextVideo.collectAsState()
+              SwitchPreference(
+                value = preloadNextVideo,
+                onValueChange = preferences.preloadNextVideo::set,
+                title = { Text(text = stringResource(R.string.i18n_preload_next_video)) },
+                summary = {
+                  Text(
+                    text = stringResource(R.string.i18n_preload_next_video_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
               val playlistMode by preferences.playlistMode.collectAsState()
               SwitchPreference(
                 value = playlistMode,
                 onValueChange = preferences.playlistMode::set,
-                title = { Text(text = "Enable next/previous navigation") },
+                title = { Text(text = stringResource(R.string.i18n_enable_nav)) },
                 summary = {
                   Text(
                     text = if (playlistMode)
@@ -166,7 +181,7 @@ object PlayerPreferencesScreen : Screen {
                 title = { Text("自动画中画") },
                 summary = {
                   Text(
-                    text = "Automatically enter PIP mode when pressing home or back",
+                    text = stringResource(R.string.i18n_auto_pip_hint),
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },
@@ -335,8 +350,7 @@ object PlayerPreferencesScreen : Screen {
                 onValueChange = preferences.showDynamicSpeedOverlay::set,
                 title = { Text("动态倍速浮层") },
                 summary = { 
-                  Text(
-                    "Show advance overlay for speed control during long press and swipe",
+                  Text(stringResource(R.string.i18n_speed_overlay_hint),
                     color = MaterialTheme.colorScheme.outline,
                   ) 
                 }

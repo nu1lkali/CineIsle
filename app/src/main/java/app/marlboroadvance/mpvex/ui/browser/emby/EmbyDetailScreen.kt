@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,14 +22,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -42,6 +38,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.SuggestionChipDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -55,6 +52,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
@@ -65,7 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
-import app.marlboroadvance.mpvex.domain.emby.EmbyMediaSource
+import app.marlboroadvance.mpvex.domain.emby.EmbyMediaStream
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.presentation.Screen
@@ -75,6 +73,8 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlin.math.abs
+import kotlin.math.round
 
 /**
  * 媒体详情页。
@@ -82,7 +82,7 @@ import kotlinx.serialization.Serializable
  * 布局（沉浸式）：
  * 1. 顶部透明栏浮在剧照之上：左侧返回，右侧「标记为已播放 / 收藏 / 更多」
  * 2. 剧照（Backdrop）从屏幕顶端一直延伸到按钮下方，标题叠在剧照上
- * 3. 剧照下方依次是播放按钮与元数据信息
+ * 3. 剧照下方依次是播放/删除按钮、简介、演职员，最后是完整的媒体编码信息
  */
 @Serializable
 data class EmbyDetailScreen(
@@ -223,9 +223,9 @@ private fun DetailBody(
         BackdropHeader(item = item, backdropUrl = backdropUrl, posterUrl = posterUrl)
       }
 
-      // ── 播放按钮 ──
+      // ── 播放 / 删除 ──
       item {
-        PlaySection(item = item, onPlay = onPlay)
+        PlaySection(item = item, onPlay = onPlay, onDelete = onDelete)
       }
 
       // ── 类型标签 ──
@@ -309,28 +309,9 @@ private fun DetailBody(
         }
       }
 
-      // ── 媒体信息 ──
-      item.MediaSources?.takeIf { it.isNotEmpty() }?.let { sources ->
-        item {
-          Column(modifier = Modifier.padding(16.dp)) {
-            Text("媒体信息", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-            sources.forEach { source -> MediaSourceInfo(source) }
-          }
-        }
-      }
-
-      item.Path?.takeIf { it.isNotBlank() }?.let { path ->
-        item {
-          Column(modifier = Modifier.padding(16.dp)) {
-            Text("文件路径", style = MaterialTheme.typography.titleSmall)
-            Text(
-              text = path,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-        }
+      // ── 媒体信息（含完整视频 / 音频编码信息）──
+      item {
+        MediaInfoSection(item = item)
       }
     }
 
@@ -400,9 +381,10 @@ private fun DetailBody(
 /**
  * 沉浸式剧照头部。
  *
- * - 有横幅（Backdrop）时：横幅铺满整个头图区，左下角叠加小海报卡。
- * - 只有海报（Primary，2:3 竖版）时：**完整展示整张海报**（ContentScale.Fit），
- *   而不是把它裁成一条横切片——否则就会出现「图很小 / 不完整」的问题。
+ * - 有横幅（Backdrop）时：横幅铺满整个头图区。
+ * - 只有海报（Primary，2:3 竖版）时：为了**铺满整个容器**改用 [ContentScale.Crop]
+ *   （原来用 Fit 会上下留出背景色条，看起来「图没铺满」）；Crop 会等比放大后居中裁切，
+ *   不会把脸拉变形。
  * - 标题放大加粗并加阴影，保证在任何底图上都清晰可读。
  */
 @Composable
@@ -419,7 +401,7 @@ private fun BackdropHeader(
       .fillMaxWidth()
       .height(if (hasBackdrop) BACKDROP_HEIGHT else POSTER_HEADER_HEIGHT),
   ) {
-    // 底图（有横幅用横幅，否则完整展示海报；都没有时用纯色占位）
+    // 底图：无论横幅还是海报都铺满容器（Crop = 等比放大 + 居中裁切，无变形）
     Box(
       modifier = Modifier
         .fillMaxSize()
@@ -432,7 +414,7 @@ private fun BackdropHeader(
           fallbackUrl = if (hasBackdrop) posterUrl else null,
           contentDescription = item.Name,
           modifier = Modifier.fillMaxSize(),
-          contentScale = if (hasBackdrop) ContentScale.Crop else ContentScale.Fit,
+          contentScale = ContentScale.Crop,
           // 详情页头部要清晰，给一个较高的解码上限（同时避免原图过大撑爆内存）
           maxWidth = 1080,
         )
@@ -509,14 +491,24 @@ private fun metaSummary(item: EmbyItem): String {
   return parts.joinToString(" · ")
 }
 
+/**
+ * 播放区：主按钮「播放 / 继续播放 · mm:ss」+ 右侧红色垃圾桶删除按钮。
+ *
+ * 进度说明改成**始终显示**（原来只在「可续播」时才出现，而且剩余时长不足 1 分钟会显示成空括号）：
+ * `已观看 24% · 剩余 1小时12分 · 总时长 1小时35分`，
+ * 剩余/总时长用 [formatDurationFull] 格式化，秒级也一定有位数字。
+ * 只有真看过的片子才额外显示「从头播放 / 继续上次」两个按钮。
+ */
 @Composable
 private fun PlaySection(
   item: EmbyItem,
   onPlay: (resumeSeconds: Long) -> Unit,
+  onDelete: () -> Unit,
 ) {
   val positionTicks = item.UserData?.PlaybackPositionTicks ?: 0L
   val runTimeTicks = item.RunTimeTicks ?: 0L
   val resumeSeconds = EmbyTicks.ticksToSeconds(positionTicks)
+  val remainingTicks = (runTimeTicks - positionTicks).coerceAtLeast(0L)
   val hasResume = resumeSeconds > 10 && runTimeTicks > 0 &&
     (positionTicks.toFloat() / runTimeTicks.toFloat()) < 0.95f
   val progressPercent = if (runTimeTicks > 0) {
@@ -531,22 +523,54 @@ private fun PlaySection(
       .padding(horizontal = 16.dp, vertical = 12.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    Button(
-      onClick = { onPlay(if (hasResume) resumeSeconds else 0) },
+    Row(
       modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      Icon(Icons.Default.PlayArrow, contentDescription = null)
-      Spacer(modifier = Modifier.width(8.dp))
-      Text(if (hasResume) "继续播放 · ${formatClock(resumeSeconds)}" else "播放")
+      Button(
+        onClick = { onPlay(if (hasResume) resumeSeconds else 0) },
+        modifier = Modifier
+          .weight(1f)
+          .height(56.dp),
+      ) {
+        Icon(Icons.Default.PlayArrow, contentDescription = null)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(if (hasResume) "继续播放 · ${formatClock(resumeSeconds)}" else "播放")
+      }
+
+      // 删除：红底红桶，就放在播放按钮旁边；点击后仍会弹确认框（由外层控制）
+      IconButton(
+        onClick = onDelete,
+        modifier =
+          Modifier
+            .size(56.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.errorContainer),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Delete,
+          contentDescription = "删除媒体",
+          tint = MaterialTheme.colorScheme.error,
+        )
+      }
     }
 
-    if (hasResume) {
+    // 进度：已观看百分比 + 剩余时长 + 总时长，三个数一起给，避免只看到一个百分比
+    if (runTimeTicks > 0) {
       Text(
-        text = "已观看 $progressPercent%（剩余 ${formatDuration(runTimeTicks - positionTicks)}）",
+        text = buildString {
+          append("已观看 $progressPercent%")
+          append(" · 剩余 ${formatDurationFull(remainingTicks)}")
+          append(" · 总时长 ${formatDurationFull(runTimeTicks)}")
+        },
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 4.dp),
       )
+    }
+
+    if (hasResume) {
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilledTonalButton(onClick = { onPlay(0) }) {
           Text("从头播放")
@@ -559,42 +583,246 @@ private fun PlaySection(
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// 媒体信息：基本信息 + 视频/音频/字幕轨道编码信息
+// ════════════════════════════════════════════════════════════════════════
+
+/** 信息表的一行：分区标题（label == null 用 Section）或键值行 */
+private sealed interface MediaInfoEntry {
+  data class Section(
+    val title: String,
+  ) : MediaInfoEntry
+
+  data class Row(
+    val label: String,
+    val value: String,
+  ) : MediaInfoEntry
+}
+
 @Composable
-private fun MediaSourceInfo(source: EmbyMediaSource) {
-  Column(
-    modifier = Modifier
-      .fillMaxWidth()
-      .padding(vertical = 6.dp),
-  ) {
-    Text(
-      text = source.Name ?: "媒体源",
-      style = MaterialTheme.typography.bodyMedium,
-      fontWeight = FontWeight.SemiBold,
-    )
-    val video = source.MediaStreams?.firstOrNull { it.Type == "Video" }
-    val audio = source.MediaStreams?.firstOrNull { it.Type == "Audio" }
-    val subtitleCount = source.MediaStreams?.count { it.Type == "Subtitle" } ?: 0
+private fun MediaInfoSection(item: EmbyItem) {
+  val entries = remember(item) { buildInfoEntries(item) }
 
-    val details = mutableListOf<String>()
-    source.Container?.let { details.add(it.uppercase()) }
-    video?.let {
-      if (it.Width != null && it.Height != null) details.add("${it.Width}×${it.Height}")
-      it.Codec?.let { c -> details.add(c.uppercase()) }
-    }
-    audio?.let {
-      it.Codec?.let { c -> details.add("音频 ${c.uppercase()}") }
-      it.Language?.let { l -> details.add(l) }
-    }
-    if (subtitleCount > 0) details.add("字幕 $subtitleCount")
-    source.Size?.let { details.add(formatFileSize(it)) }
+  Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+    Text("媒体信息", style = MaterialTheme.typography.titleMedium)
+    Spacer(modifier = Modifier.height(8.dp))
 
-    if (details.isNotEmpty()) {
+    if (entries.isEmpty()) {
       Text(
-        text = details.joinToString(" · "),
+        text = "服务器没有返回可用的媒体信息",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
+      return@Column
     }
+
+    Surface(
+      shape = RoundedCornerShape(16.dp),
+      color = MaterialTheme.colorScheme.surfaceContainerLow,
+      modifier = Modifier.fillMaxWidth(),
+    ) {
+      Column(modifier = Modifier.padding(vertical = 6.dp)) {
+        entries.forEach { entry ->
+          when (entry) {
+            is MediaInfoEntry.Section -> {
+              Text(
+                text = entry.title,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 2.dp),
+              )
+            }
+
+            is MediaInfoEntry.Row -> {
+              Row(
+                modifier =
+                  Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.Top,
+              ) {
+                Text(
+                  text = entry.label,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.width(76.dp),
+                )
+                Text(
+                  text = entry.value,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  modifier = Modifier.weight(1f),
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 把 Emby 返回的字段整理成「分区 + 键值行」。
+ *
+ * 顺序：基本信息（含添加时间 / 文件路径）→ 每个视频轨道 → 每个音频轨道 → 字幕轨道。
+ * 值为空的项直接跳过，不会出现「未知 / N/A」这种噪音行。
+ */
+private fun buildInfoEntries(item: EmbyItem): List<MediaInfoEntry> {
+  val out = mutableListOf<MediaInfoEntry>()
+
+  fun add(label: String, value: String?) {
+    if (!value.isNullOrBlank()) out += MediaInfoEntry.Row(label, value)
+  }
+
+  fun section(title: String) {
+    out += MediaInfoEntry.Section(title)
+  }
+
+  // ── 基本信息 ──
+  val source = item.MediaSources?.firstOrNull()
+
+  add("添加时间", formatIsoDate(item.DateCreated))
+  add("首播日期", formatIsoDate(item.PremiereDate))
+  add("时长", item.RunTimeTicks?.takeIf { it > 0 }?.let { formatDurationFull(it) })
+  add("年份", item.ProductionYear?.toString())
+  add("分级", item.OfficialRating)
+  add("评分", item.CommunityRating?.let { "★ %.1f".format(it) })
+  add("制作", item.Studios?.firstOrNull()?.Name)
+  add("容器", source?.Container?.uppercase())
+  add("文件大小", source?.Size?.takeIf { it > 0 }?.let { formatFileSize(it) })
+  add("总码率", source?.Bitrate?.takeIf { it > 0 }?.let { formatBitrate(it) })
+  add("文件路径", item.Path)
+  if (out.isEmpty()) {
+    add("名称", item.Name)
+  }
+
+  val streams = source?.MediaStreams.orEmpty()
+
+  // ── 视频轨道 ──
+  val videos = streams.filter { it.Type == "Video" }
+  videos.forEachIndexed { index, v ->
+    section(if (videos.size > 1) "视频轨道 ${index + 1}" else "视频")
+    add("类型", "视频 (Video)")
+    add("语言", languageLabel(v.Language))
+    add("编码器", codecLine(v))
+    add("编码标识", v.CodecTag)
+    if (v.Width != null && v.Height != null) add("分辨率", "${v.Width}×${v.Height}")
+    add("画面比例", v.AspectRatio)
+    add("帧率", frameRateLabel(v))
+    add("动态范围", (v.VideoRangeType ?: v.VideoRange)?.uppercase())
+    add("比特率", v.BitRate?.takeIf { it > 0 }?.let { formatBitrate(it) })
+    add("位深度", v.BitDepth?.let { "$it bit" })
+    add("像素格式", v.PixelFormat)
+    add("色彩空间", v.ColorSpace)
+    add("传输特性", v.ColorTransfer)
+    add("色彩原色", v.ColorPrimaries)
+    v.IsInterlaced?.let { add("扫描方式", if (it) "隔行 (Interlaced)" else "逐行 (Progressive)") }
+    v.RefFrames?.takeIf { it > 0 }?.let { add("参考帧", "$it 帧") }
+  }
+
+  // ── 音频轨道 ──
+  val audios = streams.filter { it.Type == "Audio" }
+  audios.forEachIndexed { index, a ->
+    section(if (audios.size > 1) "音频轨道 ${index + 1}" else "音频")
+    add("类型", "音频 (Audio)")
+    add("语言", languageLabel(a.Language))
+    add("编码器", codecLine(a))
+    add("编码标识", a.CodecTag)
+    add("声道", a.Channels?.let { c -> a.ChannelLayout?.let { "$c ($it)" } ?: "$c" })
+    add("采样率", a.SampleRate?.takeIf { it > 0 }?.let { "$it Hz" })
+    add("比特率", a.BitRate?.takeIf { it > 0 }?.let { formatBitrate(it) })
+    add("位深度", a.BitDepth?.let { "$it bit" })
+    a.IsDefault?.let { add("默认音轨", if (it) "是" else "否") }
+  }
+
+  // ── 字幕轨道 ──
+  val subtitles = streams.filter { it.Type == "Subtitle" }
+  if (subtitles.isNotEmpty()) {
+    section("字幕（共 ${subtitles.size} 条）")
+    subtitles.forEachIndexed { index, s ->
+      val tags = buildList {
+        if (s.IsDefault == true) add("默认")
+        if (s.IsForced == true) add("强制")
+        add(if (s.IsExternal == true) "外挂" else "内嵌")
+      }
+      add(
+        "字幕 ${index + 1}",
+        listOfNotNull(
+          languageLabel(s.Language) ?: s.DisplayTitle,
+          s.Codec?.uppercase(),
+        ).joinToString(" · ") + " (${tags.joinToString("/")})",
+      )
+    }
+  }
+
+  return out
+}
+
+/** `HEVC (Main 10 · L4.1)` 这样的编码器描述；没有档次/级别时只给编码名 */
+private fun codecLine(stream: EmbyMediaStream): String? {
+  val codec = stream.Codec?.uppercase() ?: return null
+  val extras = buildList {
+    stream.Profile?.takeIf { it.isNotBlank() }?.let { add(it) }
+    stream.Level?.let { add("L$it") }
+  }
+  return if (extras.isEmpty()) codec else "$codec (${extras.joinToString(" · ")})"
+}
+
+/** 帧率：优先标称值，其次实际值；整数帧率不带小数点 */
+private fun frameRateLabel(stream: EmbyMediaStream): String? {
+  val fps = stream.FrameRate ?: stream.RealFrameRate ?: stream.AverageFrameRate ?: return null
+  if (fps <= 0.0) return null
+  val rounded = round(fps * 100) / 100.0
+  return if (abs(rounded - rounded.toInt()) < 0.005) "${rounded.toInt()} fps" else "%.2f fps".format(rounded)
+}
+
+/** `2024-01-15T10:23:45.0000000Z` → `2024-01-15` */
+private fun formatIsoDate(raw: String?): String? {
+  if (raw.isNullOrBlank()) return null
+  val datePart = raw.substringBefore('T')
+  return datePart.takeIf { it.length >= 8 }
+}
+
+/** ISO 639-2/1 语言码 → 中文名（带原码），未知码原样返回 */
+private fun languageLabel(code: String?): String? {
+  if (code.isNullOrBlank()) return null
+  return when (code.lowercase()) {
+    "chi", "zho", "zh", "chs", "cht" -> "中文 ($code)"
+    "eng", "en" -> "英语 ($code)"
+    "jpn", "ja" -> "日语 ($code)"
+    "kor", "ko" -> "韩语 ($code)"
+    "fra", "fre", "fr" -> "法语 ($code)"
+    "deu", "ger", "de" -> "德语 ($code)"
+    "spa", "es" -> "西班牙语 ($code)"
+    "rus", "ru" -> "俄语 ($code)"
+    "und" -> "未指定"
+    else -> code
+  }
+}
+
+private fun formatBitrate(bps: Long): String = when {
+  bps >= 1_000_000 -> "%.1f Mbps".format(bps / 1_000_000.0)
+  bps >= 1_000 -> "%d kbps".format(bps / 1_000)
+  else -> "$bps bps"
+}
+
+/**
+ * tick 时长 → 中文可读文本，**秒级也一定有数字**。
+ *
+ * 与 [formatDuration]（首页/卡片用，只到分钟、不足 1 分钟返回空串）的区别就在这里：
+ * 详情页的「剩余」如果不足 1 分钟会显示成空括号，看起来像没数据。
+ */
+private fun formatDurationFull(ticks: Long): String {
+  val totalSeconds = EmbyTicks.ticksToSeconds(ticks).coerceAtLeast(0L)
+  if (totalSeconds <= 0L) return "0 秒"
+  val hours = totalSeconds / 3600
+  val minutes = (totalSeconds % 3600) / 60
+  val seconds = totalSeconds % 60
+  return when {
+    hours > 0 -> "${hours}小时${minutes}分"
+    minutes > 0 -> "${minutes}分${seconds}秒"
+    else -> "${seconds}秒"
   }
 }
 
@@ -616,5 +844,5 @@ private fun formatFileSize(bytes: Long): String {
 
 private val BACKDROP_HEIGHT = 280.dp
 
-/** 没有横幅、只展示完整海报时头图区的高度（比横幅更高，容纳 2:3 竖版海报） */
+/** 没有横幅、只展示海报时头图区的高度（比横幅更高，容纳 2:3 竖版海报） */
 private val POSTER_HEADER_HEIGHT = 340.dp

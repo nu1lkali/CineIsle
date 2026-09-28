@@ -428,7 +428,7 @@ private fun FrameInfoDisplay(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
-        text = "Frame: ",
+        text = stringResource(R.string.i18n_frame_label),
         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
         color = MaterialTheme.colorScheme.tertiary,
       )
@@ -448,7 +448,7 @@ private fun FrameInfoDisplay(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
-        text = "Timestamp: ",
+        text = stringResource(R.string.i18n_timestamp_label),
         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
         color = MaterialTheme.colorScheme.tertiary,
       )

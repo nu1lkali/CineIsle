@@ -23,10 +23,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import androidx.compose.foundation.combinedClickable
@@ -92,7 +94,7 @@ fun M3UVideoCard(
         // Play icon overlay
         Icon(
           Icons.Filled.PlayArrow,
-          contentDescription = "Play",
+          contentDescription = stringResource(R.string.i18n_play),
           modifier = Modifier.size(48.dp),
           tint = MaterialTheme.colorScheme.secondary,
         )

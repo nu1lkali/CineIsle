@@ -51,11 +51,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.database.repository.PlaylistRepository
 import app.marlboroadvance.mpvex.domain.media.model.Video
 import app.marlboroadvance.mpvex.domain.media.model.VideoFolder
@@ -253,7 +255,7 @@ object RecentlyPlayedScreen : Screen {
               filePicker.launch(arrayOf("video/*"))
             },
             icon = { Icon(Icons.Filled.FileOpen, contentDescription = null) },
-            text = { Text(text = "Open File") },
+            text = { Text(text = stringResource(R.string.i18n_open_file)) },
           )
 
           FloatingActionButtonMenuItem(
@@ -277,7 +279,7 @@ object RecentlyPlayedScreen : Screen {
               showLinkDialog.value = true
             },
             icon = { Icon(Icons.Filled.Link, contentDescription = null) },
-            text = { Text(text = "Open Link") },
+            text = { Text(text = stringResource(R.string.i18n_open_link)) },
           )
         }
       },
@@ -387,7 +389,7 @@ object RecentlyPlayedScreen : Screen {
                 },
               )
               androidx.compose.material3.Text(
-                text = "Also delete original file(s)",
+                text = stringResource(R.string.i18n_also_delete_original),
                 modifier = Modifier.padding(start = 8.dp),
                 style = MaterialTheme.typography.bodyMedium,
               )

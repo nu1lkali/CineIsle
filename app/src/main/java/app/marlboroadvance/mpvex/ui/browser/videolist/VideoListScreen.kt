@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.utils.media.OpenDocumentTreeContract
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -64,6 +65,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -523,7 +525,7 @@ data class VideoListScreen(
           onDismissRequest = { showPrivateSpaceCompletionDialog.value = false },
           title = {
             Text(
-              text = "Moved to Private Space",
+              text = stringResource(R.string.i18n_moved_private_space),
               style = MaterialTheme.typography.headlineSmall,
             )
           },

@@ -25,8 +25,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 
 @Composable
@@ -78,7 +80,7 @@ fun NetworkConnectionCard(
           IconButton(onClick = { onEdit(connection) }) {
             Icon(
               Icons.Filled.Edit,
-              contentDescription = "Edit",
+              contentDescription = stringResource(R.string.i18n_edit),
               tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
@@ -135,7 +137,7 @@ fun NetworkConnectionCard(
           },
         )
         Text(
-          text = "Connect automatically on app launch",
+          text = stringResource(R.string.i18n_connect_on_launch),
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -163,8 +165,7 @@ fun NetworkConnectionCard(
                   strokeWidth = 2.dp,
                   color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                 )
-                Text(
-                  "Connecting",
+                Text(stringResource(R.string.i18n_connecting),
                   color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                 )
               }

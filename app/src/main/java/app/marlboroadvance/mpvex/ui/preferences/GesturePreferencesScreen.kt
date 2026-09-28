@@ -140,7 +140,7 @@ object GesturePreferencesScreen : Screen {
               text = {
                 Column {
                   Text(
-                    text = "Enter custom seek duration in seconds (1-120)",
+                    text = stringResource(R.string.i18n_enter_seek_seconds),
                     modifier = Modifier.padding(bottom = 8.dp),
                   )
                   OutlinedTextField(
@@ -182,7 +182,7 @@ object GesturePreferencesScreen : Screen {
             onValueChange = { preferences.doubleTapSeekAreaWidth.set(it) },
             values = seekAreaValues,
             valueToText = { AnnotatedString("${it}%") },
-            title = { Text(text = "Double Tap Seek Area Width") },
+            title = { Text(text = stringResource(R.string.i18n_double_tap_area_width)) },
             summary = {
               Text(
                 text = "Current: ${doubleTapSeekAreaWidth}%",
@@ -198,7 +198,7 @@ object GesturePreferencesScreen : Screen {
             value = leftDoubleTap,
             onValueChange = { preferences.leftSingleActionGesture.set(it) },
             values = SingleActionGesture.entries,
-            valueToText = { AnnotatedString(context.getString(it.titleRes)) },
+            valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
             title = { Text(text = stringResource(R.string.pref_gesture_double_tap_left_title)) },
             summary = { Text(
               text = stringResource(leftDoubleTap.titleRes),
@@ -240,7 +240,7 @@ object GesturePreferencesScreen : Screen {
             value = rightDoubleTap,
             onValueChange = { preferences.rightSingleActionGesture.set(it) },
             values = SingleActionGesture.entries,
-            valueToText = { AnnotatedString(context.getString(it.titleRes)) },
+            valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
             title = { Text(text = stringResource(R.string.pref_gesture_double_tap_right_title)) },
             summary = { Text(
               text = stringResource(rightDoubleTap.titleRes),
@@ -314,7 +314,7 @@ object GesturePreferencesScreen : Screen {
             value = mediaPreviousGesture,
             onValueChange = { preferences.mediaPreviousGesture.set(it) },
             values = SingleActionGesture.entries,
-            valueToText = { AnnotatedString(context.getString(it.titleRes)) },
+            valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
             title = { Text(text = stringResource(R.string.pref_gesture_media_previous)) },
             summary = { Text(
               text = stringResource(mediaPreviousGesture.titleRes),
@@ -347,7 +347,7 @@ object GesturePreferencesScreen : Screen {
             value = mediaNextGesture,
             onValueChange = { preferences.mediaNextGesture.set(it) },
             values = SingleActionGesture.entries,
-            valueToText = { AnnotatedString(context.getString(it.titleRes)) },
+            valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
             title = { Text(text = stringResource(R.string.pref_gesture_media_next)) },
             summary = { Text(
               text = stringResource(mediaNextGesture.titleRes),
