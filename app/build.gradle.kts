@@ -32,8 +32,8 @@ android {
     applicationId = "app.cineisle.player"
     minSdk = 26
     targetSdk = 36
-    versionCode = 131
-    versionName = "1.3.1"
+    versionCode = 1
+    versionName = "1.0.1"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -262,6 +262,8 @@ dependencies {
   implementation(libs.kotlinx.immutable.collections)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.okhttp)
+  // DLNA 投屏（UPnPCast，Maven Central）
+  implementation("com.yinnho.upnpcast:upnpcast:1.1.2")
 
     implementation(libs.truetype.parser)
     implementation(libs.fsaf)

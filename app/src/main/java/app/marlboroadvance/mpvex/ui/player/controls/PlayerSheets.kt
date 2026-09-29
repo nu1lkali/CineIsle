@@ -22,6 +22,7 @@ import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.PlaybackSp
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.PlaylistSheet
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.SubtitlesSheet
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.VideoZoomSheet
+import app.marlboroadvance.mpvex.dlna.DlnaSheet
 import dev.vivvvek.seeker.Segment
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.toImmutableList
@@ -268,6 +269,10 @@ fun PlayerSheets(
       )
     }
 
+
+    Sheets.Cast -> {
+      DlnaSheet(onDismissRequest = onDismissRequest)
+    }
 
     Sheets.Playlist -> {
       // Refresh playlist items when sheet is shown

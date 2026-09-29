@@ -726,5 +726,6 @@
   <string name="btn_label_previous">上一个</string>
   <string name="btn_label_next">下一个</string>
   <string name="btn_label_emby_favorite">Emby 收藏</string>
+  <string name="btn_label_cast">投屏</string>
   <string name="btn_label_none">无</string>
 </resources>

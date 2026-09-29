@@ -728,5 +728,6 @@
   <string name="btn_label_previous">Previous</string>
   <string name="btn_label_next">Next</string>
   <string name="btn_label_emby_favorite">Emby Favorite</string>
+  <string name="btn_label_cast">Cast</string>
   <string name="btn_label_none">None</string>
 </resources>

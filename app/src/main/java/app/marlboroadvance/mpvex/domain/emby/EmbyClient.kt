@@ -94,6 +94,12 @@ data class EmbyItem(
   val Genres: List<String> = emptyList(),
   /** 工作室 */
   val Studios: List<EmbyStudio>? = null,
+  /** 标签（Emby 的 Tags，和 Genres 是两套东西） */
+  val Tags: List<String> = emptyList(),
+  /** 排序名：Emby 内部排序用，界面一般不显示，但编辑元数据要能改 */
+  val SortName: String? = null,
+  /** 制作地区 / 国家 */
+  val ProductionLocations: List<String> = emptyList(),
   val Path: String? = null,
   val Taglines: List<String> = emptyList(),
   val ProviderIds: Map<String, String> = emptyMap(),
@@ -219,7 +225,8 @@ object EmbyClient {
 
   /** 请求 Emby 时统一附加的扩展字段 */
   private const val ITEM_FIELDS =
-    "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources"
+    "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources," +
+    "Tags,SortName,ProductionLocations"
 
   // ─── 内部工具 ───
 
@@ -429,6 +436,8 @@ object EmbyClient {
      * 「全部」这类视图要传入 Folder/CollectionFolder/UserView 把它们挡掉。
      */
     excludeItemTypes: List<String>? = null,
+    /** 按人员筛选：传演员/导演的 PersonId，查 TA 参与过的条目 */
+    personIds: List<String>? = null,
   ): EmbyItemsResult {
     val q = LinkedHashMap<String, String?>()
     parentId?.let { q["ParentId"] = it }
@@ -439,6 +448,7 @@ object EmbyClient {
     includeItemTypes?.takeIf { it.isNotEmpty() }?.let { q["IncludeItemTypes"] = it.joinToString(",") }
     excludeItemTypes?.takeIf { it.isNotEmpty() }?.let { q["ExcludeItemTypes"] = it.joinToString(",") }
     genres?.takeIf { it.isNotEmpty() }?.let { q["Genres"] = it.joinToString("|") }
+    personIds?.takeIf { it.isNotEmpty() }?.let { q["PersonIds"] = it.joinToString(",") }
     searchTerm?.takeIf { it.isNotBlank() }?.let { q["SearchTerm"] = it }
     mediaTypes?.takeIf { it.isNotEmpty() }?.let { q["MediaTypes"] = it.joinToString(",") }
     q["StartIndex"] = startIndex.toString()
@@ -600,6 +610,36 @@ object EmbyClient {
   fun markUnplayed(server: EmbyServer, itemId: String) {
     val req = authedRequest(server, "/Users/${server.userId}/PlayedItems/$itemId")
       .delete()
+      .build()
+    execString(req)
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 3.5 元数据操作（编辑 / 刮削 / 刷新）
+  // ════════════════════════════════════════════════════════════════════════
+
+  /**
+   * 刷新元数据：让服务器重新读取本地文件、或从网络刮削。
+   * mode: Default / FullRefresh(全量重刮) / LatestRefresh(仅补缺失字段)
+   */
+  fun refreshItem(server: EmbyServer, itemId: String, mode: String = "Default") {
+    val req = authedRequest(
+      server,
+      "/Items/$itemId/Refresh",
+      mapOf("MetadataRefreshMode" to mode, "Recursive" to "true"),
+    ).post("".toRequestBody(jsonMedia))
+      .build()
+    execString(req)
+  }
+
+  /**
+   * 更新（编辑）条目元数据：PUT 完整 item 对象。
+   * Emby 以传入对象整体覆盖，因此调用方应传入「带修改后的完整 item」，避免丢字段。
+   */
+  fun updateItem(server: EmbyServer, item: EmbyItem) {
+    val body = json.encodeToString(item)
+    val req = authedRequest(server, "/Items/${item.Id}")
+      .put(body.toRequestBody(jsonMedia))
       .build()
     execString(req)
   }

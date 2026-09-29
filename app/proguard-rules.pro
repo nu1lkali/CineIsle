@@ -76,3 +76,7 @@
     java.lang.Object writeReplace();
     java.lang.Object readResolve();
 }
+
+# UPnPCast (DLNA 投屏)
+-keep class com.yinnho.upnpcast.** { *; }
+-dontwarn com.yinnho.upnpcast.**

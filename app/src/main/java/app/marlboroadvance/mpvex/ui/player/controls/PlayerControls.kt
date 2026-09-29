@@ -731,7 +731,7 @@ fun PlayerControls(
                       } else {
                         Color.Transparent
                       },
-                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    contentColor = controlColor,
                     tonalElevation = 0.dp,
                     shadowElevation = 0.dp,
                     border =
@@ -746,12 +746,12 @@ fun PlayerControls(
                       contentDescription = stringResource(R.string.player_control_previous),
                       tint =
                         if (viewModel.hasPrevious()) {
-                          if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface
+                          controlColor
                         } else {
                           if (hideBackground) {
                             controlColor.copy(alpha = 0.38f)
                           } else {
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            controlColor.copy(alpha = 0.38f)
                           }
                         },
                       modifier = Modifier
@@ -783,7 +783,7 @@ fun PlayerControls(
                       } else {
                         Color.Transparent
                       },
-                    contentColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+                    contentColor = controlColor,
                     tonalElevation = 0.dp,
                     shadowElevation = 0.dp,
                     border =
@@ -829,7 +829,7 @@ fun PlayerControls(
                       } else {
                         Color.Transparent
                       },
-                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    contentColor = controlColor,
                     tonalElevation = 0.dp,
                     shadowElevation = 0.dp,
                     border =
@@ -844,12 +844,12 @@ fun PlayerControls(
                       contentDescription = stringResource(R.string.player_control_next),
                       tint =
                         if (viewModel.hasNext()) {
-                          if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface
+                          controlColor
                         } else {
                           if (hideBackground) {
                             controlColor.copy(alpha = 0.38f)
                           } else {
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            controlColor.copy(alpha = 0.38f)
                           }
                         },
                       modifier = Modifier
@@ -882,7 +882,7 @@ fun PlayerControls(
                     } else {
                       Color.Transparent
                     },
-                  contentColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+                  contentColor = controlColor,
                   tonalElevation = 0.dp,
                   shadowElevation = 0.dp,
                   border =

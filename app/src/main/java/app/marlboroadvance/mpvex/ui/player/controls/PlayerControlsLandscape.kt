@@ -65,7 +65,7 @@ fun TopLeftPlayerControlsLandscape(
     ControlsButton(
       icon = Icons.AutoMirrored.Default.ArrowBack,
       onClick = onBackPress,
-      color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+      color = controlColor,
       modifier = Modifier.size(45.dp),
     )
 
@@ -92,7 +92,7 @@ fun TopLeftPlayerControlsLandscape(
           } else {
             PlayerControlGlassFill
           },
-        contentColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        contentColor = controlColor,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
         border =
@@ -115,21 +115,13 @@ fun TopLeftPlayerControlsLandscape(
             ),
         ) {
           viewModel.getPlaylistInfo()?.let { playlistInfo ->
-            Text(
-              text = playlistInfo,
-              textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-              style = MaterialTheme.typography.bodyMedium,
-              maxLines = 1,
-              overflow = TextOverflow.Visible,
-              fontFamily = FontFamily.Monospace,
-              color = MaterialTheme.colorScheme.primary,
-            )
+            PlaylistIndexBadge(text = playlistInfo)
             Text(
               text = Typography.bullet.toString(),
               textAlign = androidx.compose.ui.text.style.TextAlign.Center,
               style = MaterialTheme.typography.bodyMedium,
               maxLines = 1,
-              color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+              color = controlColor,
               overflow = TextOverflow.Clip,
             )
           }
@@ -139,7 +131,7 @@ fun TopLeftPlayerControlsLandscape(
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium,
             fontFamily = FontFamily.Monospace,
-            color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+            color = controlColor,
             modifier = Modifier.weight(1f, fill = false),
           )
         }

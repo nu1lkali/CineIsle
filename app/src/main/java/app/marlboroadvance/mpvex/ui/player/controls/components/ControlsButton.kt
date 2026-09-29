@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
+import app.marlboroadvance.mpvex.ui.theme.controlColor
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.player.controls.LocalPlayerButtonsClickEvent
 import app.marlboroadvance.mpvex.ui.theme.spacing
@@ -48,7 +49,7 @@ fun ControlsButton(
   val appearancePreferences = koinInject<AppearancePreferences>()
   val hideBackground by appearancePreferences.hidePlayerButtonsBackground.collectAsState()
 
-  val effectiveColor = if (enabled) color else (color ?: MaterialTheme.colorScheme.onSurface).copy(alpha = 0.38f)
+  val effectiveColor = if (enabled) color else (color ?: controlColor).copy(alpha = 0.38f)
 
   val clickEvent = LocalPlayerButtonsClickEvent.current
   Surface(
@@ -67,7 +68,7 @@ fun ControlsButton(
         ),
     shape = CircleShape,
     color = if (hideBackground) Color.Transparent else PlayerControlGlassFill,
-    contentColor = effectiveColor ?: MaterialTheme.colorScheme.onSurface,
+    contentColor = effectiveColor ?: controlColor,
     tonalElevation = 0.dp,
     shadowElevation = 0.dp,
     border =
@@ -83,7 +84,7 @@ fun ControlsButton(
     Icon(
       imageVector = icon,
       contentDescription = title,
-      tint = effectiveColor ?: MaterialTheme.colorScheme.onSurface,
+      tint = effectiveColor ?: controlColor,
       modifier =
         Modifier
           .padding(MaterialTheme.spacing.small)

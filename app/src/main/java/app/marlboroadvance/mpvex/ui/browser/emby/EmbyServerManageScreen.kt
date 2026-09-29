@@ -278,7 +278,13 @@ private fun ServerEditDialog(
   var address by remember { mutableStateOf(initial?.baseUrl ?: "http://") }
   var username by remember { mutableStateOf(initial?.username ?: "") }
   var password by remember { mutableStateOf(initial?.password ?: "") }
-  var useHttps by remember { mutableStateOf(initial?.useHttps ?: false) }
+  // 勾选框初始值：优先取已存服务器的 useHttps，编辑场景再兜底按地址里的 scheme 推一次，
+  // 避免「地址是 https:// 但框没勾」的初始错位（提交时以这个框为准）
+  var useHttps by remember {
+    mutableStateOf(
+      initial?.useHttps ?: (initial?.baseUrl?.startsWith("https://", ignoreCase = true) == true),
+    )
+  }
   var isConnecting by remember { mutableStateOf(false) }
   var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -296,7 +302,14 @@ private fun ServerEditDialog(
         )
         OutlinedTextField(
           value = address,
-          onValueChange = { address = it },
+          onValueChange = { input ->
+            address = input
+            // 用户手输显式 scheme 时同步勾选框，避免「地址写着 https:// 但框没勾」的错位
+            when {
+              input.startsWith("https://", ignoreCase = true) -> useHttps = true
+              input.startsWith("http://", ignoreCase = true) -> useHttps = false
+            }
+          },
           label = { Text("服务器地址") },
           placeholder = { Text("http://192.168.1.10:8096") },
           singleLine = true,
@@ -316,7 +329,22 @@ private fun ServerEditDialog(
           visualTransformation = PasswordVisualTransformation(),
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
-          Checkbox(checked = useHttps, onCheckedChange = { useHttps = it })
+          Checkbox(
+            checked = useHttps,
+            onCheckedChange = { checked ->
+              useHttps = checked
+              // 勾选框是最终裁决：同步改写地址里的 scheme，保证「看到的」和「实际用的」一致。
+              // （修复：以前 confirm 用的是 parseServerAddress 从地址文本推出的 https，
+              //   地址写裸 IP 时勾了等于没勾，请求仍然走 http。）
+              address = when {
+                checked && address.startsWith("http://", ignoreCase = true) ->
+                  "https://" + address.substring("http://".length)
+                !checked && address.startsWith("https://", ignoreCase = true) ->
+                  "http://" + address.substring("https://".length)
+                else -> address
+              }
+            },
+          )
           Text("使用 HTTPS")
         }
         errorMessage?.let {
@@ -337,11 +365,14 @@ private fun ServerEditDialog(
             errorMessage = "服务器地址格式不正确"
             return@Button
           }
-          val (host, port, https) = parsed
+          val (host, port, _) = parsed
+          // scheme 以勾选框为准（parseServerAddress 只负责拆 host/port）；
+          // 勾选框已与地址文本双向同步，这里不会再出现「勾了却走 http」的情况
+          val finalHttps = useHttps
           val finalName = name.ifBlank { host }
 
           if (!requireLogin) {
-            onConfirm(finalName, host, port, https, username, password)
+            onConfirm(finalName, host, port, finalHttps, username, password)
             return@Button
           }
 
@@ -349,7 +380,7 @@ private fun ServerEditDialog(
           isConnecting = true
           errorMessage = null
           scope.launch {
-            val saved = viewModel.loginAndSave(finalName, host, port, https, username, password)
+            val saved = viewModel.loginAndSave(finalName, host, port, finalHttps, username, password)
             isConnecting = false
             if (saved != null) {
               onDismiss()

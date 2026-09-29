@@ -143,8 +143,15 @@ data class EmbyLibraryScreen(
     val recursive: Boolean = category != EmbyCategory.FOLDER
     // Emby 的 Recursive 查询默认会把文件夹一并返回。
     // 用户期望「全部」直接铺媒体，只有切到「文件夹」分类才看到文件夹，所以这里显式排除。
+    // 「全部」只保留媒体本体：合集（BoxSet）单独放到「合集」分类里看，这里排除掉。
+    // 例外：专门的「合集库」（collectionType = boxsets）本身装的就是合集，
+    // 若也排除会把它剔空，所以只对非合集库生效。
+    val excludeBoxSet = category == EmbyCategory.ALL &&
+      collectionType?.lowercase() != "boxsets"
     val effectiveExclude: List<String>? =
-      if (includeItemTypes == null && category != EmbyCategory.FOLDER) FOLDER_TYPES else null
+      if (includeItemTypes == null && category != EmbyCategory.FOLDER) {
+        if (excludeBoxSet) FOLDER_TYPES + "BoxSet" else FOLDER_TYPES
+      } else null
 
     fun cacheItems() {
       EmbyLibraryCache.putItems(cacheKey, items, totalCount)
@@ -268,7 +275,11 @@ data class EmbyLibraryScreen(
               includeItemTypes = PLAYABLE_TYPES,
               limit = 100,
             )
-            if (random.isNotEmpty()) viewModel.launchPlaylist(current, random)
+            if (random.isNotEmpty()) {
+              // 随机列表里可能混着看过的剧，切过去若恢复进度会直接跳到片尾，
+              // 所以每个视频都从头放
+              viewModel.launchPlaylist(current, random, playFromStartAll = true)
+            }
           }
         }) {
           Icon(Icons.Default.Shuffle, contentDescription = "随机播放")
@@ -285,7 +296,8 @@ data class EmbyLibraryScreen(
               isFavorite = true,
             )
             if (random.isNotEmpty()) {
-              viewModel.launchPlaylist(current, random)
+              // 同上：随机收藏列表里每个视频都从头放
+              viewModel.launchPlaylist(current, random, playFromStartAll = true)
             } else {
               android.widget.Toast
                 .makeText(context, "该媒体库还没有收藏内容", android.widget.Toast.LENGTH_SHORT)
@@ -641,7 +653,7 @@ private object EmbyFolderCoverCache {
  */
 private fun allItemTypesFor(collectionType: String?): List<String>? =
   when (collectionType?.lowercase()) {
-    "movies" -> listOf("Movie", "BoxSet")
+    "movies" -> listOf("Movie")
     "tvshows" -> listOf("Series")
     "music" -> listOf("MusicAlbum")
     "musicvideos" -> listOf("MusicVideo")

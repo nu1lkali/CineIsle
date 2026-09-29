@@ -65,6 +65,9 @@ import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.outlined.BlurOn
 import androidx.compose.material.icons.outlined.Autorenew
+import androidx.compose.material.icons.outlined.Cast
+import app.marlboroadvance.mpvex.dlna.CastPayload
+import app.marlboroadvance.mpvex.dlna.DlnaCastManager
 import androidx.compose.ui.draw.rotate
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -125,6 +128,29 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
+/**
+ * 播放队列序号（如「3/12」）的蓝色圆角角标。
+ *
+ * 原来只是把序号当普通蓝字排在最左边，和后面的片名贴在一起不好区分；
+ * 包成实心蓝底 + onPrimary 文字的胶囊后，序号本身成为一个独立视觉块。
+ */
+@Composable
+fun PlaylistIndexBadge(text: String) {
+  Surface(
+    shape = RoundedCornerShape(50),
+    color = MaterialTheme.colorScheme.primary,
+    contentColor = MaterialTheme.colorScheme.onPrimary,
+  ) {
+    Text(
+      text = text,
+      style = MaterialTheme.typography.labelMedium,
+      fontFamily = FontFamily.Monospace,
+      maxLines = 1,
+      modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+    )
+  }
+}
+
 @Composable
 fun RenderPlayerButton(
   button: PlayerButton,
@@ -151,7 +177,7 @@ fun RenderPlayerButton(
       ControlsButton(
         icon = Icons.AutoMirrored.Default.ArrowBack,
         onClick = onBackPress,
-        color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        color = controlColor,
         modifier = Modifier.size(buttonSize),
       )
     }
@@ -179,7 +205,7 @@ fun RenderPlayerButton(
           } else {
             PlayerControlGlassFill
           },
-        contentColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        contentColor = controlColor,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
         border =
@@ -202,21 +228,13 @@ fun RenderPlayerButton(
             ),
         ) {
           viewModel.getPlaylistInfo()?.let { playlistInfo ->
-            Text(
-              text = playlistInfo,
-              textAlign = TextAlign.Center,
-              style = MaterialTheme.typography.bodyMedium,
-              maxLines = 1,
-              overflow = TextOverflow.Visible,
-              fontFamily = FontFamily.Monospace,
-              color = MaterialTheme.colorScheme.primary,
-            )
+            PlaylistIndexBadge(text = playlistInfo)
             Text(
               text = Typography.bullet.toString(),
               textAlign = TextAlign.Center,
               style = MaterialTheme.typography.bodyMedium,
               maxLines = 1,
-              color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+              color = controlColor,
               overflow = TextOverflow.Clip,
             )
           }
@@ -226,7 +244,7 @@ fun RenderPlayerButton(
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium,
             fontFamily = FontFamily.Monospace,
-            color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+            color = controlColor,
             modifier = Modifier.weight(1f, fill = false),
           )
         }
@@ -238,7 +256,7 @@ fun RenderPlayerButton(
         ControlsButton(
           Icons.Default.Bookmarks,
           onClick = { onOpenSheet(Sheets.Chapters) },
-          color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+          color = controlColor,
           modifier = Modifier.size(buttonSize),
         )
       }
@@ -249,7 +267,7 @@ fun RenderPlayerButton(
         Surface(
           shape = CircleShape,
           color = if (hideBackground) Color.Transparent else PlayerControlGlassFill,
-          contentColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+          contentColor = controlColor,
           tonalElevation = 0.dp,
           shadowElevation = 0.dp,
           border = if (hideBackground) null else BorderStroke(
@@ -294,7 +312,7 @@ fun RenderPlayerButton(
         ControlsButton(
           icon = Icons.Default.Speed,
           onClick = { onOpenSheet(Sheets.PlaybackSpeed) },
-          color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+          color = controlColor,
           modifier = Modifier.size(buttonSize),
         )
       }
@@ -309,7 +327,7 @@ fun RenderPlayerButton(
           } else {
             PlayerControlGlassFill
           },
-        contentColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        contentColor = controlColor,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
         border =
@@ -357,7 +375,7 @@ fun RenderPlayerButton(
       ControlsButton(
         icon = Icons.Default.ScreenRotation,
         onClick = viewModel::cycleScreenRotations,
-        color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        color = controlColor,
         modifier = Modifier.size(buttonSize),
       )
     }
@@ -404,7 +422,7 @@ fun RenderPlayerButton(
                   Icon(
                     imageVector = Icons.Default.FastRewind,
                     contentDescription = stringResource(R.string.player_control_previous_frame),
-                    tint = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+                    tint = controlColor,
                     modifier = Modifier.size(20.dp),
                   )
                 }
@@ -422,7 +440,7 @@ fun RenderPlayerButton(
                     CircularProgressIndicator(
                       modifier = Modifier.size(16.dp),
                       strokeWidth = 2.dp,
-                      color = if (hideBackground) controlColor else MaterialTheme.colorScheme.primary,
+                      color = controlColor,
                     )
                   }
                 }
@@ -447,7 +465,7 @@ fun RenderPlayerButton(
                     Icon(
                       imageVector = Icons.Default.CameraAlt,
                       contentDescription = stringResource(R.string.player_control_take_screenshot),
-                      tint = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+                      tint = controlColor,
                       modifier = Modifier.size(20.dp),
                     )
                   }
@@ -470,7 +488,7 @@ fun RenderPlayerButton(
                   Icon(
                     imageVector = Icons.Default.FastForward,
                     contentDescription = stringResource(R.string.player_control_next_frame),
-                    tint = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+                    tint = controlColor,
                     modifier = Modifier.size(20.dp),
                   )
                 }
@@ -483,7 +501,7 @@ fun RenderPlayerButton(
             icon = Icons.Default.Camera,
             onClick = viewModel::toggleFrameNavigationExpanded,
             onLongClick = { onOpenSheet(Sheets.FrameNavigation) },
-            color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+            color = controlColor,
             modifier = Modifier.size(buttonSize),
           )
         }
@@ -496,7 +514,7 @@ fun RenderPlayerButton(
         Surface(
           shape = CircleShape,
           color = if (hideBackground) Color.Transparent else PlayerControlGlassFill,
-          contentColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+          contentColor = controlColor,
           tonalElevation = 0.dp,
           shadowElevation = 0.dp,
           border = if (hideBackground) null else BorderStroke(
@@ -549,7 +567,7 @@ fun RenderPlayerButton(
             onOpenSheet(Sheets.VideoZoom)
           },
           onLongClick = { viewModel.resetVideoZoom() },
-          color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+          color = controlColor,
           modifier = Modifier.size(buttonSize),
         )
       }
@@ -559,7 +577,7 @@ fun RenderPlayerButton(
       ControlsButton(
         Icons.Default.PictureInPictureAlt,
         onClick = { activity.enterPipModeHidingOverlay() },
-        color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        color = controlColor,
         modifier = Modifier.size(buttonSize),
       )
     }
@@ -580,7 +598,7 @@ fun RenderPlayerButton(
           }
         },
         onLongClick = { onOpenSheet(Sheets.AspectRatios) },
-        color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        color = controlColor,
         modifier = Modifier.size(buttonSize),
       )
     }
@@ -589,7 +607,7 @@ fun RenderPlayerButton(
       ControlsButton(
         Icons.Default.LockOpen,
         onClick = viewModel::lockControls,
-        color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        color = controlColor,
         modifier = Modifier.size(buttonSize),
       )
     }
@@ -599,7 +617,7 @@ fun RenderPlayerButton(
         Icons.Default.Audiotrack,
         onClick = { onOpenSheet(Sheets.AudioTracks) },
         onLongClick = { onOpenPanel(Panels.AudioDelay) },
-        color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        color = controlColor,
         modifier = Modifier.size(buttonSize),
       )
     }
@@ -609,7 +627,7 @@ fun RenderPlayerButton(
         Icons.Default.Subtitles,
         onClick = { onOpenSheet(Sheets.SubtitleTracks) },
         onLongClick = { onOpenPanel(Panels.SubtitleDelay) },
-        color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        color = controlColor,
         modifier = Modifier.size(buttonSize),
       )
     }
@@ -619,7 +637,7 @@ fun RenderPlayerButton(
         Icons.Default.MoreVert,
         onClick = { onOpenSheet(Sheets.More) },
         onLongClick = { onOpenPanel(Panels.VideoFilters) },
-        color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        color = controlColor,
         modifier = Modifier.size(buttonSize),
       )
     }
@@ -659,7 +677,7 @@ fun RenderPlayerButton(
           }
         } else {
           when (repeatMode) {
-            app.marlboroadvance.mpvex.ui.player.RepeatMode.OFF -> MaterialTheme.colorScheme.onSurface
+            app.marlboroadvance.mpvex.ui.player.RepeatMode.OFF -> controlColor
             else -> MaterialTheme.colorScheme.primary
           }
         },
@@ -672,7 +690,7 @@ fun RenderPlayerButton(
       ControlsButton(
         icon = Icons.Default.FastForward,
         onClick = { viewModel.seekBy(playerPreferences.customSkipDuration.get()) },
-        color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        color = controlColor,
         modifier = Modifier.size(buttonSize),
       )
     }
@@ -687,7 +705,7 @@ fun RenderPlayerButton(
           color = if (hideBackground) {
             if (shuffleEnabled) MaterialTheme.colorScheme.primary else controlColor
           } else {
-            if (shuffleEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+            if (shuffleEnabled) MaterialTheme.colorScheme.primary else controlColor
           },
           modifier = Modifier.size(buttonSize),
         )
@@ -702,7 +720,7 @@ fun RenderPlayerButton(
         color = if (hideBackground) {
           if (isMirrored) MaterialTheme.colorScheme.primary else controlColor
         } else {
-          if (isMirrored) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+          if (isMirrored) MaterialTheme.colorScheme.primary else controlColor
         },
         modifier = Modifier.size(buttonSize),
       )
@@ -713,7 +731,7 @@ fun RenderPlayerButton(
       val vFlipColor = if (hideBackground) {
         if (isVerticalFlipped) MaterialTheme.colorScheme.primary else controlColor
       } else {
-        if (isVerticalFlipped) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+        if (isVerticalFlipped) MaterialTheme.colorScheme.primary else controlColor
       }
       Surface(
         shape = CircleShape,
@@ -783,7 +801,7 @@ fun RenderPlayerButton(
                     color = if (loopA != null) {
                       MaterialTheme.colorScheme.onTertiaryContainer
                     } else {
-                      if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface
+                      controlColor
                     },
                     modifier = Modifier.padding(horizontal = if (loopA != null) 8.dp else 0.dp),
                   )
@@ -831,7 +849,7 @@ fun RenderPlayerButton(
                     color = if (loopB != null) {
                       MaterialTheme.colorScheme.onTertiaryContainer
                     } else {
-                      if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface
+                      controlColor
                     },
                     modifier = Modifier.padding(horizontal = if (loopB != null) 8.dp else 0.dp),
                   )
@@ -857,7 +875,7 @@ fun RenderPlayerButton(
                 tint = if (loopA != null && loopB != null) {
                   MaterialTheme.colorScheme.primary
                 } else {
-                  if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface
+                  controlColor
                 },
                 modifier = Modifier.size(24.dp),
               )
@@ -871,7 +889,7 @@ fun RenderPlayerButton(
       ControlsButton(
         icon = Icons.Default.Headset,
         onClick = { activity.triggerBackgroundPlayback() },
-        color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+        color = controlColor,
         modifier = Modifier.size(buttonSize),
       )
     }
@@ -883,7 +901,7 @@ fun RenderPlayerButton(
         ControlsButton(
           icon = Icons.Default.SkipPrevious,
           onClick = activity::playPrevious,
-          color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+          color = controlColor,
           modifier = Modifier.size(buttonSize),
           enabled = enabled,
         )
@@ -896,7 +914,7 @@ fun RenderPlayerButton(
         ControlsButton(
           icon = Icons.Default.SkipNext,
           onClick = activity::playNext,
-          color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+          color = controlColor,
           modifier = Modifier.size(buttonSize),
           enabled = enabled,
         )
@@ -907,6 +925,24 @@ fun RenderPlayerButton(
       EmbyFavoritePlayerButton(
         hideBackground = hideBackground,
         buttonSize = buttonSize,
+      )
+    }
+
+    PlayerButton.CAST -> {
+      val dlna = org.koin.compose.koinInject<DlnaCastManager>()
+      ControlsButton(
+        icon = Icons.Outlined.Cast,
+        onClick = {
+          val uri = activity.getCurrentPlayingUri()
+          if (uri != null) {
+            dlna.pendingPayload = CastPayload(uri, activity.getTitleForControls())
+          } else {
+            dlna.pendingPayload = null
+          }
+          onOpenSheet(Sheets.Cast)
+        },
+        color = controlColor,
+        modifier = Modifier.size(buttonSize),
       )
     }
 
@@ -949,7 +985,7 @@ private fun EmbyFavoritePlayerButton(
     } else {
       BorderStroke(1.dp, PlayerControlGlassBorder)
     }
-  val idleColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface
+  val idleColor = controlColor
 
   Box(modifier = Modifier.size(buttonSize), contentAlignment = Alignment.Center) {
     // 圆形底 + 点击：水波纹只在这一层里裁剪，星光要能溢出到按钮之外

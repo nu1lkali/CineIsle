@@ -188,6 +188,18 @@ class PlayerActivity :
   private var playFromStartOnce = false
 
   /**
+   * 「整场从头播放」标记（随机播放入口专用）。
+   *
+   * 「随机播放 / 随机播放收藏」里可能混着已经看完的剧：如果切到下一个视频时
+   * 恢复本地续播记录，会直接跳到片尾一秒就结束，观感极差。所以这两个入口
+   * 带 `play_from_start_all=true`，让**本次播放会话里的每一个视频**都从头放。
+   *
+   * 与 [playFromStartOnce] 的区别：它在整个会话内持续生效（读的时候不清零），
+   * 直到下一个 intent 重新赋值（随机入口必然带 true，其它入口必然是 false）。
+   */
+  private var playFromStartAllSession = false
+
+  /**
    * Playlist of URIs for sequential playback
    */
   internal var playlist: List<Uri> = emptyList()
@@ -409,6 +421,8 @@ class PlayerActivity :
 
     // Emby「从头播放」：本次启动的第一个视频不要从本地续播记录恢复进度
     playFromStartOnce = intent.getBooleanExtra("play_from_start", false)
+    // 随机播放入口：整场每个视频都从头放（连播切集也不恢复进度）
+    playFromStartAllSession = intent.getBooleanExtra("play_from_start_all", false)
 
     // Load playlist from intent extras first (fast path - backward compatibility)
     playlist = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -1453,6 +1467,12 @@ class PlayerActivity :
       }
     }
 
+  /** 返回当前正在播放的媒体 URI：优先取播放列表当前项，否则从 intent 解析。供投屏按钮写入 payload。 */
+  internal fun getCurrentPlayingUri(): Uri? {
+    if (playlist.isNotEmpty() && playlistIndex in playlist.indices) return playlist[playlistIndex]
+    return extractUriFromIntent(intent)
+  }
+
   /**
    * Queries the content resolver to get the display name for a URI.
    *
@@ -2272,8 +2292,9 @@ class PlayerActivity :
    * @return true if saved state was found and applied, false otherwise
    */
   private suspend fun loadVideoPlaybackState(mediaTitle: String): Boolean {
-    // 「从头播放」是一次性标记：这里读出后立刻清掉，避免影响后面的剧集
-    val playFromStart = playFromStartOnce
+    // 「从头播放」是一次性标记：这里读出后立刻清掉，避免影响后面的剧集。
+    // 「整场从头播放」（随机播放入口）是会话级标记：整个会话都不清，切到哪个视频都从头放。
+    val playFromStart = playFromStartOnce || playFromStartAllSession
     playFromStartOnce = false
 
     if (mediaIdentifier.isBlank()) return false
@@ -2515,6 +2536,8 @@ class PlayerActivity :
 
     // 每个新 intent 都重新判定「从头播放」标记（不跨 intent 存活）
     playFromStartOnce = intent.getBooleanExtra("play_from_start", false)
+    // 随机播放入口：整场从头放（连播切集也不恢复进度）
+    playFromStartAllSession = intent.getBooleanExtra("play_from_start_all", false)
 
     // Check if this intent has playlist information
     val hasPlaylistExtras = intent.hasExtra("playlist_id") ||

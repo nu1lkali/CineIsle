@@ -101,6 +101,7 @@ enum class Sheets {
   AspectRatios,
   Playlist,
   FrameNavigation,
+  Cast,
 }
 
 enum class Panels {

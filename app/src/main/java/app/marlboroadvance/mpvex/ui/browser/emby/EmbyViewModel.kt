@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
@@ -17,7 +18,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.java.KoinJavaComponent.inject
 
 /**
@@ -343,6 +346,12 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     server: EmbyServer,
     items: List<EmbyItem>,
     resumeSeconds: Long = 0,
+    /**
+     * 整场从头播放（随机播放 / 随机播放收藏专用）。
+     * 随机出来的列表里常混着看过的剧，若切集时恢复本地续播记录，
+     * 已看完的会直接跳到片尾一秒就结束，所以本次会话内每个视频都从头放。
+     */
+    playFromStartAll: Boolean = false,
   ) {
     val uris = ArrayList<android.net.Uri>()
     val ids = ArrayList<String>()
@@ -371,6 +380,10 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         // 否则 savePositionOnQuit 开启时，applyPlaybackState 会把上次停下
         // 的位置套回 time-pos，「从头播放」就变成了「继续播放」。
         putExtra("play_from_start", true)
+      }
+      // 随机播放入口：整个播放会话内切到哪个视频都从头放（不恢复本地续播）
+      if (playFromStartAll) {
+        putExtra("play_from_start_all", true)
       }
       putParcelableArrayListExtra("playlist", uris)
       putStringArrayListExtra("playlist_titles", titles)
@@ -405,6 +418,41 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       else -> item.ImageTags[imageType]
     }
     return repository.imageUrl(server, id, imageType, tag, maxWidth)
+  }
+
+  /** 刷新 / 刮削元数据。full=true 走全量重刮（FullRefresh），否则默认刷新（Default）。 */
+  suspend fun refreshMetadata(server: EmbyServer, itemId: String, full: Boolean = false): Boolean =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        EmbyClient.refreshItem(server, itemId, if (full) "FullRefresh" else "Default")
+      }.isSuccess
+    }
+
+  /** 编辑（更新）条目元数据：传入「带修改后的完整 item」整体 PUT 给服务器。 */
+  suspend fun updateItemMetadata(server: EmbyServer, item: EmbyItem): Boolean =
+    withContext(Dispatchers.IO) {
+      runCatching { EmbyClient.updateItem(server, item) }.isSuccess
+    }
+
+  /** 按演员 / 导演查作品：走 Emby 的 PersonIds 过滤。 */
+  suspend fun loadPersonItems(
+    server: EmbyServer,
+    personId: String,
+    startIndex: Int = 0,
+    limit: Int = 60,
+  ): List<EmbyItem> = withContext(Dispatchers.IO) {
+    runCatching {
+      EmbyClient.getItems(
+        server = server,
+        personIds = listOf(personId),
+        includeItemTypes = listOf("Movie", "Series", "Episode", "Video", "MusicVideo"),
+        sortBy = "SortName",
+        sortOrder = "Ascending",
+        recursive = true,
+        startIndex = startIndex,
+        limit = limit,
+      ).Items
+    }.getOrDefault(emptyList())
   }
 
   /**

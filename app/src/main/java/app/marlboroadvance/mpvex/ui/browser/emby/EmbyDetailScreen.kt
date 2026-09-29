@@ -2,14 +2,22 @@ package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
 import android.widget.Toast
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,11 +30,19 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -38,10 +54,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.SuggestionChipDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -61,6 +79,8 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -68,13 +88,23 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyDownloadStatus
 import app.marlboroadvance.mpvex.domain.emby.EmbyEnqueueResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyMediaStream
+import app.marlboroadvance.mpvex.domain.emby.EmbyPerson
+import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.domain.emby.EmbyStudio
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
+import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import android.net.Uri
+import androidx.compose.material.icons.outlined.Cast
+import org.koin.compose.koinInject
+import app.marlboroadvance.mpvex.dlna.DlnaSheet
+import app.marlboroadvance.mpvex.dlna.DlnaCastManager
+import app.marlboroadvance.mpvex.dlna.CastPayload
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlin.math.abs
@@ -103,6 +133,9 @@ data class EmbyDetailScreen(
     )
     val server by viewModel.currentServer.collectAsState()
     val scope = rememberCoroutineScope()
+    val dlnaManager = koinInject<DlnaCastManager>()
+    var castSheetShown by remember { mutableStateOf(false) }
+    var showEditMeta by remember { mutableStateOf(false) }
 
     // 下载状态：用来把详情页的下载按钮显示成「下载 / 下载中 12% / 已下载」
     val downloadViewModel: EmbyDownloadViewModel = viewModel(
@@ -145,6 +178,7 @@ data class EmbyDetailScreen(
 
           DetailBody(
             item = current,
+            server = currentServer,
             backdropUrl = viewModel.imageUrl(currentServer, current, "Backdrop", 1280),
             posterUrl = viewModel.imageUrl(currentServer, current, "Primary", 600),
             onPlay = { resume -> scope.launch { viewModel.play(currentServer, current, resume) } },
@@ -203,11 +237,274 @@ data class EmbyDetailScreen(
                   "下载中 ${((task.progressFraction ?: 0f) * 100).toInt()}%"
               }
             },
+            // 下载按钮的自下而上填充进度：下载中/暂停用真实进度，已完成填满，
+            // 排队给一个 0 值（按钮内部会做呼吸式待机动画），没任务传 null 不画
+            downloadProgress = downloadTasks.firstOrNull { it.itemId == current.Id }?.let { task ->
+              when (task.status) {
+                EmbyDownloadStatus.RUNNING -> task.progressFraction ?: 0f
+                EmbyDownloadStatus.PAUSED -> task.progressFraction ?: 0f
+                EmbyDownloadStatus.COMPLETED -> 1f
+                EmbyDownloadStatus.QUEUED -> 0f
+                EmbyDownloadStatus.FAILED -> 0f
+              }
+            },
+            downloadFailed = downloadTasks.any {
+              it.itemId == current.Id && it.status == EmbyDownloadStatus.FAILED
+            },
+            onCast = {
+              val id = current.Id
+              if (id != null) {
+                val url = viewModel.getStreamUrl(currentServer, id, true)
+                dlnaManager.pendingPayload =
+                  CastPayload(Uri.parse(url), viewModel.displayTitle(current))
+                castSheetShown = true
+              }
+            },
+            onRefreshMetadata = {
+              val id = current.Id
+              if (id != null) {
+                scope.launch {
+                  val ok = viewModel.refreshMetadata(currentServer, id, full = false)
+                  Toast.makeText(
+                    context,
+                    if (ok) "已触发刷新元数据" else "刷新失败",
+                    Toast.LENGTH_SHORT,
+                  ).show()
+                }
+              }
+            },
+            onScrapeMetadata = {
+              val id = current.Id
+              if (id != null) {
+                scope.launch {
+                  val ok = viewModel.refreshMetadata(currentServer, id, full = true)
+                  Toast.makeText(
+                    context,
+                    if (ok) "已触发刮削元数据" else "刮削失败",
+                    Toast.LENGTH_SHORT,
+                  ).show()
+                }
+              }
+            },
+            onEditMetadata = { showEditMeta = true },
+            onPersonClick = { pid, pname, tag ->
+              backStack.add(
+                EmbyPersonScreen(personId = pid, personName = pname, personImageTag = tag),
+              )
+            },
             moreMenuExpanded = showMoreMenu,
             onMoreMenuChange = { showMoreMenu = it },
           )
         }
       }
+    }
+
+    if (castSheetShown) {
+      DlnaSheet(onDismissRequest = { castSheetShown = false })
+    }
+
+    // ── 编辑元数据弹窗：名称 / 原名 / 排序名 / 简介 / 年份 / 首映日期 /
+    //    类型 / 标签 / 制作地区 / 工作室 / 评分 / 分级 / 演员与导演，整体 PUT 回服务器 ──
+    if (showEditMeta && item != null) {
+      val targetItem = item
+      val targetServer = server
+      var nameState by remember { mutableStateOf(targetItem?.Name ?: "") }
+      var originalTitleState by remember { mutableStateOf(targetItem?.OriginalTitle ?: "") }
+      var sortNameState by remember { mutableStateOf(targetItem?.SortName ?: "") }
+      var overviewState by remember { mutableStateOf(targetItem?.Overview ?: "") }
+      var yearState by remember { mutableStateOf(targetItem?.ProductionYear?.toString() ?: "") }
+      var premiereState by remember { mutableStateOf(targetItem?.PremiereDate?.take(10) ?: "") }
+      var genresState by remember { mutableStateOf(targetItem?.Genres?.joinToString("、") ?: "") }
+      var tagsState by remember { mutableStateOf(targetItem?.Tags?.joinToString("、") ?: "") }
+      var locationsState by remember {
+        mutableStateOf(targetItem?.ProductionLocations?.joinToString("、") ?: "")
+      }
+      var studiosState by remember {
+        mutableStateOf(targetItem?.Studios?.mapNotNull { it.Name }?.joinToString("、") ?: "")
+      }
+      var ratingState by remember { mutableStateOf(targetItem?.CommunityRating?.toString() ?: "") }
+      var officialState by remember { mutableStateOf(targetItem?.OfficialRating ?: "") }
+      var peopleState by remember {
+        mutableStateOf<List<EmbyPerson>>(targetItem?.People?.map { it.copy() } ?: emptyList())
+      }
+
+      AlertDialog(
+        onDismissRequest = { showEditMeta = false },
+        title = { Text("编辑元数据") },
+        text = {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            OutlinedTextField(
+              value = nameState,
+              onValueChange = { nameState = it },
+              label = { Text("名称") },
+              singleLine = true,
+            )
+            OutlinedTextField(
+              value = originalTitleState,
+              onValueChange = { originalTitleState = it },
+              label = { Text("原名") },
+              singleLine = true,
+            )
+            OutlinedTextField(
+              value = sortNameState,
+              onValueChange = { sortNameState = it },
+              label = { Text("排序名") },
+              singleLine = true,
+            )
+            OutlinedTextField(
+              value = overviewState,
+              onValueChange = { overviewState = it },
+              label = { Text("简介") },
+              minLines = 3,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              OutlinedTextField(
+                value = yearState,
+                onValueChange = { yearState = it },
+                label = { Text("年份") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f),
+              )
+              OutlinedTextField(
+                value = premiereState,
+                onValueChange = { premiereState = it },
+                label = { Text("首映日期") },
+                placeholder = { Text("2020-05-01") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+              )
+            }
+            OutlinedTextField(
+              value = genresState,
+              onValueChange = { genresState = it },
+              label = { Text("类型（、或逗号分隔）") },
+              singleLine = true,
+            )
+            OutlinedTextField(
+              value = tagsState,
+              onValueChange = { tagsState = it },
+              label = { Text("标签（、或逗号分隔）") },
+              singleLine = true,
+            )
+            OutlinedTextField(
+              value = locationsState,
+              onValueChange = { locationsState = it },
+              label = { Text("制作地区（、或逗号分隔）") },
+              singleLine = true,
+            )
+            OutlinedTextField(
+              value = studiosState,
+              onValueChange = { studiosState = it },
+              label = { Text("工作室（、或逗号分隔）") },
+              singleLine = true,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              OutlinedTextField(
+                value = ratingState,
+                onValueChange = { ratingState = it },
+                label = { Text("评分") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f),
+              )
+              OutlinedTextField(
+                value = officialState,
+                onValueChange = { officialState = it },
+                label = { Text("分级") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+              )
+            }
+
+            // ── 演员与导演：可改姓名 / 角色，可删除 ──
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Icon(
+                imageVector = Icons.Default.People,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("演员与导演", style = MaterialTheme.typography.titleSmall)
+            }
+            peopleState.forEachIndexed { index, person ->
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                  value = person.Name ?: "",
+                  onValueChange = { v ->
+                    peopleState = peopleState.toMutableList().also {
+                      it[index] = it[index].copy(Name = v)
+                    }
+                  },
+                  label = { Text("姓名") },
+                  singleLine = true,
+                  modifier = Modifier.weight(1f),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                OutlinedTextField(
+                  value = person.Role ?: "",
+                  onValueChange = { v ->
+                    peopleState = peopleState.toMutableList().also {
+                      it[index] = it[index].copy(Role = v.ifBlank { null })
+                    }
+                  },
+                  label = { Text("角色") },
+                  singleLine = true,
+                  modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = {
+                  peopleState = peopleState.toMutableList().also { it.removeAt(index) }
+                }) {
+                  Icon(Icons.Default.Delete, contentDescription = "删除该人员")
+                }
+              }
+            }
+          }
+        },
+        confirmButton = {
+          TextButton(onClick = {
+            if (targetItem != null && targetServer != null) {
+              scope.launch {
+                val ok = viewModel.updateItemMetadata(
+                  targetServer,
+                  targetItem.copy(
+                    Name = nameState.trim().ifBlank { null },
+                    OriginalTitle = originalTitleState.trim().ifBlank { null },
+                    SortName = sortNameState.trim().ifBlank { null },
+                    Overview = overviewState.ifBlank { null },
+                    ProductionYear = yearState.trim().toIntOrNull(),
+                    PremiereDate = premiereState.trim().ifBlank { null },
+                    Genres = parseMetaList(genresState),
+                    Tags = parseMetaList(tagsState),
+                    ProductionLocations = parseMetaList(locationsState),
+                    Studios = parseMetaList(studiosState)
+                      .map { EmbyStudio(Name = it) }
+                      .takeIf { it.isNotEmpty() },
+                    CommunityRating = ratingState.trim().toDoubleOrNull(),
+                    OfficialRating = officialState.trim().ifBlank { null },
+                    People = peopleState.takeIf { it.isNotEmpty() },
+                  ),
+                )
+                Toast.makeText(
+                  context,
+                  if (ok) "已保存元数据" else "保存失败",
+                  Toast.LENGTH_SHORT,
+                ).show()
+              }
+            }
+            showEditMeta = false
+          }) { Text("保存") }
+        },
+        dismissButton = {
+          TextButton(onClick = { showEditMeta = false }) { Text("取消") }
+        },
+      )
     }
 
     if (showDeleteConfirm && item != null) {
@@ -233,6 +530,7 @@ data class EmbyDetailScreen(
 @Composable
 private fun DetailBody(
   item: EmbyItem,
+  server: EmbyServer?,
   backdropUrl: String?,
   posterUrl: String?,
   onPlay: (resumeSeconds: Long) -> Unit,
@@ -241,7 +539,16 @@ private fun DetailBody(
   onBack: () -> Unit,
   onDelete: () -> Unit,
   onDownload: () -> Unit,
+  onCast: () -> Unit,
+  onEditMetadata: () -> Unit,
+  onScrapeMetadata: () -> Unit,
+  onRefreshMetadata: () -> Unit,
+  /** 点演职员头像：进「演员作品」页（personId / 名字 / 头像 tag） */
+  onPersonClick: (personId: String, personName: String, imageTag: String?) -> Unit,
   downloadLabel: String?,
+  /** 下载填充进度 0..1；null = 没有下载任务（不画填充） */
+  downloadProgress: Float?,
+  downloadFailed: Boolean,
   moreMenuExpanded: Boolean,
   onMoreMenuChange: (Boolean) -> Unit,
 ) {
@@ -267,7 +574,10 @@ private fun DetailBody(
           onPlay = onPlay,
           onDelete = onDelete,
           onDownload = onDownload,
+          onCast = onCast,
           downloadLabel = downloadLabel,
+          downloadProgress = downloadProgress,
+          downloadFailed = downloadFailed,
         )
       }
 
@@ -310,7 +620,16 @@ private fun DetailBody(
       item.People?.takeIf { it.isNotEmpty() }?.let { people ->
         item {
           Column(modifier = Modifier.padding(16.dp)) {
-            Text("演职员", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Icon(
+                imageVector = Icons.Default.People,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("演职员", style = MaterialTheme.typography.titleMedium)
+            }
             Spacer(modifier = Modifier.height(8.dp))
             Row(
               modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -322,15 +641,38 @@ private fun DetailBody(
                   horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                   Card(
-                    modifier = Modifier.size(56.dp),
+                    modifier = Modifier
+                      .size(56.dp)
+                      .clip(RoundedCornerShape(28.dp))
+                      .clickable {
+                        val pid = person.Id
+                        if (pid != null) {
+                          onPersonClick(pid, person.Name ?: "", person.PrimaryImageTag)
+                        }
+                      },
                     shape = RoundedCornerShape(28.dp),
                   ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                      Text(
-                        text = person.Name?.firstOrNull()?.toString() ?: "?",
-                        style = MaterialTheme.typography.titleMedium,
-                      )
+                    val avatarUrl = remember(person.Id, person.PrimaryImageTag, server) {
+                      server?.let { s ->
+                        person.Id?.let { id ->
+                          EmbyClient.imageUrl(
+                            server = s,
+                            itemId = id,
+                            imageType = "Primary",
+                            tag = person.PrimaryImageTag,
+                            maxWidth = 240,
+                          )
+                        }
+                      }
                     }
+                    EmbyImage(
+                      url = avatarUrl,
+                      contentDescription = person.Name,
+                      modifier = Modifier.fillMaxSize(),
+                      contentScale = ContentScale.Crop,
+                      placeholder = Icons.Default.Person,
+                      maxWidth = 240,
+                    )
                   }
                   Text(
                     text = person.Name ?: "",
@@ -407,6 +749,27 @@ private fun DetailBody(
               onClick = {
                 onMoreMenuChange(false)
                 onDelete()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("编辑元数据") },
+              onClick = {
+                onMoreMenuChange(false)
+                onEditMetadata()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("刮削元数据") },
+              onClick = {
+                onMoreMenuChange(false)
+                onScrapeMetadata()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("刷新元数据") },
+              onClick = {
+                onMoreMenuChange(false)
+                onRefreshMetadata()
               },
             )
           }
@@ -502,36 +865,66 @@ private fun BackdropHeader(
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
         )
-        item.OriginalTitle?.takeIf { it.isNotBlank() && it != item.Name }?.let {
-          Text(
-            text = it,
-            style = MaterialTheme.typography.bodyMedium.copy(
-              shadow = Shadow(color = Color.Black.copy(alpha = 0.55f), blurRadius = 8f),
-            ),
-            color = Color.White.copy(alpha = 0.85f),
-          )
+        // 原名只在「实质不同」时才显示（去掉首尾空白、忽略大小写），并加「原名：」前缀，
+        // 否则大标题下面再跟一行差不多的文字，看起来就像标题显示了两遍
+        item.OriginalTitle
+          ?.takeIf {
+            it.isNotBlank() && !it.trim().equals(item.Name?.trim(), ignoreCase = true)
+          }
+          ?.let {
+            Text(
+              text = "原名：$it",
+              style = MaterialTheme.typography.bodyMedium.copy(
+                shadow = Shadow(color = Color.Black.copy(alpha = 0.55f), blurRadius = 8f),
+              ),
+              color = Color.White.copy(alpha = 0.85f),
+            )
+          }
+        Spacer(modifier = Modifier.height(6.dp))
+        // 年份 / 时长 / 评分 / 分级：包成圆角角标，压在剧照上也看得清
+        val chips = metaChips(item)
+        if (chips.isNotEmpty()) {
+          Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            chips.forEach { chip ->
+              Surface(
+                shape = RoundedCornerShape(50),
+                color = Color.Black.copy(alpha = 0.42f),
+                contentColor = Color.White,
+              ) {
+                Text(
+                  text = chip,
+                  style = MaterialTheme.typography.labelMedium,
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+              }
+            }
+          }
         }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-          text = metaSummary(item),
-          style = MaterialTheme.typography.bodySmall.copy(
-            shadow = Shadow(color = Color.Black.copy(alpha = 0.55f), blurRadius = 8f),
-          ),
-          color = Color.White.copy(alpha = 0.9f),
-        )
       }
     }
   }
 }
 
-/** 剧照上的一行摘要：年份 · 时长 · 评分 · 官方分级 */
-private fun metaSummary(item: EmbyItem): String {
+/** 剧照上的角标内容：年份 / 时长 / 评分 / 官方分级，每项单独渲染成一个圆角角标 */
+/** 把「、」/ 逗号 / 分号分隔的输入切成列表：去空白、去空项、保序去重。空输入返回空列表。 */
+private fun parseMetaList(raw: String): List<String> =
+  raw
+    .split("、", ",", "，", ";", "；")
+    .map { it.trim() }
+    .filter { it.isNotEmpty() }
+    .distinct()
+
+/** 剧照上的一行摘要：年份 · 时长 · 评分 · 官方分级，渲染成圆角角标 */
+private fun metaChips(item: EmbyItem): List<String> {
   val parts = mutableListOf<String>()
   item.ProductionYear?.let { parts.add(it.toString()) }
   formatDuration(item.RunTimeTicks).takeIf { it.isNotBlank() }?.let { parts.add(it) }
   item.CommunityRating?.let { parts.add("★ %.1f".format(it)) }
   item.OfficialRating?.let { parts.add(it) }
-  return parts.joinToString(" · ")
+  return parts
 }
 
 /**
@@ -548,7 +941,11 @@ private fun PlaySection(
   onPlay: (resumeSeconds: Long) -> Unit,
   onDelete: () -> Unit,
   onDownload: () -> Unit,
+  onCast: () -> Unit,
   downloadLabel: String?,
+  /** 下载填充进度 0..1；null = 没有下载任务（不画填充） */
+  downloadProgress: Float?,
+  downloadFailed: Boolean,
 ) {
   val positionTicks = item.UserData?.PlaybackPositionTicks ?: 0L
   val runTimeTicks = item.RunTimeTicks ?: 0L
@@ -600,12 +997,35 @@ private fun PlaySection(
         )
       }
 
-      // 下载：与播放按钮同一行，只保留图标（不放文字，避免窄屏把这行撑爆）。
-      // 已下载 / 下载中 / 排队中时置灰不可点，状态通过 downloadLabel 描述给无障碍服务。
+      // 下载：与播放按钮同一行，只保留图标。按钮内部**自下而上**填充一块进度色带 ——
+      //   下载中：跟真实进度走（300ms 平滑过渡，不会一格格跳）
+      //   已暂停：停在当前进度
+      //   已下载：填满整枚按钮 + 图标换成对勾
+      //   排队中：细条填充 + 透明度呼吸，示意「在队列里等」
+      // 任何状态都可点：有任务时再点由 enqueue 弹「已在下载列表 / 已下载过」的提示，
+      // 所以不用 enabled 置灰（置灰会把整个按钮压成半透明，进度带就看不清了）。
       if (isDownloadable(item)) {
-        IconButton(
-          onClick = onDownload,
-          enabled = downloadLabel == null,
+        val animatedFill by animateFloatAsState(
+          targetValue = downloadProgress ?: 0f,
+          animationSpec = tween(durationMillis = 300),
+          label = "downloadFill",
+        )
+        val queuedPulse by rememberInfiniteTransition(label = "downloadQueued")
+          .animateFloat(
+            initialValue = 0.25f,
+            targetValue = 0.55f,
+            animationSpec = infiniteRepeatable(tween(durationMillis = 900)),
+            label = "downloadQueuedAlpha",
+          )
+        val isQueued = downloadLabel == "排队中"
+        val fillFraction = when {
+          downloadProgress == null -> 0f
+          isQueued -> 0.06f
+          else -> animatedFill.coerceIn(0f, 1f)
+        }
+        val fillAlpha = if (isQueued) queuedPulse else 1f
+
+        Box(
           modifier =
             Modifier
               .size(56.dp)
@@ -616,13 +1036,48 @@ private fun PlaySection(
                 } else {
                   MaterialTheme.colorScheme.surfaceVariant
                 }
-              ),
+              )
+              .clickable(onClick = onDownload),
+          contentAlignment = Alignment.Center,
         ) {
+          if (fillFraction > 0f) {
+            // 贴底的填充层：fraction=1 时正好铺满整枚按钮
+            Box(
+              modifier =
+                Modifier
+                  .align(Alignment.BottomCenter)
+                  .fillMaxWidth()
+                  .fillMaxHeight(fillFraction)
+                  .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.45f * fillAlpha)),
+            )
+          }
           Icon(
-            imageVector = Icons.Default.Download,
+            imageVector = if (downloadLabel == "已下载") Icons.Default.Check else Icons.Default.Download,
             contentDescription = downloadLabel ?: "下载",
+            tint = when {
+              downloadFailed -> MaterialTheme.colorScheme.error
+              downloadLabel == null -> MaterialTheme.colorScheme.onPrimaryContainer
+              else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
           )
         }
+      }
+
+      // 投屏：把当前媒体投到 DLNA 设备（与播放 / 删除 / 下载同一行）
+      Box(
+        modifier =
+          Modifier
+            .size(56.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .clickable(onClick = onCast),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.Cast,
+          contentDescription = "投屏",
+          tint = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
       }
     }
 
@@ -703,7 +1158,16 @@ private fun MediaInfoSection(item: EmbyItem) {
   val entries = remember(item) { buildInfoEntries(item) }
 
   Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-    Text("媒体信息", style = MaterialTheme.typography.titleMedium)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Icon(
+        imageVector = Icons.Default.Info,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(20.dp),
+      )
+      Spacer(modifier = Modifier.width(6.dp))
+      Text("媒体信息", style = MaterialTheme.typography.titleMedium)
+    }
     Spacer(modifier = Modifier.height(8.dp))
 
     if (entries.isEmpty()) {

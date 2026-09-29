@@ -7,6 +7,7 @@ import androidx.compose.material.icons.outlined.AspectRatio
 import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.Camera
+import androidx.compose.material.icons.outlined.Cast
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.MoreVert
@@ -65,6 +66,7 @@ enum class PlayerButton(
   PREVIOUS(Icons.Outlined.SkipPrevious),
   NEXT(Icons.Outlined.SkipNext),
   EMBY_FAVORITE(Icons.Outlined.FavoriteBorder),
+  CAST(Icons.Outlined.Cast),
   NONE(Icons.Outlined.Bookmarks),
 }
 
@@ -110,5 +112,6 @@ fun getPlayerButtonLabel(button: PlayerButton): String =
     PlayerButton.PREVIOUS -> stringResource(R.string.btn_label_previous)
     PlayerButton.NEXT -> stringResource(R.string.btn_label_next)
     PlayerButton.EMBY_FAVORITE -> stringResource(R.string.btn_label_emby_favorite)
+    PlayerButton.CAST -> stringResource(R.string.btn_label_cast)
     PlayerButton.NONE -> stringResource(R.string.btn_label_none)
   }

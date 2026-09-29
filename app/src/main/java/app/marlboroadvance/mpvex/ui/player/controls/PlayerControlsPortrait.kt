@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,6 +21,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.ui.player.controls.components.ControlsButton
@@ -49,7 +51,7 @@ fun TopPlayerControlsPortrait(
     ControlsButton(
       icon = Icons.AutoMirrored.Default.ArrowBack,
       onClick = onBackPress,
-      color = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface,
+      color = controlColor,
     )
 
     // 返回键与快捷开关各占一端，中间留白
@@ -81,7 +83,7 @@ fun PortraitBottomTitle(
   clickable: Boolean,
   onClick: () -> Unit,
 ) {
-  val textColor = if (hideBackground) controlColor else MaterialTheme.colorScheme.onSurface
+  val textColor = controlColor
   // 底部控件层下面就是画面，加一层阴影让白字在任何底图上都看得清
   val textShadow = Shadow(color = Color.Black.copy(alpha = 0.7f), blurRadius = 8f)
 
@@ -93,21 +95,12 @@ fun PortraitBottomTitle(
         .clickable(enabled = clickable, onClick = onClick)
         .padding(horizontal = MaterialTheme.spacing.extraSmall),
     verticalAlignment = Alignment.CenterVertically,
+    // 序号角标 + 片名作为一个整体水平居中，不再顶着左边排
+    horizontalArrangement = Arrangement.Center,
   ) {
     if (!playlistInfo.isNullOrBlank()) {
-      Text(
-        text = playlistInfo,
-        style = MaterialTheme.typography.labelMedium.copy(shadow = textShadow),
-        fontFamily = FontFamily.Monospace,
-        color = MaterialTheme.colorScheme.primary,
-        maxLines = 1,
-      )
-      Text(
-        text = " · ",
-        style = MaterialTheme.typography.labelMedium.copy(shadow = textShadow),
-        color = textColor.copy(alpha = 0.7f),
-        maxLines = 1,
-      )
+      PlaylistIndexBadge(text = playlistInfo)
+      Spacer(modifier = Modifier.width(8.dp))
     }
 
     Text(
@@ -115,6 +108,7 @@ fun PortraitBottomTitle(
       style = MaterialTheme.typography.bodyMedium.copy(shadow = textShadow),
       fontFamily = FontFamily.Monospace,
       color = textColor,
+      textAlign = TextAlign.Center,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       modifier = Modifier.basicMarquee(),

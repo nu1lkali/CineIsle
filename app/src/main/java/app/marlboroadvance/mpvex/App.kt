@@ -86,6 +86,7 @@ class App : Application() {
           DatabaseModule,
           FileManagerModule,
           app.marlboroadvance.mpvex.di.domainModule,
+          app.marlboroadvance.mpvex.dlna.dlnaModule,
         )
       }
       trace("startKoin done")
