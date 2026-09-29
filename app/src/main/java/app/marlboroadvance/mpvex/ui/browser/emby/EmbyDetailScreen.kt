@@ -292,6 +292,12 @@ data class EmbyDetailScreen(
                 EmbyPersonScreen(personId = pid, personName = pname, personImageTag = tag),
               )
             },
+            // 点类型 / 标签 chip：进「按该类型 / 标签找片」的结果页
+            onMetaClick = { keyword, isGenre ->
+              backStack.add(
+                EmbyTagItemsScreen(keyword = keyword, kind = if (isGenre) "genre" else "tag"),
+              )
+            },
             moreMenuExpanded = showMoreMenu,
             onMoreMenuChange = { showMoreMenu = it },
           )
@@ -545,6 +551,8 @@ private fun DetailBody(
   onRefreshMetadata: () -> Unit,
   /** 点演职员头像：进「演员作品」页（personId / 名字 / 头像 tag） */
   onPersonClick: (personId: String, personName: String, imageTag: String?) -> Unit,
+  /** 点类型 / 标签 chip：进「按该类型 / 标签找片」页（keyword / 是否类型） */
+  onMetaClick: (keyword: String, isGenre: Boolean) -> Unit,
   downloadLabel: String?,
   /** 下载填充进度 0..1；null = 没有下载任务（不画填充） */
   downloadProgress: Float?,
@@ -581,8 +589,12 @@ private fun DetailBody(
         )
       }
 
-      // ── 类型标签 ──
-      if (item.Genres.isNotEmpty()) {
+      // ── 类型 / 标签 chip ──
+      // 点一下进「按该类型 / 标签找片」的结果页，和点演职员头像进作品页是同一套交互。
+      // 类型在前、标签在后，同排横向滚动；两者都是 Emby /Items 支持的过滤维度。
+      val genreList = item.Genres
+      val tagList = item.Tags.filter { it.isNotBlank() }
+      if (genreList.isNotEmpty() || tagList.isNotEmpty()) {
         item {
           Row(
             modifier = Modifier
@@ -590,10 +602,17 @@ private fun DetailBody(
               .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
-            item.Genres.forEach { genre ->
+            genreList.forEach { genre ->
               SuggestionChip(
-                onClick = {},
+                onClick = { onMetaClick(genre, true) },
                 label = { Text(genre) },
+                colors = SuggestionChipDefaults.suggestionChipColors(),
+              )
+            }
+            tagList.forEach { tag ->
+              SuggestionChip(
+                onClick = { onMetaClick(tag, false) },
+                label = { Text(tag) },
                 colors = SuggestionChipDefaults.suggestionChipColors(),
               )
             }

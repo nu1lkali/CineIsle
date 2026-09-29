@@ -41,16 +41,25 @@ class AppearancePreferences(
       "CURRENT_CHAPTER,DECODER,AUDIO_TRACK,SUBTITLES,EMBY_FAVORITE,CAST,MORE_OPTIONS",
     )
 
+  /**
+   * 横屏右下簇（贴屏幕右缘）。
+   *
+   * 末尾那颗离拇指最近，留给「切回竖屏」（SCREEN_ROTATION）——
+   * 用户反馈：横屏下最常做的就是看完切回竖屏，画面比例反而用得少，
+   * 所以把两者对调：旋转挪到最右，比例退到左下簇原先旋转的位置。
+   *
+   * key 带 `_v2`：旧默认值已写进老用户本地存储，只改默认值不会生效。
+   */
   val bottomRightControls =
     preferenceStore.getString(
-      "bottom_right_controls",
-      "FRAME_NAVIGATION,VIDEO_ZOOM,PICTURE_IN_PICTURE,ASPECT_RATIO",
+      "bottom_right_controls_v2",
+      "FRAME_NAVIGATION,VIDEO_ZOOM,PICTURE_IN_PICTURE,SCREEN_ROTATION",
     )
 
   val bottomLeftControls =
     preferenceStore.getString(
-      "bottom_left_controls",
-      "PREVIOUS,NEXT,BACKGROUND_PLAYBACK,LOCK_CONTROLS,SCREEN_ROTATION,PLAYBACK_SPEED,REPEAT_MODE,SHUFFLE,AB_LOOP",
+      "bottom_left_controls_v2",
+      "PREVIOUS,NEXT,BACKGROUND_PLAYBACK,LOCK_CONTROLS,ASPECT_RATIO,PLAYBACK_SPEED,REPEAT_MODE,SHUFFLE,AB_LOOP",
     )
 
   /**

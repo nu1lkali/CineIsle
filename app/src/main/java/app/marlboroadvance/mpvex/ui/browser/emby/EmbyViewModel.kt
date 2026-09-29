@@ -529,6 +529,47 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   /**
+   * 按「类型」查作品：走 Emby 的 Genres 过滤。
+   *
+   * 详情页点类型 chip 进来，和 [searchGlobal] 一样不传 ParentId —— 全库范围检索，
+   * 只限定可播放类型，避免把 Folder / 合集这类容器混进结果。
+   */
+  suspend fun loadGenreItems(
+    server: EmbyServer,
+    genre: String,
+    limit: Int = 120,
+  ): List<EmbyItem> = loadItemsByFacet(server, genres = listOf(genre), limit = limit)
+
+  /** 按「标签」查作品：走 Emby 的 Tags 过滤，规则同 [loadGenreItems]。 */
+  suspend fun loadTagItems(
+    server: EmbyServer,
+    tag: String,
+    limit: Int = 120,
+  ): List<EmbyItem> = loadItemsByFacet(server, tags = listOf(tag), limit = limit)
+
+  /** [loadGenreItems] / [loadTagItems] 的公共实现：只差 Genres / Tags 两个参数。 */
+  private suspend fun loadItemsByFacet(
+    server: EmbyServer,
+    genres: List<String>? = null,
+    tags: List<String>? = null,
+    limit: Int = 120,
+  ): List<EmbyItem> = withContext(Dispatchers.IO) {
+    runCatching {
+      EmbyClient.getItems(
+        server = server,
+        genres = genres,
+        tags = tags,
+        includeItemTypes = listOf("Movie", "Series", "Episode", "Video", "MusicVideo"),
+        sortBy = "SortName",
+        sortOrder = "Ascending",
+        recursive = true,
+        startIndex = 0,
+        limit = limit,
+      ).Items
+    }.getOrDefault(emptyList())
+  }
+
+  /**
    * 取文件夹内若干子项的封面图 URL，用于给「文件夹」条目拼多宫格封面。
    *
    * Emby 的 Folder / CollectionFolder / UserView 这类容器条目自身没有 Primary 图，

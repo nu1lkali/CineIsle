@@ -294,26 +294,48 @@ dependencies {
 
 /* ---------------- Git helpers ---------------- */
 
-fun getCommitCount(): String =
-  runCommand("git rev-list --count HEAD") ?: "0"
+/**
+ * 本机可用的 git 可执行文件（找不到就是 null）。
+ *
+ * 为什么要先找绝对路径：本机 git **不在 PATH 上**（只有 GitHub Desktop 自带的那份），
+ * 直接 exec "git" 必然起不来；而配置期起外部进程失败会让 Gradle 9 判定配置缓存无效
+ * （实测报 "failed to compute value with custom source ... starting process 'command 'git''"，
+ * 缓存每次被丢弃）。所以只在**确认文件存在**时才真的调用。
+ */
+fun findGitExecutable(): String? {
+  val candidates = mutableListOf<String>()
+  System.getenv("GIT_EXE")?.let(candidates::add)
+  val ghRoot = System.getenv("LOCALAPPDATA")?.let { File(it, "GitHubDesktop") }
+  ghRoot
+    ?.listFiles()
+    ?.filter { it.isDirectory && it.name.startsWith("app-") }
+    ?.forEach { appDir ->
+      candidates += File(appDir, "resources/app/git/cmd/git.exe").absolutePath
+    }
+  return candidates.firstOrNull { File(it).exists() }
+}
 
-fun getCommitSha(): String =
-  runCommand("git rev-parse --short HEAD") ?: "unknown"
+/** 提交数（用作 versionCode / debug 版本号后缀）；拿不到就退回 0 */
+fun getCommitCount(): String = runGit("rev-list", "--count", "HEAD") ?: "0"
 
-fun runCommand(command: String): String? =
-  try {
-    val parts = command.split(' ')
-    val process = ProcessBuilder(parts)
-      .redirectErrorStream(true)
-      .start()
+/** 短提交号（写进 BuildConfig.GIT_SHA）；拿不到就退回 unknown */
+fun getCommitSha(): String = runGit("rev-parse", "--short", "HEAD") ?: "unknown"
 
-    val output = process.inputStream
-      .bufferedReader()
-      .readText()
-      .trim()
-
-    process.waitFor()
-    output.ifEmpty { null }
+/**
+ * 用 providers.exec 而不是 ProcessBuilder 起 git。
+ *
+ * providers.exec 会被 Gradle 当构建输入跟踪，配置缓存能正常命中；
+ * 而 ProcessBuilder 属于「配置期外部进程」，Gradle 9 直接判缓存无效。
+ */
+fun runGit(vararg args: String): String? {
+  val exe = findGitExecutable() ?: return null
+  return try {
+    providers.exec {
+      commandLine(listOf(exe) + args)
+      // 不在 git 仓库时不要让构建失败
+      isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().ifEmpty { null }
   } catch (e: Exception) {
     null
   }
+}
