@@ -28,6 +28,7 @@ import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.toFixed
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.serialization.Serializable
 import me.zhanghai.compose.preference.ListPreference
+import me.zhanghai.compose.preference.ListPreferenceType
 import me.zhanghai.compose.preference.ProvidePreferenceLocals
 import me.zhanghai.compose.preference.SliderPreference
 import me.zhanghai.compose.preference.SwitchPreference
@@ -130,6 +131,74 @@ object PlayerPreferencesScreen : Screen {
                 },
               )
               
+              PreferenceDivider()
+
+              // 自动连播倒计时：0 = 播完直接切下一集（原来的行为）
+              val autoplayCountdown by preferences.autoplayNextCountdownSeconds.collectAsState()
+              ListPreference(
+                value = autoplayCountdown,
+                onValueChange = { preferences.autoplayNextCountdownSeconds.set(it) },
+                title = { Text("连播下一集倒计时") },
+                values = listOf(0, 3, 5, 10),
+                valueToText = { value ->
+                  AnnotatedString(
+                    when (value) {
+                      0 -> "不显示，播完直接切"
+                      else -> "$value 秒"
+                    },
+                  )
+                },
+                type = ListPreferenceType.DROPDOWN_MENU,
+                summary = {
+                  Text(
+                    text = if (autoplayCountdown == 0) {
+                      "不显示，播完直接切"
+                    } else {
+                      "播完弹卡片，倒数 $autoplayCountdown 秒后切下一集；点卡片可立即播放"
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              val rememberSpeed by preferences.rememberSpeedPerSeries.collectAsState()
+              SwitchPreference(
+                value = rememberSpeed,
+                onValueChange = preferences.rememberSpeedPerSeries::set,
+                title = { Text("记住每部剧的播放速度") },
+                summary = {
+                  Text(
+                    text = if (rememberSpeed) {
+                      "同一部剧切下一集时沿用上次调过的倍速（电影按单部记）"
+                    } else {
+                      "每部片子都用默认倍速"
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              val rememberAudioTrack by preferences.rememberAudioTrackPerSeries.collectAsState()
+              SwitchPreference(
+                value = rememberAudioTrack,
+                onValueChange = preferences.rememberAudioTrackPerSeries::set,
+                title = { Text("记住每部剧选择的音轨") },
+                summary = {
+                  Text(
+                    text = if (rememberAudioTrack) {
+                      "按「语言+编码+声道」匹配，下一集自动选中同一条音轨"
+                    } else {
+                      "每集都按默认语言规则选音轨"
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
               PreferenceDivider()
               
               val preloadNextVideo by preferences.preloadNextVideo.collectAsState()

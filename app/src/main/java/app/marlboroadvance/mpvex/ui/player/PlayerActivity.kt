@@ -28,7 +28,13 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import kotlin.math.ceil
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -212,6 +218,16 @@ class PlayerActivity :
    * 通过 intent extra `playlist_titles` 传进来，切集时优先用它。
    */
   private var playlistTitles: List<String> = emptyList()
+
+  /**
+   * 「每部剧记住播放设置」用的键，与 playlist 下标一一对应（Emby 剧集是 SeriesId）。
+   *
+   * 单文件播放不走列表，用 [singleSeriesKey]；
+   * 列表播放按下标取，切集时键随之换成新一集所属的剧。
+   * 本地播放（非 Emby）两个都是空，记忆逻辑整体跳过。
+   */
+  private var playlistSeriesKeys: List<String> = emptyList()
+  private var singleSeriesKey: String? = null
 
   /**
    * 视频预加载：对下一集的流地址做 HTTP Range 预取的协程。
@@ -436,6 +452,10 @@ class PlayerActivity :
     // 没有这个列表时只能从 URL 末段猜标题 —— Emby 的流地址末段固定是 "stream"，
     // 于是从第二个视频起标题全变成 "stream"（用户反馈的 bug）。有它就优先用它。
     playlistTitles = intent.getStringArrayListExtra("playlist_titles") ?: emptyList()
+    // 「记住每部剧的播放设置」的键，与 playlist 下标一一对应
+    playlistSeriesKeys = intent.getStringArrayListExtra("playlist_series_keys") ?: emptyList()
+    singleSeriesKey = intent.getStringExtra("emby_series_key")
+    viewModel.seriesKey = currentSeriesKey()
 
     // If playlist is empty but playlist_id is provided, load asynchronously from database
     // Load all items - LazyColumn handles pagination/virtualization efficiently
@@ -572,14 +592,36 @@ class PlayerActivity :
   private fun setupPlayerControls() {
     binding.controls.setContent {
       MpvexTheme {
-        PlayerControls(
-          viewModel = viewModel,
-          onBackPress = {
-            isUserFinishing = true
-            finish()
-          },
-          modifier = Modifier,
-        )
+        Box(modifier = Modifier.fillMaxSize()) {
+          PlayerControls(
+            viewModel = viewModel,
+            onBackPress = {
+              isUserFinishing = true
+              finish()
+            },
+            modifier = Modifier,
+          )
+          // 下一集连播倒计时：贴在底部、抬高一截避开控制栏。
+          // 只有倒计时 > 0 时卡片才出现（AnimatedVisibility 内部判断）。
+          AutoplayCountdownCard(
+            viewModel = viewModel,
+            onPlayNow = {
+              // 点卡片 = 立刻切下一集（不等片尾放完）
+              autoplayCancelled = false
+              cancelAutoplayCountdown()
+              playNext()
+            },
+            onCancel = {
+              // 取消 = 本集播完停在最后一帧，不再自动连播
+              autoplayCancelled = true
+              cancelAutoplayCountdown()
+            },
+            // 放右下角，不压画面中间，也不挡底部的进度条
+            modifier = Modifier
+              .align(Alignment.BottomEnd)
+              .padding(end = 16.dp, bottom = 84.dp),
+          )
+        }
       }
     }
   }
@@ -653,6 +695,9 @@ class PlayerActivity :
   @RequiresApi(Build.VERSION_CODES.P)
   override fun onDestroy() {
     Log.d(TAG, "PlayerActivity onDestroy")
+
+    // 页面都没了就别再倒计时切集了
+    cancelAutoplayCountdown()
 
     runCatching {
       // OPTIMIZATION: Prevent any further UI updates or callbacks
@@ -1612,6 +1657,161 @@ class PlayerActivity :
     }.onFailure { /* Silently ignore PiP update failures */ }
   }
 
+  /** 自动连播倒计时的盯梢协程；切集 / 取消 / 退出时都要 cancel，避免播完后还偷偷切集 */
+  private var autoplayCountdownJob: kotlinx.coroutines.Job? = null
+
+  /**
+   * 用户在倒计时卡片上点过「取消」：本集播完不再自动切，停在最后一帧。
+   * 只影响当前这一集，切集 / 开播下一集时清零。
+   */
+  private var autoplayCancelled = false
+
+  /**
+   * 每集开播时起一个轻量轮询：**快播完的那几秒**把倒计时卡片推到屏幕上。
+   *
+   * 不用「播完再倒数」的做法 —— 那样视频已经停在最后一帧了，
+   * 用户还要干等几秒才切，纯粹是浪费时间。现在卡片在片尾提前出现，
+   * 真正切集仍然发生在播完的那一刻（[onPlaybackEndedAutoplay]），一秒都不多等。
+   *
+   * 轮询而不是观察 mpv 的 time-remaining：后者每帧回调一次、JNI 开销明显，
+   * 而这里只需要 0.5 秒精度。
+   */
+  private fun startAutoplayCountdownWatcher() {
+  autoplayCountdownJob?.cancel()
+  val total = playerPreferences.autoplayNextCountdownSeconds.get()
+  // 设置里选了「不显示，播完直接切」：不需要盯进度，播完走原逻辑即可
+  if (total <= 0) {
+    autoplayCountdownJob = null
+    return
+  }
+    val startIndex = playlistIndex
+  autoplayCountdownJob = lifecycleScope.launch {
+    while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+      kotlinx.coroutines.delay(500)
+      // 用户自己切了集 / 退出了 / 在片尾取消了：这次盯梢作废
+      if (playlistIndex != startIndex || isFinishing || autoplayCancelled) break
+      if (peekNextIndex() == null && !viewModel.shouldRepeatPlaylist()) break // 没有下一集
+      val left = wallClockSecondsToEnd() ?: continue
+      // 进入最后 total 秒：把卡片推出来，之后每 0.5 秒刷新一次，数字自然往下走
+      if (left in 0.1..total.toDouble()) {
+        if (viewModel.autoplayNextTitle.value == null) {
+          viewModel.autoplayNextTitle.value = peekNextIndex()?.let { playlistTitles.getOrNull(it) }
+        }
+        viewModel.autoplayCountdown.value = kotlin.math.ceil(left).toInt().coerceAtLeast(1)
+      } else if (left > total && viewModel.autoplayCountdown.value > 0) {
+        // 用户往后拖了进度条：卡片收起来，等再次接近片尾再出现
+        viewModel.autoplayCountdown.value = 0
+        viewModel.autoplayNextTitle.value = null
+      }
+    }
+  }
+}
+
+/**
+ * 距离本集播完还剩多少**真实**秒数（考虑倍速）。
+ *
+ * mpv 的 duration / time-pos 都是媒体时间，2 倍速下剩 10 秒片尾实际只要 5 秒就放完，
+ * 所以要除以当前倍速，否则卡片会早一倍时间弹出来。
+ */
+private fun wallClockSecondsToEnd(): Double? {
+  val duration = MPVLib.getPropertyDouble("duration") ?: return null
+  val position = MPVLib.getPropertyDouble("time-pos") ?: return null
+  val speed = MPVLib.getPropertyDouble("speed") ?: 1.0
+  if (duration <= 0 || speed <= 0) return null
+  return (duration - position) / speed
+}
+
+/**
+ * 播完一集时调用：默认直接切下一集（一秒都不等），
+ * 除非用户刚才在卡片上点了「取消」——那就停在最后一帧，等他手动操作。
+ *
+ * 取消标记用完即清，只影响「这一集」，下一集重新给机会。
+ */
+private fun onPlaybackEndedAutoplay() {
+  val cancelled = autoplayCancelled
+  autoplayCancelled = false
+  autoplayCountdownJob?.cancel()
+  autoplayCountdownJob = null
+  viewModel.autoplayCountdown.value = 0
+  viewModel.autoplayNextTitle.value = null
+  if (cancelled) return
+  playNext()
+}
+
+/** 取消倒计时：卡片上的「取消」按钮，以及用户手动切集 / 退出时都要调用 */
+private fun cancelAutoplayCountdown() {
+  autoplayCountdownJob?.cancel()
+  autoplayCountdownJob = null
+  viewModel.autoplayCountdown.value = 0
+  viewModel.autoplayNextTitle.value = null
+}
+
+  /**
+   * 下一个要播的条目下标（不真的切过去，只用来提前取标题）。
+   * 与 [playNext] 的判断保持一致：随机模式走 shuffledIndices，末位且整列表循环时回到开头。
+   */
+  private fun peekNextIndex(): Int? {
+    if (playlist.isEmpty()) return null
+    val effectiveSize = if (playlistTotalCount > 0) playlistTotalCount else playlist.size
+    return if (viewModel.shuffleEnabled.value) {
+      if (shuffledIndices.isEmpty()) generateShuffledIndices()
+      val nextPosition = shuffledPosition + 1
+      when {
+        nextPosition <= shuffledIndices.size - 1 -> shuffledIndices.getOrNull(nextPosition)
+        viewModel.shouldRepeatPlaylist() -> shuffledIndices.firstOrNull()
+        else -> null
+      }
+    } else {
+      when {
+        playlistIndex < effectiveSize - 1 -> playlistIndex + 1
+        viewModel.shouldRepeatPlaylist() -> 0
+        else -> null
+      }
+    }
+  }
+
+  /**
+   * 当前这一集对应的「记忆键」：列表播放按下标取，单文件播放用 intent 里那个。
+   *
+   * 取不到就返回 null，此时播放速度 / 音轨记忆整体跳过（本地播放就是这种情况）。
+   */
+  private fun currentSeriesKey(): String? =
+    playlistSeriesKeys.getOrNull(playlistIndex) ?: singleSeriesKey
+
+  /**
+   * 切集后把记忆键同步给 ViewModel —— 用户在这一集里改的速度 / 音轨要记到「这一部剧」名下。
+   */
+  private fun refreshSeriesKey() {
+    viewModel.seriesKey = currentSeriesKey()
+  }
+
+  /**
+   * 应用「本剧上次记住的播放速度 / 音轨」。
+   *
+   * 只在开关打开且有记忆键时生效；音轨按指纹匹配（见 [PlaybackMemory]），
+   * 匹配不到就什么都不做，交给 TrackSelector 的默认语言逻辑。
+   */
+  private fun applyRememberedPlaybackSettings() {
+    val key = currentSeriesKey()
+    viewModel.seriesKey = key
+    if (key.isNullOrBlank()) return
+    if (playerPreferences.rememberSpeedPerSeries.get()) {
+      val speed = PlaybackMemory.speedFor(playerPreferences, key)
+      if (speed != null && speed > 0f) {
+        runCatching { MPVLib.setPropertyDouble("speed", speed.toDouble()) }
+      }
+    }
+    if (playerPreferences.rememberAudioTrackPerSeries.get()) {
+      val fingerprint = PlaybackMemory.audioFingerprintFor(playerPreferences, key)
+      if (!fingerprint.isNullOrBlank()) {
+        val trackId = PlaybackMemory.findAudioTrackId(fingerprint)
+        if (trackId != null && trackId > 0) {
+          runCatching { MPVLib.setPropertyInt("aid", trackId) }
+        }
+      }
+    }
+  }
+
   /**
    * Handles end-of-file event by playing next in playlist if available, otherwise finishing activity if configured.
    *
@@ -1640,8 +1840,9 @@ class PlayerActivity :
         val repeatPlaylist = viewModel.shouldRepeatPlaylist()
 
         if (repeatPlaylist || (hasNextItem && autoplayEnabled)) {
-          // Play next item in playlist
-          playNext()
+          // 卡片在片尾倒数阶段已经弹过了，这里直接切，不再多等；
+          // 只有用户在卡片上点过「取消」才会停住不动。
+          onPlaybackEndedAutoplay()
         } else if (!hasNextItem && playerPreferences.closeAfterReachingEndOfVideo.get()) {
           // 只有"真的没有下一集可播"时才退出播放器（整个队列/单文件播放结束）。
           // autoplay 关闭但队列里还有后续时，属于"等用户手动切"，不能算播放结束，
@@ -1793,6 +1994,14 @@ class PlayerActivity :
 
       // Apply track selection logic (defaults only apply when no saved state)
       trackSelector.onFileLoaded(hasState)
+
+      // 「每部剧记住速度 / 音轨」：必须在 TrackSelector 之后，
+      // 否则会被默认语言逻辑覆盖掉用户上次手动选的音轨。
+      applyRememberedPlaybackSettings()
+
+      // 起一个盯梢协程：片尾倒数阶段把「下一集」卡片推出来
+      autoplayCancelled = false
+      withContext(Dispatchers.Main) { startAutoplayCountdownWatcher() }
 
       // Apply default zoom only if there's no saved state
       if (!hasState) {
@@ -2562,6 +2771,10 @@ class PlayerActivity :
       playlist = playlistFromIntent
       // 标题列表必须和 playlist 同步替换，否则切集时会用到上一批的标题
       playlistTitles = intent.getStringArrayListExtra("playlist_titles") ?: emptyList()
+      // 记忆键同理：换了队列就换键，否则会把上一部剧的速度套到新剧上
+      playlistSeriesKeys = intent.getStringArrayListExtra("playlist_series_keys") ?: emptyList()
+      singleSeriesKey = intent.getStringExtra("emby_series_key")
+      viewModel.seriesKey = currentSeriesKey()
       // 换了播放队列，允许对新的下一集重新预加载
       preloadRequestedForIndex = -1
     }
@@ -3254,6 +3467,8 @@ class PlayerActivity :
       Log.e(TAG, "Invalid playlist index: $index (playlist size: ${playlist.size})")
       return
     }
+    // 切集了：记忆键要跟着换成新一集所属的剧，否则会把上一部剧的速度记到这部剧名下
+    refreshSeriesKey()
     loadPlaylistItemInternal(index)
   }
 

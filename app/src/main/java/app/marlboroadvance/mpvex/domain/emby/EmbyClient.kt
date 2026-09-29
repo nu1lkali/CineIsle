@@ -47,6 +47,63 @@ data class EmbyItemsResult(
 )
 
 /**
+ * 媒体库筛选面板的可选项集合。
+ *
+ * 四个维度都来自 Emby 的「按名字聚合」端点（/Genres、/Tags、/Years、/OfficialRatings），
+ * 即该库里真实出现过的值。任一维度为空表示服务端没给或不可用，UI 会隐藏对应分组。
+ */
+data class EmbyFilterOptions(
+  val genres: List<String> = emptyList(),
+  val tags: List<String> = emptyList(),
+  /** 发行年份，新的在前 */
+  val years: List<Int> = emptyList(),
+  val officialRatings: List<String> = emptyList(),
+  /** 演员 / 导演 / 编剧（走 /Persons，带 PersonTypes 过滤） */
+  val persons: List<EmbyIdName> = emptyList(),
+  /** 工作室（出品方） */
+  val studios: List<EmbyIdName> = emptyList(),
+)
+
+/**
+ * 需要「按 Id 筛选」的可选项：名字给人看，Id 才是传给 /Items 的。
+ *
+ * 类型、标签这类是按**名字**筛（Genres=动作），
+ * 演员和工作室是按**Id** 筛（PersonIds=xxx），同名不同人靠 Id 才能区分。
+ */
+@Serializable
+data class EmbyIdName(
+  val id: String,
+  val name: String,
+)
+
+/** 筛选条件的持久化快照（按媒体库分别存，进库时恢复）。 */
+@Serializable
+data class EmbyLibraryFilterState(
+  val genres: List<String> = emptyList(),
+  val tags: List<String> = emptyList(),
+  val years: List<Int> = emptyList(),
+  val officialRatings: List<String> = emptyList(),
+  val personIds: List<String> = emptyList(),
+  val studioIds: List<String> = emptyList(),
+  /** null 不限，true 已看，false 未看 */
+  val isPlayed: Boolean? = null,
+  /** null 不限，true 高清 / false 标清 */
+  val isHD: Boolean? = null,
+  /** null 不限，true 3D / false 非 3D */
+  val is3D: Boolean? = null,
+  /** null 不限，true 有字幕 / false 无字幕 */
+  val hasSubtitles: Boolean? = null,
+  val minRating: Float? = null,
+  val favoriteOnly: Boolean = false,
+) {
+  /** 全空 = 没有生效条件，用于决定图标高亮与「恢复默认」是否可用 */
+  fun isEmpty(): Boolean =
+    genres.isEmpty() && tags.isEmpty() && years.isEmpty() && officialRatings.isEmpty() &&
+      personIds.isEmpty() && studioIds.isEmpty() && isPlayed == null && isHD == null &&
+      is3D == null && hasSubtitles == null && minRating == null && !favoriteOnly
+}
+
+/**
  * Emby 媒体项。Emby 的 Item 类型丰富（Movie/Series/Episode/MusicAlbum/...），
  * 这里只定义播放器最关心的字段；UI 层根据 [type] 分支显示。
  */
@@ -438,6 +495,29 @@ object EmbyClient {
     excludeItemTypes: List<String>? = null,
     /** 按人员筛选：传演员/导演的 PersonId，查 TA 参与过的条目 */
     personIds: List<String>? = null,
+    /** 按发行年份筛选；多选时 Emby 取并集 */
+    years: List<Int>? = null,
+    /** 最低社区评分（0~10），例如传 7.0 表示只要 7 分以上的 */
+    minCommunityRating: Float? = null,
+    /** 按标签筛选；多选时 Emby 取并集，查询串用 | 分隔 */
+    tags: List<String>? = null,
+    /** 按官方分级筛选；参数名是复数 OfficialRatings，查询串用 | 分隔 */
+    officialRatings: List<String>? = null,
+    /**
+     * 已看 / 未看：true 只要看过的，false 只要没看过的，null 不限。
+     *
+     * Emby 4.x 起这是独立的 IsPlayed 布尔参数，不是 Filters 里的枚举值，
+     * 所以单独拼，不要塞进 Filters（塞进去服务端会忽略）。
+     */
+    isPlayed: Boolean? = null,
+    /** true 只要高清 / false 只要标清（Emby 的 IsHD） */
+    isHD: Boolean? = null,
+    /** true 只要 3D / false 排除 3D（Emby 的 Is3D） */
+    is3D: Boolean? = null,
+    /** true 只要有字幕 / false 只要没字幕（Emby 的 HasSubtitles） */
+    hasSubtitles: Boolean? = null,
+    /** 工作室（出品方）Id 列表，多选取并集 */
+    studioIds: List<String>? = null,
   ): EmbyItemsResult {
     val q = LinkedHashMap<String, String?>()
     parentId?.let { q["ParentId"] = it }
@@ -448,7 +528,18 @@ object EmbyClient {
     includeItemTypes?.takeIf { it.isNotEmpty() }?.let { q["IncludeItemTypes"] = it.joinToString(",") }
     excludeItemTypes?.takeIf { it.isNotEmpty() }?.let { q["ExcludeItemTypes"] = it.joinToString(",") }
     genres?.takeIf { it.isNotEmpty() }?.let { q["Genres"] = it.joinToString("|") }
+    tags?.takeIf { it.isNotEmpty() }?.let { q["Tags"] = it.joinToString("|") }
+    officialRatings?.takeIf { it.isNotEmpty() }?.let { q["OfficialRatings"] = it.joinToString("|") }
+    // 已看状态与视频规格都是独立布尔参数，服务端只认 true / false，不传才是「不限」
+    isPlayed?.let { q["IsPlayed"] = it.toString() }
+    isHD?.let { q["IsHD"] = it.toString() }
+    is3D?.let { q["Is3D"] = it.toString() }
+    hasSubtitles?.let { q["HasSubtitles"] = it.toString() }
+    studioIds?.takeIf { it.isNotEmpty() }?.let { q["StudioIds"] = it.joinToString(",") }
     personIds?.takeIf { it.isNotEmpty() }?.let { q["PersonIds"] = it.joinToString(",") }
+    years?.takeIf { it.isNotEmpty() }?.let { q["Years"] = it.joinToString(",") }
+    // Genres / Tags / OfficialRatings 都是「|」分隔，只有 Years 是「,」分隔
+    minCommunityRating?.let { q["MinCommunityRating"] = it.toString() }
     searchTerm?.takeIf { it.isNotBlank() }?.let { q["SearchTerm"] = it }
     mediaTypes?.takeIf { it.isNotEmpty() }?.let { q["MediaTypes"] = it.joinToString(",") }
     q["StartIndex"] = startIndex.toString()
@@ -459,6 +550,100 @@ object EmbyClient {
     q["EnableUserData"] = "true"
     q["ImageTypeLimit"] = "1"
     return getJson(server, "/Users/${server.userId}/Items", q)
+  }
+
+  /**
+   * 取「按名字聚合」端点 /Genres、/Tags、/OfficialRatings、/Years 返回的名称列表。
+   * 这四个端点返回体结构一致（Items[].Name），可以共用一个取法。
+   */
+  private fun nameList(server: EmbyServer, path: String, parentId: String?): List<String> =
+    runCatching {
+      val q = LinkedHashMap<String, String?>()
+      q["UserId"] = server.userId
+      parentId?.let { q["ParentId"] = it }
+      q["Recursive"] = "true"
+      q["SortBy"] = "SortName"
+      getJson<EmbyItemsResult>(server, path, q)
+        .Items
+        .mapNotNull { it.Name }
+        .filter { it.isNotBlank() }
+    }.getOrDefault(emptyList())
+
+  /** 某媒体库下出现过的全部类型名 */
+  fun getGenres(server: EmbyServer, parentId: String? = null): List<String> =
+    nameList(server, "/Genres", parentId)
+
+  /**
+   * 取「Id + 名字」的聚合端点（/Persons、/Studios）。
+   *
+   * 和 [nameList] 的区别是这里要留下 Id —— 演员同名很常见，只有 Id 能唯一确定一个人。
+   */
+  private fun idNameList(
+    server: EmbyServer,
+    path: String,
+    parentId: String?,
+    extra: Map<String, String> = emptyMap(),
+  ): List<EmbyIdName> =
+    runCatching {
+      val q = LinkedHashMap<String, String?>()
+      q["UserId"] = server.userId
+      parentId?.let { q["ParentId"] = it }
+      q["Recursive"] = "true"
+      q["SortBy"] = "SortName"
+      extra.forEach { (k, v) -> q[k] = v }
+      getJson<EmbyItemsResult>(server, path, q)
+        .Items
+        .mapNotNull { item ->
+          val id = item.Id ?: return@mapNotNull null
+          val name = item.Name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+          EmbyIdName(id, name)
+        }
+    }.getOrDefault(emptyList())
+
+  /**
+   * 某媒体库里出现过的演员 / 导演 / 编剧。
+   *
+   * PersonTypes 用 | 分隔，和 Genres 一样；不传会把幕后工种全拉回来，列表会很长。
+   */
+  fun getPersons(
+    server: EmbyServer,
+    parentId: String? = null,
+    personTypes: List<String> = listOf("Actor", "Director", "Writer"),
+  ): List<EmbyIdName> = idNameList(
+    server,
+    "/Persons",
+    parentId,
+    mapOf("PersonTypes" to personTypes.joinToString("|")),
+  )
+
+  /** 某媒体库里出现过的工作室（出品方） */
+  fun getStudios(server: EmbyServer, parentId: String? = null): List<EmbyIdName> =
+    idNameList(server, "/Studios", parentId)
+
+  /**
+   * 一次拿齐筛选面板需要的全部可选项。
+   *
+   * 走按名字聚合的端点而不是从条目列表里现去重：后者要翻完整个库才准，
+   * 而且分页时漏掉的项根本看不见。任一端点失败就退化成空列表，
+   * 面板里对应的分组会自动隐藏（年份另有兜底，见 [fallbackYears]）。
+   */
+  fun getFilterOptions(server: EmbyServer, parentId: String? = null): EmbyFilterOptions =
+    EmbyFilterOptions(
+      genres = getGenres(server, parentId),
+      tags = nameList(server, "/Tags", parentId),
+      years = nameList(server, "/Years", parentId)
+        .mapNotNull { it.toIntOrNull() }
+        .sortedDescending()
+        .takeIf { it.isNotEmpty() } ?: fallbackYears(),
+      officialRatings = nameList(server, "/OfficialRatings", parentId),
+      persons = getPersons(server, parentId),
+      studios = getStudios(server, parentId),
+    )
+
+  /** /Years 端点不可用时兜底：给一份从今年往前推的年份表，保证年份筛选不会空着 */
+  private fun fallbackYears(): List<Int> {
+    val now = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+    return (now downTo 1950).toList()
   }
 
   /** 媒体详情 */

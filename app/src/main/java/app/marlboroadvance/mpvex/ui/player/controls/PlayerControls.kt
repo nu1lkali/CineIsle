@@ -100,6 +100,7 @@ import app.marlboroadvance.mpvex.preferences.preference.plusAssign
 import app.marlboroadvance.mpvex.preferences.preference.minusAssign
 import app.marlboroadvance.mpvex.ui.player.Decoder.Companion.getDecoderFromValue
 import app.marlboroadvance.mpvex.ui.player.Panels
+import app.marlboroadvance.mpvex.ui.player.PlaybackMemory
 import app.marlboroadvance.mpvex.ui.player.PlayerActivity
 import app.marlboroadvance.mpvex.ui.player.PlayerUpdates
 import app.marlboroadvance.mpvex.ui.player.PlayerViewModel
@@ -1379,6 +1380,8 @@ fun PlayerControls(
           MPVLib.setPropertyBoolean("aid", false)
         } else {
           MPVLib.setPropertyInt("aid", it.id)
+          // 记住这条音轨（指纹匹配），下一集相同音轨自动选中；开关关闭时内部直接忽略
+          PlaybackMemory.saveAudioTrack(playerPreferences, viewModel.seriesKey, it)
         }
       },
       chapter = chapters.getOrNull(currentChapter ?: 0),
@@ -1390,7 +1393,11 @@ fun PlayerControls(
       decoder = decoder,
       onUpdateDecoder = { MPVLib.setPropertyString("hwdec", it.value) },
       speed = playbackSpeed ?: playerPreferences.defaultSpeed.get(),
-      onSpeedChange = { MPVLib.setPropertyFloat("speed", it.toFixed(2)) },
+      onSpeedChange = {
+        MPVLib.setPropertyFloat("speed", it.toFixed(2))
+        // 记住这个倍速，同剧下一集沿用；开关关闭时内部直接忽略
+        PlaybackMemory.saveSpeed(playerPreferences, viewModel.seriesKey, it.toFixed(2))
+      },
       onMakeDefaultSpeed = { playerPreferences.defaultSpeed.set(it.toFixed(2)) },
       onAddSpeedPreset = { playerPreferences.speedPresets += it.toFixed(2).toString() },
       onRemoveSpeedPreset = { playerPreferences.speedPresets -= it.toFixed(2).toString() },

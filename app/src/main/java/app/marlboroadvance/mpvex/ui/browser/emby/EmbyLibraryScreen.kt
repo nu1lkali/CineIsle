@@ -11,29 +11,37 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.ShuffleOn
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -54,6 +62,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
+import app.marlboroadvance.mpvex.domain.emby.EmbyFilterOptions
+import app.marlboroadvance.mpvex.domain.emby.EmbyLibraryFilterState
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
@@ -66,6 +87,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import org.koin.compose.koinInject
 
 /**
@@ -103,16 +125,84 @@ data class EmbyLibraryScreen(
     var category by remember { mutableStateOf(EmbyCategory.ALL) }
     var showStyleDialog by remember { mutableStateOf(false) }
 
-    // 排序方式与卡片样式走偏好存储：重新进入媒体库、甚至重启 App 都沿用上次的选择
+    // 排序方式 / 方向 / 卡片样式走偏好存储：重新进入媒体库、甚至重启 App 都沿用上次的选择
     val browserPreferences = koinInject<BrowserPreferences>()
     val sortBy by browserPreferences.embyLibrarySortBy.collectAsState()
+    val sortOrderOverride by browserPreferences.embyLibrarySortOrder.collectAsState()
     val cardStyleName by browserPreferences.embyLibraryCardStyle.collectAsState()
     val cardStyle = remember(cardStyleName) { embyCardStyleFromName(cardStyleName) }
+    // 没手动切过时跟随该排序项的自然方向：名称 / 年份升序，其余（加入时间、评分…）降序
+    val sortOrder = sortOrderOverride.takeIf { it.isNotBlank() }
+      ?: if (sortBy == "SortName" || sortBy == "ProductionYear") "Ascending" else "Descending"
+
+    // ── 筛选条件 ──
+    // 各项可叠加；空集合、null、false 都代表「不限」。
+    // 初始值从偏好里恢复（每个库一份 JSON），没筛过就是全空。
+    val savedFilter = remember(libraryId) {
+      runCatching {
+        val raw = browserPreferences.embyLibraryFilter(libraryId).get()
+        if (raw.isBlank()) {
+          EmbyLibraryFilterState()
+        } else {
+          Json.decodeFromString<EmbyLibraryFilterState>(raw)
+        }
+      }.getOrDefault(EmbyLibraryFilterState())
+    }
+    var showFilterDialog by remember { mutableStateOf(false) }
+    var selectedGenres by remember(libraryId) { mutableStateOf(savedFilter.genres.toSet()) }
+    var selectedTags by remember(libraryId) { mutableStateOf(savedFilter.tags.toSet()) }
+    var selectedYears by remember(libraryId) { mutableStateOf(savedFilter.years.toSet()) }
+    var selectedRatings by remember(libraryId) {
+      mutableStateOf(savedFilter.officialRatings.toSet())
+    }
+    var selectedPersonIds by remember(libraryId) { mutableStateOf(savedFilter.personIds.toSet()) }
+    var selectedStudioIds by remember(libraryId) { mutableStateOf(savedFilter.studioIds.toSet()) }
+    var playedFilter by remember(libraryId) { mutableStateOf(savedFilter.isPlayed) }
+    var hdFilter by remember(libraryId) { mutableStateOf(savedFilter.isHD) }
+    var threeDFilter by remember(libraryId) { mutableStateOf(savedFilter.is3D) }
+    var subtitlesFilter by remember(libraryId) { mutableStateOf(savedFilter.hasSubtitles) }
+    var minRating by remember(libraryId) { mutableStateOf(savedFilter.minRating) }
+    var favoriteOnly by remember(libraryId) { mutableStateOf(savedFilter.favoriteOnly) }
+    // 该库实际出现过的可选项，进页面时拉一次
+    var filterOptions by remember { mutableStateOf(EmbyFilterOptions()) }
+    val hasActiveFilter =
+      selectedGenres.isNotEmpty() || selectedTags.isNotEmpty() ||
+        selectedYears.isNotEmpty() || selectedRatings.isNotEmpty() ||
+        selectedPersonIds.isNotEmpty() || selectedStudioIds.isNotEmpty() ||
+        playedFilter != null || hdFilter != null || threeDFilter != null ||
+        subtitlesFilter != null || minRating != null || favoriteOnly
+
+    /** 把当前筛选条件写回偏好，下次进这个库还带着 */
+    fun persistFilter() {
+      val state = EmbyLibraryFilterState(
+        genres = selectedGenres.toList(),
+        tags = selectedTags.toList(),
+        years = selectedYears.toList(),
+        officialRatings = selectedRatings.toList(),
+        personIds = selectedPersonIds.toList(),
+        studioIds = selectedStudioIds.toList(),
+        isPlayed = playedFilter,
+        isHD = hdFilter,
+        is3D = threeDFilter,
+        hasSubtitles = subtitlesFilter,
+        minRating = minRating,
+        favoriteOnly = favoriteOnly,
+      )
+      runCatching { browserPreferences.embyLibraryFilter(libraryId).set(Json.encodeToString(state)) }
+    }
 
     // 列表缓存 key：库 + 分类 + 排序 + 搜索词。
     // 从详情页 / 播放器返回时这个 key 不变，于是直接命中缓存、不再发请求；
     // 只有用户下拉刷新或改了筛选条件才会真正重新拉取。
-    val cacheKey = "$libraryId|${category.name}|$sortBy|$searchQuery"
+    val cacheKey = "$libraryId|${category.name}|$sortBy|$sortOrder|$searchQuery|" +
+      "g=${selectedGenres.sorted().joinToString(",")}|" +
+      "t=${selectedTags.sorted().joinToString(",")}|" +
+      "y=${selectedYears.sorted().joinToString(",")}|" +
+      "r=${selectedRatings.sorted().joinToString(",")}|" +
+      "p=${selectedPersonIds.sorted().joinToString(",")}|" +
+      "s=${selectedStudioIds.sorted().joinToString(",")}|" +
+      "played=$playedFilter|hd=$hdFilter|3d=$threeDFilter|sub=$subtitlesFilter|" +
+      "m=$minRating|fav=$favoriteOnly"
     val cachedEntry = remember(cacheKey) { EmbyLibraryCache.get(cacheKey) }
 
     var items by remember(cacheKey) { mutableStateOf(cachedEntry?.items ?: emptyList()) }
@@ -170,11 +260,23 @@ data class EmbyLibraryScreen(
             includeItemTypes = effectiveTypes,
             filters = effectiveFilters,
             sortBy = sortBy,
-            sortOrder = if (sortBy == "SortName" || sortBy == "ProductionYear") "Ascending" else "Descending",
+            sortOrder = sortOrder,
             startIndex = if (reset) 0 else items.size,
             limit = PAGE_SIZE,
             recursive = recursive,
             excludeItemTypes = effectiveExclude,
+            genres = selectedGenres.toList().takeIf { it.isNotEmpty() },
+            tags = selectedTags.toList().takeIf { it.isNotEmpty() },
+            years = selectedYears.toList().takeIf { it.isNotEmpty() },
+            officialRatings = selectedRatings.toList().takeIf { it.isNotEmpty() },
+            minCommunityRating = minRating,
+            isFavorite = if (favoriteOnly) true else null,
+            personIds = selectedPersonIds.toList().takeIf { it.isNotEmpty() },
+            isPlayed = playedFilter,
+            isHD = hdFilter,
+            is3D = threeDFilter,
+            hasSubtitles = subtitlesFilter,
+            studioIds = selectedStudioIds.toList().takeIf { it.isNotEmpty() },
           )
         } else {
           val result = viewModel.search(current, searchQuery)
@@ -202,6 +304,13 @@ data class EmbyLibraryScreen(
       if (searchQuery.isNotBlank()) return@LaunchedEffect
       val entry = EmbyLibraryCache.get(cacheKey)
       if (entry == null || entry.items.isEmpty()) load(reset = true)
+    }
+
+    // 筛选可选项（类型 / 标签 / 年份 / 分级）按库拉一次，
+    // 只在「库」或「服务器」变化时重新取
+    LaunchedEffect(libraryId, server) {
+      val current = server ?: viewModel.currentServerOrAwait() ?: return@LaunchedEffect
+      filterOptions = viewModel.loadFilterOptions(current, libraryId)
     }
 
     // 离开页面时记下滚动位置，返回时才能回到原来的位置
@@ -309,10 +418,33 @@ data class EmbyLibraryScreen(
           // 原先用的 ShuffleOn 只比 Shuffle 多一条下划线，并排根本分不出来
           Icon(EmbyFavoriteRandomIcon, contentDescription = "随机播放收藏")
         }
+        // 筛选：有生效条件时图标高亮，让人一眼看出列表不是全量
+        IconButton(onClick = { showFilterDialog = true }) {
+          Icon(
+            imageVector = Icons.Default.FilterAlt,
+            contentDescription = "筛选",
+            tint = if (hasActiveFilter) {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.onSurface
+            },
+          )
+        }
         IconButton(onClick = { showStyleDialog = true }) {
           Icon(Icons.Default.GridView, contentDescription = "视图样式")
         }
-        SortMenu(currentSort = sortBy) { newSort -> browserPreferences.embyLibrarySortBy.set(newSort) }
+        SortMenu(
+          currentSort = sortBy,
+          currentOrder = sortOrder,
+          onSortChange = { newSort ->
+            browserPreferences.embyLibrarySortBy.set(newSort)
+            // 换排序项就丢掉手动方向，回到该排序项的自然方向
+            browserPreferences.embyLibrarySortOrder.set("")
+          },
+          onOrderChange = { newOrder ->
+            browserPreferences.embyLibrarySortOrder.set(newOrder)
+          },
+        )
       }
 
       if (searchActive) {
@@ -423,6 +555,238 @@ data class EmbyLibraryScreen(
         }
       }
     }
+
+    // ── 筛选弹窗：类型 / 标签 / 年份 / 官方分级 / 评分 / 只看收藏 ──
+    // 弹窗里改的是草稿副本，只有点「确定」才写回，避免每点一个 chip 就发一次请求。
+    // 点弹窗外部 / 返回键 = 放弃本次改动。
+    // ── 筛选面板：底部上划，每个维度一个下拉；选中立即生效，不用点确定 ──
+    // 之所以不用「草稿 + 确定」：筛选的结果在下面列表里是实时可见的，
+    // 每点一项就刷新一次，比「点完确定才知道对不对」少一次试错。
+    if (showFilterDialog) {
+      ModalBottomSheet(onDismissRequest = { showFilterDialog = false }) {
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 16.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = "筛选",
+              style = MaterialTheme.typography.titleMedium,
+              modifier = Modifier.weight(1f),
+            )
+            // 恢复默认：清空全部条件并落盘，面板保持打开，列表立刻回到全量
+            TextButton(onClick = {
+              selectedGenres = emptySet()
+              selectedTags = emptySet()
+              selectedYears = emptySet()
+              selectedRatings = emptySet()
+              minRating = null
+              favoriteOnly = false
+              selectedPersonIds = emptySet()
+              selectedStudioIds = emptySet()
+              playedFilter = null
+              hdFilter = null
+              threeDFilter = null
+              subtitlesFilter = null
+              persistFilter()
+            }) {
+              Text("恢复默认")
+            }
+          }
+
+          // 类型：多选
+          FilterDropdown(
+            label = "类型",
+            options = filterOptions.genres,
+            selectedNames = filterOptions.genres.filter { it in selectedGenres }.toSet(),
+            onToggle = { name ->
+              selectedGenres = if (name in selectedGenres) selectedGenres - name else selectedGenres + name
+              persistFilter()
+            },
+            onClear = { selectedGenres = emptySet(); persistFilter() },
+          )
+          // 标签：多选
+          FilterDropdown(
+            label = "标签",
+            options = filterOptions.tags,
+            selectedNames = filterOptions.tags.filter { it in selectedTags }.toSet(),
+            onToggle = { name ->
+              selectedTags = if (name in selectedTags) selectedTags - name else selectedTags + name
+              persistFilter()
+            },
+            onClear = { selectedTags = emptySet(); persistFilter() },
+          )
+          // 年份：下拉里是字符串，切回 Int 再存（多选）
+          FilterDropdown(
+            label = "年份",
+            options = filterOptions.years.map { it.toString() },
+            selectedNames = selectedYears.map { it.toString() }.toSet(),
+            onToggle = { v ->
+              v.toIntOrNull()?.let { y ->
+                selectedYears = if (y in selectedYears) selectedYears - y else selectedYears + y
+                persistFilter()
+              }
+            },
+            onClear = { selectedYears = emptySet(); persistFilter() },
+          )
+          // 官方分级：多选
+          FilterDropdown(
+            label = "官方分级",
+            options = filterOptions.officialRatings,
+            selectedNames = filterOptions.officialRatings.filter { it in selectedRatings }.toSet(),
+            onToggle = { name ->
+              selectedRatings = if (name in selectedRatings) selectedRatings - name else selectedRatings + name
+              persistFilter()
+            },
+            onClear = { selectedRatings = emptySet(); persistFilter() },
+          )
+          // 演员 / 导演：显示名字，按 Id 筛（同名不同人只能靠 Id 区分），多选
+          FilterDropdown(
+            label = "演员 / 导演",
+            options = filterOptions.persons.map { it.name },
+            selectedNames = filterOptions.persons
+              .filter { it.id in selectedPersonIds }
+              .map { it.name }
+              .toSet(),
+            onToggle = { name ->
+              val person = filterOptions.persons.firstOrNull { it.name == name } ?: return@FilterDropdown
+              selectedPersonIds = if (person.id in selectedPersonIds) {
+                selectedPersonIds - person.id
+              } else {
+                selectedPersonIds + person.id
+              }
+              persistFilter()
+            },
+            onClear = { selectedPersonIds = emptySet(); persistFilter() },
+          )
+          // 工作室：多选
+          FilterDropdown(
+            label = "工作室",
+            options = filterOptions.studios.map { it.name },
+            selectedNames = filterOptions.studios
+              .filter { it.id in selectedStudioIds }
+              .map { it.name }
+              .toSet(),
+            onToggle = { name ->
+              val studio = filterOptions.studios.firstOrNull { it.name == name } ?: return@FilterDropdown
+              selectedStudioIds = if (studio.id in selectedStudioIds) {
+                selectedStudioIds - studio.id
+              } else {
+                selectedStudioIds + studio.id
+              }
+              persistFilter()
+            },
+            onClear = { selectedStudioIds = emptySet(); persistFilter() },
+          )
+          // 播放状态：单选，再点一次已选的那项就取消
+          FilterDropdown(
+            label = "播放状态",
+            options = listOf("已看", "未看"),
+            selectedNames = when (playedFilter) {
+              true -> setOf("已看")
+              false -> setOf("未看")
+              null -> emptySet()
+            },
+            onToggle = { v ->
+              val target = v == "已看"
+              playedFilter = if (playedFilter == target) null else target
+              persistFilter()
+            },
+            onClear = { playedFilter = null; persistFilter() },
+          )
+          // 清晰度：单选
+          FilterDropdown(
+            label = "清晰度",
+            options = listOf("高清", "标清"),
+            selectedNames = when (hdFilter) {
+              true -> setOf("高清")
+              false -> setOf("标清")
+              null -> emptySet()
+            },
+            onToggle = { v ->
+              val target = v == "高清"
+              hdFilter = if (hdFilter == target) null else target
+              persistFilter()
+            },
+            onClear = { hdFilter = null; persistFilter() },
+          )
+          // 3D：单选
+          FilterDropdown(
+            label = "3D",
+            options = listOf("3D", "非 3D"),
+            selectedNames = when (threeDFilter) {
+              true -> setOf("3D")
+              false -> setOf("非 3D")
+              null -> emptySet()
+            },
+            onToggle = { v ->
+              val target = v == "3D"
+              threeDFilter = if (threeDFilter == target) null else target
+              persistFilter()
+            },
+            onClear = { threeDFilter = null; persistFilter() },
+          )
+          // 字幕：单选
+          FilterDropdown(
+            label = "字幕",
+            options = listOf("有字幕", "无字幕"),
+            selectedNames = when (subtitlesFilter) {
+              true -> setOf("有字幕")
+              false -> setOf("无字幕")
+              null -> emptySet()
+            },
+            onToggle = { v ->
+              val target = v == "有字幕"
+              subtitlesFilter = if (subtitlesFilter == target) null else target
+              persistFilter()
+            },
+            onClear = { subtitlesFilter = null; persistFilter() },
+          )
+          // 评分：单选
+          FilterDropdown(
+            label = "评分",
+            options = RATING_OPTIONS.map { it.first }.filter { it != "不限" },
+            selectedNames = RATING_OPTIONS
+              .firstOrNull { it.second == minRating }
+              ?.let { setOf(it.first) }
+              ?: emptySet(),
+            onToggle = { v ->
+              val target = RATING_OPTIONS.firstOrNull { it.first == v }?.second
+              minRating = if (minRating == target) null else target
+              persistFilter()
+            },
+            onClear = { minRating = null; persistFilter() },
+          )
+
+          // 只看收藏：打开 = 只在收藏里套用上面的筛选；关掉 = 不限（不是「只看未收藏」）
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = "只看收藏",
+              style = MaterialTheme.typography.titleSmall,
+              modifier = Modifier.weight(1f),
+            )
+            Switch(
+              checked = favoriteOnly,
+              onCheckedChange = {
+                favoriteOnly = it
+                persistFilter()
+              },
+            )
+          }
+        }
+      }
+    }
+
 
     // 视图样式选择
     if (showStyleDialog) {
@@ -543,10 +907,126 @@ private fun openItem(
   }
 }
 
+/**
+ * 筛选弹窗里的一组可多选 chip（类型 / 标签 / 年份 / 官方分级 / 评分共用）。
+ *
+ * 选项为空时整组隐藏：说明该维度服务端没给或这个库用不上，
+ * 与其显示一个空标题，不如直接不占地方。
+ */
+@Composable
+/**
+ * 筛选面板里的「下拉选择」：一行摘要 + 点开后纵向铺开全部选项。
+ *
+ * 原来是横向滑动的 chip 组 —— 类型、演员这种动辄几十项的维度横向滑根本没法找，
+ * 而且滑到后面完全不知道还剩多少。改成下拉后一屏能扫十几项，末尾还有「不限」一键清空。
+ *
+ * 选项为空时整组隐藏：说明这个维度服务端没给或该库没有，不占地方。
+ * 展开区最高 260dp，超出后自己在组内滚动，不会把整个面板撑得很长。
+ */
+@Composable
+private fun FilterDropdown(
+  label: String,
+  options: List<String>,
+  selectedNames: Set<String>,
+  onToggle: (String) -> Unit,
+  onClear: () -> Unit,
+) {
+  if (options.isEmpty()) return
+  var expanded by remember { mutableStateOf(false) }
+  // 摘要：没选显示「不限」，选得少就全列出来，选得多只报数量，避免一行塞不下
+  val summary = when {
+    selectedNames.isEmpty() -> "不限"
+    selectedNames.size <= 2 -> selectedNames.joinToString("、")
+    else -> "已选 ${selectedNames.size} 项"
+  }
+
+  Column(modifier = Modifier.fillMaxWidth()) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(12.dp))
+        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+        .clickable { expanded = !expanded }
+        .padding(horizontal = 14.dp, vertical = 11.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = label,
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+          text = summary,
+          style = MaterialTheme.typography.bodyMedium,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      Icon(
+        imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+        contentDescription = if (expanded) "收起" else "展开",
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+
+    AnimatedVisibility(visible = expanded) {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .heightIn(max = 260.dp)
+          .verticalScroll(rememberScrollState())
+          .padding(top = 4.dp),
+      ) {
+        // 「不限」永远放在第一位，点它等于清空这一组
+        FilterDropdownRow(
+          text = "不限",
+          checked = selectedNames.isEmpty(),
+          onClick = { if (selectedNames.isNotEmpty()) onClear() },
+        )
+        options.forEach { option ->
+          FilterDropdownRow(
+            text = option,
+            checked = option in selectedNames,
+            onClick = { onToggle(option) },
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun FilterDropdownRow(
+  text: String,
+  checked: Boolean,
+  onClick: () -> Unit,
+) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .clickable(onClick = onClick)
+      .padding(horizontal = 8.dp, vertical = 4.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Checkbox(checked = checked, onCheckedChange = { onClick() })
+    Text(
+      text = text,
+      style = MaterialTheme.typography.bodyMedium,
+      modifier = Modifier.weight(1f),
+    )
+  }
+}
+
+
 @Composable
 private fun SortMenu(
   currentSort: String,
+  currentOrder: String,
   onSortChange: (String) -> Unit,
+  onOrderChange: (String) -> Unit,
 ) {
   var expanded by remember { mutableStateOf(false) }
   Box {
@@ -554,11 +1034,17 @@ private fun SortMenu(
       Icon(Icons.Default.Sort, contentDescription = "排序")
     }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+      // 上半区：排序项。勾中的那一项高亮，并直接显示它当前的方向（↑ 升 / ↓ 降）
       SORT_OPTIONS.forEach { (value, label) ->
         DropdownMenuItem(
           text = {
             Text(
-              text = label,
+              text = buildString {
+                append(label)
+                if (value == currentSort) {
+                  append(if (currentOrder == "Ascending") " ↑" else " ↓")
+                }
+              },
               color = if (value == currentSort) {
                 MaterialTheme.colorScheme.primary
               } else {
@@ -567,11 +1053,51 @@ private fun SortMenu(
             )
           },
           onClick = {
-            onSortChange(value)
+            if (value == currentSort) {
+              // 再点一次已选中的排序项 = 只反转方向，不换排序项
+              onOrderChange(if (currentOrder == "Ascending") "Descending" else "Ascending")
+            } else {
+              // 换排序项：由调用方把方向重置为该排序项的自然方向
+              onSortChange(value)
+            }
             expanded = false
           },
         )
       }
+      HorizontalDivider()
+      // 下半区：手动指定方向。留一个「自动」把手动覆盖清掉，回到各项的自然方向
+      DropdownMenuItem(
+        text = {
+          Text(
+            text = "升序",
+            color = if (currentOrder == "Ascending") {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.onSurface
+            },
+          )
+        },
+        onClick = {
+          onOrderChange("Ascending")
+          expanded = false
+        },
+      )
+      DropdownMenuItem(
+        text = {
+          Text(
+            text = "降序",
+            color = if (currentOrder == "Descending") {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.onSurface
+            },
+          )
+        },
+        onClick = {
+          onOrderChange("Descending")
+          expanded = false
+        },
+      )
     }
   }
 }
@@ -588,6 +1114,15 @@ private val SORT_OPTIONS = listOf(
   "Runtime" to "时长",
   "PlayCount" to "播放次数",
   "Random" to "随机",
+)
+
+/** 最低评分档位：显示文案 → 传给 Emby 的 MinCommunityRating（null 表示不限） */
+private val RATING_OPTIONS: List<Pair<String, Float?>> = listOf(
+  "不限" to null,
+  "6 分以上" to 6f,
+  "7 分以上" to 7f,
+  "8 分以上" to 8f,
+  "9 分以上" to 9f,
 )
 
 /** 可播放的媒体类型（随机播放时使用） */

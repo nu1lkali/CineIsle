@@ -210,6 +210,28 @@ class EmbyRepository(
     limit: Int = 100,
     recursive: Boolean = true,
     excludeItemTypes: List<String>? = null,
+    /** 按发行年份筛选，多选取并集 */
+    years: List<Int>? = null,
+    /** 最低社区评分（0~10） */
+    minCommunityRating: Float? = null,
+    /** 标签筛选，多选取并集 */
+    tags: List<String>? = null,
+    /** 官方分级筛选，多选取并集 */
+    officialRatings: List<String>? = null,
+    /** true / false 分别限定只要收藏 / 只要未收藏；null 表示不限 */
+    isFavorite: Boolean? = null,
+    /** 按人员（演员 / 导演）筛选，传 PersonId */
+    personIds: List<String>? = null,
+    /** true 只要已看 / false 只要未看；null 不限 */
+    isPlayed: Boolean? = null,
+    /** true 只要高清 / false 只要标清 */
+    isHD: Boolean? = null,
+    /** true 只要 3D / false 排除 3D */
+    is3D: Boolean? = null,
+    /** true 只要有字幕 / false 只要没字幕 */
+    hasSubtitles: Boolean? = null,
+    /** 工作室 Id 列表，多选取并集 */
+    studioIds: List<String>? = null,
   ): EmbyItemsResult = withContext(Dispatchers.IO) {
     EmbyClient.getItems(
       server,
@@ -224,8 +246,25 @@ class EmbyRepository(
       limit = limit,
       recursive = recursive,
       excludeItemTypes = excludeItemTypes,
+      years = years,
+      minCommunityRating = minCommunityRating,
+      tags = tags,
+      officialRatings = officialRatings,
+      isFavorite = isFavorite,
+      personIds = personIds,
+      isPlayed = isPlayed,
+      isHD = isHD,
+      is3D = is3D,
+      hasSubtitles = hasSubtitles,
+      studioIds = studioIds,
     )
   }
+
+  /** 某媒体库的筛选可选项（类型 / 标签 / 年份 / 分级） */
+  suspend fun getFilterOptions(
+    server: EmbyServer,
+    parentId: String? = null,
+  ): EmbyFilterOptions = withContext(Dispatchers.IO) { EmbyClient.getFilterOptions(server, parentId) }
 
   /** 继续观看 */
   suspend fun getResumeItems(server: EmbyServer, limit: Int = 20): List<EmbyItem> =

@@ -1,5 +1,7 @@
 package app.marlboroadvance.mpvex.preferences
 
+import app.marlboroadvance.mpvex.domain.emby.EmbyLibraryFilterState
+import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
 import app.marlboroadvance.mpvex.preferences.preference.getEnum
 
@@ -7,7 +9,7 @@ import app.marlboroadvance.mpvex.preferences.preference.getEnum
  * Preferences for the video browser (folder and video lists)
  */
 class BrowserPreferences(
-  preferenceStore: PreferenceStore,
+  private val preferenceStore: PreferenceStore,
   context: android.content.Context,
 ) {
   // Folder sorting preferences
@@ -63,6 +65,23 @@ class BrowserPreferences(
 
   /** 媒体库内的卡片样式名（对应 [EmbyCardStyle] 的枚举名：POSTER / BACKDROP / BANNER） */
   val embyLibraryCardStyle = preferenceStore.getString("emby_library_card_style", "POSTER")
+
+  /**
+   * 媒体库排序方向。**空串 = 跟随该排序项的自然方向**（名称升序、加入时间降序…）；
+   * 用户在库里点过升降序箭头后写死成 "Ascending" / "Descending"。
+   *
+   * 换排序项时会清空回空串重新跟随 —— 否则「名称」点成降序后切到「加入时间」，
+   * 会变成最旧的排在最前面，几乎没人想要。
+   */
+  val embyLibrarySortOrder = preferenceStore.getString("emby_library_sort_order", "")
+
+  /**
+   * 每个媒体库各自记住的筛选条件（[EmbyLibraryFilterState] 的 JSON 串，空串 = 没筛过）。
+   *
+   * key 带上 libraryId：电影库和剧集库的筛选互不干扰。
+   */
+  fun embyLibraryFilter(libraryId: String): Preference<String> =
+    preferenceStore.getString("emby_library_filter_$libraryId", "")
 }
 
 /**

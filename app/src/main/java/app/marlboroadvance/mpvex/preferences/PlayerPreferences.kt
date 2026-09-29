@@ -73,6 +73,44 @@ class PlayerPreferences(
   val autoplayNextVideo = preferenceStore.getBoolean("autoplay_next_video", true)
 
   /**
+   * 播完自动切下一集前，先弹一个倒计时卡片让用户来得及取消。
+   *
+   * 单位秒：**0 表示不弹、直接切**（原来的行为）；3 / 5 / 10 为可选档位。
+   * 只在 [autoplayNextVideo] 打开时才有意义 —— 关掉连播后根本不会走到倒计时。
+   */
+  val autoplayNextCountdownSeconds = preferenceStore.getInt("autoplay_next_countdown_seconds", 5)
+
+  /**
+   * 记住每部剧的播放速度：同一部剧切下一集时沿用上一集调过的倍速。
+   *
+   * 默认**关闭** —— 倍速是很容易忘记自己改过的状态，自动继承时
+   * 「下一集怎么变快了」比「每集重新调一次」更容易让人困惑，所以交给用户自己开。
+   * 只在同一部剧（同一个 SeriesId）内继承，跨剧不继承。
+   */
+  val rememberSpeedPerSeries = preferenceStore.getBoolean("remember_speed_per_series", false)
+
+  /**
+   * 记住每部剧选择的音轨。
+   *
+   * 匹配用「语言 + 编码 + 声道数」指纹而不是 mpv 的 track id ——
+   * 不同文件里同一条音轨的 id 可能因为多一条评论轨就整体错位。
+   * 默认关闭，理由同 [rememberSpeedPerSeries]。
+   */
+  val rememberAudioTrackPerSeries = preferenceStore.getBoolean("remember_audio_track_per_series", false)
+
+  /**
+   * 记住的播放速度：SeriesKey → 倍速（JSON）。
+   * 只在 [rememberSpeedPerSeries] 打开时写入；关掉后旧数据保留，重新打开仍然生效。
+   */
+  val rememberedSpeeds = preferenceStore.getString("remembered_speeds", "{}")
+
+  /**
+   * 记住的音轨指纹：SeriesKey → 指纹串（JSON）。
+   * 只在 [rememberAudioTrackPerSeries] 打开时写入。
+   */
+  val rememberedAudioTracks = preferenceStore.getString("remembered_audio_tracks", "{}")
+
+  /**
    * 视频预加载。
    *
    * 打开后：当前视频播放满 [PRELOAD_TRIGGER_SECONDS] 秒时，后台取下一个视频**开头**一段数据，

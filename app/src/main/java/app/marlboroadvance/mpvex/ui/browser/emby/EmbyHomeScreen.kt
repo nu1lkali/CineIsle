@@ -10,10 +10,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Button
@@ -24,10 +27,12 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -86,6 +91,13 @@ fun EmbyHomeScreen(
 
   var serverMenuExpanded by remember { mutableStateOf(false) }
 
+  // ── 全库搜索 ──
+  // 不带 ParentId，Emby 会跨所有媒体库检索，所以这里搜的是「全部媒体」而不是某个库。
+  var searchActive by remember { mutableStateOf(false) }
+  var searchQuery by remember { mutableStateOf("") }
+  var searchResults by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
+  var isSearching by remember { mutableStateOf(false) }
+
   Column(modifier = Modifier.fillMaxSize()) {
     TopAppBar(
       title = {
@@ -104,6 +116,17 @@ fun EmbyHomeScreen(
         }
       },
       actions = {
+        // 全库搜索：跨所有媒体库检索，结果替换首页内容
+        IconButton(onClick = {
+          searchActive = !searchActive
+          if (!searchActive) {
+            searchQuery = ""
+            searchResults = emptyList()
+            isSearching = false
+          }
+        }) {
+          Icon(Icons.Default.Search, contentDescription = "搜索全部媒体库")
+        }
         Box {
           IconButton(onClick = { serverMenuExpanded = true }) {
             Icon(Icons.Default.Dns, contentDescription = "切换服务器")
@@ -159,7 +182,92 @@ fun EmbyHomeScreen(
       },
     )
 
+    // 搜索框：只在点开搜索后出现
+    if (searchActive) {
+      OutlinedTextField(
+        value = searchQuery,
+        onValueChange = { searchQuery = it },
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 16.dp, vertical = 8.dp),
+        placeholder = { Text("搜索全部媒体库…") },
+        singleLine = true,
+        trailingIcon = {
+          if (searchQuery.isNotEmpty()) {
+            IconButton(onClick = { searchQuery = "" }) {
+              Icon(Icons.Default.Clear, contentDescription = "清空")
+            }
+          }
+        },
+      )
+    }
+
+    // 防抖 400ms，避免每敲一个字就发一次请求
+    LaunchedEffect(searchQuery, searchActive) {
+      if (!searchActive || searchQuery.isBlank()) {
+        searchResults = emptyList()
+        isSearching = false
+        return@LaunchedEffect
+      }
+      isSearching = true
+      kotlinx.coroutines.delay(400)
+      val current = server
+      if (current == null) {
+        isSearching = false
+        return@LaunchedEffect
+      }
+      searchResults = viewModel.searchGlobal(current, searchQuery)
+      isSearching = false
+    }
+
     when {
+      // 全库搜索：结果替换首页内容
+      searchActive -> {
+        if (searchQuery.isBlank()) {
+          Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+              text = "输入关键词，搜索全部媒体库",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        } else if (isSearching) {
+          Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+          }
+        } else if (searchResults.isEmpty()) {
+          Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+              text = "没有找到「$searchQuery」相关媒体",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        } else {
+          androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+            columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(minSize = 104.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            items(
+              items = searchResults,
+              key = { it.Id ?: it.Name ?: "" },
+            ) { item ->
+              EmbyPosterCard(
+                title = item.Name ?: "",
+                subtitle = item.ProductionYear?.toString(),
+                imageUrl = server?.let { s -> viewModel.imageUrl(s, item, "Primary", 300) },
+                progress = null,
+                isFavorite = item.UserData?.IsFavorite == true,
+                onClick = { onOpenDetail(item) },
+              )
+            }
+          }
+        }
+      }
+
       // 加载尚未结束时不判定「没有服务器」，避免冷启动（服务器还在异步恢复）闪一下空状态
       server == null && !isLoading -> EmbyEmptyState(
         message = "还没有添加 Emby 服务器",

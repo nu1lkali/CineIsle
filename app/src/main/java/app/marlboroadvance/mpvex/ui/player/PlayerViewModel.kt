@@ -87,6 +87,26 @@ class PlayerViewModel(
   private val subtitlesPreferences: SubtitlesPreferences by inject()
   private val advancedPreferences: AdvancedPreferences by inject()
   private val json: Json by inject()
+
+  /**
+   * 「记住每部剧播放设置」的键：Emby 剧集是 SeriesId，电影是 ItemId，本地播放为 null。
+   *
+   * 由 PlayerActivity 从 intent 里读出来后写进来，切集时按下标换成新一集的键。
+   * 用普通字段而不是 StateFlow：它只在「用户改速度 / 选音轨」的回调里被读一次，
+   * 不需要驱动重组。
+   */
+  var seriesKey: String? = null
+
+  /**
+   * 自动连播下一集前的倒计时剩余秒数；0 表示不显示卡片。
+   *
+   * 播完一集时由播放页起一个每秒递减的协程，卡片上「立即播放 / 取消」
+   * 两个按钮会取消这个协程并把它清零。
+   */
+  val autoplayCountdown = MutableStateFlow(0)
+
+  /** 倒计时卡片里显示的下一集标题（取不到就是 null，卡片只显示秒数） */
+  val autoplayNextTitle = MutableStateFlow<String?>(null)
   private val playbackStateDao: app.marlboroadvance.mpvex.database.dao.PlaybackStateDao by inject()
 
   // Playlist items for the playlist sheet

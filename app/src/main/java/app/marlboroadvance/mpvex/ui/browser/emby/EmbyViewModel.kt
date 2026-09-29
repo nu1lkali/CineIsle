@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
+import app.marlboroadvance.mpvex.domain.emby.EmbyFilterOptions
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
@@ -165,6 +166,30 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     limit: Int = 100,
     recursive: Boolean = true,
     excludeItemTypes: List<String>? = null,
+    /** 类型筛选，多选取并集（Emby 的 Genres 参数） */
+    genres: List<String>? = null,
+    /** 发行年份筛选，多选取并集 */
+    years: List<Int>? = null,
+    /** 最低社区评分，例如 7f 表示只要 7 分以上 */
+    minCommunityRating: Float? = null,
+    /** 标签筛选，多选取并集 */
+    tags: List<String>? = null,
+    /** 官方分级筛选，多选取并集 */
+    officialRatings: List<String>? = null,
+    /** true 只返回收藏，false 只返回未收藏，null 不限 */
+    isFavorite: Boolean? = null,
+    /** 演员 / 导演的 PersonId 列表，多选取并集 */
+    personIds: List<String>? = null,
+    /** true 只要已看，false 只要未看，null 不限 */
+    isPlayed: Boolean? = null,
+    /** true 只要高清，false 只要标清 */
+    isHD: Boolean? = null,
+    /** true 只要 3D，false 排除 3D */
+    is3D: Boolean? = null,
+    /** true 只要有字幕，false 只要没字幕 */
+    hasSubtitles: Boolean? = null,
+    /** 工作室 Id 列表，多选取并集 */
+    studioIds: List<String>? = null,
   ): EmbyItemsPage {
     val result = repository.getItems(
       server = server,
@@ -177,8 +202,29 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       limit = limit,
       recursive = recursive,
       excludeItemTypes = excludeItemTypes,
+      genres = genres,
+      years = years,
+      minCommunityRating = minCommunityRating,
+      tags = tags,
+      officialRatings = officialRatings,
+      isFavorite = isFavorite,
+      personIds = personIds,
+      isPlayed = isPlayed,
+      isHD = isHD,
+      is3D = is3D,
+      hasSubtitles = hasSubtitles,
+      studioIds = studioIds,
     )
     return EmbyItemsPage(result.Items, result.TotalRecordCount)
+  }
+
+  /** 取某媒体库的筛选可选项（类型 / 标签 / 年份 / 分级），供筛选面板使用。 */
+  suspend fun loadFilterOptions(
+    server: EmbyServer,
+    parentId: String?,
+  ): EmbyFilterOptions = withContext(Dispatchers.IO) {
+    runCatching { repository.getFilterOptions(server, parentId) }
+      .getOrDefault(EmbyFilterOptions())
   }
 
   suspend fun loadSeasons(server: EmbyServer, seriesId: String): List<EmbyItem> =
@@ -226,6 +272,25 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     server: EmbyServer,
     term: String,
   ): List<EmbyItem> = repository.searchItems(server, term).Items
+
+  /**
+   * 首页的「全库搜索」：不传 ParentId，Emby 会跨所有媒体库检索。
+   *
+   * 和库内搜索 [search] 用的是同一个 /Items?SearchTerm 接口，区别只在两点：
+   * 不传 ParentId（所以覆盖全部库），以及限定只看可播放类型
+   * ——否则文件夹、合集这些容器会混进结果里，点进去还要再下钻一层。
+   */
+  suspend fun searchGlobal(server: EmbyServer, term: String): List<EmbyItem> =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        repository.searchItems(
+          server = server,
+          term = term,
+          includeItemTypes = listOf("Movie", "Series", "Episode", "Video", "MusicVideo"),
+          limit = 100,
+        ).Items
+      }.getOrDefault(emptyList())
+    }
 
   // ==================== 媒体操作 ====================
 
@@ -336,6 +401,9 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       }
       // 供播放页把进度回传给 Emby 服务器
       putEmbyPlaybackExtras(server, listOf(itemId))
+      // 「记忆播放设置」的键：剧集用所属剧的 Id（整季共用一份速度 / 音轨），
+      // 电影没有 SeriesId，就用它自己的 Id。
+      putExtra("emby_series_key", item.SeriesId ?: itemId)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     getApplication<Application>().startActivity(intent)
@@ -358,11 +426,15 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     // 与 uris 下标一一对应的显示标题。播放器侧切集时用它，避免从
     // `/Videos/{id}/stream` 这种 URL 里猜出统一是 "stream" 的假标题。
     val titles = ArrayList<String>()
+    // 与 uris 下标一一对应的「记忆键」：剧集用 SeriesId（整季共用一份速度 / 音轨），
+    // 电影没有 SeriesId 就用自身 Id。播放器切集时按下标取，实现「同剧继承」。
+    val seriesKeys = ArrayList<String>()
     items.forEach { item ->
       val id = item.Id ?: return@forEach
       uris.add(android.net.Uri.parse(repository.videoStreamUrl(server, id, static = true)))
       ids.add(id)
       titles.add(displayTitle(item))
+      seriesKeys.add(item.SeriesId ?: id)
     }
     if (uris.isEmpty()) return
 
@@ -387,6 +459,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       }
       putParcelableArrayListExtra("playlist", uris)
       putStringArrayListExtra("playlist_titles", titles)
+      putStringArrayListExtra("playlist_series_keys", seriesKeys)
       putExtra("playlist_index", 0)
       // 播放列表的 ID 顺序与 uris 一致，切集时据此把"正在播放"同步给服务器
       putEmbyPlaybackExtras(server, ids)
