@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -85,10 +86,10 @@ fun GestureHandler(
   val gesturePreferences = koinInject<GesturePreferences>()
   val panelShown by viewModel.panelShown.collectAsState()
   val allowGesturesInPanels by playerPreferences.allowGesturesInPanels.collectAsState()
-  val paused by MPVLib.propBoolean["pause"].collectAsState()
-  val duration by MPVLib.propInt["duration"].collectAsState()
-  val position by MPVLib.propInt["time-pos"].collectAsState()
-  val playbackSpeed by MPVLib.propFloat["speed"].collectAsState()
+  val paused by PlayerLib.propBoolean["pause"].collectAsState()
+  val duration by PlayerLib.propInt["duration"].collectAsState()
+  val position by PlayerLib.propInt["time-pos"].collectAsState()
+  val playbackSpeed by PlayerLib.propFloat["speed"].collectAsState()
   val controlsShown by viewModel.controlsShown.collectAsState()
   val areControlsLocked by viewModel.areControlsLocked.collectAsState()
   val seekAmount by viewModel.doubleTapSeekAmount.collectAsState()
@@ -122,7 +123,7 @@ fun GestureHandler(
   var longPressTriggeredDuringTouch by remember { mutableStateOf(false) }
   var isVerticalGestureActive by remember { mutableStateOf(false) }
   val currentVolume by viewModel.currentVolume.collectAsState()
-  val currentMPVVolume by MPVLib.propInt["volume"].collectAsState()
+  val currentMPVVolume by PlayerLib.propInt["volume"].collectAsState()
   val currentBrightness by viewModel.currentBrightness.collectAsState()
   val volumeBoostingCap = audioPreferences.volumeBoostCap.get()
   val haptics = LocalHapticFeedback.current
@@ -379,7 +380,7 @@ fun GestureHandler(
                 for (i in 1..steps) {
                   val t = i.toFloat() / steps
                   val intermediateSpeed = startSpeed + (targetSpeed - startSpeed) * t
-                  MPVLib.setPropertyFloat("speed", intermediateSpeed)
+                  PlayerLib.setPropertyFloat("speed", intermediateSpeed)
                   if (i < steps) delay(stepDelay)
                 }
 
@@ -432,7 +433,7 @@ fun GestureHandler(
                     when (gestureType) {
                       "speed_control" -> {
                         dynamicSpeedStartX = currentPosition.x
-                        dynamicSpeedStartValue = MPVLib.getPropertyFloat("speed") ?: multipleSpeedGesture
+                        dynamicSpeedStartValue = PlayerLib.getPropertyFloat("speed") ?: multipleSpeedGesture
                       }
                       "vertical" -> {
                         if ((brightnessGesture || volumeGesture) && !isLongPressing) {
@@ -482,7 +483,7 @@ fun GestureHandler(
                           if (abs(lastAppliedSpeed - newSpeed) > 0.01f) {
                             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             lastAppliedSpeed = newSpeed
-                            MPVLib.setPropertyFloat("speed", newSpeed)
+                            PlayerLib.setPropertyFloat("speed", newSpeed)
                             viewModel.playerUpdate.update { PlayerUpdates.DynamicSpeedControl(newSpeed, true) }
                           }
                         }
@@ -605,7 +606,7 @@ fun GestureHandler(
             isDynamicSpeedControlActive = false
             hasSwipedEnough = false
             // Ramp speed back down incrementally to avoid audio filter stutter
-            val currentSpeed = MPVLib.getPropertyFloat("speed") ?: multipleSpeedGesture
+            val currentSpeed = PlayerLib.getPropertyFloat("speed") ?: multipleSpeedGesture
             val targetSpeed = originalSpeed
             val steps = 5
             val stepDelay = 16L
@@ -613,7 +614,7 @@ fun GestureHandler(
               for (i in 1..steps) {
                 val t = i.toFloat() / steps
                 val intermediateSpeed = currentSpeed + (targetSpeed - currentSpeed) * t
-                MPVLib.setPropertyFloat("speed", intermediateSpeed)
+                PlayerLib.setPropertyFloat("speed", intermediateSpeed)
                 if (i < steps) delay(stepDelay)
               }
             }
@@ -640,7 +641,7 @@ fun GestureHandler(
         fun videoDisplaySize(): Pair<Float, Float> {
           val sw = size.width.toFloat()
           val sh = size.height.toFloat()
-          val va = MPVLib.getPropertyDouble("video-params/aspect")?.toFloat() ?: (sw / sh)
+          val va = PlayerLib.getPropertyDouble("video-params/aspect")?.toFloat() ?: (sw / sh)
           val sa = sw / sh
           return if (va >= sa) Pair(sw, sw / va) else Pair(sh * va, sh)
         }
@@ -656,8 +657,8 @@ fun GestureHandler(
           if (sw <= 0 || sh <= 0) return
           val (bw, bh) = videoDisplaySize()
           // 1 finger pixel = 1 video pixel
-          val curX = MPVLib.getPropertyDouble("video-pan-x")?.toFloat() ?: 0f
-          val curY = MPVLib.getPropertyDouble("video-pan-y")?.toFloat() ?: 0f
+          val curX = PlayerLib.getPropertyDouble("video-pan-x")?.toFloat() ?: 0f
+          val curY = PlayerLib.getPropertyDouble("video-pan-y")?.toFloat() ?: 0f
           val targetX = curX + dx / (bw * scale)
           val targetY = curY + dy / (bh * scale)
           // Initialize smoothing on first call
@@ -698,7 +699,7 @@ fun GestureHandler(
               if (prevDist == 0f) {
                 // First frame — capture baseline
                 prevDist = dist
-                zoom = MPVLib.getPropertyDouble("video-zoom")?.toFloat() ?: 0f
+                zoom = PlayerLib.getPropertyDouble("video-zoom")?.toFloat() ?: 0f
                 prevMidX = midX
                 prevMidY = midY
               } else {
@@ -749,7 +750,7 @@ fun GestureHandler(
           fun videoDisplaySize(): Pair<Float, Float> {
             val sw = size.width.toFloat()
             val sh = size.height.toFloat()
-            val va = MPVLib.getPropertyDouble("video-params/aspect")?.toFloat() ?: (sw / sh)
+            val va = PlayerLib.getPropertyDouble("video-params/aspect")?.toFloat() ?: (sw / sh)
             val sa = sw / sh
             return if (va >= sa) Pair(sw, sw / va) else Pair(sh * va, sh)
           }
@@ -760,7 +761,7 @@ fun GestureHandler(
 
             if (pressed.size == 1) {
               val change = pressed[0]
-              val zoom = MPVLib.getPropertyDouble("video-zoom")?.toFloat() ?: 0f
+              val zoom = PlayerLib.getPropertyDouble("video-zoom")?.toFloat() ?: 0f
               if (zoom <= 0f) { continue }
 
               val pos = change.position
@@ -777,8 +778,8 @@ fun GestureHandler(
                 if (sw > 0 && sh > 0) {
                   val scale = 2f.pow(zoom)
                   val (bw, bh) = videoDisplaySize()
-                  val curX = MPVLib.getPropertyDouble("video-pan-x")?.toFloat() ?: 0f
-                  val curY = MPVLib.getPropertyDouble("video-pan-y")?.toFloat() ?: 0f
+                  val curX = PlayerLib.getPropertyDouble("video-pan-x")?.toFloat() ?: 0f
+                  val curY = PlayerLib.getPropertyDouble("video-pan-y")?.toFloat() ?: 0f
                   val targetX = curX + (pos.x - prevX) / (bw * scale)
                   val targetY = curY + (pos.y - prevY) / (bh * scale)
                   // Initialize smoothing on first pan frame

@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.panels
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -95,12 +96,12 @@ fun VideoSettingsFilterPresetsCard(modifier: Modifier = Modifier) {
               decoderPreferences.sharpnessFilter.set(preset.sharpness)
 
               // Apply to MPV
-              MPVLib.setPropertyInt("brightness", preset.brightness)
-              MPVLib.setPropertyInt("saturation", preset.saturation)
-              MPVLib.setPropertyInt("contrast", preset.contrast)
-              MPVLib.setPropertyInt("gamma", preset.gamma)
-              MPVLib.setPropertyInt("hue", preset.hue)
-              MPVLib.setPropertyInt("sharpen", preset.sharpness)
+              PlayerLib.setPropertyInt("brightness", preset.brightness)
+              PlayerLib.setPropertyInt("saturation", preset.saturation)
+              PlayerLib.setPropertyInt("contrast", preset.contrast)
+              PlayerLib.setPropertyInt("gamma", preset.gamma)
+              PlayerLib.setPropertyInt("hue", preset.hue)
+              PlayerLib.setPropertyInt("sharpen", preset.sharpness)
             },
             label = { Text(stringResource(preset.displayNameRes)) },
             leadingIcon = null,

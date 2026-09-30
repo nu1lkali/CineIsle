@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import android.content.Context
 import android.widget.Toast
@@ -96,15 +97,15 @@ fun FrameNavigationSheet(
   val currentOnUpdateFrameInfo by rememberUpdatedState(onUpdateFrameInfo)
 
   // Use the same logic as PlayerControls for pause state
-  val paused by MPVLib.propBoolean["pause"].collectAsState()
+  val paused by PlayerLib.propBoolean["pause"].collectAsState()
   val isPaused = paused ?: false
 
   // Remember the initial pause state when the sheet opens
   val wasPausedInitially = remember { isPaused }
 
   // Use the same logic as PlayerControls for position and duration
-  val position by MPVLib.propInt["time-pos"].collectAsState()
-  val duration by MPVLib.propInt["duration"].collectAsState()
+  val position by PlayerLib.propInt["time-pos"].collectAsState()
+  val duration by PlayerLib.propInt["duration"].collectAsState()
   val pos = position ?: 0
   val dur = duration ?: 0
 
@@ -149,7 +150,7 @@ fun FrameNavigationSheet(
               currentOnPause()
               delay(50)
             }
-            MPVLib.command("no-osd", "frame-back-step")
+            PlayerLib.command("no-osd", "frame-back-step")
             delay(100)
             currentOnUpdateFrameInfo()
           }
@@ -163,7 +164,7 @@ fun FrameNavigationSheet(
               currentOnPause()
               delay(50)
             }
-            MPVLib.command("no-osd", "frame-step")
+            PlayerLib.command("no-osd", "frame-step")
             delay(100)
             currentOnUpdateFrameInfo()
           }
@@ -613,9 +614,9 @@ private suspend fun takeSnapshot(
 
       // Take screenshot using MPV to temp file, with or without subtitles
       if (includeSubtitles) {
-        MPVLib.command("screenshot-to-file", tempFile.absolutePath, "subtitles")
+        PlayerLib.command("screenshot-to-file", tempFile.absolutePath, "subtitles")
       } else {
-        MPVLib.command("screenshot-to-file", tempFile.absolutePath, "video")
+        PlayerLib.command("screenshot-to-file", tempFile.absolutePath, "video")
       }
 
       // Wait a bit for MPV to finish writing the file

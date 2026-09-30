@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.panels
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.annotation.StringRes
 import androidx.compose.foundation.horizontalScroll
@@ -119,7 +120,7 @@ fun SubtitleSettingsColorsCard(modifier: Modifier = Modifier) {
         onColorChange = {
           currentColor = it
           currentColorType.preference(preferences).set(it)
-          MPVLib.setPropertyString(currentColorType.property, it.toColorHexString())
+          PlayerLib.setPropertyString(currentColorType.property, it.toColorHexString())
         },
       )
     }
@@ -164,21 +165,21 @@ fun resetColors(
 ) {
   when (type) {
     SubColorType.Text -> {
-      MPVLib.setPropertyString("sub-color", preferences.textColor.deleteAndGet().toColorHexString())
+      PlayerLib.setPropertyString("sub-color", preferences.textColor.deleteAndGet().toColorHexString())
     }
 
     SubColorType.Border -> {
-      MPVLib.setPropertyString("sub-border-color", preferences.borderColor.deleteAndGet().toColorHexString())
+      PlayerLib.setPropertyString("sub-border-color", preferences.borderColor.deleteAndGet().toColorHexString())
     }
 
     SubColorType.Background -> {
-      MPVLib.setPropertyString("sub-back-color", preferences.backgroundColor.deleteAndGet().toColorHexString())
+      PlayerLib.setPropertyString("sub-back-color", preferences.backgroundColor.deleteAndGet().toColorHexString())
     }
   }
 }
 
 val getCurrentMPVColor: (SubColorType) -> Int = {
-  MPVLib.getPropertyString(it.property)?.uppercase()?.toColorInt() ?: 0xFFFFFFFF.toInt()
+  PlayerLib.getPropertyString(it.property)?.uppercase()?.toColorInt() ?: 0xFFFFFFFF.toInt()
 }
 
 @Composable

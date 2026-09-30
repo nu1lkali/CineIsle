@@ -964,7 +964,7 @@ fun RenderPlayerButton(
  * - 收藏成功时给一次轻触反馈。
  */
 @Composable
-private fun EmbyFavoritePlayerButton(
+internal fun EmbyFavoritePlayerButton(
   hideBackground: Boolean,
   buttonSize: Dp,
 ) {

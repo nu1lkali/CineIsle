@@ -13,7 +13,11 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.preferences.PlayerPreferences
+import app.marlboroadvance.mpvex.ui.player.GsyPlayerActivity
 import app.marlboroadvance.mpvex.ui.player.PlayerActivity
+import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
+import app.marlboroadvance.mpvex.ui.player.engine.reversed
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +36,7 @@ import org.koin.java.KoinJavaComponent.inject
  */
 class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   private val repository by inject<EmbyRepository>(EmbyRepository::class.java)
+  private val playerPreferences by inject<PlayerPreferences>(PlayerPreferences::class.java)
 
   val servers: StateFlow<List<EmbyServer>> = repository.servers
     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -327,13 +332,16 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * 从而在播完当前集后自动接着播下一集。
    *
    * @param resumeSeconds >0 时从指定秒数续播，否则从头开始
+   * @param reverseEngine true = 用「与默认相反」的内核播放（详情页长按播放按钮）
    */
   suspend fun play(
     server: EmbyServer,
     item: EmbyItem,
     resumeSeconds: Long = 0,
+    reverseEngine: Boolean = false,
   ) {
     val itemId = item.Id ?: return
+    val engine = resolveEngine(reverseEngine)
 
     // 剧集：构建从当前集开始的播放列表，实现"播完自动下一集"
     val playlist = if (item.Type == "Episode") {
@@ -343,9 +351,9 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     if (playlist.size > 1) {
-      launchPlaylist(server, playlist, resumeSeconds)
+      launchPlaylist(server, playlist, resumeSeconds, engine = engine)
     } else {
-      launchSingle(server, item, resumeSeconds)
+      launchSingle(server, item, resumeSeconds, engine = engine)
     }
 
     // 上报播放开始，让服务器记录"正在播放"
@@ -377,11 +385,54 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     return if (index >= 0) episodes.subList(index, episodes.size) else listOf(item)
   }
 
+  /**
+   * 算出这次播放**实际要用**的内核。
+   *
+   * 默认就是设置里选的「默认播放内核」（设置 → GSY 播放器 → 默认播放内核），
+   * 长按（[reverse]）且「长按反选内核」开关打开时才反选另一个。
+   *
+   * 注意这里必须返回「默认内核」而不是 null：返回 null 的话调用方只会把 intent
+   * 指向 mpv 播放页，「默认内核 = GSYVideoPlayer」这个设置就形同虚设
+   * （用户反馈的「设置里选了 GSY，播放起来还是 mpv」就是这个原因）。
+   */
+  fun resolveEngine(reverse: Boolean): EngineKind {
+    val preferred = EngineKind.from(playerPreferences.playbackEngine.get())
+    if (!reverse || !playerPreferences.longPressReverseEngine.get()) return preferred
+    return preferred.reversed()
+  }
+
+  /**
+   * 只有「真的被反选了」才返回非空。
+   *
+   * 详情页拿它决定要不要弹「用 xx 播放」的提示 —— 每次点播放都弹一条就太吵了，
+   * 长按换内核才需要明确反馈。
+   */
+  fun resolveEngineOverride(reverse: Boolean): EngineKind? {
+    if (!reverse || !playerPreferences.longPressReverseEngine.get()) return null
+    return resolveEngine(reverse)
+  }
+
+  /**
+   * 把内核选择写进 intent。
+   *
+   * 备用内核（GSY）走独立的 [GsyPlayerActivity]；
+   * 主内核（mpv）则显式把内核名塞进 extra，让 [PlayerActivity] 明确按 mpv 播 ——
+   * 免得「设置里默认内核 = GSY」时又被路由走一次。
+   */
+  private fun Intent.putEngine(engine: EngineKind?) {
+    when (engine) {
+      EngineKind.GSY -> setClass(getApplication(), GsyPlayerActivity::class.java)
+      EngineKind.MPV -> putExtra(PlayerActivity.EXTRA_ENGINE, engine.name)
+      null -> Unit
+    }
+  }
+
   /** 播放单个媒体 */
   private fun launchSingle(
     server: EmbyServer,
     item: EmbyItem,
     resumeSeconds: Long,
+    engine: EngineKind? = resolveEngine(false),
   ) {
     val itemId = item.Id ?: return
     val url = repository.videoStreamUrl(server, itemId, static = true)
@@ -404,6 +455,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       // 「记忆播放设置」的键：剧集用所属剧的 Id（整季共用一份速度 / 音轨），
       // 电影没有 SeriesId，就用它自己的 Id。
       putExtra("emby_series_key", item.SeriesId ?: itemId)
+      putEngine(engine)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     getApplication<Application>().startActivity(intent)
@@ -420,6 +472,10 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
      * 已看完的会直接跳到片尾一秒就结束，所以本次会话内每个视频都从头放。
      */
     playFromStartAll: Boolean = false,
+    /**
+     * 指定内核；默认取设置里的「默认播放内核」（长按反选时由 [resolveEngine] 给出）
+     */
+    engine: EngineKind? = resolveEngine(false),
   ) {
     val uris = ArrayList<android.net.Uri>()
     val ids = ArrayList<String>()
@@ -463,6 +519,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       putExtra("playlist_index", 0)
       // 播放列表的 ID 顺序与 uris 一致，切集时据此把"正在播放"同步给服务器
       putEmbyPlaybackExtras(server, ids)
+      putEngine(engine)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     getApplication<Application>().startActivity(intent)

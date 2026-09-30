@@ -313,7 +313,9 @@ private fun ServerEditDialog(
           label = { Text("服务器地址") },
           placeholder = { Text("http://192.168.1.10:8096") },
           singleLine = true,
-          supportingText = { Text("可以是 http://host:8096 或 host:8096") },
+          supportingText = {
+            Text("可写 https://域名 或 192.168.1.10:8096；不写端口时 https 默认 443、http 默认 8096")
+          },
         )
         OutlinedTextField(
           value = username,
@@ -434,7 +436,9 @@ private fun parseServerAddress(raw: String): Triple<String, Int, Boolean>? {
     val port = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: return null
     if (host.isBlank()) null else Triple(host, port, useHttps)
   } else {
-    val defaultPort = if (useHttps) 8920 else 8096
+    // 端口缺省值：https → 443（标准 HTTPS，反代 / 域名场景最常见），http → 8096（Emby 默认）。
+    // 用 Emby 自带的 https 端口 8920 的话，地址里显式写 :8920 即可。
+    val defaultPort = if (useHttps) 443 else 8096
     Triple(input, defaultPort, useHttps)
   }
 }

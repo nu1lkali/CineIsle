@@ -22,6 +22,7 @@ import androidx.core.app.ServiceCompat
 import androidx.media.MediaBrowserServiceCompat
 import androidx.media.session.MediaButtonReceiver
 import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
@@ -91,12 +92,12 @@ class MediaPlaybackService :
     
     // Only add MPV observer if MPV is initialized
     try {
-      MPVLib.addObserver(this)
-      // Observe properties
-      MPVLib.observeProperty("pause", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
-      MPVLib.observeProperty("media-title", MPVLib.MpvFormat.MPV_FORMAT_STRING)
-      MPVLib.observeProperty("metadata/artist", MPVLib.MpvFormat.MPV_FORMAT_STRING)
-      MPVLib.observeProperty("time-pos", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
+      PlayerLib.addObserver(this)
+      // Observe properties（GSY 内核下这些是空操作：状态由 GsyBackend 主动推送）
+      PlayerLib.observeProperty("pause", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
+      PlayerLib.observeProperty("media-title", MPVLib.MpvFormat.MPV_FORMAT_STRING)
+      PlayerLib.observeProperty("metadata/artist", MPVLib.MpvFormat.MPV_FORMAT_STRING)
+      PlayerLib.observeProperty("time-pos", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
       Log.d(TAG, "MPV observer registered")
     } catch (e: Exception) {
       Log.e(TAG, "Error registering MPV observer", e)
@@ -130,11 +131,11 @@ class MediaPlaybackService :
 
     // Fallback: Read current state from MPV if not provided via intent
     if (mediaTitle.isBlank()) {
-      mediaTitle = MPVLib.getPropertyString("media-title") ?: ""
-      mediaArtist = MPVLib.getPropertyString("metadata/artist") ?: ""
+      mediaTitle = PlayerLib.getPropertyString("media-title") ?: ""
+      mediaArtist = PlayerLib.getPropertyString("metadata/artist") ?: ""
     }
     
-    paused = MPVLib.getPropertyBoolean("pause") == true
+    paused = PlayerLib.getPropertyBoolean("pause") == true
 
     updateMediaSession()
 
@@ -187,12 +188,12 @@ class MediaPlaybackService :
           object : MediaSessionCompat.Callback() {
             override fun onPlay() {
               Log.d(TAG, "onPlay called")
-              MPVLib.setPropertyBoolean("pause", false)
+              PlayerLib.setPropertyBoolean("pause", false)
             }
 
             override fun onPause() {
               Log.d(TAG, "onPause called")
-              MPVLib.setPropertyBoolean("pause", true)
+              PlayerLib.setPropertyBoolean("pause", true)
             }
 
             override fun onStop() {
@@ -203,24 +204,24 @@ class MediaPlaybackService :
             override fun onSkipToNext() {
               Log.d(TAG, "onSkipToNext called")
               // Use precise seeking for videos shorter than 2 minutes (120 seconds) or if preference is enabled
-              val duration = MPVLib.getPropertyInt("duration") ?: 0
+              val duration = PlayerLib.getPropertyInt("duration") ?: 0
               val shouldUsePreciseSeeking = playerPreferences.usePreciseSeeking.get() || duration < 120
               val seekMode = if (shouldUsePreciseSeeking) "relative+exact" else "relative+keyframes"
-              MPVLib.command("seek", "10", seekMode)
+              PlayerLib.command("seek", "10", seekMode)
             }
 
             override fun onSkipToPrevious() {
               Log.d(TAG, "onSkipToPrevious called")
               // Use precise seeking for videos shorter than 2 minutes (120 seconds) or if preference is enabled
-              val duration = MPVLib.getPropertyInt("duration") ?: 0
+              val duration = PlayerLib.getPropertyInt("duration") ?: 0
               val shouldUsePreciseSeeking = playerPreferences.usePreciseSeeking.get() || duration < 120
               val seekMode = if (shouldUsePreciseSeeking) "relative+exact" else "relative+keyframes"
-              MPVLib.command("seek", "-10", seekMode)
+              PlayerLib.command("seek", "-10", seekMode)
             }
 
             override fun onSeekTo(pos: Long) {
               Log.d(TAG, "onSeekTo called: $pos")
-              MPVLib.setPropertyDouble("time-pos", pos / 1000.0)
+              PlayerLib.setPropertyDouble("time-pos", pos / 1000.0)
             }
           },
         )
@@ -244,7 +245,7 @@ class MediaPlaybackService :
       
       // Update metadata
       val duration = runCatching { 
-        MPVLib.getPropertyDouble("duration")?.times(1000)?.toLong() 
+        PlayerLib.getPropertyDouble("duration")?.times(1000)?.toLong() 
       }.getOrNull() ?: 0L
       
       val metadataBuilder =
@@ -263,7 +264,7 @@ class MediaPlaybackService :
 
       // Update playback state
       val position = runCatching { 
-        MPVLib.getPropertyDouble("time-pos")?.times(1000)?.toLong() 
+        PlayerLib.getPropertyDouble("time-pos")?.times(1000)?.toLong() 
       }.getOrNull() ?: 0L
       
       val state = if (paused) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING
@@ -436,7 +437,7 @@ class MediaPlaybackService :
       
       // Remove MPV observer safely
       try {
-        MPVLib.removeObserver(this)
+        PlayerLib.removeObserver(this)
       } catch (e: Exception) {
         Log.e(TAG, "Error removing MPV observer", e)
       }
@@ -485,7 +486,7 @@ class MediaPlaybackService :
     try {
       // Kill MPV playback immediately when task is removed
       try {
-        MPVLib.command("quit")
+        PlayerLib.command("quit")
         Log.d(TAG, "MPV quit command sent")
       } catch (e: Exception) {
         Log.e(TAG, "Error sending quit command to MPV", e)

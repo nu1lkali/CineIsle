@@ -205,6 +205,28 @@ object PreferencesScreen : Screen {
                 },
                 onClick = { backstack.add(GesturePreferencesScreen) },
               )
+
+              PreferenceDivider()
+
+              // GSY 播放器是**独立的一套播放页**（内核 / 渲染 / 手势都跟 mpv 不共用），
+              // 所以它的配置单开一页：这一页改什么都不影响 mpv，反之亦然。
+              Preference(
+                title = { Text(text = stringResource(id = R.string.pref_gsy_player)) },
+                summary = {
+                  Text(
+                    text = stringResource(id = R.string.pref_gsy_player_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.PlayCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = { backstack.add(GsyPreferencesScreen) },
+              )
             }
           }
           

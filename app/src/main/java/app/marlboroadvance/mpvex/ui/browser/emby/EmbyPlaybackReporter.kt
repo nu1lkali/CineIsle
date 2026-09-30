@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import android.content.Intent
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -178,19 +179,19 @@ object EmbyPlaybackReporter {
   // ─── mpv 属性读取 ───
 
   private fun readPositionTicks(): Long {
-    val seconds = `is`.xyz.mpv.MPVLib.getPropertyInt("time-pos") ?: 0
+    val seconds = PlayerLib.getPropertyInt("time-pos") ?: 0
     return EmbyTicks.secondsToTicks(seconds.toLong())
   }
 
-  private fun readIsPaused(): Boolean = `is`.xyz.mpv.MPVLib.getPropertyBoolean("pause") == true
+  private fun readIsPaused(): Boolean = PlayerLib.getPropertyBoolean("pause") == true
 
   /**
-   * 从 mpv 当前播放路径里解析出 Emby 媒体 ID。
+   * 从当前播放路径里解析出 Emby 媒体 ID（经 PlayerLib 门面读，mpv / Exo 都适用）。
    *
    * 播放地址形如 `/emby/Videos/{itemId}/stream?static=true&api_key=...`
    */
   private fun readCurrentItemId(): String? {
-    val path = `is`.xyz.mpv.MPVLib.getPropertyString("path") ?: return null
+    val path = PlayerLib.getPropertyString("path") ?: return null
     val match = ITEM_ID_REGEX.find(path) ?: return null
     val id = match.groupValues.getOrNull(1) ?: return null
     // 只认可本次播放列表里的 ID，避免 mpv 自动连播到无关文件时误报

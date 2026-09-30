@@ -1,82 +1,77 @@
 # ═══════════════════════════════════════════════════════════════
-#  Gradle / Android 构建产物
+#  mpvEx · .gitignore
+#
+#  策略：
+#   1. 构建产物、本机配置、签名密钥、调试残留一律不入库；
+#   2. 根目录只放工程文件（gradle 脚本、README 等），因此对根目录的
+#      *.txt / _* 整体忽略 —— 调试 dump 的文件名千奇百怪（adb_*.txt、
+#      verify*.txt、logcat*.txt……），逐个枚举永远追不上；
+#      需要入库的 .txt（fastlane 商店文案）都在子目录里，不受影响；
+#   3. 文件末尾列出了几处【故意不忽略】的内容，改动前先看一眼。
 # ═══════════════════════════════════════════════════════════════
-.gradle
-.kotlin
+
+# ── Gradle / Android 构建产物 ──────────────────────────────────
+.gradle/
+.kotlin/
 build/
 /captures
-.externalNativeBuild
-.cxx
+.externalNativeBuild/
+.cxx/
+bin/
+gen/
 /gradle/gradle-daemon-jvm.properties
 
-# 打包产物与中间件（全部可重新生成，没必要进仓库）
+# 打包产物（都可由构建重新生成）
 *.apk
 *.aab
 *.ap_
+*.idsig
 *.dex
 *.class
-output-metadata.json
-release/
-app/release/
-# ABI 拆分后的 flavor 输出目录
+/app/release/
 /app/standard/
 /app/fdroid/
 /app/playstore/
 
-# ═══════════════════════════════════════════════════════════════
-#  本地配置与签名（含绝对路径 / 私钥，严禁提交）
-# ═══════════════════════════════════════════════════════════════
+# Lint 报告 / JVM 崩溃现场 / 内存转储
+lint-results*
+hs_err_pid*
+replay_pid*
+*.hprof
+
+# ── 本机配置与签名（含绝对路径 / 私钥，严禁入库）──────────────
 local.properties
 keystore.properties
 signing.properties
-# 本机构建加速用的 Gradle init 脚本（注入阿里云镜像，路径/镜像随机器而变）
-jitpack-repo.init.gradle
 *.init.gradle
 *.jks
 *.keystore
 *.p12
 *.pfx
-release-keystore*
+# 密钥文件一旦进库就永久留在历史里，整个目录再挡一层双保险
+/keystore/
 
-# ═══════════════════════════════════════════════════════════════
-#  IDE / 编辑器
-# ═══════════════════════════════════════════════════════════════
+# ── IDE / 编辑器 ───────────────────────────────────────────────
 .idea/
+!.idea/codeStyles/
+!.idea/codeStyles/**
 *.iml
 *.iws
 *.ipr
+.fleet/
+.vscode/
 out/
-# 例外：代码风格配置是团队共享的，需要提交
-!.idea/codeStyles/
-!.idea/codeStyles/**
 
-# ═══════════════════════════════════════════════════════════════
-#  操作系统
-# ═══════════════════════════════════════════════════════════════
+# ── 操作系统 ───────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
 *~
-*#
-.#*
-.fuse_hidden*
-$RECYCLE.BIN/
 
-# ═══════════════════════════════════════════════════════════════
-#  日志 / 崩溃日志 / 临时文件
-#  调试期的设备日志常常几百 KB 到几 MB，一律不入库
-# ═══════════════════════════════════════════════════════════════
+# ── 日志与临时文件（任意目录）─────────────────────────────────
 *.log
 *.hprof
-logcat*.txt
-mpvex_logs*.txt
 crash-reports/
-build*.txt
-seg*.txt
-
-# ═══════════════════════════════════════════════════════════════
-#  通用临时 / 备份文件
-# ═══════════════════════════════════════════════════════════════
 *.tmp
 *.temp
 *.bak
@@ -85,57 +80,45 @@ seg*.txt
 *.swp
 *.swo
 
-# ═══════════════════════════════════════════════════════════════
-#  Python（仓库里有若干本地辅助脚本）
-# ═══════════════════════════════════════════════════════════════
+# ── 根目录调试残留：整体忽略 ──────────────────────────────────
+#  调试期的日志 / 设备 dump / 构建输出抄本，随手扔在仓库根：
+#  logcat*.txt、build_*.txt、adb_*.txt、_gsy_probe/ 等全靠这几条。
+#  确有文件要入库时用 git add -f，或在此处加 ! 白名单。
+/*.txt
+/_*
+/build_tmp_*/
+
+# ── tools/ 本地辅助脚本的产物 ─────────────────────────────────
+#  脚本本身（*.py）入库；它们的输出和下载的 sources jar 不入库
+/tools/*.txt
+tools/*.jar
+
+# ── Python 辅助脚本的缓存 ─────────────────────────────────────
 __pycache__/
 *.py[cod]
 .venv/
-venv/
+
+# ── AI 协作工具的本机状态（含机器相关路径）───────────────────
+/.workbuddy/
 
 # ═══════════════════════════════════════════════════════════════
-#  签名密钥目录
-#  上面 *.jks / *.keystore 已经挡掉了文件本身，这里再把整个目录挡一层：
-#  密钥文件一旦进库就永久留在历史里（删文件也洗不掉），必须双保险。
-#  现状：keystore/cineisle-release.jks 已被忽略，且 `git ls-files -- keystore` 为空。
-# ═══════════════════════════════════════════════════════════════
-/keystore/
-
-# ═══════════════════════════════════════════════════════════════
-#  本地调试 / 诊断产生的临时文件（随时可删，不必入库）
-#  说明：build*.txt 这条已经覆盖了 build_out.txt、build_state.txt、
-#        build_tmp_dlna*.txt、build_tmp_git.txt 等绝大多数构建日志，
-#        下面补的是命名不在 build* 前缀里的那几个。
-# ═══════════════════════════════════════════════════════════════
-/apk_info.txt
-/git_status.txt
-/clean_state.txt
-/build_tmp_*/
-tools/inspect_out.txt
-# upnpcast 等第三方库的 sources jar：联网可重新下载，不入库
-tools/*.jar
-
-# ═══════════════════════════════════════════════════════════════
-#  ⚠️ 以下内容【必须提交】，故不写忽略规则 —— 改动前请先读理由
-# ═══════════════════════════════════════════════════════════════
+#  【故意不忽略】—— 看似"该忽略"、实际必须入库的内容：
 #
-#  app/src/main/jniLibs/
-#      mpv / ffmpeg / libplayer 等原生库（4 个 ABI，共 40 个 .so，约 151MB）。
-#      这些库【无法从 Maven 获取】：依赖坐标
-#        io.github.marlboro-advance:mpv-android:1.0.0
-#      对应的 AAR 只有 0.2MB，内容仅为 classes.jar（MPVLib API）+ cacert.pem，
-#      里面一个 .so 都没有。原生库只能随仓库分发。
-#      ⇒ 一旦忽略该目录，任何新克隆的仓库打包出的 APK 都会在运行时报
-#        UnsatisfiedLinkError: dlopen failed: library "libavcodec.so"/"libmpv.so"
-#        not found，且问题只在真机运行时才暴露，非常难排查。
-#      （libmediainfo.so / libzen.so 例外：它们由 mediainfo-android 的 AAR 提供，
-#        jniLibs 里若同时存在会以 jniLibs 优先，两者保持一致即可。）
+#  • app/src/main/jniLibs/
+#      mpv / ffmpeg / libplayer 原生库（4 个 ABI，约 151MB）。
+#      Maven 上的依赖 AAR 只含 classes.jar（MPVLib API），没有任何
+#      .so —— 忽略它的话，新克隆打出的包一跑就报
+#      UnsatisfiedLinkError: libmpv.so not found，且只在真机暴露。
+#      嫌大：可删 x86/x86_64 两套模拟器库（约省 55MB），或改走 Git LFS。
 #
-#  .github/workflows/、fastlane/、website/、docs/
-#      发布与文档相关，属于仓库的一部分。
+#  • gradle/wrapper/（gradle-wrapper.jar + properties）
+#      构建入口，缺了它 clone 下来连 ./gradlew 都跑不起来。
+#      上面的 tools/*.jar 只覆盖 tools/ 目录，不会误伤这里。
 #
-#  如需缩小仓库体积（可选优化）：
-#      x86 / x86_64 两套库只服务于模拟器，约占 55MB。若只面向真机分发，
-#      可删掉 jniLibs/x86、jniLibs/x86_64 并同步收紧 app/build.gradle.kts
-#      里 splits.abi 的 include 列表；或在需要全 ABI 时改用 Git LFS 托管。
+#  • fastlane/metadata/**/*.txt
+#      应用商店文案。根目录的 /*.txt 不涉及子目录。
+#
+#  • app/schemas/        Room 数据库 schema 快照，供迁移测试用。
+#  • .editorconfig / .gitattributes / .github/ / docs/ / website/
+#      工程配置、CI、文档与官网源码，都是仓库的一部分。
 # ═══════════════════════════════════════════════════════════════

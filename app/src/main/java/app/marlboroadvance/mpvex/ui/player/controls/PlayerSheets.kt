@@ -67,6 +67,8 @@ fun PlayerSheets(
   onStartSleepTimer: (Int) -> Unit,
   onOpenPanel: (Panels) -> Unit,
   onShowSheet: (Sheets) -> Unit,
+  /** mpv 播放页「更多」里的一键切到 GSY 内核（由 PlayerActivity 实现） */
+  onSwitchToGsy: () -> Unit = {},
   onDismissRequest: () -> Unit,
 ) {
   when (sheetShown) {
@@ -181,6 +183,8 @@ fun PlayerSheets(
         onAnime4KChanged = { },
         // 「快捷功能」宫格点一下直接切到对应面板（倍速 / 比例 / 缩放 / 逐帧 / 章节 / 音轨 / 字幕 / 解码器）
         onShowSheet = onShowSheet,
+        // 最后一项是把整个播放会话交给 GSY 内核（面板内只在 mpv 下显示）
+        onSwitchToGsy = onSwitchToGsy,
       )
     }
 

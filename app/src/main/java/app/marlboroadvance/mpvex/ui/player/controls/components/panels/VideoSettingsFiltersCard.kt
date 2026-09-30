@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.panels
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -56,7 +57,7 @@ fun VideoSettingsFiltersCard(modifier: Modifier = Modifier) {
         TextButton(
           onClick = {
             VideoFilters.entries.forEach {
-              MPVLib.setPropertyInt(it.mpvProperty, it.preference(decoderPreferences).deleteAndGet())
+              PlayerLib.setPropertyInt(it.mpvProperty, it.preference(decoderPreferences).deleteAndGet())
             }
           },
         ) {
@@ -71,7 +72,7 @@ fun VideoSettingsFiltersCard(modifier: Modifier = Modifier) {
             valueText = value.toString(),
             onChange = {
               filter.preference(decoderPreferences).set(it)
-              MPVLib.setPropertyInt(filter.mpvProperty, it)
+              PlayerLib.setPropertyInt(filter.mpvProperty, it)
             },
             max = filter.max,
             min = filter.min,

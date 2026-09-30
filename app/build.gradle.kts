@@ -184,6 +184,21 @@ android {
   }
 }
 
+// ── 构建提速：默认关掉 release 的 lintVital ──
+//
+// 实测（本机 6 核 i7-8750H）assembleStandardRelease 任务耗时分布：
+//   lintVitalAnalyzeStandardRelease   7m02s  ← 比 R8 还慢
+//   minifyStandardReleaseWithR8       6m31s
+//   compileJavaWithJavac                54s
+//   其余全部                          ~3m
+// lintVital 是 AGP 给 release 变体加的「致命问题」静态检查，跑在 R8 之后、
+// 且几乎吃不掉并行度（它和 R8 抢 CPU），是本机构建最大的一块纯开销。
+// 日常出包关掉它；要上线前体检时加 -PlintVital=true 跑一次即可。
+val lintVitalEnabled = providers.gradleProperty("lintVital").map { it.toBoolean() }.orElse(false)
+tasks.matching { it.name.startsWith("lintVital") }.configureEach {
+  enabled = lintVitalEnabled.get()
+}
+
 androidComponents {
   val abiCodes = mapOf(
     "armeabi-v7a" to 1,
@@ -218,7 +233,10 @@ kotlin {
 }
 
 composeCompiler {
-  includeSourceInformation = true
+  // 源信息（把重组对应回源码行号）只有 debug 的 Compose 工具链用得上。
+  // release 打开会给每个 composable 塞额外字符串元数据：Compose 编译器更慢、
+  // R8 要处理的代码量更大（R8 占 release 构建 6m31s），产物也更大。
+  includeSourceInformation = false
 }
 
 room {
@@ -262,13 +280,32 @@ dependencies {
   implementation(libs.kotlinx.immutable.collections)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.okhttp)
-  // DLNA 投屏（UPnPCast，Maven Central）
-  implementation("com.yinnho.upnpcast:upnpcast:1.1.2")
+  // DLNA 投屏：UPnPCast 源码内置在 app/src/main/java/com/yinnho/upnpcast/ 下（同 embyclient 的做法），
+  // 版本为上游 master / v1.3.0。
+  // 为什么不用 Maven Central 的 com.yinnho.upnpcast:upnpcast:1.1.2：
+  //   1.1.2 的 SSDP 有致命缺陷 —— SO_REUSEADDR 在 bind 之后才设置（等于没设）、1900 端口被占就再
+  //   也搜不到设备、去重表跨搜索不清空（第二次搜索起永远返回空列表，必须重启 App）、
+  //   search() 一发现首个设备就返回导致列表不全、location 无端口时拼出 http://host:-1/...、
+  //   本地文件一律用 application/octet-stream（部分电视直接拒收）。
+  //   这些正是 1.2.0 的修复项（upstream CHANGELOG 逐条对应：discovery #1 / MulticastLock /
+  //   Control URL / search() semantics / MIME by extension）。1.3.0 只上了 JitPack，
+  //   Maven Central 仍停留在 1.1.2，所以直接内置源码。
+  // 运行时依赖：kotlinx.coroutines + nanohttpd（均已在本文件声明）。
 
     implementation(libs.truetype.parser)
     implementation(libs.fsaf)
     implementation(libs.mediainfo.lib)
     implementation(libs.mpv.android)
+
+    // GSYVideoPlayer —— 双播放内核中的第二个内核（默认仍是 mpv）
+    // java = 播放器 View + IJK Java 绑定；exo2 = GSY 的 ExoPlayer 内核；
+    // arm64 / armv7a / x86 / x64 = IJK 的原生 so（按 ABI 拆包，缺了 IJK 起不来）。
+    implementation(libs.gsy.java)
+    implementation(libs.gsy.exo2)
+    implementation(libs.gsy.arm64)
+    implementation(libs.gsy.armv7a)
+    implementation(libs.gsy.x86)
+    implementation(libs.gsy.x64)
 
     // Network protocol libraries
     implementation(libs.smbj)

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GSY 播放页专用图标：滤镜（三色叠加），对应官方 setEffectFilter -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M9,3a5.5,5.5 0 1,1 0,11a5.5,5.5 0 1,1 0,-11zM15,3a5.5,5.5 0 1,1 0,11a5.5,5.5 0 1,1 0,-11zM12,10a5.5,5.5 0 1,1 0,11a5.5,5.5 0 1,1 0,-11z" />
+</vector>

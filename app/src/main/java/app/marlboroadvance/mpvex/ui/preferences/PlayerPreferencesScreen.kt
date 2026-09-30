@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,6 +30,7 @@ import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.serialization.Serializable
 import me.zhanghai.compose.preference.ListPreference
 import me.zhanghai.compose.preference.ListPreferenceType
+import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.ProvidePreferenceLocals
 import me.zhanghai.compose.preference.SliderPreference
 import me.zhanghai.compose.preference.SwitchPreference
@@ -200,7 +202,33 @@ object PlayerPreferencesScreen : Screen {
               )
 
               PreferenceDivider()
-              
+
+              // ── 播放内核 / GSY 全部配置 ──
+              // 这一整块（默认内核、长按反选、GSY 的解码内核、渲染方式、显示比例、手势…）
+              // 已经整块搬到「设置 → GSY 播放器」（GsyPreferencesScreen）。
+              // 原因：GSY 现在是**独立的一套播放页**（GsyPlayerActivity），
+              // 它的配置和 mpv 播放页的配置必须各管各的，混在一起改一边会误伤另一边。
+              Preference(
+                title = { Text("GSY 播放器") },
+                summary = {
+                  Text(
+                    text = "内核 / 渲染方式 / 显示比例 / 手势 / 全屏与旋转，以及「长按用哪个内核播放」——" +
+                      "全部在 GSY 播放器自己的设置页里，与 mpv 的配置互不影响",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.PlayCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = { backstack.add(GsyPreferencesScreen) },
+              )
+
+              PreferenceDivider()
+
               val preloadNextVideo by preferences.preloadNextVideo.collectAsState()
               SwitchPreference(
                 value = preloadNextVideo,

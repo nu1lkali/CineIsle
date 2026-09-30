@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -57,7 +58,7 @@ fun VideoZoomSheet(
   val currentOnSetVideoZoom by rememberUpdatedState(onSetVideoZoom)
 
   LaunchedEffect(Unit) {
-    val mpvZoom = MPVLib.getPropertyDouble("video-zoom")?.toFloat() ?: videoZoom
+    val mpvZoom = PlayerLib.getPropertyDouble("video-zoom")?.toFloat() ?: videoZoom
     zoom = mpvZoom
   }
 

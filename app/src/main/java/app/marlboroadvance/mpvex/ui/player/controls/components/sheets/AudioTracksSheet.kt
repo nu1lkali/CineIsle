@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -94,11 +95,11 @@ fun AudioTracksSheet(
               onClick = {
                 audioPreferences.audioChannels.set(it)
                 if (it == AudioChannels.ReverseStereo) {
-                  MPVLib.setPropertyString(AudioChannels.AutoSafe.property, AudioChannels.AutoSafe.value)
+                  PlayerLib.setPropertyString(AudioChannels.AutoSafe.property, AudioChannels.AutoSafe.value)
                 } else {
-                  MPVLib.setPropertyString(AudioChannels.ReverseStereo.property, "")
+                  PlayerLib.setPropertyString(AudioChannels.ReverseStereo.property, "")
                 }
-                MPVLib.setPropertyString(it.property, it.value)
+                PlayerLib.setPropertyString(it.property, it.value)
               },
               label = { Text(text = stringResource(id = it.title)) },
               leadingIcon = null,

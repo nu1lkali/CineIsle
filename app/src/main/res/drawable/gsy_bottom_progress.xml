@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  控件隐藏时留在屏幕最底的那条细进度线（GSY 的 bottom_progressbar）：
+  2dp、半透明白，压在画面最底边，不抢注意力。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@android:id/background">
+        <shape>
+            <size android:height="2dp" />
+            <solid android:color="#1AFFFFFF" />
+        </shape>
+    </item>
+    <item android:id="@android:id/progress">
+        <clip>
+            <shape>
+                <size android:height="2dp" />
+                <solid android:color="#80FFFFFF" />
+            </shape>
+        </clip>
+    </item>
+</layer-list>

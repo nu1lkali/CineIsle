@@ -80,3 +80,27 @@
 # UPnPCast (DLNA 投屏)
 -keep class com.yinnho.upnpcast.** { *; }
 -dontwarn com.yinnho.upnpcast.**
+
+# ── GSYVideoPlayer + IJK ──
+# GSY 的播放器 View 由 XML 布局 inflate、内部大量按类名/反射找 manager，
+# 收缩会直接崩；IJK 的 native 方法被裁掉则是「起播就黑屏」。
+-keep class com.shuyu.gsyvideoplayer.** { *; }
+-dontwarn com.shuyu.gsyvideoplayer.**
+-keep class tv.danmaku.ijk.** { *; }
+-dontwarn tv.danmaku.ijk.**
+-keep class moe.codeest.enviews.** { *; }
+-dontwarn moe.codeest.enviews.**
+-keepclassmembers class tv.danmaku.ijk.** {
+    native <methods>;
+}
+# PlayerFactory.setPlayManager(Class) 传的是 Class 对象，类名不能被重命名
+-keep,allowoptimization class com.shuyu.gsyvideoplayer.player.IjkPlayerManager
+-keep,allowoptimization class com.shuyu.gsyvideoplayer.player.Exo2PlayerManager
+# GSY 自带的字幕解析（SRT / WebVTT）走注解 + 工厂，别裁
+-keep class com.shuyu.gsyvideoplayer.subtitle.** { *; }
+-keep,allowoptimization class * implements com.shuyu.gsyvideoplayer.subtitle.GSYSubtitleParser {
+    public <init>(...);
+}
+# AndroidVideoCache（GSY 的边下边播）
+-keep class com.danikula.videocache.** { *; }
+-dontwarn com.danikula.videocache.**

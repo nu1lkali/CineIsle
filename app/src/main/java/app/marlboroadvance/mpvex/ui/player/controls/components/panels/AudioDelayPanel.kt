@@ -1,6 +1,7 @@
 @file:Suppress("ktlint:standard:no-wildcard-imports")
 
 package app.marlboroadvance.mpvex.ui.player.controls.components.panels
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -47,17 +48,17 @@ fun AudioDelayPanel(
       AudioDelayCardTitle(onClose = onDismissRequest)
     }
   ) {
-    val delay by MPVLib.propDouble["audio-delay"].collectAsState()
+    val delay by PlayerLib.propDouble["audio-delay"].collectAsState()
     val delayFloat by remember { derivedStateOf { (delay ?: 0.0).toFloat() } }
 
     DelayCard(
       delay = delayFloat,
       onDelayChange = {
         val delayInSeconds = it.toDouble()
-        MPVLib.setPropertyDouble("audio-delay", delayInSeconds)
+        PlayerLib.setPropertyDouble("audio-delay", delayInSeconds)
       },
       onApply = { preferences.defaultAudioDelay.set((delayFloat * 1000).roundToInt()) },
-      onReset = { MPVLib.setPropertyDouble("audio-delay", 0.0) },
+      onReset = { PlayerLib.setPropertyDouble("audio-delay", 0.0) },
       delayType = DelayType.Audio,
     )
   }

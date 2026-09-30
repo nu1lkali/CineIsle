@@ -81,6 +81,28 @@ class PlayerPreferences(
   val autoplayNextCountdownSeconds = preferenceStore.getInt("autoplay_next_countdown_seconds", 5)
 
   /**
+   * 默认播放内核："MPV" 或 "GSY"。
+   *
+   * 默认 mpv —— 它是原始内核，功能最全；GSYVideoPlayer 作为兼容兜底存在，
+   * 需要用户在设置里主动切换，或用「长按播放切换备用内核」临时用一次。
+   */
+  val playbackEngine = preferenceStore.getString("playback_engine", "MPV")
+
+  /**
+   * 长按反选内核：打开后，长按一个视频会用「与默认相反」的内核播放。
+   *
+   * 典型场景是「这个片 mpv 播不动，临时用 Exo 试试」，
+   * 不需要先去设置里切默认内核再回来点。
+   */
+  val longPressReverseEngine = preferenceStore.getBoolean("long_press_reverse_engine", true)
+
+  /*
+   * 注：GSY 的解码内核（IJK / System / ExoPlayer）不在这里 ——
+   * 它是 GSY 播放页自己的配置，见 [GsyPreferences.kernel]，
+   * 配置入口在「设置 → GSY 播放器」。mpv 这边只有 [playbackEngine] 决定默认走哪套播放页。
+   */
+
+  /**
    * 记住每部剧的播放速度：同一部剧切下一集时沿用上一集调过的倍速。
    *
    * 默认**关闭** —— 倍速是很容易忘记自己改过的状态，自动继承时

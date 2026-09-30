@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -250,7 +251,7 @@ fun PlaybackSpeedSheet(
                 .clickable { 
                     val newValue = !pitchCorrection
                     audioPreferences.audioPitchCorrection.set(newValue)
-                    MPVLib.setPropertyBoolean("audio-pitch-correction", newValue)
+                    PlayerLib.setPropertyBoolean("audio-pitch-correction", newValue)
                 }
                 .padding(horizontal = MaterialTheme.spacing.medium, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -272,7 +273,7 @@ fun PlaybackSpeedSheet(
                 checked = pitchCorrection,
                 onCheckedChange = { 
                     audioPreferences.audioPitchCorrection.set(it)
-                    MPVLib.setPropertyBoolean("audio-pitch-correction", it)
+                    PlayerLib.setPropertyBoolean("audio-pitch-correction", it)
                 },
                 modifier = Modifier.scale(0.8f) // Make switch slightly smaller
             )

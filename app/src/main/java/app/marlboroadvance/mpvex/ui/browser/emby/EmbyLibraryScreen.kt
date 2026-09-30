@@ -1063,40 +1063,8 @@ private fun SortMenu(
           },
         )
       }
-      HorizontalDivider()
-      // 下半区：手动指定方向。留一个「自动」把手动覆盖清掉，回到各项的自然方向
-      DropdownMenuItem(
-        text = {
-          Text(
-            text = "升序",
-            color = if (currentOrder == "Ascending") {
-              MaterialTheme.colorScheme.primary
-            } else {
-              MaterialTheme.colorScheme.onSurface
-            },
-          )
-        },
-        onClick = {
-          onOrderChange("Ascending")
-          expanded = false
-        },
-      )
-      DropdownMenuItem(
-        text = {
-          Text(
-            text = "降序",
-            color = if (currentOrder == "Descending") {
-              MaterialTheme.colorScheme.primary
-            } else {
-              MaterialTheme.colorScheme.onSurface
-            },
-          )
-        },
-        onClick = {
-          onOrderChange("Descending")
-          expanded = false
-        },
-      )
+      // 方向不单列选项：上面每个排序项的标签会带 ↑ / ↓，
+      // 再点一次已选中的项就反转方向，两个入口合并成一个，菜单也短一半。
     }
   }
 }

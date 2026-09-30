@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import android.util.Log
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
@@ -90,15 +91,15 @@ object PlaybackMemory {
    */
   fun findAudioTrackId(fingerprint: String): Int? {
     if (fingerprint.isBlank()) return null
-    val count = MPVLib.getPropertyInt("track-list/count") ?: 0
+    val count = PlayerLib.getPropertyInt("track-list/count") ?: 0
     for (i in 0 until count) {
-      if (MPVLib.getPropertyString("track-list/$i/type") != "audio") continue
-      val lang = MPVLib.getPropertyString("track-list/$i/lang") ?: ""
-      val codec = MPVLib.getPropertyString("track-list/$i/codec") ?: ""
-      val channels = MPVLib.getPropertyInt("track-list/$i/demux-channel-count")?.toString() ?: ""
+      if (PlayerLib.getPropertyString("track-list/$i/type") != "audio") continue
+      val lang = PlayerLib.getPropertyString("track-list/$i/lang") ?: ""
+      val codec = PlayerLib.getPropertyString("track-list/$i/codec") ?: ""
+      val channels = PlayerLib.getPropertyInt("track-list/$i/demux-channel-count")?.toString() ?: ""
       val current = listOf(lang.lowercase(), codec.lowercase(), channels).joinToString("|")
       if (current == fingerprint) {
-        return MPVLib.getPropertyInt("track-list/$i/id")
+        return PlayerLib.getPropertyInt("track-list/$i/id")
       }
     }
     return null

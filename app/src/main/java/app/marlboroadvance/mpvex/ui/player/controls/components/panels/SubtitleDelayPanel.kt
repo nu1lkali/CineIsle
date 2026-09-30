@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.panels
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.annotation.StringRes
 import androidx.compose.animation.animateContentSize
@@ -69,27 +70,27 @@ fun SubtitleDelayPanel(
       SubtitleDelayTitle(onClose = onDismissRequest)
     }
   ) {
-    val delay by MPVLib.propDouble["sub-delay"].collectAsState()
+    val delay by PlayerLib.propDouble["sub-delay"].collectAsState()
     val delayFloat by remember { derivedStateOf { (delay ?: 0.0).toFloat() } }
-    val speed by MPVLib.propDouble["sub-speed"].collectAsState()
+    val speed by PlayerLib.propDouble["sub-speed"].collectAsState()
     val speedFloat by remember { derivedStateOf { (speed ?: 1.0).toFloat() } }
     
     // We unwrap the card content here because DraggablePanel already provides the card
     SubtitleDelayCardContent(
       delay = delayFloat,
       onDelayChange = {
-        MPVLib.setPropertyDouble("sub-delay", it.toDouble())
+        PlayerLib.setPropertyDouble("sub-delay", it.toDouble())
       },
       speed = speedFloat,
-      onSpeedChange = { MPVLib.setPropertyDouble("sub-speed", it.toDouble()) },
+      onSpeedChange = { PlayerLib.setPropertyDouble("sub-speed", it.toDouble()) },
       onApply = {
         preferences.defaultSubDelay.set((delayFloat * 1000).roundToInt())
         val currentSpeed = speed ?: 1.0
         if (currentSpeed in 0.1..10.0) preferences.defaultSubSpeed.set(currentSpeed.toFloat())
       },
       onReset = {
-        MPVLib.setPropertyDouble("sub-delay", preferences.defaultSubDelay.get() / 1000.0)
-        MPVLib.setPropertyDouble("sub-speed", preferences.defaultSubSpeed.get().toDouble())
+        PlayerLib.setPropertyDouble("sub-delay", preferences.defaultSubDelay.get() / 1000.0)
+        PlayerLib.setPropertyDouble("sub-speed", preferences.defaultSubSpeed.get().toDouble())
       },
     )
   }

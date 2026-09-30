@@ -217,6 +217,28 @@
                 <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\.m3u8*" />
             </intent-filter>
         </activity>
+
+        <!--
+          GSY 备用内核播放页。
+          它是一套**完全独立的播放页**：自己一个 Activity + 自己一套 XML 布局
+          （res/layout/activity_gsy_player.xml → gsy_player_cineisle.xml），
+          外观按 CineIsle 播放器重画（透明玻璃控件），但状态机 / 手势 / 全屏全部走 GSY 官方实现。
+          单独一个 Activity 而不是在 PlayerActivity 里加分支，是为了把「备用内核出问题」的影响面
+          关在这个页面里 —— mpv 那条路完全不受牵连；配置也各自独立（见 GsyPreferences / GsyPreferencesScreen）。
+        -->
+        <activity
+            android:name=".ui.player.GsyPlayerActivity"
+            android:autoRemoveFromRecents="true"
+            android:noHistory="false"
+            android:excludeFromRecents="false"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:documentLaunchMode="never"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
+            android:theme="@style/Theme.mpvex" />
+
         <activity android:name=".presentation.crash.CrashActivity" />
 
         <activity

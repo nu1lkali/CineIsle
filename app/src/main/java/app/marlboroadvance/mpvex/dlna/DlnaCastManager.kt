@@ -5,7 +5,9 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
+import android.util.Log
 import android.webkit.MimeTypeMap
+import com.yinnho.upnpcast.CastOptions
 import com.yinnho.upnpcast.DLNACast
 import com.yinnho.upnpcast.internal.UPnPException
 import kotlinx.coroutines.CoroutineScope
@@ -18,17 +20,21 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.util.UUID
 
 /**
- * 对 UPnPCast 的薄封装：把它的回调式 / 对象式 API 收敛成 Compose 友好的 [StateFlow]，
+ * 对 UPnPCast 的薄封装：把它的协程 / 对象式 API 收敛成 Compose 友好的 [StateFlow]，
  * 并补齐本地文件投屏（file:// 直传路径；content:// 先解析真实路径，不行再拷到缓存）。
  *
  * 状态机：
  *   Idle → Discovering → Devices → (选设备) Connecting → Casting
  *                                ↘ (空/失败) Error
  * 关闭面板时：若正在 Casting 则保留（电视继续播），否则回到 Idle。
+ *
+ * 底层 UPnPCast 源码内置在 com.yinnho.upnpcast 包（v1.3.0），
+ * 已修掉 1.1.2 的「越搜越少 / 端口占用 / host:-1 / MIME」等问题。
  */
 class DlnaCastManager(private val context: Application) {
 
@@ -58,31 +64,37 @@ class DlnaCastManager(private val context: Application) {
 
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private var pollJob: Job? = null
+  private var discoverJob: Job? = null
 
   init {
-    // 初始化 UPnPCast 引擎（安全调用：失败也不影响主进程）
+    // 初始化 UPnPCast 引擎（安全调用：失败也不影响主进程）。
+    // 新版本 init() 会先 cleanup()，重复调用是安全的。
     runCatching { DLNACast.init(context) }
   }
 
   /** 开始 SSDP 设备发现。 */
   fun startDiscovery() {
     if (_uiState.value is UiState.Discovering) return
-    _devices.value = emptyList()
+    discoverJob?.cancel()
     _uiState.value = UiState.Discovering
-    scope.launch(Dispatchers.IO) {
-      runCatching { DLNACast.search(timeout = 5000) }
+    discoverJob = scope.launch(Dispatchers.IO) {
+      runCatching { DLNACast.search(timeout = SEARCH_TIMEOUT_MS) }
         .onSuccess { list ->
-          _devices.value = list
+          // 兜底：万一这一轮一个都没收到（Wi-Fi 抖动 / 设备休眠），
+          // 保留上一轮已发现的设备，避免面板凭空变空。
+          val merged = list.ifEmpty { _devices.value }
+          _devices.value = merged
           _uiState.value =
-            if (list.isEmpty()) {
+            if (merged.isEmpty()) {
               UiState.Error(
                 "未发现可用的投屏设备。\n请确认：\n· 手机与投屏设备在同一 Wi-Fi\n· 设备的 DLNA / 投屏功能已开启",
               )
             } else {
-              UiState.Devices(list)
+              UiState.Devices(merged)
             }
         }
         .onFailure { e ->
+          Log.w(TAG, "DLNA search failed", e)
           _uiState.value = UiState.Error("设备搜索失败：${e.message ?: e.javaClass.simpleName}")
         }
     }
@@ -97,33 +109,59 @@ class DlnaCastManager(private val context: Application) {
     }
     _uiState.value = UiState.Connecting(device)
     scope.launch(Dispatchers.IO) {
-      runCatching { castPayload(device, payload) }
-        .onSuccess {
-          _uiState.value =
-            UiState.Casting(
-              device = device,
-              playbackState = DLNACast.getState().playbackState,
-              positionMs = 0,
-              durationMs = 0,
-              volume = -1,
-            )
-          startPolling()
-        }
-        .onFailure { e -> _uiState.value = UiState.Error(mapError(e)) }
+      runCatching {
+        withTimeout(CAST_TIMEOUT_MS) { castPayload(device, payload) }
+      }.onSuccess {
+        _uiState.value =
+          UiState.Casting(
+            device = device,
+            playbackState = DLNACast.PlaybackState.PLAYING,
+            positionMs = 0,
+            durationMs = 0,
+            volume = -1,
+          )
+        startPolling()
+      }.onFailure { e ->
+        Log.w(TAG, "DLNA cast failed", e)
+        _uiState.value = UiState.Error(mapError(e))
+      }
     }
   }
 
   private suspend fun castPayload(device: DLNACast.Device, p: CastPayload) {
+    val options = CastOptions(mimeType = p.mimeType)
     when (p.uri.scheme) {
       "http", "https" -> {
-        val ok = DLNACast.castToDevice(device, p.uri.toString(), p.title)
-        if (!ok) throw UPnPException.DeviceError("设备拒绝了投屏请求")
+        val url = p.uri.toString()
+        Log.i(TAG, "cast url=$url to ${device.name} (${device.address})")
+        val ok = DLNACast.castToDevice(device, url, p.title, options)
+        if (!ok) throw UPnPException.DeviceError(describeRejection(url))
       }
       else -> {
         val path =
           resolveLocalPath(p.uri)
             ?: throw UPnPException.FileError("无法读取本地文件，可能无法投屏该视频。")
-        DLNACast.castLocalFile(path, device, p.title)
+        Log.i(TAG, "cast local file=$path to ${device.name} (${device.address})")
+        DLNACast.castLocalFile(path, device, p.title, options)
+      }
+    }
+  }
+
+  /**
+   * castToDevice() 只回传 false，失败原因是个黑盒。这里把库记下的设备侧错误
+   * （UPnP errorCode / errorDescription，或服务解析失败提示）拼进提示里，
+   * 让用户/日志能看出到底是格式不支持、URL 不可达还是设备描述解析失败。
+   */
+  private fun describeRejection(url: String): String {
+    val detail = DLNACast.getLastError()
+    val host = runCatching { Uri.parse(url).host }.getOrNull()
+    return buildString {
+      append("设备拒绝了投屏请求")
+      if (!detail.isNullOrBlank()) append("：").append(detail)
+      else append("（设备未返回具体错误码）")
+      if (!host.isNullOrBlank()) {
+        append("\n提示：设备需要能直接访问 ").append(host)
+        append("，请确认两者在同一局域网且该地址未被防火墙拦截。")
       }
     }
   }
@@ -210,24 +248,29 @@ class DlnaCastManager(private val context: Application) {
     }
   }
 
+  /** 轮询设备状态。getPlaybackState() 走 GetTransportInfo，能反映电视端被暂停/停止。 */
   private suspend fun refresh() {
     val cur = _uiState.value as? UiState.Casting ?: return
-    val state = DLNACast.getState()
+    val state = runCatching { DLNACast.getPlaybackState() }
+      .getOrDefault(DLNACast.getState().playbackState)
     val prog = runCatching { DLNACast.getProgress() }.getOrNull()
+    val volume = runCatching { DLNACast.getState().volume }.getOrDefault(cur.volume)
     _uiState.value = cur.copy(
-      playbackState = state.playbackState,
+      playbackState = state,
       positionMs = prog?.first ?: cur.positionMs,
       durationMs = prog?.second ?: cur.durationMs,
-      volume = state.volume,
+      volume = volume,
     )
   }
 
   private fun mapError(e: Throwable): String =
     when (e) {
-      is UPnPException.NetworkError -> "网络错误：无法连接投屏设备，请确认设备在线且在同一局域网。"
+      is UPnPException.NetworkError -> "网络错误：无法连接投屏设备，请确认设备在线且在同一局域网。\n${e.message ?: ""}".trim()
       is UPnPException.DeviceError -> "设备返回错误：${e.message}"
       is UPnPException.FileError -> "本地文件错误：${e.message}"
       is UPnPException.MediaError -> "媒体错误：${e.message}"
+      is kotlinx.coroutines.TimeoutCancellationException ->
+        "投屏超时（${CAST_TIMEOUT_MS / 1000}s）：设备没有在预期时间内响应，请重试或换一个设备。"
       else -> "投屏失败：${e.message ?: e.javaClass.simpleName}"
     }
 
@@ -238,5 +281,13 @@ class DlnaCastManager(private val context: Application) {
       _uiState.value = UiState.Idle
       _devices.value = emptyList()
     }
+  }
+
+  private companion object {
+    const val TAG = "CineIsle-DLNA"
+    const val SEARCH_TIMEOUT_MS = 4000L
+    // SetAVTransportURI 最多会降级重试 4 次（见 DlnaMediaController.playMediaDirect），
+    // 给足时间，避免第一次降级还没走完就被判超时。
+    const val CAST_TIMEOUT_MS = 45_000L
   }
 }

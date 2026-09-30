@@ -18,6 +18,8 @@ reorderable = "3.0.0"
 aboutLibraries = "15.1.1"
 mpv-android = "1.0.0"
 mediainfo-android = "1.0.2"
+# Media3（ExoPlayer）—— 双播放内核里的第二个内核
+gsy = "13.2.1"
 
 [libraries]
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
@@ -69,6 +71,17 @@ accompanist-permissions = { module = "com.google.accompanist:accompanist-permiss
 
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
+
+# Media3 / ExoPlayer（第二播放内核）
+# GSYVideoPlayer：java（含全部播放器 View + IJK Java 绑定）
+gsy-java = { module = "io.github.carguo:gsyvideoplayer-java", version.ref = "gsy" }
+# GSY 的 ExoPlayer（media3）内核
+gsy-exo2 = { module = "io.github.carguo:gsyvideoplayer-exo2", version.ref = "gsy" }
+# IJK 原生库（按 ABI 拆）：缺了它们 IJK 内核直接起不来
+gsy-arm64 = { module = "io.github.carguo:gsyvideoplayer-arm64", version.ref = "gsy" }
+gsy-armv7a = { module = "io.github.carguo:gsyvideoplayer-armv7a", version.ref = "gsy" }
+gsy-x86 = { module = "io.github.carguo:gsyvideoplayer-x86", version.ref = "gsy" }
+gsy-x64 = { module = "io.github.carguo:gsyvideoplayer-x64", version.ref = "gsy" }
 
 [bundles]
 koin = ["koin-core", "koin-android", "koin-compose", "koin-viewmodel"]

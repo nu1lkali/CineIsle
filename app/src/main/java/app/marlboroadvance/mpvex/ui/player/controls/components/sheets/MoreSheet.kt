@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import `is`.xyz.mpv.MPVLib
 import android.text.format.DateUtils
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Subtitles
+import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material3.AlertDialog
@@ -71,6 +73,9 @@ import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.components.PlayerSheet
 import app.marlboroadvance.mpvex.ui.player.Sheets
+import app.marlboroadvance.mpvex.ui.player.engine.EngineFeature
+import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
+import app.marlboroadvance.mpvex.ui.player.engine.supports
 import app.marlboroadvance.mpvex.ui.theme.spacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -86,6 +91,8 @@ fun MoreSheet(
   onAnime4KChanged: () -> Unit = {},
   /** 用来从「更多」里直接打开其它面板/子页（快捷功能宫格） */
   onShowSheet: (Sheets) -> Unit = {},
+  /** 把当前视频 + 整份播放队列 + 进度交给 GSY 播放页（只在 mpv 播放页出现） */
+  onSwitchToGsy: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val decoderPreferences = koinInject<DecoderPreferences>()
@@ -103,6 +110,9 @@ fun MoreSheet(
 
   val context = LocalContext.current
 val scope = rememberCoroutineScope()
+
+  // 当前内核做不到的入口直接不显示（而不是置灰后点了没反应）
+  val engineKind = PlayerLib.kind
 
   PlayerSheet(
     onDismissRequest,
@@ -155,13 +165,16 @@ val scope = rememberCoroutineScope()
               }
             }
           }
-          TextButton(onClick = onEnterFiltersPanel) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.extraSmall),
-            ) {
-              Icon(imageVector = Icons.Default.Tune, contentDescription = null)
-              Text(text = stringResource(id = R.string.player_sheets_filters_title))
+          // 滤镜面板是 mpv 专属（vf / deband / glsl），Exo 下整块不显示
+          if (engineKind.supports(EngineFeature.VIDEO_FILTERS)) {
+            TextButton(onClick = onEnterFiltersPanel) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.extraSmall),
+              ) {
+                Icon(imageVector = Icons.Default.Tune, contentDescription = null)
+                Text(text = stringResource(id = R.string.player_sheets_filters_title))
+              }
             }
           }
         }
@@ -241,16 +254,21 @@ val scope = rememberCoroutineScope()
           label = stringResource(R.string.player_control_video_zoom),
           onClick = { onShowSheet(Sheets.VideoZoom) },
         )
-        QuickActionItem(
-          icon = Icons.Outlined.Camera,
-          label = stringResource(R.string.player_sheets_frame_navigation_title),
-          onClick = { onShowSheet(Sheets.FrameNavigation) },
-        )
-        QuickActionItem(
-          icon = Icons.Outlined.Bookmarks,
-          label = stringResource(R.string.player_sheets_more_chapters),
-          onClick = { onShowSheet(Sheets.Chapters) },
-        )
+        // 逐帧依赖 mpv 的 frame-step / frame-back-step，章节与解码器同理 —— Exo 下无入口
+        if (engineKind.supports(EngineFeature.FRAME_NAVIGATION)) {
+          QuickActionItem(
+            icon = Icons.Outlined.Camera,
+            label = stringResource(R.string.player_sheets_frame_navigation_title),
+            onClick = { onShowSheet(Sheets.FrameNavigation) },
+          )
+        }
+        if (engineKind.supports(EngineFeature.CHAPTERS)) {
+          QuickActionItem(
+            icon = Icons.Outlined.Bookmarks,
+            label = stringResource(R.string.player_sheets_more_chapters),
+            onClick = { onShowSheet(Sheets.Chapters) },
+          )
+        }
         QuickActionItem(
           icon = Icons.Outlined.Audiotrack,
           label = stringResource(R.string.pref_audio),
@@ -261,18 +279,33 @@ val scope = rememberCoroutineScope()
           label = stringResource(R.string.pref_subtitles),
           onClick = { onShowSheet(Sheets.SubtitleTracks) },
         )
-        QuickActionItem(
-          icon = Icons.Outlined.Memory,
-          label = stringResource(R.string.pref_decoder),
-          onClick = { onShowSheet(Sheets.Decoders) },
-        )
+        if (engineKind.supports(EngineFeature.DECODER_SWITCH)) {
+          QuickActionItem(
+            icon = Icons.Outlined.Memory,
+            label = stringResource(R.string.pref_decoder),
+            onClick = { onShowSheet(Sheets.Decoders) },
+          )
+        }
+        // 反向切换内核：只在 mpv 播放页出现 —— GSY 播放页顶部自己有「切回 mpv」按钮，
+        // 两边各留一个入口、不互相重复。点一下把当前视频 + 整份播放队列 + 进度
+        // 一起交给 GSY，规则和 GSY 切回 mpv 完全对称。
+        if (engineKind == EngineKind.MPV) {
+          QuickActionItem(
+            icon = Icons.Outlined.SwapHoriz,
+            label = stringResource(R.string.player_more_switch_to_gsy),
+            onClick = {
+              onDismissRequest()
+              onSwitchToGsy()
+            },
+          )
+        }
       }
       
-      // Shaders Controls
-      if (enableAnime4K && (!gpuNext || useVulkan)) {
+      // Shaders Controls —— Anime4K 是 mpv 的 glsl-shader 链，Exo 下整段不显示
+      if (engineKind.supports(EngineFeature.GLSL_SHADERS) && enableAnime4K && (!gpuNext || useVulkan)) {
         // Auto-detect resolution to disable for 4K+
-        val width = MPVLib.getPropertyInt("video-params/w") ?: 0
-        val height = MPVLib.getPropertyInt("video-params/h") ?: 0
+        val width = PlayerLib.getPropertyInt("video-params/w") ?: 0
+        val height = PlayerLib.getPropertyInt("video-params/h") ?: 0
         val isHighRes = width >= 3840 || height >= 2160
 
         // Presets (Mode) - Now on Top
@@ -321,7 +354,7 @@ val scope = rememberCoroutineScope()
                     val shaderChain = anime4kManager.getShaderChain(currentMode, quality)
 
                     // Use setPropertyString for runtime changes
-                    MPVLib.setPropertyString("glsl-shaders", if (shaderChain.isNotEmpty()) shaderChain else "")
+                    PlayerLib.setPropertyString("glsl-shaders", if (shaderChain.isNotEmpty()) shaderChain else "")
                     onAnime4KChanged()
                   }
                 }
@@ -365,7 +398,7 @@ val scope = rememberCoroutineScope()
                     val shaderChain = anime4kManager.getShaderChain(modeEnum, currentQuality)
 
                     // Use setPropertyString for runtime changes
-                    MPVLib.setPropertyString("glsl-shaders", if (shaderChain.isNotEmpty()) shaderChain else "")
+                    PlayerLib.setPropertyString("glsl-shaders", if (shaderChain.isNotEmpty()) shaderChain else "")
                     onAnime4KChanged()
                   }
                 }

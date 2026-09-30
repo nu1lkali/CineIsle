@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
@@ -119,6 +120,7 @@ import app.marlboroadvance.mpvex.ui.player.controls.components.SpeedControlSlide
 import app.marlboroadvance.mpvex.ui.player.controls.components.TextPlayerUpdate
 import app.marlboroadvance.mpvex.ui.player.controls.components.VolumeSlider
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.toFixed
+import app.marlboroadvance.mpvex.ui.player.engine.supportsButton
 import app.marlboroadvance.mpvex.ui.theme.controlColor
 import app.marlboroadvance.mpvex.ui.theme.playerRippleConfiguration
 import app.marlboroadvance.mpvex.ui.theme.spacing
@@ -209,21 +211,21 @@ fun PlayerControls(
   val controlsShown by viewModel.controlsShown.collectAsState()
   val areControlsLocked by viewModel.areControlsLocked.collectAsState()
   val seekBarShown by viewModel.seekBarShown.collectAsState()
-  val pausedForCache by MPVLib.propBoolean["paused-for-cache"].collectAsState()
-  val paused by MPVLib.propBoolean["pause"].collectAsState()
-  val duration by MPVLib.propInt["duration"].collectAsState()
-  val position by MPVLib.propInt["time-pos"].collectAsState()
+  val pausedForCache by PlayerLib.propBoolean["paused-for-cache"].collectAsState()
+  val paused by PlayerLib.propBoolean["pause"].collectAsState()
+  val duration by PlayerLib.propInt["duration"].collectAsState()
+  val position by PlayerLib.propInt["time-pos"].collectAsState()
   val precisePosition by viewModel.precisePosition.collectAsState()
   val preciseDuration by viewModel.preciseDuration.collectAsState()
-  val playbackSpeed by MPVLib.propFloat["speed"].collectAsState()
+  val playbackSpeed by PlayerLib.propFloat["speed"].collectAsState()
   val doubleTapSeekAmount by viewModel.doubleTapSeekAmount.collectAsState()
   val showDoubleTapOvals by playerPreferences.showDoubleTapOvals.collectAsState()
   val showSeekTime by playerPreferences.showSeekTimeWhileSeeking.collectAsState()
   var isSeeking by remember { mutableStateOf(false) }
   var resetControlsTimestamp by remember { mutableStateOf(0L) }
   val seekText by viewModel.seekText.collectAsState()
-  val currentChapter by MPVLib.propInt["chapter"].collectAsState()
-  val mpvDecoder by MPVLib.propString["hwdec-current"].collectAsState()
+  val currentChapter by PlayerLib.propInt["chapter"].collectAsState()
+  val mpvDecoder by PlayerLib.propString["hwdec-current"].collectAsState()
   val decoder by remember { derivedStateOf { getDecoderFromValue(mpvDecoder ?: "auto") } }
   val isSpeedNonOne by remember(playbackSpeed) {
     derivedStateOf { abs((playbackSpeed ?: 1f) - 1f) > 0.001f }
@@ -261,18 +263,22 @@ fun PlayerControls(
   val bottomLeftControlsPref by appearancePreferences.bottomLeftControls.collectAsState()
   val portraitBottomControlsPref by appearancePreferences.portraitBottomControls.collectAsState()
 
+  // 当前内核：不支持的按钮直接从控件栏移除（而不是置灰后点了没反应）
+  val engineKind = PlayerLib.kind
+
   val (topRightButtons, bottomRightButtons, bottomLeftButtons) =
     remember(
       topRightControlsPref,
       bottomRightControlsPref,
       bottomLeftControlsPref,
+      engineKind,
     ) {
       val usedButtons = mutableSetOf<app.marlboroadvance.mpvex.preferences.PlayerButton>()
       val topR = appearancePreferences.parseButtons(topRightControlsPref, usedButtons)
       val bottomR = appearancePreferences.parseButtons(bottomRightControlsPref, usedButtons)
       val bottomL = appearancePreferences.parseButtons(bottomLeftControlsPref, usedButtons)
       listOf(topR, bottomR, bottomL)
-    }
+    }.map { buttons -> buttons.filter { engineKind.supportsButton(it) } }
 
   // 竖屏控件列表按用途拆开：
   //   ① 顶栏右侧快捷开关：解码器 / 音轨 / 字幕 / 收藏 / 更多；
@@ -286,11 +292,12 @@ fun PlayerControls(
   }
   // 上/下一集固定显示在屏幕正中的播放键两侧，从底部按钮条里剔除，避免重复出现；
   // 同时把「画面类」统一挪到按钮条末尾，保证它们始终在右半边。
-  val portraitBottomButtons = remember(portraitSideButtons) {
+  val portraitBottomButtons = remember(portraitSideButtons, engineKind) {
     val playState = portraitSideButtons.filter { it !in PORTRAIT_RIGHT_CLUSTER }
     val displayState = portraitSideButtons.filter { it in PORTRAIT_RIGHT_CLUSTER }
     (playState + displayState)
       .filter { it != PlayerButton.PREVIOUS && it != PlayerButton.NEXT }
+      .filter { engineKind.supportsButton(it) }
   }
 
   var isUnlockSliderDragging by remember { mutableStateOf(false) }
@@ -365,7 +372,7 @@ fun PlayerControls(
         val isVolumeSliderShown by viewModel.isVolumeSliderShown.collectAsState()
         val brightness by viewModel.currentBrightness.collectAsState()
         val volume by viewModel.currentVolume.collectAsState()
-        val mpvVolume by MPVLib.propInt["volume"].collectAsState()
+        val mpvVolume by PlayerLib.propInt["volume"].collectAsState()
         val swapVolumeAndBrightness by playerPreferences.swapVolumeAndBrightness.collectAsState()
         val reduceMotion by playerPreferences.reduceMotion.collectAsState()
 
@@ -373,7 +380,7 @@ fun PlayerControls(
         val aspect by viewModel.videoAspect.collectAsState()
         val currentZoom by viewModel.videoZoom.collectAsState()
 
-        val rawMediaTitle by MPVLib.propString["media-title"].collectAsState()
+        val rawMediaTitle by PlayerLib.propString["media-title"].collectAsState()
         val mediaTitle by remember(rawMediaTitle, activity) {
           derivedStateOf {
             rawMediaTitle?.takeIf { it.isNotBlank() }
@@ -1359,6 +1366,11 @@ fun PlayerControls(
       }
     }
 
+    // 内核切换要交给承载页（mpv 播放页 PlayerActivity）来做。
+    // 这里先取一次 Activity：下面传给面板的 lambda 不是 @Composable 上下文，
+    // 不能在里面调 LocalActivity.current。
+    val hostActivity = LocalActivity.current
+
     val sheetShown by viewModel.sheetShown.collectAsState()
     val subtitles by viewModel.subtitleTracks.collectAsState(persistentListOf())
     val audioTracks by viewModel.audioTracks.collectAsState(persistentListOf())
@@ -1376,10 +1388,10 @@ fun PlayerControls(
       audioTracks = audioTracks.toImmutableList(),
       onAddAudio = viewModel::addAudio,
       onSelectAudio = {
-        if (MPVLib.getPropertyInt("aid") == it.id) {
-          MPVLib.setPropertyBoolean("aid", false)
+        if (PlayerLib.getPropertyInt("aid") == it.id) {
+          PlayerLib.setPropertyBoolean("aid", false)
         } else {
-          MPVLib.setPropertyInt("aid", it.id)
+          PlayerLib.setPropertyInt("aid", it.id)
           // 记住这条音轨（指纹匹配），下一集相同音轨自动选中；开关关闭时内部直接忽略
           PlaybackMemory.saveAudioTrack(playerPreferences, viewModel.seriesKey, it)
         }
@@ -1387,14 +1399,14 @@ fun PlayerControls(
       chapter = chapters.getOrNull(currentChapter ?: 0),
       chapters = chapters.toImmutableList(),
       onSeekToChapter = {
-        MPVLib.setPropertyInt("chapter", it)
+        PlayerLib.setPropertyInt("chapter", it)
         viewModel.unpause()
       },
       decoder = decoder,
-      onUpdateDecoder = { MPVLib.setPropertyString("hwdec", it.value) },
+      onUpdateDecoder = { PlayerLib.setPropertyString("hwdec", it.value) },
       speed = playbackSpeed ?: playerPreferences.defaultSpeed.get(),
       onSpeedChange = {
-        MPVLib.setPropertyFloat("speed", it.toFixed(2))
+        PlayerLib.setPropertyFloat("speed", it.toFixed(2))
         // 记住这个倍速，同剧下一集沿用；开关关闭时内部直接忽略
         PlaybackMemory.saveSpeed(playerPreferences, viewModel.seriesKey, it.toFixed(2))
       },
@@ -1404,12 +1416,13 @@ fun PlayerControls(
       onResetSpeedPresets = playerPreferences.speedPresets::delete,
       speedPresets = speedPresets.map { it.toFloat() }.sorted(),
       onResetDefaultSpeed = {
-        MPVLib.setPropertyFloat("speed", playerPreferences.defaultSpeed.deleteAndGet().toFixed(2))
+        PlayerLib.setPropertyFloat("speed", playerPreferences.defaultSpeed.deleteAndGet().toFixed(2))
       },
       sleepTimerTimeRemaining = sleepTimerTimeRemaining,
       onStartSleepTimer = viewModel::startTimer,
       onOpenPanel = onOpenPanel,
       onShowSheet = onOpenSheet,
+      onSwitchToGsy = { (hostActivity as? PlayerActivity)?.switchToGsyPlayer() },
       onDismissRequest = { onOpenSheet(Sheets.None) },
     )
 

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  GSY 播放页的宿主布局：里面就一个播放器控件，占满全屏。
+  控件本身用 CineIsleGsyPlayer —— 它把布局换成 res/layout/gsy_player_cineisle.xml
+  （CineIsle 版外观），而 GSY 官方那套状态机 / 手势 / 全屏逻辑一行没改。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <app.marlboroadvance.mpvex.ui.player.CineIsleGsyPlayer
+        android:id="@+id/gsy_player"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+</FrameLayout>

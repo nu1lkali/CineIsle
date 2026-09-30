@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.utils.media
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import android.util.Log
 import app.marlboroadvance.mpvex.repository.NetworkRepository
@@ -156,17 +157,17 @@ object SubtitleOps : KoinComponent {
           )
 
           // Get current subtitle track count before adding
-          val trackCountBefore = MPVLib.getPropertyInt("track-list/count") ?: 0
+          val trackCountBefore = PlayerLib.getPropertyInt("track-list/count") ?: 0
 
           // Use "select" for the first subtitle, "auto" for others
           val flag = if (index == 0) "select" else "auto"
-          MPVLib.command("sub-add", proxyUrl, flag)
+          PlayerLib.command("sub-add", proxyUrl, flag)
 
           // Set the title for the newly added subtitle track
-          val trackCountAfter = MPVLib.getPropertyInt("track-list/count") ?: 0
+          val trackCountAfter = PlayerLib.getPropertyInt("track-list/count") ?: 0
           if (trackCountAfter > trackCountBefore) {
             val newTrackIndex = trackCountAfter - 1
-            MPVLib.setPropertyString("track-list/$newTrackIndex/title", displayName)
+            PlayerLib.setPropertyString("track-list/$newTrackIndex/title", displayName)
             Log.d(TAG, "Loaded network subtitle: '$displayName' (track $newTrackIndex) via proxy (flag=$flag)")
           } else {
             Log.d(TAG, "Loaded network subtitle: '$displayName' via proxy (flag=$flag)")
@@ -201,7 +202,7 @@ object SubtitleOps : KoinComponent {
           // MPV command format: sub-add <url> [<flags> [<title>]]
           // Use "select" for the first autoloaded subtitle so it is enabled by default
           val flag = if (index == 0) "select" else "auto"
-          MPVLib.command("sub-add", subtitle.absolutePath, flag, subtitle.name)
+          PlayerLib.command("sub-add", subtitle.absolutePath, flag, subtitle.name)
           Log.d(TAG, "Loaded local subtitle: ${subtitle.name} (flag=$flag)")
         }
       }
@@ -233,7 +234,7 @@ object SubtitleOps : KoinComponent {
         // Use "auto" flag so MPV doesn't select it if it's not found
         // Only use "select" for the first one (.srt)
         val flag = if (index == 0) "select" else "auto"
-        MPVLib.command("sub-add", subtitleUrl, flag, "$baseName.$ext")
+        PlayerLib.command("sub-add", subtitleUrl, flag, "$baseName.$ext")
         Log.d(TAG, "Attempting to load network subtitle: $subtitleUrl (flag=$flag)")
       } catch (e: Exception) {
         Log.d(TAG, "Could not load network subtitle $subtitleUrl: ${e.message}")

@@ -343,6 +343,7 @@
   <string name="timer_remaining">%s remaining</string>
   <string name="toast_sleep_timer_ended">Sleep timer ended</string>
   <string name="toast_file_no_longer_exists">File no longer exists</string>
+  <string name="toast_playback_failed">Playback failed: the media could not be opened</string>
   <string name="volume_slider_absolute_value" translatable="false">%d</string>
   <string name="github_repo_url" translatable="false">https://github.com/marlboro-advance/mpvex</string>
   <string name="swap_the_volume_and_brightness_slider">Swap volume and brightness slider</string>
@@ -533,11 +534,69 @@
   <string name="player_control_clear_loop">Clear Loop</string>
   <string name="player_control_ab_loop">AB Loop</string>
   <string name="player_control_slide_to_unlock">Slide to unlock</string>
+  <string name="player_control_back">Back</string>
+  <string name="player_control_fullscreen">Fullscreen</string>
+  <string name="player_control_play_pause">Play / Pause</string>
+  <string name="player_control_lock_controls">Lock controls</string>
+
+  <!-- ===== GSY 播放页：玻璃控件条上的按钮 ===== -->
+  <string name="gsy_control_speed">Speed</string>
+  <string name="gsy_control_loop">Loop</string>
+  <string name="gsy_control_aspect">Display ratio</string>
+  <string name="gsy_control_render">Render mode</string>
+  <string name="gsy_control_filter">Filter</string>
+  <string name="gsy_control_mute">Mute</string>
+  <string name="gsy_control_unmute">Unmute</string>
+  <string name="gsy_control_prev">Previous video</string>
+  <string name="gsy_control_next">Next video</string>
+  <string name="gsy_control_switch_engine">Switch to the mpv player</string>
+  <string name="gsy_control_orientation">Switch portrait / landscape</string>
+  <string name="gsy_control_screenshot">Take screenshot</string>
+  <string name="gsy_control_subtitle">Subtitles</string>
+  <string name="gsy_control_audio_track">Audio track</string>
+  <string name="gsy_control_pip">Picture in picture</string>
+  <string name="gsy_control_cast">Cast (DLNA)</string>
+
+  <string name="gsy_snapshot_saved">Saved to Pictures/CineIsleSnaps</string>
+  <string name="gsy_snapshot_failed">Failed to save screenshot</string>
+
+  <string name="gsy_subtitle_title">Subtitles</string>
+  <string name="gsy_subtitle_pick">Choose subtitle file…</string>
+  <string name="gsy_subtitle_off">Turn subtitles off</string>
+  <string name="gsy_subtitle_delay">Subtitle delay…</string>
+  <string name="gsy_subtitle_loaded">Subtitles loaded: %1$s</string>
+  <string name="gsy_subtitle_cleared">Subtitles off</string>
+  <string name="gsy_subtitle_delay_value">Delay %1$s</string>
+  <string name="gsy_subtitle_delay_earlier">0.5 s earlier</string>
+  <string name="gsy_subtitle_delay_later">0.5 s later</string>
+  <string name="gsy_subtitle_delay_reset">Reset</string>
+
+  <string name="gsy_audio_title">Audio track</string>
+  <string name="gsy_audio_unsupported">Audio track switching needs the IJK kernel (current: %1$s)</string>
+  <string name="gsy_audio_empty">No audio tracks found</string>
+
+  <string name="gsy_pip_unsupported">Picture-in-picture is not supported on this device</string>
+  <string name="gsy_pip_play">Play</string>
+  <string name="gsy_pip_pause">Pause</string>
+  <string name="gsy_pip_rewind">Back 10 s</string>
+  <string name="gsy_pip_forward">Forward 10 s</string>
+  <string name="gsy_cast_no_source">No playable source to cast</string>
+
+  <string name="gsy_pref_rotate_with_system">Follow system auto-rotate</string>
+  <string name="gsy_pref_rotate_with_system_summary">Off (default): the player always reacts to the gravity sensor. On: once the system auto-rotate switch is off, the player stops rotating with the sensor too.</string>
+
+  <!-- ===== GSY 播放器独立设置页（与 mpv 的配置完全隔离） ===== -->
+  <string name="pref_gsy_player">GSY Player</string>
+  <string name="pref_gsy_player_summary">Kernel, rendering, display ratio, gestures, fullscreen and rotation of the standalone GSY player page</string>
 
   <!-- ===== 播放器「更多」面板：快捷功能宫格 =====
        原先这里放的是「默认统计页面」选择器，已移除；改用宫格收纳低频功能入口。 -->
   <string name="player_sheets_more_quick_actions">Quick actions</string>
   <string name="player_sheets_more_chapters">Chapters</string>
+  <!-- 「更多」宫格里的内核切换入口：把当前视频（含整份播放队列与进度）交给 GSY 播放页 -->
+  <string name="player_more_switch_to_gsy">Play with GSY</string>
+  <!-- 拿不到可播地址时（理论上不该发生）的内核切换提示 -->
+  <string name="player_engine_switch_unavailable">Cannot switch engine: no playable source</string>
 
   <!-- ===== 播放器「更多」面板：播放开关（循环 / 自动下一集 / 播完退出） ===== -->
   <string name="player_sheets_more_playback">Playback</string>

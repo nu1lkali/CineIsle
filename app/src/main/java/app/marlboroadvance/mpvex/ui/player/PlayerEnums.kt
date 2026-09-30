@@ -58,7 +58,16 @@ enum class Decoder(
   ;
 
   companion object {
-    fun getDecoderFromValue(value: String): Decoder = Decoder.entries.first { it.value == value }
+    /**
+     * 从 mpv 的 `hwdec-current` 取值映射到 [Decoder]。
+     *
+     * **不能用 `first { }`**：mpv 在不同平台 / 不同构建下可能返回表里没有的值
+     * （`vulkan`、`vaapi`、`cuda`、`dxva2` …），GSY 内核也会走自己的一套命名，
+     * 一旦匹配不到就是 `NoSuchElementException` 直接把播放页炸掉 ——
+     * 而这里只是在 Compose 派生状态里算个图标，取不到值用 Auto 兜住即可。
+     */
+    fun getDecoderFromValue(value: String): Decoder =
+      Decoder.entries.firstOrNull { it.value == value } ?: Decoder.Auto
   }
 }
 

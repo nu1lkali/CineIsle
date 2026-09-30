@@ -1,4 +1,6 @@
 package app.marlboroadvance.mpvex.ui.player
+import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import android.content.BroadcastReceiver
 import android.content.ComponentName
@@ -90,7 +92,7 @@ import java.io.File
  * @see MediaPlaybackService for background playback functionality
  */
 @Suppress("TooManyFunctions", "LargeClass")
-class PlayerActivity :
+open class PlayerActivity :
   AppCompatActivity(),
   PlayerHost {
   // ==================== ViewModels and Bindings ====================
@@ -128,6 +130,18 @@ class PlayerActivity :
    * Preferences for player settings.
    */
   private val playerPreferences: PlayerPreferences by inject()
+
+  /** 本次播放使用的内核 */
+  private var engineKind: EngineKind = EngineKind.MPV
+
+  /**
+   * 本次播放用哪个内核。
+   *
+   * [GsyPlayerActivity] 会重写它直接返回 [EngineKind.GSY] ——
+   * 「长按用备用内核播」走的就是那个 Activity，这样即便备用内核出问题，
+   * 默认的 mpv 页面也完全不受影响。
+   */
+  protected open fun resolveEngineKind(preferred: String): EngineKind = EngineKind.from(preferred)
 
   /**
    * Preferences for audio settings.
@@ -388,9 +402,9 @@ class PlayerActivity :
 
         AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
           // Lower volume temporarily
-          MPVLib.command("multiply", "volume", "0.5")
+          PlayerLib.command("multiply", "volume", "0.5")
           restoreAudioFocus = {
-            MPVLib.command("multiply", "volume", "2")
+            PlayerLib.command("multiply", "volume", "2")
           }
         }
 
@@ -410,7 +424,20 @@ class PlayerActivity :
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+
+    // ── 默认播放内核是 GSY 时，把这次播放整体转交给 GSY 播放页 ──
+    // 必须在任何 mpv 初始化之前判断，转交时连画面都还没建起来，观感上就是直接进 GSY。
+    if (redirectToPreferredEngine()) return
+
     setContentView(binding.root)
+
+    // ── 播放内核选择 ──
+    // intent 里带 "engine" 的长按反选优先，否则用设置里的默认内核。
+    // 必须在任何 PlayerLib 调用之前定下来：门面层靠它决定转发给 mpv 还是 Exo。
+    // 本页固定 mpv。备用内核 GSY 走独立的 GsyPlayerActivity（官方默认布局 + 官方三行用法），
+    // 两套东西不再共用同一个 Activity，互不干扰。
+    engineKind = EngineKind.MPV
+    PlayerLib.kind = EngineKind.MPV
 
     // OPTIMIZATION: Set volume control stream so hardware buttons control media volume
     volumeControlStream = AudioManager.STREAM_MUSIC
@@ -514,7 +541,9 @@ class PlayerActivity :
       return
     }
 
-    getPlayableUri(intent)?.let(player::playFile)
+    getPlayableUri(intent)?.let { uri ->
+      player.playFile(uri)
+    }
 
     // Only set orientation immediately if NOT in Video mode
     // For Video mode, wait for video-params/aspect to become available
@@ -527,6 +556,58 @@ class PlayerActivity :
 
     window.attributes.layoutInDisplayCutoutMode =
       WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+  }
+
+  /**
+   * 默认播放内核是 GSY 时，把这次播放整体转交给 [GsyPlayerActivity]。
+   *
+   * 全项目有十来处「起播放」的入口（文件浏览、播放列表、网络流、播放历史、外部的
+   * `content://` VIEW intent…），逐个去改既容易漏又散；在 mpv 播放页这一处兜住，
+   * 所有入口就都服从「设置 → GSY 播放器 → 默认播放内核」。
+   *
+   * 显式指定了内核时不转交：长按反选、以及从 GSY 页切回 mpv 都会带上 [EXTRA_ENGINE]，
+   * 那说明调用方已经决定好要用哪一套了。
+   *
+   * 交接所需的播放队列 / 标题 / 进度 / Emby 上报信息都在 intent extras 里，
+   * [Intent] 拷贝构造会原样带过去（key 与 [PlayerHandoff] 完全一致），
+   * 所以 GSY 那边拿到的是一个完整的播放会话，而不是一个孤零零的地址。
+   *
+   * 「带没带播放内容」要先判一下：播放通知点开（[MediaPlaybackService] 里那个只有
+   * CLEAR_TOP 的 intent）、以及本页复用时的一些内部 refresh intent 都不带内容，
+   * 对它们转交只会把一个正在好好运行的 mpv 会话踢掉。真正的「起播放」入口
+   * （文件浏览 / 播放列表 / 网络流 / Emby / 外部 VIEW intent）无一例外都带 URI。
+   *
+   * @return true 表示已完成转交并收摊，调用方应当直接返回
+   */
+  private fun redirectToPreferredEngine(): Boolean {
+    if (intent.data == null &&
+      !intent.hasExtra("playlist") &&
+      !intent.hasExtra("playlist_id")
+    ) {
+      return false
+    }
+
+    val requested = intent.getStringExtra(EXTRA_ENGINE)
+    val effective =
+      if (requested != null) {
+        EngineKind.from(requested)
+      } else {
+        EngineKind.from(playerPreferences.playbackEngine.get())
+      }
+    if (effective != EngineKind.GSY) return false
+
+    runCatching {
+      startActivity(
+        Intent(intent).apply {
+          setClass(this@PlayerActivity, GsyPlayerActivity::class.java)
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        },
+      )
+    }.onFailure { e ->
+      Log.e(TAG, "Failed to hand off playback to GsyPlayerActivity", e)
+    }
+    finish()
+    return true
   }
 
   override fun attachBaseContext(newBase: Context?) {
@@ -636,7 +717,7 @@ class PlayerActivity :
   private fun setupAudio() {
     audioPreferences.audioChannels.get().let {
       runCatching {
-        MPVLib.setPropertyString(it.property, it.value)
+        PlayerLib.setPropertyString(it.property, it.value)
       }.onFailure { e ->
         Log.e(TAG, "Error setting audio channels: ${it.property}=${it.value}", e)
       }
@@ -715,7 +796,7 @@ class PlayerActivity :
 
       // Wait for any pending save operation to complete before destroying MPV
       // This prevents the race condition where the save coroutine tries to access
-      // MPV properties after MPVLib.destroy() has been called
+      // MPV properties after PlayerLib.destroy() has been called
       savePlaybackStateJob?.let { job ->
         Log.d(TAG, "Waiting for save playback state job to complete...")
         runCatching {
@@ -751,25 +832,25 @@ class PlayerActivity :
     if (!isFinishing || isManualBackgroundPlayback) return
 
     runCatching {
-      MPVLib.removeObserver(playerObserver)
+      PlayerLib.removeObserver(playerObserver)
 
       if (isReady) {
         // Pause playback first to reduce thread activity
-        MPVLib.setPropertyBoolean("pause", true)
+        PlayerLib.setPropertyBoolean("pause", true)
 
         // Send quit command to gracefully shut down MPV
-        MPVLib.command("quit")
+        PlayerLib.command("quit")
 
         // Wait briefly for MPV to process quit and clean up internal threads
         // This prevents race conditions where hardware UI threads try to access
-        // mutexes/queues that are destroyed by MPVLib.destroy()
+        // mutexes/queues that are destroyed by PlayerLib.destroy()
         // We use a short blocking wait here as onDestroy is already on the main thread
         // and this ensures proper cleanup before activity destruction
         Thread.sleep(100)
       }
 
       // Now safe to destroy MPV as internal threads have had time to shut down
-      MPVLib.destroy()
+      PlayerLib.destroy()
       mpvInitialized = false
     }.onFailure { e ->
       Log.e(TAG, "Error cleaning up MPV", e)
@@ -813,7 +894,7 @@ class PlayerActivity :
       if (isFinishing && !isManualBackgroundPlayback) {
         viewModel.pause()
         // Tell MPV to stop processing to reduce busywork during cleanup
-        MPVLib.command("stop")
+        PlayerLib.command("stop")
       } else if (!isInPip && shouldPause) {
         wasPlayingBeforePause = !(viewModel.paused ?: true)
         viewModel.pause()
@@ -1013,7 +1094,7 @@ class PlayerActivity :
     Log.d(TAG, "MPV initialized")
 
     // Add observer after initialization
-    MPVLib.addObserver(playerObserver)
+    PlayerLib.addObserver(playerObserver)
   }
 
   /**
@@ -1222,7 +1303,7 @@ class PlayerActivity :
     if (extras == null) return
 
     extras.getInt("position", POSITION_NOT_SET).takeIf { it != POSITION_NOT_SET }?.let {
-      MPVLib.setPropertyInt("time-pos", it / MILLISECONDS_TO_SECONDS)
+      PlayerLib.setPropertyInt("time-pos", it / MILLISECONDS_TO_SECONDS)
     }
 
     addSubtitlesFromExtras(extras)
@@ -1250,7 +1331,7 @@ class PlayerActivity :
         val flag = if (subsToEnable.any { it == suburi }) "select" else "auto"
 
         Log.v(TAG, "Adding subtitles from intent extras: $subfile")
-        MPVLib.command("sub-add", subfile, flag)
+        PlayerLib.command("sub-add", subfile, flag)
       }
     }
   }
@@ -1284,7 +1365,7 @@ class PlayerActivity :
       if (headers.isEmpty()) return@let
 
       if (headers[0].startsWith("User-Agent", ignoreCase = true)) {
-        MPVLib.setPropertyString("user-agent", headers[1])
+        PlayerLib.setPropertyString("user-agent", headers[1])
       }
 
       if (headers.size > 2) {
@@ -1305,7 +1386,7 @@ class PlayerActivity :
         .map { "${it.key}: ${it.value.replace(",", "\\,")}" }
         .joinToString(",")
 
-      MPVLib.setPropertyString("http-header-fields", headersString)
+      PlayerLib.setPropertyString("http-header-fields", headersString)
       Log.d(TAG, "Set HTTP headers: $headersString")
     }
   }
@@ -1333,7 +1414,7 @@ class PlayerActivity :
         .map { "${it.key}: ${it.value.replace(",", "\\,")}" }
         .joinToString(",")
 
-      MPVLib.setPropertyString("http-header-fields", headersString)
+      PlayerLib.setPropertyString("http-header-fields", headersString)
       Log.d(TAG, "Set HTTP headers for playlist item: $headersString")
     }
   }
@@ -1518,6 +1599,60 @@ class PlayerActivity :
     return extractUriFromIntent(intent)
   }
 
+  // ────────────────────────────────────────────────────────────────────────
+  // 内核切换：把当前播放会话交给 GSY 播放页
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * 把「当前视频 + 整份播放队列 + 当前进度」交给 [GsyPlayerActivity]。
+   *
+   * 只传一个地址是不够的：那样切过去就只剩一个孤零零的视频 —— 队列、标题、
+   * 「现在放到第几个」全丢，Emby 那边的进度回传也断档。所以整份 [PlayerHandoff]
+   * 都要带过去，GSY 那边读出来之后就能在同一份队列里继续切集。
+   *
+   * 进度取 `time-pos`（秒，带小数）而不是取整秒的 `propInt`，切过去接着放的口径更准。
+   */
+  internal fun switchToGsyPlayer() {
+    val uri = getCurrentPlayingUri()
+    if (uri == null) {
+      viewModel.showToast(getString(app.marlboroadvance.mpvex.R.string.player_engine_switch_unavailable))
+      return
+    }
+
+    val positionMs = ((PlayerLib.getPropertyDouble("time-pos") ?: 0.0) * 1000).toLong()
+
+    val target =
+      Intent(Intent.ACTION_VIEW, uri, this, GsyPlayerActivity::class.java).apply {
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        putExtra("internal_launch", true)
+        putExtra("title", getTitleForControls())
+        putExtra("filename", fileName)
+        PlayerHandoff(
+          playlist = playlist,
+          titles = playlistTitles,
+          seriesKeys = playlistSeriesKeys,
+          index = playlistIndex,
+          playlistId = playlistId,
+          positionMs = positionMs,
+          seriesKey = currentSeriesKey(),
+          embyServerId =
+            intent
+              .getLongExtra(app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_SERVER_ID, -1L)
+              .takeIf { it > 0 },
+          embyItemIds =
+            intent.getStringArrayListExtra(
+              app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_ITEM_IDS,
+            ) ?: emptyList(),
+          headers = intent.getStringArrayExtra("headers"),
+        ).writeTo(this)
+      }
+
+    startActivity(target)
+    // 立刻收摊：mpv 与 GSY 同时持有音频焦点 / 解码器只会互相打架
+    isUserFinishing = true
+    finish()
+  }
+
   /**
    * Queries the content resolver to get the display name for a URI.
    *
@@ -1554,6 +1689,11 @@ class PlayerActivity :
       uri
     }
   }
+
+  /** content:// 转成 fd://（mpv 自己读不了 SAF） */
+  private fun getPlayableUriForEngine(intent: Intent): String? = getPlayableUri(intent)
+
+  private fun playlistItemPlayableUri(uri: Uri): String = uri.openContentFd(this) ?: uri.toString()
 
   /**
    * Handles device configuration changes.
@@ -1595,10 +1735,11 @@ class PlayerActivity :
     when (property) {
       "video-params/w",
       "video-params/h" -> {
-        // Safety check: don't access MPV during cleanup
-        if (!mpvInitialized || player.isExiting || isFinishing) return
+        // Safety check: don't access MPV during cleanup（Exo 内核下 mpv 从未初始化，只查 isFinishing）
+        if (isFinishing) return
+        if (engineKind == EngineKind.MPV && (!mpvInitialized || player.isExiting)) return
 
-        val aspect = player.getVideoOutAspect()
+        val aspect = currentVideoAspect()
         Log.d(TAG, "Video dimension changed: $property, aspect: $aspect")
         pipHelper.updatePictureInPictureParams()
         // Update orientation when video dimensions change (fixes Video orientation mode)
@@ -1606,11 +1747,14 @@ class PlayerActivity :
           setOrientation()
         }
 
-        // Re-apply Anime4K shaders (check for resolution limit)
-        player.applyAnime4KShaders()
+        // Re-apply Anime4K shaders (check for resolution limit) —— mpv 专属
+        if (engineKind == EngineKind.MPV) player.applyAnime4KShaders()
       }
     }
   }
+
+  /** 当前视频宽高比：走 MPVView（含 rotate 修正） */
+  private fun currentVideoAspect(): Double? = player.getVideoOutAspect()
 
   /**
    * Observer callback for MPV property changes (Boolean values).
@@ -1714,9 +1858,9 @@ class PlayerActivity :
  * 所以要除以当前倍速，否则卡片会早一倍时间弹出来。
  */
 private fun wallClockSecondsToEnd(): Double? {
-  val duration = MPVLib.getPropertyDouble("duration") ?: return null
-  val position = MPVLib.getPropertyDouble("time-pos") ?: return null
-  val speed = MPVLib.getPropertyDouble("speed") ?: 1.0
+  val duration = PlayerLib.getPropertyDouble("duration") ?: return null
+  val position = PlayerLib.getPropertyDouble("time-pos") ?: return null
+  val speed = PlayerLib.getPropertyDouble("speed") ?: 1.0
   if (duration <= 0 || speed <= 0) return null
   return (duration - position) / speed
 }
@@ -1798,7 +1942,7 @@ private fun cancelAutoplayCountdown() {
     if (playerPreferences.rememberSpeedPerSeries.get()) {
       val speed = PlaybackMemory.speedFor(playerPreferences, key)
       if (speed != null && speed > 0f) {
-        runCatching { MPVLib.setPropertyDouble("speed", speed.toDouble()) }
+        runCatching { PlayerLib.setPropertyDouble("speed", speed.toDouble()) }
       }
     }
     if (playerPreferences.rememberAudioTrackPerSeries.get()) {
@@ -1806,7 +1950,7 @@ private fun cancelAutoplayCountdown() {
       if (!fingerprint.isNullOrBlank()) {
         val trackId = PlaybackMemory.findAudioTrackId(fingerprint)
         if (trackId != null && trackId > 0) {
-          runCatching { MPVLib.setPropertyInt("aid", trackId) }
+          runCatching { PlayerLib.setPropertyInt("aid", trackId) }
         }
       }
     }
@@ -1821,7 +1965,7 @@ private fun cancelAutoplayCountdown() {
     if (isEof) {
       // Check if we should repeat the current file
       if (viewModel.shouldRepeatCurrentFile()) {
-        MPVLib.command("seek", "0", "absolute")
+        PlayerLib.command("seek", "0", "absolute")
         viewModel.unpause()
         return
       }
@@ -1847,12 +1991,15 @@ private fun cancelAutoplayCountdown() {
           // 只有"真的没有下一集可播"时才退出播放器（整个队列/单文件播放结束）。
           // autoplay 关闭但队列里还有后续时，属于"等用户手动切"，不能算播放结束，
           // 因此停住而不是退出 —— 否则会和"自动下一集"抢同一段判断。
-          finishAndRemoveTask()
+          // isReady 兜底：从来没真正起播过（例如备用内核打开失败）时不能退出，
+          // 否则表现就是"进播放器转两下就被踢回上一页"。
+          if (isReady) finishAndRemoveTask()
         }
         // 其余情况（autoplay 关 且 队列还有后续）：停在当前视频，等用户手动切集
       } else {
         // Single video playback (no playlist)
-        if (playerPreferences.closeAfterReachingEndOfVideo.get()) {
+        // 同样要求真的起播过：备用内核打开失败时不能把用户踢回上一页。
+        if (playerPreferences.closeAfterReachingEndOfVideo.get() && isReady) {
           finishAndRemoveTask()
         }
       }
@@ -1891,16 +2038,17 @@ private fun cancelAutoplayCountdown() {
     // Handle Double properties
     when (property) {
       "video-params/aspect" -> {
-        // Safety check: don't access MPV during cleanup
-        if (!mpvInitialized || player.isExiting || isFinishing) return
+        // Safety check: don't access MPV during cleanup（Exo 内核下 mpv 从未初始化，只查 isFinishing）
+        if (isFinishing) return
+        if (engineKind == EngineKind.MPV && (!mpvInitialized || player.isExiting)) return
 
-        val aspect = player.getVideoOutAspect()
+        val aspect = currentVideoAspect()
         Log.d(TAG, "video-params/aspect changed: $aspect")
         pipHelper.updatePictureInPictureParams()
         // Update orientation when video aspect ratio changes (fixes Video orientation mode)
         // BUT: Don't update if aspect is being overridden (stretch/custom aspect mode)
         // to prevent infinite orientation switching loop
-        val aspectOverride = MPVLib.getPropertyDouble("video-aspect-override") ?: -1.0
+        val aspectOverride = PlayerLib.getPropertyDouble("video-aspect-override") ?: -1.0
         if (playerPreferences.orientation.get() == PlayerOrientation.Video && 
             aspect != null && 
             aspectOverride <= 0.0) {
@@ -1981,6 +2129,7 @@ private fun cancelAutoplayCountdown() {
     }
 
     // Start media notification service (like YouTube - always show notification)
+    // 服务经由 PlayerLib 门面驱动，mpv / Exo 内核都能用（Exo 下缩略图为空，其余一致）
     startBackgroundPlayback()
 
     // Reset AB loop values when video changes
@@ -2007,7 +2156,7 @@ private fun cancelAutoplayCountdown() {
       if (!hasState) {
         withContext(Dispatchers.Main) {
           val zoomPreference = playerPreferences.defaultVideoZoom.get()
-          MPVLib.setPropertyDouble("video-zoom", zoomPreference.toDouble())
+          PlayerLib.setPropertyDouble("video-zoom", zoomPreference.toDouble())
           viewModel.setVideoZoom(zoomPreference)
         }
       }
@@ -2055,12 +2204,12 @@ private fun cancelAutoplayCountdown() {
       // video dimensions are available
       lifecycleScope.launch {
         kotlinx.coroutines.delay(100)
-        if (mpvInitialized && !player.isExiting && !isFinishing) {
-          val aspect = player.getVideoOutAspect()
-          Log.d(TAG, "handleFileLoaded - Video mode, aspect after delay: $aspect")
-          if (aspect != null && aspect > 0) {
-            setOrientation()
-          }
+        if (isFinishing) return@launch
+        if (engineKind == EngineKind.MPV && (!mpvInitialized || player.isExiting)) return@launch
+        val aspect = currentVideoAspect()
+        Log.d(TAG, "handleFileLoaded - Video mode, aspect after delay: $aspect")
+        if (aspect != null && aspect > 0) {
+          setOrientation()
         }
       }
     }
@@ -2069,7 +2218,7 @@ private fun cancelAutoplayCountdown() {
 
     // Don't force media-title for m3u/m3u8 streams - let MPV provide it
     if (!isCurrentStreamM3U()) {
-      MPVLib.setPropertyString("force-media-title", fileName)
+      PlayerLib.setPropertyString("force-media-title", fileName)
       viewModel.setMediaTitle(fileName)
     }
 
@@ -2103,7 +2252,7 @@ private fun cancelAutoplayCountdown() {
 
     updateMediaSessionMetadata(
       title = fileName,
-      durationMs = (MPVLib.getPropertyDouble("duration")?.times(1000))?.toLong() ?: 0L,
+      durationMs = (PlayerLib.getPropertyDouble("duration")?.times(1000))?.toLong() ?: 0L,
     )
     updateMediaSessionPlaybackState(isPlaying = true)
 
@@ -2146,7 +2295,7 @@ private fun cancelAutoplayCountdown() {
         // 等当前视频真正播起来，避免起播瞬间和首帧解码抢带宽
         while (self?.isActive == true) {
           if (isFinishing || player.isExiting) return@launch
-          val pos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
+          val pos = runCatching { PlayerLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
           if (pos >= PlayerPreferences.PRELOAD_TRIGGER_SECONDS) break
           delay(250)
         }
@@ -2268,11 +2417,11 @@ private fun cancelAutoplayCountdown() {
 
           // Update MPV title
           withContext(Dispatchers.Main) {
-            MPVLib.setPropertyString("force-media-title", fileName)
+            PlayerLib.setPropertyString("force-media-title", fileName)
             viewModel.setMediaTitle(fileName)
 
             // Update media session
-            val durationMs = (MPVLib.getPropertyDouble("duration")?.times(1000))?.toLong() ?: 0L
+            val durationMs = (PlayerLib.getPropertyDouble("duration")?.times(1000))?.toLong() ?: 0L
             updateMediaSessionMetadata(
               title = fileName,
               durationMs = durationMs,
@@ -2280,8 +2429,8 @@ private fun cancelAutoplayCountdown() {
 
             // Update background service if connected
             if (serviceBound && mediaPlaybackService != null) {
-              val artist = runCatching { MPVLib.getPropertyString("metadata/artist") }.getOrNull() ?: ""
-              val thumbnail = runCatching { MPVLib.grabThumbnail(1080) }.getOrNull()
+              val artist = runCatching { PlayerLib.getPropertyString("metadata/artist") }.getOrNull() ?: ""
+              val thumbnail = runCatching { PlayerLib.grabThumbnail(1080) }.getOrNull()
               mediaPlaybackService?.setMediaInfo(title = fileName, artist = artist, thumbnail = thumbnail)
             }
           }
@@ -2309,23 +2458,23 @@ private fun cancelAutoplayCountdown() {
 
           // Get duration and file size from MPV
           val updatedDuration = runCatching {
-            (MPVLib.getPropertyDouble("duration") ?: 0.0).times(1000).toLong()
+            (PlayerLib.getPropertyDouble("duration") ?: 0.0).times(1000).toLong()
           }.getOrDefault(0L)
 
           val updatedFileSize = runCatching {
             // Try multiple properties to get file size
-            MPVLib.getPropertyDouble("file-size")?.toLong()
-              ?: MPVLib.getPropertyDouble("stream-end")?.toLong()
+            PlayerLib.getPropertyDouble("file-size")?.toLong()
+              ?: PlayerLib.getPropertyDouble("stream-end")?.toLong()
               ?: 0L
           }.getOrDefault(0L)
 
           // Get video resolution from MPV
           val updatedWidth = runCatching {
-            MPVLib.getPropertyInt("width") ?: MPVLib.getPropertyInt("video-params/w") ?: 0
+            PlayerLib.getPropertyInt("width") ?: PlayerLib.getPropertyInt("video-params/w") ?: 0
           }.getOrDefault(0)
 
           val updatedHeight = runCatching {
-            MPVLib.getPropertyInt("height") ?: MPVLib.getPropertyInt("video-params/h") ?: 0
+            PlayerLib.getPropertyInt("height") ?: PlayerLib.getPropertyInt("video-params/h") ?: 0
           }.getOrDefault(0)
 
           // Update metadata without thumbnail
@@ -2358,33 +2507,33 @@ private fun cancelAutoplayCountdown() {
    */
   private fun applySubtitlePreferences() {
     // Typography settings
-    MPVLib.setPropertyString("sub-font", subtitlesPreferences.font.get())
-    MPVLib.setPropertyString("secondary-sub-font", subtitlesPreferences.font.get())
-    MPVLib.setPropertyInt("sub-font-size", subtitlesPreferences.fontSize.get())
-    MPVLib.setPropertyBoolean("sub-bold", subtitlesPreferences.bold.get())
-    MPVLib.setPropertyBoolean("sub-italic", subtitlesPreferences.italic.get())
-    MPVLib.setPropertyString("sub-justify", subtitlesPreferences.justification.get().value)
-    MPVLib.setPropertyString("sub-border-style", subtitlesPreferences.borderStyle.get().value)
-    MPVLib.setPropertyInt("sub-outline-size", subtitlesPreferences.borderSize.get())
-    MPVLib.setPropertyInt("sub-shadow-offset", subtitlesPreferences.shadowOffset.get())
+    PlayerLib.setPropertyString("sub-font", subtitlesPreferences.font.get())
+    PlayerLib.setPropertyString("secondary-sub-font", subtitlesPreferences.font.get())
+    PlayerLib.setPropertyInt("sub-font-size", subtitlesPreferences.fontSize.get())
+    PlayerLib.setPropertyBoolean("sub-bold", subtitlesPreferences.bold.get())
+    PlayerLib.setPropertyBoolean("sub-italic", subtitlesPreferences.italic.get())
+    PlayerLib.setPropertyString("sub-justify", subtitlesPreferences.justification.get().value)
+    PlayerLib.setPropertyString("sub-border-style", subtitlesPreferences.borderStyle.get().value)
+    PlayerLib.setPropertyInt("sub-outline-size", subtitlesPreferences.borderSize.get())
+    PlayerLib.setPropertyInt("sub-shadow-offset", subtitlesPreferences.shadowOffset.get())
 
     // Color settings
-    MPVLib.setPropertyString("sub-color", subtitlesPreferences.textColor.get().toColorHexString())
-    MPVLib.setPropertyString("sub-border-color", subtitlesPreferences.borderColor.get().toColorHexString())
-    MPVLib.setPropertyString("sub-back-color", subtitlesPreferences.backgroundColor.get().toColorHexString())
+    PlayerLib.setPropertyString("sub-color", subtitlesPreferences.textColor.get().toColorHexString())
+    PlayerLib.setPropertyString("sub-border-color", subtitlesPreferences.borderColor.get().toColorHexString())
+    PlayerLib.setPropertyString("sub-back-color", subtitlesPreferences.backgroundColor.get().toColorHexString())
 
     // Miscellaneous settings
     val overrideAssSubs = subtitlesPreferences.overrideAssSubs.get()
-    MPVLib.setPropertyString("sub-ass-override", if (overrideAssSubs) "force" else "scale")
-    MPVLib.setPropertyString("secondary-sub-ass-override", if (overrideAssSubs) "force" else "scale")
+    PlayerLib.setPropertyString("sub-ass-override", if (overrideAssSubs) "force" else "scale")
+    PlayerLib.setPropertyString("secondary-sub-ass-override", if (overrideAssSubs) "force" else "scale")
 
     val scaleByWindow = subtitlesPreferences.scaleByWindow.get()
     val scaleValue = if (scaleByWindow) "yes" else "no"
-    MPVLib.setPropertyString("sub-scale-by-window", scaleValue)
-    MPVLib.setPropertyString("sub-use-margins", scaleValue)
+    PlayerLib.setPropertyString("sub-scale-by-window", scaleValue)
+    PlayerLib.setPropertyString("sub-use-margins", scaleValue)
 
-    MPVLib.setPropertyFloat("sub-scale", subtitlesPreferences.subScale.get())
-    MPVLib.setPropertyInt("sub-pos", subtitlesPreferences.subPos.get())
+    PlayerLib.setPropertyFloat("sub-scale", subtitlesPreferences.subScale.get())
+    PlayerLib.setPropertyInt("sub-pos", subtitlesPreferences.subPos.get())
 
     Log.d(TAG, "Applied subtitle preferences")
   }
@@ -2409,21 +2558,21 @@ private fun cancelAutoplayCountdown() {
     savePlaybackStateJob?.cancel()
 
     // Read values from MPV immediately while it is still loaded (before stop/destroy or coroutine delay)
-    val currentPos = (MPVLib.getPropertyInt("time-pos") ?: viewModel.pos ?: 0).coerceAtLeast(0)
-    val currentDuration = (MPVLib.getPropertyInt("duration")?.takeIf { it > 0 } ?: (viewModel.duration ?: 0)).coerceAtLeast(0)
-    val speed = MPVLib.getPropertyDouble("speed") ?: DEFAULT_PLAYBACK_SPEED
-    val videoZoom = MPVLib.getPropertyDouble("video-zoom")?.toFloat() ?: 0f
-    val currentSid = player.sid
-    val currentSecondarySid = player.secondarySid
+    val currentPos = (PlayerLib.getPropertyInt("time-pos") ?: viewModel.pos ?: 0).coerceAtLeast(0)
+    val currentDuration = (PlayerLib.getPropertyInt("duration")?.takeIf { it > 0 } ?: (viewModel.duration ?: 0)).coerceAtLeast(0)
+    val speed = PlayerLib.getPropertyDouble("speed") ?: DEFAULT_PLAYBACK_SPEED
+    val videoZoom = PlayerLib.getPropertyDouble("video-zoom")?.toFloat() ?: 0f
+    val currentSid = PlayerLib.getPropertyInt("sid") ?: -1
+    val currentSecondarySid = PlayerLib.getPropertyInt("secondary-sid") ?: -1
     val (effectiveSid, effectiveSecondarySid) = if (currentSid <= 0 && currentSecondarySid > 0) {
       currentSecondarySid to -1
     } else {
       currentSid to currentSecondarySid
     }
-    val subDelay = ((MPVLib.getPropertyDouble("sub-delay") ?: 0.0) * MILLISECONDS_TO_SECONDS).toInt()
-    val subSpeed = MPVLib.getPropertyDouble("sub-speed") ?: DEFAULT_SUB_SPEED
-    val aid = player.aid
-    val audioDelay = ((MPVLib.getPropertyDouble("audio-delay") ?: 0.0) * MILLISECONDS_TO_SECONDS).toInt()
+    val subDelay = ((PlayerLib.getPropertyDouble("sub-delay") ?: 0.0) * MILLISECONDS_TO_SECONDS).toInt()
+    val subSpeed = PlayerLib.getPropertyDouble("sub-speed") ?: DEFAULT_SUB_SPEED
+    val aid = PlayerLib.getPropertyInt("aid") ?: -1
+    val audioDelay = ((PlayerLib.getPropertyDouble("audio-delay") ?: 0.0) * MILLISECONDS_TO_SECONDS).toInt()
     val externalSubs = viewModel.externalSubtitles.joinToString("|")
     val watchedThreshold = browserPreferences.watchedThreshold.get()
     val saveOnQuit = playerPreferences.savePositionOnQuit.get()
@@ -2570,24 +2719,38 @@ private fun cancelAutoplayCountdown() {
       Log.d(TAG, "Restored audio track: ${state.aid} (user selection)")
     }
 
-    MPVLib.setPropertyDouble("sub-delay", subDelay)
-    MPVLib.setPropertyDouble("speed", state.playbackSpeed)
-    MPVLib.setPropertyDouble("audio-delay", audioDelay)
-    MPVLib.setPropertyDouble("sub-speed", state.subSpeed)
+    PlayerLib.setPropertyDouble("sub-delay", subDelay)
+    PlayerLib.setPropertyDouble("speed", state.playbackSpeed)
+    PlayerLib.setPropertyDouble("audio-delay", audioDelay)
+    PlayerLib.setPropertyDouble("sub-speed", state.subSpeed)
 
     // Restore video zoom from saved state
-    MPVLib.setPropertyDouble("video-zoom", state.videoZoom.toDouble())
+    PlayerLib.setPropertyDouble("video-zoom", state.videoZoom.toDouble())
     viewModel.setVideoZoom(state.videoZoom)
 
     when {
       // 显式「从头播放」：本地续播记录一律不生效（详情页的「从头播放」按钮）
       playFromStart -> {
-        MPVLib.setPropertyInt("time-pos", 0)
+        PlayerLib.setPropertyInt("time-pos", 0)
         Log.d(TAG, "play_from_start: ignore saved position (${state.lastPosition}s), seek to 0")
       }
 
       playerPreferences.savePositionOnQuit.get() && state.lastPosition != 0 -> {
-        MPVLib.setPropertyInt("time-pos", state.lastPosition)
+        val saved = state.lastPosition.toDouble()
+        val duration = PlayerLib.getPropertyDouble("duration")
+        // 续播位置离片尾太近（例如上一次是"播完/假播完"退出的，位置就停在 duration 上）：
+        // 直接从头放。否则一开局就被 seek 到结束点，IJK 立刻回调播放完成，
+        // 上层把它当成「播放结束」自动退出 —— 表现就是"一进播放器就被踢回详情页"。
+        val tooCloseToEnd = duration != null && duration > 0.0 && duration - saved < RESUME_TAIL_GUARD_SEC
+        if (tooCloseToEnd) {
+          Log.w(
+            TAG,
+            "saved position ${saved}s is within $RESUME_TAIL_GUARD_SEC s of the end ($duration s); restart from 0",
+          )
+          PlayerLib.setPropertyInt("time-pos", 0)
+        } else {
+          PlayerLib.setPropertyInt("time-pos", state.lastPosition)
+        }
       }
     }
   }
@@ -2602,7 +2765,7 @@ private fun cancelAutoplayCountdown() {
   private fun applyDefaultSettings(state: PlaybackStateEntity?) {
     if (state == null) {
       val defaultSubSpeed = subtitlesPreferences.defaultSubSpeed.get().toDouble()
-      MPVLib.setPropertyDouble("sub-speed", defaultSubSpeed)
+      PlayerLib.setPropertyDouble("sub-speed", defaultSubSpeed)
     }
   }
 
@@ -2663,12 +2826,12 @@ private fun cancelAutoplayCountdown() {
 
       // Get parsed video title from MPV
       val videoTitle = runCatching {
-        MPVLib.getPropertyString("media-title")
+        PlayerLib.getPropertyString("media-title")
       }.getOrNull()?.takeIf { it.isNotBlank() && it != fileName }
 
       // Get duration and file size from MPV
       var duration = runCatching {
-        (MPVLib.getPropertyDouble("duration") ?: 0.0).times(1000).toLong()
+        (PlayerLib.getPropertyDouble("duration") ?: 0.0).times(1000).toLong()
       }.getOrDefault(0L)
 
       if (duration <= 0L) {
@@ -2677,18 +2840,18 @@ private fun cancelAutoplayCountdown() {
 
       val fileSize = runCatching {
         // Try multiple properties to get file size
-        MPVLib.getPropertyDouble("file-size")?.toLong()
-          ?: MPVLib.getPropertyDouble("stream-end")?.toLong()
+        PlayerLib.getPropertyDouble("file-size")?.toLong()
+          ?: PlayerLib.getPropertyDouble("stream-end")?.toLong()
           ?: 0L
       }.getOrDefault(0L)
 
       // Get video resolution from MPV
       val width = runCatching {
-        MPVLib.getPropertyInt("width") ?: MPVLib.getPropertyInt("video-params/w") ?: 0
+        PlayerLib.getPropertyInt("width") ?: PlayerLib.getPropertyInt("video-params/w") ?: 0
       }.getOrDefault(0)
 
       val height = runCatching {
-        MPVLib.getPropertyInt("height") ?: MPVLib.getPropertyInt("video-params/h") ?: 0
+        PlayerLib.getPropertyInt("height") ?: PlayerLib.getPropertyInt("video-params/h") ?: 0
       }.getOrDefault(0)
 
       RecentlyPlayedOps.addRecentlyPlayed(
@@ -2742,6 +2905,11 @@ private fun cancelAutoplayCountdown() {
 
     // Update the intent first so getFileName uses the new intent data
     setIntent(intent)
+
+    // 本页是 singleTask，第二次「起播放」走的是这里而不是 onCreate，
+    // 所以默认内核的转交判断也得在这儿兜一次，否则「默认内核 = GSY」只在冷启动生效。
+    // 守卫条件（带没带播放内容）在方法内部统一处理，两处口径一致。
+    if (redirectToPreferredEngine()) return
 
     // 每个新 intent 都重新判定「从头播放」标记（不跨 intent 存活）
     playFromStartOnce = intent.getBooleanExtra("play_from_start", false)
@@ -2816,10 +2984,10 @@ private fun cancelAutoplayCountdown() {
     setHttpHeadersFromExtras(intent.extras)
 
     // Load the new file
-    getPlayableUri(intent)?.let { uri ->
+    getPlayableUriForEngine(intent)?.let { uri ->
       // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
       lifecycleScope.launch(Dispatchers.Default) {
-        MPVLib.command("loadfile", uri)
+        PlayerLib.command("loadfile", uri)
       }
     }
   }
@@ -3033,7 +3201,8 @@ private fun cancelAutoplayCountdown() {
       }
 
       else -> {
-        event?.let { player.onKey(it) }
+        // input.conf 按键映射是 mpv 专属；Exo 下没有这个体系
+        if (engineKind == EngineKind.MPV) event?.let { player.onKey(it) }
         return super.onKeyDown(keyCode, event)
       }
     }
@@ -3050,8 +3219,10 @@ private fun cancelAutoplayCountdown() {
     keyCode: Int,
     event: KeyEvent?,
   ): Boolean {
-    event?.let {
-      if (player.onKey(it)) return true
+    if (engineKind == EngineKind.MPV) {
+      event?.let {
+        if (player.onKey(it)) return true
+      }
     }
     return super.onKeyUp(keyCode, event)
   }
@@ -3211,8 +3382,8 @@ private fun cancelAutoplayCountdown() {
     MediaPlaybackService.createNotificationChannel(this)
     
     // Get media info before starting service
-    val artist = runCatching { MPVLib.getPropertyString("metadata/artist") }.getOrNull() ?: ""
-    val thumbnail = runCatching { MPVLib.grabThumbnail(1080) }.getOrNull()
+    val artist = runCatching { PlayerLib.getPropertyString("metadata/artist") }.getOrNull() ?: ""
+    val thumbnail = runCatching { PlayerLib.grabThumbnail(1080) }.getOrNull()
     
     // Pass media info via intent extras
     val intent = Intent(this, MediaPlaybackService::class.java).apply {
@@ -3503,7 +3674,7 @@ private fun cancelAutoplayCountdown() {
       return
     }
 
-    val playableUri = uri.openContentFd(this) ?: uri.toString()
+    val playableUri = playlistItemPlayableUri(uri)
 
     // Update playlist index
     playlistIndex = index
@@ -3552,21 +3723,21 @@ private fun cancelAutoplayCountdown() {
     // Load the new video
     // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
     lifecycleScope.launch(Dispatchers.Default) {
-      MPVLib.command("loadfile", playableUri)
+      PlayerLib.command("loadfile", playableUri)
     }
 
     // Update media title (this will trigger UI update)
     // Don't force media-title for m3u/m3u8 streams - let MPV provide it
     val isM3U = uri.toString().lowercase().contains(".m3u8") || uri.toString().lowercase().contains(".m3u")
     if (!isM3U) {
-      MPVLib.setPropertyString("force-media-title", fileName)
+      PlayerLib.setPropertyString("force-media-title", fileName)
       viewModel.setMediaTitle(fileName)
     }
 
     // Update media session metadata
     lifecycleScope.launch {
       kotlinx.coroutines.delay(100) // Wait for MPV to load the file
-      val durationMs = (MPVLib.getPropertyDouble("duration")?.times(1000))?.toLong() ?: 0L
+      val durationMs = (PlayerLib.getPropertyDouble("duration")?.times(1000))?.toLong() ?: 0L
       updateMediaSessionMetadata(
         title = fileName,
         durationMs = durationMs,
@@ -3592,7 +3763,7 @@ private fun cancelAutoplayCountdown() {
   fun getTitleForControls(): String {
     // For m3u/m3u8 streams, use MPV's raw media-title directly
     if (isCurrentStreamM3U()) {
-      val rawTitle = MPVLib.getPropertyString("media-title")
+      val rawTitle = PlayerLib.getPropertyString("media-title")
       if (!rawTitle.isNullOrBlank()) {
         return rawTitle
       }
@@ -3667,12 +3838,12 @@ private fun cancelAutoplayCountdown() {
 
       // Get parsed video title from MPV
       val videoTitle = runCatching {
-        MPVLib.getPropertyString("media-title")
+        PlayerLib.getPropertyString("media-title")
       }.getOrNull()?.takeIf { it.isNotBlank() && it != name }
 
       // Get duration and file size from MPV
       var duration = runCatching {
-        (MPVLib.getPropertyDouble("duration") ?: 0.0).times(1000).toLong()
+        (PlayerLib.getPropertyDouble("duration") ?: 0.0).times(1000).toLong()
       }.getOrDefault(0L)
 
       if (duration <= 0L) {
@@ -3681,18 +3852,18 @@ private fun cancelAutoplayCountdown() {
 
       val fileSize = runCatching {
         // Try multiple properties to get file size
-        MPVLib.getPropertyDouble("file-size")?.toLong()
-          ?: MPVLib.getPropertyDouble("stream-end")?.toLong()
+        PlayerLib.getPropertyDouble("file-size")?.toLong()
+          ?: PlayerLib.getPropertyDouble("stream-end")?.toLong()
           ?: 0L
       }.getOrDefault(0L)
 
       // Get video resolution from MPV
       val width = runCatching {
-        MPVLib.getPropertyInt("width") ?: MPVLib.getPropertyInt("video-params/w") ?: 0
+        PlayerLib.getPropertyInt("width") ?: PlayerLib.getPropertyInt("video-params/w") ?: 0
       }.getOrDefault(0)
 
       val height = runCatching {
-        MPVLib.getPropertyInt("height") ?: MPVLib.getPropertyInt("video-params/h") ?: 0
+        PlayerLib.getPropertyInt("height") ?: PlayerLib.getPropertyInt("video-params/h") ?: 0
       }.getOrDefault(0)
 
       RecentlyPlayedOps.addRecentlyPlayed(
@@ -3773,7 +3944,7 @@ private fun cancelAutoplayCountdown() {
   private fun updateRecentlyPlayedDurationIfAvailable() {
     lifecycleScope.launch(Dispatchers.IO) {
       val durMs = runCatching {
-        (MPVLib.getPropertyDouble("duration") ?: 0.0).times(1000).toLong()
+        (PlayerLib.getPropertyDouble("duration") ?: 0.0).times(1000).toLong()
       }.getOrDefault(0L)
       if (durMs > 0L) {
         val uri = extractUriFromIntent(intent) ?: return@launch
@@ -3796,18 +3967,18 @@ private fun cancelAutoplayCountdown() {
           else -> uri.toString()
         }
         val fileSize = runCatching {
-          MPVLib.getPropertyDouble("file-size")?.toLong()
-            ?: MPVLib.getPropertyDouble("stream-end")?.toLong()
+          PlayerLib.getPropertyDouble("file-size")?.toLong()
+            ?: PlayerLib.getPropertyDouble("stream-end")?.toLong()
             ?: 0L
         }.getOrDefault(0L)
         val width = runCatching {
-          MPVLib.getPropertyInt("width") ?: MPVLib.getPropertyInt("video-params/w") ?: 0
+          PlayerLib.getPropertyInt("width") ?: PlayerLib.getPropertyInt("video-params/w") ?: 0
         }.getOrDefault(0)
         val height = runCatching {
-          MPVLib.getPropertyInt("height") ?: MPVLib.getPropertyInt("video-params/h") ?: 0
+          PlayerLib.getPropertyInt("height") ?: PlayerLib.getPropertyInt("video-params/h") ?: 0
         }.getOrDefault(0)
         val videoTitle = runCatching {
-          MPVLib.getPropertyString("media-title")
+          PlayerLib.getPropertyString("media-title")
         }.getOrNull()?.takeIf { it.isNotBlank() && it != fileName }
 
         RecentlyPlayedOps.updateVideoMetadata(
@@ -4065,6 +4236,15 @@ private fun cancelAutoplayCountdown() {
     private const val RESULT_INTENT = "app.marlboroadvance.mpvex.ui.player.PlayerActivity.result"
 
     /**
+     * intent 里指定播放内核的 extra key（详情页长按播放按钮 → 备用内核）。
+     * 值为 [EngineKind.name]（"MPV" / "EXO"），缺省回退到设置里的默认内核。
+     */
+    const val EXTRA_ENGINE = "engine"
+
+    /** GSY 底下的解码内核（"IJK" / "EXO"），交给 [GsyPlayerActivity] 时带上 */
+    const val EXTRA_GSY_KERNEL = "gsy_kernel"
+
+    /**
      * Constant for "brightness not set".
      */
     private const val BRIGHTNESS_NOT_SET = -1f
@@ -4088,6 +4268,14 @@ private fun cancelAutoplayCountdown() {
      * Factor to divide subtitle and audio delays to convert from ms to seconds.
      */
     private const val DELAY_DIVISOR = 1000.0
+
+    /**
+     * 续播位置离片尾小于这个秒数就视为"已经看完"，从头开始播。
+     *
+     * 防止把 `-1` 秒级的续播位置写进播放器：那样会让 mpv / GSY 一开局就 seek 到结束点，
+     * IJK 立刻回调播放完成，上层按「播放结束」把 Activity 关掉。
+     */
+    private const val RESUME_TAIL_GUARD_SEC = 5.0
 
     /**
      * Default playback speed (1.0 = normal).

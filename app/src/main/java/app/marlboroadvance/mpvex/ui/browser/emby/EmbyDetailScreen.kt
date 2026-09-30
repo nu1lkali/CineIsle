@@ -8,7 +8,9 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -181,7 +183,13 @@ data class EmbyDetailScreen(
             server = currentServer,
             backdropUrl = viewModel.imageUrl(currentServer, current, "Backdrop", 1280),
             posterUrl = viewModel.imageUrl(currentServer, current, "Primary", 600),
-            onPlay = { resume -> scope.launch { viewModel.play(currentServer, current, resume) } },
+            onPlay = { resume, reverse ->
+              // 长按切内核时给个明确反馈，否则用户不知道这一下到底换了什么
+              viewModel.resolveEngineOverride(reverse)?.let {
+                Toast.makeText(context, "使用 ${it.label} 内核播放", Toast.LENGTH_SHORT).show()
+              }
+              scope.launch { viewModel.play(currentServer, current, resume, reverse) }
+            },
             onToggleFavorite = {
               val wasFavorite = current.UserData?.IsFavorite == true
               // 乐观更新：先把红心翻过来，动效才跟得上手指；失败再回滚
@@ -539,7 +547,8 @@ private fun DetailBody(
   server: EmbyServer?,
   backdropUrl: String?,
   posterUrl: String?,
-  onPlay: (resumeSeconds: Long) -> Unit,
+  /** resumeSeconds = 续播秒数（0 = 从头）；reverseEngine = 用与默认相反的内核（长按） */
+  onPlay: (resumeSeconds: Long, reverseEngine: Boolean) -> Unit,
   onToggleFavorite: () -> Unit,
   onTogglePlayed: (played: Boolean) -> Unit,
   onBack: () -> Unit,
@@ -957,7 +966,8 @@ private fun metaChips(item: EmbyItem): List<String> {
 @Composable
 private fun PlaySection(
   item: EmbyItem,
-  onPlay: (resumeSeconds: Long) -> Unit,
+  /** resumeSeconds = 续播秒数（0 = 从头）；reverseEngine = 用与默认相反的内核（长按） */
+  onPlay: (resumeSeconds: Long, reverseEngine: Boolean) -> Unit,
   onDelete: () -> Unit,
   onDownload: () -> Unit,
   onCast: () -> Unit,
@@ -989,16 +999,17 @@ private fun PlaySection(
       horizontalArrangement = Arrangement.spacedBy(12.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      Button(
-        onClick = { onPlay(if (hasResume) resumeSeconds else 0) },
+      // 播放按钮：单击用默认内核，长按用「另一个」内核（Media3 ↔ mpv）应急。
+      // 不用 Button + 内层 clickable 的写法：内层会把单击吃掉，外层 combinedClickable
+      // 只能收到长按，两者行为对不上。这里直接用 Box + combinedClickable 自己画。
+      PlayButton(
+        label = if (hasResume) "继续播放 · ${formatClock(resumeSeconds)}" else "播放",
+        onClick = { onPlay(if (hasResume) resumeSeconds else 0, false) },
+        onLongClick = { onPlay(if (hasResume) resumeSeconds else 0, true) },
         modifier = Modifier
           .weight(1f)
           .height(56.dp),
-      ) {
-        Icon(Icons.Default.PlayArrow, contentDescription = null)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(if (hasResume) "继续播放 · ${formatClock(resumeSeconds)}" else "播放")
-      }
+      )
 
       // 删除：红底红桶，就放在播放按钮旁边；点击后仍会弹确认框（由外层控制）
       IconButton(
@@ -1122,13 +1133,54 @@ private fun PlaySection(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       if (hasResume) {
-        FilledTonalButton(onClick = { onPlay(0) }) {
+        FilledTonalButton(onClick = { onPlay(0, false) }) {
           Text("从头播放")
         }
-        OutlinedButton(onClick = { onPlay(resumeSeconds) }) {
+        OutlinedButton(onClick = { onPlay(resumeSeconds, false) }) {
           Text("继续上次")
         }
       }
+    }
+  }
+}
+
+/**
+ * 主播放按钮：单击 = 默认内核，长按 = 备用内核。
+ *
+ * 长按的落点是「这片子 mpv 播不动，临时换个内核试试」—— 不用先去设置里改默认内核
+ * 再回来点一次。开关关掉（设置 → 长按反选内核）后长按与单击行为一致。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PlayButton(
+  label: String,
+  onClick: () -> Unit,
+  onLongClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Box(
+    modifier =
+      modifier
+        .clip(RoundedCornerShape(20.dp))
+        .background(MaterialTheme.colorScheme.primary)
+        .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+    contentAlignment = Alignment.Center,
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.Center,
+    ) {
+      Icon(
+        imageVector = Icons.Default.PlayArrow,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onPrimary,
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+      Text(
+        text = label,
+        color = MaterialTheme.colorScheme.onPrimary,
+        style = MaterialTheme.typography.labelLarge,
+      )
     }
   }
 }

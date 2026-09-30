@@ -9,6 +9,13 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- GSYVideoPlayer 的渲染容器：只有内核 = GSY 时才把播放器 View 挂进来 -->
+    <FrameLayout
+        android:id="@+id/gsyContainer"
+        android:visibility="gone"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
     <androidx.compose.ui.platform.ComposeView
         android:id="@+id/controls"
         android:layout_width="match_parent"
