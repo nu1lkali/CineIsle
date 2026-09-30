@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.People
@@ -194,6 +195,10 @@ data class EmbyDetailScreen(
         else -> {
           val current = item ?: return@Box
           val currentServer = server ?: return@Box
+          // 该条目当前的下载任务（没有就是 null）：按钮的文字、进度、图标都由它决定
+          val currentDownload = current.Id?.let { id ->
+            downloadTasks.firstOrNull { it.itemId == id }
+          }
 
           DetailBody(
             item = current,
@@ -238,21 +243,48 @@ data class EmbyDetailScreen(
             onBack = { backStack.removeLastOrNull() },
             onDelete = { showDeleteConfirm = true },
             onDownload = {
-              when (downloadViewModel.enqueue(currentServer, current)) {
-                EmbyEnqueueResult.STARTED ->
-                  Toast.makeText(context, "已加入下载队列", Toast.LENGTH_SHORT).show()
+              // 已有任务时，这个按钮变成「暂停 / 继续」开关（与下载管理页同一套动作）：
+              //   下载中 / 排队中 → 暂停；已暂停 / 失败 → 继续；已完成 → 只提示。
+              // 没有任务才走去重入队，行为与以前一致。
+              val downloadItemId = current.Id
+              val existing = downloadItemId?.let { id ->
+                downloadTasks.firstOrNull { it.itemId == id }
+              }
+              when (existing?.status) {
+                EmbyDownloadStatus.RUNNING, EmbyDownloadStatus.QUEUED -> {
+                  downloadViewModel.pause(existing.itemId)
+                  Toast.makeText(
+                    context,
+                    if (existing.status == EmbyDownloadStatus.QUEUED) "已暂停下载（已移出队列）" else "已暂停下载",
+                    Toast.LENGTH_SHORT,
+                  ).show()
+                }
 
-                EmbyEnqueueResult.EXISTS ->
-                  Toast.makeText(context, "该媒体已在下载列表中", Toast.LENGTH_SHORT).show()
+                EmbyDownloadStatus.PAUSED, EmbyDownloadStatus.FAILED -> {
+                  downloadViewModel.resume(existing.itemId)
+                  Toast.makeText(context, "已继续下载", Toast.LENGTH_SHORT).show()
+                }
 
-                EmbyEnqueueResult.COMPLETED ->
+                EmbyDownloadStatus.COMPLETED ->
                   Toast.makeText(context, "该媒体已经下载过了", Toast.LENGTH_SHORT).show()
 
-                EmbyEnqueueResult.INVALID ->
-                  Toast.makeText(context, "该媒体不支持下载", Toast.LENGTH_SHORT).show()
+                null ->
+                  when (downloadViewModel.enqueue(currentServer, current)) {
+                    EmbyEnqueueResult.STARTED ->
+                      Toast.makeText(context, "已加入下载队列", Toast.LENGTH_SHORT).show()
+
+                    EmbyEnqueueResult.EXISTS ->
+                      Toast.makeText(context, "该媒体已在下载列表中", Toast.LENGTH_SHORT).show()
+
+                    EmbyEnqueueResult.COMPLETED ->
+                      Toast.makeText(context, "该媒体已经下载过了", Toast.LENGTH_SHORT).show()
+
+                    EmbyEnqueueResult.INVALID ->
+                      Toast.makeText(context, "该媒体不支持下载", Toast.LENGTH_SHORT).show()
+                  }
               }
             },
-            downloadLabel = downloadTasks.firstOrNull { it.itemId == current.Id }?.let { task ->
+            downloadLabel = currentDownload?.let { task ->
               when (task.status) {
                 EmbyDownloadStatus.COMPLETED -> "已下载"
                 EmbyDownloadStatus.PAUSED -> "已暂停"
@@ -262,9 +294,10 @@ data class EmbyDetailScreen(
                   "下载中 ${((task.progressFraction ?: 0f) * 100).toInt()}%"
               }
             },
+            downloadStatus = currentDownload?.status,
             // 下载按钮的自下而上填充进度：下载中/暂停用真实进度，已完成填满，
             // 排队给一个 0 值（按钮内部会做呼吸式待机动画），没任务传 null 不画
-            downloadProgress = downloadTasks.firstOrNull { it.itemId == current.Id }?.let { task ->
+            downloadProgress = currentDownload?.let { task ->
               when (task.status) {
                 EmbyDownloadStatus.RUNNING -> task.progressFraction ?: 0f
                 EmbyDownloadStatus.PAUSED -> task.progressFraction ?: 0f
@@ -273,9 +306,7 @@ data class EmbyDetailScreen(
                 EmbyDownloadStatus.FAILED -> 0f
               }
             },
-            downloadFailed = downloadTasks.any {
-              it.itemId == current.Id && it.status == EmbyDownloadStatus.FAILED
-            },
+            downloadFailed = currentDownload?.status == EmbyDownloadStatus.FAILED,
             onCast = {
               val id = current.Id
               if (id != null) {
@@ -580,6 +611,8 @@ private fun DetailBody(
   /** 点类型 / 标签 chip：进「按该类型 / 标签找片」页（keyword / 是否类型） */
   onMetaClick: (keyword: String, isGenre: Boolean) -> Unit,
   downloadLabel: String?,
+  /** 当前下载任务状态；null = 没有任务。用来决定按钮是「下载 / 暂停 / 继续 / 已完成」 */
+  downloadStatus: EmbyDownloadStatus?,
   /** 下载填充进度 0..1；null = 没有下载任务（不画填充） */
   downloadProgress: Float?,
   downloadFailed: Boolean,
@@ -609,6 +642,7 @@ private fun DetailBody(
           onDownload = onDownload,
           onCast = onCast,
           downloadLabel = downloadLabel,
+          downloadStatus = downloadStatus,
           downloadProgress = downloadProgress,
           downloadFailed = downloadFailed,
         )
@@ -989,6 +1023,7 @@ private fun PlaySection(
   onDownload: () -> Unit,
   onCast: () -> Unit,
   downloadLabel: String?,
+  downloadStatus: EmbyDownloadStatus?,
   /** 下载填充进度 0..1；null = 没有下载任务（不画填充） */
   downloadProgress: Float?,
   downloadFailed: Boolean,
@@ -1034,8 +1069,9 @@ private fun PlaySection(
       //   已暂停：停在当前进度
       //   已下载：填满整枚按钮 + 图标换成对勾
       //   排队中：细条填充 + 透明度呼吸，示意「在队列里等」
-      // 任何状态都可点：有任务时再点由 enqueue 弹「已在下载列表 / 已下载过」的提示，
-      // 所以不用 enabled 置灰（置灰会把整个按钮压成半透明，进度带就看不清了）。
+      // 这个按钮同时也是「暂停 / 继续」开关：下载中（或排队）点一下暂停、已暂停点一下继续，
+      // 图标随状态换成 暂停 / 播放 箭头，让用户能一眼看出再点会发生什么。
+      // 已完成只弹提示；不用 enabled 置灰（置灰会把整个按钮压成半透明，进度带就看不清了）。
       if (isDownloadable(item)) {
         val animatedFill by animateFloatAsState(
           targetValue = downloadProgress ?: 0f,
@@ -1049,7 +1085,7 @@ private fun PlaySection(
             animationSpec = infiniteRepeatable(tween(durationMillis = 900)),
             label = "downloadQueuedAlpha",
           )
-        val isQueued = downloadLabel == "排队中"
+        val isQueued = downloadStatus == EmbyDownloadStatus.QUEUED
         val fillFraction = when {
           downloadProgress == null -> 0f
           isQueued -> 0.06f
@@ -1083,9 +1119,19 @@ private fun PlaySection(
                   .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.45f * fillAlpha)),
             )
           }
+          val (downloadIcon, downloadActionLabel) = when (downloadStatus) {
+            EmbyDownloadStatus.RUNNING, EmbyDownloadStatus.QUEUED ->
+              Icons.Default.Pause to "暂停下载"
+
+            EmbyDownloadStatus.PAUSED, EmbyDownloadStatus.FAILED ->
+              Icons.Default.PlayArrow to "继续下载"
+
+            EmbyDownloadStatus.COMPLETED -> Icons.Default.Check to "已下载"
+            null -> Icons.Default.Download to "下载"
+          }
           Icon(
-            imageVector = if (downloadLabel == "已下载") Icons.Default.Check else Icons.Default.Download,
-            contentDescription = downloadLabel ?: "下载",
+            imageVector = downloadIcon,
+            contentDescription = downloadActionLabel,
             tint = when {
               downloadFailed -> MaterialTheme.colorScheme.error
               downloadLabel == null -> MaterialTheme.colorScheme.onPrimaryContainer
