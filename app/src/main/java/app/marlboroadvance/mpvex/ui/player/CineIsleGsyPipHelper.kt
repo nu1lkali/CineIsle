@@ -15,6 +15,7 @@ import android.util.Log
 import android.util.Rational
 import androidx.activity.ComponentActivity
 import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.preferences.GsyPreferences
 import com.shuyu.gsyvideoplayer.GSYVideoManager
 
 private const val PIP_INTENTS_FILTER = "gsy_pip_action"
@@ -31,9 +32,13 @@ private const val PIP_FORWARD = 4
  * 只是把指令通道从 mpv 属性换成 GSY 自己的 `GSYVideoManager`：
  * `pause()/start()/seekTo()` —— 这三个是 `GSYVideoBaseManager` 的公开方法，
  * 操控的正是当前接管播放的那个实例（全屏克隆实例也归它管），所以不用去碰具体 View。
+ *
+ * 小窗里「只留画面、控件全部收起」不在本类做 —— 那是视图层的事，
+ * 见 `CineIsleGsyPlayer.setPipMode()`（由 Activity 的 `onPictureInPictureModeChanged` 驱动）。
  */
 class CineIsleGsyPipHelper(
   private val activity: ComponentActivity,
+  private val prefs: GsyPreferences,
 ) {
   private var receiver: BroadcastReceiver? = null
 
@@ -107,8 +112,9 @@ class CineIsleGsyPipHelper(
           setSourceRectHint(sourceRect(it))
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-          // 用户按 Home 时自动进小窗
-          setAutoEnterEnabled(true)
+          // 用户按 Home 时自动进小窗。**默认关**，由设置项 gsy_pip_auto_enter 决定：
+          // 开着的话用户按 Home 想去干别的，视频会一直挂在小窗上 —— 主动按画中画键才是预期路径。
+          setAutoEnterEnabled(prefs.pipAutoEnter.get())
         }
         setActions(actions())
       }.build()

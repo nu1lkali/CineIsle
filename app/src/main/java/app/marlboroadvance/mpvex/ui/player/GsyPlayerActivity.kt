@@ -68,13 +68,16 @@ import tv.danmaku.ijk.media.player.misc.ITrackInfo
  * 1. 布局里直接声明 [CineIsleGsyPlayer]（它自己把内部布局换成 CineIsle 版）；
  * 2. 起播前把「全局静态」和「实例级」偏好全部灌进 GSY 官方 setter（见 [applyStatics] / [configurePlayer]）；
  * 3. `setUp(url, cacheWithPlay, title)` 绑定地址 → `startPlayLogic()` 起播；
- * 4. 全屏走**官方那套 window 全屏**：`orientationUtils.resolveByClick()` 先转屏，
- *    再 `startWindowFullscreen(...)`（或由 GSY 自己在配置变化里触发）。只有走这条路，
+ * 4. 全屏仍然走**官方那套 window 全屏**（`startWindowFullscreen` 会克隆一个新实例、
  *    `setLockLand` / `setNeedLockFull` / `setHideKey` / `setFullHideStatusBar` /
- *    `setAutoFullWithSize` / `setShowFullAnimation` 这些「全屏专属」能力才会真的生效；
+ *    `setAutoFullWithSize` / `setShowFullAnimation` 这些「全屏专属」能力也才真的生效），
+ *    但**进入全屏的方向不再交给官方的 `resolveByClick()`** —— 它会被「竖屏视频自动竖屏全屏」
+ *    提前 return 掉、还会和应用内方向请求来回拉锯。现在由 [toggleLandscapeFullscreen]
+ *    直接请求方向，配置变化时再由 GSY 自己进出全屏；
  * 5. 返回键：先 `orientationUtils.backToProtVideo()` 回竖屏，再 `backFromWindowFull()` 退全屏，
  *    最后才 `finish()`；
  * 6. `onPause → onVideoPause()`、`onResume → onVideoResume()`、退出 → `GSYVideoManager.releaseAllVideos()`。
+ *    注意画中画：进小窗时系统也会走 `onPause`，那两种情况下都不该暂停/恢复（见 onPause / onResume）。
  *
  * 它不继承 [PlayerActivity]：mpv 那一整套 Compose 控件 / ViewModel / 属性门面与 GSY 无关，
  * 混在一起只会互相干扰。
@@ -97,6 +100,21 @@ class GsyPlayerActivity : ComponentActivity() {
 
   /** DLNA 投屏：与 mpv 播放页 / 详情页共用同一个单例（发现、连接、投屏状态都在它里面） */
   private val dlnaManager: DlnaCastManager by inject()
+
+  /**
+   * 一次「退出全屏」正在路上。
+   *
+   * GSY 的退出不是同步的：`clearFullscreenLayout` 只是把 `backToNormal` post 到主线程，
+   * 真正的收尾（摘掉克隆视图、把 listener 还给小屏实例、回调 onQuitFullscreen）要等这个
+   * 任务跑完。这期间 manager 的 listener 还指着正在退场的克隆实例 —— 若此时再来一次
+   * 旋转配置让 GSY 继续处理，它会「克隆正在退场的克隆」：新克隆顶掉旧克隆的窗口视图，
+   * 等旧克隆的退出任务落地时又把新克隆从窗口摘掉、把 listener 挂回已被拆除的视图 ——
+   * 画面从此黑住、渲染层断掉、所有方向/返回键在窗口里找不到全屏视图而全部失灵
+   * （快速反复横竖屏必现）。
+   *
+   * 所以进出全屏必须串行：退出在途时忽略新的进出请求，退出落地后按当前实际方向补收尾。
+   */
+  private var fullBusy = false
 
   private var player: CineIsleGsyPlayer? = null
 
@@ -127,12 +145,12 @@ class GsyPlayerActivity : ComponentActivity() {
   private var subtitleOffsetMs: Long = 0L
 
   /**
-   * 用户手动强制横屏中。
+   * 用户手动切到横屏中。
    *
    * GSY 的「竖屏视频自动竖屏全屏」（`setAutoFullWithSize`，本项目默认开）会让
-   * `OrientationUtils.resolveByClick()` 对竖屏视频**直接 return** —— 表现就是
-   * 「竖屏视频点全屏没反应、点好几次才切过去」。用户手动按横屏键时把这项临时关掉，
-   * 全屏期间保持关闭，退出全屏再恢复。
+   * `isVerticalFullByVideoSize()` 在竖屏视频上恒为 true，进而让官方
+   * `onConfigurationChanged()` 的**竖屏分支拒绝退全屏**（见 GSYBaseVideoPlayer 源码）。
+   * 手动横屏期间把这项临时关掉（竖屏实例与全屏克隆实例都要），退出横屏再恢复用户设置。
    */
   private var forcedLandscape = false
 
@@ -171,7 +189,7 @@ class GsyPlayerActivity : ComponentActivity() {
 
     val view = findViewById<CineIsleGsyPlayer>(R.id.gsy_player)
     player = view
-    pipHelper = CineIsleGsyPipHelper(this)
+    pipHelper = CineIsleGsyPipHelper(this, prefs)
 
     if (!readSession(intent)) {
       finish()
@@ -180,12 +198,11 @@ class GsyPlayerActivity : ComponentActivity() {
 
     // ── 官方 demo 的「三件套」 ──
     setUpOrientation(view)
-    view.getFullscreenButton()?.setOnClickListener { toggleLandscapeFullscreen() }
-    view.getBackButton()?.setOnClickListener { onBackPressedDispatcher.onBackPressed() }
     installCallbacks(view)
+    bindShellButtons(view)
     bindControls(view)
     applyTitlePlacement(view)
-    setUpFavoriteButton()
+    setUpFavoriteButton(view)
 
     // 续播 / 起播；显式「从头播放」时带 play_from_start，重建播放页（换渲染方式）时带
     // gsy_restore_position，此时不受「续播到上次位置」开关影响。
@@ -206,7 +223,7 @@ class GsyPlayerActivity : ComponentActivity() {
           }
           orientationUtils?.backToProtVideo()
           forcedLandscape = false
-          if (GSYVideoManager.backFromWindowFull(this@GsyPlayerActivity)) return
+          if (requestExitFullscreen()) return
           finish()
         }
       },
@@ -561,7 +578,23 @@ class GsyPlayerActivity : ComponentActivity() {
   // ────────────────────────────────────────────────────────────────────────
 
   /**
-   * 给自控的按钮条接线。
+   * 接上 GSY **自己的**那两个键：右下角的 `fullscreen` 与左上角的 `back`。
+   *
+   * 它们由 GSY 在 `init()` 里绑好官方行为，我们覆盖掉：
+   *  · `fullscreen` → [toggleLandscapeFullscreen]（手机上「全屏」和「横屏」本来就是一件事，
+   *    所以整个播放页只有这一个方向键，不再另设一个横屏键）；
+   *  · `back` → 交给系统的返回分发，和物理返回键 / 手势返回走同一条路径。
+   *
+   * **必须按实例调用**：GSY 进全屏时克隆出的那个实例是另一棵视图树，它的这两个键
+   * 还是官方默认行为（点「退出全屏」键会走 GSY 内部那套，状态和我们自己维护的对不上）。
+   */
+  private fun bindShellButtons(view: CineIsleGsyPlayer) {
+    view.getFullscreenButton()?.setOnClickListener { toggleLandscapeFullscreen() }
+    view.getBackButton()?.setOnClickListener { onBackPressedDispatcher.onBackPressed() }
+  }
+
+  /**
+   * 接线给自控的按钮条。
    *
    * 「换渲染载体」只能在重建播放页时生效，所以这里顺手把当前进度写回 intent 再重建 ——
    * 观感上就是画面闪一下、继续播，而不是被打回从头。
@@ -583,7 +616,6 @@ class GsyPlayerActivity : ComponentActivity() {
           onPrevious = { playIndex(currentIndex - 1) },
           onNext = { playIndex(currentIndex + 1) },
           onSwitchEngine = { switchToMpvPlayer() },
-          onOrientation = { toggleLandscapeFullscreen() },
           onScreenshot = { takeSnapshot() },
           onSubtitle = { showSubtitleMenu() },
           onAudioTrack = { showAudioTrackDialog() },
@@ -607,18 +639,19 @@ class GsyPlayerActivity : ComponentActivity() {
     view.setVideoAllCallBack(
       object : GSYSampleCallBack() {
         override fun onEnterFullscreen(url: String?, vararg objects: Any?) {
+          // GSY 13.x 的回调签名是 onEnterFullscreen(url, title, fullPlayer)：
+          // objects = [title 字符串, 克隆实例]。直接在 objects 里找实例，
+          // 别依赖 listener() —— 非动画分支下它此刻还指向竖屏的小屏实例，
+          // 拿去 configureClone 会把克隆实例整个漏掉（全屏里收藏键/玻璃按钮全失灵）。
           val full =
-            (objects.getOrNull(0) as? CineIsleGsyPlayer)
+            objects.firstNotNullOfOrNull { it as? CineIsleGsyPlayer }
               ?: (GSYVideoManager.instance().listener() as? CineIsleGsyPlayer)
           full?.let { configureClone(it) }
           pipHelper?.updateParams()
         }
 
         override fun onQuitFullscreen(url: String?, vararg objects: Any?) {
-          fullscreenPlayer = null
-          // 退出全屏 = 这次「手动强制横屏」结束，把「竖屏视频自动竖屏全屏」还给用户设置
-          forcedLandscape = false
-          player?.let { applyAutoFullWithSize(it) }
+          handleFullExited()
         }
 
         override fun onAutoComplete(url: String?, vararg objects: Any?) {
@@ -643,8 +676,12 @@ class GsyPlayerActivity : ComponentActivity() {
     applySafeArea(clone)
     configurePlayer(clone)
     applyTitlePlacement(clone)
+    bindShellButtons(clone)
     bindControls(clone)
     syncNavigation(clone)
+    // 克隆实例是**另一棵视图树**：它自己的 gsy_btn_favorite 是个全新的空 ComposeView，
+    // setContent 只对竖屏实例做过，所以一进全屏顶栏那个收藏键就"消失"了 —— 这里补挂一次。
+    setUpFavoriteButton(clone)
   }
 
   /** 克隆实例自己也要能收到「播完自动下一集」，否则全屏下看完就停在那儿 */
@@ -659,9 +696,7 @@ class GsyPlayerActivity : ComponentActivity() {
       }
 
       override fun onQuitFullscreen(url: String?, vararg objects: Any?) {
-        fullscreenPlayer = null
-        forcedLandscape = false
-        player?.let { applyAutoFullWithSize(it) }
+        handleFullExited()
       }
     }
 
@@ -722,50 +757,54 @@ class GsyPlayerActivity : ComponentActivity() {
   }
 
   /**
-   * 竖屏 ↔ 横屏全屏，一次点击完成一次切换。
+   * 竖屏 ↔ 横屏，一次点击切过去。
    *
-   * **不复用官方 `resolveByClick()` 的判定**，因为它在竖屏视频上会提前 return：
+   * 这是播放页**唯一**的方向键 —— 绑在右下角 GSY 官方的 `fullscreen` 键上（见 [bindShellButtons]）。
+   * 手机上「全屏」和「横屏全屏」本来就是同一件事，之前拆成两个键又指向同一条逻辑，
+   * 只会让人不知道该点哪个 —— 现在只留一个。
    *
-   * ```java
-   * if (mIsLand == 0 && mVideoPlayer.isVerticalFullByVideoSize()) return;   // ← 竖屏视频被吃掉
-   * ```
+   * 做法上**刻意绕开官方的 `resolveByClick()`**，只做一件事：直接改 Activity 的方向请求。
+   * 为什么不能用它：
    *
-   * 而 `isVerticalFullByVideoSize() = isVerticalVideo() && isAutoFullWithSize()`，
-   * 本项目 `setAutoFullWithSize` 默认是开的 —— 于是「竖屏视频点全屏没反应、
-   * 得点好几次才能切到横屏」。
+   *  1. 它第一行就是 `if (mIsLand == 0 && mVideoPlayer.isVerticalFullByVideoSize()) return;`，
+   *     而 `isVerticalFullByVideoSize() = isVerticalVideo() && isAutoFullWithSize()` ——
+   *     本项目 `setAutoFullWithSize` 默认开着，于是**竖屏视频点它直接被 return**，怎么点都没反应。
+   *  2. 它设的是 `SCREEN_ORIENTATION_SENSOR_LANDSCAPE`，之后 `OrientationUtils` 的传感器回调
+   *     还会按重力再把方向改回去 —— 两个方向请求来回拉锯，用户就得点好几次才切得过去。
    *
-   * 这里的处理：手动切横屏时用 [forcedLandscape] 把「竖屏视频自动竖屏全屏」临时关掉，
-   * 官方的 `resolveByClick()` 就会正常转屏；退出全屏时再恢复用户设置。
+   * 现在的做法：
+   *  · 切横屏 → 先 `orientationUtils.setEnable(false)` 把传感器让开，再请求 `SENSOR_LANDSCAPE`，一次到位；
+   *  · 切竖屏 → 请求 `SENSOR`（与 mpv 播放页一致：交还重力感应），
+   *    由 `onConfigurationChanged` 的竖屏分支把 `orientationUtils` 重新启用。
+   *
+   * 进 / 出全屏仍然交给 GSY 官方那条路（转横屏它就进全屏、转竖屏它就退全屏），
+   * 只是入口从「官方按重力判断」换成了「我们明确要求的方向」。
    */
   private fun toggleLandscapeFullscreen() {
     val view = player ?: return
-    val somehowLandscape =
-      view.isIfCurrentIsFullscreen ||
-        resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-    if (somehowLandscape) {
-      // → 回竖屏
-      forcedLandscape = false
-      applyAutoFullWithSize(view)
-      orientationUtils?.backToProtVideo()
-      if (GSYVideoManager.backFromWindowFull(this)) return
-      // 没有 window 全屏（只是被转了屏），那就把方向请求改回竖屏
-      requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    if (landscape) {
+      // → 回竖屏：退出走幂等入口（退出在途时这里会 no-op，见 [fullBusy]）
+      requestExitFullscreen()
+      requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
       return
     }
 
-    // → 强制横屏全屏
-    // 判定「竖屏视频」的 isVerticalFullByVideoSize() 是 protected，外部拿不到，
-    // 所以这里一律按「强制横屏」处理：手动切横屏时本就不再需要「竖屏视频自动竖屏全屏」。
+    // → 竖屏状态下的旋转键
+    if (fullscreenPlayer != null) {
+      // 竖屏视频的「竖屏全屏」在场：这一下先退全屏回普通竖屏，再点一下才转横屏
+      requestExitFullscreen()
+      return
+    }
+    if (fullBusy) return
+
+    // 判定「竖屏视频」的 isVerticalFullByVideoSize() 是 protected，外部拿不到；
+    // 手动切横屏时本来也不需要「竖屏视频自动竖屏全屏」，所以一律按强制横屏处理。
     forcedLandscape = true
     applyAutoFullWithSize(view)
-    orientationUtils?.resolveByClick()
-    if (!view.isIfCurrentIsFullscreen) {
-      val full =
-        view.startWindowFullscreen(this, false, prefs.fullHideStatusBar.get()) as? CineIsleGsyPlayer
-      full?.let { configureClone(it) }
-    }
-    applyTitlePlacement(view)
+    orientationUtils?.setEnable(false)
+    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -1052,8 +1091,15 @@ class GsyPlayerActivity : ComponentActivity() {
       Toast.makeText(this, R.string.gsy_pip_unsupported, Toast.LENGTH_SHORT).show()
       return
     }
-    // 小窗里不需要控件条（系统会整块裁掉，留着只是白占一层）
+    // 进小窗前先把两棵视图树的控件收掉 —— 系统的 onPictureInPictureModeChanged
+    // 要等收缩动画开始之后才回调，等它再收的话，控件条会被整块等比缩进小窗里挤成一坨。
+    player?.setPipMode(true)
+    fullscreenPlayer?.takeIf { it !== player }?.setPipMode(true)
+
     if (!helper.enter()) {
+      // 进小窗失败（极少数机型）：把控件还原回来，别让页面停在无控件状态
+      player?.setPipMode(false)
+      fullscreenPlayer?.takeIf { it !== player }?.setPipMode(false)
       Toast.makeText(this, R.string.gsy_pip_unsupported, Toast.LENGTH_SHORT).show()
     }
   }
@@ -1117,11 +1163,14 @@ class GsyPlayerActivity : ComponentActivity() {
    * 挂的是 mpv 播放页那份 [EmbyFavoritePlayerButton]（弹跳 + 星光 + 红心渐变完全一致），
    * 状态来自 `EmbyPlayerActions` 单例：[readSession] 里已经 `bind` 过本次播放的 server/item，
    * 非 Emby 播放时它自己会渲染成空。
+   *
+   * **必须按实例调用**：GSY 进全屏时克隆出的那个实例是另一棵视图树，它自己的
+   * `gsy_btn_favorite` 是个全新的空 ComposeView，不补挂就看不到收藏键。
    */
-  private fun setUpFavoriteButton() {
-    val host = findViewById<ComposeView>(R.id.gsy_btn_favorite) ?: return
-    host.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-    host.setContent { FavoriteButtonContent() }
+  private fun setUpFavoriteButton(host: View) {
+    val compose = host.findViewById<ComposeView>(R.id.gsy_btn_favorite) ?: return
+    compose.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+    compose.setContent { FavoriteButtonContent() }
   }
 
   @Composable
@@ -1234,14 +1283,17 @@ class GsyPlayerActivity : ComponentActivity() {
 
   override fun onPause() {
     super.onPause()
-    player?.onVideoPause()
+    // 进画中画时系统也会走 onPause —— 但小窗的全部意义就是继续播，
+    // 所以按官方指引排除这个状态，否则小窗里只剩一张停住的画面。
+    if (!isInPictureInPictureMode) player?.onVideoPause()
     // 离开页面就停掉重力感应监听（13.x 里 pause()/resume() 改成了这个开关）
     orientationUtils?.setIsPause(true)
   }
 
   override fun onResume() {
     super.onResume()
-    player?.onVideoResume()
+    // 同理：小窗被系统重新“唤起”时不要反过来去恢复播放，会把小窗的状态搞乱
+    if (!isInPictureInPictureMode) player?.onVideoResume()
     orientationUtils?.setIsPause(false)
     pipHelper?.updateParams()
   }
@@ -1252,6 +1304,9 @@ class GsyPlayerActivity : ComponentActivity() {
   ) {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     pipHelper?.onPictureInPictureModeChanged(isInPictureInPictureMode)
+    // 小窗里只留画面：两棵视图树（竖屏实例 + 全屏克隆实例）都要收控件
+    player?.setPipMode(isInPictureInPictureMode)
+    fullscreenPlayer?.takeIf { it !== player }?.setPipMode(isInPictureInPictureMode)
   }
 
   override fun onDestroy() {
@@ -1270,19 +1325,95 @@ class GsyPlayerActivity : ComponentActivity() {
 
   /**
    * 页面声明了 `configChanges="orientation|screenSize|..."`，旋转时系统**不会重建 Activity**，
-   * 所以要主动把配置变化交给 GSY —— 它才会在转到横屏时进全屏、转回竖屏时退全屏。
-   * （官方 demo DetailPlayer 的 onConfigurationChanged 就是这一句。）
+   * 全屏的进出由这里串行驱动（等价于 GSY `onConfigurationChanged` 的两个分支，但加了守卫）：
    *
-   * GSY 可能在这次调用里自己进出全屏，所以标题落位要放在它之后重新算一遍。
+   *  · 转横屏且当前没有全屏克隆 → 直接在小屏实例上调 `startWindowFullscreen`
+   *    （GSY 横屏分支就这一句，行为等价；入口收敛到「永远只克隆小屏实例」，
+   *    杜绝对着退场中的克隆再克隆一次）。过渡动画必须关：此刻窗口刚转成横屏，
+   *    小屏实例还带着竖屏的旧几何，GSY 的动画分支会按这份过期矩形摆克隆、
+   *    300ms 后再展开 —— 就是「画面塞在角落、周围黑屏、然后恢复」的来源。
+   *  · 转回竖屏且全屏在场 → [requestExitFullscreen]（幂等）；竖屏视频 + 「竖屏视频
+   *    自动竖屏全屏」时按 GSY 原语义保留竖屏全屏不退。
+   *  · 其余情况（退出在途 / 已在全屏 / 画中画里）一律不动 —— 见 [fullBusy] 的说明。
    */
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
-    val view = player ?: return
-    val utils = orientationUtils ?: return
-    view.onConfigurationChanged(this, newConfig, utils, false, prefs.fullHideStatusBar.get())
+    val landscape = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-    applyTitlePlacement(view)
-    fullscreenPlayer?.takeIf { it !== view }?.let { applyTitlePlacement(it) }
+    if (isInPictureInPictureMode || fullBusy) return
+
+    if (landscape) {
+      if (fullscreenPlayer == null) enterLandscapeFullscreen()
+    } else {
+      val view = player
+      if (fullscreenPlayer != null && view != null && !view.isVerticalFullByVideoSize()) {
+        requestExitFullscreen()
+      }
+      // GSY 竖屏分支的另一半：回到竖屏后把方向交还给重力感应
+      orientationUtils?.setEnable(true)
+    }
+
+    // GSY 可能刚做完进出全屏（克隆是另一棵视图树），标题落位两棵树都要重算
+    player?.let { applyTitlePlacement(it) }
+    fullscreenPlayer?.takeIf { it !== player }?.let { applyTitlePlacement(it) }
+  }
+
+  /**
+   * 进入横屏全屏。只在 [fullBusy] 为 false 且没有克隆在场时调用。
+   *
+   * 刻意绕开 GSY 的 `resolveByClick()`（见 [toggleLandscapeFullscreen]），
+   * 也直接调官方 `startWindowFullscreen` 而不是转发配置变化 —— 二者内部等价，
+   * 但这里能拿到返回值同步做 [configureClone]，不依赖 300ms 后才来的 onEnterFullscreen
+   * （那个回调在非动画分支下还会把小屏实例误当成克隆实例，见 installCallbacks 里的注释）。
+   */
+  private fun enterLandscapeFullscreen() {
+    val view = player ?: return
+    // 旋转驱动的进入不走过渡动画（此刻几何是过期的竖屏值，动画必然「塞在角落」）
+    view.setShowFullAnimation(false)
+    val full = view.startWindowFullscreen(this, false, prefs.fullHideStatusBar.get())
+    // 小屏实例的动画设置还回去（「竖屏视频自动竖屏全屏」那条路还要用它）
+    view.setShowFullAnimation(prefs.showFullAnimation.get())
+    (full as? CineIsleGsyPlayer)?.let { clone ->
+      // 克隆实例保持关闭：它退出全屏的收缩动画用的也是同一份过期矩形
+      clone.setShowFullAnimation(false)
+      configureClone(clone)
+    }
+  }
+
+  /**
+   * 发起一次全屏退出（幂等）。真正落地时 onQuitFullscreen → [handleFullExited] 会清掉 [fullBusy]。
+   *
+   * @return 是否真的发起了一次退出（已在退出中 / 没有全屏在场时返回 false）
+   */
+  private fun requestExitFullscreen(): Boolean {
+    if (fullscreenPlayer == null || fullBusy) return false
+    fullBusy = true
+    val exited = GSYVideoManager.backFromWindowFull(this)
+    if (!exited) fullBusy = false
+    return exited
+  }
+
+  /**
+   * 全屏退出的统一收尾（onQuitFullscreen 回调，两份回调实例都汇到这里）。
+   * 退出落地时窗口若停在横屏（快速旋转时退出比方向变化慢半拍），把横屏全屏补回来。
+   */
+  private fun handleFullExited() {
+    fullscreenPlayer = null
+    fullBusy = false
+    // 退出全屏 = 这次「手动强制横屏」结束，把「竖屏视频自动竖屏全屏」还给用户设置
+    forcedLandscape = false
+    player?.let {
+      applyAutoFullWithSize(it)
+      applyTitlePlacement(it)
+    }
+    if (
+      !isFinishing &&
+        !isDestroyed &&
+        !isInPictureInPictureMode &&
+        resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    ) {
+      enterLandscapeFullscreen()
+    }
   }
 
   companion object {

@@ -511,6 +511,28 @@ object GsyPreferencesScreen : Screen {
           }
 
           // ────────────────────────────────────────────────────────
+          item { PreferenceSectionHeader(title = "画中画") }
+
+          item {
+            PreferenceCard {
+              val pipAutoEnter by prefs.pipAutoEnter.collectAsState()
+              SwitchPreference(
+                value = pipAutoEnter,
+                onValueChange = { prefs.pipAutoEnter.set(it) },
+                title = { Text("按 Home 键自动进小窗") },
+                summary = {
+                  Text(
+                    text = "官方 setAutoEnterEnabled（Android 12+ 才生效）。" +
+                      "关闭（默认）：只有按播放页里的画中画键才进小窗；" +
+                      "开启：一按 Home 键就把画面缩成小窗继续播",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+            }
+          }
+
+          // ────────────────────────────────────────────────────────
           item { PreferenceSectionHeader(title = "全屏与旋转") }
 
           item {

@@ -5,8 +5,8 @@
   这是 CineIsleGsyPlayer.getLayoutId() 指向的布局：GSY 用自己的状态机驱动它，
   但外观完全按 CineIsle 播放器（player_layout.xml + PlayerControls.kt）重画：
 
-    · 顶栏：玻璃圆底返回键 + 右端一组动作键
-      （Emby 收藏 / 横竖屏切换 / 切换到 mpv）；**横屏时媒体标题也搬到这里**，
+    · 顶栏：玻璃圆底返回键 + 右端动作键（Emby 收藏 / 切换到 mpv）；
+      **横屏时媒体标题也搬到这里**，
       和返回键同一行（见 CineIsleGsyPlayer.applyTitlePlacement）——横屏横向空间富裕，
       标题压在顶栏不会跟按钮条抢位置；竖屏则回到底栏、独占一行居中。
     · 正中：上一集 / 播放暂停 / 下一集 —— 与 mpv 播放页「播放键两侧夹着上下一集」一致
@@ -16,6 +16,11 @@
       → 播放键行（倍速 / 循环 / 比例 / 渲染 / 滤镜 / 静音）
     · 最底：2dp 细进度线（控件隐藏时仅剩它）
     · 顶/底各垫一层渐变遮罩，随控件一起淡入淡出
+
+  **只有右下角一个方向键**：`fullscreen` 那个键同时承担「全屏」和「横竖屏切换」——
+  在手机上这本来就是同一件事（全屏 = 横屏全屏），拆成两个键只会让人不知道该点哪个。
+  点它的行为见 GsyPlayerActivity.toggleLandscapeFullscreen()：
+  竖屏 → 横屏全屏；横屏全屏 → 回竖屏。
 
   按钮分两行的理由：一行塞 11 个键在 360dp 竖屏上必然溢出（每个 42dp + 8dp 间距），
   分「播放相关」「内容相关」两行既放得下，也比横向滚动更好按。
@@ -76,7 +81,7 @@
         android:layout_alignParentBottom="true"
         android:background="@drawable/gsy_scrim_bottom" />
 
-    <!-- ⑤ 顶栏：返回键 + （横屏时才有的标题）+ 弹性占位 + 收藏 / 横竖屏 / 切换内核。
+    <!-- ⑤ 顶栏：返回键 + （横屏时才有的标题）+ 弹性占位 + 收藏 / 切换内核。
          paddingTop 由 GsyPlayerActivity 按状态栏安全区在运行时补齐。
          标题（id=title）默认不在这里，横屏时才由 CineIsleGsyPlayer 插到返回键右侧，
          同时把 gsy_top_spacer 置为 GONE，让标题吃满中间的空间。 -->
@@ -120,17 +125,7 @@
             android:layout_height="40dp"
             android:layout_marginEnd="4dp" />
 
-        <!-- 横竖屏切换（点一下就在竖屏 / 横屏全屏之间来回切） -->
-        <ImageView
-            android:id="@+id/gsy_btn_orientation"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:background="@drawable/gsy_ctrl_circle"
-            android:contentDescription="@string/gsy_control_orientation"
-            android:padding="9dp"
-            android:scaleType="centerInside"
-            android:src="@drawable/gsy_ic_orientation" />
-
+        <!-- 横竖屏切换已经并到右下角那个 fullscreen 键上，顶栏不再重复放一个 -->
         <ImageView
             android:id="@+id/gsy_btn_engine"
             android:layout_width="40dp"
@@ -326,7 +321,7 @@
                 android:src="@drawable/gsy_ic_cast" />
         </LinearLayout>
 
-        <!-- ⑥-d 进度条行：已播时间 / 可拖进度条 / 总时长 / 全屏键 -->
+        <!-- ⑥-d 进度条行：已播时间 / 可拖进度条 / 总时长 / 全屏（＝横竖屏切换）键 -->
         <LinearLayout
             android:id="@+id/gsy_seek_row"
             android:layout_width="match_parent"
@@ -374,16 +369,18 @@
                 android:textSize="12sp"
                 android:typeface="monospace" />
 
+            <!-- 播放页唯一的方向键：竖屏点它进横屏全屏，横屏点它回竖屏。
+                 图标固定用「旋转」，GSY 的 getEnlargeImageRes / getShrinkImageRes 都指向它。 -->
             <ImageView
                 android:id="@+id/fullscreen"
                 android:layout_width="40dp"
                 android:layout_height="40dp"
                 android:layout_marginStart="6dp"
                 android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/player_control_fullscreen"
-                android:padding="8dp"
+                android:contentDescription="@string/gsy_control_orientation"
+                android:padding="9dp"
                 android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_fullscreen" />
+                android:src="@drawable/gsy_ic_rotate" />
         </LinearLayout>
     </LinearLayout>
 

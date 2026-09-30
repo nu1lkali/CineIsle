@@ -3,7 +3,9 @@ package app.marlboroadvance.mpvex.ui.player
 import android.content.Context
 import android.util.AttributeSet
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -44,8 +46,6 @@ class GsyGlassActions(
   val onPrevious: () -> Unit = {},
   val onNext: () -> Unit = {},
   val onSwitchEngine: () -> Unit = {},
-  /** 横竖屏切换（竖屏 ↔ 横屏全屏） */
-  val onOrientation: () -> Unit = {},
   val onScreenshot: () -> Unit = {},
   val onSubtitle: () -> Unit = {},
   val onAudioTrack: () -> Unit = {},
@@ -56,7 +56,12 @@ class GsyGlassActions(
 /**
  * CineIsle 的 GSY 播放器控件。
  *
- * 四层职责，除此之外一行官方逻辑都不改（状态机、手势、全屏、缓冲动画全部按 GSY 自己的走）：
+ * 另外补了两处官方链路断掉时的兜底（都不是改官方逻辑）：
+ *  · 拆掉 GSY 挂在 `thumb` 上的点击监听 —— 本项目的 `thumb` 是空的全透明 `match_parent` 层，
+ *    被官方置为 VISIBLE 时会吃掉整屏触摸（见 [disableThumbTouch]）；
+ *  · 单击画面呼出控件条 —— 官方链路在 `mHideKey && mShowVKey` 时会被整条 `return` 掉（见 [onTouch]）。
+ *
+ * 主要职责如下，除此之外一行官方逻辑都不改（状态机、手势、全屏、缓冲动画全部按 GSY 自己的走）：
  *
  * 1. `getLayoutId()` 换成 [R.layout.gsy_player_cineisle] —— 官方文档里换布局的唯一入口；
  * 2. `setViewShowState()` 兜住官方的控件显隐出口，做三件官方不管的事：
@@ -80,14 +85,44 @@ class GsyGlassActions(
  *    | 截图 | `saveFrame(File, GSYVideoShotSaveListener)` |
  *    | 字幕 | `setSubtitleSource(GSYSubtitleSource)`（官方字幕子系统，见 GSYSubtitleController） |
  *    | 音轨 | 见 Activity：IJK 内核的 `getTrackInfo()/selectTrack()` |
- *    | 画中画 / 投屏 / 横竖屏 / 切换内核 | 交给 Activity（Activity 才拿得到窗口、DLNA 与另一套内核） |
+ *    | 画中画 / 投屏 / 切换内核 | 交给 Activity（Activity 才拿得到窗口、DLNA 与另一套内核） |
  */
 class CineIsleGsyPlayer : StandardGSYVideoPlayer {
-  constructor(context: Context) : super(context)
+  constructor(context: Context) : super(context) {
+    disableThumbTouch()
+  }
 
-  constructor(context: Context, attrs: AttributeSet?) : super(context, attrs)
+  constructor(context: Context, attrs: AttributeSet?) : super(context, attrs) {
+    disableThumbTouch()
+  }
 
-  constructor(context: Context, fullFlag: Boolean) : super(context, fullFlag)
+  constructor(context: Context, fullFlag: Boolean) : super(context, fullFlag) {
+    disableThumbTouch()
+  }
+
+  /**
+   * 拆掉 GSY 挂在 `thumb`（封面层）上的点击监听。
+   *
+   * 官方 `GSYVideoControlView.init()` 里有 `mThumbImageViewLayout.setOnClickListener(this)`，
+   * 把它变成可点击的 —— 官方布局里那层放着封面图、点击是「点封面起播」，没问题。
+   *
+   * 但本项目的 `thumb` 是**空的全透明 `match_parent` 层**（见 gsy_player_cineisle.xml），
+   * 而 GSY 在 `changeUiToNormal()` / `changeUiToCompleteShow()` 都会把它置为 **VISIBLE** ——
+   * 于是一整层看不见的可点击视图盖在画面上，把整屏触摸全部吃掉，
+   * 表现就是「控件自动隐藏后，点屏幕呼不出来」。
+   *
+   * 让这一层彻底退出触摸分发即可，GSY 依旧照常显隐它（反正它本来就没内容）。
+   * 放在构造器体里而不是 `init()` 里：构造器体一定晚于 `super` 里的 `init()`，
+   * 不会踩到「构造期间访问子类成员」的坑。
+   */
+  private fun disableThumbTouch() {
+    findViewById<View>(R.id.thumb)?.apply {
+      setOnClickListener(null)
+      isClickable = false
+      isLongClickable = false
+      isFocusable = false
+    }
+  }
 
   /** 循环开关：GSY 只把它存进私有字段 `mLooping`，没有 getter，所以本地留一份用于刷图标 */
   private var loopingState = false
@@ -101,6 +136,15 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
   /** 是否已挂上外挂字幕：用于字幕键的激活态 */
   private var subtitleActive = false
 
+  /**
+   * 正在画中画小窗里。
+   *
+   * 系统是把**整个 Activity**（连同我们这套顶栏 / 底栏 / 按钮条）等比缩进小窗的，
+   * 不特殊处理的话那些控件会一起缩进去糊成一片。为 true 时 [setViewShowState]
+   * 会把除画面之外的一切控件压成 GONE。
+   */
+  private var pipMode = false
+
   /** 播放队列是否可切换（≥ 2 个视频才有意义）—— 决定正中两侧的上/下一集要不要出现 */
   private var playlistNavigationEnabled = false
 
@@ -110,11 +154,17 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
   /** 官方扩展点：返回本项目的播放器布局（保留 GSY 状态机需要的全部 id） */
   override fun getLayoutId(): Int = R.layout.gsy_player_cineisle
 
-  /** 全屏键图标（GSY 在切全屏时会自己来取，这里换成 CineIsle 的图标） */
-  override fun getEnlargeImageRes(): Int = R.drawable.gsy_ic_fullscreen
+  /**
+   * 右下角那个键的图标。
+   *
+   * 它同时承担「全屏」和「横竖屏切换」，而这两件事在手机上本来就是同一件
+   * （全屏 = 横屏全屏），所以两个状态用**同一个旋转图标**，
+   * 不再像官方那样在「放大/缩小」两个图标之间切 —— 那反而看不出它能转屏。
+   */
+  override fun getEnlargeImageRes(): Int = R.drawable.gsy_ic_rotate
 
-  /** 退出全屏键图标 */
-  override fun getShrinkImageRes(): Int = R.drawable.gsy_ic_fullscreen_exit
+  /** 同上：全屏态也用同图标，语义是「点我转回竖屏」 */
+  override fun getShrinkImageRes(): Int = R.drawable.gsy_ic_rotate
 
   /**
    * GSY 里所有控件显隐的唯一出口（7 个 `changeUiToXxx()` 最后都收口到这里）。
@@ -122,20 +172,125 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
    * 父类实现只做 `view.setVisibility(visibility)`；这里额外：
    *  · 顶/底容器显隐时，把对应的渐变遮罩一起带上 —— 遮罩不是 GSY 认的控件，不会自己跟着动；
    *  · 正中播放键被显示时，按当前播放状态同步图标；
-   *  · 上/下一集跟着正中播放键一起显隐（GSY 不知道它们的存在）。
+   *  · 上/下一集跟着正中播放键一起显隐（GSY 不知道它们的存在）；
+   *  · 画中画小窗里把除画面之外的一切都压成 GONE（见 [pipMode]）。
    */
   override fun setViewShowState(view: View?, visibility: Int) {
-    super.setViewShowState(view, visibility)
     if (view == null) return
 
+    // 画中画小窗里只留画面：除了渲染视图本身，其余控件一律压掉
+    //（见 [pipMode] / [setPipMode]）。
+    val effective =
+      if (pipMode && view.id != R.id.surface_container) View.GONE else visibility
+
+    super.setViewShowState(view, effective)
+
     when (view.id) {
-      R.id.layout_top -> findViewById<View>(R.id.gsy_scrim_top)?.visibility = visibility
-      R.id.layout_bottom -> findViewById<View>(R.id.gsy_scrim_bottom)?.visibility = visibility
+      R.id.layout_top -> findViewById<View>(R.id.gsy_scrim_top)?.visibility = effective
+      R.id.layout_bottom -> findViewById<View>(R.id.gsy_scrim_bottom)?.visibility = effective
       R.id.start -> {
-        if (visibility == View.VISIBLE) syncStartButtonIcon(view)
-        startButtonVisibility = visibility
+        if (effective == View.VISIBLE) syncStartButtonIcon(view)
+        startButtonVisibility = effective
         applyNavigationVisibility()
       }
+    }
+  }
+
+  /**
+   * 进出画中画小窗。
+   *
+   * 进：把控件全部收起（后续显隐由 [setViewShowState] 统一拦掉）。
+   * 出：手工还原一次 —— GSY 的状态机并不知道我们中途把控件压掉了，
+   * 光把 [pipMode] 置回 false 会出现「回到了大屏，但控件一直是隐藏的、点一下才出来」。
+   */
+  fun setPipMode(enabled: Boolean) {
+    if (pipMode == enabled) return
+    pipMode = enabled
+
+    if (enabled) {
+      PIP_HIDDEN_IDS.forEach { findViewById<View>(it)?.visibility = View.GONE }
+      return
+    }
+
+    // 还原成「控件条正在显示」的样子，再把自动隐藏计时器重新起一遍
+    findViewById<View>(R.id.layout_top)?.visibility = View.VISIBLE
+    findViewById<View>(R.id.layout_bottom)?.visibility = View.VISIBLE
+    findViewById<View>(R.id.gsy_scrim_top)?.visibility = View.VISIBLE
+    findViewById<View>(R.id.gsy_scrim_bottom)?.visibility = View.VISIBLE
+    findViewById<View>(R.id.start)?.let { button ->
+      syncStartButtonIcon(button)
+      button.visibility = View.VISIBLE
+    }
+    startButtonVisibility = View.VISIBLE
+    applyNavigationVisibility()
+    startDismissControlViewTimer()
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // 「点画面呼出控件条」的兜底
+  // ────────────────────────────────────────────────────────────────────────
+
+  /** 按下的落点，用来区分「轻点呼出控件」和「滑动调亮度/音量/进度」 */
+  private var touchDownX = 0f
+  private var touchDownY = 0f
+
+  /** 按下那一刻控件是不是藏着的 —— 只有「想呼出」的那一下才需要兜底 */
+  private var controlsHiddenOnDown = false
+
+  /** 判定「轻点」的位移阈值（超过就当滑动，交给 GSY 自己的手势逻辑） */
+  private val touchSlop: Int by lazy { ViewConfiguration.get(context).scaledTouchSlop }
+
+  /**
+   * 单击画面呼出控件条的兜底。
+   *
+   * GSY 官方的呼出链路是
+   * `surface_container.onTouch → GestureDetector.onSingleTapConfirmed → onClickUiToggle()`，
+   * 这条链路上有个断点会把它整条吃掉 —— `onTouch` 的 ACTION_UP 分支里：
+   *
+   * ```java
+   * if (mHideKey && mShowVKey) {
+   *     return true;   // ← 提前返回，下面的 gestureDetector.onTouchEvent(event) 不执行
+   * }
+   * ```
+   *
+   * 一旦成立，单击回调永远不会触发，点屏幕就再也呼不出控件。
+   *
+   * 这里**不跟官方那条链路抢活**：只在「按下时控件是藏着的」且「轻点没滑动」的情况下，
+   * 等一小会儿再看一眼 —— 控件要是还没出来，才由我们按当前播放状态直接显示。
+   * 因为做了「按下时是藏的」这个前置判断，用户主动点一下**收起**控件的那次不会被兜底又翻出来。
+   */
+  override fun onTouch(v: View?, event: MotionEvent?): Boolean {
+    if (v != null && event != null && v.id == R.id.surface_container) {
+      when (event.action) {
+        MotionEvent.ACTION_DOWN -> {
+          touchDownX = event.x
+          touchDownY = event.y
+          controlsHiddenOnDown = isControlsHidden()
+        }
+
+        MotionEvent.ACTION_UP -> {
+          val moved = abs(event.x - touchDownX) + abs(event.y - touchDownY)
+          if (controlsHiddenOnDown && moved <= touchSlop) {
+            // 官方单击回调要等双击判定（约 300ms），所以这里排在它后面
+            postDelayed({ if (isControlsHidden()) showControlsNow() }, CONTROL_FALLBACK_DELAY_MS)
+          }
+        }
+      }
+    }
+    return super.onTouch(v, event)
+  }
+
+  /** 控件条（底栏）当前是不是藏着的 */
+  private fun isControlsHidden(): Boolean =
+    findViewById<View>(R.id.layout_bottom)?.visibility != View.VISIBLE
+
+  /** 按当前播放状态直接把控件条显示出来（只覆盖确定的三个状态，其余交给 GSY） */
+  private fun showControlsNow() {
+    when (currentState) {
+      GSYVideoView.CURRENT_STATE_PLAYING -> changeUiToPlayingShow()
+      GSYVideoView.CURRENT_STATE_PAUSE -> changeUiToPauseShow()
+      GSYVideoView.CURRENT_STATE_AUTO_COMPLETE -> changeUiToCompleteShow()
+      else -> Unit
     }
   }
 
@@ -371,11 +526,6 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
       actions.onCast()
     }
 
-    findViewById<ImageView>(R.id.gsy_btn_orientation)?.setOnClickListener {
-      keepControlsAlive()
-      actions.onOrientation()
-    }
-
     findViewById<ImageView>(R.id.gsy_btn_engine)?.setOnClickListener {
       keepControlsAlive()
       actions.onSwitchEngine()
@@ -425,8 +575,31 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
     /** 未激活按钮的透明度（保留玻璃底，只压图标亮度） */
     private const val INACTIVE_ALPHA = 0.62f
 
+    /** 单击画面后等多久再去检查控件有没有被官方逻辑呼出来（要排在 GestureDetector 的双击判定之后） */
+    private const val CONTROL_FALLBACK_DELAY_MS = 400L
+
     /** 比例按钮的三档循环 */
     private val ASPECT_CYCLE = listOf(GsyShowKind.DEFAULT, GsyShowKind.STRETCH, GsyShowKind.CROP)
+
+    /**
+     * 画中画小窗里要收起来的控件。
+     *
+     * 画面本身（`surface_container`）不在其中 —— 小窗里就只剩它。
+     * 其余是顶/底栏、遮罩、进度线、正中播放键、上下一集、缓冲圈、锁屏键。
+     */
+    private val PIP_HIDDEN_IDS =
+      intArrayOf(
+        R.id.layout_top,
+        R.id.layout_bottom,
+        R.id.gsy_scrim_top,
+        R.id.gsy_scrim_bottom,
+        R.id.bottom_progressbar,
+        R.id.start,
+        R.id.gsy_btn_prev,
+        R.id.gsy_btn_next,
+        R.id.loading,
+        R.id.lock_screen,
+      )
 
     private fun trimZero(value: Float): String =
       if (value == value.toInt().toFloat()) value.toInt().toString() else value.toString()

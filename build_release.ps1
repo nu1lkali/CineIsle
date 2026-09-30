@@ -1,4 +1,4 @@
-# CineIsle release 出包 + 复制到 F:\apk_release
+﻿# CineIsle release 出包 + 复制到 F:\apk_release
 # 用法（PowerShell，管理员非必需）：
 #   .\build_release.ps1                 # 默认 arm64-v8a release
 #   .\build_release.ps1 -Abi x86_64     # 换 ABI
@@ -40,10 +40,21 @@ if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }
 
-# 3) 定位产物
-$apk = Join-Path $ProjectDir "app\build\outputs\apk\standard\$Abi\release\app-standard-$Abi-release.apk"
-if (-not (Test-Path $apk)) {
-  Write-Host "找不到产物：$apk" -ForegroundColor Red
+# 3) 定位产物：ABI 体现在文件名里（app-standard-<abi>-release.apk）。
+#    兼容两种输出布局：<abi>\release\ 子目录 或 直接在 standard\release\ 下。
+$apkCandidates = @(
+  (Join-Path $ProjectDir "app\build\outputs\apk\standard\$Abi\release\app-standard-$Abi-release.apk"),
+  (Join-Path $ProjectDir "app\build\outputs\apk\standard\release\app-standard-$Abi-release.apk")
+)
+$apk = $apkCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $apk) {
+  $apk = Get-ChildItem (Join-Path $ProjectDir "app\build\outputs\apk") -Recurse -Filter "*$Abi*release*.apk" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notmatch "unsigned|\.idsig$" } |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1 -ExpandProperty FullName
+}
+if (-not $apk -or -not (Test-Path $apk)) {
+  Write-Host "找不到产物（ABI=$Abi）" -ForegroundColor Red
   Get-ChildItem (Join-Path $ProjectDir "app\build\outputs\apk") -Recurse -Filter *.apk -ErrorAction SilentlyContinue |
     ForEach-Object { Write-Host "  -> $($_.FullName)" }
   exit 1

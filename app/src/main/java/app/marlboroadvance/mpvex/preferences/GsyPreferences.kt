@@ -131,6 +131,14 @@ class GsyPreferences(
   /** 暂停时保留最后一帧（官方 setShowPauseCover） */
   val showPauseCover = preferenceStore.getBoolean("gsy_show_pause_cover", true)
 
+  /**
+   * 画中画：**按 Home 键时自动缩进小窗**（官方 `setAutoEnterEnabled`，Android 12+）。
+   *
+   * 默认关 —— 自动进小窗会让「按 Home 想干别的」变成「视频一直挂在小窗上」，
+   * 用户主动按播放页里的画中画键才是预期路径。
+   */
+  val pipAutoEnter = preferenceStore.getBoolean("gsy_pip_auto_enter", false)
+
   /** 默认倍速快捷键的档位 */
   val speedPresets =
     preferenceStore.getStringSet(
