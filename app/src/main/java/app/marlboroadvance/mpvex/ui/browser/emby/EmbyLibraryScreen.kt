@@ -140,6 +140,9 @@ data class EmbyLibraryScreen(
     var searchActive by remember { mutableStateOf(false) }
     // 类型筛选：空集合 = 「全部」= 不加类型限制
     var searchFilters by remember { mutableStateOf(emptySet<EmbySearchFilter>()) }
+    // 上一次「由输入触发」的搜索词。用来区分这次重查是打字引起的（要 400ms 防抖），
+    // 还是切排序 / 换类型筛选引起的（离散操作，立即重查）。
+    var lastTypedQuery by remember { mutableStateOf("") }
     var category by remember { mutableStateOf(EmbyCategory.ALL) }
     var showStyleDialog by remember { mutableStateOf(false) }
 
@@ -432,6 +435,9 @@ data class EmbyLibraryScreen(
             server = current,
             term = searchQuery,
             itemTypes = EmbySearchFilter.toItemTypes(searchFilters),
+            // 搜索也能排序：不然在搜索结果里切排序，列表会重新加载却仍是原来的顺序
+            sortBy = sortBy,
+            sortOrder = sortOrder,
           )
           EmbyItemsPage(result, result.size)
         }
@@ -672,11 +678,24 @@ data class EmbyLibraryScreen(
             }
           },
         )
-        LaunchedEffect(searchQuery, searchFilters) {
-          if (searchQuery.isNotBlank()) {
+        // 搜索的触发源不只是输入文字，还包括切排序、换类型筛选、开关「中文字幕」等 ——
+        // 所以这里直接用 cacheKey 当 key：它已经聚合了所有会影响结果集的输入。
+        //
+        // 修的是一个真实 bug：之前只用 (searchQuery, searchFilters) 当 key，
+        // 于是「在搜索结果里切排序」时这个 effect 不重跑，而 cacheKey 变化已经把
+        // `isLoading = remember(cacheKey) { ... }` 重置成 true → 界面永远停在转圈。
+        // 用 cacheKey 之后，凡是结果会变的情况都必然重新加载，不可能再卡住。
+        //
+        // 是否防抖按「变化来源」决定：打字等 400ms，其余离散操作（点排序 / 点筛选）立即重查，
+        // 免得切个排序还要干等半秒。
+        LaunchedEffect(cacheKey) {
+          // 非搜索状态由上面那个 effect 负责（那条路径不需要防抖）
+          if (searchQuery.isBlank()) return@LaunchedEffect
+          if (searchQuery != lastTypedQuery) {
+            lastTypedQuery = searchQuery
             kotlinx.coroutines.delay(400)
-            load(reset = true)
           }
+          load(reset = true)
         }
         // 类型筛选：默认「全部」不加限制；勾了电影/合集/演员这类就按类型查
         EmbySearchFilterRow(

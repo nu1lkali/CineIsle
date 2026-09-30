@@ -292,11 +292,19 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   suspend fun loadItemDetail(server: EmbyServer, itemId: String): EmbyItem =
     repository.getItem(server, itemId)
 
+  /**
+   * 库内搜索。
+   *
+   * [sortBy] / [sortOrder] 由媒体库工具行上的排序按钮给出：Emby 允许
+   * SearchTerm 与 SortBy 组合，所以搜索完再切排序能真的改变结果顺序。
+   */
   suspend fun search(
     server: EmbyServer,
     term: String,
     itemTypes: List<String>? = null,
-  ): List<EmbyItem> = repository.searchItems(server, term, itemTypes).Items
+    sortBy: String? = "SortName",
+    sortOrder: String? = null,
+  ): List<EmbyItem> = repository.searchItems(server, term, itemTypes, sortBy = sortBy, sortOrder = sortOrder).Items
 
   /**
    * 首页的「全库搜索」：不传 ParentId，Emby 会跨所有媒体库检索。

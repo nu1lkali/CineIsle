@@ -694,9 +694,18 @@ object EmbyClient {
     term: String,
     includeItemTypes: List<String>? = null,
     limit: Int = 60,
+    /**
+     * 排序方式。默认 SortName（按名称），与改造前行为一致。
+     *
+     * Emby 的 /Items 接受 SearchTerm 与 SortBy 组合，所以搜索结果同样能排序 ——
+     * 媒体库里搜索后再切排序要真的生效，就必须把用户选的排序传进来。
+     */
+    sortBy: String? = "SortName",
+    sortOrder: String? = null,
   ): EmbyItemsResult = getItems(
     server,
-    sortBy = "SortName",
+    sortBy = sortBy,
+    sortOrder = sortOrder,
     includeItemTypes = includeItemTypes,
     searchTerm = term,
     startIndex = 0,

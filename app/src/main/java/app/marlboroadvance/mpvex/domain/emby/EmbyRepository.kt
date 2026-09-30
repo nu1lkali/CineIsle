@@ -425,14 +425,16 @@ class EmbyRepository(
     EmbyClient.reportPlaybackStopped(server, itemId, playSessionId, positionTicks)
   }
 
-  /** 搜索媒体（服务端 SearchTerm 匹配） */
+  /** 搜索媒体（服务端 SearchTerm 匹配），可按指定方式排序 */
   suspend fun searchItems(
     server: EmbyServer,
     term: String,
     includeItemTypes: List<String>? = null,
     limit: Int = 60,
+    sortBy: String? = "SortName",
+    sortOrder: String? = null,
   ): EmbyItemsResult = withContext(Dispatchers.IO) {
-    EmbyClient.searchItems(server, term, includeItemTypes, limit)
+    EmbyClient.searchItems(server, term, includeItemTypes, limit, sortBy, sortOrder)
   }
 
   /** 剧集的季列表 */
