@@ -297,6 +297,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    *
    * [sortBy] / [sortOrder] 由媒体库工具行上的排序按钮给出：Emby 允许
    * SearchTerm 与 SortBy 组合，所以搜索完再切排序能真的改变结果顺序。
+   * `sortBy = "Random"` 就是「在搜索结果里随机播」用的。
    */
   suspend fun search(
     server: EmbyServer,
@@ -304,7 +305,16 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     itemTypes: List<String>? = null,
     sortBy: String? = "SortName",
     sortOrder: String? = null,
-  ): List<EmbyItem> = repository.searchItems(server, term, itemTypes, sortBy = sortBy, sortOrder = sortOrder).Items
+    limit: Int = 60,
+  ): List<EmbyItem> =
+    repository.searchItems(
+      server,
+      term,
+      itemTypes,
+      limit = limit,
+      sortBy = sortBy,
+      sortOrder = sortOrder,
+    ).Items
 
   /**
    * 首页的「全库搜索」：不传 ParentId，Emby 会跨所有媒体库检索。

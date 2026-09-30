@@ -522,6 +522,96 @@ data class EmbyLibraryScreen(
     val visibleItems =
       if (lastRemovedItemId != null) items.filterNot { it.Id == lastRemovedItemId } else items
 
+    /**
+     * 「随机播放」的取数。
+     *
+     * 口径：**随机范围 = 当前屏幕上这批结果** —— 把 [load] 那套条件原样搬过来，
+     * 只把排序换成 `SortBy=Random`。
+     *
+     * 改造前这里只传 `parentId + PLAYABLE_TYPES`，等于「整个库随机」：
+     * 搜了某个词、或筛了类型/标签/年份之后再点随机，放的还是全库内容，跟眼前这批对不上。
+     *
+     * [favoritesOnly] 对应「随机播放收藏」那个键：在同样的范围上再限定只看收藏。
+     */
+    suspend fun loadRandomForView(
+      current: EmbyServer,
+      favoritesOnly: Boolean = false,
+    ): List<EmbyItem> {
+      // 「中文字幕」是客户端按路径判定的，服务端没有对应参数。
+      // 这种模式下屏幕上那批就是全库扫描出来的命中集 —— 直接洗牌，既准确又不用再扫一遍。
+      if (chineseSubsOnly) {
+        val pool = visibleItems.filter { !favoritesOnly || it.UserData?.IsFavorite == true }
+        return pool.shuffled().take(RANDOM_LIMIT)
+      }
+
+      // 随机只能落在「能直接播」的条目上。当前分类若只含 Series / BoxSet / Folder
+      // 这类容器（剧集库、合集分类、文件夹分类），交集为空 → 退回「本库可播放条目」，
+      // 也就是改造前的老行为；搜索词与其它筛选项仍然生效。
+      val playableOfView = (effectiveTypes ?: PLAYABLE_TYPES).filter { it in PLAYABLE_TYPES }
+      val randomTypes = playableOfView.takeIf { it.isNotEmpty() } ?: PLAYABLE_TYPES
+
+      val random =
+        if (searchQuery.isBlank()) {
+          viewModel.loadItems(
+            server = current,
+            parentId = libraryId,
+            includeItemTypes = randomTypes,
+            filters = effectiveFilters,
+            sortBy = "Random",
+            sortOrder = "Ascending",
+            startIndex = 0,
+            limit = RANDOM_LIMIT,
+            // 固定用 recursive：容器类分类（如「文件夹」）本身递归不出可播条目
+            recursive = true,
+            excludeItemTypes = effectiveExclude,
+            genres = selectedGenres.toList().takeIf { it.isNotEmpty() },
+            tags = selectedTags.toList().takeIf { it.isNotEmpty() },
+            years = selectedYears.toList().takeIf { it.isNotEmpty() },
+            officialRatings = selectedRatings.toList().takeIf { it.isNotEmpty() },
+            minCommunityRating = minRating,
+            isFavorite = if (favoritesOnly || favoriteOnly) true else null,
+            personIds = selectedPersonIds.toList().takeIf { it.isNotEmpty() },
+            isPlayed = playedFilter,
+            isHD = hdFilter,
+            is3D = threeDFilter,
+            hasSubtitles = subtitlesFilter,
+            studioIds = selectedStudioIds.toList().takeIf { it.isNotEmpty() },
+          ).items
+        } else {
+          viewModel.search(
+            server = current,
+            term = searchQuery,
+            itemTypes = EmbySearchFilter.toItemTypes(searchFilters),
+            sortBy = "Random",
+            sortOrder = "Ascending",
+            limit = RANDOM_LIMIT,
+          )
+        }
+
+      // 服务端搜索不支持 IsFavorite 组合，收藏这个条件在客户端补一刀
+      return if (favoritesOnly) random.filter { it.UserData?.IsFavorite == true } else random
+    }
+
+    /** 随机播放的统一入口：取一批、没取到就明确提示（以前是静默无反应） */
+    fun startRandomPlayback(favoritesOnly: Boolean) {
+      scope.launch {
+        val current = viewModel.currentServerOrAwait() ?: return@launch
+        val random = loadRandomForView(current, favoritesOnly = favoritesOnly)
+        if (random.isEmpty()) {
+          android.widget.Toast
+            .makeText(
+              context,
+              if (favoritesOnly) "当前范围内没有可随机播放的收藏" else "当前范围内没有可随机播放的内容",
+              android.widget.Toast.LENGTH_SHORT,
+            )
+            .show()
+          return@launch
+        }
+        // 随机列表里可能混着看过的剧，切过去若恢复进度会直接跳到片尾，所以每个视频都从头放
+        viewModel.launchPlaylist(current, random, playFromStartAll = true)
+      }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
       // ── 1. 顶栏：返回 + 库名 + 搜索 ──
       TopAppBar(
@@ -578,45 +668,11 @@ data class EmbyLibraryScreen(
         )
         Spacer(modifier = Modifier.weight(1f))
 
-        IconButton(onClick = {
-          scope.launch {
-            val current = viewModel.currentServerOrAwait() ?: return@launch
-            val random = viewModel.loadRandom(
-              server = current,
-              parentId = libraryId,
-              includeItemTypes = PLAYABLE_TYPES,
-              limit = 100,
-            )
-            if (random.isNotEmpty()) {
-              // 随机列表里可能混着看过的剧，切过去若恢复进度会直接跳到片尾，
-              // 所以每个视频都从头放
-              viewModel.launchPlaylist(current, random, playFromStartAll = true)
-            }
-          }
-        }) {
+        IconButton(onClick = { startRandomPlayback(favoritesOnly = false) }) {
           Icon(Icons.Default.Shuffle, contentDescription = "随机播放")
         }
-        // 只在本库已收藏的媒体里随机，避免随机到没看过的
-        IconButton(onClick = {
-          scope.launch {
-            val current = viewModel.currentServerOrAwait() ?: return@launch
-            val random = viewModel.loadRandom(
-              server = current,
-              parentId = libraryId,
-              includeItemTypes = PLAYABLE_TYPES,
-              limit = 100,
-              isFavorite = true,
-            )
-            if (random.isNotEmpty()) {
-              // 同上：随机收藏列表里每个视频都从头放
-              viewModel.launchPlaylist(current, random, playFromStartAll = true)
-            } else {
-              android.widget.Toast
-                .makeText(context, "该媒体库还没有收藏内容", android.widget.Toast.LENGTH_SHORT)
-                .show()
-            }
-          }
-        }) {
+        // 同上，只是范围再限定「已收藏」：避免随机到没看过的
+        IconButton(onClick = { startRandomPlayback(favoritesOnly = true) }) {
           // 区别于上面的「随机播放」：用它自己的 Emby 收藏随机图标，
           // 原先用的 ShuffleOn 只比 Shuffle 多一条下划线，并排根本分不出来
           Icon(EmbyFavoriteRandomIcon, contentDescription = "随机播放收藏")
@@ -1479,6 +1535,14 @@ private val RATING_OPTIONS: List<Pair<String, Float?>> = listOf(
 
 /** 可播放的媒体类型（随机播放时使用） */
 private val PLAYABLE_TYPES = listOf("Movie", "Episode", "Video", "MusicVideo")
+
+/**
+ * 随机播放一次取多少条。
+ *
+ * 让服务端按 `SortBy=Random` 抽这么多条出来组成播放队列 —— 抽多了没必要，
+ * 队列太长反而不好切；100 条足够覆盖「换一批」的随机感。
+ */
+private const val RANDOM_LIMIT = 100
 
 /** 文件夹类条目。只在「文件夹」分类里显示，其它分类一律排除。 */
 private val FOLDER_TYPES = listOf("Folder", "CollectionFolder", "UserView")
