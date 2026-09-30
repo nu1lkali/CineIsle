@@ -1817,6 +1817,9 @@ private fun applyClientSort(
       "CommunityRating" -> compareBy { it.CommunityRating ?: -1.0 }
       "CriticRating" -> compareBy { it.CriticRating ?: -1.0 }
       "Runtime" -> compareBy { it.RunTimeTicks ?: 0L }
+      // 文件大小：顶层 Size 由 Fields=Size 带回；老服务端或详情类请求可能没有，
+      // 这时退回 MediaSources 里第一个源的大小（实测两者一致），都没有就按 0
+      "Size" -> compareBy { it.Size ?: it.MediaSources?.firstOrNull()?.Size ?: 0L }
       "PlayCount" -> compareBy { it.UserData?.PlayCount ?: 0 }
       else -> null
     } ?: return items

@@ -169,6 +169,13 @@ data class EmbyItem(
   val Taglines: List<String> = emptyList(),
   val ProviderIds: Map<String, String> = emptyMap(),
   /**
+   * 媒体文件总大小（字节），供「按文件大小排序」使用。
+   *
+   * 只有请求时 [ITEM_FIELDS] 带上 `Size` 服务端才会返回；取不到时排序会退回
+   * [MediaSources] 里第一个源的大小（实测两者一致），两边都没有就按 0 处理。
+   */
+  val Size: Long? = null,
+  /**
    * 影评人评分（0~100）。
    *
    * 只用于客户端排序（服务端对「搜索 + SortBy」这个组合不保证认），界面不显示。
@@ -311,7 +318,8 @@ object EmbyClient {
   /** 请求 Emby 时统一附加的扩展字段 */
   private const val ITEM_FIELDS =
     "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources," +
-    "Tags,SortName,ProductionLocations,Path"
+    // Size 是「按文件大小排序」的数据来源，Emby 默认不返回，必须显式索取
+    "Tags,SortName,ProductionLocations,Path,Size"
 
   // ─── 内部工具 ───
 
