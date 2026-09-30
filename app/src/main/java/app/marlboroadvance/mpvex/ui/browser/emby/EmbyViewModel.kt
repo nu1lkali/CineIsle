@@ -8,8 +8,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
+import app.marlboroadvance.mpvex.domain.emby.EmbyExternalIdInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyFilterOptions
+import app.marlboroadvance.mpvex.domain.emby.EmbyImageInfo
+import app.marlboroadvance.mpvex.domain.emby.EmbyImageProviderInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
+import app.marlboroadvance.mpvex.domain.emby.EmbyItemLookupInfo
+import app.marlboroadvance.mpvex.domain.emby.EmbyRemoteImageInfo
+import app.marlboroadvance.mpvex.domain.emby.EmbyRemoteSearchResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanChunk
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
@@ -360,12 +366,25 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * 由调用方决定提示文案与是否回滚本地状态 —— 详情页要据此弹 Toast，
    * 所以这里不自己吞掉错误（内部同步写 [_error] 供其他观察者使用）。
    */
+  /**
+   * 切换收藏。返回 [Result]，值 = 切换后的收藏状态。
+   *
+   * **成败以服务器回传的 UserData 为准**：这条接口的响应体本身就是最新的
+   * `{"IsFavorite":true/false,...}`，直接采信它最可靠 ——
+   * 之前用「再拉一次条目」回查，而详情接口在这台服务器上返回的 Content-Length
+   * 比实际 body 长，OkHttp 读不满会抛异常，回查一失败就把「其实成功了」误报成失败。
+   */
   suspend fun toggleFavorite(server: EmbyServer, item: EmbyItem): Result<Boolean> {
-    val nowFavorite = item.UserData?.IsFavorite == true
-    return runCatching {
-      if (nowFavorite) repository.unfavorite(server, item.Id!!) else repository.favorite(server, item.Id!!)
-      !nowFavorite
-    }.onFailure { _error.value = it.message ?: "操作失败" }
+    val itemId = item.Id ?: return Result.failure(IllegalArgumentException("缺少条目 Id"))
+    val target = item.UserData?.IsFavorite != true
+    val result = runCatching {
+      val data = repository.setFavorite(server, itemId, target)
+      // 只有服务器明确回「还是没收藏」才算失败；拿不到 UserData 时不下失败结论
+      if (data?.IsFavorite == false && target) throw IllegalStateException("服务器未接受这次收藏")
+      target
+    }
+    result.exceptionOrNull()?.let { _error.value = it.message ?: "操作失败" }
+    return result
   }
 
   fun deleteItem(server: EmbyServer, itemId: String) {
@@ -398,10 +417,16 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * 这里刻意不做「内部 launch 后不管」：那样调用方无从得知成败，
    * 用户点了右上角的勾却没有任何反馈，服务端失败时也看不出来。
    */
-  suspend fun setPlayed(server: EmbyServer, itemId: String, played: Boolean): Result<Unit> =
-    runCatching {
-      if (played) repository.markPlayed(server, itemId) else repository.markUnplayed(server, itemId)
-    }.onFailure { _error.value = it.message ?: "操作失败" }
+  /** 标记已看 / 未看。同 [toggleFavorite]：以服务器回传的 UserData 为准。 */
+  suspend fun setPlayed(server: EmbyServer, itemId: String, played: Boolean): Result<Unit> {
+    val result = runCatching {
+      val data = repository.setPlayed(server, itemId, played)
+      // 只有服务器明确回「状态和我要的不一样」才算失败；拿不到 UserData 时不下失败结论
+      if (data?.Played == !played) throw IllegalStateException("服务器未接受这次修改")
+    }
+    result.exceptionOrNull()?.let { _error.value = it.message ?: "操作失败" }
+    return result
+  }
 
   // ==================== 播放 ====================
 
@@ -631,12 +656,47 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   /** 刷新 / 刮削元数据。full=true 走全量重刮（FullRefresh），否则默认刷新（Default）。 */
-  suspend fun refreshMetadata(server: EmbyServer, itemId: String, full: Boolean = false): Boolean =
+  suspend fun refreshMetadata(
+    server: EmbyServer,
+    itemId: String,
+    full: Boolean = false,
+    replaceAllMetadata: Boolean = false,
+    replaceAllImages: Boolean = false,
+  ): Boolean =
     withContext(Dispatchers.IO) {
       runCatching {
-        EmbyClient.refreshItem(server, itemId, if (full) "FullRefresh" else "Default")
+        EmbyClient.refreshItem(
+          server = server,
+          itemId = itemId,
+          mode = if (full) "FullRefresh" else "Default",
+          replaceAllMetadata = replaceAllMetadata,
+          replaceAllImages = replaceAllImages,
+        )
       }.isSuccess
     }
+
+  /**
+   * 「刷新元数据」：全量重刮 + 可选的强制覆盖。
+   *
+   * 与 [scanLibrary] 的区别是这边走 FullRefresh，会把片名 / 简介 / 演职员 / 图片重新刮一遍；
+   * [replaceAllMetadata] / [replaceAllImages] 决定「已有的要不要一起换掉」——
+   * 不勾时 Emby 只补缺失字段，已锁定的本地元数据会被保留。
+   *
+   * 同样是异步任务：返回 true 只代表服务器接受了请求，实际刮削要跑一阵子。
+   */
+  suspend fun refreshLibraryMetadata(
+    server: EmbyServer,
+    itemId: String,
+    replaceAllMetadata: Boolean = false,
+    replaceAllImages: Boolean = false,
+  ): Boolean =
+    refreshMetadata(
+      server = server,
+      itemId = itemId,
+      full = true,
+      replaceAllMetadata = replaceAllMetadata,
+      replaceAllImages = replaceAllImages,
+    )
 
   /**
    * 扫描媒体库 / 文件夹：等价于 Emby Web 端库菜单里的「扫描媒体库」。
@@ -658,6 +718,114 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     withContext(Dispatchers.IO) {
       runCatching { EmbyClient.updateItem(server, item) }.isSuccess
     }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 图片管理（长按菜单 → 编辑图片）
+  // ══════════════════════════════════════════════════════════════════════
+
+  /**
+   * 重新拉一次条目。换图 / 删图后要靠它拿**新的图片 tag** ——
+   * 图片地址里带着 tag，tag 不变地址就不变，图片库会直接把旧图从缓存里翻出来，
+   * 表现就是「抽屉里还是老图，关掉再进才更新」。
+   */
+  suspend fun loadItem(server: EmbyServer, itemId: String): EmbyItem? =
+    withContext(Dispatchers.IO) {
+      runCatching { repository.getItem(server, itemId) }.getOrNull()
+    }
+
+  /** 条目当前挂着的图片清单（含尺寸与来源，即「图片源数据」） */
+  suspend fun loadItemImages(server: EmbyServer, itemId: String): List<EmbyImageInfo> =
+    withContext(Dispatchers.IO) {
+      runCatching { EmbyClient.getItemImages(server, itemId) }.getOrDefault(emptyList())
+    }
+
+  suspend fun deleteItemImage(
+    server: EmbyServer,
+    itemId: String,
+    imageType: String,
+    index: Int = 0,
+  ): Boolean = withContext(Dispatchers.IO) {
+    runCatching { EmbyClient.deleteItemImage(server, itemId, imageType, index) }.isSuccess
+  }
+
+  /** 本地换图：[mime] 必须是图片类型（image/jpeg / image/png …），否则服务器会拒 */
+  suspend fun uploadItemImage(
+    server: EmbyServer,
+    itemId: String,
+    imageType: String,
+    bytes: ByteArray,
+    mime: String,
+  ): Boolean = withContext(Dispatchers.IO) {
+    runCatching { EmbyClient.uploadItemImage(server, itemId, imageType, bytes, mime) }.isSuccess
+  }
+
+  suspend fun loadRemoteImageProviders(
+    server: EmbyServer,
+    itemId: String,
+  ): List<EmbyImageProviderInfo> = withContext(Dispatchers.IO) {
+    runCatching { EmbyClient.getRemoteImageProviders(server, itemId) }.getOrDefault(emptyList())
+  }
+
+  /** 从元数据源搜某类图片；[providerName] 为空表示「所有图源」 */
+  /** 同样返回 [Result]：空图和「请求失败」要分开提示，否则排查起来没有头绪 */
+  suspend fun searchRemoteImages(
+    server: EmbyServer,
+    itemId: String,
+    imageType: String,
+    providerName: String? = null,
+  ): Result<List<EmbyRemoteImageInfo>> = withContext(Dispatchers.IO) {
+    runCatching { EmbyClient.searchRemoteImages(server, itemId, imageType, providerName) }
+  }
+
+  suspend fun downloadRemoteImage(
+    server: EmbyServer,
+    itemId: String,
+    imageType: String,
+    imageUrl: String,
+    providerName: String? = null,
+  ): Boolean = withContext(Dispatchers.IO) {
+    runCatching {
+      EmbyClient.downloadRemoteImage(server, itemId, imageType, imageUrl, providerName)
+    }.isSuccess
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 识别 / 刮削（长按菜单 → 刮削元数据）
+  // ══════════════════════════════════════════════════════════════════════
+
+  /** 条目已绑定的外部 ID（Imdb / Tmdb / Tvdb），用于预填识别对话框 */
+  suspend fun loadExternalIdInfos(
+    server: EmbyServer,
+    itemId: String,
+  ): List<EmbyExternalIdInfo> = withContext(Dispatchers.IO) {
+    runCatching { EmbyClient.getExternalIdInfos(server, itemId) }.getOrDefault(emptyList())
+  }
+
+  /**
+   * 远程检索元数据。
+   *
+   * 返回 [Result] 而不是「失败就给空列表」：空结果和「请求出错」对用户是两回事 ——
+   * 前者是真的没匹配上，后者多半是权限 / 图源没配，提示文案必须能区分开。
+   */
+  suspend fun remoteSearchMetadata(
+    server: EmbyServer,
+    searchType: String,
+    lookup: EmbyItemLookupInfo,
+    itemId: String? = null,
+  ): Result<List<EmbyRemoteSearchResult>> = withContext(Dispatchers.IO) {
+    runCatching { EmbyClient.remoteSearch(server, searchType, lookup, itemId) }
+  }
+
+  suspend fun applyRemoteSearchResult(
+    server: EmbyServer,
+    itemId: String,
+    result: EmbyRemoteSearchResult,
+    replaceAllImages: Boolean = false,
+  ): Boolean = withContext(Dispatchers.IO) {
+    runCatching {
+      EmbyClient.applyRemoteSearch(server, itemId, result, replaceAllImages)
+    }.isSuccess
+  }
 
   /**
    * 按演员 / 导演查作品：走 Emby 的 PersonIds 过滤。

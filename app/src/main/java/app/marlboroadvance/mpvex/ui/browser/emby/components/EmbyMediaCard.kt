@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.browser.emby.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,8 +28,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -52,7 +62,7 @@ fun EmbyPosterCard(
   isFavorite: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
-  onLongClick: (() -> Unit)? = null,
+  onLongClick: ((Offset) -> Unit)? = null,
   placeholder: ImageVector = Icons.Default.Movie,
   fallbackImageUrl: String? = null,
 ) {
@@ -62,11 +72,7 @@ fun EmbyPosterCard(
         .fillMaxWidth()
         .aspectRatio(POSTER_RATIO)
         .then(
-          if (onLongClick != null) {
-            Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-          } else {
-            Modifier.combinedClickable(onClick = onClick)
-          }
+Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
         ),
       shape = RoundedCornerShape(EMBY_CARD_CORNER),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -151,7 +157,7 @@ fun EmbyWideCard(
   isFavorite: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
-  onLongClick: (() -> Unit)? = null,
+  onLongClick: ((Offset) -> Unit)? = null,
   fallbackImageUrl: String? = null,
   remainingText: String? = null,
   showPlayButton: Boolean = true,
@@ -162,11 +168,7 @@ fun EmbyWideCard(
         .fillMaxWidth()
         .aspectRatio(WIDE_RATIO)
         .then(
-          if (onLongClick != null) {
-            Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-          } else {
-            Modifier.combinedClickable(onClick = onClick)
-          }
+Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
         ),
       shape = RoundedCornerShape(EMBY_CARD_CORNER),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -316,7 +318,7 @@ fun EmbyMediaCard(
   fallbackImageUrl: String? = null,
   fillWidth: Boolean = false,
   mosaicUrls: List<String>? = null,
-  onLongClick: (() -> Unit)? = null,
+  onLongClick: ((Offset) -> Unit)? = null,
 ) {
   Column(modifier = if (fillWidth) modifier.fillMaxWidth() else modifier.width(style.width)) {
     Card(
@@ -324,11 +326,7 @@ fun EmbyMediaCard(
         .fillMaxWidth()
         .aspectRatio(style.ratio)
         .then(
-          if (onLongClick != null) {
-            Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-          } else {
-            Modifier.combinedClickable(onClick = onClick)
-          }
+Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
         ),
       shape = RoundedCornerShape(EMBY_CARD_CORNER),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -474,18 +472,14 @@ fun EmbyLibraryCard(
   icon: ImageVector,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
-  onLongClick: (() -> Unit)? = null,
+  onLongClick: ((Offset) -> Unit)? = null,
 ) {
   Card(
     modifier = modifier
       .width(LIBRARY_CARD_WIDTH)
       .height(LIBRARY_CARD_HEIGHT)
       .then(
-        if (onLongClick != null) {
-          Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-        } else {
-          Modifier.combinedClickable(onClick = onClick)
-        }
+Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
       ),
     shape = RoundedCornerShape(EMBY_CARD_CORNER),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -598,3 +592,31 @@ private val LIBRARY_CARD_HEIGHT = 90.dp
  * 半透明是为了让底下的封面还能透出一点点，不至于像贴了张死色纸。
  */
 private val MEDIA_BADGE_BG = Color(0xFF262229).copy(alpha = 0.85f)
+
+/**
+ * 「单击 + 长按」合成 modifier，并把**长按的位置（root 坐标）**回传给 [onLongClick]。
+ *
+ * 用 detectTapGestures 而不是 combinedClickable：后者拿不到手指坐标，而长按菜单
+ * 要「出现在手指点的右边」。代价是这一支没有 ripple 按压反馈 —— 长按弹菜单本身
+ * 已经是足够明确的反馈，为 ripple 牺牲定位不划算。
+ */
+private fun Modifier.tapAndLongPress(
+  onClick: () -> Unit,
+  onLongClick: ((Offset) -> Unit)?,
+): Modifier = composed {
+  var posInRoot by remember { mutableStateOf(Offset.Zero) }
+  this
+    .onGloballyPositioned { posInRoot = it.positionInRoot() }
+    .then(
+      if (onLongClick == null) {
+        Modifier.combinedClickable(onClick = onClick)
+      } else {
+        Modifier.pointerInput(onClick, onLongClick) {
+          detectTapGestures(
+            onTap = { onClick() },
+            onLongPress = { offset -> onLongClick(posInRoot + offset) },
+          )
+        }
+      }
+    )
+}

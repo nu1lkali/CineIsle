@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.domain.emby
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -292,6 +293,17 @@ object EmbyClient {
     .build()
 
   private val jsonMedia = "application/json; charset=utf-8".toMediaType()
+
+  /**
+   * 无参数 POST 的请求体。
+   *
+   * 不能直接发空字符串：Emby 走的是 ServiceStack，对 Content-Type 为 json、
+   * body 却是空的 POST 有概率返回 400，请求压根没到业务逻辑。发一个空对象最稳。
+   */
+  private const val EMPTY_JSON_BODY = "{}"
+
+  /** 无 body 的 POST（OkHttp 的 post 必须给 body，给空串就是 content-length=0，跟 Web 端一致） */
+  private val EMPTY_BODY = "".toRequestBody(null)
 
   /** 视频类媒体（用于把音乐、图片从影视列表中过滤掉） */
   private const val VIDEO_MEDIA_TYPE = "Video"
@@ -812,41 +824,57 @@ object EmbyClient {
   // 3. 收藏 / 删除
   // ════════════════════════════════════════════════════════════════════════
 
-  /** 加入收藏夹 */
-  fun favoriteItem(server: EmbyServer, itemId: String) {
-    val req = authedRequest(server, "/Users/${server.userId}/FavoriteItems/$itemId")
-      .post("".toRequestBody(jsonMedia))
-      .build()
-    execString(req)
+  /**
+   * 加入 / 取消收藏。返回服务器回传的 UserData（含 IsFavorite），用来确认真实状态。
+   */
+  fun setFavorite(server: EmbyServer, itemId: String, favorite: Boolean): EmbyUserData? =
+    toggleUserState(server, "/Users/${server.userId}/FavoriteItems/$itemId", favorite)
+
+  /** 标记已看 / 未看。返回服务器回传的 UserData（含 Played）。 */
+  fun setPlayed(server: EmbyServer, itemId: String, played: Boolean): EmbyUserData? =
+    toggleUserState(server, "/Users/${server.userId}/PlayedItems/$itemId", played)
+
+  /**
+   * 收藏 / 已播放这类「开关型」接口的统一发送。
+   *
+   * 请求形态照 Emby Web 端实测的两种（**不是**官方 OpenAPI 写的那种）：
+   *   打开：`POST /Users/{uid}/FavoriteItems/{id}`
+   *   关闭：`POST /Users/{uid}/FavoriteItems/{id}/Delete` ← 是 POST 到 `/Delete`，不是 DELETE 方法
+   * 实测 SmartStrm 这类服务端只认后一种写法，用 DELETE 方法会被拒。
+   *
+   * **响应体本身就是最新的 UserData**（`{"IsFavorite":true,"Played":false,...}`），
+   * 直接解析它就能确认状态 —— 不用再回查一次条目：那台服务器的详情响应
+   * `Content-Length` 比实际 body 长，OkHttp 读不满会抛 unexpected end of stream，
+   * 回查失败就会把「其实已经成功了」误报成失败。
+   */
+  private fun toggleUserState(server: EmbyServer, basePath: String, enable: Boolean): EmbyUserData? {
+    val path = if (enable) basePath else "$basePath/Delete"
+    // 1) 主：POST + 无 body（Web 端就是这个形态，content-length=0）
+    val first = runCatching { execString(authedRequest(server, path).post(EMPTY_BODY).build()) }
+    val body = first.getOrNull()
+      // 2) 兜底：空 body 会被部分服务端（ServiceStack 系）判 400，此时改发空对象
+      ?: runCatching {
+        execString(authedRequest(server, path).post(EMPTY_JSON_BODY.toRequestBody(jsonMedia)).build())
+      }.getOrNull()
+      // 3) 关闭再兜底：老版本只认 DELETE 方法
+      ?: if (!enable) {
+        runCatching { execString(authedRequest(server, basePath).delete().build()) }.getOrNull()
+      } else {
+        null
+      }
+    // 三种形态都失败：把第一次的真实原因抛出去（它最接近「实际用的是哪种形态」的问题）
+    if (body == null) throw first.exceptionOrNull() ?: EmbyApiException(0, "请求失败")
+    return parseUserData(body)
   }
 
-  /** 取消收藏 */
-  fun unfavoriteItem(server: EmbyServer, itemId: String) {
-    val req = authedRequest(server, "/Users/${server.userId}/FavoriteItems/$itemId")
-      .delete()
-      .build()
-    execString(req)
-  }
+  /** 解析响应体里的 UserData；解析不了（空 body / 不是 JSON）返回 null，由调用方另想办法 */
+  private fun parseUserData(body: String): EmbyUserData? =
+    body.takeIf { it.isNotBlank() }
+      ?.let { runCatching { json.decodeFromString<EmbyUserData>(it) }.getOrNull() }
 
   /** 删除媒体（需要相应权限） */
   fun deleteItem(server: EmbyServer, itemId: String) {
     val req = authedRequest(server, "/Items/$itemId").delete().build()
-    execString(req)
-  }
-
-  /** 标记已看 */
-  fun markPlayed(server: EmbyServer, itemId: String) {
-    val req = authedRequest(server, "/Users/${server.userId}/PlayedItems/$itemId")
-      .post("".toRequestBody(jsonMedia))
-      .build()
-    execString(req)
-  }
-
-  /** 标记未看 */
-  fun markUnplayed(server: EmbyServer, itemId: String) {
-    val req = authedRequest(server, "/Users/${server.userId}/PlayedItems/$itemId")
-      .delete()
-      .build()
     execString(req)
   }
 
@@ -855,16 +883,208 @@ object EmbyClient {
   // ════════════════════════════════════════════════════════════════════════
 
   /**
-   * 刷新元数据：让服务器重新读取本地文件、或从网络刮削。
-   * mode: Default / FullRefresh(全量重刮) / LatestRefresh(仅补缺失字段)
+   * 刷新 / 扫描：让服务器重新读取本地文件、或从网络刮削。
+   *
+   * @param mode MetadataRefreshMode：Default（只补新增 / 缺失）/ FullRefresh（全量重刮）/
+   *             LatestRefresh（仅补缺失字段）
+   * @param replaceAllMetadata ReplaceAllMetadata：连已存在的片名、简介一起重刮覆盖
+   * @param replaceAllImages ReplaceAllImages：重新下载并替换已有封面、背景图
+   *                         （勾选时图片模式一并提到 FullRefresh，否则服务器可能仍沿用缓存图）
    */
-  fun refreshItem(server: EmbyServer, itemId: String, mode: String = "Default") {
+  fun refreshItem(
+    server: EmbyServer,
+    itemId: String,
+    mode: String = "Default",
+    replaceAllMetadata: Boolean = false,
+    replaceAllImages: Boolean = false,
+  ) {
     val req = authedRequest(
       server,
       "/Items/$itemId/Refresh",
-      mapOf("MetadataRefreshMode" to mode, "Recursive" to "true"),
+      mapOf(
+        "MetadataRefreshMode" to mode,
+        "Recursive" to "true",
+        "ImageRefreshMode" to if (replaceAllImages) "FullRefresh" else "Default",
+        "ReplaceAllMetadata" to replaceAllMetadata.toString(),
+        "ReplaceAllImages" to replaceAllImages.toString(),
+      ),
     ).post("".toRequestBody(jsonMedia))
       .build()
+    execString(req)
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 3.6 图片管理（编辑图片：列出现有图 / 删除 / 本地上传 / 从图源搜图）
+  // ════════════════════════════════════════════════════════════════════════
+
+  /** 条目当前挂着的图片清单（GET /Items/{Id}/Images） */
+  fun getItemImages(server: EmbyServer, itemId: String): List<EmbyImageInfo> =
+    execJson(authedRequest(server, "/Items/$itemId/Images").build())
+
+  /** 删除一张图片（封面 / 徽标 / 艺术图 …） */
+  fun deleteItemImage(
+    server: EmbyServer,
+    itemId: String,
+    imageType: String,
+    index: Int = 0,
+  ) {
+    val base = "/Items/$itemId/Images/$imageType/$index"
+    runCatching {
+      // Emby 4.9 起改成了 POST …/{Index}/Delete
+      execString(
+        authedRequest(server, "$base/Delete")
+          .post("".toRequestBody(jsonMedia))
+          .build(),
+      )
+    }.recoverCatching {
+      // 老版本只认 DELETE /Items/{Id}/Images/{Type}/{Index}
+      execString(authedRequest(server, base).delete().build())
+    }.getOrThrow()
+  }
+
+  /**
+   * 上传（更换）一张图片：POST /Items/{Id}/Images/{Type}。
+   *
+   * 这条接口的 body 格式各版本不一致：新版本收**原始二进制**（Content-Type 是图片 mime），
+   * 老版本只认 **base64 文本**（同样配图片 mime）。先按二进制发，被拒了再退回 base64 ——
+   * 两种都试过仍失败才抛，避免「换图一直失败但不知道为什么」。
+   */
+  fun uploadItemImage(
+    server: EmbyServer,
+    itemId: String,
+    imageType: String,
+    bytes: ByteArray,
+    mime: String,
+  ) {
+    val mediaType = mime.toMediaType()
+    val rawError = runCatching {
+      execString(
+        authedRequest(server, "/Items/$itemId/Images/$imageType")
+          .post(bytes.toRequestBody(mediaType))
+          .build(),
+      )
+    }.exceptionOrNull()
+    if (rawError == null) return
+
+    val base64 = java.util.Base64.getEncoder().encodeToString(bytes)
+    runCatching {
+      execString(
+        authedRequest(server, "/Items/$itemId/Images/$imageType")
+          .post(base64.toByteArray().toRequestBody(mediaType))
+          .build(),
+      )
+    }.onFailure {
+      throw rawError
+    }
+  }
+
+  /** 可用的远程图源（GET /Items/{Id}/RemoteImages/Providers） */
+  fun getRemoteImageProviders(server: EmbyServer, itemId: String): List<EmbyImageProviderInfo> =
+    execJson(authedRequest(server, "/Items/$itemId/RemoteImages/Providers").build())
+
+  /** 从远程图源搜某类图片（GET /Items/{Id}/RemoteImages） */
+  fun searchRemoteImages(
+    server: EmbyServer,
+    itemId: String,
+    imageType: String,
+    providerName: String? = null,
+    includeAllLanguages: Boolean = true,
+  ): List<EmbyRemoteImageInfo> =
+    execJson<EmbyRemoteImageResult>(
+      authedRequest(
+        server,
+        "/Items/$itemId/RemoteImages",
+        mapOf(
+          "Type" to imageType,
+          "ProviderName" to providerName,
+          "IncludeAllLanguages" to includeAllLanguages.toString(),
+          // 跟 Emby Web 端一致：一次取 50 张足够挑，不设的话有的图源会全量返回几百张
+          "Limit" to "50",
+        ),
+      ).build(),
+    ).Images
+
+  /** 把远程搜到的那张图下载并挂到条目上（POST /Items/{Id}/RemoteImages/Download） */
+  fun downloadRemoteImage(
+    server: EmbyServer,
+    itemId: String,
+    imageType: String,
+    imageUrl: String,
+    providerName: String? = null,
+  ) {
+    val req = authedRequest(
+      server,
+      "/Items/$itemId/RemoteImages/Download",
+      mapOf(
+        // 4.9 起参数名叫 Type，老版本叫 ImageType —— 两个都带上，各自忽略不认识的那个
+        "Type" to imageType,
+        "ImageType" to imageType,
+        "ImageUrl" to imageUrl,
+        // 必须是「这张图来自哪个图源」（MetaTube / FanArt ...）。写死 Manual 会让服务器
+        // 拿错的图源去取图，MetaTube 这类外链图源基本必失败。留空时服务器自己判断。
+        "ProviderName" to providerName,
+      ),
+    ).post("".toRequestBody(jsonMedia)).build()
+    execString(req)
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 3.7 识别 / 刮削（Identify）
+  // ════════════════════════════════════════════════════════════════════════
+
+  /** 条目已绑定的外部 ID（GET /Items/{Id}/ExternalIdInfos），用于预填识别对话框 */
+  fun getExternalIdInfos(server: EmbyServer, itemId: String): List<EmbyExternalIdInfo> =
+    execJson(authedRequest(server, "/Items/$itemId/ExternalIdInfos").build())
+
+  /**
+   * 按条件远程检索元数据（POST /Items/RemoteSearch/{Type}）。
+   *
+   * [searchType] 是 **检索类型**（Movie / Series / BoxSet / Person …），
+   * 跟条目的 Type 大多数时候同名，但剧集（Episode）要按 Series 去搜，不能直接拿 Type 填。
+   *
+   * 请求体必须是 `{"SearchInfo":{...},"ItemId":n,...}` 这层壳 ——
+   * 官方 schema 里 body 类型是 `RemoteSearchQuery<MovieInfo>`，
+   * 直接把 lookup 对象发过去的话服务器读到的 SearchInfo 是 null，返回永远是空数组。
+   */
+  fun remoteSearch(
+    server: EmbyServer,
+    searchType: String,
+    lookup: EmbyItemLookupInfo,
+    itemId: String? = null,
+  ): List<EmbyRemoteSearchResult> {
+    val path = "/Items/RemoteSearch/$searchType"
+    // 主请求：ItemId 按字符串发（实测能拿到候选的形式）
+    val body = json.encodeToString(EmbyRemoteSearchQuery(SearchInfo = lookup, ItemId = itemId))
+    val first = runCatching { postJson<List<EmbyRemoteSearchResult>>(server, path, body) }
+    if (first.isSuccess) return first.getOrThrow()
+
+    // 兜底：少数版本只认数字 ItemId（严格按 OpenAPI 生成的那批），换形式再试一次。
+    // 两次都失败时抛第一次的错误，它更贴近「实际用的那种形式」的问题。
+    val numeric = itemId?.toLongOrNull() ?: throw first.exceptionOrNull()!!
+    runCatching {
+      postJson<List<EmbyRemoteSearchResult>>(
+        server,
+        path,
+        json.encodeToString(EmbyRemoteSearchQueryNumeric(SearchInfo = lookup, ItemId = numeric)),
+      )
+    }.getOrElse { throw first.exceptionOrNull()!! }
+    // 上一行要么返回、要么抛，这里到不了；写出来是为了让编译器确认返回类型非空
+    @Suppress("UNREACHABLE_CODE")
+    return emptyList()
+  }
+
+  /** 应用识别结果并刷新元数据（POST /Items/RemoteSearch/Apply/{Id}） */
+  fun applyRemoteSearch(
+    server: EmbyServer,
+    itemId: String,
+    result: EmbyRemoteSearchResult,
+    replaceAllImages: Boolean = false,
+  ) {
+    val req = authedRequest(
+      server,
+      "/Items/RemoteSearch/Apply/$itemId",
+      mapOf("ReplaceAllImages" to replaceAllImages.toString()),
+    ).post(json.encodeToString(result).toRequestBody(jsonMedia)).build()
     execString(req)
   }
 

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
@@ -94,10 +95,13 @@ import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshGridBox
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyFavoriteRandomIcon
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyItemActionsDialog
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaActionsDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
 import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
+import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -107,6 +111,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.koin.compose.koinInject
+import kotlin.math.roundToInt
 
 /**
  * Emby 媒体库浏览页（二级页面）。
@@ -274,6 +279,10 @@ data class EmbyLibraryScreen(
     var isScanning by remember(cacheKey) { mutableStateOf(false) }
     // 正在跑的扫描任务：换筛选条件 / 退出页面时取消，避免旧扫描继续拉数据
     val scanJob = remember { mutableStateOf<Job?>(null) }
+    // 长按选中的条目：非空时弹操作框（文件夹与媒体是两套菜单）
+    var actionTarget by remember { mutableStateOf<EmbyItem?>(null) }
+  /** 长按发生的位置（root 坐标）：菜单锚在这里展开，而不是屏幕中间 */
+  var menuAnchor by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
 
     // 文件夹宫格封面：初值取自进程内缓存，从子页面返回时不会重新请求
     val folderCovers = remember {
@@ -919,27 +928,9 @@ data class EmbyLibraryScreen(
                   onClick = { openItem(item, backStack, s, context) },
                   style = cardStyle,
                   fillWidth = cardStyle == EmbyCardStyle.POSTER,
-                  // 长按文件夹 = 扫描这个目录：新拷进去的文件不用去 Web 端点一遍也能入库。
-                  // 只给真实目录挂（电影 / 剧集这类媒体本身没有可扫的目录，挂上没意义）
-                  onLongClick = if (itemId != null && isScannableFolder(item)) {
-                    {
-                      val name = viewModel.displayTitle(item)
-                      scope.launch {
-                        val ok = runCatching { viewModel.scanLibrary(s, itemId) }.getOrDefault(false)
-                        Toast.makeText(
-                          context,
-                          if (ok) {
-                            "已通知服务器扫描「$name」，稍后下拉刷新查看新文件"
-                          } else {
-                            "扫描「$name」失败，可能需要管理员权限"
-                          },
-                          Toast.LENGTH_LONG,
-                        ).show()
-                      }
-                    }
-                  } else {
-                    null
-                  },
+                  // 长按 = 弹出操作框。文件夹与媒体是两套菜单：
+                  // 文件夹是「扫描 / 刷新元数据」，媒体是「收藏 / 已看 / 编辑元数据 / 编辑图片 / 刮削 / 刷新 / 删除」
+                  onLongClick = if (itemId != null) { { offset -> actionTarget = item; menuAnchor = offset } } else null,
                 )
               }
             }
@@ -947,6 +938,76 @@ data class EmbyLibraryScreen(
         }
       }
     }
+
+      // ── 长按操作框：文件夹走「扫描 / 刷新元数据」，媒体走完整的那一套 ──
+      val target = actionTarget
+      val targetServer = server
+      if (target != null && targetServer != null) {
+        // 锚定到长按的那一点：菜单从手指旁边展开
+        Box(
+          modifier = Modifier.offset {
+            androidx.compose.ui.unit.IntOffset(
+              menuAnchor.x.roundToInt(),
+              menuAnchor.y.roundToInt(),
+            )
+          },
+        ) {
+        val targetId = target.Id
+        val targetName = viewModel.displayTitle(target)
+        if (isScannableFolder(target)) {
+          EmbyItemActionsDialog(
+            name = targetName,
+            kindLabel = "文件夹",
+            onDismissRequest = { actionTarget = null },
+            onScan = {
+              actionTarget = null
+              runEmbyLibraryAction(
+                context = context,
+                scope = scope,
+                server = targetServer,
+                itemId = targetId,
+                name = targetName,
+                okMessage = "已通知服务器扫描「$targetName」，稍后下拉刷新查看新文件",
+                action = { srv, id -> runCatching { viewModel.scanLibrary(srv, id) } },
+              )
+            },
+            onRefreshMetadata = { replaceMetadata, replaceImages ->
+              actionTarget = null
+              runEmbyLibraryAction(
+                context = context,
+                scope = scope,
+                server = targetServer,
+                itemId = targetId,
+                name = targetName,
+                okMessage = "已通知服务器刷新「$targetName」的元数据，稍后下拉刷新查看",
+                action = { srv, id ->
+                  runCatching { viewModel.refreshLibraryMetadata(srv, id, replaceMetadata, replaceImages) }
+                },
+              )
+            },
+          )
+        } else {
+          EmbyMediaActionsDialog(
+            server = targetServer,
+            item = target,
+            viewModel = viewModel,
+            onDismissRequest = { actionTarget = null },
+            onChanged = { updated ->
+              val id = updated.Id
+              if (id != null) {
+                items = items.map { if (it.Id == id) updated else it }
+              }
+            },
+            onDeleted = { id ->
+              items = items.filterNot { it.Id == id }
+              EmbyLibraryCache.removeItem(id)
+            },
+            // 图片 / 元数据换过之后，列表里这条的 ImageTags 已经旧了，重拉一次才看得到新封面
+            onImagesChanged = { scope.launch { load(reset = true) } },
+          )
+        }
+        } // 关闭锚定 Box（菜单跟着长按的那一点走）
+      }
 
     // ── 筛选弹窗：类型 / 标签 / 年份 / 官方分级 / 评分 / 只看收藏 ──
     // 弹窗里改的是草稿副本，只有点「确定」才写回，避免每点一个 chip 就发一次请求。

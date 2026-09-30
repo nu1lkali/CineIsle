@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -62,10 +63,13 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySectionHeader
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyWideCard
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyItemActionsDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
+import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
+import kotlin.math.roundToInt
 
 /**
  * Emby 首页。
@@ -115,6 +119,10 @@ fun EmbyHomeScreen(
 
   // 长按媒体库卡片 → 通知服务器扫描该库（异步任务，只发指令不等结果）
   val scanScope = rememberCoroutineScope()
+  // 长按选中的媒体库：非空时弹操作框，用户点「扫描媒体库」后才真的发请求
+  var scanTarget by remember { mutableStateOf<EmbyItem?>(null) }
+  /** 长按位置（root 坐标）：菜单锚在手指旁边展开 */
+  var menuAnchor by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
 
   // ── 全库搜索 ──
   // 不带 ParentId，Emby 会跨所有媒体库检索，所以这里搜的是「全部媒体」而不是某个库。
@@ -133,6 +141,54 @@ fun EmbyHomeScreen(
   val keyboardController = LocalSoftwareKeyboardController.current
 
   Column(modifier = Modifier.fillMaxSize()) {
+    // 长按媒体库卡片弹出的操作框（扫描媒体库 / 刷新元数据）
+    //
+    // ⚠️ 这个锚定 Box **必须放在 Column 的第一个子元素**：它包的是 DropdownMenu
+    // （Popup，不占布局空间），位置只取决于它在 Column 里排第几。放在最后的话，
+    // 前面的列表 fillMaxSize 已经占满整屏，留给它的空间是 0，锚点就落到屏幕底部 ——
+    // 表现就是「菜单跑到界面底部，而不是手指旁边」。
+    val target = scanTarget
+    if (target != null) {
+      Box(
+        modifier = Modifier.offset {
+          androidx.compose.ui.unit.IntOffset(menuAnchor.x.roundToInt(), menuAnchor.y.roundToInt())
+        },
+      ) {
+        val targetId = target.Id
+        val targetName = target.Name ?: "媒体库"
+        EmbyItemActionsDialog(
+          name = targetName,
+          kindLabel = "媒体库",
+          onDismissRequest = { scanTarget = null },
+          onScan = {
+            scanTarget = null
+            runEmbyLibraryAction(
+              context = context,
+              scope = scanScope,
+              server = server,
+              itemId = targetId,
+              name = targetName,
+              okMessage = "已通知服务器扫描「$targetName」，稍后下拉刷新查看新文件",
+              action = { s, id -> runCatching { viewModel.scanLibrary(s, id) } },
+            )
+          },
+          onRefreshMetadata = { replaceMetadata, replaceImages ->
+            scanTarget = null
+            runEmbyLibraryAction(
+              context = context,
+              scope = scanScope,
+              server = server,
+              itemId = targetId,
+              name = targetName,
+              okMessage = "已通知服务器刷新「$targetName」的元数据，稍后下拉刷新查看",
+              action = { s, id ->
+                runCatching { viewModel.refreshLibraryMetadata(s, id, replaceMetadata, replaceImages) }
+              },
+            )
+          },
+        )
+      }
+    }
     TopAppBar(
       title = {
         Column {
@@ -371,7 +427,6 @@ fun EmbyHomeScreen(
                   horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                   items(libraries, key = { it.Id ?: it.Name ?: "" }) { library ->
-                    val libraryId = library.Id
                     val libraryName = library.Name ?: "媒体库"
                     EmbyLibraryCard(
                       name = libraryName,
@@ -379,28 +434,9 @@ fun EmbyHomeScreen(
                       imageUrl = viewModel.imageUrl(server!!, library, "Primary", 300),
                       icon = libraryIcon(library.CollectionType),
                       onClick = { onOpenLibrary(library) },
-                      // 长按 = 扫描媒体库：新拷进去的片子让服务器重新读一遍目录就能出现，
-                      // 不用去 Web 端点一遍。扫描是服务器后台任务，接口只负责「通知到了」
-                      onLongClick = {
-                        val s = server
-                        if (libraryId == null || s == null) {
-                          Toast.makeText(context, "无法扫描：缺少库信息", Toast.LENGTH_SHORT).show()
-                        } else {
-                          scanScope.launch {
-                            val ok = runCatching { viewModel.scanLibrary(s, libraryId) }
-                              .getOrDefault(false)
-                            Toast.makeText(
-                              context,
-                              if (ok) {
-                                "已通知服务器扫描「$libraryName」，稍后下拉刷新查看新文件"
-                              } else {
-                                "扫描「$libraryName」失败，可能需要管理员权限"
-                              },
-                              Toast.LENGTH_LONG,
-                            ).show()
-                          }
-                        }
-                      },
+                      // 长按 = 弹出操作框（扫描媒体库等）。扫描是作用在服务器上的异步任务、
+                      // 发出去撤不回来，所以不直接执行，先让用户确认
+                      onLongClick = { offset -> scanTarget = library; menuAnchor = offset },
                     )
                   }
                 }
@@ -471,6 +507,7 @@ fun EmbyHomeScreen(
         }
       }
     }
+
   }
 }
 

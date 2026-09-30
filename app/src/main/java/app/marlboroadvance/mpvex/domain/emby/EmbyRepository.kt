@@ -377,11 +377,20 @@ class EmbyRepository(
   // ─── 收藏 / 删除 / 已看 ───
 
   suspend fun favorite(server: EmbyServer, itemId: String) = withContext(Dispatchers.IO) {
-    EmbyClient.favoriteItem(server, itemId)
+    EmbyClient.setFavorite(server, itemId, true)
   }
 
   suspend fun unfavorite(server: EmbyServer, itemId: String) = withContext(Dispatchers.IO) {
-    EmbyClient.unfavoriteItem(server, itemId)
+    EmbyClient.setFavorite(server, itemId, false)
+  }
+
+  /** 加入 / 取消收藏；返回服务器回传的 UserData（含 IsFavorite），调用方据此确认真实状态 */
+  suspend fun setFavorite(
+    server: EmbyServer,
+    itemId: String,
+    favorite: Boolean,
+  ): EmbyUserData? = withContext(Dispatchers.IO) {
+    EmbyClient.setFavorite(server, itemId, favorite)
   }
 
   suspend fun deleteItem(server: EmbyServer, itemId: String) = withContext(Dispatchers.IO) {
@@ -389,11 +398,20 @@ class EmbyRepository(
   }
 
   suspend fun markPlayed(server: EmbyServer, itemId: String) = withContext(Dispatchers.IO) {
-    EmbyClient.markPlayed(server, itemId)
+    EmbyClient.setPlayed(server, itemId, true)
   }
 
   suspend fun markUnplayed(server: EmbyServer, itemId: String) = withContext(Dispatchers.IO) {
-    EmbyClient.markUnplayed(server, itemId)
+    EmbyClient.setPlayed(server, itemId, false)
+  }
+
+  /** 标记已看 / 未看；返回服务器回传的 UserData（含 Played），调用方据此确认真实状态 */
+  suspend fun setPlayed(
+    server: EmbyServer,
+    itemId: String,
+    played: Boolean,
+  ): EmbyUserData? = withContext(Dispatchers.IO) {
+    EmbyClient.setPlayed(server, itemId, played)
   }
 
   // ─── 播放进度上报 ───
