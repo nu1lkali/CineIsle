@@ -5,6 +5,9 @@ import androidx.room.PrimaryKey
 
 /**
  * Represents a network connection configuration
+ *
+ * [password] 落盘时是 Keystore AES-GCM 密文、内存里是明文，
+ * 转换统一由 [app.marlboroadvance.mpvex.repository.NetworkRepository] 在读写边界完成。
  */
 @Entity(tableName = "network_connections")
 data class NetworkConnection(

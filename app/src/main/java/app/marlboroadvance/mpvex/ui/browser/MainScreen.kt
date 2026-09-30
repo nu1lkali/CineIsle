@@ -281,12 +281,24 @@ private fun EmbyHomeRoute() {
       )
     },
     onOpenDetail = { item ->
-      backStack.add(
-        app.marlboroadvance.mpvex.ui.browser.emby.EmbyDetailScreen(
-          itemId = item.Id ?: return@EmbyHomeScreen,
-          title = item.Name ?: "",
-        ),
-      )
+      val id = item.Id ?: return@EmbyHomeScreen
+      // 「演员」筛选搜出来的是 Person，没有「媒体详情」可看 —— 点进去应该看 TA 的作品列表
+      if (item.Type == "Person") {
+        backStack.add(
+          app.marlboroadvance.mpvex.ui.browser.emby.EmbyPersonScreen(
+            personId = id,
+            personName = item.Name ?: "",
+            personImageTag = item.ImageTags["Primary"],
+          ),
+        )
+      } else {
+        backStack.add(
+          app.marlboroadvance.mpvex.ui.browser.emby.EmbyDetailScreen(
+            itemId = id,
+            title = item.Name ?: "",
+          ),
+        )
+      }
     },
     onManageServers = { backStack.add(app.marlboroadvance.mpvex.ui.browser.emby.EmbyServerManageScreen) },
     onOpenSettings = { backStack.add(app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen) },

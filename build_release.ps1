@@ -12,10 +12,18 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectDir = "D:\project\mpvEx-master"
 $OutDir = "F:\apk_release"
-$VersionName = "1.0.1"
+
+# 版本号从 build.gradle.kts 里现读，不再手写 ——
+# 之前脚本里硬编码 1.0.1，而 gradle 已经改成 1.0.3，产物名和真实版本对不上。
+$gradleFile = Join-Path $ProjectDir "app\build.gradle.kts"
+$gradleText = Get-Content $gradleFile -Raw
+$VersionName = [regex]::Match($gradleText, 'versionName\s*=\s*"([^"]+)"').Groups[1].Value
+$baseVersionCode = [int][regex]::Match($gradleText, 'versionCode\s*=\s*(\d+)').Groups[1].Value
+if (-not $VersionName) { throw "没从 $gradleFile 里解析到 versionName" }
 
 $abiCode = @{ "armeabi-v7a" = 1; "arm64-v8a" = 2; "x86" = 3; "x86_64" = 4 }[$Abi]
-$versionCode = 1 * 10 + $abiCode
+$versionCode = $baseVersionCode * 10 + $abiCode
+Write-Host "版本: v$VersionName ($versionCode) / ABI=$Abi" -ForegroundColor DarkGray
 
 Set-Location $ProjectDir
 
@@ -23,7 +31,10 @@ Set-Location $ProjectDir
 #    导致后续任务报「拒绝访问」。
 if (-not $NoClean) {
   Write-Host "[1/4] 停止 Gradle 守护进程并清理 transform 锁 ..." -ForegroundColor Cyan
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
   & .\gradlew.bat --stop 2>&1 | Out-Null
+  $ErrorActionPreference = $prevEap
   Start-Sleep -Seconds 5
   $lockDir = Join-Path $env:USERPROFILE ".gradle\caches\9.6.0\transforms\.internal\locks"
   if (Test-Path $lockDir) {
@@ -33,11 +44,20 @@ if (-not $NoClean) {
 }
 
 # 2) 打 release 包（走 keystore.properties 里的签名配置）
+#
+# 注意：PowerShell 5.1 下把原生命令的 stderr 并进成功流（`2>&1`）会生成
+# NativeCommandError，而本脚本开头设了 $ErrorActionPreference = "Stop" ——
+# 后果是 Gradle 一旦编译失败，脚本会在打印「构建失败」之前就中断退出，
+# 收尾信息全丢。所以调 Gradle 前后临时把 ErrorActionPreference 放回 Continue。
 Write-Host "[2/4] 构建 StandardRelease / $Abi ..." -ForegroundColor Cyan
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 & .\gradlew.bat :app:assembleStandardRelease "-Pabi=$Abi" --console=plain
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "构建失败，exit=$LASTEXITCODE" -ForegroundColor Red
-  exit $LASTEXITCODE
+$buildExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($buildExit -ne 0) {
+  Write-Host "构建失败，exit=$buildExit" -ForegroundColor Red
+  exit $buildExit
 }
 
 # 3) 定位产物：ABI 体现在文件名里（app-standard-<abi>-release.apk）。
@@ -70,7 +90,10 @@ Copy-Item -LiteralPath $apk -Destination $dest -Force
 $sdk = "D:\project\AlistClientN\.android-sdk\build-tools\36.0.0\apksigner.bat"
 if (Test-Path $sdk) {
   Write-Host "[3/4] 校验签名 ..." -ForegroundColor Cyan
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
   & $sdk verify --print-certs $dest 2>&1 | Select-Object -First 8
+  $ErrorActionPreference = $prevEap
 }
 
 Write-Host "[4/4] 完成" -ForegroundColor Green

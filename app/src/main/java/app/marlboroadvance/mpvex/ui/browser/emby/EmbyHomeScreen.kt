@@ -12,6 +12,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Dns
@@ -37,21 +39,30 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.database.repository.SearchHistoryRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyLibraryCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMaintainButton
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyPosterCard
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySectionHeader
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyWideCard
+import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
+import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
 
 /**
  * Emby 首页。
@@ -97,6 +108,15 @@ fun EmbyHomeScreen(
   var searchQuery by remember { mutableStateOf("") }
   var searchResults by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
   var isSearching by remember { mutableStateOf(false) }
+  // 类型筛选：空集合 = 「全部」= 不加类型限制
+  var searchFilters by remember { mutableStateOf(emptySet<EmbySearchFilter>()) }
+
+  // 搜索历史：与媒体库内搜索共用同一张表，在哪儿搜过的词换个地方也能点到
+  val searchHistoryRepository = koinInject<SearchHistoryRepository>()
+  val searchHistoryFlow = remember { searchHistoryRepository.observe() }
+  val searchHistory by searchHistoryFlow.collectAsState(initial = emptyList())
+  val historyScope = rememberCoroutineScope()
+  val keyboardController = LocalSoftwareKeyboardController.current
 
   Column(modifier = Modifier.fillMaxSize()) {
     TopAppBar(
@@ -192,6 +212,14 @@ fun EmbyHomeScreen(
           .padding(horizontal = 16.dp, vertical = 8.dp),
         placeholder = { Text("搜索全部媒体库…") },
         singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(
+          // 键盘上按「搜索」= 用户明确表态「我就搜这个词」，直接落一条历史并立刻出结果
+          onSearch = {
+            keyboardController?.hide()
+            historyScope.launch { searchHistoryRepository.record(searchQuery) }
+          },
+        ),
         trailingIcon = {
           if (searchQuery.isNotEmpty()) {
             IconButton(onClick = { searchQuery = "" }) {
@@ -200,10 +228,15 @@ fun EmbyHomeScreen(
           }
         },
       )
+      // 类型筛选：默认「全部」不加限制；勾了电影/合集/演员这类就按类型查
+      EmbySearchFilterRow(
+        selected = searchFilters,
+        onSelectedChange = { searchFilters = it },
+      )
     }
 
     // 防抖 400ms，避免每敲一个字就发一次请求
-    LaunchedEffect(searchQuery, searchActive) {
+    LaunchedEffect(searchQuery, searchActive, searchFilters) {
       if (!searchActive || searchQuery.isBlank()) {
         searchResults = emptyList()
         isSearching = false
@@ -216,7 +249,16 @@ fun EmbyHomeScreen(
         isSearching = false
         return@LaunchedEffect
       }
-      searchResults = viewModel.searchGlobal(current, searchQuery)
+      val finishedQuery = searchQuery
+      searchResults = viewModel.searchGlobal(
+        server = current,
+        term = finishedQuery,
+        itemTypes = EmbySearchFilter.toItemTypes(searchFilters),
+      )
+      // 有结果才记历史：一个字都没命中的多半是打字打岔了，记下来只会污染列表
+      if (searchResults.isNotEmpty()) {
+        searchHistoryRepository.record(finishedQuery)
+      }
       isSearching = false
     }
 
@@ -224,13 +266,14 @@ fun EmbyHomeScreen(
       // 全库搜索：结果替换首页内容
       searchActive -> {
         if (searchQuery.isBlank()) {
-          Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-              text = "输入关键词，搜索全部媒体库",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
+          SearchHistoryPanel(
+            history = searchHistory,
+            onPick = { keyword -> searchQuery = keyword },
+            onRemove = { keyword -> historyScope.launch { searchHistoryRepository.remove(keyword) } },
+            onClearAll = { historyScope.launch { searchHistoryRepository.clear() } },
+            modifier = Modifier.fillMaxSize(),
+            emptyHint = "输入关键词，搜索全部媒体库",
+          )
         } else if (isSearching) {
           Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()

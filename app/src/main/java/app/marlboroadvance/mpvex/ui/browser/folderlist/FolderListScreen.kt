@@ -953,19 +953,21 @@ private fun FolderSortDialog(
       Icons.Filled.CalendarToday,
       Icons.Filled.SwapVert,
     ),
+    // types / sortType 是枚举的 displayName（英文，同时是偏好持久化键），显示时转中文
+    typeLabel = { name -> FolderSortType.entries.find { it.displayName == name }?.label ?: name },
     getLabelForType = { type, _ ->
       when (type) {
         FolderSortType.Title.displayName -> Pair("A-Z", "Z-A")
-        FolderSortType.Date.displayName -> Pair("Oldest", "Newest")
-        FolderSortType.Size.displayName -> Pair("Smallest", "Largest")
-        else -> Pair("Asc", "Desc")
+        FolderSortType.Date.displayName -> Pair("最旧", "最新")
+        FolderSortType.Size.displayName -> Pair("最小", "最大")
+        else -> Pair("升序", "降序")
       }
     },
     showSortOptions = isAlbumView,
     viewModeSelector = ViewModeSelector(
       label = "视图模式",
-      firstOptionLabel = "Folder",
-      secondOptionLabel = "Tree",
+      firstOptionLabel = "文件夹",
+      secondOptionLabel = "树形",
       firstOptionIcon = Icons.Filled.ViewModule,
       secondOptionIcon = Icons.Filled.AccountTree,
       isFirstOptionSelected = folderViewMode == FolderViewMode.AlbumView,
@@ -977,8 +979,8 @@ private fun FolderSortDialog(
     ),
     layoutModeSelector = ViewModeSelector(
       label = "布局",
-      firstOptionLabel = "List",
-      secondOptionLabel = "Grid",
+      firstOptionLabel = "列表",
+      secondOptionLabel = "网格",
       firstOptionIcon = Icons.AutoMirrored.Filled.ViewList,
       secondOptionIcon = Icons.Filled.GridView,
       isFirstOptionSelected = mediaLayoutMode == MediaLayoutMode.LIST,

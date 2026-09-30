@@ -932,19 +932,22 @@ private fun VideoSortDialog(
         Icons.Filled.CalendarToday,
         Icons.Filled.SwapVert,
       ),
+    // types / sortType 传的是枚举的 displayName（英文），那同时是偏好里的持久化键；
+    // 界面文案统一在这里转成中文，不改动 displayName。
+    typeLabel = { name -> VideoSortType.entries.find { it.displayName == name }?.label ?: name },
     getLabelForType = { type, _ ->
       when (type) {
         VideoSortType.Title.displayName -> Pair("A-Z", "Z-A")
-        VideoSortType.Duration.displayName -> Pair("Shortest", "Longest")
-        VideoSortType.Date.displayName -> Pair("Oldest", "Newest")
-        VideoSortType.Size.displayName -> Pair("Smallest", "Biggest")
-        else -> Pair("Asc", "Desc")
+        VideoSortType.Duration.displayName -> Pair("最短", "最长")
+        VideoSortType.Date.displayName -> Pair("最旧", "最新")
+        VideoSortType.Size.displayName -> Pair("最小", "最大")
+        else -> Pair("升序", "降序")
       }
     },
     viewModeSelector = ViewModeSelector(
       label = "视图模式",
-      firstOptionLabel = "Folder",
-      secondOptionLabel = "Tree",
+      firstOptionLabel = "文件夹",
+      secondOptionLabel = "树形",
       firstOptionIcon = Icons.Filled.ViewModule,
       secondOptionIcon = Icons.Filled.AccountTree,
       isFirstOptionSelected = folderViewMode == FolderViewMode.AlbumView,
@@ -956,8 +959,8 @@ private fun VideoSortDialog(
     ),
     layoutModeSelector = ViewModeSelector(
       label = "布局",
-      firstOptionLabel = "List",
-      secondOptionLabel = "Grid",
+      firstOptionLabel = "列表",
+      secondOptionLabel = "网格",
       firstOptionIcon = Icons.AutoMirrored.Filled.ViewList,
       secondOptionIcon = Icons.Filled.GridView,
       isFirstOptionSelected = mediaLayoutMode == MediaLayoutMode.LIST,

@@ -7,8 +7,11 @@ import androidx.room.PrimaryKey
  * Emby 服务器配置（持久化到 Room）。
  *
  * 登录成功后会把 [userId] 和 [apiToken] 写回，后续所有 API 调用都带 X-Emby-Token。
- * 密码以明文存储——本应用定位是个人本地播放器，不涉及多用户场景，
- * 若需要更高安全可后续改成 EncryptedSharedPreferences 或 Tink 加密。
+ *
+ * 关于 [password]：**落盘时是密文，内存里是明文。**
+ * 加密/解密统一由 [app.marlboroadvance.mpvex.database.repository.EmbyServerRepository]
+ * 在读写边界完成（走 Android Keystore 的 AES-256-GCM，密钥不可导出），
+ * 所以业务代码拿到的 [EmbyServer] 上 `password` 永远是明文，不需要自己做任何解密。
  */
 @Entity(tableName = "emby_servers")
 data class EmbyServer(
@@ -22,6 +25,7 @@ data class EmbyServer(
   /** 是否用 HTTPS。Emby 默认 HTTP 8096、HTTPS 8920。 */
   val useHttps: Boolean = false,
   val username: String,
+  /** 明文（内存）／Keystore 密文（落盘），转换见类注释 */
   val password: String,
   /** 登录成功后写入；空表示未登录 */
   val userId: String = "",

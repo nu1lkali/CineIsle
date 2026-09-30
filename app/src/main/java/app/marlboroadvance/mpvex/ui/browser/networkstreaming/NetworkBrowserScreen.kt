@@ -31,7 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import app.marlboroadvance.mpvex.database.dao.NetworkConnectionDao
+import app.marlboroadvance.mpvex.repository.NetworkRepository
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -151,12 +151,12 @@ private fun NetworkBrowserContent(
   onVideoClick: (NetworkFile) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  // Load connection details
-  val dao = org.koin.compose.koinInject<NetworkConnectionDao>()
+  // Load connection details（走仓库而不是直接读 DAO —— 密码落盘是密文，仓库会负责解密）
+  val repository = org.koin.compose.koinInject<NetworkRepository>()
   var connection by remember { mutableStateOf<NetworkConnection?>(null) }
 
   LaunchedEffect(connectionId) {
-    connection = dao.getConnectionById(connectionId)
+    connection = repository.getConnectionById(connectionId)
   }
 
   when {

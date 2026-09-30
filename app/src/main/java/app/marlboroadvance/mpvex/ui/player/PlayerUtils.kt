@@ -17,6 +17,47 @@ import java.io.File
 private enum class IsoKind { BLU_RAY, DVD }
 
 /**
+ * 会出现在 URL query 里的凭据参数名。Emby 的播放直链长这样：
+ * `http://host:8096/emby/Videos/{id}/stream?static=true&api_key=xxxxxxxx`
+ * —— mpv 在拿不到片名时会把**整条 URL** 当成 `media-title` 回传，
+ * 顶栏 / 通知栏于是会把 api_key 一起显示出来。
+ */
+private val SECRET_QUERY_KEYS =
+  listOf(
+    "api_key",
+    "apikey",
+    "x-emby-token",
+    "token",
+    "access_token",
+    "auth",
+    "password",
+    "passwd",
+    "pwd",
+    "sig",
+    "signature",
+  )
+
+/** 匹配 `?api_key=xxx` / `&api_key=xxx`，只保留 key、把 value 打码 */
+private val SECRET_QUERY_REGEX =
+  Regex(
+    "(?i)([?&](?:${SECRET_QUERY_KEYS.joinToString("|")})=)([^&#\\s]*)",
+  )
+
+/**
+ * 把字符串里 URL query 的凭据值打码，用于**界面显示**（顶栏标题、通知栏、投屏名等）。
+ *
+ * 只动展示用的字符串，**绝不参与播放** —— 交给 mpv / GSY / OkHttp 的地址
+ * 始终是原始的、带 api_key 的那一份，所以不会影响播放。
+ *
+ * 例：`.../stream?static=true&api_key=abc123` → `.../stream?static=true&api_key=***`
+ */
+internal fun redactUrlSecrets(text: String?): String? {
+  if (text.isNullOrEmpty()) return text
+  if (!text.contains('=')) return text
+  return SECRET_QUERY_REGEX.replace(text) { match -> "${match.groupValues[1]}***" }
+}
+
+/**
  * ISO 原盘支持：本地 .iso 镜像映射到 mpv 的 bluray:// / dvd:// 流。
  *
  * libmpv 内置 libbluray / dvdnav（已确认自带），但它们按「路径」打开镜像、

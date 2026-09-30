@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
@@ -60,6 +62,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.animation.AnimatedVisibility
@@ -73,6 +77,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
+import app.marlboroadvance.mpvex.database.repository.SearchHistoryRepository
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleFilter
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleHit
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleMarks
@@ -88,6 +93,9 @@ import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefresh
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyFavoriteRandomIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
+import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -130,8 +138,16 @@ data class EmbyLibraryScreen(
 
     var searchQuery by remember { mutableStateOf("") }
     var searchActive by remember { mutableStateOf(false) }
+    // 类型筛选：空集合 = 「全部」= 不加类型限制
+    var searchFilters by remember { mutableStateOf(emptySet<EmbySearchFilter>()) }
     var category by remember { mutableStateOf(EmbyCategory.ALL) }
     var showStyleDialog by remember { mutableStateOf(false) }
+
+    // 搜索历史：与首页全库搜索共用同一张表 / 同一份历史
+    val searchHistoryRepository = koinInject<SearchHistoryRepository>()
+    val searchHistoryFlow = remember { searchHistoryRepository.observe() }
+    val searchHistory by searchHistoryFlow.collectAsState(initial = emptyList())
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     // 排序方式 / 方向 / 卡片样式走偏好存储：重新进入媒体库、甚至重启 App 都沿用上次的选择
     val browserPreferences = koinInject<BrowserPreferences>()
@@ -224,7 +240,9 @@ data class EmbyLibraryScreen(
       "csub=$chineseSubsOnly|" +
       // 标记配置也算条件：改了标记 / 匹配范围，命中结果就变了，必须重新扫
       "cmarks=${chineseMarks.signature()}|" +
-      "m=$minRating|fav=$favoriteOnly"
+      "m=$minRating|fav=$favoriteOnly|" +
+      // 搜索筛选也算条件：换类型的结果是另一批，不能复用同一桶缓存
+      "st=${searchFilters.map { it.name }.sorted().joinToString(",")}"
     val cachedEntry = remember(cacheKey) { EmbyLibraryCache.get(cacheKey) }
 
     var items by remember(cacheKey) { mutableStateOf(cachedEntry?.items ?: emptyList()) }
@@ -252,6 +270,20 @@ data class EmbyLibraryScreen(
       initialFirstVisibleItemIndex = cachedEntry?.scrollIndex ?: 0,
       initialFirstVisibleItemScrollOffset = cachedEntry?.scrollOffset ?: 0,
     )
+
+    // 换排序方式 / 切升降序之后，列表内容整体换了一批，滚动位置必须回到第一条 ——
+    // 否则用户停在「第 200 个」，切完排序还停在 200 号位，看到的是一批顺序完全不同的条目。
+    // 首次进入不触发：那时要保留上面从缓存恢复出来的位置。
+    // `gridState` 是 remember 出来的（同一个对象跨排序存活），所以必须显式归位。
+    var lastSortKey by remember { mutableStateOf("$sortBy|$sortOrder") }
+    LaunchedEffect(sortBy, sortOrder) {
+      val key = "$sortBy|$sortOrder"
+      if (key != lastSortKey) {
+        lastSortKey = key
+        // 不带动画：整批内容都换了，滑动过去毫无意义还显得卡
+        gridState.scrollToItem(0)
+      }
+    }
 
     // 季/集层级由 includeItemTypes 固定，优先于分类筛选
     val effectiveTypes: List<String>? = includeItemTypes
@@ -396,10 +428,19 @@ data class EmbyLibraryScreen(
             studioIds = selectedStudioIds.toList().takeIf { it.isNotEmpty() },
           )
         } else {
-          val result = viewModel.search(current, searchQuery)
+          val result = viewModel.search(
+            server = current,
+            term = searchQuery,
+            itemTypes = EmbySearchFilter.toItemTypes(searchFilters),
+          )
           EmbyItemsPage(result, result.size)
         }
       }.onSuccess { page ->
+        // 搜索命中才记历史：一个字都没查到的词记下来只会污染列表；
+        // 键盘上显式按「搜索」的那次在上面的 keyboardActions 里已经记过了。
+        if (searchQuery.isNotBlank() && page.items.isNotEmpty()) {
+          searchHistoryRepository.record(searchQuery)
+        }
         if (chineseSubsOnly) {
           // 搜索结果本身就是完整的一批（/Items?SearchTerm 一次性给完），直接筛
           val matched = withContext(Dispatchers.Default) { ChineseSubtitleFilter.filter(page.items) }
@@ -612,6 +653,14 @@ data class EmbyLibraryScreen(
             .padding(horizontal = 16.dp, vertical = 8.dp),
           placeholder = { Text("搜索媒体…") },
           singleLine = true,
+          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+          keyboardActions = KeyboardActions(
+            // 键盘上按「搜索」= 用户明确表态要搜这个词，直接落一条历史
+            onSearch = {
+              keyboardController?.hide()
+              scope.launch { searchHistoryRepository.record(searchQuery) }
+            },
+          ),
           trailingIcon = {
             if (searchQuery.isNotEmpty()) {
               IconButton(onClick = {
@@ -623,12 +672,17 @@ data class EmbyLibraryScreen(
             }
           },
         )
-        LaunchedEffect(searchQuery) {
+        LaunchedEffect(searchQuery, searchFilters) {
           if (searchQuery.isNotBlank()) {
             kotlinx.coroutines.delay(400)
             load(reset = true)
           }
         }
+        // 类型筛选：默认「全部」不加限制；勾了电影/合集/演员这类就按类型查
+        EmbySearchFilterRow(
+          selected = searchFilters,
+          onSelectedChange = { searchFilters = it },
+        )
       }
 
       // ── 4. 媒体网格 ──
@@ -640,6 +694,18 @@ data class EmbyLibraryScreen(
         modifier = Modifier.weight(1f).fillMaxWidth(),
       ) {
         when {
+          // 刚点开搜索、还没输入：顶掉网格，用历史词占位
+          searchActive && searchQuery.isBlank() -> SearchHistoryPanel(
+            history = searchHistory,
+            onPick = { keyword -> searchQuery = keyword },
+            onRemove = { keyword -> scope.launch { searchHistoryRepository.remove(keyword) } },
+            onClearAll = { scope.launch { searchHistoryRepository.clear() } },
+            modifier = Modifier
+              .align(Alignment.TopStart)
+              .fillMaxWidth(),
+            emptyHint = "输入关键词，搜索当前媒体库",
+          )
+
           isLoading && items.isEmpty() -> Column(
             modifier = Modifier.align(Alignment.Center),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -1191,6 +1257,15 @@ private fun openItem(
         libraryId = id,
         title = item.Name ?: "",
         collectionType = item.CollectionType,
+      ),
+    )
+
+    // 「演员」筛选搜出来的是 Person，它本身不是可播放媒体 —— 点进去看 TA 的作品列表
+    "Person" -> backStack.add(
+      EmbyPersonScreen(
+        personId = id,
+        personName = item.Name ?: "",
+        personImageTag = item.ImageTags["Primary"],
       ),
     )
 

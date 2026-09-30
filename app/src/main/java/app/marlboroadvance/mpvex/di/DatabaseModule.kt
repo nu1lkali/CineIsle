@@ -498,6 +498,34 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
 }
 
 
+/**
+ * Migration from version 11 to version 12
+ *
+ * 新增 search_history 表：首页全库搜索 + 媒体库搜索共用的搜索历史。
+ */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+  override fun migrate(db: SupportSQLiteDatabase) {
+    try {
+      android.util.Log.d("Migration_11_12", "Creating search_history table")
+      db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `search_history` (
+          `keyword` TEXT NOT NULL,
+          `lastUsedAt` INTEGER NOT NULL,
+          `useCount` INTEGER NOT NULL,
+          PRIMARY KEY(`keyword`)
+        )
+        """.trimIndent()
+      )
+      android.util.Log.d("Migration_11_12", "Migration completed successfully")
+    } catch (e: Exception) {
+      android.util.Log.e("Migration_11_12", "Migration failed", e)
+      throw e
+    }
+  }
+}
+
+
 val DatabaseModule =
   module {
     single<Json> {
@@ -512,13 +540,22 @@ val DatabaseModule =
       Room
         .databaseBuilder(context, MpvExDatabase::class.java, "mpvex.db")
         .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_11_12)
         .fallbackToDestructiveMigration(true) // Fallback if migration fails (last resort)
         .build()
     }
 
     // Emby 服务器配置 DAO
     single { get<MpvExDatabase>().embyServerDao() }
+
+    // 搜索历史 DAO + 仓库（首页全库搜索与媒体库搜索共用）
+    single { get<MpvExDatabase>().searchHistoryDao() }
+
+    single {
+      app.marlboroadvance.mpvex.database.repository.SearchHistoryRepository(
+        dao = get(),
+      )
+    }
 
     // Emby 服务器配置仓库
     single {

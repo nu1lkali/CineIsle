@@ -201,7 +201,7 @@ fun EmbyWideCard(
           }
         }
 
-        // 左下角剩余时长角标（深蓝底），仅「继续观看」等带进度的卡片传入
+        // 左下角剩余时长角标，仅「继续观看」等带进度的卡片传入
         if (!remainingText.isNullOrBlank()) {
           Surface(
             modifier = Modifier
@@ -209,7 +209,7 @@ fun EmbyWideCard(
               // 留出底部进度条（3dp）空间，避免角标压住进度条
               .padding(start = 6.dp, bottom = 8.dp),
             shape = RoundedCornerShape(6.dp),
-            color = Color(0xFF0B2E5B).copy(alpha = 0.92f),
+            color = MEDIA_BADGE_BG,
           ) {
             Text(
               text = remainingText,
@@ -495,9 +495,9 @@ fun EmbyLibraryCard(
           .padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
       ) {
         Surface(
-          shape = RoundedCornerShape(6.dp),
-          color = LIBRARY_TITLE_BG,
-        ) {
+            shape = RoundedCornerShape(6.dp),
+            color = MEDIA_BADGE_BG,
+          ) {
           Row(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -575,9 +575,10 @@ private val LIBRARY_CARD_WIDTH = 150.dp
 private val LIBRARY_CARD_HEIGHT = 90.dp
 
 /**
- * 媒体库卡片上「库名」的垫底色。
+ * 压在封面上的角标底色（库名 / 剩余时长共用一套）。
  *
- * 与「继续观看」卡片左下角那个剩余时长角标同色（深蓝），保持同一套视觉语言；
+ * 原来是深蓝 `0xFF0B2E5B`，在暖色封面和紫调主题下都显得很跳，换成中性炭黑 ——
+ * 取自 App 暗色背景（`0xFF161217`）那一族的色调，不偏蓝，配白字在任何封面上都稳。
  * 半透明是为了让底下的封面还能透出一点点，不至于像贴了张死色纸。
  */
-private val LIBRARY_TITLE_BG = Color(0xFF0B2E5B).copy(alpha = 0.85f)
+private val MEDIA_BADGE_BG = Color(0xFF262229).copy(alpha = 0.85f)

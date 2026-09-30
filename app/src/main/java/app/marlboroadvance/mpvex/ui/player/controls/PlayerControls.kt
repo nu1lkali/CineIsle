@@ -447,8 +447,12 @@ fun PlayerControls(
         val rawMediaTitle by PlayerLib.propString["media-title"].collectAsState()
         val mediaTitle by remember(rawMediaTitle, activity) {
           derivedStateOf {
-            rawMediaTitle?.takeIf { it.isNotBlank() }
-              ?: activity.getTitleForControls()
+            // mpv 拿不到片名时会把整条播放直链当 media-title 回传（Emby 的链里带
+            // api_key），顶栏不能照原样显示 —— 只对**显示**的那份打码，播放用的地址不受影响。
+            val raw =
+              rawMediaTitle?.takeIf { it.isNotBlank() }
+                ?: activity.getTitleForControls()
+            app.marlboroadvance.mpvex.ui.player.redactUrlSecrets(raw).orEmpty()
           }
         }
 

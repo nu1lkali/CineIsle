@@ -7,6 +7,7 @@ import app.marlboroadvance.mpvex.database.MpvExDatabase
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkProtocol
 import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
+import app.marlboroadvance.mpvex.utils.security.withEncryptedPassword
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
@@ -104,8 +105,12 @@ class SettingsManager(
 
     val networkConnections = database.networkConnectionDao().getAllConnectionsList()
     serializer.startTag(null, TAG_NETWORK_CONNECTIONS)
+    val passwordDropped = mutableListOf<String>()
     networkConnections.forEach { connection ->
       writeNetworkConnection(serializer, connection)
+      // 备份文件不落密码：它是明文 XML，可能被扔进网盘/聊天窗口，
+      // 一旦带密码就是把所有服务器的口令一起送出去。导入后重新输一次即可。
+      if (connection.password.isNotEmpty()) passwordDropped.add(connection.name)
       exportedCount++
       exportedKeys.add("network:${connection.name}")
     }
@@ -120,6 +125,7 @@ class SettingsManager(
     return ExportStats(
       totalExported = exportedCount,
       exportedKeys = exportedKeys,
+      passwordDroppedFor = passwordDropped,
     )
   }
 
@@ -179,7 +185,12 @@ class SettingsManager(
     serializer.attribute(null, "host", connection.host)
     serializer.attribute(null, "port", connection.port.toString())
     serializer.attribute(null, "username", connection.username)
-    serializer.attribute(null, "password", connection.password)
+    // 密码**不写进备份**，理由见 writeSettingsToXml 里的注释。
+    // 保留 passwordOmitted 标记，导入时能区分「本来就没密码」和「备份里被剥掉了」，
+    // 便于给出「请重新输入密码」的提示。
+    if (connection.password.isNotEmpty()) {
+      serializer.attribute(null, "passwordOmitted", "true")
+    }
     serializer.attribute(null, "path", connection.path)
     serializer.attribute(null, "isAnonymous", connection.isAnonymous.toString())
     serializer.attribute(null, "lastConnected", connection.lastConnected.toString())
@@ -217,6 +228,10 @@ class SettingsManager(
             TAG_NETWORK_CONNECTION -> {
               try {
                 networkConnections.add(readNetworkConnection(parser))
+                if (parser.getAttributeValue(null, "passwordOmitted") == "true") {
+                  val name = parser.getAttributeValue(null, "name").orEmpty()
+                  stats.notices.add("连接「$name」的密码不在备份中，导入后请重新输入")
+                }
                 stats.imported++
               } catch (e: Exception) {
                 stats.failed++
@@ -232,7 +247,10 @@ class SettingsManager(
     // Insert all database data
     try {
       if (networkConnections.isNotEmpty()) {
-        database.networkConnectionDao().insertAll(networkConnections)
+        // 老版本备份里可能带明文密码，落库前统一加密 —— 保证 DB 里不出现明文。
+        database.networkConnectionDao().insertAll(
+          networkConnections.map { it.withEncryptedPassword() },
+        )
       }
     } catch (e: Exception) {
       stats.failed++
@@ -303,10 +321,14 @@ class SettingsManager(
     var failed: Int = 0,
     var version: String = "unknown",
     val errors: MutableList<String> = mutableListOf(),
+    /** 非致命提示，例如「这条连接的密码不在备份里，需要重输」 */
+    val notices: MutableList<String> = mutableListOf(),
   )
 
   data class ExportStats(
     val totalExported: Int,
     val exportedKeys: List<String>,
+    /** 出于安全考虑未把密码写进备份的连接名 */
+    val passwordDroppedFor: List<String> = emptyList(),
   )
 }

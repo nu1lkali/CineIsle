@@ -116,6 +116,7 @@ enum class FolderSortType {
   VideoCount,
   ;
 
+  /** 持久化用的稳定键（英文），**不要改动** —— 改了老用户的排序偏好会失效 */
   val displayName: String
     get() =
       when (this) {
@@ -123,6 +124,16 @@ enum class FolderSortType {
         Date -> "Date"
         Size -> "Size"
         VideoCount -> "Count"
+      }
+
+  /** 界面上显示的中文名 */
+  val label: String
+    get() =
+      when (this) {
+        Title -> "标题"
+        Date -> "日期"
+        Size -> "大小"
+        VideoCount -> "视频数"
       }
 }
 
@@ -136,6 +147,7 @@ enum class VideoSortType {
   Size,
   ;
 
+  /** 持久化用的稳定键（英文），**不要改动** —— 改了老用户的排序偏好会失效 */
   val displayName: String
     get() =
       when (this) {
@@ -143,6 +155,16 @@ enum class VideoSortType {
         Duration -> "Duration"
         Date -> "Date"
         Size -> "Size"
+      }
+
+  /** 界面上显示的中文名 */
+  val label: String
+    get() =
+      when (this) {
+        Title -> "标题"
+        Duration -> "时长"
+        Date -> "日期"
+        Size -> "大小"
       }
 }
 

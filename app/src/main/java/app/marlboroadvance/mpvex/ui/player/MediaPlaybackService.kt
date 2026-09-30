@@ -130,8 +130,9 @@ class MediaPlaybackService :
     }
 
     // Fallback: Read current state from MPV if not provided via intent
+    // （mpv 的 media-title 可能是整条播放直链，通知栏 / 媒体会话不能显示 api_key）
     if (mediaTitle.isBlank()) {
-      mediaTitle = PlayerLib.getPropertyString("media-title") ?: ""
+      mediaTitle = redactUrlSecrets(PlayerLib.getPropertyString("media-title")).orEmpty()
       mediaArtist = PlayerLib.getPropertyString("metadata/artist") ?: ""
     }
     

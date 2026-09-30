@@ -1449,19 +1449,24 @@ fun FileSystemSortDialog(
       Icons.Filled.CalendarToday,
       Icons.Filled.SwapVert,
     ),
+    // types / sortType 是枚举的 displayName（英文，同时是偏好持久化键），显示时转中文
+    typeLabel = { name ->
+      app.marlboroadvance.mpvex.preferences.FolderSortType.entries
+        .find { it.displayName == name }?.label ?: name
+    },
     getLabelForType = { type, _ ->
       when (type) {
         app.marlboroadvance.mpvex.preferences.FolderSortType.Title.displayName -> Pair("A-Z", "Z-A")
-        app.marlboroadvance.mpvex.preferences.FolderSortType.Date.displayName -> Pair("Oldest", "Newest")
-        app.marlboroadvance.mpvex.preferences.FolderSortType.Size.displayName -> Pair("Smallest", "Largest")
-        else -> Pair("Asc", "Desc")
+        app.marlboroadvance.mpvex.preferences.FolderSortType.Date.displayName -> Pair("最旧", "最新")
+        app.marlboroadvance.mpvex.preferences.FolderSortType.Size.displayName -> Pair("最小", "最大")
+        else -> Pair("升序", "降序")
       }
     },
     showSortOptions = true,
     viewModeSelector = ViewModeSelector(
       label = "视图模式",
-      firstOptionLabel = "Folder",
-      secondOptionLabel = "Tree",
+      firstOptionLabel = "文件夹",
+      secondOptionLabel = "树形",
       firstOptionIcon = Icons.Filled.ViewModule,
       secondOptionIcon = Icons.Filled.AccountTree,
       isFirstOptionSelected = folderViewMode == app.marlboroadvance.mpvex.preferences.FolderViewMode.AlbumView,
@@ -1477,8 +1482,8 @@ fun FileSystemSortDialog(
     ),
     layoutModeSelector = ViewModeSelector(
       label = "布局",
-      firstOptionLabel = "List",
-      secondOptionLabel = "Grid",
+      firstOptionLabel = "列表",
+      secondOptionLabel = "网格",
       firstOptionIcon = Icons.AutoMirrored.Filled.ViewList,
       secondOptionIcon = Icons.Filled.GridView,
       isFirstOptionSelected = true, // Always list mode

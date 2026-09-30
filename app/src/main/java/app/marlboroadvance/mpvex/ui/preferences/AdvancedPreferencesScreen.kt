@@ -8,9 +8,10 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
-import app.marlboroadvance.mpvex.utils.media.OpenDocumentTreeContract
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
@@ -41,6 +42,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastJoinToString
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
@@ -54,6 +56,7 @@ import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.presentation.crash.CrashActivity
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.utils.media.OpenDocumentTreeContract
 import app.marlboroadvance.mpvex.utils.history.RecentlyPlayedOps
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -144,13 +147,24 @@ object AdvancedPreferencesScreen : Screen {
               .verticalScroll(rememberScrollState()),
           ) {
             Text(
-              "Successfully exported ${exportStats?.totalExported} items!\n\n"
+              "已导出 ${exportStats?.totalExported} 项设置。"
             )
+            val dropped = exportStats?.passwordDroppedFor.orEmpty()
+            if (dropped.isNotEmpty()) {
+              Spacer(modifier = Modifier.height(8.dp))
+              Text(
+                text =
+                  "出于安全考虑，以下连接的密码没有写入备份文件：\n" +
+                    dropped.joinToString("、") +
+                    "\n\n导入后请重新输入这些连接的密码。",
+                color = MaterialTheme.colorScheme.error,
+              )
+            }
           }
         },
         confirmButton = {
           TextButton(onClick = { showExportDialog = false }) {
-            Text("OK")
+            Text("好")
           }
         },
       )
@@ -162,16 +176,30 @@ object AdvancedPreferencesScreen : Screen {
         onDismissRequest = { showImportDialog = false },
         title = { Text("导入完成") },
         text = {
-          Text(
-            "Successfully imported: ${importStats?.imported}\n" +
-              "Failed: ${importStats?.failed}\n" +
-              "Version: ${importStats?.version}\n\n" +
-              "Please restart the app for all changes to take effect.",
-          )
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .verticalScroll(rememberScrollState()),
+          ) {
+            Text(
+              "成功导入：${importStats?.imported}\n" +
+                "失败：${importStats?.failed}\n" +
+                "备份版本：${importStats?.version}\n\n" +
+                "请重启应用使全部改动生效。",
+            )
+            val notices = importStats?.notices.orEmpty()
+            if (notices.isNotEmpty()) {
+              Spacer(modifier = Modifier.height(8.dp))
+              Text(
+                text = notices.joinToString("\n"),
+                color = MaterialTheme.colorScheme.error,
+              )
+            }
+          }
         },
         confirmButton = {
           TextButton(onClick = { showImportDialog = false }) {
-            Text("OK")
+            Text("好")
           }
         },
       )

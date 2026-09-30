@@ -2841,8 +2841,9 @@ private fun cancelAutoplayCountdown() {
         }
 
       // Get parsed video title from MPV
+      // （媒体标题可能落成整条播放直链，存进库前先给 api_key 打码 —— 这条会显示在「最近播放」里）
       val videoTitle = runCatching {
-        PlayerLib.getPropertyString("media-title")
+        redactUrlSecrets(PlayerLib.getPropertyString("media-title"))
       }.getOrNull()?.takeIf { it.isNotBlank() && it != fileName }
 
       // Get duration and file size from MPV
@@ -3777,11 +3778,14 @@ private fun cancelAutoplayCountdown() {
    * For m3u/m3u8 streams, returns the raw media-title from MPV instead of parsing.
    */
   fun getTitleForControls(): String {
-    // For m3u/m3u8 streams, use MPV's raw media-title directly
+    // For m3u/m3u8 streams, use MPV's raw media-title directly.
+    // mpv 在拿不到片名时会回传**整条播放直链**（Emby 的链里带 api_key），
+    // 而这里的结果会被顶栏 / 投屏 / 交接给另一个内核的标题用到 —— 全部先打码。
+    // 打码只发生在展示层，真正的播放地址不受影响。
     if (isCurrentStreamM3U()) {
       val rawTitle = PlayerLib.getPropertyString("media-title")
       if (!rawTitle.isNullOrBlank()) {
-        return rawTitle
+        return redactUrlSecrets(rawTitle).orEmpty()
       }
     }
     return fileName
@@ -3853,8 +3857,9 @@ private fun cancelAutoplayCountdown() {
         }
 
       // Get parsed video title from MPV
+      // （同上：标题可能是整条直链，先给 api_key 打码再落库）
       val videoTitle = runCatching {
-        PlayerLib.getPropertyString("media-title")
+        redactUrlSecrets(PlayerLib.getPropertyString("media-title"))
       }.getOrNull()?.takeIf { it.isNotBlank() && it != name }
 
       // Get duration and file size from MPV
@@ -3993,8 +3998,9 @@ private fun cancelAutoplayCountdown() {
         val height = runCatching {
           PlayerLib.getPropertyInt("height") ?: PlayerLib.getPropertyInt("video-params/h") ?: 0
         }.getOrDefault(0)
+        // 标题可能是整条播放直链：写进「最近播放」前先给 api_key 打码
         val videoTitle = runCatching {
-          PlayerLib.getPropertyString("media-title")
+          redactUrlSecrets(PlayerLib.getPropertyString("media-title"))
         }.getOrNull()?.takeIf { it.isNotBlank() && it != fileName }
 
         RecentlyPlayedOps.updateVideoMetadata(

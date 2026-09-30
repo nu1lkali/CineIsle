@@ -30,6 +30,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.java.KoinJavaComponent.inject
 
+/** 全库搜索没选任何筛选时的默认类型集：只保留可播放的视频本体 */
+private val GLOBAL_SEARCH_DEFAULT_TYPES =
+  listOf("Movie", "Series", "Episode", "Video", "MusicVideo")
+
 /**
  * Emby 模块共享 ViewModel。
  *
@@ -291,26 +295,35 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   suspend fun search(
     server: EmbyServer,
     term: String,
-  ): List<EmbyItem> = repository.searchItems(server, term).Items
+    itemTypes: List<String>? = null,
+  ): List<EmbyItem> = repository.searchItems(server, term, itemTypes).Items
 
   /**
    * 首页的「全库搜索」：不传 ParentId，Emby 会跨所有媒体库检索。
    *
    * 和库内搜索 [search] 用的是同一个 /Items?SearchTerm 接口，区别只在两点：
-   * 不传 ParentId（所以覆盖全部库），以及限定只看可播放类型
+   * 不传 ParentId（所以覆盖全部库），以及**默认**限定只看可播放类型
    * ——否则文件夹、合集这些容器会混进结果里，点进去还要再下钻一层。
+   *
+   * [itemTypes] 由搜索框下方的筛选条给出：用户显式选了「合集」「演员」这类时，
+   * 就按他选的类型查，不再套用上面的默认值。
    */
-  suspend fun searchGlobal(server: EmbyServer, term: String): List<EmbyItem> =
+  suspend fun searchGlobal(
+    server: EmbyServer,
+    term: String,
+    itemTypes: List<String>? = null,
+  ): List<EmbyItem> =
     withContext(Dispatchers.IO) {
       runCatching {
         repository.searchItems(
           server = server,
           term = term,
-          includeItemTypes = listOf("Movie", "Series", "Episode", "Video", "MusicVideo"),
+          includeItemTypes = itemTypes ?: GLOBAL_SEARCH_DEFAULT_TYPES,
           limit = 100,
         ).Items
       }.getOrDefault(emptyList())
     }
+
 
   // ==================== 媒体操作 ====================
 

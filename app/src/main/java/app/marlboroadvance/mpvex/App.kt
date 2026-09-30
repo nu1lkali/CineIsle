@@ -24,6 +24,8 @@ import java.io.File
 class App : Application() {
   private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val metadataCache: VideoMetadataCacheRepository by inject()
+  private val embyServerRepository: app.marlboroadvance.mpvex.database.repository.EmbyServerRepository by inject()
+  private val networkRepository: app.marlboroadvance.mpvex.repository.NetworkRepository by inject()
 
   companion object {
     private var instance: App? = null
@@ -121,6 +123,18 @@ class App : Application() {
     applicationScope.launch {
       runCatching {
         metadataCache.performMaintenance()
+      }
+    }
+
+    // 凭据加密升级：老版本把 Emby / SMB / FTP / WebDAV 的密码以明文存在库里，
+    // 这里启动后一次性改成 Keystore AES-GCM 密文（幂等，已经是密文的会跳过）。
+    // 放在后台线程、整体 runCatching —— 升级失败不影响任何功能，下次启动会再试。
+    applicationScope.launch {
+      runCatching {
+        val upgraded =
+          embyServerRepository.encryptLegacyPlaintextPasswords() +
+            networkRepository.encryptLegacyPlaintextPasswords()
+        if (upgraded > 0) trace("credential encryption upgrade: $upgraded row(s)")
       }
     }
 

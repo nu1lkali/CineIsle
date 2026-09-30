@@ -6,13 +6,20 @@ import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.NetworkClient
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.NetworkClientFactory
+import app.marlboroadvance.mpvex.utils.security.CryptoUtils
+import app.marlboroadvance.mpvex.utils.security.withDecryptedPassword
+import app.marlboroadvance.mpvex.utils.security.withEncryptedPassword
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 
 /**
  * Repository for managing network connections and file browsing
+ *
+ * 密码的加解密收口在这里：**数据库里存密文，交给客户端的对象里是明文**。
+ * 这样 SmbClient / FtpClient / WebDavClient / NetworkStreamingProxy 全都不用改。
  */
 class NetworkRepository(
   private val dao: NetworkConnectionDao,
@@ -27,28 +34,32 @@ class NetworkRepository(
   /**
    * Get all saved connections as a Flow
    */
-  fun getAllConnections(): Flow<List<NetworkConnection>> = dao.getAllConnections()
+  fun getAllConnections(): Flow<List<NetworkConnection>> =
+    dao.getAllConnections().map { list -> list.map { it.withDecryptedPassword() } }
 
   /**
    * Get connections that should auto-connect on launch
    */
-  suspend fun getAutoConnectConnections(): List<NetworkConnection> = dao.getAutoConnectConnections()
+  suspend fun getAutoConnectConnections(): List<NetworkConnection> =
+    dao.getAutoConnectConnections().map { it.withDecryptedPassword() }
 
   /**
    * Get a connection by ID
    */
-  suspend fun getConnectionById(id: Long): NetworkConnection? = dao.getConnectionById(id)
+  suspend fun getConnectionById(id: Long): NetworkConnection? =
+    dao.getConnectionById(id)?.withDecryptedPassword()
 
   /**
    * Add a new connection
    */
-  suspend fun addConnection(connection: NetworkConnection): Long = dao.insert(connection)
+  suspend fun addConnection(connection: NetworkConnection): Long =
+    dao.insert(connection.withEncryptedPassword())
 
   /**
    * Update an existing connection
    */
   suspend fun updateConnection(connection: NetworkConnection) {
-    dao.update(connection)
+    dao.update(connection.withEncryptedPassword())
     // Disconnect and remove cached client if it exists
     // This ensures the next connection uses the updated credentials
     activeClients[connection.id]?.let { client ->
@@ -195,7 +206,9 @@ class NetworkRepository(
   ): Result<List<NetworkFile>> =
     try {
       // Always fetch the latest connection from database to ensure we have current credentials
-      val latestConnection = dao.getConnectionById(connection.id) ?: connection
+      // 注意：DAO 里存的是密文，这里必须解一次再交给客户端
+      val latestConnection =
+        (dao.getConnectionById(connection.id) ?: connection).withDecryptedPassword()
 
       // Check if we have an active client
       val existingClient = activeClients[connection.id]
@@ -240,6 +253,25 @@ class NetworkRepository(
     }
     activeClients.clear()
     _connectionStatuses.value = emptyMap()
+  }
+
+  /**
+   * 一次性升级：把老版本遗留的**明文**密码就地重新加密。
+   *
+   * 只在 App 启动时跑一次，幂等（已是密文的行跳过），整体 try 住 ——
+   * 升级失败不影响任何功能，下次启动会再试。
+   */
+  suspend fun encryptLegacyPlaintextPasswords(): Int {
+    val all = runCatching { dao.getAllConnectionsList() }.getOrNull() ?: return 0
+    var upgraded = 0
+    for (connection in all) {
+      if (connection.password.isEmpty() || CryptoUtils.isEncrypted(connection.password)) continue
+      runCatching {
+        dao.update(connection.withEncryptedPassword())
+        upgraded++
+      }
+    }
+    return upgraded
   }
 
   private fun updateConnectionStatus(

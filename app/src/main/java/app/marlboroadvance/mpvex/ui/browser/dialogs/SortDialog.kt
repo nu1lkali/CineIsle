@@ -61,6 +61,13 @@ fun SortDialog(
   types: List<String>,
   icons: List<ImageVector>,
   getLabelForType: (String, Boolean) -> Pair<String, String>,
+  /**
+   * 把 [types] 里的「稳定键」翻成界面文案。
+   *
+   * [types] / `sortType` 用的是枚举的 `displayName`（英文），因为那个字符串**同时是
+   * 持久化到偏好里的键**，不能改动；所以显示时统一走这里转一道中文。
+   */
+  typeLabel: (String) -> String = { it },
   modifier: Modifier = Modifier,
   visibilityToggles: List<VisibilityToggle> = emptyList(),
   viewModeSelector: ViewModeSelector? = null,
@@ -99,6 +106,7 @@ fun SortDialog(
             onSortTypeChange = onSortTypeChange,
             types = types,
             icons = icons,
+            typeLabel = typeLabel,
             modifier = Modifier.fillMaxWidth(),
           )
 
@@ -197,6 +205,7 @@ private fun SortTypeSelector(
   onSortTypeChange: (String) -> Unit,
   types: List<String>,
   icons: List<ImageVector>,
+  typeLabel: (String) -> String,
   modifier: Modifier = Modifier,
 ) {
   Column(
@@ -245,7 +254,7 @@ private fun SortTypeSelector(
           ) {
             Icon(
               imageVector = icons[index],
-              contentDescription = type,
+              contentDescription = typeLabel(type),
               tint =
                 if (selected) {
                   MaterialTheme.colorScheme.onPrimaryContainer
@@ -257,7 +266,7 @@ private fun SortTypeSelector(
           }
 
           Text(
-            text = type,
+            text = typeLabel(type),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
             color =
@@ -422,7 +431,7 @@ private fun VisibilityTogglesSection(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
-        text = "Fields",
+        text = "显示项",
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Medium,
         color = MaterialTheme.colorScheme.onSurface,
@@ -433,7 +442,7 @@ private fun VisibilityTogglesSection(
       ) {
         Icon(
           imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.ArrowDropDown,
-          contentDescription = if (expanded) "Collapse" else "Expand",
+          contentDescription = if (expanded) "收起" else "展开",
           tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       }
@@ -489,7 +498,7 @@ private fun GridColumnSelectorComponent(
     )
 
     Text(
-      text = "${gridColumnSelector.currentValue} columns",
+      text = "${gridColumnSelector.currentValue} 列",
       style = MaterialTheme.typography.bodyMedium,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
       modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -539,7 +548,7 @@ private fun GridColumnsSection(
             modifier = Modifier.fillMaxWidth(),
           )
           Text(
-            text = "${folderGridColumnSelector.currentValue} columns",
+            text = "${folderGridColumnSelector.currentValue} 列",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -565,7 +574,7 @@ private fun GridColumnsSection(
             modifier = Modifier.fillMaxWidth(),
           )
           Text(
-            text = "${videoGridColumnSelector.currentValue} columns",
+            text = "${videoGridColumnSelector.currentValue} 列",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterHorizontally),
