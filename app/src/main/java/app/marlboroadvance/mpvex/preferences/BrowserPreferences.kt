@@ -85,6 +85,18 @@ class BrowserPreferences(
     preferenceStore.getString("emby_library_filter_$libraryId", "")
 
   /**
+   * 每个媒体库各自记住的**分类**（全部 / 继续播放 / 合集 / 收藏 / 文件夹，存枚举名）。
+   *
+   * 空串 = 没选过 → 用「全部」。key 带 libraryId，跨库互不干扰。
+   *
+   * **为什么必须落盘而不是只 `remember`**：从库里下钻进一个文件夹（或剧集 → 季）再返回时，
+   * 这一页的组合会被重建，`remember` 里的分类直接丢、被打回「全部」。
+   * 和排序 / 筛选一样存进偏好，返回与重启都能回到用户上次选的那一档。
+   */
+  fun embyLibraryCategory(libraryId: String): Preference<String> =
+    preferenceStore.getString("emby_library_category_$libraryId", "")
+
+  /**
    * 「中文字幕」路径标记配置（[ChineseSubtitleMarks] 的 JSON 串，空串 = 用默认标记）。
    *
    * 全局一份、不按库分：标记是**资源命名惯例**，跟具体哪个库无关。

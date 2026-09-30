@@ -128,32 +128,40 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
 
   /** 加载首页所需的全部数据：媒体库 + 继续观看 + 最新加入 */
   fun refreshHome() {
-    viewModelScope.launch {
-      _isLoading.value = true
-      _error.value = null
-      // 冷启动时服务器是异步恢复的，这里必须等它恢复完，否则会误判成「没有服务器」
-      val server = repository.ensureLoggedIn(repository.awaitCurrentServer())
-      if (server == null) {
-        _libraries.value = emptyList()
-        _resumeItems.value = emptyList()
-        _latestItems.value = emptyList()
-        _isLoading.value = false
-        return@launch
-      }
-      runCatching {
-        val libs = repository.getVirtualFolders(server)
-        val resume = repository.getResumeItems(server, limit = 20)
-        val latest = repository.getLatestItems(server, limit = 24)
-        Triple(libs, resume, latest)
-      }.onSuccess { (libs, resume, latest) ->
-        _libraries.value = libs
-        _resumeItems.value = resume
-        _latestItems.value = latest
-      }.onFailure {
-        _error.value = it.message ?: "加载失败"
-      }
+    viewModelScope.launch { loadHome() }
+  }
+
+  /**
+   * [refreshHome] 的可等待版本：下拉刷新要用它 —— 刷新指示器得等这批请求真的回来才收起，
+   * 否则手指刚松开动画就没了，用户看不出到底刷没刷。
+   */
+  suspend fun refreshHomeAndWait() = loadHome()
+
+  private suspend fun loadHome() {
+    _isLoading.value = true
+    _error.value = null
+    // 冷启动时服务器是异步恢复的，这里必须等它恢复完，否则会误判成「没有服务器」
+    val server = repository.ensureLoggedIn(repository.awaitCurrentServer())
+    if (server == null) {
+      _libraries.value = emptyList()
+      _resumeItems.value = emptyList()
+      _latestItems.value = emptyList()
       _isLoading.value = false
+      return
     }
+    runCatching {
+      val libs = repository.getVirtualFolders(server)
+      val resume = repository.getResumeItems(server, limit = 20)
+      val latest = repository.getLatestItems(server, limit = 24)
+      Triple(libs, resume, latest)
+    }.onSuccess { (libs, resume, latest) ->
+      _libraries.value = libs
+      _resumeItems.value = resume
+      _latestItems.value = latest
+    }.onFailure {
+      _error.value = it.message ?: "加载失败"
+    }
+    _isLoading.value = false
   }
 
   /**
@@ -629,6 +637,21 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         EmbyClient.refreshItem(server, itemId, if (full) "FullRefresh" else "Default")
       }.isSuccess
     }
+
+  /**
+   * 扫描媒体库 / 文件夹：等价于 Emby Web 端库菜单里的「扫描媒体库」。
+   *
+   * 走的还是官方那条 `POST /Items/{id}/Refresh`（Recursive=true），和 [refreshMetadata]
+   * 是同一个接口 —— 差别只在语义：这里要的是「让服务器重新读一遍目录」，
+   * 新拷进去的文件会入库、删掉的会清掉，而不是为了重刮海报简介。
+   *
+   * **它是异步任务**：接口立刻返回，服务器在后台慢慢扫，所以返回 true 只代表
+   * 「服务器接受了」，不代表已经扫完 —— 列表不会自己变，结果要等下拉刷新才看得到。
+   *
+   * @param full false = 默认刷新（只处理新增 / 变更，快）；true = 全量重刮（连元数据带图片一起重来，慢）
+   */
+  suspend fun scanLibrary(server: EmbyServer, itemId: String, full: Boolean = false): Boolean =
+    refreshMetadata(server, itemId, full)
 
   /** 编辑（更新）条目元数据：传入「带修改后的完整 item」整体 PUT 给服务器。 */
   suspend fun updateItemMetadata(server: EmbyServer, item: EmbyItem): Boolean =

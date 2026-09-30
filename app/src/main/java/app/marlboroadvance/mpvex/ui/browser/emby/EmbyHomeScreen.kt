@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -61,6 +63,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySectionHeader
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyWideCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
+import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -101,6 +104,17 @@ fun EmbyHomeScreen(
   val servers by viewModel.servers.collectAsState()
 
   var serverMenuExpanded by remember { mutableStateOf(false) }
+
+  // ── 下拉刷新 ──
+  // 首页是「媒体库 + 继续观看 + 最新加入」三块的组合，服务端上新了片子不会自己冒出来，
+  // 所以要给用户一个手动重拉的入口。刷新期间转圈一直转到这批请求真的回来（refreshHomeAndWait），
+  // 否则手指一松动画就没了，看不出到底刷没刷。
+  val isRefreshing = remember { mutableStateOf(false) }
+  // 只有列表停在顶部时才允许下拉刷新：滚到中间往下拉，列表自己会往上滚，不该触发刷新
+  val homeListState = rememberLazyListState()
+
+  // 长按媒体库卡片 → 通知服务器扫描该库（异步任务，只发指令不等结果）
+  val scanScope = rememberCoroutineScope()
 
   // ── 全库搜索 ──
   // 不带 ParentId，Emby 会跨所有媒体库检索，所以这里搜的是「全部媒体」而不是某个库。
@@ -332,94 +346,128 @@ fun EmbyHomeScreen(
       }
 
       else -> {
-        LazyColumn(
+        PullRefreshBox(
+          isRefreshing = isRefreshing,
+          onRefresh = { viewModel.refreshHomeAndWait() },
           modifier = Modifier.fillMaxSize(),
-          contentPadding = PaddingValues(bottom = 96.dp),
-          verticalArrangement = Arrangement.spacedBy(4.dp),
+          // 搜索态首页列表是空的，此时下拉刷新没有意义（下拉要重跑的是搜索，不是首页数据）
+          enabled = !searchActive,
+          listState = homeListState,
         ) {
-          if (libraries.isNotEmpty()) {
-            item {
-              EmbySectionHeader(
-                title = "媒体库",
-                modifier = Modifier.padding(top = 10.dp),
-              )
-              LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-              ) {
-                items(libraries, key = { it.Id ?: it.Name ?: "" }) { library ->
-                  EmbyLibraryCard(
-                    name = library.Name ?: "",
-                    itemCount = library.ChildCount,
-                    imageUrl = viewModel.imageUrl(server!!, library, "Primary", 300),
-                    icon = libraryIcon(library.CollectionType),
-                    onClick = { onOpenLibrary(library) },
-                  )
+          LazyColumn(
+            state = homeListState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            if (libraries.isNotEmpty()) {
+              item {
+                EmbySectionHeader(
+                  title = "媒体库",
+                  modifier = Modifier.padding(top = 10.dp),
+                )
+                LazyRow(
+                  contentPadding = PaddingValues(horizontal = 16.dp),
+                  horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                  items(libraries, key = { it.Id ?: it.Name ?: "" }) { library ->
+                    val libraryId = library.Id
+                    val libraryName = library.Name ?: "媒体库"
+                    EmbyLibraryCard(
+                      name = libraryName,
+                      itemCount = library.ChildCount,
+                      imageUrl = viewModel.imageUrl(server!!, library, "Primary", 300),
+                      icon = libraryIcon(library.CollectionType),
+                      onClick = { onOpenLibrary(library) },
+                      // 长按 = 扫描媒体库：新拷进去的片子让服务器重新读一遍目录就能出现，
+                      // 不用去 Web 端点一遍。扫描是服务器后台任务，接口只负责「通知到了」
+                      onLongClick = {
+                        val s = server
+                        if (libraryId == null || s == null) {
+                          Toast.makeText(context, "无法扫描：缺少库信息", Toast.LENGTH_SHORT).show()
+                        } else {
+                          scanScope.launch {
+                            val ok = runCatching { viewModel.scanLibrary(s, libraryId) }
+                              .getOrDefault(false)
+                            Toast.makeText(
+                              context,
+                              if (ok) {
+                                "已通知服务器扫描「$libraryName」，稍后下拉刷新查看新文件"
+                              } else {
+                                "扫描「$libraryName」失败，可能需要管理员权限"
+                              },
+                              Toast.LENGTH_LONG,
+                            ).show()
+                          }
+                        }
+                      },
+                    )
+                  }
                 }
               }
             }
-          }
 
-          if (resumeItems.isNotEmpty()) {
-            item {
-              EmbySectionHeader(title = "继续观看")
-              LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-              ) {
-                items(resumeItems, key = { it.Id ?: it.Name ?: "" }) { item ->
-                  EmbyWideCard(
-                    title = viewModel.displayTitle(item),
-                    subtitle = item.SeriesName ?: item.ProductionYear?.toString(),
-                    imageUrl = viewModel.imageUrl(server!!, item, "Backdrop", 640),
-                    fallbackImageUrl = viewModel.imageUrl(server!!, item, "Primary", 640),
-                    progress = playbackProgress(item),
-                    remainingText = remainingLabel(item),
-                    // 单击是进详情页而非直接播放，去掉居中的播放三角，避免误导
-                    showPlayButton = false,
-                    isFavorite = item.UserData?.IsFavorite == true,
-                    // 单击进入详情页，播放由详情页发起
-                    onClick = { onOpenDetail(item) },
-                  )
+            if (resumeItems.isNotEmpty()) {
+              item {
+                EmbySectionHeader(title = "继续观看")
+                LazyRow(
+                  contentPadding = PaddingValues(horizontal = 16.dp),
+                  horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                  items(resumeItems, key = { it.Id ?: it.Name ?: "" }) { item ->
+                    EmbyWideCard(
+                      title = viewModel.displayTitle(item),
+                      subtitle = item.SeriesName ?: item.ProductionYear?.toString(),
+                      imageUrl = viewModel.imageUrl(server!!, item, "Backdrop", 640),
+                      fallbackImageUrl = viewModel.imageUrl(server!!, item, "Primary", 640),
+                      progress = playbackProgress(item),
+                      remainingText = remainingLabel(item),
+                      // 单击是进详情页而非直接播放，去掉居中的播放三角，避免误导
+                      showPlayButton = false,
+                      isFavorite = item.UserData?.IsFavorite == true,
+                      // 单击进入详情页，播放由详情页发起
+                      onClick = { onOpenDetail(item) },
+                    )
+                  }
                 }
               }
             }
-          }
 
-          if (latestItems.isNotEmpty()) {
-            item {
-              EmbySectionHeader(title = "最新加入")
-              LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-              ) {
-                items(latestItems, key = { it.Id ?: it.Name ?: "" }) { item ->
-                  EmbyPosterCard(
-                    title = viewModel.displayTitle(item),
-                    subtitle = item.ProductionYear?.toString(),
-                    imageUrl = viewModel.imageUrl(server!!, item, "Primary", 480),
-                    // 单集等条目可能没有 Primary（海报），回退到 Thumb（剧照/缩略图）
-                    fallbackImageUrl = viewModel.imageUrl(server!!, item, "Thumb", 480),
-                    progress = playbackProgress(item),
-                    isFavorite = item.UserData?.IsFavorite == true,
-                    // 单击进入详情页，播放由详情页发起
-                    onClick = { onOpenDetail(item) },
-                  )
+            if (latestItems.isNotEmpty()) {
+              item {
+                EmbySectionHeader(title = "最新加入")
+                LazyRow(
+                  contentPadding = PaddingValues(horizontal = 16.dp),
+                  horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                  items(latestItems, key = { it.Id ?: it.Name ?: "" }) { item ->
+                    EmbyPosterCard(
+                      title = viewModel.displayTitle(item),
+                      subtitle = item.ProductionYear?.toString(),
+                      imageUrl = viewModel.imageUrl(server!!, item, "Primary", 480),
+                      // 单集等条目可能没有 Primary（海报），回退到 Thumb（剧照/缩略图）
+                      fallbackImageUrl = viewModel.imageUrl(server!!, item, "Thumb", 480),
+                      progress = playbackProgress(item),
+                      isFavorite = item.UserData?.IsFavorite == true,
+                      // 单击进入详情页，播放由详情页发起
+                      onClick = { onOpenDetail(item) },
+                    )
+                  }
                 }
               }
             }
-          }
 
-          if (libraries.isEmpty() && resumeItems.isEmpty() && latestItems.isEmpty() && !isLoading) {
-            item {
-              EmbyEmptyState(
-                message = "这个服务器上还没有可显示的媒体",
-                buttonText = "刷新",
-                onAction = { viewModel.refreshHome() },
-                modifier = Modifier.fillMaxWidth().padding(top = 64.dp),
-              )
+            if (libraries.isEmpty() && resumeItems.isEmpty() && latestItems.isEmpty() && !isLoading) {
+              item {
+                EmbyEmptyState(
+                  message = "这个服务器上还没有可显示的媒体",
+                  buttonText = "刷新",
+                  onAction = { viewModel.refreshHome() },
+                  modifier = Modifier.fillMaxWidth().padding(top = 64.dp),
+                )
+              }
             }
-          }
+        }
         }
       }
     }

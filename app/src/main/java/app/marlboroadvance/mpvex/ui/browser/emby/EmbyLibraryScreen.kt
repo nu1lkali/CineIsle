@@ -51,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -144,7 +145,6 @@ data class EmbyLibraryScreen(
     // 上一次「由输入触发」的搜索词。用来区分这次重查是打字引起的（要 400ms 防抖），
     // 还是切排序 / 换类型筛选引起的（离散操作，立即重查）。
     var lastTypedQuery by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf(EmbyCategory.ALL) }
     var showStyleDialog by remember { mutableStateOf(false) }
 
     // 搜索历史：与首页全库搜索共用同一张表 / 同一份历史
@@ -163,6 +163,16 @@ data class EmbyLibraryScreen(
     // 没手动切过时跟随该排序项的自然方向：名称 / 年份升序，其余（加入时间、评分…）降序
     val sortOrder = sortOrderOverride.takeIf { it.isNotBlank() }
       ?: if (sortBy == "SortName" || sortBy == "ProductionYear") "Ascending" else "Descending"
+
+    // ── 分类（全部 / 继续播放 / 合集 / 收藏 / 文件夹）──
+    // 和排序、筛选一样**按库持久化**：从库里下钻进一个文件夹再返回时，这一页的组合会被重建，
+    // 只放在 remember 里的话分类会被打回「全部」。落盘后返回、甚至重启 App 都还在上次的档位。
+    val savedCategory = remember(libraryId) {
+      EmbyCategory.entries.firstOrNull {
+        it.name == browserPreferences.embyLibraryCategory(libraryId).get()
+      } ?: EmbyCategory.ALL
+    }
+    var category by remember(libraryId) { mutableStateOf(savedCategory) }
 
     // ── 筛选条件 ──
     // 各项可叠加；空集合、null、false 都代表「不限」。
@@ -543,7 +553,11 @@ data class EmbyLibraryScreen(
     // 列表组合还活着时也能立即触发重组，把已删除的条目从渲染里剔除
     val lastRemovedItemId = EmbyLibraryCache.lastRemovedItemId
     val visibleItems =
-      if (lastRemovedItemId != null) items.filterNot { it.Id == lastRemovedItemId } else items
+      (if (lastRemovedItemId != null) items.filterNot { it.Id == lastRemovedItemId } else items)
+        // 顺手剔掉服务端混进来的幽灵条目（详见 isGhostItem）：它与官方客户端的条目数对不上，
+        // 点进去还会崩。列表数量行用的是 totalCount（服务端给的），不在这里减，
+        // 所以「共 41 个」这类数字仍以服务端为准。
+        .filterNot { isGhostItem(it) }
 
     /**
      * 「随机播放」的取数。**口径：随机 = 把当前屏幕上这批结果打乱。**
@@ -665,7 +679,14 @@ data class EmbyLibraryScreen(
       // 跟搜索结果没有对应关系，留着只是挤掉一整行，还容易让人以为结果按它筛过。
       // 只是不显示，分类状态本身保留，退出搜索回到原来的样子。
       if (includeItemTypes == null && !searchActive) {
-        CategoryChips(selected = category, onSelect = { category = it })
+        CategoryChips(
+          selected = category,
+          onSelect = {
+            category = it
+            // 选完立刻落盘：下次进这个库（含从文件夹返回、重启 App）都停在这一档
+            browserPreferences.embyLibraryCategory(libraryId).set(it.name)
+          },
+        )
       }
 
       // ── 3. 工具行：数量 + 随机播放 + 视图 + 排序 ──
@@ -895,9 +916,30 @@ data class EmbyLibraryScreen(
                   mosaicUrls = folderCover,
                   progress = itemProgress(item),
                   isFavorite = item.UserData?.IsFavorite == true,
-                  onClick = { openItem(item, backStack, s) },
+                  onClick = { openItem(item, backStack, s, context) },
                   style = cardStyle,
                   fillWidth = cardStyle == EmbyCardStyle.POSTER,
+                  // 长按文件夹 = 扫描这个目录：新拷进去的文件不用去 Web 端点一遍也能入库。
+                  // 只给真实目录挂（电影 / 剧集这类媒体本身没有可扫的目录，挂上没意义）
+                  onLongClick = if (itemId != null && isScannableFolder(item)) {
+                    {
+                      val name = viewModel.displayTitle(item)
+                      scope.launch {
+                        val ok = runCatching { viewModel.scanLibrary(s, itemId) }.getOrDefault(false)
+                        Toast.makeText(
+                          context,
+                          if (ok) {
+                            "已通知服务器扫描「$name」，稍后下拉刷新查看新文件"
+                          } else {
+                            "扫描「$name」失败，可能需要管理员权限"
+                          },
+                          Toast.LENGTH_LONG,
+                        ).show()
+                      }
+                    }
+                  } else {
+                    null
+                  },
                 )
               }
             }
@@ -1337,54 +1379,92 @@ private fun CategoryChips(
 }
 
 /**
+ * 「幽灵条目」：服务端偶尔混进列表、但实际上打不开的条目。
+ *
+ * 典型来源：库里放着指向远程 ISO 的 strm（文件内容就是 `http://cdn/xxx.iso` 这种 URL）。
+ * Emby 在解析它时会把 URL 的 scheme 部分当成一个**名为 `http:` 的条目**返回，
+ * Id 也跟着变成那个 URL 片段。结果就是：
+ *
+ * - 列表比官方客户端多出一条（用户实测：别的客户端 40 个，这里 41 个）；
+ * - 点它一下就闪退 —— 拿一个「不是条目 Id 的字符串」去当 ParentId / ItemId 发请求，
+ *   后续拼出来的地址是坏的。
+ *
+ * 判据刻意只取两条很保守的特征，正常媒体（Id 是数字 / GUID、名字是片名）不会被误伤：
+ *
+ * - Id 里带 `://`（Emby 的条目 Id 永远不含这个）；
+ * - 名字就叫 `http:` / `https:`（URL scheme 被当成目录名时的产物）。
+ */
+private fun isGhostItem(item: EmbyItem): Boolean {
+  if (item.Id?.contains("://") == true) return true
+  val name = item.Name?.trim().orEmpty()
+  return name.equals("http:", ignoreCase = true) || name.equals("https:", ignoreCase = true)
+}
+
+/**
  * 单击媒体项：容器类继续下钻，其余打开详情页。
  *
  * - 影视剧（Series）→ 季列表
  * - 季（Season）→ 该季的剧集列表
  * - 其它（电影 / 单集 / 视频）→ 详情页，播放由详情页发起
+ *
+ * [context] 只用来在「打不开」时弹一句话：这类条目（见 [isGhostItem]）以前是静默崩溃，
+ * 现在至少让用户知道为什么没反应。
  */
 private fun openItem(
   item: EmbyItem,
   backStack: androidx.navigation3.runtime.NavBackStack<Screen>,
   server: EmbyServer,
+  context: android.content.Context,
 ) {
-  val id = item.Id ?: return
-  when (item.Type) {
-    "Series" -> backStack.add(
-      EmbyLibraryScreen(
-        libraryId = id,
-        title = item.Name ?: "",
-        collectionType = item.CollectionType,
-        includeItemTypes = listOf("Season"),
-      ),
-    )
+  val id = item.Id
+  if (id.isNullOrBlank() || id.contains("://")) {
+    Toast.makeText(context, "这个条目打不开（不是有效的媒体 ID）", Toast.LENGTH_SHORT).show()
+    return
+  }
+  runCatching {
+    when (item.Type) {
+      "Series" -> backStack.add(
+        EmbyLibraryScreen(
+          libraryId = id,
+          title = item.Name ?: "",
+          collectionType = item.CollectionType,
+          includeItemTypes = listOf("Season"),
+        ),
+      )
 
-    "Season" -> backStack.add(
-      EmbyLibraryScreen(
-        libraryId = id,
-        title = item.Name ?: "",
-        includeItemTypes = listOf("Episode"),
-      ),
-    )
+      "Season" -> backStack.add(
+        EmbyLibraryScreen(
+          libraryId = id,
+          title = item.Name ?: "",
+          includeItemTypes = listOf("Episode"),
+        ),
+      )
 
-    "CollectionFolder", "Folder", "UserView", "BoxSet" -> backStack.add(
-      EmbyLibraryScreen(
-        libraryId = id,
-        title = item.Name ?: "",
-        collectionType = item.CollectionType,
-      ),
-    )
+      "CollectionFolder", "Folder", "UserView", "BoxSet" -> backStack.add(
+        EmbyLibraryScreen(
+          libraryId = id,
+          title = item.Name ?: "",
+          collectionType = item.CollectionType,
+        ),
+      )
 
-    // 「演员」筛选搜出来的是 Person，它本身不是可播放媒体 —— 点进去看 TA 的作品列表
-    "Person" -> backStack.add(
-      EmbyPersonScreen(
-        personId = id,
-        personName = item.Name ?: "",
-        personImageTag = item.ImageTags["Primary"],
-      ),
-    )
+      // 「演员」筛选搜出来的是 Person，它本身不是可播放媒体 —— 点进去看 TA 的作品列表
+      "Person" -> backStack.add(
+        EmbyPersonScreen(
+          personId = id,
+          personName = item.Name ?: "",
+          personImageTag = item.ImageTags["Primary"],
+        ),
+      )
 
-    else -> backStack.add(EmbyDetailScreen(itemId = id, title = item.Name ?: ""))
+      else -> backStack.add(EmbyDetailScreen(itemId = id, title = item.Name ?: ""))
+    }
+  }.onFailure {
+    Toast.makeText(
+      context,
+      "打开失败：${it.message ?: "未知错误"}",
+      Toast.LENGTH_SHORT,
+    ).show()
   }
 }
 
@@ -1647,6 +1727,14 @@ private val FOLDER_TYPES = listOf("Folder", "CollectionFolder", "UserView")
  */
 private fun isFolderLike(item: EmbyItem): Boolean =
   item.Type in FOLDER_TYPES || item.Type == "BoxSet"
+
+/**
+ * 能「扫描」的条目：媒体库（UserView / CollectionFolder）和真实文件夹。
+ *
+ * 与 [isFolderLike] 的差别是刻意排除 BoxSet（合集）—— 它只是个虚拟分组，
+ * 背后没有对应的物理目录，让服务器去扫它扫不出任何东西。
+ */
+private fun isScannableFolder(item: EmbyItem): Boolean = item.Type in FOLDER_TYPES
 
 /**
  * 文件夹宫格封面的进程内缓存（按文件夹 Id 存取）。

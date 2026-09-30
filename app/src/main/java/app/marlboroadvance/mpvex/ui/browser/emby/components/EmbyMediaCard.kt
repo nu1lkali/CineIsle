@@ -316,13 +316,20 @@ fun EmbyMediaCard(
   fallbackImageUrl: String? = null,
   fillWidth: Boolean = false,
   mosaicUrls: List<String>? = null,
+  onLongClick: (() -> Unit)? = null,
 ) {
   Column(modifier = if (fillWidth) modifier.fillMaxWidth() else modifier.width(style.width)) {
     Card(
       modifier = Modifier
         .fillMaxWidth()
         .aspectRatio(style.ratio)
-        .combinedClickable(onClick = onClick),
+        .then(
+          if (onLongClick != null) {
+            Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+          } else {
+            Modifier.combinedClickable(onClick = onClick)
+          }
+        ),
       shape = RoundedCornerShape(EMBY_CARD_CORNER),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
@@ -456,6 +463,8 @@ private fun MosaicTile(
 
 /**
  * 媒体库入口卡片：显示库名与媒体数量。
+ *
+ * @param onLongClick 长按回调（首页用它触发「扫描媒体库」）；不传就是纯单击。
  */
 @Composable
 fun EmbyLibraryCard(
@@ -465,12 +474,19 @@ fun EmbyLibraryCard(
   icon: ImageVector,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  onLongClick: (() -> Unit)? = null,
 ) {
   Card(
-    onClick = onClick,
     modifier = modifier
       .width(LIBRARY_CARD_WIDTH)
-      .height(LIBRARY_CARD_HEIGHT),
+      .height(LIBRARY_CARD_HEIGHT)
+      .then(
+        if (onLongClick != null) {
+          Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+        } else {
+          Modifier.combinedClickable(onClick = onClick)
+        }
+      ),
     shape = RoundedCornerShape(EMBY_CARD_CORNER),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
   ) {

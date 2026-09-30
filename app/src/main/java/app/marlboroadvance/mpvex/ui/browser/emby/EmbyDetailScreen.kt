@@ -117,6 +117,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
+import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
@@ -169,6 +170,8 @@ data class EmbyDetailScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    // 下拉刷新的转圈状态（转完由 PullRefreshBox 自己收起）
+    val isRefreshing = remember { mutableStateOf(false) }
 
     suspend fun load() {
       // 冷启动时当前服务器可能还没恢复，这里等一下，避免静默不加载
@@ -218,197 +221,208 @@ data class EmbyDetailScreen(
             downloadTasks.firstOrNull { it.itemId == id }
           }
 
-          DetailBody(
-            item = current,
-            server = currentServer,
-            // 剧照当封面区的整张背景图用，所以要按屏幕级别的宽度取（1080 足够铺满常见机型）：
-            // 之前取 128px 是为了「放大即虚化」的糊底效果，用户不喜欢 —— 现在直接看清晰大图。
-            // EmbyImageLoader 的 maxWidth 只做客户端降采样、不会改写 URL，
-            // 所以尺寸必须从源头（这个 URL）给定。
-            backdropUrl = viewModel.imageUrl(currentServer, current, "Backdrop", 1080),
-            posterUrl = viewModel.imageUrl(currentServer, current, "Primary", 600),
-            onPlay = { resume, reverse ->
-              // 长按切内核时给个明确反馈，否则用户不知道这一下到底换了什么
-              viewModel.resolveEngineOverride(reverse)?.let {
-                Toast.makeText(context, "使用 ${it.label} 内核播放", Toast.LENGTH_SHORT).show()
-              }
-              scope.launch { viewModel.play(currentServer, current, resume, reverse) }
-            },
-            onToggleFavorite = {
-              val wasFavorite = current.UserData?.IsFavorite == true
-              // 乐观更新：先把红心翻过来，动效才跟得上手指；失败再回滚
-              item = current.copy(
-                UserData = (current.UserData ?: EmbyUserData()).copy(IsFavorite = !wasFavorite),
-              )
-              scope.launch {
-                val result = viewModel.toggleFavorite(currentServer, current)
-                val nowFavorite = result.getOrNull()
+          // ── 下拉刷新 ──
+          // 详情页的数据（进度、已看状态、演员、推荐）都是进页面那一次拉回来的，
+          // 从播放器返回时虽然有 800ms 延迟的自动刷新，但用户手动拉一下仍然是最直接的重取方式。
+          // 手势与折叠头部天然分工：头部还没展开完时下拉先展开头部（内层 NestedScrollConnection
+          // 会把这段位移吃掉），只有头部已经完全展开、列表又停在顶部时，位移才会漏到下拉刷新上。
+          PullRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = { load() },
+            modifier = Modifier.fillMaxSize(),
+          ) {
+            DetailBody(
+              item = current,
+              server = currentServer,
+              // 剧照当封面区的整张背景图用，所以要按屏幕级别的宽度取（1080 足够铺满常见机型）：
+              // 之前取 128px 是为了「放大即虚化」的糊底效果，用户不喜欢 —— 现在直接看清晰大图。
+              // EmbyImageLoader 的 maxWidth 只做客户端降采样、不会改写 URL，
+              // 所以尺寸必须从源头（这个 URL）给定。
+              backdropUrl = viewModel.imageUrl(currentServer, current, "Backdrop", 1080),
+              posterUrl = viewModel.imageUrl(currentServer, current, "Primary", 600),
+              onPlay = { resume, reverse ->
+                // 长按切内核时给个明确反馈，否则用户不知道这一下到底换了什么
+                viewModel.resolveEngineOverride(reverse)?.let {
+                  Toast.makeText(context, "使用 ${it.label} 内核播放", Toast.LENGTH_SHORT).show()
+                }
+                scope.launch { viewModel.play(currentServer, current, resume, reverse) }
+              },
+              onToggleFavorite = {
+                val wasFavorite = current.UserData?.IsFavorite == true
+                // 乐观更新：先把红心翻过来，动效才跟得上手指；失败再回滚
                 item = current.copy(
-                  UserData = (current.UserData ?: EmbyUserData())
-                    .copy(IsFavorite = nowFavorite ?: wasFavorite),
+                  UserData = (current.UserData ?: EmbyUserData()).copy(IsFavorite = !wasFavorite),
                 )
-                // 红心有动效，但「到底收没收藏成功」得给个字，服务端失败时才不会误以为成了
-                Toast.makeText(
-                  context,
-                  when (nowFavorite) {
-                    true -> "已加入收藏"
-                    false -> "已取消收藏"
-                    null -> "收藏失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
-                  },
-                  Toast.LENGTH_SHORT,
-                ).show()
-              }
-            },
-            onTogglePlayed = { played ->
-              val playedItemId = current.Id ?: return@DetailBody
-              // 乐观更新：先把勾翻到预期状态，失败再回滚
-              item = current.copy(
-                UserData = (current.UserData ?: EmbyUserData()).copy(
-                  Played = played,
-                  PlaybackPositionTicks = if (played) {
-                    current.UserData?.PlaybackPositionTicks ?: 0
-                  } else {
-                    0
-                  },
-                ),
-              )
-              scope.launch {
-                val result = viewModel.setPlayed(currentServer, playedItemId, played)
-                if (result.isFailure) item = current
-                // 勾的填充色会变，但点完到底成没成要有字说得清楚
-                Toast.makeText(
-                  context,
-                  when {
-                    result.isSuccess && played -> "已标记为已播放"
-                    result.isSuccess -> "已标记为未播放"
-                    else -> "标记失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
-                  },
-                  Toast.LENGTH_SHORT,
-                ).show()
-              }
-            },
-            onBack = { backStack.removeLastOrNull() },
-            onDelete = { showDeleteConfirm = true },
-            onDownload = {
-              // 已有任务时，这个按钮变成「暂停 / 继续」开关（与下载管理页同一套动作）：
-              //   下载中 / 排队中 → 暂停；已暂停 / 失败 → 继续；已完成 → 只提示。
-              // 没有任务才走去重入队，行为与以前一致。
-              val downloadItemId = current.Id
-              val existing = downloadItemId?.let { id ->
-                downloadTasks.firstOrNull { it.itemId == id }
-              }
-              when (existing?.status) {
-                EmbyDownloadStatus.RUNNING, EmbyDownloadStatus.QUEUED -> {
-                  downloadViewModel.pause(existing.itemId)
+                scope.launch {
+                  val result = viewModel.toggleFavorite(currentServer, current)
+                  val nowFavorite = result.getOrNull()
+                  item = current.copy(
+                    UserData = (current.UserData ?: EmbyUserData())
+                      .copy(IsFavorite = nowFavorite ?: wasFavorite),
+                  )
+                  // 红心有动效，但「到底收没收藏成功」得给个字，服务端失败时才不会误以为成了
                   Toast.makeText(
                     context,
-                    if (existing.status == EmbyDownloadStatus.QUEUED) "已暂停下载（已移出队列）" else "已暂停下载",
+                    when (nowFavorite) {
+                      true -> "已加入收藏"
+                      false -> "已取消收藏"
+                      null -> "收藏失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
+                    },
                     Toast.LENGTH_SHORT,
                   ).show()
                 }
-
-                EmbyDownloadStatus.PAUSED, EmbyDownloadStatus.FAILED -> {
-                  downloadViewModel.resume(existing.itemId)
-                  Toast.makeText(context, "已继续下载", Toast.LENGTH_SHORT).show()
+              },
+              onTogglePlayed = { played ->
+                val playedItemId = current.Id ?: return@DetailBody
+                // 乐观更新：先把勾翻到预期状态，失败再回滚
+                item = current.copy(
+                  UserData = (current.UserData ?: EmbyUserData()).copy(
+                    Played = played,
+                    PlaybackPositionTicks = if (played) {
+                      current.UserData?.PlaybackPositionTicks ?: 0
+                    } else {
+                      0
+                    },
+                  ),
+                )
+                scope.launch {
+                  val result = viewModel.setPlayed(currentServer, playedItemId, played)
+                  if (result.isFailure) item = current
+                  // 勾的填充色会变，但点完到底成没成要有字说得清楚
+                  Toast.makeText(
+                    context,
+                    when {
+                      result.isSuccess && played -> "已标记为已播放"
+                      result.isSuccess -> "已标记为未播放"
+                      else -> "标记失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
+                    },
+                    Toast.LENGTH_SHORT,
+                  ).show()
                 }
-
-                EmbyDownloadStatus.COMPLETED ->
-                  Toast.makeText(context, "该媒体已经下载过了", Toast.LENGTH_SHORT).show()
-
-                null ->
-                  when (downloadViewModel.enqueue(currentServer, current)) {
-                    EmbyEnqueueResult.STARTED ->
-                      Toast.makeText(context, "已加入下载队列", Toast.LENGTH_SHORT).show()
-
-                    EmbyEnqueueResult.EXISTS ->
-                      Toast.makeText(context, "该媒体已在下载列表中", Toast.LENGTH_SHORT).show()
-
-                    EmbyEnqueueResult.COMPLETED ->
-                      Toast.makeText(context, "该媒体已经下载过了", Toast.LENGTH_SHORT).show()
-
-                    EmbyEnqueueResult.INVALID ->
-                      Toast.makeText(context, "该媒体不支持下载", Toast.LENGTH_SHORT).show()
+              },
+              onBack = { backStack.removeLastOrNull() },
+              onDelete = { showDeleteConfirm = true },
+              onDownload = {
+                // 已有任务时，这个按钮变成「暂停 / 继续」开关（与下载管理页同一套动作）：
+                //   下载中 / 排队中 → 暂停；已暂停 / 失败 → 继续；已完成 → 只提示。
+                // 没有任务才走去重入队，行为与以前一致。
+                val downloadItemId = current.Id
+                val existing = downloadItemId?.let { id ->
+                  downloadTasks.firstOrNull { it.itemId == id }
+                }
+                when (existing?.status) {
+                  EmbyDownloadStatus.RUNNING, EmbyDownloadStatus.QUEUED -> {
+                    downloadViewModel.pause(existing.itemId)
+                    Toast.makeText(
+                      context,
+                      if (existing.status == EmbyDownloadStatus.QUEUED) "已暂停下载（已移出队列）" else "已暂停下载",
+                      Toast.LENGTH_SHORT,
+                    ).show()
                   }
-              }
-            },
-            downloadLabel = currentDownload?.let { task ->
-              when (task.status) {
-                EmbyDownloadStatus.COMPLETED -> "已下载"
-                EmbyDownloadStatus.PAUSED -> "已暂停"
-                EmbyDownloadStatus.FAILED -> "下载失败"
-                EmbyDownloadStatus.QUEUED -> "排队中"
-                EmbyDownloadStatus.RUNNING ->
-                  "下载中 ${((task.progressFraction ?: 0f) * 100).toInt()}%"
-              }
-            },
-            downloadStatus = currentDownload?.status,
-            // 下载按钮的自下而上填充进度：下载中/暂停用真实进度，已完成填满，
-            // 排队给一个 0 值（按钮内部会做呼吸式待机动画），没任务传 null 不画
-            downloadProgress = currentDownload?.let { task ->
-              when (task.status) {
-                EmbyDownloadStatus.RUNNING -> task.progressFraction ?: 0f
-                EmbyDownloadStatus.PAUSED -> task.progressFraction ?: 0f
-                EmbyDownloadStatus.COMPLETED -> 1f
-                EmbyDownloadStatus.QUEUED -> 0f
-                EmbyDownloadStatus.FAILED -> 0f
-              }
-            },
-            downloadFailed = currentDownload?.status == EmbyDownloadStatus.FAILED,
-            onCast = {
-              val id = current.Id
-              if (id != null) {
-                val url = viewModel.getStreamUrl(currentServer, id, true)
-                dlnaManager.pendingPayload =
-                  CastPayload(Uri.parse(url), viewModel.displayTitle(current))
-                castSheetShown = true
-              }
-            },
-            onRefreshMetadata = {
-              val id = current.Id
-              if (id != null) {
-                scope.launch {
-                  val ok = viewModel.refreshMetadata(currentServer, id, full = false)
-                  Toast.makeText(
-                    context,
-                    if (ok) "已触发刷新元数据" else "刷新失败",
-                    Toast.LENGTH_SHORT,
-                  ).show()
+
+                  EmbyDownloadStatus.PAUSED, EmbyDownloadStatus.FAILED -> {
+                    downloadViewModel.resume(existing.itemId)
+                    Toast.makeText(context, "已继续下载", Toast.LENGTH_SHORT).show()
+                  }
+
+                  EmbyDownloadStatus.COMPLETED ->
+                    Toast.makeText(context, "该媒体已经下载过了", Toast.LENGTH_SHORT).show()
+
+                  null ->
+                    when (downloadViewModel.enqueue(currentServer, current)) {
+                      EmbyEnqueueResult.STARTED ->
+                        Toast.makeText(context, "已加入下载队列", Toast.LENGTH_SHORT).show()
+
+                      EmbyEnqueueResult.EXISTS ->
+                        Toast.makeText(context, "该媒体已在下载列表中", Toast.LENGTH_SHORT).show()
+
+                      EmbyEnqueueResult.COMPLETED ->
+                        Toast.makeText(context, "该媒体已经下载过了", Toast.LENGTH_SHORT).show()
+
+                      EmbyEnqueueResult.INVALID ->
+                        Toast.makeText(context, "该媒体不支持下载", Toast.LENGTH_SHORT).show()
+                    }
                 }
-              }
-            },
-            onScrapeMetadata = {
-              val id = current.Id
-              if (id != null) {
-                scope.launch {
-                  val ok = viewModel.refreshMetadata(currentServer, id, full = true)
-                  Toast.makeText(
-                    context,
-                    if (ok) "已触发刮削元数据" else "刮削失败",
-                    Toast.LENGTH_SHORT,
-                  ).show()
+              },
+              downloadLabel = currentDownload?.let { task ->
+                when (task.status) {
+                  EmbyDownloadStatus.COMPLETED -> "已下载"
+                  EmbyDownloadStatus.PAUSED -> "已暂停"
+                  EmbyDownloadStatus.FAILED -> "下载失败"
+                  EmbyDownloadStatus.QUEUED -> "排队中"
+                  EmbyDownloadStatus.RUNNING ->
+                    "下载中 ${((task.progressFraction ?: 0f) * 100).toInt()}%"
                 }
-              }
-            },
-            onEditMetadata = { showEditMeta = true },
-            onPersonClick = { pid, pname, tag ->
-              backStack.add(
-                EmbyPersonScreen(personId = pid, personName = pname, personImageTag = tag),
-              )
-            },
-            // 点类型 / 标签 chip：进「按该类型 / 标签找片」的结果页
-            onMetaClick = { keyword, isGenre ->
-              backStack.add(
-                EmbyTagItemsScreen(keyword = keyword, kind = if (isGenre) "genre" else "tag"),
-              )
-            },
-            moreMenuExpanded = showMoreMenu,
-            onMoreMenuChange = { showMoreMenu = it },
-            viewModel = viewModel,
-            // 点推荐卡片：同一位演员 / 导演的另一部片子，直接再开一层详情页
-            onRecommendClick = { id, name ->
-              backStack.add(EmbyDetailScreen(itemId = id, title = name))
-            },
-          )
+              },
+              downloadStatus = currentDownload?.status,
+              // 下载按钮的自下而上填充进度：下载中/暂停用真实进度，已完成填满，
+              // 排队给一个 0 值（按钮内部会做呼吸式待机动画），没任务传 null 不画
+              downloadProgress = currentDownload?.let { task ->
+                when (task.status) {
+                  EmbyDownloadStatus.RUNNING -> task.progressFraction ?: 0f
+                  EmbyDownloadStatus.PAUSED -> task.progressFraction ?: 0f
+                  EmbyDownloadStatus.COMPLETED -> 1f
+                  EmbyDownloadStatus.QUEUED -> 0f
+                  EmbyDownloadStatus.FAILED -> 0f
+                }
+              },
+              downloadFailed = currentDownload?.status == EmbyDownloadStatus.FAILED,
+              onCast = {
+                val id = current.Id
+                if (id != null) {
+                  val url = viewModel.getStreamUrl(currentServer, id, true)
+                  dlnaManager.pendingPayload =
+                    CastPayload(Uri.parse(url), viewModel.displayTitle(current))
+                  castSheetShown = true
+                }
+              },
+              onRefreshMetadata = {
+                val id = current.Id
+                if (id != null) {
+                  scope.launch {
+                    val ok = viewModel.refreshMetadata(currentServer, id, full = false)
+                    Toast.makeText(
+                      context,
+                      if (ok) "已触发刷新元数据" else "刷新失败",
+                      Toast.LENGTH_SHORT,
+                    ).show()
+                  }
+                }
+              },
+              onScrapeMetadata = {
+                val id = current.Id
+                if (id != null) {
+                  scope.launch {
+                    val ok = viewModel.refreshMetadata(currentServer, id, full = true)
+                    Toast.makeText(
+                      context,
+                      if (ok) "已触发刮削元数据" else "刮削失败",
+                      Toast.LENGTH_SHORT,
+                    ).show()
+                  }
+                }
+              },
+              onEditMetadata = { showEditMeta = true },
+              onPersonClick = { pid, pname, tag ->
+                backStack.add(
+                  EmbyPersonScreen(personId = pid, personName = pname, personImageTag = tag),
+                )
+              },
+              // 点类型 / 标签 chip：进「按该类型 / 标签找片」的结果页
+              onMetaClick = { keyword, isGenre ->
+                backStack.add(
+                  EmbyTagItemsScreen(keyword = keyword, kind = if (isGenre) "genre" else "tag"),
+                )
+              },
+              moreMenuExpanded = showMoreMenu,
+              onMoreMenuChange = { showMoreMenu = it },
+              viewModel = viewModel,
+              // 点推荐卡片：同一位演员 / 导演的另一部片子，直接再开一层详情页
+              onRecommendClick = { id, name ->
+                backStack.add(EmbyDetailScreen(itemId = id, title = name))
+              },
+            )
+          }
         }
       }
     }
