@@ -409,6 +409,21 @@
         android:src="@drawable/gsy_ic_prev"
         android:visibility="gone" />
 
+    <!-- ⑧-a 后退10秒（正中控件组最左；显隐跟着正中播放键走） -->
+    <ImageView
+        android:id="@+id/gsy_btn_rewind10"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_centerVertical="true"
+        android:layout_marginEnd="14dp"
+        android:layout_toStartOf="@id/gsy_btn_prev"
+        android:background="@drawable/gsy_ctrl_circle"
+        android:contentDescription="@string/player_control_rewind_10s"
+        android:padding="11dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/gsy_ic_replay_10"
+        android:visibility="gone" />
+
     <!-- ⑨ 正中播放/暂停键（图标由 CineIsleGsyPlayer 按播放状态同步） -->
     <ImageView
         android:id="@+id/start"
@@ -434,6 +449,21 @@
         android:padding="13dp"
         android:scaleType="centerInside"
         android:src="@drawable/gsy_ic_next"
+        android:visibility="gone" />
+
+    <!-- ⑩-a 前进10秒（正中控件组最右；显隐跟着正中播放键走） -->
+    <ImageView
+        android:id="@+id/gsy_btn_forward10"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_centerVertical="true"
+        android:layout_marginStart="14dp"
+        android:layout_toEndOf="@id/gsy_btn_next"
+        android:background="@drawable/gsy_ctrl_circle"
+        android:contentDescription="@string/player_control_forward_10s"
+        android:padding="11dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/gsy_ic_forward_10"
         android:visibility="gone" />
 
     <!-- ⑪ 缓冲动画 -->

@@ -192,6 +192,9 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
         if (effective == View.VISIBLE) syncStartButtonIcon(view)
         startButtonVisibility = effective
         applyNavigationVisibility()
+        // ±10s 键不在 GSY 的 id 表里，跟着正中播放键一起显隐
+        findViewById<View>(R.id.gsy_btn_rewind10)?.visibility = effective
+        findViewById<View>(R.id.gsy_btn_forward10)?.visibility = effective
       }
     }
   }
@@ -217,6 +220,8 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
     findViewById<View>(R.id.layout_bottom)?.visibility = View.VISIBLE
     findViewById<View>(R.id.gsy_scrim_top)?.visibility = View.VISIBLE
     findViewById<View>(R.id.gsy_scrim_bottom)?.visibility = View.VISIBLE
+    findViewById<View>(R.id.gsy_btn_rewind10)?.visibility = View.VISIBLE
+    findViewById<View>(R.id.gsy_btn_forward10)?.visibility = View.VISIBLE
     findViewById<View>(R.id.start)?.let { button ->
       syncStartButtonIcon(button)
       button.visibility = View.VISIBLE
@@ -501,6 +506,22 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
       actions.onNext()
     }
 
+    // 后退 / 前进 10 秒：走 GSYVideoManager 的 seekTo（当前接管播放的实例，
+    // 全屏克隆实例也归它管，与画中画遥控键同一套路）
+    findViewById<ImageView>(R.id.gsy_btn_rewind10)?.setOnClickListener {
+      keepControlsAlive()
+      val manager = GSYVideoManager.instance()
+      manager.seekTo((manager.getCurrentPosition() - SEEK_STEP_MS).coerceAtLeast(0L))
+    }
+
+    findViewById<ImageView>(R.id.gsy_btn_forward10)?.setOnClickListener {
+      keepControlsAlive()
+      val manager = GSYVideoManager.instance()
+      val target = manager.getCurrentPosition() + SEEK_STEP_MS
+      val duration = manager.getDuration()
+      manager.seekTo(if (duration > 0) target.coerceAtMost(duration) else target)
+    }
+
     findViewById<ImageView>(R.id.gsy_btn_screenshot)?.setOnClickListener {
       keepControlsAlive()
       actions.onScreenshot()
@@ -597,9 +618,14 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
         R.id.start,
         R.id.gsy_btn_prev,
         R.id.gsy_btn_next,
+        R.id.gsy_btn_rewind10,
+        R.id.gsy_btn_forward10,
         R.id.loading,
         R.id.lock_screen,
       )
+
+    /** ±10s 键的步长（毫秒） */
+    private const val SEEK_STEP_MS = 10_000L
 
     private fun trimZero(value: Float): String =
       if (value == value.toInt().toFloat()) value.toInt().toString() else value.toString()

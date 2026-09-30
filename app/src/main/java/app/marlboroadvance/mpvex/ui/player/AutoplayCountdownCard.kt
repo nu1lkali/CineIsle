@@ -68,7 +68,7 @@ fun AutoplayCountdownCard(
       horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       Text(
-        text = "下一集 $remaining",
+        text = "下一个视频 $remaining",
         style = MaterialTheme.typography.labelLarge,
         color = Color.White.copy(alpha = 0.82f),
       )
@@ -78,7 +78,7 @@ fun AutoplayCountdownCard(
       ) {
         Icon(
           imageVector = Icons.Default.Close,
-          contentDescription = "不自动播放下一集",
+          contentDescription = "不自动播放下一个视频",
           tint = Color.White.copy(alpha = 0.55f),
           modifier = Modifier.size(14.dp),
         )

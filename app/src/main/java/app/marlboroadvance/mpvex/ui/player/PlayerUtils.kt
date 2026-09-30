@@ -7,10 +7,95 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.util.Log
 import app.marlboroadvance.mpvex.ui.player.PlayerActivity.Companion.TAG
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
 import kotlinx.serialization.json.Json
 import java.io.File
+
+/** ISO 镜像类型 */
+private enum class IsoKind { BLU_RAY, DVD }
+
+/**
+ * ISO 原盘支持：本地 .iso 镜像映射到 mpv 的 bluray:// / dvd:// 流。
+ *
+ * libmpv 内置 libbluray / dvdnav（已确认自带），但它们按「路径」打开镜像、
+ * 读不了 fd:// —— 所以只有解析到真实路径时才生效。镜像类型靠扫 ISO9660
+ * 根目录判断（BDMV = 蓝光原盘，VIDEO_TS = DVD）；探测不到 ISO9660
+ * （UDF-only 镜像很常见）时按蓝光原盘处理。默认播放最长标题 / 主影片。
+ *
+ * 非 .iso 的输入原样返回，行为不变。
+ */
+internal fun isoPlayableUri(playableUri: String): String {
+  val path =
+    when {
+      playableUri.startsWith("file://") -> Uri.decode(playableUri.removePrefix("file://"))
+      playableUri.startsWith("/") -> playableUri
+      else -> return playableUri
+    }
+  if (!path.endsWith(".iso", ignoreCase = true)) return playableUri
+
+  val kind = sniffIsoKind(path) ?: IsoKind.BLU_RAY
+  return when (kind) {
+    IsoKind.BLU_RAY -> {
+      PlayerLib.setPropertyString("bluray-device", path)
+      Log.d(TAG, "ISO 原盘（蓝光）：bluray-device=$path")
+      "bluray://"
+    }
+    IsoKind.DVD -> {
+      PlayerLib.setPropertyString("dvd-device", path)
+      Log.d(TAG, "ISO 原盘（DVD）：dvd-device=$path")
+      "dvd://"
+    }
+  }
+}
+
+/**
+ * 扫 ISO9660 卷描述符 + 根目录判断镜像类型。
+ * PVD 固定在 16 号扇区（"CD001"），根目录记录在 PVD 偏移 156 处。
+ */
+private fun sniffIsoKind(path: String): IsoKind? =
+  runCatching {
+    java.io.RandomAccessFile(path, "r").use { raf ->
+      val sector = ByteArray(2048)
+      raf.seek(16L * 2048)
+      if (raf.read(sector) < sector.size) return@runCatching null
+      if (String(sector, 1, 5) != "CD001") return@runCatching null
+
+      val rootExtent = readLe32(sector, 156 + 2)
+      val rootSize = readLe32(sector, 156 + 10)
+      if (rootExtent <= 0 || rootSize <= 0) return@runCatching null
+
+      val dir = ByteArray(rootSize.toInt().coerceAtMost(1 shl 20))
+      raf.seek(rootExtent * 2048)
+      if (raf.read(dir) < dir.size) return@runCatching null
+
+      var off = 0
+      var kind: IsoKind? = null
+      while (off + 33 <= dir.size) {
+        val recordLen = dir[off].toInt() and 0xFF
+        if (recordLen == 0) break
+        val nameLen = dir[off + 32].toInt() and 0xFF
+        if (nameLen > 0) {
+          when (String(dir, off + 33, nameLen).substringBefore(';').uppercase()) {
+            "BDMV" -> kind = IsoKind.BLU_RAY
+            "VIDEO_TS" -> kind = IsoKind.DVD
+          }
+          if (kind != null) break
+        }
+        off += recordLen
+      }
+      kind
+    }
+  }.onFailure { e ->
+    Log.w(TAG, "ISO 类型探测失败: ${e.message}")
+  }.getOrNull()
+
+private fun readLe32(b: ByteArray, off: Int): Long =
+  (b[off].toLong() and 0xFF) or
+    ((b[off + 1].toLong() and 0xFF) shl 8) or
+    ((b[off + 2].toLong() and 0xFF) shl 16) or
+    ((b[off + 3].toLong() and 0xFF) shl 24)
 
 /**
  * Storage path constants for Android's various storage locations.

@@ -2,6 +2,7 @@ package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.MediaStore
 import android.provider.MediaStore.Video.Thumbnails
@@ -81,7 +82,22 @@ data class PlaylistItem(
   val path: String = "", // Video path for thumbnail loading
   val duration: String = "", // Duration in formatted string (e.g., "10:30")
   val resolution: String = "", // Resolution (e.g., "1920x1080")
-)
+  /**
+   * 网络播放源（Emby 等）的缩略图直链（背景图/海报）。
+   * 网络流不走 MediaStore 缩略图（拿不到），有它就按 URL 加载。
+   */
+  val thumbnailUrl: String = "",
+) {
+  /**
+   * 网络播放流（Emby / strm 直链等）。
+   *
+   * 这类条目的时长 / 分辨率**永远不会被探测填充**（见 PlayerViewModel.getVideoMetadata
+   * 对网络流的跳过逻辑 —— strm 的真实媒体在云存储 CDN 上，逐个探测会触发风控），
+   * UI 不能为它们渲染「加载中」占位，否则就是永远在加载的样子。
+   */
+  val isNetworkStream: Boolean
+    get() = uri.scheme == "http" || uri.scheme == "https"
+}
 
 /**
  * LRU (Least Recently Used) cache for Bitmap thumbnails with a maximum size limit.
@@ -192,6 +208,24 @@ private suspend fun loadMediaStoreThumbnail(context: Context, uri: Uri): Bitmap?
       android.util.Log.w("PlaylistSheet", "Failed to load MediaStore thumbnail for $uri", e)
       null
     }
+  }
+}
+
+/**
+ * 加载网络播放源（Emby 等）的缩略图。
+ *
+ * 走 [EmbyImageLoader]（内存 LRU + 磁盘缓存 + 服务端缩放失败退原图的兜底），
+ * 这里再补一层「背景图 404 → 退海报」的回退；都失败返回 null，由调用方回退到占位图标。
+ */
+private suspend fun loadUrlThumbnail(url: String): Bitmap? {
+  app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
+    .load(url, maxWidth = 512)
+    ?.let { return it }
+  val primary = url.replace("/Images/Backdrop", "/Images/Primary")
+  return if (primary != url) {
+    app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader.load(primary, maxWidth = 512)
+  } else {
+    null
   }
 }
 
@@ -351,7 +385,7 @@ fun PlaylistSheet(
               )
             }
             Text(
-              text = "$totalCount items",
+              text = stringResource(R.string.i18n_playlist_items, totalCount),
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -364,7 +398,9 @@ fun PlaylistSheet(
             ) {
               Icon(
                 imageVector = if (isListMode) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
-                contentDescription = if (isListMode) "Switch to Grid View" else "Switch to List View",
+                contentDescription = stringResource(
+                  if (isListMode) R.string.i18n_switch_to_list else R.string.i18n_switch_to_grid,
+                ),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
               )
             }
@@ -440,7 +476,17 @@ fun PlaylistTrackListItem(
   // Skip thumbnail loading for M3U playlists (network streams)
   LaunchedEffect(videoPath) {
     if (!skipThumbnail && !thumbnailCache.containsKey(videoPath)) {
-      val bmp = loadMediaStoreThumbnail(context, item.uri)
+      val bmp =
+        when {
+          // 网络播放源（Emby 等）：背景图优先，退回海报，再退回占位图标
+          item.thumbnailUrl.isNotBlank() ->
+            loadUrlThumbnail(item.thumbnailUrl)
+              ?: item.thumbnailUrl
+                .replace("/Images/Backdrop", "/Images/Primary")
+                .takeIf { it != item.thumbnailUrl }
+                ?.let { loadUrlThumbnail(it) }
+          else -> loadMediaStoreThumbnail(context, item.uri)
+        }
       thumbnail = bmp
       thumbnailCache[videoPath] = bmp
     }
@@ -569,7 +615,8 @@ fun PlaylistTrackListItem(
                 color = if (item.isPlaying) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
-          } else {
+          } else if (!item.isNetworkStream) {
+            // 网络流不探测元数据，不渲染加载占位
             LoadingChip(width = 40.dp)
           }
           
@@ -588,7 +635,9 @@ fun PlaylistTrackListItem(
                 color = if (item.isPlaying) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
-          } else {
+          } else if (!item.isNetworkStream) {
+            // 网络流（Emby / strm）不探测元数据，永远不会有值 —— 不渲染加载占位，
+            // 否则就是「一直在加载」的样子（见 PlaylistItem.isNetworkStream 的说明）
             LoadingChip(width = 60.dp)
           }
         }
@@ -602,7 +651,7 @@ fun PlaylistTrackListItem(
             shape = RoundedCornerShape(16.dp),
           ) {
             Text(
-              text = "Playing",
+              text = stringResource(R.string.i18n_playing),
               modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
               style = MaterialTheme.typography.labelSmall.copy(
                 fontWeight = FontWeight.SemiBold,
@@ -640,7 +689,17 @@ fun PlaylistTrackGridItem(
   // Skip thumbnail loading for M3U playlists (network streams)
   LaunchedEffect(videoPath) {
     if (!skipThumbnail && !thumbnailCache.containsKey(videoPath)) {
-      val bmp = loadMediaStoreThumbnail(context, item.uri)
+      val bmp =
+        when {
+          // 网络播放源（Emby 等）：背景图优先，退回海报，再退回占位图标
+          item.thumbnailUrl.isNotBlank() ->
+            loadUrlThumbnail(item.thumbnailUrl)
+              ?: item.thumbnailUrl
+                .replace("/Images/Backdrop", "/Images/Primary")
+                .takeIf { it != item.thumbnailUrl }
+                ?.let { loadUrlThumbnail(it) }
+          else -> loadMediaStoreThumbnail(context, item.uri)
+        }
       thumbnail = bmp
       thumbnailCache[videoPath] = bmp
     }
@@ -739,8 +798,8 @@ fun PlaylistTrackGridItem(
               color = Color.White,
             )
           }
-        } else {
-          // Loading duration badge
+        } else if (!item.isNetworkStream) {
+          // Loading duration badge（网络流不探测，不显示）
           Box(
             modifier = Modifier
               .align(Alignment.BottomEnd)
@@ -809,7 +868,8 @@ fun PlaylistTrackGridItem(
                 color = if (item.isPlaying) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
-          } else {
+          } else if (!item.isNetworkStream) {
+            // 网络流不探测元数据，不渲染加载占位
             LoadingChip(width = 60.dp)
           }
 
@@ -819,7 +879,7 @@ fun PlaylistTrackGridItem(
               shape = RoundedCornerShape(4.dp),
             ) {
               Text(
-                text = "Playing",
+                text = stringResource(R.string.i18n_playing),
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                 style = MaterialTheme.typography.labelSmall.copy(
                   fontSize = 10.sp,

@@ -525,6 +525,8 @@
   <!-- ===== 播放器：控件无障碍描述（TalkBack 朗读用）===== -->
   <string name="player_control_previous">Previous</string>
   <string name="player_control_next">Next</string>
+  <string name="player_control_rewind_10s">Back 10 seconds</string>
+  <string name="player_control_forward_10s">Forward 10 seconds</string>
   <string name="player_control_playback_speed">Playback Speed</string>
   <string name="player_control_previous_frame">Previous Frame</string>
   <string name="player_control_next_frame">Next Frame</string>
@@ -675,6 +677,10 @@
   <string name="i18n_no_videos_in_playlist">No videos in playlist</string>
   <string name="i18n_not_available_4k8k">Not available for 4K/8K video</string>
   <string name="i18n_now_playing">Now Playing</string>
+  <string name="i18n_playing">Playing</string>
+  <string name="i18n_playlist_items">%d items</string>
+  <string name="i18n_switch_to_grid">Switch to Grid View</string>
+  <string name="i18n_switch_to_list">Switch to List View</string>
   <string name="i18n_open_file">Open File</string>
   <string name="i18n_open_link">Open Link</string>
   <string name="i18n_pan_zoom">Pan &amp; Zoom</string>

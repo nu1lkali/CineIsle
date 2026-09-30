@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -392,8 +393,16 @@ private fun ServerEditDialog(
           }
         },
       ) {
+        // 连接中也要保留文字（只留转圈的话，网络异常要等 15~60s 超时才恢复，
+        // 期间按钮看起来就是空白的）；小号转圈放进 Row，不再被按钮高度裁掉
         if (isConnecting) {
-          CircularProgressIndicator(modifier = Modifier.padding(2.dp))
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+            Text(
+              modifier = Modifier.padding(start = 8.dp),
+              text = if (requireLogin) "连接中…" else "保存中…",
+            )
+          }
         } else {
           Text(if (requireLogin) "登录并添加" else "保存")
         }

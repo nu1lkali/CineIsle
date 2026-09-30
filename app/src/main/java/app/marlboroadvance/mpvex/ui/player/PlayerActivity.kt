@@ -1683,17 +1683,33 @@ open class PlayerActivity :
    */
   private fun getPlayableUri(intent: Intent): String? {
     val uri = parsePathFromIntent(intent) ?: return null
-    return if (uri.startsWith("content://")) {
-      uri.toUri().openContentFd(this)
-    } else {
-      uri
-    }
+    return isoPlayableUri(
+      if (uri.startsWith("content://")) {
+        uri.toUri().openContentFd(this) ?: uri
+      } else {
+        uri
+      },
+    ).also { applyAviDemuxerWorkaround(it) }
   }
 
-  /** content:// 转成 fd://（mpv 自己读不了 SAF） */
+  /** content:// 转成 fd://（mpv 自己读不了 SAF）；.iso 镜像再映射成 bluray:// / dvd:// */
   private fun getPlayableUriForEngine(intent: Intent): String? = getPlayableUri(intent)
 
-  private fun playlistItemPlayableUri(uri: Uri): String = uri.openContentFd(this) ?: uri.toString()
+  private fun playlistItemPlayableUri(uri: Uri): String =
+    isoPlayableUri(uri.openContentFd(this) ?: uri.toString()).also { applyAviDemuxerWorkaround(it) }
+
+  /**
+   * AVI 容器 + H264（avc1）的黑屏兜底。
+   *
+   * AVI 没有 PTS 概念，带打包 B 帧的 H264 流进 ffmpeg 解复用后解码器常常
+   * 等不到时间戳，表现就是「打开一直黑屏没反应」。只对 .avi 文件开
+   * `fflags=+genpts`（缺失 PTS 时补齐）；其他文件显式置空，不影响。
+   */
+  private fun applyAviDemuxerWorkaround(playableUri: String) {
+    val pathLike = playableUri.substringBefore('?')
+    val isAvi = pathLike.endsWith(".avi", ignoreCase = true) && pathLike.startsWith("/")
+    PlayerLib.setPropertyString("demuxer-lavf-o", if (isAvi) "fflags=+genpts" else "")
+  }
 
   /**
    * Handles device configuration changes.

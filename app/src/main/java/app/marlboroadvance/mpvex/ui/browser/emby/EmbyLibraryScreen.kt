@@ -73,9 +73,13 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
+import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleFilter
+import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleHit
+import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleMarks
 import app.marlboroadvance.mpvex.domain.emby.EmbyFilterOptions
 import app.marlboroadvance.mpvex.domain.emby.EmbyLibraryFilterState
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
+import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -85,7 +89,11 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyFavoriteRandomIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.koin.compose.koinInject
@@ -161,6 +169,16 @@ data class EmbyLibraryScreen(
     var hdFilter by remember(libraryId) { mutableStateOf(savedFilter.isHD) }
     var threeDFilter by remember(libraryId) { mutableStateOf(savedFilter.is3D) }
     var subtitlesFilter by remember(libraryId) { mutableStateOf(savedFilter.hasSubtitles) }
+    var chineseSubsOnly by remember(libraryId) { mutableStateOf(savedFilter.chineseSubsOnly) }
+    // ── 「中文字幕」标记配置 ──
+    // 标记列表存在偏好里（可编辑、可恢复默认），不写死在代码里。
+    // 在 remember 里同步 configure（而不是 LaunchedEffect）：保证任何扫描开始之前
+    // 正则已经编译好，不会出现「先用旧规则扫一遍、再用新规则扫一遍」。
+    val chineseMarksRaw by browserPreferences.embyChineseSubtitleMarks.collectAsState()
+    val chineseMarks = remember(chineseMarksRaw) {
+      ChineseSubtitleMarks.fromJson(chineseMarksRaw).also { ChineseSubtitleFilter.configure(it) }
+    }
+    var showMarksEditor by remember { mutableStateOf(false) }
     var minRating by remember(libraryId) { mutableStateOf(savedFilter.minRating) }
     var favoriteOnly by remember(libraryId) { mutableStateOf(savedFilter.favoriteOnly) }
     // 该库实际出现过的可选项，进页面时拉一次
@@ -170,7 +188,7 @@ data class EmbyLibraryScreen(
         selectedYears.isNotEmpty() || selectedRatings.isNotEmpty() ||
         selectedPersonIds.isNotEmpty() || selectedStudioIds.isNotEmpty() ||
         playedFilter != null || hdFilter != null || threeDFilter != null ||
-        subtitlesFilter != null || minRating != null || favoriteOnly
+        subtitlesFilter != null || chineseSubsOnly || minRating != null || favoriteOnly
 
     /** 把当前筛选条件写回偏好，下次进这个库还带着 */
     fun persistFilter() {
@@ -185,6 +203,7 @@ data class EmbyLibraryScreen(
         isHD = hdFilter,
         is3D = threeDFilter,
         hasSubtitles = subtitlesFilter,
+        chineseSubsOnly = chineseSubsOnly,
         minRating = minRating,
         favoriteOnly = favoriteOnly,
       )
@@ -202,6 +221,9 @@ data class EmbyLibraryScreen(
       "p=${selectedPersonIds.sorted().joinToString(",")}|" +
       "s=${selectedStudioIds.sorted().joinToString(",")}|" +
       "played=$playedFilter|hd=$hdFilter|3d=$threeDFilter|sub=$subtitlesFilter|" +
+      "csub=$chineseSubsOnly|" +
+      // 标记配置也算条件：改了标记 / 匹配范围，命中结果就变了，必须重新扫
+      "cmarks=${chineseMarks.signature()}|" +
       "m=$minRating|fav=$favoriteOnly"
     val cachedEntry = remember(cacheKey) { EmbyLibraryCache.get(cacheKey) }
 
@@ -212,6 +234,13 @@ data class EmbyLibraryScreen(
     }
     var error by remember(cacheKey) { mutableStateOf<String?>(null) }
     val isRefreshing = remember { mutableStateOf(false) }
+    // itemId → 命中的「中文字幕」标记：列表卡片直接显示是哪条标记命中的
+    var chineseHits by remember(cacheKey) { mutableStateOf(cachedEntry?.hits ?: emptyMap()) }
+    // 客户端筛选必须扫全库，这两个状态让 UI 能显示「已扫多少 / 命中多少」
+    var scanScanned by remember(cacheKey) { mutableIntStateOf(cachedEntry?.scannedCount ?: 0) }
+    var isScanning by remember(cacheKey) { mutableStateOf(false) }
+    // 正在跑的扫描任务：换筛选条件 / 退出页面时取消，避免旧扫描继续拉数据
+    val scanJob = remember { mutableStateOf<Job?>(null) }
 
     // 文件夹宫格封面：初值取自进程内缓存，从子页面返回时不会重新请求
     val folderCovers = remember {
@@ -244,12 +273,100 @@ data class EmbyLibraryScreen(
       } else null
 
     fun cacheItems() {
-      EmbyLibraryCache.putItems(cacheKey, items, totalCount)
+      EmbyLibraryCache.putItems(
+        key = cacheKey,
+        items = items,
+        totalCount = totalCount,
+        hits = chineseHits,
+        scannedCount = scanScanned,
+        // 扫描中途被打断时缓存里只有前半截命中，标记成「不完整」，下次进来重扫
+        complete = !isScanning,
+      )
+    }
+
+    /**
+     * 「中文字幕」的全量扫描。
+     *
+     * 为什么不能沿用「拉一页筛一页」：Emby 的 /Items 一页只给 PAGE_SIZE 条，
+     * 客户端筛掉的条目**不占 StartIndex** —— 拿筛完的 items.size 当下一次的起始下标，
+     * 翻页窗口会一直重叠、反复拉同一段，命中条目永远只有开头那一小撮
+     * （表现就是「只能筛出一部分中文字幕视频」）。
+     * 所以这里改成：把整个库逐页拉到底，逐页过滤、逐页把命中结果抛给 UI。
+     */
+    suspend fun runScan(current: EmbyServer) {
+      // 已经有结果的 Id 集合：扫描期间库变了可能导致某条被重复返回，按 Id 去重
+      val seen = HashSet<String>()
+      items.forEach { item -> item.Id?.let { seen.add(it) } }
+      val scanned = viewModel.scanItems(
+        server = current,
+        query = EmbyScanQuery(
+          parentId = libraryId,
+          includeItemTypes = effectiveTypes,
+          excludeItemTypes = effectiveExclude,
+          filters = effectiveFilters,
+          sortBy = sortBy,
+          sortOrder = sortOrder,
+          recursive = recursive,
+          genres = selectedGenres.toList().takeIf { it.isNotEmpty() },
+          tags = selectedTags.toList().takeIf { it.isNotEmpty() },
+          years = selectedYears.toList().takeIf { it.isNotEmpty() },
+          officialRatings = selectedRatings.toList().takeIf { it.isNotEmpty() },
+          minCommunityRating = minRating,
+          isFavorite = if (favoriteOnly) true else null,
+          personIds = selectedPersonIds.toList().takeIf { it.isNotEmpty() },
+          isPlayed = playedFilter,
+          isHD = hdFilter,
+          is3D = threeDFilter,
+          hasSubtitles = subtitlesFilter,
+          studioIds = selectedStudioIds.toList().takeIf { it.isNotEmpty() },
+        ),
+      ) { chunk ->
+        // 回调在 IO 线程：正则过滤是纯 CPU 活，放这里不会占 UI 线程
+        val matched = ChineseSubtitleFilter.filter(chunk.items)
+        val fresh = matched.filter { (item, _) -> item.Id?.let { seen.add(it) } == true }
+        withContext(Dispatchers.Main) {
+          items = items + fresh.map { it.first }
+          chineseHits = chineseHits + fresh.associate { it.first.Id.orEmpty() to it.second }
+          scanScanned = chunk.scanned
+          if (chunk.total > 0) totalCount = chunk.total
+          cacheItems()
+        }
+      }
+      withContext(Dispatchers.Main) {
+        scanScanned = scanned
+        isScanning = false
+        isLoading = false
+        cacheItems()
+      }
+    }
+
+    /** 启动（或重启）一次扫描。旧的扫描先取消，免得两个扫描同时写同一份状态 */
+    fun startScan(current: EmbyServer) {
+      scanJob.value?.cancel()
+      error = null
+      isScanning = true
+      scanJob.value = scope.launch {
+        try {
+          runScan(current)
+        } catch (e: CancellationException) {
+          // 被接替的扫描 / 页面退出取消：状态交给接替者，这里不要动
+          throw e
+        } catch (e: Throwable) {
+          isScanning = false
+          isLoading = false
+          error = e.message ?: "加载失败"
+        }
+      }
     }
 
     suspend fun load(reset: Boolean) {
       // 冷启动时当前服务器可能还没恢复，这里等一下，避免静默不加载
       val current = viewModel.currentServerOrAwait() ?: return
+      // 「中文字幕」是客户端按路径判定的，服务端没有对应参数 —— 只能扫全库
+      if (chineseSubsOnly && searchQuery.isBlank()) {
+        startScan(current)
+        return
+      }
       if (reset) isLoading = true
       error = null
       runCatching {
@@ -283,13 +400,22 @@ data class EmbyLibraryScreen(
           EmbyItemsPage(result, result.size)
         }
       }.onSuccess { page ->
-        items = if (reset) {
-          page.items
+        if (chineseSubsOnly) {
+          // 搜索结果本身就是完整的一批（/Items?SearchTerm 一次性给完），直接筛
+          val matched = withContext(Dispatchers.Default) { ChineseSubtitleFilter.filter(page.items) }
+          items = matched.map { it.first }
+          chineseHits = matched.associate { it.first.Id.orEmpty() to it.second }
+          // 客户端筛过之后服务端总数对不上，数量行显示可见命中数
+          totalCount = items.size
         } else {
-          // 分页时按 Id 去重后追加
-          items + page.items.filter { new -> items.none { it.Id == new.Id } }
+          items = if (reset) {
+            page.items
+          } else {
+            // 分页时按 Id 去重后追加
+            items + page.items.filter { new -> items.none { it.Id == new.Id } }
+          }
+          totalCount = page.totalCount
         }
-        totalCount = page.totalCount
         cacheItems()
       }.onFailure {
         error = it.message ?: "加载失败"
@@ -303,7 +429,9 @@ data class EmbyLibraryScreen(
       // 搜索走下面带防抖的那个 effect，这里跳过，避免每敲一个字就立刻发一次请求
       if (searchQuery.isNotBlank()) return@LaunchedEffect
       val entry = EmbyLibraryCache.get(cacheKey)
-      if (entry == null || entry.items.isEmpty()) load(reset = true)
+      // 扫描没跑完的缓存（items 只含前半截命中）不能当完整结果复用，重扫
+      val stale = chineseSubsOnly && entry != null && !entry.complete
+      if (entry == null || entry.items.isEmpty() || stale) load(reset = true)
     }
 
     // 筛选可选项（类型 / 标签 / 年份 / 分级）按库拉一次，
@@ -327,12 +455,25 @@ data class EmbyLibraryScreen(
     LaunchedEffect(gridState, items.size) {
       snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
         .collect { lastVisible ->
-          val canLoadMore = !isLoading && items.size < totalCount && lastVisible != null
+          // 客户端筛选走全量扫描，没有「下一页」可翻；扫描中也不要再触发普通分页
+          val canLoadMore = !isLoading && !isScanning && !chineseSubsOnly &&
+            items.size < totalCount && lastVisible != null
           if (canLoadMore && lastVisible >= items.size - 6) {
             load(reset = false)
           }
         }
     }
+
+    // 换筛选条件 / 退出页面：把正在跑的全量扫描停掉（一个库可能上百个请求）
+    DisposableEffect(cacheKey) {
+      onDispose { scanJob.value?.cancel() }
+    }
+
+    // 详情页删除后同步：EmbyLibraryCache.lastRemovedItemId 是快照状态，
+    // 列表组合还活着时也能立即触发重组，把已删除的条目从渲染里剔除
+    val lastRemovedItemId = EmbyLibraryCache.lastRemovedItemId
+    val visibleItems =
+      if (lastRemovedItemId != null) items.filterNot { it.Id == lastRemovedItemId } else items
 
     Column(modifier = Modifier.fillMaxSize()) {
       // ── 1. 顶栏：返回 + 库名 + 搜索 ──
@@ -369,7 +510,22 @@ data class EmbyLibraryScreen(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Text(
-          text = if (totalCount > 0) "$totalCount 项" else "",
+          text = when {
+            // 客户端筛选（中文字幕）走全量扫描：扫的时候显示进度，扫完显示命中数。
+            // 服务端 totalCount 是「整个库的条目数」，客户端筛过之后对不上，所以分开显示。
+            isScanning -> "扫描中… 已扫 $scanScanned" +
+              (if (totalCount > 0) " / $totalCount" else "") +
+              " · 命中 ${visibleItems.size}"
+            chineseSubsOnly -> buildString {
+              append("命中 ${visibleItems.size} 项")
+              if (scanScanned > 0) {
+                append(" · 已扫 $scanScanned")
+                if (totalCount > 0) append(" / $totalCount")
+              }
+            }
+            totalCount > 0 -> "$totalCount 项"
+            else -> ""
+          },
           style = MaterialTheme.typography.bodyMedium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -484,9 +640,22 @@ data class EmbyLibraryScreen(
         modifier = Modifier.weight(1f).fillMaxWidth(),
       ) {
         when {
-          isLoading && items.isEmpty() -> CircularProgressIndicator(
+          isLoading && items.isEmpty() -> Column(
             modifier = Modifier.align(Alignment.Center),
-          )
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            CircularProgressIndicator()
+            // 全量扫描可能要拉几十页，没有进度提示会让人以为卡死了
+            if (isScanning) {
+              Text(
+                text = "正在扫描媒体库… 已扫 $scanScanned" +
+                  (if (totalCount > 0) " / $totalCount" else ""),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
 
           error != null && items.isEmpty() -> EmbyEmptyState(
             message = error ?: "加载失败",
@@ -496,7 +665,7 @@ data class EmbyLibraryScreen(
           )
 
           items.isEmpty() && !isLoading -> EmbyEmptyState(
-            message = "没有找到媒体",
+            message = if (chineseSubsOnly) "没有匹配「中文字幕」标记的媒体" else "没有找到媒体",
             buttonText = "刷新",
             onAction = { scope.launch { load(reset = true) } },
             modifier = Modifier.align(Alignment.Center),
@@ -517,7 +686,7 @@ data class EmbyLibraryScreen(
               horizontalArrangement = Arrangement.spacedBy(8.dp),
               verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-              items(items, key = { it.Id ?: it.Name ?: "" }) { item ->
+              items(visibleItems, key = { it.Id ?: it.Name ?: "" }) { item ->
                 val s = server ?: return@items
                 val itemId = item.Id
                 // 文件夹 / 合集这类容器条目自身没有封面图，改用内部视频的缩略图拼宫格
@@ -563,7 +732,15 @@ data class EmbyLibraryScreen(
     // 之所以不用「草稿 + 确定」：筛选的结果在下面列表里是实时可见的，
     // 每点一项就刷新一次，比「点完确定才知道对不对」少一次试错。
     if (showFilterDialog) {
-      ModalBottomSheet(onDismissRequest = { showFilterDialog = false }) {
+      // skipPartiallyExpanded：面板只有「展开 / 收起」两态，不允许停在半展开。
+      // 半展开态会和内容里的下拉列表抢嵌套滚动 —— 表现为拖不动、滑一下就
+      // 变成拖面板、点击偶尔被吞。
+      val filterSheetState =
+        androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+      ModalBottomSheet(
+        onDismissRequest = { showFilterDialog = false },
+        sheetState = filterSheetState,
+      ) {
         Column(
           modifier = Modifier
             .fillMaxWidth()
@@ -595,6 +772,7 @@ data class EmbyLibraryScreen(
               hdFilter = null
               threeDFilter = null
               subtitlesFilter = null
+              chineseSubsOnly = false
               persistFilter()
             }) {
               Text("恢复默认")
@@ -765,6 +943,49 @@ data class EmbyLibraryScreen(
             onClear = { minRating = null; persistFilter() },
           )
 
+          // 中文字幕：按路径标记做客户端匹配（Emby 服务端没有这类筛选）。
+          // 打开后会把整个库逐页扫一遍（服务端筛不了，只能拉全再筛），
+          // 标记列表可编辑，规则见 [ChineseSubtitleMarks]。
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "中文字幕（按路径标记）",
+                style = MaterialTheme.typography.titleSmall,
+              )
+              Text(
+                text = "匹配 ${chineseMarks.markers.size} 个标记：" +
+                  chineseMarks.markers.take(6).joinToString(" / ") + " …",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            Switch(
+              checked = chineseSubsOnly,
+              onCheckedChange = {
+                chineseSubsOnly = it
+                persistFilter()
+              },
+            )
+          }
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = "匹配范围：" +
+                if (chineseMarks.matchWholePath) "整条路径（含目录名）" else "仅文件名",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { showMarksEditor = true }) {
+              Text("编辑标记")
+            }
+          }
+
           // 只看收藏：打开 = 只在收藏里套用上面的筛选；关掉 = 不限（不是「只看未收藏」）
           Row(
             modifier = Modifier.fillMaxWidth(),
@@ -815,6 +1036,76 @@ data class EmbyLibraryScreen(
         confirmButton = {
           TextButton(onClick = { showStyleDialog = false }) {
             Text("完成")
+          }
+        },
+      )
+    }
+
+    // 中文字幕标记编辑器：改完写回偏好 → cacheKey 变化 → 自动重新扫描一遍。
+    // 之所以要给用户开口子：库里出现新的标记写法（比如新资源组用 `[CM]`）时，
+    // 不该为了加一个字符串重新发版。
+    if (showMarksEditor) {
+      // 草稿放在弹窗外层：确认按钮要读到它，放在 text 里就出了作用域
+      var marksDraft by remember(chineseMarksRaw) {
+        mutableStateOf(chineseMarks.markers.joinToString("\n"))
+      }
+      var wholePathDraft by remember(chineseMarksRaw) {
+        mutableStateOf(chineseMarks.matchWholePath)
+      }
+      AlertDialog(
+        onDismissRequest = { showMarksEditor = false },
+        title = { Text("中文字幕标记") },
+        text = {
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+              text = "一行一个（逗号 / 空格分隔也行）。汉字标记按整词或子串匹配；" +
+                "其余标记两侧都要求边界，所以 -C 不会命中 -CD / -CH / -CM。",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+              value = marksDraft,
+              onValueChange = { marksDraft = it },
+              modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 120.dp, max = 220.dp),
+              textStyle = MaterialTheme.typography.bodySmall,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Text(
+                text = "匹配整条路径（关掉只匹配文件名）",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
+              )
+              Switch(checked = wholePathDraft, onCheckedChange = { wholePathDraft = it })
+            }
+            Text(
+              text = "生效 ${ChineseSubtitleMarks.parse(marksDraft, wholePathDraft).markers.size} 个标记",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        },
+        confirmButton = {
+          TextButton(onClick = {
+            val marks = ChineseSubtitleMarks.parse(marksDraft, wholePathDraft)
+            browserPreferences.embyChineseSubtitleMarks.set(marks.toJson())
+            showMarksEditor = false
+          }) {
+            Text("保存并重扫")
+          }
+        },
+        dismissButton = {
+          Row {
+            TextButton(onClick = {
+              marksDraft = ChineseSubtitleMarks.DEFAULT_MARKERS.joinToString("\n")
+              wholePathDraft = true
+            }) {
+              Text("恢复默认")
+            }
+            TextButton(onClick = { showMarksEditor = false }) {
+              Text("取消")
+            }
           }
         },
       )
@@ -1176,6 +1467,21 @@ private fun itemSubtitle(item: EmbyItem): String? {
   }
 }
 
+/**
+ * 卡片副标题 + 「中文字幕」命中标记。
+ *
+ * 把命中的标记（配置里的原文，如 `-C`）标在卡片上：一眼能看出这条为什么被筛出来，
+ * 也能顺便验证自己配的标记有没有误伤。
+ */
+private fun itemSubtitleWithMark(
+  item: EmbyItem,
+  chineseHit: ChineseSubtitleHit?,
+): String? {
+  val base = itemSubtitle(item)
+  val mark = chineseHit?.marker?.takeIf { it.isNotBlank() }?.let { "中字 $it" } ?: return base
+  return if (base.isNullOrBlank()) mark else "$base · $mark"
+}
+
 private fun itemProgress(item: EmbyItem): Float? {
   val total = item.RunTimeTicks ?: return null
   if (total <= 0) return null
@@ -1201,7 +1507,7 @@ private fun embyCardStyleFromName(name: String): EmbyCardStyle =
  *
  * 仅做进程内缓存、不落盘 —— 重启 App 后重新拉取是符合预期的。
  */
-private object EmbyLibraryCache {
+internal object EmbyLibraryCache {
   private const val MAX_ENTRIES = 16
 
   class Entry {
@@ -1209,9 +1515,24 @@ private object EmbyLibraryCache {
     var totalCount: Int = 0
     var scrollIndex: Int = 0
     var scrollOffset: Int = 0
+    /** itemId → 「中文字幕」命中标记（客户端筛选时才有） */
+    var hits: Map<String, ChineseSubtitleHit> = emptyMap()
+    /** 全量扫描已扫过的条目数（普通分页时不用） */
+    var scannedCount: Int = 0
+    /** 结果是否完整：扫描中途被打断时是 false，下次进页面要重扫 */
+    var complete: Boolean = true
   }
 
   private val entries = LinkedHashMap<String, Entry>()
+
+  /**
+   * 最近一次删除的媒体 Id（快照状态）。
+   *
+   * 媒体库页的组合在详情页压栈期间可能仍然存活，光改缓存里的 Entry 不会让它
+   * 重组 —— 列表读这个快照状态做渲染时剔除，删除后返回立即生效。
+   */
+  var lastRemovedItemId: String? by androidx.compose.runtime.mutableStateOf(null)
+    private set
 
   @Synchronized
   fun get(key: String): Entry? = entries[key]
@@ -1221,10 +1542,16 @@ private object EmbyLibraryCache {
     key: String,
     items: List<EmbyItem>,
     totalCount: Int,
+    hits: Map<String, ChineseSubtitleHit> = emptyMap(),
+    scannedCount: Int = 0,
+    complete: Boolean = true,
   ) {
     val entry = entries.getOrPut(key) { Entry() }
     entry.items = items
     entry.totalCount = totalCount
+    entry.hits = hits
+    entry.scannedCount = scannedCount
+    entry.complete = complete
     touch(key, entry)
   }
 
@@ -1240,6 +1567,24 @@ private object EmbyLibraryCache {
     touch(key, entry)
   }
 
+  /**
+   * 从所有缓存的分桶里移除已删除的媒体。
+   *
+   * 详情页删除成功后调用：媒体库页返回时直接复用缓存（不重新请求），
+   * 不同步剔除的话，被删掉的条目还会留在列表里。
+   */
+  @Synchronized
+  fun removeItem(itemId: String) {
+    entries.values.forEach { entry ->
+      if (entry.items.any { it.Id == itemId }) {
+        entry.items = entry.items.filterNot { it.Id == itemId }
+        entry.totalCount = (entry.totalCount - 1).coerceAtLeast(0)
+        if (entry.hits.containsKey(itemId)) entry.hits = entry.hits - itemId
+      }
+    }
+    lastRemovedItemId = itemId
+  }
+
   /** 最近使用的挪到末尾，超出上限时淘汰最久未使用的 */
   private fun touch(
     key: String,
@@ -1253,3 +1598,12 @@ private object EmbyLibraryCache {
     }
   }
 }
+
+/**
+ * 「中文字幕」判定已全部挪到 [ChineseSubtitleFilter]（domain/emby）：
+ * 标记列表可配置、正则预编译、结果带缓存、并按「顶层 Path + 每条 MediaSource 的 Path」
+ * 多候选路径判定。这里不再保留旧的「只看文件名 token」实现 —— 那套规则漏在两点：
+ * 1. 只匹配末段文件名，标记只写在目录名的条目全部筛不出来；
+ * 2. 走的是「切 token 后整词比较」，`HMN-864-C` 之后若还有别的段落就命中不到。
+ */
+

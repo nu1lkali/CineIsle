@@ -341,6 +341,17 @@ class GsyPlayerActivity : ComponentActivity() {
   private fun setUpCurrent(target: CineIsleGsyPlayer) {
     val uri = currentUri ?: return
     val url = playableUrl(uri)
+
+    // ISO 原盘：GSY 的三个内核（IJK / Exo / System）都不带 libbluray，读不了镜像；
+    // mpv 内核带 libbluray（见 PlayerUtils.isoPlayableUri），自动转交，队列与进度不丢
+    if (url.endsWith(".iso", ignoreCase = true) ||
+      uri.lastPathSegment?.endsWith(".iso", ignoreCase = true) == true
+    ) {
+      Toast.makeText(this, "ISO 原盘由 mpv 内核播放，正在切换…", Toast.LENGTH_LONG).show()
+      switchToMpvPlayer()
+      return
+    }
+
     applyTitleVisibility(target)
 
     val headData = headerMap()
@@ -1351,6 +1362,12 @@ class GsyPlayerActivity : ComponentActivity() {
       }
       // GSY 竖屏分支的另一半：回到竖屏后把方向交还给重力感应
       orientationUtils?.setEnable(true)
+      // 转回竖屏的当下就按用户设置恢复系统栏。全屏期间 GSY 把小白条（手势导航条）
+      // 收掉了，它自己的恢复要等「退出收尾」那个 post 任务落地（比旋转晚最多 ~300ms），
+      // 小白条迟到会让画面按新 insets 再缩一次 —— 就是「先没小白条、再出现、闪一下」。
+      // 提前到旋转发生的那一刻恢复，让导航条和竖屏布局同帧就位（GSY 之后的
+      // showNavKey 是幂等的显示调用，无冲突）。
+      applySystemBars()
     }
 
     // GSY 可能刚做完进出全屏（克隆是另一棵视图树），标题落位两棵树都要重算
@@ -1388,7 +1405,13 @@ class GsyPlayerActivity : ComponentActivity() {
   private fun requestExitFullscreen(): Boolean {
     if (fullscreenPlayer == null || fullBusy) return false
     fullBusy = true
+    // 退出期间把小屏实例的动画标志临时关掉：GSY 的 clearFullscreenLayout 里
+    // `if (!mShowFullAnimation) delay = 0` —— 不关的话退出要固定等 300ms，
+    // 全屏克隆会撑过整个旋转过程、窗口都转完了才瞬间换视图，就是那次轻微闪屏。
+    // 立即退出则让竖屏小屏视图直接顶上，跟系统旋转动画一起自然过渡。
+    player?.setShowFullAnimation(false)
     val exited = GSYVideoManager.backFromWindowFull(this)
+    player?.setShowFullAnimation(prefs.showFullAnimation.get())
     if (!exited) fullBusy = false
     return exited
   }

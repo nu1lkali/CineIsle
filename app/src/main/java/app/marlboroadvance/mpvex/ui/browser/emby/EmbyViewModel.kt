@@ -11,6 +11,8 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyFilterOptions
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
+import app.marlboroadvance.mpvex.domain.emby.EmbyScanChunk
+import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
@@ -223,6 +225,19 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     return EmbyItemsPage(result.Items, result.TotalRecordCount)
   }
 
+  /**
+   * 全量扫描：客户端筛选（如按路径判断的「中文字幕」）需要遍历整个库时用。
+   *
+   * 逐页拉完 [query] 命中的全部条目，每页回调一次 [onChunk] —— 回调在 IO 线程上执行，
+   * 里面做正则过滤这类纯 CPU 活不会卡 UI；写 Compose 状态记得切回主线程。
+   * 调用方所在协程被取消（换筛选条件 / 退出页面）时，扫描会在一页之内停下。
+   */
+  suspend fun scanItems(
+    server: EmbyServer,
+    query: EmbyScanQuery,
+    onChunk: suspend (EmbyScanChunk) -> Unit,
+  ): Int = repository.scanItems(server, query, onChunk = onChunk)
+
   /** 取某媒体库的筛选可选项（类型 / 标签 / 年份 / 分级），供筛选面板使用。 */
   suspend fun loadFilterOptions(
     server: EmbyServer,
@@ -310,8 +325,24 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   fun deleteItem(server: EmbyServer, itemId: String) {
     viewModelScope.launch {
       runCatching { repository.deleteItem(server, itemId) }
-        .onFailure { _error.value = it.message ?: "删除失败" }
-        .onSuccess { refreshHome() }
+        .onSuccess {
+          // 媒体库列表的进程内缓存同步剔除：返回媒体库时不再渲染已删除的条目
+          EmbyLibraryCache.removeItem(itemId)
+          _error.value = null
+          android.widget.Toast
+            .makeText(getApplication(), "已删除", android.widget.Toast.LENGTH_SHORT)
+            .show()
+          refreshHome()
+        }
+        .onFailure {
+          _error.value = it.message ?: "删除失败"
+          android.widget.Toast
+            .makeText(
+              getApplication(),
+              "删除失败：${it.message ?: "未知错误"}",
+              android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
     }
   }
 

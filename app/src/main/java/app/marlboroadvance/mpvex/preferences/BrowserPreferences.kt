@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.preferences
 
+import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleMarks
 import app.marlboroadvance.mpvex.domain.emby.EmbyLibraryFilterState
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
@@ -82,6 +83,15 @@ class BrowserPreferences(
    */
   fun embyLibraryFilter(libraryId: String): Preference<String> =
     preferenceStore.getString("emby_library_filter_$libraryId", "")
+
+  /**
+   * 「中文字幕」路径标记配置（[ChineseSubtitleMarks] 的 JSON 串，空串 = 用默认标记）。
+   *
+   * 全局一份、不按库分：标记是**资源命名惯例**，跟具体哪个库无关。
+   * 放在偏好里而不是写死在代码里，是为了库里出现新的标记写法时能自己加，
+   * 不必重新发版。
+   */
+  val embyChineseSubtitleMarks = preferenceStore.getString("emby_chinese_subtitle_marks", "")
 }
 
 /**

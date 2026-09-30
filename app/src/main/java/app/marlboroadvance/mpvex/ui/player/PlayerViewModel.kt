@@ -1420,8 +1420,33 @@ class PlayerViewModel(
         isWatched = isCurrentlyPlaying && currentProgress >= 95f,
         duration = durationStr,
         resolution = resolutionStr,
+        // Emby 播放源：用背景图作列表缩略图（本地文件 / strm 直链没有该模式，留空）
+        thumbnailUrl = embyBackdropUrl(uri) ?: "",
       )
     }
+  }
+
+  /**
+   * 从 Emby 播放流地址派生背景图地址，作播放列表缩略图。
+   *
+   * 流地址形如 `http(s)://host[:port]/emby/Videos/{itemId}/stream?...&api_key=...`，
+   * 图片地址就是同源下的 `/emby/Items/{itemId}/Images/Backdrop`（api_key 原样带上，
+   * static 等视频参数丢弃）。strm 指向的 CDN 直链解析不出该模式时返回 null ——
+   * 走原有的本地缩略图 / 占位图标路径，不会对 CDN 发起任何多余请求。
+   */
+  private fun embyBackdropUrl(uri: Uri): String? {
+    if (uri.scheme != "http" && uri.scheme != "https") return null
+    val match = EMBY_STREAM_PATH_REGEX.find(uri.path ?: return null) ?: return null
+    val itemId = match.groupValues[1]
+    val builder =
+      uri
+        .buildUpon()
+        .path("/emby/Items/$itemId/Images/Backdrop")
+        .query(null)
+        .appendQueryParameter("maxWidth", "512")
+        .appendQueryParameter("quality", "90")
+    uri.getQueryParameter("api_key")?.let { builder.appendQueryParameter("api_key", it) }
+    return builder.build().toString()
   }
 
   private fun getVideoMetadata(uri: Uri): Pair<String, String> {
@@ -1851,6 +1876,9 @@ class PlayerViewModel(
     super.onCleared()
   }
 }
+
+/** Emby 播放流地址里的 itemId（`/emby/Videos/{id}/stream`），用于派生图片地址 */
+private val EMBY_STREAM_PATH_REGEX = Regex("/emby/Videos/([^/?]+)/stream", RegexOption.IGNORE_CASE)
 
 // Extension functions
 fun Float.normalize(

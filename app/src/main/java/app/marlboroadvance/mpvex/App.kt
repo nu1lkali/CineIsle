@@ -98,6 +98,9 @@ class App : Application() {
     Thread.setDefaultUncaughtExceptionHandler(GlobalExceptionHandler(applicationContext, CrashActivity::class.java))
     trace("uncaught handler set")
 
+    // Emby 封面图的磁盘缓存层（TTL 7 天 / 上限 256MB，设置页可查看占用与清除）
+    app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader.init(this)
+
     // FastThumbnails 会加载 native 库（libmpv 等），在某些设备/ABI 上可能原生崩溃或抛 UnsatisfiedLinkError。
     // 用 try/catch 包住：即便它失败也只是视频缩略图不可用，绝不该把整个启动砸死。
     // 若检测到上次启动卡在 Application 阶段（lastBootStuck，通常是它自身原生崩溃），则进入安全模式跳过，

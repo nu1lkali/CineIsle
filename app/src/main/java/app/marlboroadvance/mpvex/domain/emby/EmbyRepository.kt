@@ -5,6 +5,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -154,6 +156,9 @@ class EmbyRepository(
     // 顺便拿服务器名/版本
     val info = runCatching { EmbyClient.getPublicSystemInfo(probe) }.getOrNull()
 
+    // 入库前先看一眼：这是不是第一台服务器（之前一台都没有）
+    val wasFirstServer = runCatching { serverRepo.getAll().isEmpty() }.getOrDefault(false)
+
     // 入库（带凭据）
     val id = serverRepo.add(
       probe.copy(
@@ -164,7 +169,12 @@ class EmbyRepository(
       ),
     )
     // 入库时 createdAt 等被 Room 填，重新查一次返回完整对象
-    serverRepo.getById(id) ?: throw EmbyApiException(500, "无法读取新添加的服务器记录")
+    val saved = serverRepo.getById(id) ?: throw EmbyApiException(500, "无法读取新添加的服务器记录")
+
+    // 第一台服务器直接设为当前：没有历史选择可恢复，不设的话添加完
+    // 还得手动再点一下才能进库浏览
+    if (wasFirstServer) setCurrentServer(saved)
+    saved
   }
 
   /**
@@ -260,9 +270,72 @@ class EmbyRepository(
     )
   }
 
-  /** 某媒体库的筛选可选项（类型 / 标签 / 年份 / 分级） */
-  suspend fun getFilterOptions(
+  /**
+   * 全量扫描：把 [query] 命中的**整个**结果集逐页拉完。
+   *
+   * 用在「客户端筛选」场景（如按路径判断的中文字幕）：Emby 服务端没有这类筛选参数，
+   * 只筛第一页必然漏，必须一个 StartIndex 一个 StartIndex 地翻到底。
+   * 每页拉完调一次 [onChunk]，UI 能边扫边出结果，不必等整库拉完。
+   *
+   * 结束条件只认「空页」和「已翻到 TotalRecordCount」：
+   * 不能拿「返回条数 < 请求条数」当结束条件 —— 有些 Emby 版本会截断 Limit，
+   * 那样会在第一页就退出，退化成「只筛出一部分」。
+   *
+   * @param pageSize 每页条数
+   * @param maxItems 本次扫描的条数上限（兜底，防止异常数据把设备拖死）
+   * @return 实际扫描到的条目数
+   */
+  suspend fun scanItems(
     server: EmbyServer,
+    query: EmbyScanQuery,
+    pageSize: Int = SCAN_PAGE_SIZE,
+    maxItems: Int = SCAN_MAX_ITEMS,
+    onChunk: suspend (EmbyScanChunk) -> Unit,
+  ): Int = withContext(Dispatchers.IO) {
+    var startIndex = 0
+    var scanned = 0
+    var total = 0
+    while (scanned < maxItems) {
+      // 每页之间检查一次取消：整个扫描可能上百个请求，用户退出页面时要能立刻停下
+      currentCoroutineContext().ensureActive()
+      val limit = (maxItems - scanned).coerceAtMost(pageSize)
+      val page = EmbyClient.getItems(
+        server = server,
+        parentId = query.parentId,
+        sortBy = query.sortBy,
+        sortOrder = query.sortOrder,
+        filters = query.filters,
+        includeItemTypes = query.includeItemTypes,
+        genres = query.genres,
+        startIndex = startIndex,
+        limit = limit,
+        recursive = query.recursive,
+        excludeItemTypes = query.excludeItemTypes,
+        personIds = query.personIds,
+        years = query.years,
+        minCommunityRating = query.minCommunityRating,
+        tags = query.tags,
+        officialRatings = query.officialRatings,
+        isPlayed = query.isPlayed,
+        isHD = query.isHD,
+        is3D = query.is3D,
+        hasSubtitles = query.hasSubtitles,
+        studioIds = query.studioIds,
+        isFavorite = query.isFavorite,
+      )
+      val items = page.Items
+      if (page.TotalRecordCount > 0) total = page.TotalRecordCount
+      if (items.isEmpty()) break
+      scanned += items.size
+      startIndex += items.size
+      onChunk(EmbyScanChunk(scanned = scanned, total = total, items = items))
+      if (total > 0 && startIndex >= total) break
+    }
+    scanned
+  }
+
+  /** 某媒体库的筛选可选项（类型 / 标签 / 年份 / 分级） */
+  suspend fun getFilterOptions(    server: EmbyServer,
     parentId: String? = null,
   ): EmbyFilterOptions = withContext(Dispatchers.IO) { EmbyClient.getFilterOptions(server, parentId) }
 

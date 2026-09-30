@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.emby.components
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
@@ -8,13 +9,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /**
  * Emby 封面图加载器。
  *
- * 项目不引入第三方图片库，这里用已有的 OkHttp + BitmapFactory 实现，
- * 带一层内存 LRU 缓存，避免列表滚动时重复下载同一张封面。
+ * 项目不引入第三方图片库，这里用已有的 OkHttp + BitmapFactory 实现，三层结构：
+ *
+ *  1. 内存 LRU（进程内，列表滚动不重复解码）；
+ *  2. **磁盘缓存**（[diskDir]/<sha256(url)>.img，TTL [DISK_TTL_MS]，容量上限
+ *     [DISK_LIMIT_BYTES]，超限按最旧淘汰）—— 跨启动复用，减少 Emby 服务端的
+ *     图片缩放开销（每个封面都是一次服务端缩放 + 网络传输）；
+ *  3. 网络（OkHttp，缩放失败自动退回原图重试）。
+ *
+ * 磁盘层需要 [init] 注入 Context（App.onCreate 里调一次）；未 init 时磁盘层静默
+ * 关闭，行为退化为纯内存缓存。
  */
 object EmbyImageLoader {
   private const val TAG = "EmbyImageLoader"
@@ -31,6 +42,58 @@ object EmbyImageLoader {
     override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
   }
 
+  // ── 磁盘缓存 ──
+
+  /** 磁盘缓存目录名（cacheDir 下） */
+  private const val DISK_DIR_NAME = "emby_image_cache"
+
+  /** 磁盘缓存容量上限 */
+  private const val DISK_LIMIT_BYTES = 256L * 1024 * 1024
+
+  /** 缓存失效时间：7 天（以文件修改时间 ≈ 下载时间为准） */
+  private const val DISK_TTL_MS = 7L * 24 * 60 * 60 * 1000
+
+  @Volatile
+  private var diskDir: File? = null
+
+  /** App.onCreate 注入 Context，启用磁盘缓存层 */
+  fun init(context: Context) {
+    diskDir = File(context.cacheDir, DISK_DIR_NAME)
+  }
+
+  /** URL → 磁盘文件名（sha256，避免 URL 里的非法字符 / 过长路径） */
+  private fun diskKeyOf(url: String): String =
+    MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") {
+      "%02x".format(it)
+    } + ".img"
+
+  /** 磁盘缓存当前占用（字节），设置页展示用 */
+  fun diskCacheSizeBytes(): Long =
+    diskDir?.listFiles()?.sumOf { it.length() } ?: 0L
+
+  /** 清空磁盘缓存 + 内存缓存，返回清除的字节数 */
+  fun clearDiskCache(): Long {
+    var freed = 0L
+    diskDir?.listFiles()?.forEach { f ->
+      freed += f.length()
+      runCatching { f.delete() }
+    }
+    cache.evictAll()
+    return freed
+  }
+
+  /** 容量超限时按「最旧优先」淘汰，直到回到上限以内 */
+  private fun trimDisk(dir: File) {
+    val files = dir.listFiles() ?: return
+    var total = files.sumOf { it.length() }
+    if (total <= DISK_LIMIT_BYTES) return
+    files.sortedBy { it.lastModified() }.forEach { f ->
+      if (total <= DISK_LIMIT_BYTES) return
+      val len = f.length()
+      if (f.delete()) total -= len
+    }
+  }
+
   /**
    * 加载图片；失败返回 null。
    *
@@ -41,10 +104,34 @@ object EmbyImageLoader {
   suspend fun load(url: String, maxWidth: Int = 0): Bitmap? = withContext(Dispatchers.IO) {
     cache.get(url)?.let { return@withContext it }
 
+    val diskKey = diskKeyOf(url)
+    val diskFile = diskDir?.let { File(it, diskKey) }
+    // 磁盘命中且未过期：直接解码（过期/损坏则当未命中，走网络重新下载覆盖）
+    if (diskFile != null && diskFile.isFile &&
+      System.currentTimeMillis() - diskFile.lastModified() <= DISK_TTL_MS
+    ) {
+      val bytes = runCatching { diskFile.readBytes() }.getOrNull()
+      if (bytes != null) {
+        decode(bytes, maxWidth)?.let { bmp ->
+          cache.put(url, bmp)
+          return@withContext bmp
+        }
+      }
+    }
+
     // 先按带尺寸参数的地址取，失败再退回原图。
     // 背景：部分 Emby 服务端对「按 maxWidth/maxHeight 缩放」的请求会返回 500
     //（源图格式特殊 / 缩略图缓存损坏），但直接取原图是正常的。
     val bytes = fetch(url) ?: fetchOriginal(url) ?: return@withContext null
+
+    // 落盘（失败不影响本次展示）+ 容量维护
+    if (diskFile != null) {
+      runCatching {
+        diskFile.parentFile?.mkdirs()
+        diskFile.writeBytes(bytes)
+        trimDisk(diskFile.parentFile)
+      }
+    }
 
     val bitmap = decode(bytes, maxWidth)
     if (bitmap == null) {
@@ -121,8 +208,6 @@ object EmbyImageLoader {
       BitmapFactory.Options().apply { inSampleSize = sampleSize },
     )
   }
-
-  fun clearCache() = cache.evictAll()
 
   /**
    * 构造图片请求。

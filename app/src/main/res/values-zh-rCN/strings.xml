@@ -508,6 +508,8 @@
   <!-- ===== 播放器：控件无障碍描述 ===== -->
   <string name="player_control_previous">上一个</string>
   <string name="player_control_next">下一个</string>
+  <string name="player_control_rewind_10s">后退10秒</string>
+  <string name="player_control_forward_10s">前进10秒</string>
   <string name="player_control_playback_speed">播放速度</string>
   <string name="player_control_previous_frame">上一帧</string>
   <string name="player_control_next_frame">下一帧</string>
@@ -673,6 +675,10 @@
   <string name="i18n_no_videos_in_playlist">播放列表中没有视频</string>
   <string name="i18n_not_available_4k8k">4K/8K 视频不支持此功能</string>
   <string name="i18n_now_playing">正在播放</string>
+  <string name="i18n_playing">播放中</string>
+  <string name="i18n_playlist_items">%d 个项目</string>
+  <string name="i18n_switch_to_grid">切换到网格视图</string>
+  <string name="i18n_switch_to_list">切换到列表视图</string>
   <string name="i18n_open_file">打开文件</string>
   <string name="i18n_open_link">打开链接</string>
   <string name="i18n_pan_zoom">平移与缩放</string>

@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.Gesture
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Subtitles
@@ -31,14 +32,24 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.presentation.Screen
+import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.ProvidePreferenceLocals
@@ -328,6 +339,61 @@ object PreferencesScreen : Screen {
             }
           }
           
+          // Data & Cache Section
+          item {
+            PreferenceSectionHeader(title = "数据与缓存")
+          }
+
+          item {
+            // 图片缓存：Emby 封面 / 播放列表缩略图的磁盘缓存。
+            // 7 天有效期、256MB 上限（EmbyImageLoader 里维护），这里只管查看占用与清除。
+            val context = LocalContext.current
+            val scope = rememberCoroutineScope()
+            var cacheBytes by remember { mutableStateOf(0L) }
+            var showClearConfirm by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+              cacheBytes = EmbyImageLoader.diskCacheSizeBytes()
+            }
+            PreferenceCard {
+              Preference(
+                title = { Text(text = "图片缓存") },
+                summary = {
+                  Text(
+                    text = "封面等图片的离线缓存（7 天有效）· 当前占用 " +
+                      formatCacheBytes(cacheBytes) +
+                      "，点击清除后将从服务器重新拉取",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.PhotoLibrary,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = { showClearConfirm = true },
+              )
+            }
+            if (showClearConfirm) {
+              ConfirmDialog(
+                title = "清除图片缓存",
+                subtitle = "将删除 ${formatCacheBytes(cacheBytes)} 的缓存图片，浏览时会在需要时重新下载。继续吗？",
+                onConfirm = {
+                  showClearConfirm = false
+                  scope.launch {
+                    val freed = EmbyImageLoader.clearDiskCache()
+                    cacheBytes = EmbyImageLoader.diskCacheSizeBytes()
+                    android.widget.Toast
+                      .makeText(context, "已清除 ${formatCacheBytes(freed)}", android.widget.Toast.LENGTH_SHORT)
+                      .show()
+                  }
+                },
+                onCancel = { showClearConfirm = false },
+              )
+            }
+          }
+
           // Advanced & About Section
           item {
             PreferenceSectionHeader(title = "高级与关于")
@@ -381,3 +447,12 @@ object PreferencesScreen : Screen {
     }
   }
 }
+
+/** 缓存占用的人类可读格式（KB / MB / GB） */
+private fun formatCacheBytes(bytes: Long): String =
+  when {
+    bytes >= 1L shl 30 -> "%.2f GB".format(bytes.toDouble() / (1L shl 30))
+    bytes >= 1L shl 20 -> "%.1f MB".format(bytes.toDouble() / (1L shl 20))
+    bytes >= 1L shl 10 -> "%.1f KB".format(bytes.toDouble() / (1L shl 10))
+    else -> "$bytes B"
+  }

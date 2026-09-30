@@ -93,6 +93,11 @@ data class EmbyLibraryFilterState(
   val is3D: Boolean? = null,
   /** null 不限，true 有字幕 / false 无字幕 */
   val hasSubtitles: Boolean? = null,
+  /**
+   * 只看文件名带「中文字幕」标记的（-C / CHS / 简体 / 中字 等，客户端按文件名匹配，
+   * Emby 服务端没有这类筛选）。
+   */
+  val chineseSubsOnly: Boolean = false,
   val minRating: Float? = null,
   val favoriteOnly: Boolean = false,
 ) {
@@ -100,7 +105,9 @@ data class EmbyLibraryFilterState(
   fun isEmpty(): Boolean =
     genres.isEmpty() && tags.isEmpty() && years.isEmpty() && officialRatings.isEmpty() &&
       personIds.isEmpty() && studioIds.isEmpty() && isPlayed == null && isHD == null &&
-      is3D == null && hasSubtitles == null && minRating == null && !favoriteOnly
+      is3D == null && hasSubtitles == null && minRating == null && !favoriteOnly &&
+      // 「中文字幕」也是筛选条件之一，漏了它会让「恢复默认」在只有它生效时显示成可点
+      !chineseSubsOnly
 }
 
 /**
@@ -283,7 +290,7 @@ object EmbyClient {
   /** 请求 Emby 时统一附加的扩展字段 */
   private const val ITEM_FIELDS =
     "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources," +
-    "Tags,SortName,ProductionLocations"
+    "Tags,SortName,ProductionLocations,Path"
 
   // ─── 内部工具 ───
 
@@ -646,9 +653,35 @@ object EmbyClient {
     return (now downTo 1950).toList()
   }
 
-  /** 媒体详情 */
+  /**
+   * 媒体详情。
+   *
+   * 显式带 Fields：不带的话 Emby 默认不返回 People / Studios / Tags /
+   * ProductionLocations 等字段，「编辑元数据」弹窗里就是一片空白。
+   */
   fun getItem(server: EmbyServer, itemId: String): EmbyItem =
-    getJson(server, "/Users/${server.userId}/Items/$itemId")
+    getJson(
+      server,
+      "/Users/${server.userId}/Items/$itemId",
+      mapOf(
+        "fields" to listOf(
+          "Overview",
+          "OriginalTitle",
+          "SortName",
+          "Genres",
+          "Tags",
+          "Studios",
+          "ProductionLocations",
+          "People",
+          "OfficialRating",
+          "CommunityRating",
+          "PremiereDate",
+          "ProductionYear",
+          "MediaSources",
+          "MediaStreams",
+        ).joinToString(","),
+      ),
+    )
 
   /**
    * 关键词搜索。

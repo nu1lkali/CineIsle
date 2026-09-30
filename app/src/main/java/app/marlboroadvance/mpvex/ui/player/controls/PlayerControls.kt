@@ -52,6 +52,8 @@ import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -186,6 +188,68 @@ fun <T> playerControlsEnterAnimationSpec(): FiniteAnimationSpec<T> =
     durationMillis = 100,
     easing = LinearOutSlowInEasing,
   )
+
+/**
+ * 正中控件组两侧的「后退 / 前进 10 秒」键。
+ *
+ * 外观与上/下一集同款（玻璃圆底），尺寸略小一档（44dp，正中播放键 64dp、
+ * 上/下一集 56dp），排布顺序：[后退10s · 上一集 · 播放 · 下一集 · 前进10s]。
+ */
+@Composable
+private fun CenterSeekButton(
+  forward: Boolean,
+  onClick: () -> Unit,
+) {
+  val hideBackground by koinInject<AppearancePreferences>()
+    .hidePlayerButtonsBackground.collectAsState()
+  val buttonShadow =
+    Brush.radialGradient(
+      0.0f to Color.Black.copy(alpha = 0.3f),
+      0.7f to Color.Transparent,
+      1.0f to Color.Transparent,
+    )
+  Surface(
+    modifier =
+      Modifier
+        .size(44.dp)
+        .clip(CircleShape)
+        .clickable(onClick = onClick)
+        .then(
+          if (hideBackground) {
+            Modifier.background(brush = buttonShadow, shape = CircleShape)
+          } else {
+            Modifier
+          },
+        ),
+    shape = CircleShape,
+    color =
+      if (!hideBackground) {
+        PlayerControlGlassFill
+      } else {
+        Color.Transparent
+      },
+    contentColor = controlColor,
+    tonalElevation = 0.dp,
+    shadowElevation = 0.dp,
+    border =
+      if (!hideBackground) {
+        BorderStroke(1.dp, PlayerControlGlassBorder)
+      } else {
+        null
+      },
+  ) {
+    Icon(
+      imageVector = if (forward) Icons.Default.Forward10 else Icons.Default.Replay10,
+      contentDescription = stringResource(
+        if (forward) R.string.player_control_forward_10s else R.string.player_control_rewind_10s,
+      ),
+      tint = controlColor,
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(MaterialTheme.spacing.smaller),
+    )
+  }
+}
 
 @OptIn(
   ExperimentalAnimationGraphicsApi::class,
@@ -710,9 +774,14 @@ fun PlayerControls(
 
               if (playlistMode && viewModel.hasPlaylistSupport()) {
                 androidx.compose.foundation.layout.Row(
-                  horizontalArrangement = Arrangement.spacedBy(24.dp),
+                  horizontalArrangement = Arrangement.spacedBy(16.dp),
                   verticalAlignment = Alignment.CenterVertically,
                 ) {
+                  CenterSeekButton(forward = false) {
+                    resetControlsTimestamp = System.currentTimeMillis()
+                    viewModel.seekBy(-10)
+                  }
+
                   Surface(
                     modifier =
                       Modifier
@@ -865,49 +934,69 @@ fun PlayerControls(
                         .padding(MaterialTheme.spacing.small),
                     )
                   }
+
+                  CenterSeekButton(forward = true) {
+                    resetControlsTimestamp = System.currentTimeMillis()
+                    viewModel.seekBy(10)
+                  }
                 }
               } else {
-                Surface(
-                  modifier =
-                    Modifier
-                      .size(64.dp)
-                      .clip(CircleShape)
-                      .clickable(interaction, ripple(), onClick = {
-                        resetControlsTimestamp = System.currentTimeMillis()
-                        viewModel.pauseUnpause()
-                      })
-                      .then(
-                        if (hideBackground) {
-                          Modifier.background(brush = buttonShadow, shape = CircleShape)
-                        } else {
-                          Modifier
-                        },
-                      ),
-                  shape = CircleShape,
-                  color =
-                    if (!hideBackground) {
-                      PlayerControlGlassFill
-                    } else {
-                      Color.Transparent
-                    },
-                  contentColor = controlColor,
-                  tonalElevation = 0.dp,
-                  shadowElevation = 0.dp,
-                  border =
-                    if (!hideBackground) {
-                      BorderStroke(1.dp, PlayerControlGlassBorder)
-                    } else {
-                      null
-                    },
+                androidx.compose.foundation.layout.Row(
+                  horizontalArrangement = Arrangement.spacedBy(24.dp),
+                  verticalAlignment = Alignment.CenterVertically,
                 ) {
-                  Image(
-                    painter = rememberAnimatedVectorPainter(icon, paused == false),
-                    modifier = Modifier
-                      .fillMaxSize()
-                      .padding(MaterialTheme.spacing.medium),
-                    contentDescription = null,
-                    colorFilter = ColorFilter.tint(LocalContentColor.current),
-                  )
+                  CenterSeekButton(forward = false) {
+                    resetControlsTimestamp = System.currentTimeMillis()
+                    viewModel.seekBy(-10)
+                  }
+
+                  Surface(
+                    modifier =
+                      Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .clickable(interaction, ripple(), onClick = {
+                          resetControlsTimestamp = System.currentTimeMillis()
+                          viewModel.pauseUnpause()
+                        })
+                        .then(
+                          if (hideBackground) {
+                            Modifier.background(brush = buttonShadow, shape = CircleShape)
+                          } else {
+                            Modifier
+                          },
+                        ),
+                    shape = CircleShape,
+                    color =
+                      if (!hideBackground) {
+                        PlayerControlGlassFill
+                      } else {
+                        Color.Transparent
+                      },
+                    contentColor = controlColor,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp,
+                    border =
+                      if (!hideBackground) {
+                        BorderStroke(1.dp, PlayerControlGlassBorder)
+                      } else {
+                        null
+                      },
+                  ) {
+                    Image(
+                      painter = rememberAnimatedVectorPainter(icon, paused == false),
+                      modifier = Modifier
+                        .fillMaxSize()
+                        .padding(MaterialTheme.spacing.medium),
+                      contentDescription = null,
+                      colorFilter = ColorFilter.tint(LocalContentColor.current),
+                    )
+                  }
+
+                  CenterSeekButton(forward = true) {
+                    resetControlsTimestamp = System.currentTimeMillis()
+                    viewModel.seekBy(10)
+                  }
                 }
               }
             }

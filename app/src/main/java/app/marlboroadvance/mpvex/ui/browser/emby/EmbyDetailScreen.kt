@@ -163,6 +163,23 @@ data class EmbyDetailScreen(
 
     LaunchedEffect(itemId) { load() }
 
+    // 从播放器返回时刷新详情：播放器的进度/已看上报是异步落到服务器的，而本页组合
+    // 在播放期间并未销毁（播放器是另一个 Activity），返回时 LaunchedEffect 不会重跑，
+    // 不刷新的话进度条就停在进来之前的旧值。延迟 800ms 等上报先落库再拉。
+    val detailLifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(detailLifecycleOwner, itemId) {
+      val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+        if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && item != null) {
+          scope.launch {
+            kotlinx.coroutines.delay(800)
+            load()
+          }
+        }
+      }
+      detailLifecycleOwner.lifecycle.addObserver(observer)
+      onDispose { detailLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
       when {
         isLoading && item == null -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
@@ -584,12 +601,11 @@ private fun DetailBody(
         BackdropHeader(item = item, backdropUrl = backdropUrl, posterUrl = posterUrl)
       }
 
-      // ── 播放 / 删除 / 下载 ──
+      // ── 播放 / 下载 / 投屏（删除在右上角「更多」菜单里）──
       item {
         PlaySection(
           item = item,
           onPlay = onPlay,
-          onDelete = onDelete,
           onDownload = onDownload,
           onCast = onCast,
           downloadLabel = downloadLabel,
@@ -956,19 +972,20 @@ private fun metaChips(item: EmbyItem): List<String> {
 }
 
 /**
- * 播放区：主按钮「播放 / 继续播放 · mm:ss」+ 右侧红色垃圾桶删除按钮。
+ * 播放区：主按钮「播放 / 继续播放 · mm:ss」（占满除动作键以外的宽度）
+ * + 右侧下载、投屏两个紧凑动作键。
  *
- * 进度说明改成**始终显示**（原来只在「可续播」时才出现，而且剩余时长不足 1 分钟会显示成空括号）：
- * `已观看 24% · 剩余 1小时12分 · 总时长 1小时35分`，
- * 剩余/总时长用 [formatDurationFull] 格式化，秒级也一定有位数字。
- * 只有真看过的片子才额外显示「从头播放 / 继续上次」两个按钮。
+ * 删除已收进右上角「更多」菜单（那里本来就有确认框），行内不再放第三个图标键 ——
+ * 多出来的宽度全部给播放按钮。「从头播放」也只在「更多」菜单里出现（有进度时）。
+ *
+ * 进度说明**始终显示**：
+ * `已观看 24% · 剩余 1小时12分 · 总时长 1小时35分`。
  */
 @Composable
 private fun PlaySection(
   item: EmbyItem,
   /** resumeSeconds = 续播秒数（0 = 从头）；reverseEngine = 用与默认相反的内核（长按） */
   onPlay: (resumeSeconds: Long, reverseEngine: Boolean) -> Unit,
-  onDelete: () -> Unit,
   onDownload: () -> Unit,
   onCast: () -> Unit,
   downloadLabel: String?,
@@ -996,12 +1013,13 @@ private fun PlaySection(
   ) {
     Row(
       modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(12.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      // 播放按钮：单击用默认内核，长按用「另一个」内核（Media3 ↔ mpv）应急。
+      // 播放按钮：单击用默认内核（有进度即续播），长按用「另一个」内核（Media3 ↔ mpv）应急。
       // 不用 Button + 内层 clickable 的写法：内层会把单击吃掉，外层 combinedClickable
       // 只能收到长按，两者行为对不上。这里直接用 Box + combinedClickable 自己画。
+      // 占满除两个动作键以外的全部宽度（删除键已收进右上角「更多」菜单）。
       PlayButton(
         label = if (hasResume) "继续播放 · ${formatClock(resumeSeconds)}" else "播放",
         onClick = { onPlay(if (hasResume) resumeSeconds else 0, false) },
@@ -1010,22 +1028,6 @@ private fun PlaySection(
           .weight(1f)
           .height(56.dp),
       )
-
-      // 删除：红底红桶，就放在播放按钮旁边；点击后仍会弹确认框（由外层控制）
-      IconButton(
-        onClick = onDelete,
-        modifier =
-          Modifier
-            .size(56.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.errorContainer),
-      ) {
-        Icon(
-          imageVector = Icons.Default.Delete,
-          contentDescription = "删除媒体",
-          tint = MaterialTheme.colorScheme.error,
-        )
-      }
 
       // 下载：与播放按钮同一行，只保留图标。按钮内部**自下而上**填充一块进度色带 ——
       //   下载中：跟真实进度走（300ms 平滑过渡，不会一格格跳）
@@ -1058,8 +1060,8 @@ private fun PlaySection(
         Box(
           modifier =
             Modifier
-              .size(56.dp)
-              .clip(RoundedCornerShape(18.dp))
+              .size(52.dp)
+              .clip(RoundedCornerShape(16.dp))
               .background(
                 if (downloadLabel == null) {
                   MaterialTheme.colorScheme.primaryContainer
@@ -1093,12 +1095,12 @@ private fun PlaySection(
         }
       }
 
-      // 投屏：把当前媒体投到 DLNA 设备（与播放 / 删除 / 下载同一行）
+      // 投屏：把当前媒体投到 DLNA 设备（与播放 / 下载同一行）
       Box(
         modifier =
           Modifier
-            .size(56.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .size(52.dp)
+            .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.primaryContainer)
             .clickable(onClick = onCast),
         contentAlignment = Alignment.Center,
@@ -1125,20 +1127,11 @@ private fun PlaySection(
       )
     }
 
-    // 次要操作：从头播放 / 继续上次。
-    // 窄屏上会挤，所以整行可横向滚动，避免被裁掉。
-    Row(
-      modifier = Modifier.horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      if (hasResume) {
-        FilledTonalButton(onClick = { onPlay(0, false) }) {
-          Text("从头播放")
-        }
-        OutlinedButton(onClick = { onPlay(resumeSeconds, false) }) {
-          Text("继续上次")
-        }
+    // 有续播进度时给一个「从头播放」（蓝色主键此时是续播，两者各司其职）。
+    // 「继续上次」不单独出现 —— 蓝色主键就是续播，再放一个是冗余的。
+    if (hasResume) {
+      FilledTonalButton(onClick = { onPlay(0, false) }) {
+        Text("从头播放")
       }
     }
   }
