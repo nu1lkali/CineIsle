@@ -345,12 +345,19 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
 
   // ==================== 媒体操作 ====================
 
-  suspend fun toggleFavorite(server: EmbyServer, item: EmbyItem): Boolean {
+  /**
+   * 切换收藏。
+   *
+   * 返回 [Result]：成功时携带**切换后**的状态（true = 已收藏），失败时携带异常，
+   * 由调用方决定提示文案与是否回滚本地状态 —— 详情页要据此弹 Toast，
+   * 所以这里不自己吞掉错误（内部同步写 [_error] 供其他观察者使用）。
+   */
+  suspend fun toggleFavorite(server: EmbyServer, item: EmbyItem): Result<Boolean> {
     val nowFavorite = item.UserData?.IsFavorite == true
     return runCatching {
       if (nowFavorite) repository.unfavorite(server, item.Id!!) else repository.favorite(server, item.Id!!)
       !nowFavorite
-    }.onFailure { _error.value = it.message ?: "操作失败" }.getOrDefault(nowFavorite)
+    }.onFailure { _error.value = it.message ?: "操作失败" }
   }
 
   fun deleteItem(server: EmbyServer, itemId: String) {
@@ -377,13 +384,16 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
-  fun markPlayed(server: EmbyServer, itemId: String, played: Boolean) {
-    viewModelScope.launch {
-      runCatching {
-        if (played) repository.markPlayed(server, itemId) else repository.markUnplayed(server, itemId)
-      }.onFailure { _error.value = it.message ?: "操作失败" }
-    }
-  }
+  /**
+   * 标记已播放 / 未播放，并把结果返回给调用方（详情页据此弹 Toast、失败时回滚 UI）。
+   *
+   * 这里刻意不做「内部 launch 后不管」：那样调用方无从得知成败，
+   * 用户点了右上角的勾却没有任何反馈，服务端失败时也看不出来。
+   */
+  suspend fun setPlayed(server: EmbyServer, itemId: String, played: Boolean): Result<Unit> =
+    runCatching {
+      if (played) repository.markPlayed(server, itemId) else repository.markUnplayed(server, itemId)
+    }.onFailure { _error.value = it.message ?: "操作失败" }
 
   // ==================== 播放 ====================
 
@@ -626,18 +636,24 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       runCatching { EmbyClient.updateItem(server, item) }.isSuccess
     }
 
-  /** 按演员 / 导演查作品：走 Emby 的 PersonIds 过滤。 */
+  /**
+   * 按演员 / 导演查作品：走 Emby 的 PersonIds 过滤。
+   *
+   * [includeItemTypes] 放在最后且带默认值，所以既有调用不受影响 ——
+   * 详情页的「推荐」只要正片（Movie / Series），不想混进单集和 MV，就单独传一个窄一点的集合。
+   */
   suspend fun loadPersonItems(
     server: EmbyServer,
     personId: String,
     startIndex: Int = 0,
     limit: Int = 60,
+    includeItemTypes: List<String> = listOf("Movie", "Series", "Episode", "Video", "MusicVideo"),
   ): List<EmbyItem> = withContext(Dispatchers.IO) {
     runCatching {
       EmbyClient.getItems(
         server = server,
         personIds = listOf(personId),
-        includeItemTypes = listOf("Movie", "Series", "Episode", "Video", "MusicVideo"),
+        includeItemTypes = includeItemTypes,
         sortBy = "SortName",
         sortOrder = "Ascending",
         recursive = true,

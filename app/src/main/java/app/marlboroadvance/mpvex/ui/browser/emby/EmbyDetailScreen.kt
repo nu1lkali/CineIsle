@@ -16,9 +16,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,6 +29,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,6 +40,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
@@ -69,6 +74,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -76,17 +82,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import app.marlboroadvance.mpvex.domain.emby.EmbyDownloadStatus
 import app.marlboroadvance.mpvex.domain.emby.EmbyEnqueueResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
@@ -203,7 +221,11 @@ data class EmbyDetailScreen(
           DetailBody(
             item = current,
             server = currentServer,
-            backdropUrl = viewModel.imageUrl(currentServer, current, "Backdrop", 1280),
+            // 剧照当封面区的整张背景图用，所以要按屏幕级别的宽度取（1080 足够铺满常见机型）：
+            // 之前取 128px 是为了「放大即虚化」的糊底效果，用户不喜欢 —— 现在直接看清晰大图。
+            // EmbyImageLoader 的 maxWidth 只做客户端降采样、不会改写 URL，
+            // 所以尺寸必须从源头（这个 URL）给定。
+            backdropUrl = viewModel.imageUrl(currentServer, current, "Backdrop", 1080),
             posterUrl = viewModel.imageUrl(currentServer, current, "Primary", 600),
             onPlay = { resume, reverse ->
               // 长按切内核时给个明确反馈，否则用户不知道这一下到底换了什么
@@ -219,16 +241,27 @@ data class EmbyDetailScreen(
                 UserData = (current.UserData ?: EmbyUserData()).copy(IsFavorite = !wasFavorite),
               )
               scope.launch {
-                val nowFavorite = runCatching { viewModel.toggleFavorite(currentServer, current) }
-                  .getOrNull()
+                val result = viewModel.toggleFavorite(currentServer, current)
+                val nowFavorite = result.getOrNull()
                 item = current.copy(
                   UserData = (current.UserData ?: EmbyUserData())
                     .copy(IsFavorite = nowFavorite ?: wasFavorite),
                 )
+                // 红心有动效，但「到底收没收藏成功」得给个字，服务端失败时才不会误以为成了
+                Toast.makeText(
+                  context,
+                  when (nowFavorite) {
+                    true -> "已加入收藏"
+                    false -> "已取消收藏"
+                    null -> "收藏失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
+                  },
+                  Toast.LENGTH_SHORT,
+                ).show()
               }
             },
             onTogglePlayed = { played ->
-              viewModel.markPlayed(currentServer, current.Id ?: return@DetailBody, played)
+              val playedItemId = current.Id ?: return@DetailBody
+              // 乐观更新：先把勾翻到预期状态，失败再回滚
               item = current.copy(
                 UserData = (current.UserData ?: EmbyUserData()).copy(
                   Played = played,
@@ -239,6 +272,20 @@ data class EmbyDetailScreen(
                   },
                 ),
               )
+              scope.launch {
+                val result = viewModel.setPlayed(currentServer, playedItemId, played)
+                if (result.isFailure) item = current
+                // 勾的填充色会变，但点完到底成没成要有字说得清楚
+                Toast.makeText(
+                  context,
+                  when {
+                    result.isSuccess && played -> "已标记为已播放"
+                    result.isSuccess -> "已标记为未播放"
+                    else -> "标记失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
+                  },
+                  Toast.LENGTH_SHORT,
+                ).show()
+              }
             },
             onBack = { backStack.removeLastOrNull() },
             onDelete = { showDeleteConfirm = true },
@@ -356,6 +403,11 @@ data class EmbyDetailScreen(
             },
             moreMenuExpanded = showMoreMenu,
             onMoreMenuChange = { showMoreMenu = it },
+            viewModel = viewModel,
+            // 点推荐卡片：同一位演员 / 导演的另一部片子，直接再开一层详情页
+            onRecommendClick = { id, name ->
+              backStack.add(EmbyDetailScreen(itemId = id, title = name))
+            },
           )
         }
       }
@@ -610,6 +662,7 @@ private fun DetailBody(
   onPersonClick: (personId: String, personName: String, imageTag: String?) -> Unit,
   /** 点类型 / 标签 chip：进「按该类型 / 标签找片」页（keyword / 是否类型） */
   onMetaClick: (keyword: String, isGenre: Boolean) -> Unit,
+  /** 点简介 chip：跳演员作品页等 —— 这里只用到打开详情页 */
   downloadLabel: String?,
   /** 当前下载任务状态；null = 没有任务。用来决定按钮是「下载 / 暂停 / 继续 / 已完成」 */
   downloadStatus: EmbyDownloadStatus?,
@@ -618,22 +671,34 @@ private fun DetailBody(
   downloadFailed: Boolean,
   moreMenuExpanded: Boolean,
   onMoreMenuChange: (Boolean) -> Unit,
+  /** 「推荐」区要按人员 Id 反查作品，所以需要 ViewModel */
+  viewModel: EmbyViewModel,
+  /** 点推荐卡片：打开对应媒体的详情页（itemId / 标题） */
+  onRecommendClick: (String, String) -> Unit,
 ) {
   val listState = rememberLazyListState()
   val isFavorite = item.UserData?.IsFavorite == true
   val isPlayed = item.UserData?.Played == true
 
-  Box(modifier = Modifier.fillMaxSize()) {
+  // ── 折叠头部的状态 ──
+  // 等价于 XML 的 AppBarLayout + CollapsingToolbarLayout：头部大图随内容滚动逐步收起，
+  // 工具栏保持不动（pin），收起一定程度后标题淡入工具栏。详见 [rememberCollapseState]。
+  val collapse = rememberCollapseState(listState = listState)
+  // collapse.collapsedPx 是 state，每帧变化都会触发这里的重组，所以直接用它算高度即可
+  val collapsedPx = collapse.collapsedPx
+  val headerHeightDp = with(LocalDensity.current) {
+    (BACKDROP_HEADER_MAX_HEIGHT_DP.toPx() - collapsedPx).coerceAtLeast(TOOLBAR_HEIGHT_DP.toPx()).toDp()
+  }
+
+  Box(modifier = Modifier.fillMaxSize().nestedScroll(collapse.connection)) {
     LazyColumn(
       state = listState,
       modifier = Modifier.fillMaxSize(),
-      contentPadding = PaddingValues(bottom = 96.dp),
+      // 顶部的空档留给封面 + 工具栏：折叠时跟着一起变矮，视觉上就是「内容把封面顶上去」。
+      // 这一步和 [NestedScrollConnection] 的消费是配套的 —— 滑动先把这段距离吃掉，
+      // 列表本身在这一段里并不滚动，所以不会出现「封面收一半、列表也滚一半」的重影。
+      contentPadding = PaddingValues(top = headerHeightDp, bottom = 96.dp),
     ) {
-      // ── 沉浸式剧照 + 叠加标题 ──
-      item {
-        BackdropHeader(item = item, backdropUrl = backdropUrl, posterUrl = posterUrl)
-      }
-
       // ── 播放 / 下载 / 投屏（删除在右上角「更多」菜单里）──
       item {
         PlaySection(
@@ -772,21 +837,77 @@ private fun DetailBody(
         }
       }
 
+      // ── 推荐：同一位演员 / 导演参与的其他影片 ──
+      // 放在演职员之后：看完了主演阵容，顺势往下推荐 TA 的片子，上下文是连着的。
+      item {
+        RecommendationSection(
+          item = item,
+          server = server,
+          viewModel = viewModel,
+          onOpenItem = onRecommendClick,
+        )
+      }
+
       // ── 媒体信息（含完整视频 / 音频编码信息）──
       item {
         MediaInfoSection(item = item)
       }
     }
 
-    // ── 顶部浮层操作栏（透明背景，白色图标，浮在剧照之上）──
+    // ── 封面区（浮在下层内容之上，随滚动折叠）──
+    // 它不放在 LazyColumn 里当 item，是因为要能做视差位移、且高度随滚动变化；
+    // 对应 XML 里 AppBarLayout 套 ImageView(layout_collapseMode="parallax") + Toolbar(pin)。
+    Box(
+      modifier = Modifier
+        .fillMaxWidth()
+        .height(headerHeightDp)
+        .align(Alignment.TopCenter)
+        .graphicsLayer {
+          // 收到最后阶段整体淡出，避免和 toolBar 的文字挤在一起
+          alpha = (1f - collapse.progress * 1.6f).coerceIn(0f, 1f)
+        },
+    ) {
+      BackdropHeader(
+        item = item,
+        backdropUrl = backdropUrl,
+        posterUrl = posterUrl,
+        parallaxPx = collapsedPx,
+      )
+    }
+
+    // ── 顶部浮层操作栏 ──
+    // 展开时透明 + 白图标（压在封面上），折叠后过渡到实体的工具栏底色 + 常规前景色，
+    // 并把标题淡入进来 —— 对应 XML 里 `layout_collapseMode="pin"` 那条 Toolbar。
+    val barProgress = collapse.progress
+    val barBg = lerp(
+      Color.Transparent,
+      MaterialTheme.colorScheme.surface,
+      barProgress,
+    )
+    // 图标颜色跟着背景走：透明时是白色，实体背景时切回常规前景色
+    val barContentColor = lerp(
+      Color.White,
+      MaterialTheme.colorScheme.onSurface,
+      barProgress,
+    )
     TopAppBar(
-      title = {},
+      title = {
+        Text(
+          text = item.Name ?: "",
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          // 折叠加深到一定程度才把标题放出来，避免展开时和封面区的大标题重复
+          color = MaterialTheme.colorScheme.onSurface.copy(
+            alpha = ((barProgress - 0.5f) / 0.5f).coerceIn(0f, 1f),
+          ),
+        )
+      },
       navigationIcon = {
         IconButton(onClick = onBack) {
           Icon(
             Icons.AutoMirrored.Filled.ArrowBack,
             contentDescription = "返回",
-            tint = Color.White,
+            tint = barContentColor,
           )
         }
       },
@@ -795,7 +916,7 @@ private fun DetailBody(
           Icon(
             imageVector = Icons.Outlined.CheckCircle,
             contentDescription = if (isPlayed) "标记为未播放" else "标记为已播放",
-            tint = if (isPlayed) Color.White else Color.White.copy(alpha = 0.75f),
+            tint = barContentColor.copy(alpha = if (isPlayed) 1f else 0.75f),
           )
         }
         IconButton(onClick = onToggleFavorite) {
@@ -804,12 +925,16 @@ private fun DetailBody(
             isFavorite = isFavorite,
             isToggling = false,
             iconSize = 24.dp,
-            idleColor = Color.White,
+            idleColor = barContentColor,
           )
         }
         Box {
           IconButton(onClick = { onMoreMenuChange(true) }) {
-            Icon(Icons.Default.MoreVert, contentDescription = "更多", tint = Color.White)
+            Icon(
+              Icons.Default.MoreVert,
+              contentDescription = "更多",
+              tint = barContentColor,
+            )
           }
           DropdownMenu(
             expanded = moreMenuExpanded,
@@ -854,58 +979,65 @@ private fun DetailBody(
         }
       },
       colors = TopAppBarDefaults.topAppBarColors(
-        containerColor = Color.Transparent,
+        // 背景从全透明渐变到实体底色：还没折叠时能看见封面，折完了就是一条正常的工具栏
+        containerColor = barBg,
+        scrolledContainerColor = barBg,
         navigationIconContentColor = Color.White,
         actionIconContentColor = Color.White,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
       ),
     )
   }
 }
 
 /**
- * 沉浸式剧照头部。
+ * 详情页头部：**一整张剧照（Backdrop）铺满**，标题压在图上。
  *
- * - 有横幅（Backdrop）时：横幅铺满整个头图区。
- * - 只有海报（Primary，2:3 竖版）时：为了**铺满整个容器**改用 [ContentScale.Crop]
- *   （原来用 Fit 会上下留出背景色条，看起来「图没铺满」）；Crop 会等比放大后居中裁切，
- *   不会把脸拉变形。
- * - 标题放大加粗并加阴影，保证在任何底图上都清晰可读。
+ * 上一版是「左侧 2:3 小封面 + 128px 剧照放大当虚化底」，用户反馈太糊、不喜欢 ——
+ * 现在回到整版背景图：
+ *
+ * - **底图**：向服务器要屏幕级别的剧照（1080 宽，尺寸由调用方 [backdropUrl] 给定），
+ *   Crop 铺满整个头部，**不做任何模糊、也不压半透明**，保持清晰。
+ * - **文字**：贴着底部排（标题 / 原名 / 信息角标），靠下面那层渐变把亮度压下来保证可读，
+ *   上方留白是纯图 —— 也就是常见的详情页大图观感。
+ *
+ * [parallaxPx] 是已折叠的像素数，底图跟着做半速位移 —— 对应 XML 里的
+ * `app:layout_collapseMode="parallax"`。
+ *
+ * **注意：本函数的高度由调用方决定**（折叠时容器会变矮），所以这里一律 [Modifier.fillMaxSize]。
  */
 @Composable
 private fun BackdropHeader(
   item: EmbyItem,
   backdropUrl: String?,
   posterUrl: String?,
+  parallaxPx: Float,
 ) {
-  val hasBackdrop = item.BackdropImageTags.isNotEmpty()
-  val headerImage: String? = if (hasBackdrop) backdropUrl else posterUrl
-
   Box(
     modifier = Modifier
-      .fillMaxWidth()
-      .height(if (hasBackdrop) BACKDROP_HEIGHT else POSTER_HEADER_HEIGHT),
+      .fillMaxSize()
+      // 折叠过程中容器变矮，不裁剪的话标题会溢出到下方内容区上
+      .clipToBounds(),
   ) {
-    // 底图：无论横幅还是海报都铺满容器（Crop = 等比放大 + 居中裁切，无变形）
-    Box(
-      modifier = Modifier
-        .fillMaxSize()
-        .background(MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-      if (headerImage != null) {
-        EmbyImage(
-          url = headerImage,
-          // 横幅加载失败（服务器没有该图）时回退到海报
-          fallbackUrl = if (hasBackdrop) posterUrl else null,
-          contentDescription = item.Name,
-          modifier = Modifier.fillMaxSize(),
-          contentScale = ContentScale.Crop,
-          // 详情页头部要清晰，给一个较高的解码上限（同时避免原图过大撑爆内存）
-          maxWidth = 1080,
-        )
-      }
+    // ① 剧照整版铺底（只有这一层做视差位移）
+    if (backdropUrl != null || posterUrl != null) {
+      EmbyImage(
+        url = backdropUrl,
+        // 很多单集 / 音乐只有封面没有剧照，退回到封面顶上，免得整个头部是一片灰底
+        fallbackUrl = posterUrl,
+        contentDescription = null,
+        modifier = Modifier
+          .fillMaxSize()
+          .graphicsLayer {
+            translationY = parallaxPx * 0.5f
+          },
+        contentScale = ContentScale.Crop,
+        // 0 = 不降采样：URL 已经跟服务器要了 1080，客户端再降一次只会白白变糊
+        maxWidth = 0,
+      )
     }
 
-    // 顶部压暗 + 底部融入页面背景，保证白色按钮与标题都可读
+    // ② 暗化渐变：顶上有白图标、底部压着白字，无论剧照多亮都要看得清
     Box(
       modifier = Modifier
         .fillMaxSize()
@@ -915,69 +1047,68 @@ private fun BackdropHeader(
               Color.Black.copy(alpha = 0.45f),
               Color.Transparent,
               Color.Transparent,
-              MaterialTheme.colorScheme.surface.copy(alpha = 0.75f),
+              MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
               MaterialTheme.colorScheme.surface,
             ),
           ),
         ),
     )
 
-    Row(
+    // ③ 标题区：顶部给 Toolbar 让位，文字贴着头部底边排
+    Column(
       modifier = Modifier
-        .align(Alignment.BottomStart)
-        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
-      verticalAlignment = Alignment.Bottom,
+        .fillMaxSize()
+        .padding(start = 16.dp, end = 16.dp, top = TOOLBAR_HEIGHT_DP, bottom = 16.dp),
+      verticalArrangement = Arrangement.Bottom,
     ) {
-      // 头图区已经展示了横幅/海报，这里不再重复叠一张小海报
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = item.Name ?: "",
-          style = MaterialTheme.typography.headlineMedium.copy(
-            shadow = Shadow(
-              color = Color.Black.copy(alpha = 0.65f),
-              blurRadius = 10f,
-            ),
+      Text(
+        text = item.Name ?: "",
+        style = MaterialTheme.typography.headlineSmall.copy(
+          shadow = Shadow(
+            color = Color.Black.copy(alpha = 0.65f),
+            blurRadius = 10f,
           ),
-          fontWeight = FontWeight.Bold,
-          color = Color.White,
-          maxLines = 2,
-          overflow = TextOverflow.Ellipsis,
-        )
-        // 原名只在「实质不同」时才显示（去掉首尾空白、忽略大小写），并加「原名：」前缀，
-        // 否则大标题下面再跟一行差不多的文字，看起来就像标题显示了两遍
-        item.OriginalTitle
-          ?.takeIf {
-            it.isNotBlank() && !it.trim().equals(item.Name?.trim(), ignoreCase = true)
-          }
-          ?.let {
-            Text(
-              text = "原名：$it",
-              style = MaterialTheme.typography.bodyMedium.copy(
-                shadow = Shadow(color = Color.Black.copy(alpha = 0.55f), blurRadius = 8f),
-              ),
-              color = Color.White.copy(alpha = 0.85f),
-            )
-          }
-        Spacer(modifier = Modifier.height(6.dp))
-        // 年份 / 时长 / 评分 / 分级：包成圆角角标，压在剧照上也看得清
-        val chips = metaChips(item)
-        if (chips.isNotEmpty()) {
-          Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.fillMaxWidth(),
-          ) {
-            chips.forEach { chip ->
-              Surface(
-                shape = RoundedCornerShape(50),
-                color = Color.Black.copy(alpha = 0.42f),
-                contentColor = Color.White,
-              ) {
-                Text(
-                  text = chip,
-                  style = MaterialTheme.typography.labelMedium,
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                )
-              }
+        ),
+        fontWeight = FontWeight.Bold,
+        color = Color.White,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+      )
+      // 原名只在「实质不同」时才显示（去首尾空白、忽略大小写），并加「原名：」前缀，
+      // 否则标题下面再跟一行差不多的文字，看起来就像标题显示了两遍
+      item.OriginalTitle
+        ?.takeIf {
+          it.isNotBlank() && !it.trim().equals(item.Name?.trim(), ignoreCase = true)
+        }
+        ?.let {
+          Text(
+            text = "原名：$it",
+            style = MaterialTheme.typography.bodyMedium.copy(
+              shadow = Shadow(color = Color.Black.copy(alpha = 0.55f), blurRadius = 8f),
+            ),
+            color = Color.White.copy(alpha = 0.85f),
+          )
+        }
+      Spacer(modifier = Modifier.height(6.dp))
+      // 年份 / 时长 / 评分 / 分级：包成圆角角标，压在剧照上也看得清。
+      // 用 FlowRow 而不是 Row —— 片名长、角标多的时候会自动换行，不会把角标挤出屏幕边缘。
+      val chips = metaChips(item)
+      if (chips.isNotEmpty()) {
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          chips.forEach { chip ->
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = Color.Black.copy(alpha = 0.42f),
+              contentColor = Color.White,
+            ) {
+              Text(
+                text = chip,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+              )
             }
           }
         }
@@ -1515,7 +1646,271 @@ private fun formatFileSize(bytes: Long): String {
   }
 }
 
-private val BACKDROP_HEIGHT = 280.dp
+// ══════════════════════════════════════════════════════════════════════════
+// 折叠头部的尺寸常量
+//
+// 对应 XML 里 AppBarLayout 的展开高度与 Toolbar 的 pin 高度。
+// ══════════════════════════════════════════════════════════════════════════
 
-/** 没有横幅、只展示海报时头图区的高度（比横幅更高，容纳 2:3 竖版海报） */
-private val POSTER_HEADER_HEIGHT = 340.dp
+/**
+ * 头部大图完全展开时的高度。
+ *
+ * 取 240dp~320dp 区间的上限：这块是「整张剧照铺满」的观感来源，高度不够图会被压扁成一条；
+ * 顶部 56dp 留给工具栏，其余全是图，标题叠在底部。
+ */
+private val BACKDROP_HEADER_MAX_HEIGHT_DP = 320.dp
+
+/** 折叠完成后 toolbar 剩下的高度（`layout_collapseMode="pin"` 那一条）。取值对齐 M3 TopAppBar。 */
+private val TOOLBAR_HEIGHT_DP = 56.dp
+
+// ══════════════════════════════════════════════════════════════════════════
+// 折叠头部：Compose 版的 CollapsingToolbarLayout
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 折叠状态。
+ *
+ * - `collapsedPx`：已经收掉的像素数（0 = 完全展开，[rangePx] = 完全折叠）
+ * - [rangePx]：可折叠行程 = 展开高度 − 工具栏高度
+ * - [progress]：0~1，用于驱动工具栏底色与过渡
+ *
+ * Compose 没有 `AppBarLayout`，所以要自己用 [NestedScrollConnection] 抢滚动量。
+ * （`TopAppBarDefaults.exitUntilCollapsedScrollBehavior` 只管 Toolbar 自身那条，
+ * 管不到内容区顶部那整块封面的视差位移。）
+ */
+private class CollapseState(
+  private val listState: androidx.compose.foundation.lazy.LazyListState,
+) {
+  var collapsedPx by mutableFloatStateOf(0f)
+  var rangePx by mutableFloatStateOf(0f)
+
+  val progress: Float
+    get() = if (rangePx <= 0f) 0f else (collapsedPx / rangePx).coerceIn(0f, 1f)
+
+  /**
+   * 抢滚动量的连接：挂在最外层容器上，内容滚动会先经过这里。
+   *
+   * [listState] 只用来判断「列表是否已经贴顶」——决定下拉时该展开封面还是滚列表。
+   */
+  val connection = object : NestedScrollConnection {
+    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+      val range = rangePx
+      if (range <= 0f) return Offset.Zero
+      val dy = available.y
+      return when {
+        // 手指向上（内容上移）：先把展开的那段封面收回去
+        dy < 0f -> {
+          val consume = (-dy).coerceAtMost(range - collapsedPx)
+          collapsedPx += consume
+          Offset(0f, -consume)
+        }
+
+        // 手指向下（内容下移）：只有列表已经贴到顶部时才反向放出封面，
+        // 否则一次下拉会同时「展开封面 + 滚动列表」，看着很怪
+        dy > 0f &&
+          listState.firstVisibleItemIndex == 0 &&
+          listState.firstVisibleItemScrollOffset == 0 -> {
+          val consume = dy.coerceAtMost(collapsedPx)
+          collapsedPx -= consume
+          Offset(0f, consume)
+        }
+
+        else -> Offset.Zero
+      }
+    }
+  }
+}
+
+@Composable
+private fun rememberCollapseState(
+  listState: androidx.compose.foundation.lazy.LazyListState,
+): CollapseState {
+  val state = remember(listState) { CollapseState(listState) }
+  val density = LocalDensity.current
+  LaunchedEffect(density, state) {
+    state.rangePx = with(density) { (BACKDROP_HEADER_MAX_HEIGHT_DP - TOOLBAR_HEIGHT_DP).toPx() }
+  }
+  return state
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 推荐：同一位演员 / 导演的其他影片
+// ══════════════════════════════════════════════════════════════════════════
+
+/** 推荐区实际展示几条 */
+private const val RECOMMEND_COUNT = 6
+
+/** 每个人最多取多少部候选作品回来再洗牌 —— 取少了随机不出来 */
+private const val RECOMMEND_PERSON_LIMIT = 60
+
+/** 推荐区要的条目类型：只要正片，不要单集 / MV */
+private val RECOMMEND_ITEM_TYPES = listOf("Movie", "Series")
+
+/** 一个人凑不满时，最多再往后看几个人 */
+private const val RECOMMEND_MAX_PERSONS = 5
+
+/**
+ * 详情页的推荐区。
+ *
+ * **随机在客户端做**：Emby 的 `/Items` 虽然有 `SortBy=Random`，但它跟 `SearchTerm`
+ * 这类参数组合起来是否生效并不保证（媒体库搜索那趟已经验证过一次），
+ * 所以这里一次多取一些候选，最后 `shuffled().take(6)` —— 每次进详情页看到的都不一样。
+ *
+ * **作者不足就往下补**：冷门片里排第一的演员可能只有一两部戏，所以只要还没凑够
+ * [RECOMMEND_COUNT]，就顺着候选名单继续取下一个人的作品，补满为止。
+ *
+ * @param onOpenItem 打开推荐项的详情页（itemId / 标题）
+ */
+@Composable
+private fun RecommendationSection(
+  item: EmbyItem,
+  server: EmbyServer?,
+  viewModel: EmbyViewModel,
+  onOpenItem: (String, String) -> Unit,
+) {
+  var recommendations by remember(item.Id) { mutableStateOf<List<EmbyItem>>(emptyList()) }
+
+  LaunchedEffect(item.Id, server) {
+    val current = server ?: return@LaunchedEffect
+    recommendations = emptyList()
+    recommendations = loadRecommendations(item = item, server = current, viewModel = viewModel)
+  }
+
+  // 查不到就整块不显示，不留一个空标题占地方
+  if (recommendations.isEmpty()) return
+
+  Column(modifier = Modifier.padding(top = 16.dp)) {
+    Row(
+      modifier = Modifier.padding(horizontal = 16.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector = Icons.Default.Movie,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(20.dp),
+      )
+      Spacer(modifier = Modifier.width(6.dp))
+      Text("推荐", style = MaterialTheme.typography.titleMedium)
+    }
+    Spacer(modifier = Modifier.height(8.dp))
+    LazyRow(
+      contentPadding = PaddingValues(horizontal = 16.dp),
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      items(
+        items = recommendations,
+        key = { it.Id ?: it.Name.orEmpty() },
+      ) { rec ->
+        RecommendationCard(
+          server = server,
+          item = rec,
+          onClick = {
+            val id = rec.Id ?: return@RecommendationCard
+            onOpenItem(id, rec.Name ?: "")
+          },
+        )
+      }
+    }
+  }
+}
+
+/**
+ * 一条推荐：竖版封面 + 片名 + 年份。
+ *
+ * 只显示 Primary 图，没有封面就不占位 —— 这种小卡片缺封面很常见，
+ * 用占位图把整行撑起来反而更难看。
+ */
+@Composable
+private fun RecommendationCard(
+  server: EmbyServer?,
+  item: EmbyItem,
+  onClick: () -> Unit,
+) {
+  val primaryTag = item.ImageTags["Primary"]
+  val posterUrl = remember(item.Id, primaryTag, server) {
+    server?.let { s ->
+      item.Id?.let { id -> EmbyClient.imageUrl(s, id, "Primary", primaryTag, 360) }
+    }
+  }
+  Column(
+    modifier = Modifier
+      .width(100.dp)
+      .clickable(onClick = onClick),
+  ) {
+    Card(
+      shape = RoundedCornerShape(8.dp),
+      modifier = Modifier
+        .fillMaxWidth()
+        .aspectRatio(2f / 3f),
+    ) {
+      EmbyImage(
+        url = posterUrl,
+        contentDescription = item.Name,
+        modifier = Modifier.fillMaxSize(),
+        contentScale = ContentScale.Crop,
+        maxWidth = 360,
+      )
+    }
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+      text = item.Name ?: "",
+      style = MaterialTheme.typography.bodySmall,
+      maxLines = 2,
+      minLines = 2,
+      overflow = TextOverflow.Ellipsis,
+    )
+    item.ProductionYear?.let { year ->
+      Text(
+        text = year.toString(),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+  }
+}
+
+/**
+ * 取推荐列表：作者候选 → 逐个取作品 → 去重 → 客户端随机取样。
+ *
+ * 全程在 IO 线程，里面每次 [EmbyViewModel.loadPersonItems] 都是一次网络请求，
+ * 所以「顺位补人」是有成本的 —— 因此缓存一 [RECOMMEND_MAX_PERSONS] 上限，
+ * 并且一旦凑够 [RECOMMEND_COUNT] 就立刻停手，不再往下请求。
+ */
+private suspend fun loadRecommendations(
+  item: EmbyItem,
+  server: EmbyServer,
+  viewModel: EmbyViewModel,
+): List<EmbyItem> = withContext(Dispatchers.IO) {
+  val candidates = item.People.orEmpty()
+    .filter { it.Id != null && (it.Type == "Actor" || it.Type == "Director") }
+    // Actor 优先：演员参演的片子更容易是「同款想看」，导演排在后面补位
+    .sortedBy { if (it.Type == "Actor") 0 else 1 }
+    .take(RECOMMEND_MAX_PERSONS)
+
+  if (candidates.isEmpty()) return@withContext emptyList<EmbyItem>()
+
+  val selfId = item.Id
+  // LinkedHashMap：保序 + 按 Id 去重（同一个条日可能从多位作者的查询里重复返回）
+  val pool = LinkedHashMap<String, EmbyItem>()
+
+  for (person in candidates) {
+    if (pool.size >= RECOMMEND_COUNT) break
+    val works = viewModel.loadPersonItems(
+      server = server,
+      personId = person.Id ?: continue,
+      limit = RECOMMEND_PERSON_LIMIT,
+      // 只要正片：单集（Episode）会把推荐区塞满同一部剧的几十集，MV 同理
+      includeItemTypes = RECOMMEND_ITEM_TYPES,
+    )
+    works.forEach { work ->
+      val id = work.Id ?: return@forEach
+      // 把当前这部剔掉：一进详情页就推荐自己，看着像 bug
+      if (id == selfId) return@forEach
+      pool.putIfAbsent(id, work)
+    }
+  }
+
+  if (pool.isEmpty()) return@withContext emptyList<EmbyItem>()
+  pool.values.shuffled().take(RECOMMEND_COUNT)
+}
