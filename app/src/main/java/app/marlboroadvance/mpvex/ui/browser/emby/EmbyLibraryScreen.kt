@@ -62,6 +62,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -151,6 +152,7 @@ data class EmbyLibraryScreen(
     val searchHistoryFlow = remember { searchHistoryRepository.observe() }
     val searchHistory by searchHistoryFlow.collectAsState(initial = emptyList())
     val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
 
     // 排序方式 / 方向 / 卡片样式走偏好存储：重新进入媒体库、甚至重启 App 都沿用上次的选择
     val browserPreferences = koinInject<BrowserPreferences>()
@@ -435,11 +437,14 @@ data class EmbyLibraryScreen(
             server = current,
             term = searchQuery,
             itemTypes = EmbySearchFilter.toItemTypes(searchFilters),
-            // 搜索也能排序：不然在搜索结果里切排序，列表会重新加载却仍是原来的顺序
+            // 排序参数照旧传给服务端（它认就更好），但真正决定顺序的是下面的客户端排序：
+            // 服务端对 SearchTerm + SortBy 这个组合不保证生效，实测切了排序顺序不变。
             sortBy = sortBy,
             sortOrder = sortOrder,
+            // 搜索不分页、整批返回，所以把上限提到一页的量，客户端排序才有足够样本
+            limit = PAGE_SIZE,
           )
-          EmbyItemsPage(result, result.size)
+          EmbyItemsPage(applyClientSort(result, sortBy, sortOrder), result.size)
         }
       }.onSuccess { page ->
         // 搜索命中才记历史：一个字都没查到的词记下来只会污染列表；
@@ -450,7 +455,8 @@ data class EmbyLibraryScreen(
         if (chineseSubsOnly) {
           // 搜索结果本身就是完整的一批（/Items?SearchTerm 一次性给完），直接筛
           val matched = withContext(Dispatchers.Default) { ChineseSubtitleFilter.filter(page.items) }
-          items = matched.map { it.first }
+          // 筛完再按当前排序排一遍，和不开这个开关时的顺序口径一致
+          items = applyClientSort(matched.map { it.first }, sortBy, sortOrder)
           chineseHits = matched.associate { it.first.Id.orEmpty() to it.second }
           // 客户端筛过之后服务端总数对不上，数量行显示可见命中数
           totalCount = items.size
@@ -523,10 +529,14 @@ data class EmbyLibraryScreen(
       if (lastRemovedItemId != null) items.filterNot { it.Id == lastRemovedItemId } else items
 
     /**
-     * 「随机播放」的取数。
+     * 「随机播放」的取数。**口径：随机 = 把当前屏幕上这批结果打乱。**
      *
-     * 口径：**随机范围 = 当前屏幕上这批结果** —— 把 [load] 那套条件原样搬过来，
-     * 只把排序换成 `SortBy=Random`。
+     * 屏幕上已经有一整批结果时（搜索、或「中文字幕」的全库扫描）直接洗牌 ——
+     * 这批就是用户眼前看到的东西，洗它最符合直觉，也省得去赌服务端认不认
+     * `SearchTerm` + `SortBy=Random` 这个组合。
+     *
+     * 没搜索时屏幕上的只是「一页」（库内浏览是分页续拉的），洗一页等于把随机范围
+     * 缩到极小，所以那种情况仍然交给服务端从整个（已筛选的）库里按 `SortBy=Random` 抽。
      *
      * 改造前这里只传 `parentId + PLAYABLE_TYPES`，等于「整个库随机」：
      * 搜了某个词、或筛了类型/标签/年份之后再点随机，放的还是全库内容，跟眼前这批对不上。
@@ -537,59 +547,46 @@ data class EmbyLibraryScreen(
       current: EmbyServer,
       favoritesOnly: Boolean = false,
     ): List<EmbyItem> {
-      // 「中文字幕」是客户端按路径判定的，服务端没有对应参数。
-      // 这种模式下屏幕上那批就是全库扫描出来的命中集 —— 直接洗牌，既准确又不用再扫一遍。
-      if (chineseSubsOnly) {
+      // 搜索 / 「中文字幕」扫描：结果集已经整批在手上 → 直接洗牌
+      if (searchQuery.isNotBlank() || chineseSubsOnly) {
         val pool = visibleItems.filter { !favoritesOnly || it.UserData?.IsFavorite == true }
-        return pool.shuffled().take(RANDOM_LIMIT)
+        // 优先只随机「能直接播」的条目；整批都是剧集 / 合集这类容器时才退回整批，
+        // 否则点下去会直接提示「没有可播放内容」
+        val playable = pool.filter { item -> PLAYABLE_TYPES.any { it == item.Type } }
+        return (playable.ifEmpty { pool }).shuffled().take(RANDOM_LIMIT)
       }
 
       // 随机只能落在「能直接播」的条目上。当前分类若只含 Series / BoxSet / Folder
       // 这类容器（剧集库、合集分类、文件夹分类），交集为空 → 退回「本库可播放条目」，
-      // 也就是改造前的老行为；搜索词与其它筛选项仍然生效。
+      // 也就是改造前的老行为；其它筛选项仍然生效。
       val playableOfView = (effectiveTypes ?: PLAYABLE_TYPES).filter { it in PLAYABLE_TYPES }
       val randomTypes = playableOfView.takeIf { it.isNotEmpty() } ?: PLAYABLE_TYPES
 
-      val random =
-        if (searchQuery.isBlank()) {
-          viewModel.loadItems(
-            server = current,
-            parentId = libraryId,
-            includeItemTypes = randomTypes,
-            filters = effectiveFilters,
-            sortBy = "Random",
-            sortOrder = "Ascending",
-            startIndex = 0,
-            limit = RANDOM_LIMIT,
-            // 固定用 recursive：容器类分类（如「文件夹」）本身递归不出可播条目
-            recursive = true,
-            excludeItemTypes = effectiveExclude,
-            genres = selectedGenres.toList().takeIf { it.isNotEmpty() },
-            tags = selectedTags.toList().takeIf { it.isNotEmpty() },
-            years = selectedYears.toList().takeIf { it.isNotEmpty() },
-            officialRatings = selectedRatings.toList().takeIf { it.isNotEmpty() },
-            minCommunityRating = minRating,
-            isFavorite = if (favoritesOnly || favoriteOnly) true else null,
-            personIds = selectedPersonIds.toList().takeIf { it.isNotEmpty() },
-            isPlayed = playedFilter,
-            isHD = hdFilter,
-            is3D = threeDFilter,
-            hasSubtitles = subtitlesFilter,
-            studioIds = selectedStudioIds.toList().takeIf { it.isNotEmpty() },
-          ).items
-        } else {
-          viewModel.search(
-            server = current,
-            term = searchQuery,
-            itemTypes = EmbySearchFilter.toItemTypes(searchFilters),
-            sortBy = "Random",
-            sortOrder = "Ascending",
-            limit = RANDOM_LIMIT,
-          )
-        }
-
-      // 服务端搜索不支持 IsFavorite 组合，收藏这个条件在客户端补一刀
-      return if (favoritesOnly) random.filter { it.UserData?.IsFavorite == true } else random
+      return viewModel.loadItems(
+        server = current,
+        parentId = libraryId,
+        includeItemTypes = randomTypes,
+        filters = effectiveFilters,
+        sortBy = "Random",
+        sortOrder = "Ascending",
+        startIndex = 0,
+        limit = RANDOM_LIMIT,
+        // 固定用 recursive：容器类分类（如「文件夹」）本身递归不出可播条目
+        recursive = true,
+        excludeItemTypes = effectiveExclude,
+        genres = selectedGenres.toList().takeIf { it.isNotEmpty() },
+        tags = selectedTags.toList().takeIf { it.isNotEmpty() },
+        years = selectedYears.toList().takeIf { it.isNotEmpty() },
+        officialRatings = selectedRatings.toList().takeIf { it.isNotEmpty() },
+        minCommunityRating = minRating,
+        isFavorite = if (favoritesOnly || favoriteOnly) true else null,
+        personIds = selectedPersonIds.toList().takeIf { it.isNotEmpty() },
+        isPlayed = playedFilter,
+        isHD = hdFilter,
+        is3D = threeDFilter,
+        hasSubtitles = subtitlesFilter,
+        studioIds = selectedStudioIds.toList().takeIf { it.isNotEmpty() },
+      ).items
     }
 
     /** 随机播放的统一入口：取一批、没取到就明确提示（以前是静默无反应） */
@@ -610,6 +607,18 @@ data class EmbyLibraryScreen(
         // 随机列表里可能混着看过的剧，切过去若恢复进度会直接跳到片尾，所以每个视频都从头放
         viewModel.launchPlaylist(current, random, playFromStartAll = true)
       }
+    }
+
+    /**
+     * 收掉输入法焦点。
+     *
+     * 进入搜索后焦点大概率还留在输入框上，此时点工具行上的任何按钮（排序 / 筛选 / 样式 …）
+     * 弹出层关闭时会把焦点「还」给输入框，软键盘跟着弹出来 ——
+     * 表现就是「每切一次排序方式就弹一次键盘」。隐藏键盘（`hide()`）治不了，
+     * 焦点还在就会有下一次，必须把焦点本身清掉。
+     */
+    fun releaseInputFocus() {
+      focusManager.clearFocus()
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -635,7 +644,10 @@ data class EmbyLibraryScreen(
       )
 
       // ── 2. 分类行 ──
-      if (includeItemTypes == null) {
+      // 搜索时藏起来：那一排「全部 / 继续播放 / 合集 / 收藏 / 文件夹」
+      // 跟搜索结果没有对应关系，留着只是挤掉一整行，还容易让人以为结果按它筛过。
+      // 只是不显示，分类状态本身保留，退出搜索回到原来的样子。
+      if (includeItemTypes == null && !searchActive) {
         CategoryChips(selected = category, onSelect = { category = it })
       }
 
@@ -668,17 +680,17 @@ data class EmbyLibraryScreen(
         )
         Spacer(modifier = Modifier.weight(1f))
 
-        IconButton(onClick = { startRandomPlayback(favoritesOnly = false) }) {
+        IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = false) }) {
           Icon(Icons.Default.Shuffle, contentDescription = "随机播放")
         }
         // 同上，只是范围再限定「已收藏」：避免随机到没看过的
-        IconButton(onClick = { startRandomPlayback(favoritesOnly = true) }) {
+        IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = true) }) {
           // 区别于上面的「随机播放」：用它自己的 Emby 收藏随机图标，
           // 原先用的 ShuffleOn 只比 Shuffle 多一条下划线，并排根本分不出来
           Icon(EmbyFavoriteRandomIcon, contentDescription = "随机播放收藏")
         }
         // 筛选：有生效条件时图标高亮，让人一眼看出列表不是全量
-        IconButton(onClick = { showFilterDialog = true }) {
+        IconButton(onClick = { releaseInputFocus(); showFilterDialog = true }) {
           Icon(
             imageVector = Icons.Default.FilterAlt,
             contentDescription = "筛选",
@@ -689,7 +701,7 @@ data class EmbyLibraryScreen(
             },
           )
         }
-        IconButton(onClick = { showStyleDialog = true }) {
+        IconButton(onClick = { releaseInputFocus(); showStyleDialog = true }) {
           Icon(Icons.Default.GridView, contentDescription = "视图样式")
         }
         SortMenu(
@@ -703,7 +715,18 @@ data class EmbyLibraryScreen(
           onOrderChange = { newOrder ->
             browserPreferences.embyLibrarySortOrder.set(newOrder)
           },
+          // 展开菜单之前先收焦点：菜单一关，焦点若已经不在输入框上，
+          // 就没有「还给输入框」这回事，软键盘也就不会跟着弹出来
+          onRequestClearFocus = ::releaseInputFocus,
         )
+      }
+
+      // 兜底：排序方式 / 升降序一变，就确保焦点不在输入框上。
+      // 菜单展开前已经清过一次，这里再兜一层 —— Popup 与主窗口之间的焦点交接
+      // （以及随之而来的输入法显隐）在不同系统版本上时序不完全一致，
+      // 与其猜哪一刀生效，不如两处都落下。搜索态以外没有输入框，清了也无害。
+      LaunchedEffect(sortBy, sortOrder) {
+        if (searchActive) focusManager.clearFocus()
       }
 
       if (searchActive) {
@@ -1467,13 +1490,25 @@ private fun SortMenu(
   currentOrder: String,
   onSortChange: (String) -> Unit,
   onOrderChange: (String) -> Unit,
+  /**
+   * 展开前调用：把输入框的焦点收掉。
+   *
+   * 搜索态下焦点常常还在输入框上，`DropdownMenu` 关闭时会把焦点「还」给它，
+   * 于是每切一次排序就弹一次软键盘。焦点提前清掉后就没得可还。
+   * 注意得清**焦点**（`clearFocus`）而不是只 `hide()` 键盘 —— 焦点还在，下次照样弹。
+   */
+  onRequestClearFocus: () -> Unit,
 ) {
   var expanded by remember { mutableStateOf(false) }
   Box {
-    IconButton(onClick = { expanded = true }) {
+    IconButton(onClick = { onRequestClearFocus(); expanded = true }) {
       Icon(Icons.Default.Sort, contentDescription = "排序")
     }
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+    // 点菜单外面 / 按返回取消时同样清一次（这时已经没有焦点可收，但保持语义一致）
+    DropdownMenu(
+      expanded = expanded,
+      onDismissRequest = { expanded = false; onRequestClearFocus() },
+    ) {
       // 上半区：排序项。勾中的那一项高亮，并直接显示它当前的方向（↑ 升 / ↓ 降）
       SORT_OPTIONS.forEach { (value, label) ->
         DropdownMenuItem(
@@ -1535,6 +1570,46 @@ private val RATING_OPTIONS: List<Pair<String, Float?>> = listOf(
 
 /** 可播放的媒体类型（随机播放时使用） */
 private val PLAYABLE_TYPES = listOf("Movie", "Episode", "Video", "MusicVideo")
+
+/**
+ * 搜索结果的**客户端排序**。
+ *
+ * 为什么要在本地排：Emby 的 `/Items?SearchTerm=…` 是按「相关度」返回的，
+ * `SortBy` 跟 `SearchTerm` 一起传时服务端并不保证生效 ——
+ * 表现就是「搜完再点排序，顺序纹丝不动」。
+ *
+ * 搜索本身是一次性把命中结果整批拿回来的（不像库内浏览那样分页续拉），
+ * 所以本地排一遍最直接，顺序也必然跟用户选的一致。
+ *
+ * 用于比较的字段取不到时返回原列表（稳定排序），不会把列表打乱 ——
+ * 这比「排了个寂寞」更难排查，所以宁可不排。
+ *
+ * [sortBy] 为 `Random` 时直接洗牌，对应排序菜单里的「随机」。
+ */
+private fun applyClientSort(
+  items: List<EmbyItem>,
+  sortBy: String,
+  sortOrder: String,
+): List<EmbyItem> {
+  if (sortBy == "Random") return items.shuffled()
+  val comparator: Comparator<EmbyItem> =
+    when (sortBy) {
+      // 名称统一用 SortName（Emby 内部排序名，能正确处理「第 2 季」这类），取不到再退回 Name
+      "SortName" -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.SortName ?: it.Name ?: "" }
+      // ISO-8601 字符串按字典序比较即等于按时间比较
+      "DateCreated" -> compareBy { it.DateCreated ?: "" }
+      "PremiereDate" -> compareBy { it.PremiereDate ?: "" }
+      "DatePlayed" -> compareBy { it.UserData?.LastPlayedDate ?: "" }
+      "ProductionYear" -> compareBy { it.ProductionYear ?: 0 }
+      "CommunityRating" -> compareBy { it.CommunityRating ?: -1.0 }
+      "CriticRating" -> compareBy { it.CriticRating ?: -1.0 }
+      "Runtime" -> compareBy { it.RunTimeTicks ?: 0L }
+      "PlayCount" -> compareBy { it.UserData?.PlayCount ?: 0 }
+      else -> null
+    } ?: return items
+  val ordered = items.sortedWith(comparator)
+  return if (sortOrder == "Descending") ordered.reversed() else ordered
+}
 
 /**
  * 随机播放一次取多少条。

@@ -167,6 +167,13 @@ data class EmbyItem(
   val Path: String? = null,
   val Taglines: List<String> = emptyList(),
   val ProviderIds: Map<String, String> = emptyMap(),
+  /**
+   * 影评人评分（0~100）。
+   *
+   * 只用于客户端排序（服务端对「搜索 + SortBy」这个组合不保证认），界面不显示。
+   * 加在末尾并给默认值，避免影响既有的按位置构造。
+   */
+  val CriticRating: Double? = null,
 )
 
 @Serializable
@@ -177,6 +184,8 @@ data class EmbyUserData(
   val PlaybackPositionTicks: Long = 0,
   val PlayedPercentage: Double? = null,
   val UnplayedItemCount: Int? = null,
+  /** 最近播放时间（ISO-8601 字符串）。客户端按「播放时间」排序用 */
+  val LastPlayedDate: String? = null,
 )
 
 @Serializable
