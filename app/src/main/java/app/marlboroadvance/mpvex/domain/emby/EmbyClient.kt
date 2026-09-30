@@ -538,6 +538,14 @@ object EmbyClient {
      * 所以单独拼，不要塞进 Filters（塞进去服务端会忽略）。
      */
     isPlayed: Boolean? = null,
+    /**
+     * 只要媒体本体 / 只要容器：false 会把 Folder、Series、Season、BoxSet 这类
+     * 「本身不能播放」的容器一并挡掉（Emby 的 IsFolder）。null 表示不限。
+     *
+     * 「只要视频」的视图必须传 false —— 光靠 ExcludeItemTypes 只能挡住写在名单里的
+     * 那几个容器类型，挡不住 Season、MusicAlbum 这些漏网的。
+     */
+    isFolder: Boolean? = null,
     /** true 只要高清 / false 只要标清（Emby 的 IsHD） */
     isHD: Boolean? = null,
     /** true 只要 3D / false 排除 3D（Emby 的 Is3D） */
@@ -553,6 +561,9 @@ object EmbyClient {
     sortOrder?.let { q["SortOrder"] = it }
     filters?.takeIf { it.isNotEmpty() }?.let { q["Filters"] = it.joinToString("|") }
     isFavorite?.let { q["IsFavorite"] = it.toString() }
+    // IsFolder 与 ExcludeItemTypes 是两个维度：前者按「是不是容器」筛，后者按类型名筛。
+    // 只传其中一个都会漏 —— 第三方服务端对 ExcludeItemTypes 的支持尤其参差。
+    isFolder?.let { q["IsFolder"] = it.toString() }
     includeItemTypes?.takeIf { it.isNotEmpty() }?.let { q["IncludeItemTypes"] = it.joinToString(",") }
     excludeItemTypes?.takeIf { it.isNotEmpty() }?.let { q["ExcludeItemTypes"] = it.joinToString(",") }
     genres?.takeIf { it.isNotEmpty() }?.let { q["Genres"] = it.joinToString("|") }

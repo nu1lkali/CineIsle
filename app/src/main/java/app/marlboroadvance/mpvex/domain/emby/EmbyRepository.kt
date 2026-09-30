@@ -230,6 +230,16 @@ class EmbyRepository(
     officialRatings: List<String>? = null,
     /** true / false 分别限定只要收藏 / 只要未收藏；null 表示不限 */
     isFavorite: Boolean? = null,
+    /**
+     * 只要某种 MediaType：Video / Audio / Photo / Book。
+     *
+     * 这是 Emby 官方「只要视频」的正解 —— 和 IncludeItemTypes 是两套口径：
+     * 后者按条目类型（Movie / Episode …）筛，前者按**媒体形态**筛。
+     * 库里混进的音频、图片、电子书，MediaType 都不是 Video，单靠类型白名单挡不住。
+     */
+    mediaTypes: List<String>? = null,
+    /** false = 只要能直接播放的媒体本体，容器（Folder / Series / Season / BoxSet）全挡掉 */
+    isFolder: Boolean? = null,
     /** 按人员（演员 / 导演）筛选，传 PersonId */
     personIds: List<String>? = null,
     /** true 只要已看 / false 只要未看；null 不限 */
@@ -261,6 +271,8 @@ class EmbyRepository(
       tags = tags,
       officialRatings = officialRatings,
       isFavorite = isFavorite,
+      mediaTypes = mediaTypes,
+      isFolder = isFolder,
       personIds = personIds,
       isPlayed = isPlayed,
       isHD = isHD,
@@ -322,6 +334,8 @@ class EmbyRepository(
         hasSubtitles = query.hasSubtitles,
         studioIds = query.studioIds,
         isFavorite = query.isFavorite,
+        mediaTypes = query.mediaTypes,
+        isFolder = query.isFolder,
       )
       val items = page.Items
       if (page.TotalRecordCount > 0) total = page.TotalRecordCount

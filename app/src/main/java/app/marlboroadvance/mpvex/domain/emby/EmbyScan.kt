@@ -28,6 +28,10 @@ data class EmbyScanQuery(
   val officialRatings: List<String>? = null,
   val minCommunityRating: Float? = null,
   val isFavorite: Boolean? = null,
+  /** 只扫指定 MediaType（Video / Audio / Photo / Book）；null 不限 */
+  val mediaTypes: List<String>? = null,
+  /** false = 只扫能直接播放的媒体本体，容器（Folder / Series / Season / BoxSet）不要 */
+  val isFolder: Boolean? = null,
   val personIds: List<String>? = null,
   val isPlayed: Boolean? = null,
   val isHD: Boolean? = null,

@@ -203,6 +203,10 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     officialRatings: List<String>? = null,
     /** true 只返回收藏，false 只返回未收藏，null 不限 */
     isFavorite: Boolean? = null,
+    /** 只返回指定 MediaType（Video / Audio / Photo / Book）的条目；null 不限 */
+    mediaTypes: List<String>? = null,
+    /** false = 只要能直接播放的媒体本体，容器（Folder / Series / Season / BoxSet）全不要 */
+    isFolder: Boolean? = null,
     /** 演员 / 导演的 PersonId 列表，多选取并集 */
     personIds: List<String>? = null,
     /** true 只要已看，false 只要未看，null 不限 */
@@ -233,6 +237,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       tags = tags,
       officialRatings = officialRatings,
       isFavorite = isFavorite,
+      mediaTypes = mediaTypes,
+      isFolder = isFolder,
       personIds = personIds,
       isPlayed = isPlayed,
       isHD = isHD,

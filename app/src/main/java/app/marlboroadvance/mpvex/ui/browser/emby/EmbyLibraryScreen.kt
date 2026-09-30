@@ -327,6 +327,17 @@ data class EmbyLibraryScreen(
       if (includeItemTypes == null && category != EmbyCategory.FOLDER) {
         if (excludeBoxSet) FOLDER_TYPES + "BoxSet" else FOLDER_TYPES
       } else null
+    // 只靠 ExcludeItemTypes 剔不干净：它按**类型名**筛，漏掉的类型（Season、MusicAlbum、
+    // 以及库里混进的音频 / 图片 / 电子书）照样回来。这两个参数是官方的另外两道闸：
+    // MediaTypes 按媒体形态筛（Video），IsFolder=false 把「本身不能播」的容器整体挡掉。
+    // 「文件夹」「合集」分类要的就是容器，所以那两种分类不传。
+    val effectiveMediaTypes: List<String>? =
+      if (category == EmbyCategory.FOLDER || category == EmbyCategory.BOXSET) {
+        null
+      } else {
+        mediaTypesFor(collectionType, includeItemTypes)
+      }
+    val effectiveIsFolder: Boolean? = if (effectiveMediaTypes == null) null else false
 
     fun cacheItems() {
       EmbyLibraryCache.putItems(
@@ -359,6 +370,8 @@ data class EmbyLibraryScreen(
           parentId = libraryId,
           includeItemTypes = effectiveTypes,
           excludeItemTypes = effectiveExclude,
+          mediaTypes = effectiveMediaTypes,
+          isFolder = effectiveIsFolder,
           filters = effectiveFilters,
           sortBy = sortBy,
           sortOrder = sortOrder,
@@ -444,6 +457,8 @@ data class EmbyLibraryScreen(
             officialRatings = selectedRatings.toList().takeIf { it.isNotEmpty() },
             minCommunityRating = minRating,
             isFavorite = if (favoriteOnly) true else null,
+            mediaTypes = effectiveMediaTypes,
+            isFolder = effectiveIsFolder,
             personIds = selectedPersonIds.toList().takeIf { it.isNotEmpty() },
             isPlayed = playedFilter,
             isHD = hdFilter,
@@ -567,6 +582,35 @@ data class EmbyLibraryScreen(
         // 点进去还会崩。列表数量行用的是 totalCount（服务端给的），不在这里减，
         // 所以「共 41 个」这类数字仍以服务端为准。
         .filterNot { isGhostItem(it) }
+        // 本地再按同一口径剔一遍。
+        //
+        // 为什么不能只靠服务端：MediaTypes / ExcludeItemTypes / IsFolder 这些参数
+        // 在官方 Emby 上生效，但兼容层（SmartStrm 之类）未必全部支持 ——
+        // 少了任何一个，库里混进来的音频、图片、电子书、Season 之类就会漏到列表里。
+        // 本地兜底之后，无论服务端认不认这些参数，结果都是一致的。
+        .filter { item ->
+          val type = item.Type
+          if (type != null) {
+            if (effectiveExclude?.any { it.equals(type, ignoreCase = true) } == true) return@filter false
+            if (effectiveTypes?.none { it.equals(type, ignoreCase = true) } == true) return@filter false
+          }
+          // MediaType 明确不是目标形态的一律剔掉；为空的大多是容器，交给上面的类型白名单
+          val mediaType = item.MediaType
+          val want = effectiveMediaTypes
+          if (mediaType != null && want != null && want.none { it.equals(mediaType, ignoreCase = true) }) {
+            return@filter false
+          }
+          // 未知库（CollectionType 为空）拿不到类型白名单，此时只能靠 MediaType ——
+          // 但 Genre / Tag / Studio 这类「非媒体实体」MediaType 也是空，上面漏得干干净净。
+          // 实测这类库会返回一堆名为 `"frames":2670` 的 Genre 条目（NFO 里塞了 JSON），
+          // 所以这里再按「是否可播放」兜一次。
+          if (type != null && want != null && effectiveTypes == null) {
+            val playable = PLAYABLE_TYPES.any { it.equals(type, ignoreCase = true) }
+            val isVideo = mediaType?.equals("Video", ignoreCase = true) == true
+            if (!playable && !isVideo) return@filter false
+          }
+          true
+        }
 
     /**
      * 「随机播放」的取数。**口径：随机 = 把当前屏幕上这批结果打乱。**
@@ -614,6 +658,9 @@ data class EmbyLibraryScreen(
         // 固定用 recursive：容器类分类（如「文件夹」）本身递归不出可播条目
         recursive = true,
         excludeItemTypes = effectiveExclude,
+        // 随机只落在能播的条目上，所以这里固定按视频形态 + 非容器来取
+        mediaTypes = effectiveMediaTypes ?: listOf("Video"),
+        isFolder = false,
         genres = selectedGenres.toList().takeIf { it.isNotEmpty() },
         tags = selectedTags.toList().takeIf { it.isNotEmpty() },
         years = selectedYears.toList().takeIf { it.isNotEmpty() },
@@ -1450,15 +1497,23 @@ private fun CategoryChips(
  * - 点它一下就闪退 —— 拿一个「不是条目 Id 的字符串」去当 ParentId / ItemId 发请求，
  *   后续拼出来的地址是坏的。
  *
- * 判据刻意只取两条很保守的特征，正常媒体（Id 是数字 / GUID、名字是片名）不会被误伤：
+ * 判据刻意只取几条很保守的特征，正常媒体（Id 是数字 / GUID、名字是片名）不会被误伤：
  *
  * - Id 里带 `://`（Emby 的条目 Id 永远不含这个）；
- * - 名字就叫 `http:` / `https:`（URL scheme 被当成目录名时的产物）。
+ * - 名字就叫 `http:` / `https:`（URL scheme 被当成目录名时的产物）；
+ * - 名字 / Id 里出现 JSON 的 `"键":` 片段 —— 元数据文件里是一段 JSON 时，
+ *   Emby 会把其中一节解析成「条目」，名字长成 `frames":2670` 这样；
+ * - 名字以 `{` / `[` 开头（整段 JSON 被当成名字）。
  */
+private val JSON_FRAGMENT = Regex("\"[A-Za-z_][A-Za-z0-9_]*\"\\s*:")
+
 private fun isGhostItem(item: EmbyItem): Boolean {
   if (item.Id?.contains("://") == true) return true
   val name = item.Name?.trim().orEmpty()
-  return name.equals("http:", ignoreCase = true) || name.equals("https:", ignoreCase = true)
+  if (name.equals("http:", ignoreCase = true) || name.equals("https:", ignoreCase = true)) return true
+  if (JSON_FRAGMENT.containsMatchIn(name)) return true
+  if (item.Id?.let { JSON_FRAGMENT.containsMatchIn(it) } == true) return true
+  return name.startsWith("{") || name.startsWith("[")
 }
 
 /**
@@ -1855,6 +1910,39 @@ private fun allItemTypesFor(collectionType: String?): List<String>? =
     "books" -> listOf("Book")
     else -> null
   }
+
+/**
+ * 「全部」这类视图要传给服务端的 `MediaTypes`（Emby 的媒体形态口径）。
+ *
+ * 和 [allItemTypesFor] 不是一回事：那是**条目类型**（Movie / Episode …），
+ * 这是**媒体形态**（Video / Audio / Photo / Book）。库里混进来的音频、图片、
+ * 电子书，条目类型可能仍在白名单里，但 MediaType 一定不是 Video ——
+ * 所以「只要视频」必须两个口径一起传，缺一个就剔不干净。
+ *
+ * @param includeItemTypes 剧集下钻时指定的层级类型（Season / Episode），优先于库类型
+ * @return null 表示不限制（容器类视图本来就没有 MediaType）
+ */
+private fun mediaTypesFor(collectionType: String?, includeItemTypes: List<String>?): List<String>? {
+  // 下钻层级优先：单集是可播放的视频；季是容器，没有 MediaType
+  if (includeItemTypes != null) {
+    return if (includeItemTypes.all { it.equals("Episode", ignoreCase = true) }) {
+      listOf("Video")
+    } else {
+      null
+    }
+  }
+  return when (collectionType?.lowercase()) {
+    "movies", "homevideos", "musicvideos", "mixed" -> listOf("Video")
+    "music" -> listOf("Audio")
+    "photos" -> listOf("Photo")
+    "books" -> listOf("Book")
+    // 剧集库的顶层是 Series、合集库是 BoxSet —— 都是容器，MediaType 为空，
+    // 传 Video 会把整个列表剔空，所以这两种不传
+    "tvshows", "boxsets" -> null
+    // 未知 / 混合库按视频处理：这类库基本都是视频，且用户要的就是「只要视频」
+    else -> listOf("Video")
+  }
+}
 
 private fun itemSubtitle(item: EmbyItem): String? {
   val year = item.ProductionYear
