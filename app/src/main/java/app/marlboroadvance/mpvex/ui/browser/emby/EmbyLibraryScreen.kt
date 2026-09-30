@@ -444,7 +444,12 @@ data class EmbyLibraryScreen(
             // 搜索不分页、整批返回，所以把上限提到一页的量，客户端排序才有足够样本
             limit = PAGE_SIZE,
           )
-          EmbyItemsPage(applyClientSort(result, sortBy, sortOrder), result.size)
+          EmbyItemsPage(
+            // 排序放到后台线程做：几百上千条的比较是纯 CPU 活，不该占主线程。
+            // 排完连同渲染一起交给 UI —— 中间没有「先出一版乱序的再跳一遍」的过程。
+            withContext(Dispatchers.Default) { applyClientSort(result, sortBy, sortOrder) },
+            result.size,
+          )
         }
       }.onSuccess { page ->
         // 搜索命中才记历史：一个字都没查到的词记下来只会污染列表；
@@ -453,13 +458,17 @@ data class EmbyLibraryScreen(
           searchHistoryRepository.record(searchQuery)
         }
         if (chineseSubsOnly) {
-          // 搜索结果本身就是完整的一批（/Items?SearchTerm 一次性给完），直接筛
-          val matched = withContext(Dispatchers.Default) { ChineseSubtitleFilter.filter(page.items) }
-          // 筛完再按当前排序排一遍，和不开这个开关时的顺序口径一致
-          items = applyClientSort(matched.map { it.first }, sortBy, sortOrder)
-          chineseHits = matched.associate { it.first.Id.orEmpty() to it.second }
+          // 搜索结果本身就是完整的一批（/Items?SearchTerm 一次性给完），直接筛。
+          // 筛选 + 排序一起在后台线程做完，回到主线程只进行一次赋值 —— 统一渲染，没有中间态。
+          val (sorted, hits) = withContext(Dispatchers.Default) {
+            val matched = ChineseSubtitleFilter.filter(page.items)
+            applyClientSort(matched.map { it.first }, sortBy, sortOrder) to
+              matched.associate { it.first.Id.orEmpty() to it.second }
+          }
+          items = sorted
+          chineseHits = hits
           // 客户端筛过之后服务端总数对不上，数量行显示可见命中数
-          totalCount = items.size
+          totalCount = sorted.size
         } else {
           items = if (reset) {
             page.items
@@ -470,6 +479,14 @@ data class EmbyLibraryScreen(
           totalCount = page.totalCount
         }
         cacheItems()
+        // 搜索的结果每批都是整批替换，排完序要停在第一条。
+        //
+        // 这一步放在数据落位**之后**才可靠：排序变化那个 LaunchedEffect 是在请求发出之前跑的，
+        // 而搜索这条路要先过防抖、再走网络，等结果回来时那次归位早就被列表重建冲掉了 ——
+        // 表现就是「切完排序列表还停在原来的位置」。
+        if (searchQuery.isNotBlank() && reset) {
+          gridState.scrollToItem(0)
+        }
       }.onFailure {
         error = it.message ?: "加载失败"
       }
