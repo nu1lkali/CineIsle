@@ -711,6 +711,7 @@
   <string name="i18n_settings">设置</string>
   <string name="i18n_edit">编辑</string>
   <string name="i18n_copy">复制</string>
+  <string name="i18n_paste">粘贴</string>
   <string name="i18n_share">分享</string>
   <string name="i18n_back">返回</string>
   <string name="i18n_thumbnail">缩略图</string>

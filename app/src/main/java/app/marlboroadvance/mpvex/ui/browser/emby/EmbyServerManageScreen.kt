@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -45,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -276,16 +278,12 @@ private fun ServerEditDialog(
   val scope = rememberCoroutineScope()
 
   var name by remember { mutableStateOf(initial?.name ?: "") }
-  var address by remember { mutableStateOf(initial?.baseUrl ?: "http://") }
+  // 地址与端口拆成两个输入框：地址只填主机（IP / 域名），端口单独填
+  var host by remember { mutableStateOf(initial?.host ?: "") }
+  var port by remember { mutableStateOf((initial?.port ?: DEFAULT_HTTP_PORT).toString()) }
   var username by remember { mutableStateOf(initial?.username ?: "") }
   var password by remember { mutableStateOf(initial?.password ?: "") }
-  // 勾选框初始值：优先取已存服务器的 useHttps，编辑场景再兜底按地址里的 scheme 推一次，
-  // 避免「地址是 https:// 但框没勾」的初始错位（提交时以这个框为准）
-  var useHttps by remember {
-    mutableStateOf(
-      initial?.useHttps ?: (initial?.baseUrl?.startsWith("https://", ignoreCase = true) == true),
-    )
-  }
+  var useHttps by remember { mutableStateOf(initial?.useHttps ?: false) }
   var isConnecting by remember { mutableStateOf(false) }
   var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -301,22 +299,43 @@ private fun ServerEditDialog(
           placeholder = { Text("例如：家里的 Emby") },
           singleLine = true,
         )
-        OutlinedTextField(
-          value = address,
-          onValueChange = { input ->
-            address = input
-            // 用户手输显式 scheme 时同步勾选框，避免「地址写着 https:// 但框没勾」的错位
-            when {
-              input.startsWith("https://", ignoreCase = true) -> useHttps = true
-              input.startsWith("http://", ignoreCase = true) -> useHttps = false
-            }
-          },
-          label = { Text("服务器地址") },
-          placeholder = { Text("http://192.168.1.10:8096") },
-          singleLine = true,
-          supportingText = {
-            Text("可写 https://域名 或 192.168.1.10:8096；不写端口时 https 默认 443、http 默认 8096")
-          },
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          OutlinedTextField(
+            value = host,
+            onValueChange = { input ->
+              // 容错：整段粘 http(s)://host:port 时自动拆到两个框，省得手拆
+              val parsedUrl = if (input.contains("://")) parseServerAddress(input) else null
+              if (parsedUrl != null) {
+                host = parsedUrl.first
+                port = parsedUrl.second.toString()
+                useHttps = parsedUrl.third
+              } else {
+                host = input.trim()
+              }
+            },
+            label = { Text("服务器地址") },
+            placeholder = { Text("192.168.1.10") },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+          )
+          OutlinedTextField(
+            value = port,
+            onValueChange = { input -> port = input.filter { it.isDigit() }.take(5) },
+            label = { Text("端口") },
+            placeholder = { Text((if (useHttps) HTTPS_PORT else DEFAULT_HTTP_PORT).toString()) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.weight(0.5f),
+          )
+        }
+        Text(
+          text = "地址只填 IP 或域名；端口默认 8096，勾选 HTTPS 后默认 443",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
           value = username,
@@ -336,15 +355,15 @@ private fun ServerEditDialog(
             checked = useHttps,
             onCheckedChange = { checked ->
               useHttps = checked
-              // 勾选框是最终裁决：同步改写地址里的 scheme，保证「看到的」和「实际用的」一致。
-              // （修复：以前 confirm 用的是 parseServerAddress 从地址文本推出的 https，
-              //   地址写裸 IP 时勾了等于没勾，请求仍然走 http。）
-              address = when {
-                checked && address.startsWith("http://", ignoreCase = true) ->
-                  "https://" + address.substring("http://".length)
-                !checked && address.startsWith("https://", ignoreCase = true) ->
-                  "http://" + address.substring("https://".length)
-                else -> address
+              // 端口跟着「默认值」走：只在另一个协议的默认端口上切换，
+              // 用户手填过的自定义端口（如 8920）不动
+              val current = port.trim()
+              port = when {
+                checked && (current.isEmpty() || current == DEFAULT_HTTP_PORT.toString()) ->
+                  HTTPS_PORT.toString()
+                !checked && (current.isEmpty() || current == HTTPS_PORT.toString()) ->
+                  DEFAULT_HTTP_PORT.toString()
+                else -> port
               }
             },
           )
@@ -363,19 +382,27 @@ private fun ServerEditDialog(
       Button(
         onClick = {
           if (isConnecting) return@Button
-          val parsed = parseServerAddress(address)
-          if (parsed == null) {
-            errorMessage = "服务器地址格式不正确"
+          // 地址框理论上只有主机；容错处理「主机里还带着端口」的旧习惯写法
+          val (rawHost, embeddedPort) = splitHostAndPort(host)
+          if (rawHost.isBlank()) {
+            errorMessage = "请填写服务器地址"
             return@Button
           }
-          val (host, port, _) = parsed
-          // scheme 以勾选框为准（parseServerAddress 只负责拆 host/port）；
-          // 勾选框已与地址文本双向同步，这里不会再出现「勾了却走 http」的情况
           val finalHttps = useHttps
-          val finalName = name.ifBlank { host }
+          val portText = port.trim()
+          val finalPort = when {
+            embeddedPort != null -> embeddedPort
+            portText.isEmpty() -> if (finalHttps) HTTPS_PORT else DEFAULT_HTTP_PORT
+            else -> portText.toIntOrNull() ?: -1
+          }
+          if (finalPort !in 1..65535) {
+            errorMessage = "端口请填写 1~65535 之间的数字"
+            return@Button
+          }
+          val finalName = name.ifBlank { rawHost }
 
           if (!requireLogin) {
-            onConfirm(finalName, host, port, finalHttps, username, password)
+            onConfirm(finalName, rawHost, finalPort, finalHttps, username, password)
             return@Button
           }
 
@@ -383,7 +410,7 @@ private fun ServerEditDialog(
           isConnecting = true
           errorMessage = null
           scope.launch {
-            val saved = viewModel.loginAndSave(finalName, host, port, finalHttps, username, password)
+            val saved = viewModel.loginAndSave(finalName, rawHost, finalPort, finalHttps, username, password)
             isConnecting = false
             if (saved != null) {
               onDismiss()
@@ -416,6 +443,29 @@ private fun ServerEditDialog(
   )
 }
 
+/** Emby 默认 HTTP 端口 */
+private const val DEFAULT_HTTP_PORT = 8096
+
+/** HTTPS 默认端口（标准 443；Emby 自带的 8920 需要手填） */
+private const val HTTPS_PORT = 443
+
+/**
+ * 从地址文本里拆出主机与端口（容错用）。
+ *
+ * 支持 `host`、`host:8096`、`http://host:8096/emby` 这几种写法；
+ * 拿不到端口时返回 null，由「端口」输入框的值兜底。
+ */
+private fun splitHostAndPort(raw: String): Pair<String, Int?> {
+  var s = raw.trim().substringAfter("://", raw.trim())
+  s = s.substringBefore('/')
+  val colon = s.lastIndexOf(':')
+  if (colon > 0) {
+    val embedded = s.substring(colon + 1).toIntOrNull()
+    if (embedded != null) return s.substring(0, colon) to embedded
+  }
+  return s to null
+}
+
 /**
  * 解析服务器地址。
  *
@@ -446,8 +496,8 @@ private fun parseServerAddress(raw: String): Triple<String, Int, Boolean>? {
     if (host.isBlank()) null else Triple(host, port, useHttps)
   } else {
     // 端口缺省值：https → 443（标准 HTTPS，反代 / 域名场景最常见），http → 8096（Emby 默认）。
-    // 用 Emby 自带的 https 端口 8920 的话，地址里显式写 :8920 即可。
-    val defaultPort = if (useHttps) 443 else 8096
+    // 用 Emby 自带的 https 端口 8920 的话，端口框里填 8920 即可。
+    val defaultPort = if (useHttps) HTTPS_PORT else DEFAULT_HTTP_PORT
     Triple(input, defaultPort, useHttps)
   }
 }

@@ -361,7 +361,7 @@ private fun StreamLinkSection(
               modifier = Modifier.padding(end = 8.dp),
             )
             Text(
-              text = "Paste",
+              text = stringResource(R.string.i18n_paste),
               fontWeight = FontWeight.Bold,
             )
           }

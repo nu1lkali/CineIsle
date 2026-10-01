@@ -713,6 +713,7 @@
   <string name="i18n_settings">Settings</string>
   <string name="i18n_edit">Edit</string>
   <string name="i18n_copy">Copy</string>
+  <string name="i18n_paste">Paste</string>
   <string name="i18n_share">Share</string>
   <string name="i18n_back">Back</string>
   <string name="i18n_thumbnail">Thumbnail</string>
