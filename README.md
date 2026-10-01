@@ -4,7 +4,7 @@
 
 **一个打通 Emby 的本地播放器 —— 基于 mpvEx 二次开发**
 
-包名 `app.cineisle.player` · 当前版本 `v1.0.4` · 构建变体 `standard` · 双播放内核（mpv / GSYVideoPlayer）
+包名 `app.cineisle.player` · 当前版本 `v1.0.6` · 构建变体 `standard` · 双播放内核（mpv / GSYVideoPlayer）
 
 </div>
 
@@ -133,6 +133,11 @@ Emby 没有这个维度，所以按条目的**路径**匹配。默认标记 `-C`
 
 ## 更新记录
 
+### 1.0.6
+
+- **关于页致谢**：从只列一条（mpvEx）扩充为按来源分组的主要开源项目清单 —— 上游与播放内核（mpvEx / mpv-android / GSYVideoPlayer / AndroidX Media3）、Emby 与投屏（Emby 官方 SDK / UPnPCast）、网络与工具库（SMBJ / Sardine / Commons Net / NanoHTTPD / AboutLibraries），每条都能点开对应项目主页；完整依赖清单仍在「开源许可」页
+- **中文本地化**：「网络」页的「粘贴」按钮补上中文 —— 此前它是界面里唯一漏掉英文的按钮
+
 ### 1.0.4
 
 - **添加服务器**：服务器地址与端口拆成两个输入框 —— 地址只填 IP 或域名，端口单独填（默认 8096）；勾选「使用 HTTPS」时端口自动切成 443，取消勾选切回 8096（已经手填过自定义端口的不会被改掉）。整段粘 `http://192.168.1.10:8096` 也能自动拆好
@@ -191,10 +196,14 @@ Emby 没有这个维度，所以按条目的**路径**匹配。默认标记 `-C`
 ## 致谢
 
 - [mpvEx](https://github.com/marlboro-advance/mpvEx) —— 直接的上游
-- [mpv-android](https://github.com/mpv-android) —— mpv 绑定与 libmpv 集成
-- [GSYVideoPlayer](https://github.com/CarGuo/GSYVideoPlayer) —— 第二个播放内核
+- [mpv-android](https://github.com/mpv-android) —— mpv 绑定与 libmpv 集成（主播放内核）
+- [GSYVideoPlayer](https://github.com/CarGuo/GSYVideoPlayer) —— 第二个播放内核（含自带的 IJK / FFmpeg 引擎）
+- [AndroidX Media3 / ExoPlayer](https://github.com/androidx/media) —— 视界流的多实例播放
+- [Emby Java SDK](https://github.com/MediaBrowser/Emby.SDK) —— 客户端接口层
 - [UPnPCast](https://github.com/yinnho/UPnPCast) —— DLNA 投屏
-- [mpvKt](https://github.com/abdallahmehiz/mpvKt) · [Next player](https://github.com/anilbeesetti/nextplayer) · [Gramophone](https://github.com/FoedusProgramme/Gramophone)
+- [AboutLibraries](https://github.com/mikepenz/AboutLibraries) —— 开源许可清单
+- [SMBJ](https://github.com/hierynomus/smbj) · [Sardine](https://github.com/lookfirst/sardine) · [Commons Net](https://commons.apache.org/proper/commons-net/) · [NanoHTTPD](https://github.com/NanoHttpd/nanohttpd) —— 网络存储与本地服务
+- [mpvKt](https://github.com/abdallahmehiz/mpvKt) · [Next player](https://github.com/anilbeesetti/nextplayer) · [Gramophone](https://github.com/FoedusProgramme/Gramophone) —— 界面参考
 
 上游项目的开源许可（见 [LICENSE](LICENSE)）继续适用。
 

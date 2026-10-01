@@ -375,6 +375,19 @@ class EmbyRepository(
   }
 
   /**
+   * 收藏的演员列表（收藏页「演员」tab）。
+   *
+   * Person 只能从 `/Persons` 端点拿（`/Users/{id}/Items` 不返回 Person），
+   * 见 [EmbyClient.getFavoritePersons] 的说明。
+   */
+  suspend fun getFavoritePersons(server: EmbyServer): List<EmbyItem> =
+    withContext(Dispatchers.IO) { EmbyClient.getFavoritePersons(server) }
+
+  /** 按 Id 取单个人员（演员作品页收藏红心查当前状态用） */
+  suspend fun getPersonById(server: EmbyServer, personId: String): EmbyItem? =
+    withContext(Dispatchers.IO) { EmbyClient.getPersonById(server, personId) }
+
+  /**
    * 随机播放：返回 [limit] 个随机项。可指定 [includeItemTypes]
    * 例如 listOf("Movie") / listOf("Episode")。
    */

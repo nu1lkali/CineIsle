@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.browser.emby
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -34,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.java.KoinJavaComponent.inject
@@ -294,6 +296,38 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     return EmbyItemsPage(result.Items, result.TotalRecordCount)
   }
 
+  /**
+   * 收藏的演员列表（收藏页「演员」tab）。
+   *
+   * 按服务器做了一份进程内缓存：收藏页在 影片/演员 两个 tab 之间来回切时
+   * 不重复发请求（[EmbyClient.getFavoritePersons] 是全量拉一遍再过滤，开销不小）。
+   *
+   * 缓存失效：演员被收藏 / 取消收藏时（长按菜单、演员作品页红心）必须调
+   * [invalidateFavoritePersonsCache]，否则回到收藏页看到的还是旧列表。
+   * 另外 60 秒自动过期 —— 兜底 App 其它入口（比如以后加的）改了收藏状态却忘了通知。
+   */
+  suspend fun loadFavoritePersons(server: EmbyServer, forceRefresh: Boolean = false): List<EmbyItem> {
+    val cached = favoritePersonsCache
+    if (!forceRefresh && cached != null && cached.first == server.id &&
+      SystemClock.elapsedRealtime() - cached.second < FAVORITE_PERSONS_CACHE_TTL_MS
+    ) {
+      return cached.third
+    }
+    val list = withContext(Dispatchers.IO) {
+      runCatching { repository.getFavoritePersons(server) }.getOrDefault(emptyList())
+    }
+    favoritePersonsCache = Triple(server.id, SystemClock.elapsedRealtime(), list)
+    return list
+  }
+
+  /** 收藏演员列表的进程内缓存：serverId → (缓存时间, 名单) */
+  private var favoritePersonsCache: Triple<Long, Long, List<EmbyItem>>? = null
+
+  /** 演员收藏状态发生变化时调用：把缓存作废，收藏页下次进来重新拉 */
+  fun invalidateFavoritePersonsCache() {
+    favoritePersonsCache = null
+  }
+
   suspend fun loadHistory(
     server: EmbyServer,
     startIndex: Int = 0,
@@ -442,15 +476,68 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   suspend fun toggleFavorite(server: EmbyServer, item: EmbyItem): Result<Boolean> {
     val itemId = item.Id ?: return Result.failure(IllegalArgumentException("缺少条目 Id"))
     val target = item.UserData?.IsFavorite != true
+    val isPerson = item.Type?.equals("Person", ignoreCase = true) == true
     val result = runCatching {
       val data = repository.setFavorite(server, itemId, target)
-      // 只有服务器明确回「还是没收藏」才算失败；拿不到 UserData 时不下失败结论
-      if (data?.IsFavorite == false && target) throw IllegalStateException("服务器未接受这次收藏")
+      var confirmed = data?.IsFavorite
+      // 演员收藏的回执在这类兼容服务端上不可信：实测返回 200、回执看似成功，
+      // 服务器却没落库（Emby Web 验证仍是未收藏）——用户碰到的「假成功」。
+      // 所以 Person 一律回读服务器上的真实状态做确认，回执只作参考；
+      // 媒体条目的收藏长期使用验证过可靠，维持原判定、不增加额外往返。
+      if (isPerson) {
+        // 部分服务端是「先回 200 再异步落库」，先等一拍再读，避免把刚提交的成功误判成失败
+        delay(400)
+        var read = readbackFavoriteState(server, item, itemId)
+        if (read == null) {
+          delay(600)
+          read = readbackFavoriteState(server, item, itemId)
+        }
+        if (read != null) confirmed = read
+        // 回读明确显示没生效：对齐媒体收藏的同一接口再重试一次 POST
+        //（兼容服务端偶发「回 200 但第一次没落库」的软失败），然后做最终确认
+        if (confirmed != null && confirmed != target) {
+          delay(200)
+          repository.setFavorite(server, itemId, target)
+          delay(400)
+          val retryRead = readbackFavoriteState(server, item, itemId)
+          if (retryRead != null) confirmed = retryRead
+        }
+      }
+      // 只有「明确确认与目标不符」才算失败；拿不到状态时不下失败结论
+      if (target && confirmed == false) {
+        throw IllegalStateException(
+          if (isPerson) "服务器未接受这次收藏（该服务端可能不支持收藏演员）" else "服务器未接受这次收藏",
+        )
+      }
       target
+    }
+    // 演员的收藏状态变了：收藏页「演员」tab 的缓存不再可信，作废掉
+    if (item.Type?.equals("Person", ignoreCase = true) == true) {
+      invalidateFavoritePersonsCache()
     }
     result.exceptionOrNull()?.let { _error.value = it.message ?: "操作失败" }
     return result
   }
+
+  /**
+   * 收藏后回读真实状态（true=已收藏 / false=未收藏 / null=读不到，无法确认）。
+   *
+   * Person 走 [getPersonById]（通用条目端点 + /Persons 双路径）；媒体走 [getItem]。
+   */
+  private suspend fun readbackFavoriteState(
+    server: EmbyServer,
+    item: EmbyItem,
+    itemId: String,
+  ): Boolean? =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        if (item.Type?.equals("Person", ignoreCase = true) == true) {
+          repository.getPersonById(server, itemId)?.UserData?.IsFavorite
+        } else {
+          repository.getItem(server, itemId).UserData?.IsFavorite
+        }
+      }.getOrNull()
+    }
 
   fun deleteItem(server: EmbyServer, itemId: String) {
     viewModelScope.launch {
@@ -1066,6 +1153,15 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   /**
+   * 按 Id 查单个人员（含 UserData.IsFavorite）。
+   *
+   * 演员作品页的收藏红心用：进来时查一次当前状态，收藏/取消收藏后据此刷新红心。
+   * 查不到（服务端异常等）返回 null，红心保持未收藏态且不可点。
+   */
+  suspend fun loadPersonById(server: EmbyServer, personId: String): EmbyItem? =
+    withContext(Dispatchers.IO) { EmbyClient.getPersonById(server, personId) }
+
+  /**
    * 按「类型」查作品：走 Emby 的 Genres 过滤。
    *
    * 详情页点类型 chip 进来，和 [searchGlobal] 一样不传 ParentId —— 全库范围检索，
@@ -1150,6 +1246,9 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   companion object {
+    /** 收藏演员缓存的存活时间：超过就当过期重新拉，防止别处改了收藏状态这里还留着旧数据 */
+    private const val FAVORITE_PERSONS_CACHE_TTL_MS = 60_000L
+
     fun factory(application: Application): ViewModelProvider.Factory = viewModelFactory {
       initializer { EmbyViewModel(application) }
     }

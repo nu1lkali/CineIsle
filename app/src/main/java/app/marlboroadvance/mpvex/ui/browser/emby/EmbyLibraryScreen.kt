@@ -130,6 +130,19 @@ import kotlin.math.roundToInt
  * 层级导航：媒体库 →（影视剧）季列表 → 剧集列表 → 详情。
  * 单击行为：容器类继续下钻，其余打开详情页，播放由详情页发起。
  */
+/**
+ * 退出搜索时的内容快照：词 + 整批结果 + 总数 + 滚动位置。
+ * 再点放大镜进来时用它**原样回放** —— 不发请求、不看 cacheKey，
+ * 切没切过分类、点得多快都不会闪出别的列表（见搜索 effect 的恢复分支）。
+ */
+private data class EmbySearchSnapshot(
+  val query: String,
+  val items: List<EmbyItem>,
+  val totalCount: Int,
+  val scrollIndex: Int,
+  val scrollOffset: Int,
+)
+
 @Serializable
 data class EmbyLibraryScreen(
   val libraryId: String,
@@ -153,6 +166,13 @@ data class EmbyLibraryScreen(
 
     var searchQuery by remember { mutableStateOf("") }
     var searchActive by remember { mutableStateOf(false) }
+    // 上一次搜索词：退出搜索时留存，再点放大镜进来时原样恢复 ——
+    // 配合本页缓存（cacheKey 一致即命中），结果直接可见、不用重新搜
+    var lastSearchQuery by remember { mutableStateOf("") }
+    // 退出搜索时拍下的内容快照 + 「刚进入搜索」的恢复标记：
+    // 恢复只在进入的那一次生效，之后改词 / 换排序照常走防抖与网络
+    var lastSearchSnapshot by remember { mutableStateOf<EmbySearchSnapshot?>(null) }
+    var pendingSearchRestore by remember { mutableStateOf(false) }
     // 类型筛选：空集合 = 「全部」= 不加类型限制
     var searchFilters by remember { mutableStateOf(emptySet<EmbySearchFilter>()) }
     // 上一次「由输入触发」的搜索词。用来区分这次重查是打字引起的（要 400ms 防抖），
@@ -280,8 +300,14 @@ data class EmbyLibraryScreen(
       "st=${searchFilters.map { it.name }.sorted().joinToString(",")}"
     val cachedEntry = remember(cacheKey) { EmbyLibraryCache.get(cacheKey) }
 
-    var items by remember(cacheKey) { mutableStateOf(cachedEntry?.items ?: emptyList()) }
-    var totalCount by remember(cacheKey) { mutableIntStateOf(cachedEntry?.totalCount ?: 0) }
+    // 搜索路径不从这里起值：搜索的「退出再进」由上面的快照（词+结果+滚动位置）回放，
+    // 不读 cacheKey 缓存 —— 历史竞态写进缓存的脏条目（如全库媒体）不会闪出来。
+    val cachedItems =
+      if (searchQuery.isBlank()) cachedEntry?.items ?: emptyList() else emptyList()
+    var items by remember(cacheKey) { mutableStateOf(cachedItems) }
+    var totalCount by remember(cacheKey) {
+      mutableIntStateOf(if (searchQuery.isBlank()) cachedEntry?.totalCount ?: 0 else 0)
+    }
     // ── 「演员」分类的独立数据 ──
     // 不走上面媒体那套分页 / 缓存 / 中文字幕扫描：/Persons 一次性把演员给全，
     // 既没有下一页要续拉，也没有字幕可扫。单独存一份，两条路径互不干扰。
@@ -290,14 +316,20 @@ data class EmbyLibraryScreen(
     var actorLoading by remember(cacheKey) { mutableStateOf(false) }
     var actorError by remember(cacheKey) { mutableStateOf<String?>(null) }
     var isLoading by remember(cacheKey) {
-      mutableStateOf(cachedEntry == null || cachedEntry.items.isEmpty())
+      mutableStateOf(
+        if (searchQuery.isBlank()) cachedEntry == null || cachedEntry.items.isEmpty() else true,
+      )
     }
     var error by remember(cacheKey) { mutableStateOf<String?>(null) }
     val isRefreshing = remember { mutableStateOf(false) }
     // itemId → 命中的「中文字幕」标记：列表卡片直接显示是哪条标记命中的
-    var chineseHits by remember(cacheKey) { mutableStateOf(cachedEntry?.hits ?: emptyMap()) }
+    var chineseHits by remember(cacheKey) {
+      mutableStateOf(if (searchQuery.isBlank()) cachedEntry?.hits ?: emptyMap() else emptyMap())
+    }
     // 客户端筛选必须扫全库，这两个状态让 UI 能显示「已扫多少 / 命中多少」
-    var scanScanned by remember(cacheKey) { mutableIntStateOf(cachedEntry?.scannedCount ?: 0) }
+    var scanScanned by remember(cacheKey) {
+      mutableIntStateOf(if (searchQuery.isBlank()) cachedEntry?.scannedCount ?: 0 else 0)
+    }
     var isScanning by remember(cacheKey) { mutableStateOf(false) }
     // 正在跑的扫描任务：换筛选条件 / 退出页面时取消，避免旧扫描继续拉数据
     val scanJob = remember { mutableStateOf<Job?>(null) }
@@ -450,9 +482,15 @@ data class EmbyLibraryScreen(
       }
     }
 
+    // 加载代际计数：每次 load() 递增。响应回来时若代际已前进（期间用户又触发了别的加载），
+    // 本次结果必须整批丢弃 —— 否则「退出搜索时遗留的全库媒体请求」会在用户进入搜索后
+    // 姗姗返回，把搜索结果覆盖成浏览列表（用户实测「恢复搜索却显示所有媒体」就是它）。
+    var loadGeneration by remember { mutableStateOf(0) }
+
     suspend fun load(reset: Boolean) {
       // 冷启动时当前服务器可能还没恢复，这里等一下，避免静默不加载
       val current = viewModel.currentServerOrAwait() ?: return
+      val gen = ++loadGeneration
       // 「中文字幕」是客户端按路径判定的，服务端没有对应参数 —— 只能扫全库
       if (chineseSubsOnly && searchQuery.isBlank()) {
         startScan(current)
@@ -508,6 +546,8 @@ data class EmbyLibraryScreen(
           )
         }
       }.onSuccess { page ->
+        // 已被更新的加载接替：本次结果过期，整批丢弃（历史记录也不要记）
+        if (gen != loadGeneration) return@onSuccess
         // 搜索命中才记历史：一个字都没查到的词记下来只会污染列表；
         // 键盘上显式按「搜索」的那次在上面的 keyboardActions 里已经记过了。
         if (searchQuery.isNotBlank() && page.items.isNotEmpty()) {
@@ -544,9 +584,12 @@ data class EmbyLibraryScreen(
           gridState.scrollToItem(0)
         }
       }.onFailure {
+        // 过期的失败同样丢弃：别用旧请求的错误盖掉新请求的结果
+        if (gen != loadGeneration) return@onFailure
         error = it.message ?: "加载失败"
       }
-      isLoading = false
+      // 过期请求不碰 isLoading：收尾交给当前那次加载
+      if (gen == loadGeneration) isLoading = false
     }
 
     /**
@@ -563,8 +606,10 @@ data class EmbyLibraryScreen(
         viewModel.getActors(current, libraryId)
       }
       loaded.onSuccess { list ->
-        actorItems = list
-        actorTotal = list.size
+        // 按网格 key 的同一口径去重：服务端重复返回同一演员时，
+        // 重复 key 会把 LazyVerticalGrid 撞崩（与媒体库搜索同款问题）
+        actorItems = list.distinctBy { it.Id ?: it.Name ?: "" }
+        actorTotal = actorItems.size
       }.onFailure {
         actorError = it.message ?: "加载演员失败"
       }
@@ -586,9 +631,18 @@ data class EmbyLibraryScreen(
 
     // 首次进入 / 筛选条件变化：只有没有可用缓存时才请求。
     // 有缓存说明是刚从详情页或播放器返回，直接复用列表，不刷新。
+    // 首次运行不归位 = 「从详情页返回要停在离开时的位置」；之后凡 cacheKey 变化
+    // （切分类 / 改筛选 / 改排序 / 退出搜索换回浏览列表），呈现的都是新的一批内容，
+    // 网格必须归位到第一条 —— 否则就是「从中间开始显示」（用户反馈）。
+    var firstBrowseKeyRun by remember { mutableStateOf(true) }
     LaunchedEffect(cacheKey) {
       // 搜索走下面带防抖的那个 effect，这里跳过，避免每敲一个字就立刻发一次请求
       if (searchQuery.isNotBlank()) return@LaunchedEffect
+      if (firstBrowseKeyRun) {
+        firstBrowseKeyRun = false
+      } else {
+        gridState.scrollToItem(0)
+      }
       // 「演员」分类：走独立的演员加载，跳过媒体那套分页 / 缓存 / 扫描
       if (isActorListMode) {
         if (actorItems.isEmpty() && !actorLoading) loadActors()
@@ -645,6 +699,11 @@ data class EmbyLibraryScreen(
         // 点进去还会崩。列表数量行用的是 totalCount（服务端给的），不在这里减，
         // 所以「共 41 个」这类数字仍以服务端为准。
         .filterNot { isGhostItem(it) }
+        // 服务端可能在结果里把**同一个条目返回两次**（SmartStrm 实测搜索「雲」时
+        // 同一 Id 出现两条），而下面网格的 key 正是「Id ?: Name」—— 重复条目会直接
+        // 把 LazyVerticalGrid 撞崩（IllegalArgumentException: Key was already used）。
+        // 按同一口径去重：既修崩溃，「命中 N 项」的计数也变准了。
+        .distinctBy { it.Id ?: it.Name ?: "" }
         // 本地再按同一口径剔一遍。
         //
         // 为什么不能只靠服务端：MediaTypes / ExcludeItemTypes / IsFolder 这些参数
@@ -841,10 +900,32 @@ data class EmbyLibraryScreen(
           // 一个退搜索、一个退整个库，很容易点错。SearchOff 保留放大镜意象，
           // 一眼还能看出它跟搜索有关。
           IconButton(onClick = {
-            searchActive = !searchActive
-            if (!searchActive) {
+            if (searchActive) {
+              // 退出搜索：把「词 + 结果 + 滚动位置」整个拍成本地快照，
+              // 再进时原样回放 —— 不重搜、不闪中间态（点得多快都一样）
+              lastSearchQuery = searchQuery
+              lastSearchSnapshot = EmbySearchSnapshot(
+                query = searchQuery,
+                items = items,
+                totalCount = totalCount,
+                scrollIndex = gridState.firstVisibleItemIndex,
+                scrollOffset = gridState.firstVisibleItemScrollOffset,
+              )
+              searchActive = false
               searchQuery = ""
-              scope.launch { load(reset = true) }
+              // 演员分类的网格吃的是 actorItems，这次媒体加载没有意义；
+              // 留着它还会在「再进搜索」后姗姗返回，把搜索结果覆盖成全库媒体
+              if (!isActorListMode) scope.launch { load(reset = true) }
+            } else {
+              searchActive = true
+              val snap = lastSearchSnapshot
+              if (snap != null) {
+                // 有快照：恢复词本身，列表内容由搜索 effect 用快照回放
+                pendingSearchRestore = true
+                searchQuery = snap.query
+              } else if (lastSearchQuery.isNotBlank()) {
+                searchQuery = lastSearchQuery
+              }
             }
           }) {
             Icon(
@@ -1004,6 +1085,22 @@ data class EmbyLibraryScreen(
         LaunchedEffect(cacheKey) {
           // 非搜索状态由上面那个 effect 负责（那条路径不需要防抖）
           if (searchQuery.isBlank()) return@LaunchedEffect
+          // 「退出搜索再进来」的恢复路径：用退出时拍下的**本地快照**直接回放
+          //（词 + 结果 + 滚动位置一起回）—— 不发请求、不看 cacheKey，
+          // 切没切过分类、点得多快都一样。只在「刚进入搜索」的那一次生效，
+          // 之后改词 / 换排序照常走防抖与网络。快照不可用就落到下面的正常搜索。
+          if (pendingSearchRestore) {
+            pendingSearchRestore = false
+            val snap = lastSearchSnapshot
+            if (snap != null && snap.query == searchQuery) {
+              items = snap.items
+              totalCount = snap.totalCount
+              chineseHits = emptyMap()
+              isLoading = false
+              gridState.scrollToItem(snap.scrollIndex, snap.scrollOffset)
+              return@LaunchedEffect
+            }
+          }
           if (searchQuery != lastTypedQuery) {
             lastTypedQuery = searchQuery
             kotlinx.coroutines.delay(400)
@@ -1069,25 +1166,34 @@ data class EmbyLibraryScreen(
                   // 人物只有 Primary（头像），不跟着 cardStyle 跑去取 Backdrop
                   imageUrl = viewModel.imageUrl(s, person, "Primary", 480),
                   progress = null,
-                  isFavorite = false,
+                  // /Persons 端点带 EnableUserData 时会回传 IsFavorite（见 EmbyClient.getActors），
+                  // 已收藏的演员卡片右上角显示红心角标
+                  isFavorite = person.UserData?.IsFavorite == true,
                   // 左下角角标 = 该演员在本库参与的作品数
                   badgeText = person.ChildCount?.takeIf { it > 0 }?.let { "$it 部" },
                   style = EmbyCardStyle.POSTER,
                   fillWidth = true,
                   onClick = {
                     val pid = person.Id ?: return@EmbyMediaCard
+                    // 与详情页点演职员头像统一：都进 EmbyPersonScreen（右上角收藏红心、
+                    // 全库作品清单、三列海报卡）。原先这里进的是带 personId 预筛的媒体库页
+                    // —— 和详情页那条路由是两个页面，红心与卡片规格都对不上（用户反馈），
+                    // 现在收口到同一条路由。
                     backStack.add(
-                      EmbyLibraryScreen(
-                        libraryId = libraryId,
-                        title = "演员：${person.Name.orEmpty()}",
-                        collectionType = collectionType,
+                      EmbyPersonScreen(
                         personId = pid,
-                        personName = person.Name,
+                        personName = person.Name.orEmpty(),
+                        personImageTag = person.ImageTags["Primary"],
                       ),
                     )
                   },
-                  // 演员不是文件条目，长按那套「收藏 / 已看 / 刮削 / 删除」不适用
-                  onLongClick = null,
+                  // 长按弹出操作菜单（复用媒体条目那套）：演员只支持「收藏 / 取消收藏」，
+                  // 已看 / 编辑元数据 / 刮削 / 删除这些对 Person 没有意义（菜单内部按类型裁剪）
+                  onLongClick = if (person.Id != null) {
+                    { offset -> actionTarget = person; menuAnchor = offset }
+                  } else {
+                    null
+                  },
                 )
               }
             }
@@ -1254,6 +1360,11 @@ data class EmbyLibraryScreen(
               val id = updated.Id
               if (id != null) {
                 items = items.map { if (it.Id == id) updated else it }
+                // 演员分类的长按（收藏/取消收藏演员）改的是 actorItems 这份独立数据，
+                // 不同步的话菜单关了红心不刷新
+                if (actorItems.any { it.Id == id }) {
+                  actorItems = actorItems.map { if (it.Id == id) updated else it }
+                }
               }
             },
             onDeleted = { id ->

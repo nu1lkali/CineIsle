@@ -758,9 +758,15 @@
   <string name="i18n_mpv_sw_fast">SW Fast</string>
   <string name="i18n_project_name_en" translatable="false">CineIsle</string>
   <string name="i18n_ack_title">Acknowledgments</string>
-  <string name="i18n_ack_mpvex_title" translatable="false">mpvEx</string>
-  <string name="i18n_ack_mpvex_summary">Based on the open-source project mpvEx, which is built on mpv-android / libmpv.</string>
-  <string name="i18n_ack_tap_to_open">Tap to open the upstream repository</string>
+  <string name="i18n_ack_tap_to_open">Open the project page</string>
+  <string name="i18n_ack_mpvex_summary">Direct upstream — this project is a secondary development built on it.</string>
+  <string name="i18n_ack_mpv_android_summary">mpv bindings and libmpv integration — the primary playback core.</string>
+  <string name="i18n_ack_gsy_summary">The second playback core, together with the IJK (FFmpeg) engine it bundles.</string>
+  <string name="i18n_ack_media3_summary">AndroidX Media3 / ExoPlayer — multi-instance playback used by Vertical Feed.</string>
+  <string name="i18n_ack_emby_summary">Official Emby Java SDK — the client\'s API layer is built on it.</string>
+  <string name="i18n_ack_upnpcast_summary">DLNA casting — device discovery and playback control.</string>
+  <string name="i18n_ack_aboutlibraries_summary">Generates the open-source license list on this screen.</string>
+  <string name="i18n_ack_network_summary">Network storage and serving — SMB, WebDAV, FTP and an embedded HTTP server.</string>
   <string name="i18n_preload_next_video">Preload next video</string>
   <string name="i18n_preload_next_video_summary">2s into playback, fetch the beginning of the next video in the background for smoother switching</string>
   <string name="i18n_seekbar_standard">Standard</string>

@@ -113,6 +113,17 @@ class MPVView(
     val profile = decoderPreferences.profile.get()
     MPVLib.setOptionString("profile", profile)
     setVo(if (decoderPreferences.gpuNext.get()) "gpu-next" else "gpu")
+
+    // ── 杜比视界 / HDR 输出 ──
+    // 1) DV Profile 5 没有 HDR10 兜底层，只有 gpu-next（libplacebo）会解析 HEVC 流里的
+    //    DV RPU 元数据做色彩映射，旧版 gpu 播 P5 必然紫绿反色（gpuNext 默认已开，见
+    //    DecoderPreferences.gpuNext 的说明）；Profile 7 / 8 的 RPU 同样走这条路。
+    // 2) target-colorspace-hint：HDR / DV 内容时让 libplacebo 按片源提示把显示切进
+    //    HDR 色彩空间（Android 9+ 支持），避免 HDR 片被压到 SDR 亮度区间灰成一片。
+    //    仅 gpu-next 有效；老设备不支持时 mpv 会忽略该提示，无副作用。
+    if (decoderPreferences.gpuNext.get()) {
+      MPVLib.setOptionString("target-colorspace-hint", "yes")
+    }
     
     // Set GPU API context (Vulkan or OpenGL)
     if (decoderPreferences.useVulkan.get()) {

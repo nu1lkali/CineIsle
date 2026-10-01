@@ -2190,6 +2190,10 @@ private fun cancelAutoplayCountdown() {
     // Reset AB loop values when video changes
     viewModel.clearABLoop()
 
+    // 换片了：网速采样的基线（fw-bytes 增量）与平滑历史一并清掉，
+    // 否则新片开头那一秒会把上一条的缓冲量算进来，速度显示跳变
+    MpvNetSpeedSampler.reset()
+
     setIntentExtras(intent.extras)
 
     lifecycleScope.launch(Dispatchers.IO) {

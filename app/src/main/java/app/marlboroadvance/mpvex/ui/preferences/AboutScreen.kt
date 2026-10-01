@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.CurrencyRupee
@@ -307,50 +308,28 @@ object AboutScreen : Screen {
         Spacer(Modifier.height(8.dp))
 
         // Acknowledgments Section
+        // 这里只列**主要开源项目** —— 完整依赖清单在「开源许可」页（由 AboutLibraries 生成）。
+        // 项目名与仓库地址写在 ACKNOWLEDGMENTS 里（专有名词 / 固定地址，不进资源表），
+        // 只有说明文字走资源，便于本地化。
         PreferenceSectionHeader(
           title = stringResource(id = R.string.i18n_ack_title),
         )
 
         PreferenceCard {
-          Row(
-            modifier =
-              Modifier
-                .fillMaxWidth()
-                .clickable {
+          ACKNOWLEDGMENTS.forEachIndexed { index, ack ->
+            if (index > 0) PreferenceDivider()
+            AcknowledgmentRow(
+              ack = ack,
+              onClick = {
+                // 个别机型没装浏览器时 startActivity 会抛 ActivityNotFoundException，
+                // 静默吞掉即可 —— 点一下没反应好过直接崩
+                runCatching {
                   context.startActivity(
-                    Intent(
-                      Intent.ACTION_VIEW,
-                      context.getString(R.string.github_repo_url).toUri(),
-                    ),
+                    Intent(Intent.ACTION_VIEW, ack.url.toUri()),
                   )
                 }
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Icon(
-              imageVector = Icons.Filled.Code,
-              contentDescription = null,
-              modifier = Modifier.size(24.dp),
-              tint = MaterialTheme.colorScheme.primary,
+              },
             )
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = stringResource(id = R.string.i18n_ack_mpvex_title),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium,
-              )
-              Text(
-                text = stringResource(id = R.string.i18n_ack_mpvex_summary),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.outline,
-              )
-              Text(
-                text = stringResource(id = R.string.i18n_ack_tap_to_open),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
-              )
-            }
           }
         }
 
@@ -403,5 +382,115 @@ object LibrariesScreen : Screen {
             .padding(paddingValues),
       )
     }
+  }
+}
+
+/* ---------------- 致谢 ---------------- */
+
+/**
+ * 一条致谢。
+ *
+ * 项目名与仓库地址是**专有名词 / 固定地址**，直接写在代码里、不进资源表；
+ * 只有说明文字需要翻译，走 [summaryRes]。
+ */
+private data class Acknowledgment(
+  val name: String,
+  val summaryRes: Int,
+  val url: String,
+)
+
+/**
+ * 「关于」页列出的是**主要开源项目** —— 完整依赖清单在「开源许可」页（AboutLibraries 生成）。
+ *
+ * 顺序从上游往下排：直接上游 → 两个播放内核 → Emby 客户端与投屏 → 其余库。
+ */
+private val ACKNOWLEDGMENTS =
+  listOf(
+    Acknowledgment(
+      name = "mpvEx",
+      summaryRes = R.string.i18n_ack_mpvex_summary,
+      url = "https://github.com/marlboro-advance/mpvEx",
+    ),
+    Acknowledgment(
+      name = "mpv-android / libmpv",
+      summaryRes = R.string.i18n_ack_mpv_android_summary,
+      url = "https://github.com/mpv-android/mpv-android",
+    ),
+    Acknowledgment(
+      name = "GSYVideoPlayer",
+      summaryRes = R.string.i18n_ack_gsy_summary,
+      url = "https://github.com/CarGuo/GSYVideoPlayer",
+    ),
+    Acknowledgment(
+      name = "AndroidX Media3 / ExoPlayer",
+      summaryRes = R.string.i18n_ack_media3_summary,
+      url = "https://github.com/androidx/media",
+    ),
+    Acknowledgment(
+      name = "Emby Java SDK",
+      summaryRes = R.string.i18n_ack_emby_summary,
+      url = "https://github.com/MediaBrowser/Emby.SDK",
+    ),
+    Acknowledgment(
+      name = "UPnPCast",
+      summaryRes = R.string.i18n_ack_upnpcast_summary,
+      url = "https://github.com/yinnho/UPnPCast",
+    ),
+    Acknowledgment(
+      name = "AboutLibraries",
+      summaryRes = R.string.i18n_ack_aboutlibraries_summary,
+      url = "https://github.com/mikepenz/AboutLibraries",
+    ),
+    Acknowledgment(
+      name = "SMBJ · Sardine · Commons Net · NanoHTTPD",
+      summaryRes = R.string.i18n_ack_network_summary,
+      url = "https://github.com/hierynomus/smbj",
+    ),
+  )
+
+/**
+ * 一行致谢：左边图标 + 项目名 / 说明，右边一枚「打开」箭头，**整行可点**。
+ *
+ * 箭头只是「点得开」的提示，不是独立按钮 —— 省一个触控目标，也避免误点。
+ */
+@Composable
+private fun AcknowledgmentRow(
+  ack: Acknowledgment,
+  onClick: () -> Unit,
+) {
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clickable(onClick = onClick)
+        .padding(horizontal = 16.dp, vertical = 12.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Icon(
+      imageVector = Icons.Filled.Code,
+      contentDescription = null,
+      modifier = Modifier.size(24.dp),
+      tint = MaterialTheme.colorScheme.primary,
+    )
+    Spacer(modifier = Modifier.width(16.dp))
+    Column(modifier = Modifier.weight(1f)) {
+      Text(
+        text = ack.name,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Medium,
+      )
+      Text(
+        text = stringResource(id = ack.summaryRes),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.outline,
+      )
+    }
+    Spacer(modifier = Modifier.width(12.dp))
+    Icon(
+      imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+      contentDescription = stringResource(id = R.string.i18n_ack_tap_to_open),
+      modifier = Modifier.size(18.dp),
+      tint = MaterialTheme.colorScheme.outline,
+    )
   }
 }

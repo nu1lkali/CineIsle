@@ -756,9 +756,15 @@
   <string name="i18n_mpv_sw_fast">软件快速</string>
   <string name="i18n_project_name_en" translatable="false">CineIsle</string>
   <string name="i18n_ack_title">致谢</string>
-  <string name="i18n_ack_mpvex_title" translatable="false">mpvEx</string>
-  <string name="i18n_ack_mpvex_summary">本项目基于开源项目 mpvEx，其底层为 mpv-android / libmpv。</string>
-  <string name="i18n_ack_tap_to_open">点击打开上游仓库</string>
+  <string name="i18n_ack_tap_to_open">打开项目主页</string>
+  <string name="i18n_ack_mpvex_summary">直接的上游项目，本项目基于它二次开发。</string>
+  <string name="i18n_ack_mpv_android_summary">mpv 绑定与 libmpv 集成 —— 主播放内核。</string>
+  <string name="i18n_ack_gsy_summary">第二个播放内核，以及它自带的 IJK（FFmpeg）引擎。</string>
+  <string name="i18n_ack_media3_summary">AndroidX Media3 / ExoPlayer —— 视界流用的多实例播放。</string>
+  <string name="i18n_ack_emby_summary">Emby 官方 Java SDK —— 客户端的接口层基于它实现。</string>
+  <string name="i18n_ack_upnpcast_summary">DLNA 投屏 —— 设备发现与播放控制。</string>
+  <string name="i18n_ack_aboutlibraries_summary">生成本页里的开源许可清单。</string>
+  <string name="i18n_ack_network_summary">网络存储与本地服务 —— SMB、WebDAV、FTP、内嵌 HTTP 服务。</string>
   <string name="i18n_preload_next_video">视频预加载</string>
   <string name="i18n_preload_next_video_summary">当前视频播放 2 秒后，后台预取下一个视频开头一段数据，切换更流畅</string>
   <string name="i18n_seekbar_standard">标准</string>

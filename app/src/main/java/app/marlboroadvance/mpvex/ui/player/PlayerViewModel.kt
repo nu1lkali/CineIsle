@@ -127,6 +127,18 @@ class PlayerViewModel(
   val pos by PlayerLib.propInt["time-pos"].collectAsState(viewModelScope)
   val duration by PlayerLib.propInt["duration"].collectAsState(viewModelScope)
 
+  // ── 网络加载速度（播放器顶栏的指示器）──
+  private val _netSpeedBytesPerSec = MutableStateFlow<Long?>(null)
+
+  /**
+   * 当前视频的网络加载速度（字节/秒），约 1 秒刷新一次。
+   *
+   * null = 指示器整体隐藏：非 mpv 内核、或当前流不是网络流（本地文件上
+   * 显示「0 KB/s」只会造成困惑）。值为 0 表示「缓冲已满 / 暂停中，没有在下载」，
+   * 此时指示器显示 0 KB/s 而不是消失 —— 数值归零是诚实的，忽隐忽现反而让人以为坏了。
+   */
+  val netSpeedBytesPerSec = _netSpeedBytesPerSec.asStateFlow()
+
   // High-precision position and duration for smooth seekbar
   private val _precisePosition = MutableStateFlow(0f)
   val precisePosition = _precisePosition.asStateFlow()
@@ -157,6 +169,20 @@ class PlayerViewModel(
         if (dur != null && dur > 0) {
             _preciseDuration.value = dur.toFloat()
         }
+      }
+    }
+
+    // ── 网络加载速度：固定 1 秒一拍 ──
+    // 数据源与归零策略见 [MpvNetSpeedSampler] / [netSpeedBytesPerSec] 的注释。
+    // 轮询而非 observe：cache-speed 的属性变更通知不保证按秒触发，定时读最稳。
+    viewModelScope.launch {
+      while (isActive) {
+        val paused = PlayerLib.getPropertyBoolean("pause") == true
+        _netSpeedBytesPerSec.value = MpvNetSpeedSampler.sample(
+          isMpv = PlayerLib.kind == EngineKind.MPV,
+          isPaused = paused,
+        )
+        delay(NET_SPEED_POLL_INTERVAL_MS)
       }
     }
   }
@@ -359,6 +385,9 @@ class PlayerViewModel(
   private companion object {
     const val TAG = "PlayerViewModel"
     const val SEEK_COALESCE_DELAY_MS = 60L
+
+    /** 网络加载速度的采样周期：1 秒一拍，与常见播放器（VLC / PotPlayer）的刷新节奏一致 */
+    const val NET_SPEED_POLL_INTERVAL_MS = 1_000L
     val VALID_SUBTITLE_EXTENSIONS =
       setOf(
         // Common & modern

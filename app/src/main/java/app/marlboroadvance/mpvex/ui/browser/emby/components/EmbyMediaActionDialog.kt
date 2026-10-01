@@ -218,6 +218,10 @@ private enum class MediaPage { MAIN, EDIT_METADATA, EDIT_IMAGES, IDENTIFY, REFRE
  * 280dp 起），而这里只有几个短条目，宽度应该跟着最长的那行文字走。
  * 菜单只负责「选哪个操作」—— 除了收藏 / 已看这种即时开关，其余都交给
  * 底部上划的功能窗（ModalBottomSheet）去承载。
+ *
+ * 演员条目（Type=Person）只有「收藏 / 取消收藏」一项：已看、编辑元数据、刮削、删除
+ * 这些都是针对媒体文件的，对 Person 没有意义。收藏同样走 `FavoriteItems/{id}`
+ * 接口（Person 也是一个 Item），Emby 服务端原生支持。
  */
 @Composable
 private fun EmbyMediaActionMenu(
@@ -236,10 +240,12 @@ private fun EmbyMediaActionMenu(
   val name = item.Name ?: ""
   val isFavorite = item.UserData?.IsFavorite == true
   val isPlayed = item.UserData?.Played == true
+  // 演员条目：裁剪到只剩收藏一项，文案也按「收藏 / 取消收藏」来
+  val isPerson = item.Type?.equals("Person", ignoreCase = true) == true
 
   DropdownMenu(expanded = true, onDismissRequest = onDismissRequest) {
     DropdownMenuItem(
-      text = { Text(if (isFavorite) "取消收藏" else "添加到收藏") },
+      text = { Text(if (isFavorite) "取消收藏" else if (isPerson) "收藏" else "添加到收藏") },
       leadingIcon = {
         Icon(
           if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -254,7 +260,7 @@ private fun EmbyMediaActionMenu(
           server = server,
           itemId = item.Id,
           name = name,
-          okMessage = if (isFavorite) "已从收藏移除「$name」" else "已加入收藏「$name」",
+          okMessage = if (isFavorite) "已取消收藏「$name」" else "已收藏「$name」",
           action = { s, _ -> viewModel.toggleFavorite(s, item) },
         )
         onDismissRequest()
@@ -263,53 +269,56 @@ private fun EmbyMediaActionMenu(
         )
       },
     )
-    DropdownMenuItem(
-      text = { Text(if (isPlayed) "标记为未播放" else "标记为已播放") },
-      leadingIcon = { Icon(Icons.Default.Check, contentDescription = null) },
-      onClick = {
-        val id = item.Id
-        if (id != null) {
-          runEmbyLibraryAction(
-            context = context,
-            scope = scope,
-            server = server,
-            itemId = id,
-            name = name,
-            okMessage = if (isPlayed) "已标记为未播放" else "已标记为已播放",
-            action = { s, itemId -> viewModel.setPlayed(s, itemId, !isPlayed) },
-          )
-          onDismissRequest()
-          onChanged(item.copy(UserData = (item.UserData ?: EmbyUserData()).copy(Played = !isPlayed)))
-        }
-      },
-    )
-    DropdownMenuItem(
-      text = { Text("编辑元数据") },
-      leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-      onClick = { onOpen(MediaPage.EDIT_METADATA) },
-    )
-    DropdownMenuItem(
-      text = { Text("编辑图片") },
-      leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
-      onClick = { onOpen(MediaPage.EDIT_IMAGES) },
-    )
-    DropdownMenuItem(
-      text = { Text("刮削元数据") },
-      leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-      onClick = { onOpen(MediaPage.IDENTIFY) },
-    )
-    DropdownMenuItem(
-      text = { Text("刷新元数据") },
-      leadingIcon = { Icon(Icons.Default.Autorenew, contentDescription = null) },
-      onClick = { onOpen(MediaPage.REFRESH) },
-    )
-    DropdownMenuItem(
-      text = { Text("删除", color = MaterialTheme.colorScheme.error) },
-      leadingIcon = {
-        Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-      },
-      onClick = { onOpen(MediaPage.DELETE) },
-    )
+    // 演员到收藏为止：其余操作都不适用于 Person，整块收掉
+    if (!isPerson) {
+      DropdownMenuItem(
+        text = { Text(if (isPlayed) "标记为未播放" else "标记为已播放") },
+        leadingIcon = { Icon(Icons.Default.Check, contentDescription = null) },
+        onClick = {
+          val id = item.Id
+          if (id != null) {
+            runEmbyLibraryAction(
+              context = context,
+              scope = scope,
+              server = server,
+              itemId = id,
+              name = name,
+              okMessage = if (isPlayed) "已标记为未播放" else "已标记为已播放",
+              action = { s, itemId -> viewModel.setPlayed(s, itemId, !isPlayed) },
+            )
+            onDismissRequest()
+            onChanged(item.copy(UserData = (item.UserData ?: EmbyUserData()).copy(Played = !isPlayed)))
+          }
+        },
+      )
+      DropdownMenuItem(
+        text = { Text("编辑元数据") },
+        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+        onClick = { onOpen(MediaPage.EDIT_METADATA) },
+      )
+      DropdownMenuItem(
+        text = { Text("编辑图片") },
+        leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
+        onClick = { onOpen(MediaPage.EDIT_IMAGES) },
+      )
+      DropdownMenuItem(
+        text = { Text("刮削元数据") },
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+        onClick = { onOpen(MediaPage.IDENTIFY) },
+      )
+      DropdownMenuItem(
+        text = { Text("刷新元数据") },
+        leadingIcon = { Icon(Icons.Default.Autorenew, contentDescription = null) },
+        onClick = { onOpen(MediaPage.REFRESH) },
+      )
+      DropdownMenuItem(
+        text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+        leadingIcon = {
+          Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+        },
+        onClick = { onOpen(MediaPage.DELETE) },
+      )
+    }
   }
 }
 

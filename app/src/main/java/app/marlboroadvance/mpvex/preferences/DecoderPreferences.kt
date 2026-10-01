@@ -9,7 +9,16 @@ class DecoderPreferences(
 ) {
   val profile = preferenceStore.getString("mpv_profile", "fast")
   val tryHWDecoding = preferenceStore.getBoolean("try_hw_dec", true)
-  val gpuNext = preferenceStore.getBoolean("gpu_next")
+
+  /**
+   * 渲染器：true = gpu-next（libplacebo），false = 旧版 gpu。
+   *
+   * **默认开启**（mpv 上游 0.37 起的默认渲染器也是它）。这直接决定「杜比视界能不能播」：
+   * DV Profile 5 的 IPTPQc2 色彩没有 HDR10 兜底层，只有 gpu-next 的 libplacebo
+   * 会读 HEVC 流里的 DV RPU 元数据做映射 —— 旧版 gpu 下播放 Profile 5 会整屏紫绿。
+   * Profile 7 / 8 的 RPU 同样由 gpu-next 处理。愿意接受旧渲染器的用户仍可关掉。
+   */
+  val gpuNext = preferenceStore.getBoolean("gpu_next", true)
   val useVulkan = preferenceStore.getBoolean("use_vulkan", false)
   val useYUV420P = preferenceStore.getBoolean("use_yuv420p", false)
 

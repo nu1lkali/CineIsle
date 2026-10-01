@@ -106,6 +106,28 @@
             android:scaleType="centerInside"
             android:src="@drawable/gsy_ic_back" />
 
+        <!--
+          网络加载速度指示器：紧挨返回键，跟着顶栏一起显隐（GSY 只管 layout_top 的显隐，
+          看不见它就看不见这个键）。文本由 GsyPlayerActivity 的 1 秒定时器写入；
+          非网络流时 Activity 会把它置为 GONE，这里默认 GONE 起步。
+          字体、字号、阴影与标题/时间码一致（monospace 12sp），观感不突兀。
+        -->
+        <TextView
+            android:id="@+id/gsy_net_speed"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:drawablePadding="3dp"
+            android:gravity="center_vertical"
+            android:shadowColor="#CC000000"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="4"
+            android:textColor="#E6FFFFFF"
+            android:textSize="12sp"
+            android:typeface="monospace"
+            android:visibility="gone" />
+
         <!-- 竖屏时把右侧那组动作键顶到最右；横屏有标题时会被置为 GONE -->
         <View
             android:id="@+id/gsy_top_spacer"

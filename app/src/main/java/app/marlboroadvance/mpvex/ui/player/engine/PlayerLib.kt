@@ -78,6 +78,9 @@ object PlayerLib {
 
   fun getPropertyString(key: String): String? = if (isMpv) MPVLib.getPropertyString(key) else null
 
+  /** 读 node 型属性（如 demuxer-cache-state）；非 mpv 内核恒为 null */
+  fun getPropertyNode(key: String): MPVNode? = if (isMpv) MPVLib.getPropertyNode(key) else null
+
   // ─────────────── 属性写 ───────────────
 
   fun setPropertyInt(

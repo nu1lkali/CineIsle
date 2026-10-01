@@ -6,9 +6,12 @@ import android.content.res.Configuration
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -48,6 +51,7 @@ import com.shuyu.gsyvideoplayer.player.SystemPlayerManager
 import com.shuyu.gsyvideoplayer.subtitle.GSYSubtitleSource
 import com.shuyu.gsyvideoplayer.utils.GSYVideoType
 import com.shuyu.gsyvideoplayer.utils.OrientationUtils
+import com.shuyu.gsyvideoplayer.video.base.GSYVideoView
 import `is`.xyz.mpv.Utils
 import java.io.File
 import java.text.SimpleDateFormat
@@ -169,6 +173,31 @@ class GsyPlayerActivity : ComponentActivity() {
   /** 投屏面板（Compose）挂在内容根布局上的覆盖层 */
   private var castOverlay: ComposeView? = null
 
+  // ── 网络加载速度指示器（顶栏 gsy_net_speed）──
+  /** 速度平滑器：压平 GSY 底层网速采样的毛刺，避免显示值一秒一个数（见 [NetworkSpeedSmoother]） */
+  private val netSpeedSmoother = NetworkSpeedSmoother()
+
+  // TrafficStats 兜底采样基线
+  private var lastTotalRxBytes = -1L
+  private var lastRxTimestampMs = 0L
+
+  private val netSpeedHandler = Handler(Looper.getMainLooper())
+
+  /**
+   * 1 秒一拍的速度刷新。周期与 mpv 播放页（PlayerViewModel 的协程轮询）一致。
+   *
+   * 换片 / 停止后平滑历史不重置的问题可忽略：换片走的是重建播放页
+   * （[recreateKeepingPosition]）或 setUp+startPlayLogic，原地更新的场景里
+   * 平滑器的 3 秒惯性只会造成一小段过渡值，不会显示错数据。
+   */
+  private val netSpeedTicker =
+    object : Runnable {
+      override fun run() {
+        updateNetSpeedView()
+        netSpeedHandler.postDelayed(this, NET_SPEED_POLL_INTERVAL_MS)
+      }
+    }
+
   /**
    * 正在播的那个实例。
    *
@@ -240,6 +269,9 @@ class GsyPlayerActivity : ComponentActivity() {
         }
       },
     )
+
+    // 网速指示器：进页面就开跑（onPause 停、onResume 续）
+    netSpeedHandler.post(netSpeedTicker)
   }
 
   /**
@@ -365,7 +397,7 @@ class GsyPlayerActivity : ComponentActivity() {
     if (url.endsWith(".iso", ignoreCase = true) ||
       uri.lastPathSegment?.endsWith(".iso", ignoreCase = true) == true
     ) {
-      Toast.makeText(this, "ISO 原盘由 mpv 内核播放，正在切换…", Toast.LENGTH_LONG).show()
+      Toast.makeText(this, "ISO 原盘将使用 mpv 内核播放，正在切换…", Toast.LENGTH_LONG).show()
       switchToMpvPlayer()
       return
     }
@@ -759,13 +791,13 @@ class GsyPlayerActivity : ComponentActivity() {
   private fun fallbackToIjk() {
     val current = forcedKernel ?: prefs.kernel.get()
     if (current == GsyKernelKind.IJK) {
-      Toast.makeText(this, "这个文件连 IJK（ffmpeg）内核也解不了，可能源本身有问题", Toast.LENGTH_LONG).show()
+      Toast.makeText(this, "所有可用内核均无法解码该文件，请检查媒体源是否完好", Toast.LENGTH_LONG).show()
       return
     }
     if (kernelFallbackUsed) return
     kernelFallbackUsed = true
     forcedKernel = GsyKernelKind.IJK
-    Toast.makeText(this, "当前内核解不了这个文件，已自动改用 IJK（ffmpeg）重试", Toast.LENGTH_LONG).show()
+    Toast.makeText(this, "当前内核无法解码此文件，已自动切换至 IJK（ffmpeg）内核重试", Toast.LENGTH_LONG).show()
     recreateKeepingPosition()
   }
 
@@ -1360,6 +1392,8 @@ class GsyPlayerActivity : ComponentActivity() {
     if (!isInPictureInPictureMode) player?.onVideoPause()
     // 离开页面就停掉重力感应监听（13.x 里 pause()/resume() 改成了这个开关）
     orientationUtils?.setIsPause(true)
+    // 后台不需要刷网速；注意先 remove 再 post，避免 onResume 时双拍
+    netSpeedHandler.removeCallbacks(netSpeedTicker)
   }
 
   override fun onResume() {
@@ -1368,6 +1402,8 @@ class GsyPlayerActivity : ComponentActivity() {
     if (!isInPictureInPictureMode) player?.onVideoResume()
     orientationUtils?.setIsPause(false)
     pipHelper?.updateParams()
+    netSpeedHandler.removeCallbacks(netSpeedTicker)
+    netSpeedHandler.post(netSpeedTicker)
   }
 
   override fun onPictureInPictureModeChanged(
@@ -1384,6 +1420,7 @@ class GsyPlayerActivity : ComponentActivity() {
   override fun onDestroy() {
     super.onDestroy()
     hideCastSheet()
+    netSpeedHandler.removeCallbacks(netSpeedTicker)
     pipHelper?.release()
     pipHelper = null
     orientationUtils?.releaseListener()
@@ -1393,6 +1430,74 @@ class GsyPlayerActivity : ComponentActivity() {
     EmbyPlayerActions.release()
     player = null
     fullscreenPlayer = null
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // 网络加载速度指示器
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * 把当前网速写进顶栏的 [R.id.gsy_net_speed]。
+   *
+   * 数据来源：GSY 的 `getNetSpeed()`（字节/秒）——
+   *  · IJK 内核（默认）：`IjkMediaPlayer.getTcpSpeed()`，播放器自身 TCP 连接的读取速度，准确；
+   *  · Exo2 内核：TrafficStats 按进程接收增量估算的近似值（GSY 官方实现）。
+   *
+   * 显示策略（与 mpv 播放页对齐）：
+   *  · 非网络流（本地文件 / content Uri）：TextView 整个隐藏 —— 本地播放没有「网速」可言；
+   *  · 暂停：归零显示 0 KB/s。暂停时 GSY 的进度定时器停转、内核读数冻结，
+   *    保留旧值会让人误以为还在下载，归零最诚实；
+   *  · 缓冲结束 / 缓冲已满：内核读数自然回落到 0，不做额外干预；
+   *  · 竖屏实例与全屏克隆实例都挂在 [activePlayer] 上取，切全屏不丢刷新目标。
+   *
+   * TextView 跟着顶栏（layout_top）一起显隐：GSY 的控件状态机管顶栏，
+   * 我们只负责「顶栏在的时候这行字是对的」。
+   */
+  private fun updateNetSpeedView() {
+    val view = activePlayer ?: return
+    val speedView = view.findViewById<TextView>(R.id.gsy_net_speed) ?: return
+
+    val uri = currentUri
+    val isNetworkStream = uri != null && (uri.scheme == "http" || uri.scheme == "https")
+    if (!isNetworkStream) {
+      speedView.visibility = View.GONE
+      return
+    }
+
+    val paused = view.currentState == GSYVideoView.CURRENT_STATE_PAUSE
+    val raw = if (paused) {
+      0L
+    } else {
+      // GSY 内部没起播放时返回 0，直接显示 0 KB/s 也符合「没有在下载」的事实
+      val kernelSpeed = runCatching { view.getNetSpeed() }.getOrDefault(0L)
+      if (kernelSpeed > 0) kernelSpeed else sampleRxBytesFallback()
+    }
+    val speed = netSpeedSmoother.smooth(raw)
+
+    speedView.visibility = View.VISIBLE
+    speedView.text = "↓ ${formatNetworkSpeed(speed)}"
+  }
+
+  /**
+   * TrafficStats 兜底：内核自报的网速（IJK 的 tcp_speed / Exo2 的估算）在部分设备、
+   * 或走了本地代理缓存（ProxyCacheManager）的路径上会恒为 0 —— 用户实测「一直 0 B/s」。
+   * 此时改用**进程级接收字节增量**近似当前下载速度：正在播放时视频流就是本 App 的
+   * 主要流量，误差可接受；缓冲已满 / 停止下载时增量自然归 0，语义一致。
+   */
+  private fun sampleRxBytesFallback(): Long {
+    val total = android.net.TrafficStats.getTotalRxBytes()
+    // 设备不支持时返回 UNSUPPORTED(-1)，只能保持 0
+    if (total == android.net.TrafficStats.UNSUPPORTED.toLong()) return 0L
+    val now = android.os.SystemClock.elapsedRealtime()
+    val prevBytes = lastTotalRxBytes
+    val prevTs = lastRxTimestampMs
+    lastTotalRxBytes = total
+    lastRxTimestampMs = now
+    if (prevBytes < 0 || prevTs == 0L) return 0L
+    val delta = total - prevBytes
+    if (delta <= 0) return 0L
+    val dt = (now - prevTs).coerceAtLeast(1L)
+    return delta * 1000 / dt
   }
 
   /**
@@ -1518,6 +1623,9 @@ class GsyPlayerActivity : ComponentActivity() {
 
     /** 探测字幕编码时最多读多少字节 */
     private const val CHARSET_PROBE_BYTES = 64 * 1024
+
+    /** 网速指示器的刷新周期：1 秒一拍，与 mpv 播放页保持一致 */
+    private const val NET_SPEED_POLL_INTERVAL_MS = 1_000L
 
     /**
      * 构造一次「用 GSY 播放」的 intent。

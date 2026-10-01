@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -45,9 +47,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
+import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
+import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -79,19 +83,32 @@ data class EmbyPersonScreen(
     var items by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    // 演员本人的条目（含 UserData.IsFavorite）：右上角收藏红心的状态来源。
+    // 进页面查一次；收藏/取消收藏成功后本地翻转，不再回查服务器。
+    var personItem by remember { mutableStateOf<EmbyItem?>(null) }
 
     suspend fun load() {
       val current = server
       if (current == null) return
       isLoading = true
       error = null
-      val list = viewModel.loadPersonItems(current, personId)
+      // 网格 key = Id ?: Name：按同一口径去重，防止服务端重复条目把网格撞崩
+      val list = viewModel.loadPersonItems(current, personId).distinctBy { it.Id ?: it.Name ?: "" }
       items = list
       isLoading = false
       if (list.isEmpty()) error = "没有找到「$personName」的作品"
     }
 
-    LaunchedEffect(personId, server) { load() }
+    LaunchedEffect(personId, server) {
+      load()
+      // 红心状态单独拉。**必须保证拿到可点击的条目**：查询失败（服务端不支持等）
+      // 就用 Id + 名字拼一个最小条目顶上 —— 否则红心永远禁用，点了没任何反馈。
+      // UserData 未知时按「未收藏」处理，第一次点击会执行收藏，语义无损。
+      val current = server ?: return@LaunchedEffect
+      personItem =
+        viewModel.loadPersonById(current, personId)
+          ?: EmbyItem(Id = personId, Name = personName, Type = "Person")
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
       TopAppBar(
@@ -107,6 +124,50 @@ data class EmbyPersonScreen(
             Icon(
               imageVector = Icons.AutoMirrored.Filled.ArrowBack,
               contentDescription = "返回",
+            )
+          }
+        },
+        actions = {
+          // ── 右上角收藏红心 ──
+          // 与详情页同一套交互：乐观更新红心 → 请求服务器 → 按结果修正并弹 Toast；
+          // 动效复用 FavoriteHeartIcon（弹跳 + 星光 + 红心渐变）。
+          val isFavorite = personItem?.UserData?.IsFavorite == true
+          IconButton(
+            enabled = personItem != null,
+            onClick = {
+              val current = personItem ?: return@IconButton
+              val currentServer = server ?: return@IconButton
+              val wasFavorite = current.UserData?.IsFavorite == true
+              // 乐观更新：先把红心翻过来，动效才跟得上手指；失败再回滚
+              personItem = current.copy(
+                UserData = (current.UserData ?: EmbyUserData()).copy(IsFavorite = !wasFavorite),
+              )
+              scope.launch {
+                val result = viewModel.toggleFavorite(currentServer, current)
+                val nowFavorite = result.getOrNull()
+                personItem = current.copy(
+                  UserData = (current.UserData ?: EmbyUserData())
+                    .copy(IsFavorite = nowFavorite ?: wasFavorite),
+                )
+                Toast.makeText(
+                  context,
+                  when (nowFavorite) {
+                    true -> "已收藏「$personName」"
+                    false -> "已取消收藏「$personName」"
+                    null -> "收藏失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
+                  },
+                  Toast.LENGTH_SHORT,
+                ).show()
+              }
+            },
+          ) {
+            // 与媒体详情页同款：弹跳 + 星光 + 红心渐变（状态驱动，点击时先乐观更新）
+            // 尺寸对齐详情页的 24dp，避免「顶栏这颗比详情页小一圈」的观感落差
+            FavoriteHeartIcon(
+              isFavorite = isFavorite,
+              isToggling = false,
+              iconSize = 24.dp,
+              idleColor = LocalContentColor.current,
             )
           }
         },
@@ -172,10 +233,12 @@ data class EmbyPersonScreen(
 
           else -> {
             LazyVerticalGrid(
-              columns = GridCells.Adaptive(minSize = 110.dp),
-              contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+              // 与媒体库「演员」分类、收藏页同一套规格：固定一行三列海报卡
+              // （原先用 Adaptive(110dp)，与其它入口的卡片大小对不上，用户反馈已统一）
+              columns = GridCells.Fixed(3),
+              contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 96.dp),
               verticalArrangement = Arrangement.spacedBy(12.dp),
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
               modifier = Modifier.fillMaxSize(),
             ) {
               items(items, key = { it.Id ?: it.Name ?: "" }) { item ->

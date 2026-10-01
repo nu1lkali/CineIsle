@@ -79,10 +79,11 @@ fun EmbyHistoryScreen() {
       val history = viewModel.loadHistory(current, 0, 100)
       resume to history
     }.onSuccess { (resume, history) ->
+      // 按列表 key 的口径去重：服务端重复条目会把 LazyColumn/Row 撞崩（与媒体库搜索同款问题）
       resumeItems.clear()
-      resumeItems.addAll(resume)
+      resumeItems.addAll(resume.distinctBy { it.Id ?: it.Name ?: "" })
       historyItems.clear()
-      historyItems.addAll(history.items)
+      historyItems.addAll(history.items.distinctBy { it.Id ?: it.Name ?: "" })
     }.onFailure {
       error = it.message ?: "加载历史失败"
     }

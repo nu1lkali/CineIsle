@@ -139,6 +139,15 @@ class BrowserPreferences(
    * 某个播放器之后列表就整个重排、下次找不到别的。
    */
   val embyExternalPlayer = preferenceStore.getString("emby_external_player", "")
+
+  /**
+   * 收藏页选中的内容类型（影片 / 演员，存枚举名，空串 = 影片）。
+   *
+   * **为什么落盘**：从收藏页点进某位演员的作品页再返回时，这一屏的
+   * `remember` 状态会整个重建，只放在组合里的话就被打回「影片」。
+   * 存进偏好后，返回、甚至重启 App 都还停在用户上次选的类型。
+   */
+  val embyFavoritesTab = preferenceStore.getString("emby_favorites_tab", "")
 }
 
 /**

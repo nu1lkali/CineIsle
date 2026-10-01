@@ -32,8 +32,9 @@ android {
     applicationId = "app.cineisle.player"
     minSdk = 26
     targetSdk = 36
-    versionCode = 2
-    versionName = "1.0.4"
+    // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
+    versionCode = 3
+    versionName = "1.0.6"
 
     vectorDrawables {
       useSupportLibrary = true

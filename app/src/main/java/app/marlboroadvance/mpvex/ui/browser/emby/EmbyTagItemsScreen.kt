@@ -77,11 +77,12 @@ data class EmbyTagItemsScreen(
       if (current == null) return
       isLoading = true
       error = null
-      val list = if (isGenre) {
+      // 网格 key = Id ?: Name：按同一口径去重，防止服务端重复条目把网格撞崩
+      val list = (if (isGenre) {
         viewModel.loadGenreItems(current, keyword)
       } else {
         viewModel.loadTagItems(current, keyword)
-      }
+      }).distinctBy { it.Id ?: it.Name ?: "" }
       items = list
       isLoading = false
       if (list.isEmpty()) error = "没有找到该${kindLabel}下的媒体"

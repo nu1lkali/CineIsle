@@ -378,9 +378,13 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
     if (landscape) {
       spacer?.visibility = View.GONE
       title.gravity = Gravity.CENTER_VERTICAL or Gravity.START
+      // 标题插在「返回键 + 网速指示器」之后：竖屏横屏下网速都贴着返回键，
+      // 标题吃满中间剩下的宽度（gsy_net_speed 不在 GSY 的 id 表里，搬动不影响它）
+      val netSpeed = findViewById<View>(R.id.gsy_net_speed)
+      val insertIndex = if (netSpeed != null) 2 else 1
       topBar.addView(
         title,
-        1,
+        insertIndex,
         LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
           marginStart = margin(8)
           marginEnd = margin(8)
@@ -435,7 +439,7 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
       val next = presets[(index + 1) % presets.size]
       setSpeed(next, prefs.soundTouch.get())
       syncGlassButtonStates()
-      toast("倍速 ${trimZero(next)}x")
+      toast("播放速度已调整为 ${trimZero(next)}x")
     }
 
     findViewById<ImageView>(R.id.gsy_btn_loop)?.setOnClickListener {
@@ -444,7 +448,7 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
       loopingState = !loopingState
       setLooping(loopingState)
       syncGlassButtonStates()
-      toast(if (loopingState) "循环播放：开" else "循环播放：关")
+      toast(if (loopingState) "已开启循环播放" else "已关闭循环播放")
     }
 
     findViewById<ImageView>(R.id.gsy_btn_aspect)?.setOnClickListener {
@@ -457,7 +461,7 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
       prefs.showKind.set(next)
       changeTextureViewShowType()
       getRenderProxy()?.requestLayout()
-      toast("显示比例：${next.title}")
+      toast("画面显示比例：${next.title}")
     }
 
     findViewById<ImageView>(R.id.gsy_btn_render)?.setOnClickListener {
@@ -483,7 +487,7 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
       } else {
         setEffectFilter(next.toShader())
         syncGlassButtonStates()
-        toast("滤镜：${next.title}")
+        toast("已应用滤镜：${next.title}")
       }
     }
 
@@ -493,7 +497,7 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
       mutedState = !mutedState
       GSYVideoManager.instance().setNeedMute(mutedState)
       syncGlassButtonStates()
-      toast(if (mutedState) "已静音" else "已取消静音")
+      toast(if (mutedState) "已开启静音" else "已取消静音")
     }
 
     findViewById<ImageView>(R.id.gsy_btn_prev)?.setOnClickListener {

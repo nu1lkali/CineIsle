@@ -721,6 +721,11 @@ object EmbyClient {
       // 真正的数据来源是 [getPersonWorkCounts]（客户端自己数）。这行留着，万一某个
       // 服务端认它就能省掉那次统计。
       q["Fields"] = "ChildCount"
+      // EnableUserData：让服务端回传 UserData.IsFavorite。演员长按收藏、收藏页「演员」tab
+      // 都靠这个字段判断收藏状态，没有它 Person 的 IsFavorite 恒为空。
+      q["EnableUserData"] = "true"
+      q["EnableImages"] = "true"
+      q["ImageTypeLimit"] = "1"
       getJson<EmbyItemsResult>(server, "/Persons", q)
         .Items
         .mapNotNull { item ->
@@ -729,6 +734,50 @@ object EmbyClient {
           item.copy(Type = "Person")
         }
     }.getOrDefault(emptyList())
+
+  /**
+   * 收藏的演员列表（收藏页「演员」tab 用）。
+   *
+   * **为什么不用 `Filters=IsFavorite` 直接让服务端筛**：`/Persons` 这条端点对 Filters
+   * 的支持参差不齐（官方 Emby 认，部分第三方兼容服务端会静默忽略，忽略后返回的是
+   * 全量演员的第一页 —— 收藏的人可能根本不在里面）。而 `/Persons` 全量拉一遍是
+   * 媒体库「演员」分类已经在用的成熟路径，这里复用它再在客户端按
+   * `UserData.IsFavorite` 过滤，各服务端表现一致。
+   *
+   * 调用方（EmbyViewModel）按服务器缓存结果，切换 影片/演员 tab 不重复发请求。
+   */
+  fun getFavoritePersons(server: EmbyServer): List<EmbyItem> =
+    getActors(server, null).filter { it.UserData?.IsFavorite == true }
+
+  /**
+   * 按 Id 取单个人员（演员 / 导演），带 UserData.IsFavorite。演员作品页的收藏红心用。
+   *
+   * 主路径与媒体页取条目同款：`/Persons?Ids=` + `EnableUserData=true`（列表式查询），
+   * 保证回传的 UserData 与收藏接口的口径一致；`/Users/{uid}/Items/{Id}` 虽是 Emby Web
+   * 人员详情页在用的通用端点，但在部分兼容服务端上对 Person 的回传不一定带 UserData，
+   * 所以只作兜底。
+   */
+  fun getPersonById(server: EmbyServer, personId: String): EmbyItem? {
+    val listQuery = runCatching {
+      val q = LinkedHashMap<String, String?>()
+      q["UserId"] = server.userId
+      q["Ids"] = personId
+      q["Recursive"] = "true"
+      q["EnableUserData"] = "true"
+      q["EnableImages"] = "true"
+      q["ImageTypeLimit"] = "1"
+      getJson<EmbyItemsResult>(server, "/Persons", q)
+        .Items
+        .firstOrNull { it.Id == personId }
+        ?.copy(Type = "Person")
+    }.getOrNull()
+    if (listQuery != null) return listQuery
+
+    return runCatching { getItem(server, personId) }
+      .getOrNull()
+      ?.takeIf { it.Id == personId }
+      ?.let { person -> person.copy(Type = person.Type ?: "Person") }
+  }
 
   /**
    * 数每个演员在该媒体库里参与了多少部作品：PersonId → 条目数。
@@ -1023,35 +1072,62 @@ object EmbyClient {
    *   关闭：`POST /Users/{uid}/FavoriteItems/{id}/Delete` ← 是 POST 到 `/Delete`，不是 DELETE 方法
    * 实测 SmartStrm 这类服务端只认后一种写法，用 DELETE 方法会被拒。
    *
+   * **请求细节向 Emby Web 的真实请求看齐**（用户抓包对比过）：
+   *  · `X-Emby-Token` 同时放 **query 参数和 header** —— 个别兼容服务端的这条路由只认 query；
+   *  · 带 `Accept: application/json`，避免内容协商返回非 JSON。
+   *
    * **响应体本身就是最新的 UserData**（`{"IsFavorite":true,"Played":false,...}`），
    * 直接解析它就能确认状态 —— 不用再回查一次条目：那台服务器的详情响应
    * `Content-Length` 比实际 body 长，OkHttp 读不满会抛 unexpected end of stream，
    * 回查失败就会把「其实已经成功了」误报成失败。
+   * 回执可能不干净（SmartStrm 实测会把 JSON 重复拼接），所以解析失败后还有一层
+   * 字段级提取兜底，见 [parseUserData]。
    */
   private fun toggleUserState(server: EmbyServer, basePath: String, enable: Boolean): EmbyUserData? {
     val path = if (enable) basePath else "$basePath/Delete"
+    // 请求构造：token 同时放 query 与 header + Accept: application/json（对齐 Web 抓包）
+    val buildRequest: (okhttp3.RequestBody) -> Request = { body ->
+      authedRequest(server, path, mapOf("X-Emby-Token" to server.apiToken.takeIf { it.isNotEmpty() }))
+        .header("Accept", "application/json")
+        .post(body)
+        .build()
+    }
     // 1) 主：POST + 无 body（Web 端就是这个形态，content-length=0）
-    val first = runCatching { execString(authedRequest(server, path).post(EMPTY_BODY).build()) }
-    val body = first.getOrNull()
+    val first = runCatching { execString(buildRequest(EMPTY_BODY)) }
+    var body = first.getOrNull()
       // 2) 兜底：空 body 会被部分服务端（ServiceStack 系）判 400，此时改发空对象
-      ?: runCatching {
-        execString(authedRequest(server, path).post(EMPTY_JSON_BODY.toRequestBody(jsonMedia)).build())
-      }.getOrNull()
+      ?: runCatching { execString(buildRequest(EMPTY_JSON_BODY.toRequestBody(jsonMedia))) }.getOrNull()
       // 3) 关闭再兜底：老版本只认 DELETE 方法
       ?: if (!enable) {
         runCatching { execString(authedRequest(server, basePath).delete().build()) }.getOrNull()
       } else {
         null
       }
+    // 2) 的空对象回执可能把 1) 的干净回执顶掉：优先取「能解析出 IsFavorite」的那份
+    if (body != null && parseUserData(body) == null) {
+      (first.getOrNull())?.takeIf { parseUserData(it) != null }?.let { body = it }
+    }
     // 三种形态都失败：把第一次的真实原因抛出去（它最接近「实际用的是哪种形态」的问题）
     if (body == null) throw first.exceptionOrNull() ?: EmbyApiException(0, "请求失败")
     return parseUserData(body)
   }
 
-  /** 解析响应体里的 UserData；解析不了（空 body / 不是 JSON）返回 null，由调用方另想办法 */
-  private fun parseUserData(body: String): EmbyUserData? =
-    body.takeIf { it.isNotBlank() }
-      ?.let { runCatching { json.decodeFromString<EmbyUserData>(it) }.getOrNull() }
+  /**
+   * 解析响应体里的 UserData。
+   *
+   * 先做严格 JSON 解析；失败后退回**字段级提取**——SmartStrm 实测会把回执 JSON
+   * 重复拼接成 `{...}{...}`（不是合法 JSON，但两条里的 IsFavorite 一致），
+   * 这条回执只关心 IsFavorite，正则抠出真值即可。
+   * 解析不了（空 body / 完全没有该字段）返回 null，由调用方回读确认。
+   */
+  private fun parseUserData(body: String): EmbyUserData? {
+    val trimmed = body.trim()
+    if (trimmed.isEmpty()) return null
+    runCatching { return json.decodeFromString<EmbyUserData>(trimmed) }
+    val match = Regex("\"IsFavorite\"\\s*:\\s*(true|false)", RegexOption.IGNORE_CASE)
+      .find(trimmed) ?: return null
+    return EmbyUserData(IsFavorite = match.groupValues[1].equals("true", ignoreCase = true))
+  }
 
   /** 删除媒体（需要相应权限） */
   fun deleteItem(server: EmbyServer, itemId: String) {

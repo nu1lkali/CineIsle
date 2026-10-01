@@ -118,6 +118,7 @@ import app.marlboroadvance.mpvex.ui.player.Sheets
 import app.marlboroadvance.mpvex.ui.player.VideoAspect
 import app.marlboroadvance.mpvex.ui.player.controls.components.ControlsButton
 import app.marlboroadvance.mpvex.ui.player.controls.components.CurrentChapter
+import app.marlboroadvance.mpvex.ui.player.controls.components.NetworkSpeedIndicator
 import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassBorder
 import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassFill
 import app.marlboroadvance.mpvex.ui.theme.controlColor
@@ -922,10 +923,19 @@ fun RenderPlayerButton(
     }
 
     PlayerButton.EMBY_FAVORITE -> {
-      EmbyFavoritePlayerButton(
-        hideBackground = hideBackground,
-        buttonSize = buttonSize,
-      )
+      // 网速指示器固定插在收藏键左边（用户指定位置）：收藏键被配置到哪个控件簇，
+      // 指示器就跟到哪个簇。非 Emby 播放时收藏键自身渲染为空，
+      // 指示器仍占这个槽位 —— 顶栏依旧看得到速度，不随播放来源变化。
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.extraSmall),
+      ) {
+        NetworkSpeedIndicator(speedBytesPerSec = viewModel.netSpeedBytesPerSec.collectAsState().value)
+        EmbyFavoritePlayerButton(
+          hideBackground = hideBackground,
+          buttonSize = buttonSize,
+        )
+      }
     }
 
     PlayerButton.CAST -> {
