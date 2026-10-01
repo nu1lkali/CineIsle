@@ -20,6 +20,11 @@ mpv-android = "1.0.0"
 mediainfo-android = "1.0.2"
 # Media3（ExoPlayer）—— 双播放内核里的第二个内核
 gsy = "13.2.1"
+# Media3 / ExoPlayer 的版本：**必须与 gsy-exo2 传递进来的版本一致**。
+# gsy-exo2 会带 media3 全家桶进来；这里显式声明只是为了不再依赖它的传递，
+# 版本号一旦和它对不上，classpath 上会出现两份 media3，运行时随机炸
+# （典型症状：NoSuchMethodError / duplicate class）。
+media3 = "1.10.1"
 
 [libraries]
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
@@ -82,6 +87,16 @@ gsy-arm64 = { module = "io.github.carguo:gsyvideoplayer-arm64", version.ref = "g
 gsy-armv7a = { module = "io.github.carguo:gsyvideoplayer-armv7a", version.ref = "gsy" }
 gsy-x86 = { module = "io.github.carguo:gsyvideoplayer-x86", version.ref = "gsy" }
 gsy-x64 = { module = "io.github.carguo:gsyvideoplayer-x64", version.ref = "gsy" }
+
+# 视界流（仿抖音竖屏连播）直接用的 ExoPlayer —— 不经过 GSY 那层。
+# 为什么绕开 GSY：GSYVideoManager 是进程级静态单例，多个 GSYVideoPlayer 也只能
+# 共用同一个底层 player，做不到「相邻页各持一个实例、提前缓冲」。
+# ExoPlayer.Builder(context).build() 每次都是独立实例，这才是无感滑动的前提。
+androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+# PlayerView（画面 + 可选自带控件）；`use_controller=false` 即可完全没有自带控件
+androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
+# VerticalPager 所在的包；版本由 compose-bom 统一管理，所以这里不带 version
+androidx-compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
 
 [bundles]
 koin = ["koin-core", "koin-android", "koin-compose", "koin-viewmodel"]

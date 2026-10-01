@@ -489,6 +489,17 @@ object PlayerPreferencesScreen : Screen {
                 onValueChange = preferences.showLoadingCircle::set,
                 title = { Text(stringResource(R.string.pref_player_controls_show_loading_circle)) },
               )
+
+              PreferenceDivider()
+
+              // 左下角悬浮的上一条/下一条切换按钮（mpv 播放页）
+              val showFloatingPlaylistSwitcher by preferences.showFloatingPlaylistSwitcher.collectAsState()
+              SwitchPreference(
+                value = showFloatingPlaylistSwitcher,
+                onValueChange = preferences.showFloatingPlaylistSwitcher::set,
+                title = { Text("左下角悬浮切换按钮") },
+                summary = { Text("上一条 / 下一条视频的快捷切换；控制条显示时自动隐藏") },
+              )
             }
           }
           // Display Section

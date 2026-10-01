@@ -37,6 +37,8 @@ import kotlinx.coroutines.withContext
 import org.koin.java.KoinJavaComponent.inject
 
 /** 全库搜索没选任何筛选时的默认类型集：只保留可播放的视频本体 */
+private const val PERSON_TYPE = "Person"
+
 private val GLOBAL_SEARCH_DEFAULT_TYPES =
   listOf("Movie", "Series", "Episode", "Video", "MusicVideo")
 
@@ -326,15 +328,59 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     sortBy: String? = "SortName",
     sortOrder: String? = null,
     limit: Int = 60,
-  ): List<EmbyItem> =
-    repository.searchItems(
-      server,
-      term,
-      itemTypes,
-      limit = limit,
-      sortBy = sortBy,
-      sortOrder = sortOrder,
-    ).Items
+  ): List<EmbyItem> {
+    // 演员必须走 /Persons：`/Users/{id}/Items` 不返回 Person，
+    // 勾了「演员」筛选却搜不到人就是因为原先二者混在同一条请求里。
+    val persons = searchPersons(server, term, limit, itemTypes)
+    val mediaTypes = itemTypes?.filter { it != PERSON_TYPE }?.takeIf { it.isNotEmpty() }
+    // 只勾了「演员」：媒体那一路就不用查了
+    if (itemTypes != null && mediaTypes == null) return persons
+    val media = runCatching {
+      repository.searchItems(server, term, mediaTypes, limit, sortBy, sortOrder).Items
+    }.getOrDefault(emptyList())
+    return persons + media
+  }
+
+  /**
+   * 演员走 `/Persons`：勾了「演员」筛选时才发这一路，否则不打扰服务端。
+   *
+   * 两层兜底：
+   * 1. 先按名字问服务端 `/Persons?SearchTerm`，有结果直接用 —— 这是主路径，
+   *    快且准，官方 Emby 与绝大多数兼容服务端都支持；
+   * 2. 拿不到就退回「拉一份全量演员名单、在本地按名字做包含匹配」。
+   *    这一层是给「服务端不认 `SearchTerm` 或匹配口径对不上」的兼容层准备的保险。
+   *    全量名单按服务器缓存（见 [actorsCache]），所以用户一个字一个字地打，
+   *    也只会产生一次全量请求。
+   *
+   * 注意：媒体库内搜不到演员**另有原因**（列表那层「是否可播放」的本地兜底把
+   * Person 剔掉了，见 EmbyLibraryScreen 的 visibleItems），不在这里。
+   */
+  private suspend fun searchPersons(
+    server: EmbyServer,
+    term: String,
+    limit: Int,
+    itemTypes: List<String>?,
+  ): List<EmbyItem> {
+    if (itemTypes != null && PERSON_TYPE !in itemTypes) return emptyList()
+    val direct = runCatching { repository.searchPersons(server, term, null, limit) }
+      .getOrDefault(emptyList())
+    if (direct.isNotEmpty()) return direct
+    return allActors(server)
+      .filter { person -> person.Name?.contains(term, ignoreCase = true) == true }
+      .take(limit)
+  }
+
+  /** 全量演员名单的缓存：serverId → 名单。同一台服务器只拉一次。 */
+  private var actorsCache: Pair<Long, List<EmbyItem>>? = null
+
+  private suspend fun allActors(server: EmbyServer): List<EmbyItem> {
+    actorsCache?.let { (cachedId, list) -> if (cachedId == server.id) return list }
+    val list = withContext(Dispatchers.IO) {
+      runCatching { EmbyClient.getActors(server, null) }.getOrDefault(emptyList())
+    }
+    if (list.isNotEmpty()) actorsCache = server.id to list
+    return list
+  }
 
   /**
    * 首页的「全库搜索」：不传 ParentId，Emby 会跨所有媒体库检索。
@@ -352,14 +398,24 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     itemTypes: List<String>? = null,
   ): List<EmbyItem> =
     withContext(Dispatchers.IO) {
-      runCatching {
-        repository.searchItems(
-          server = server,
-          term = term,
-          includeItemTypes = itemTypes ?: GLOBAL_SEARCH_DEFAULT_TYPES,
-          limit = 100,
-        ).Items
-      }.getOrDefault(emptyList())
+      // 与 [search] 同理：Person 只能从 `/Persons` 拿，`/Items` 那条端点搜不出人；
+      // 并且这里同样带上「服务端不认 SearchTerm 就本地过滤」的兜底
+      val persons = searchPersons(server, term, 100, itemTypes)
+      val mediaTypes = itemTypes?.filter { it != PERSON_TYPE }?.takeIf { it.isNotEmpty() }
+        ?: GLOBAL_SEARCH_DEFAULT_TYPES.takeIf { itemTypes == null }
+      val media = if (mediaTypes.isNullOrEmpty()) {
+        emptyList()
+      } else {
+        runCatching {
+          repository.searchItems(
+            server = server,
+            term = term,
+            includeItemTypes = mediaTypes,
+            limit = 100,
+          ).Items
+        }.getOrDefault(emptyList())
+      }
+      persons + media
     }
 
 
@@ -660,6 +716,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     }
     return repository.imageUrl(server, id, imageType, tag, maxWidth)
   }
+
+  /**
+   * 某媒体库的演员列表（媒体库「演员」分类用）。
+   *
+   * 走 Emby 的 /Persons 端点，IO 线程执行 —— 库大时是几十上百个人物的网络请求。
+   */
+  suspend fun getActors(server: EmbyServer, parentId: String?): List<EmbyItem> =
+    withContext(Dispatchers.IO) { EmbyClient.getActors(server, parentId) }
 
   /** 刷新 / 刮削元数据。full=true 走全量重刮（FullRefresh），否则默认刷新（Default）。 */
   suspend fun refreshMetadata(

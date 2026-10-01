@@ -1427,14 +1427,15 @@ fun PlayerControls(
                     Modifier
                   }
                 )
-                .constrainAs(bottomLeftControls) {
-                  // 横屏保持原有分区：左簇压在进度条之上、贴屏幕左缘，
-                  // 宽度吃满到右簇左侧，行内内容靠左对齐
-                  bottom.linkTo(seekbar.top, spacing.medium)
-                  start.linkTo(parent.start, spacing.large)
-                  width = Dimension.fillToConstraints
-                  end.linkTo(bottomRightControls.start, spacing.medium)
-                },
+              .constrainAs(bottomLeftControls) {
+                // 横屏保持原有分区：左簇压在进度条之上，但**左缘右移**，
+                // 给左下角常驻的「上一条/下一条」悬浮件（start=14dp，宽约 84dp）
+                // 让出空间 —— 否则两者会叠在左下角。右簇不变，宽度吃满到它的左侧。
+                bottom.linkTo(seekbar.top, spacing.medium)
+                start.linkTo(parent.start, 96.dp)
+                width = Dimension.fillToConstraints
+                end.linkTo(bottomRightControls.start, spacing.medium)
+              },
           ) {
             BottomLeftPlayerControlsLandscape(
               buttons = bottomLeftButtons,

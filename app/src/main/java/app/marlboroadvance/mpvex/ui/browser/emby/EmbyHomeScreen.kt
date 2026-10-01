@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Button
@@ -207,6 +208,8 @@ fun EmbyHomeScreen(
       },
       actions = {
         // 全库搜索：跨所有媒体库检索，结果替换首页内容
+        // 图标跟着搜索态走（放大镜 ↔ 放大镜加斜杠），否则进了搜索界面就没有明确的退出入口。
+        // 用 SearchOff 而不是通用的 ✕：旁边就是别的工具栏动作，✕ 太容易被读成「关掉这一页」。
         IconButton(onClick = {
           searchActive = !searchActive
           if (!searchActive) {
@@ -215,7 +218,10 @@ fun EmbyHomeScreen(
             isSearching = false
           }
         }) {
-          Icon(Icons.Default.Search, contentDescription = "搜索全部媒体库")
+          Icon(
+            imageVector = if (searchActive) Icons.Default.SearchOff else Icons.Default.Search,
+            contentDescription = if (searchActive) "退出搜索" else "搜索全部媒体库",
+          )
         }
         Box {
           IconButton(onClick = { serverMenuExpanded = true }) {

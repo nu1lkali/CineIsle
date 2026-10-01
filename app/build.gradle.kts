@@ -226,7 +226,9 @@ kotlin {
       "-Xcontext-parameters",
       "-Xannotation-default-target=param-property",
       "-opt-in=com.google.accompanist.permissions.ExperimentalPermissionsApi",
-      "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api"
+      "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
+      // 视界流翻页要用 VerticalPager（来自 androidx.compose.foundation）
+      "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi"
     )
     jvmTarget.set(JvmTarget.JVM_17)
   }
@@ -260,6 +262,12 @@ dependencies {
   implementation("androidx.constraintlayout:constraintlayout:2.2.0")
   implementation(libs.androidx.material3.icons.extended)
   implementation(libs.androidx.compose.animation.graphics)
+  // 视界流（仿抖音竖屏连播）：ExoPlayer 多实例 + Compose VerticalPager。
+  // foundation 显式声明是为了 VerticalPager —— 原来它是靠 ui 传递进来的，
+  // 现在翻页是视界流的核心路径，不该依赖传递关系。
+  implementation(libs.androidx.compose.foundation)
+  implementation(libs.androidx.media3.exoplayer)
+  implementation(libs.androidx.media3.ui)
   implementation(libs.mediasession)
   implementation(libs.androidx.documentfile)
   implementation(libs.saveable)

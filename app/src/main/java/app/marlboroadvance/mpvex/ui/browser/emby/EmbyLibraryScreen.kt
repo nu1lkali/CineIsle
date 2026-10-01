@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.ShuffleOn
 import androidx.compose.material.icons.filled.Sort
@@ -90,11 +91,13 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
+import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshGridBox
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyFavoriteRandomIcon
+import app.marlboroadvance.mpvex.ui.browser.emby.components.VideoFeedIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyItemActionsDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaActionsDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
@@ -102,6 +105,8 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
 import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
 import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
+import app.marlboroadvance.mpvex.ui.player.feed.FeedItem
+import app.marlboroadvance.mpvex.ui.player.feed.VerticalFeedActivity
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -131,6 +136,9 @@ data class EmbyLibraryScreen(
   val title: String,
   val collectionType: String? = null,
   val includeItemTypes: List<String>? = null,
+  /** 非空时本页 = 该人员的作品列表（预置 PersonIds 筛选），点击演员进作品用 */
+  val personId: String? = null,
+  val personName: String? = null,
 ) : Screen {
   @OptIn(ExperimentalMaterial3Api::class)
   @Composable
@@ -178,6 +186,9 @@ data class EmbyLibraryScreen(
       } ?: EmbyCategory.ALL
     }
     var category by remember(libraryId) { mutableStateOf(savedCategory) }
+    // 「演员」分类 = 展示本库演员（头像网格 + 作品数角标）。
+    // 进到某位演员的作品子页时 personId 非空，那时列表是媒体，不算演员模式
+    val isActorListMode = category == EmbyCategory.ACTOR && personId == null
 
     // ── 筛选条件 ──
     // 各项可叠加；空集合、null、false 都代表「不限」。
@@ -199,7 +210,11 @@ data class EmbyLibraryScreen(
     var selectedRatings by remember(libraryId) {
       mutableStateOf(savedFilter.officialRatings.toSet())
     }
-    var selectedPersonIds by remember(libraryId) { mutableStateOf(savedFilter.personIds.toSet()) }
+    // 演员作品子页：personId 非空时直接把它当成已选中的人员筛选，
+    // 于是这一页进来就是「该演员在这一库里的作品」
+    var selectedPersonIds by remember(libraryId) {
+      mutableStateOf(personId?.let { setOf(it) } ?: savedFilter.personIds.toSet())
+    }
     var selectedStudioIds by remember(libraryId) { mutableStateOf(savedFilter.studioIds.toSet()) }
     var playedFilter by remember(libraryId) { mutableStateOf(savedFilter.isPlayed) }
     var hdFilter by remember(libraryId) { mutableStateOf(savedFilter.isHD) }
@@ -267,6 +282,13 @@ data class EmbyLibraryScreen(
 
     var items by remember(cacheKey) { mutableStateOf(cachedEntry?.items ?: emptyList()) }
     var totalCount by remember(cacheKey) { mutableIntStateOf(cachedEntry?.totalCount ?: 0) }
+    // ── 「演员」分类的独立数据 ──
+    // 不走上面媒体那套分页 / 缓存 / 中文字幕扫描：/Persons 一次性把演员给全，
+    // 既没有下一页要续拉，也没有字幕可扫。单独存一份，两条路径互不干扰。
+    var actorItems by remember(cacheKey) { mutableStateOf(emptyList<EmbyItem>()) }
+    var actorTotal by remember(cacheKey) { mutableIntStateOf(0) }
+    var actorLoading by remember(cacheKey) { mutableStateOf(false) }
+    var actorError by remember(cacheKey) { mutableStateOf<String?>(null) }
     var isLoading by remember(cacheKey) {
       mutableStateOf(cachedEntry == null || cachedEntry.items.isEmpty())
     }
@@ -527,11 +549,37 @@ data class EmbyLibraryScreen(
       isLoading = false
     }
 
+    /**
+     * 拉「演员」分类的数据。
+     *
+     * 与 [load] 完全分开：一次请求拿全（/Persons），不分页、不进媒体缓存、
+     * 不做中文字幕扫描。失败只影响这一屏，给个重试按钮即可。
+     */
+    suspend fun loadActors() {
+      val current = viewModel.currentServerOrAwait() ?: return
+      actorLoading = true
+      actorError = null
+      runCatching {
+        viewModel.getActors(current, libraryId)
+      }.onSuccess { list ->
+        actorItems = list
+        actorTotal = list.size
+      }.onFailure {
+        actorError = it.message ?: "加载演员失败"
+      }
+      actorLoading = false
+    }
+
     // 首次进入 / 筛选条件变化：只有没有可用缓存时才请求。
     // 有缓存说明是刚从详情页或播放器返回，直接复用列表，不刷新。
     LaunchedEffect(cacheKey) {
       // 搜索走下面带防抖的那个 effect，这里跳过，避免每敲一个字就立刻发一次请求
       if (searchQuery.isNotBlank()) return@LaunchedEffect
+      // 「演员」分类：走独立的演员加载，跳过媒体那套分页 / 缓存 / 扫描
+      if (isActorListMode) {
+        if (actorItems.isEmpty() && !actorLoading) loadActors()
+        return@LaunchedEffect
+      }
       val entry = EmbyLibraryCache.get(cacheKey)
       // 扫描没跑完的缓存（items 只含前半截命中）不能当完整结果复用，重扫
       val stale = chineseSubsOnly && entry != null && !entry.complete
@@ -559,8 +607,9 @@ data class EmbyLibraryScreen(
     LaunchedEffect(gridState, items.size) {
       snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
         .collect { lastVisible ->
-          // 客户端筛选走全量扫描，没有「下一页」可翻；扫描中也不要再触发普通分页
-          val canLoadMore = !isLoading && !isScanning && !chineseSubsOnly &&
+          // 客户端筛选走全量扫描，没有「下一页」可翻；扫描中也不要再触发普通分页。
+          // 演员列表同理：/Persons 一次性给全，不可能有下一页
+          val canLoadMore = !isLoading && !isScanning && !chineseSubsOnly && !isActorListMode &&
             items.size < totalCount && lastVisible != null
           if (canLoadMore && lastVisible >= items.size - 6) {
             load(reset = false)
@@ -590,9 +639,21 @@ data class EmbyLibraryScreen(
         // 本地兜底之后，无论服务端认不认这些参数，结果都是一致的。
         .filter { item ->
           val type = item.Type
+          // 搜索命中的演员是**合法结果**，不能跟着媒体一起被剔掉。
+          //
+          // 下面两条兜底都是按「媒体形态」判的（有没有 MediaType、在不在 PLAYABLE_TYPES 里），
+          // 而 Person 两样都不占：它没有 MediaType，也不是可播放类型。于是无论库的类型白名单
+          // 认不认得出来，演员都会被判为「非媒体」剔走 —— 这正是「同一句话在首页搜得到演员、
+          // 在媒体库里一个人都搜不到」的原因（首页没有这层过滤）。
+          //
+          // 只在搜索时放行：浏览路径服务端本来就不会返回 Person（`/Users/{id}/Items`
+          // 那条端点拿不到人物），放行它没有副作用。
+          val isPersonHit = searchQuery.isNotBlank() && type.equals("Person", ignoreCase = true)
           if (type != null) {
             if (effectiveExclude?.any { it.equals(type, ignoreCase = true) } == true) return@filter false
-            if (effectiveTypes?.none { it.equals(type, ignoreCase = true) } == true) return@filter false
+            if (!isPersonHit && effectiveTypes?.none { it.equals(type, ignoreCase = true) } == true) {
+              return@filter false
+            }
           }
           // MediaType 明确不是目标形态的一律剔掉；为空的大多是容器，交给上面的类型白名单
           val mediaType = item.MediaType
@@ -607,7 +668,7 @@ data class EmbyLibraryScreen(
           if (type != null && want != null && effectiveTypes == null) {
             val playable = PLAYABLE_TYPES.any { it.equals(type, ignoreCase = true) }
             val isVideo = mediaType?.equals("Video", ignoreCase = true) == true
-            if (!playable && !isVideo) return@filter false
+            if (!playable && !isVideo && !isPersonHit) return@filter false
           }
           true
         }
@@ -637,7 +698,9 @@ data class EmbyLibraryScreen(
         // 优先只随机「能直接播」的条目；整批都是剧集 / 合集这类容器时才退回整批，
         // 否则点下去会直接提示「没有可播放内容」
         val playable = pool.filter { item -> PLAYABLE_TYPES.any { it == item.Type } }
-        return (playable.ifEmpty { pool }).shuffled().take(RANDOM_LIMIT)
+        return (playable.ifEmpty { pool })
+          .shuffled()
+          .take(browserPreferences.randomPlayCount.randomPlayLimit())
       }
 
       // 随机只能落在「能直接播」的条目上。当前分类若只含 Series / BoxSet / Folder
@@ -645,6 +708,9 @@ data class EmbyLibraryScreen(
       // 也就是改造前的老行为；其它筛选项仍然生效。
       val playableOfView = (effectiveTypes ?: PLAYABLE_TYPES).filter { it in PLAYABLE_TYPES }
       val randomTypes = playableOfView.takeIf { it.isNotEmpty() } ?: PLAYABLE_TYPES
+
+      // 随机播放 / 视界流取多少条：统一读设置项
+      val randomLimit = browserPreferences.randomPlayCount.randomPlayLimit()
 
       return viewModel.loadItems(
         server = current,
@@ -654,7 +720,7 @@ data class EmbyLibraryScreen(
         sortBy = "Random",
         sortOrder = "Ascending",
         startIndex = 0,
-        limit = RANDOM_LIMIT,
+        limit = randomLimit,
         // 固定用 recursive：容器类分类（如「文件夹」）本身递归不出可播条目
         recursive = true,
         excludeItemTypes = effectiveExclude,
@@ -697,6 +763,40 @@ data class EmbyLibraryScreen(
     }
 
     /**
+     * 「视界流」入口：从当前库随机抽一批，进仿抖音竖屏上下滑连播的页面。
+     *
+     * 随机取片和上面两个随机按钮走同一条路径（数量设置、容器类分类的兜底都共用），
+     * 差别只在最后一步：不是丢给主播放器排队播，而是把整批直连地址交给
+     * VerticalFeedActivity，让它自己管「滑到哪放哪」。
+     */
+    fun startFeedPlayback(favoritesOnly: Boolean) {
+      scope.launch {
+        val current = viewModel.currentServerOrAwait() ?: return@launch
+        val random = loadRandomForView(current, favoritesOnly = favoritesOnly)
+        val items = random.mapNotNull { item ->
+          val id = item.Id ?: return@mapNotNull null
+          FeedItem(
+            itemId = id,
+            title = viewModel.displayTitle(item),
+            url = viewModel.getStreamUrl(current, id),
+            isFavorite = item.UserData?.IsFavorite == true,
+          )
+        }
+        if (items.isEmpty()) {
+          android.widget.Toast
+            .makeText(
+              context,
+              if (favoritesOnly) "当前范围内没有可随机播放的收藏" else "当前范围内没有可随机播放的内容",
+              android.widget.Toast.LENGTH_SHORT,
+            )
+            .show()
+          return@launch
+        }
+        VerticalFeedActivity.launch(context, items, libraryId, favoritesOnly)
+      }
+    }
+
+    /**
      * 收掉输入法焦点。
      *
      * 进入搜索后焦点大概率还留在输入框上，此时点工具行上的任何按钮（排序 / 筛选 / 样式 …）
@@ -718,6 +818,14 @@ data class EmbyLibraryScreen(
           }
         },
         actions = {
+          // 图标跟着搜索态走：没搜时是放大镜，进搜索后换成「放大镜 + 斜杠」。
+          // 图标一直不变的话，用户进了搜索界面就找不到退出来的入口 ——
+          // 同一个位置既是「进入」又是「退出」，长得却一模一样。
+          //
+          // 这里用 SearchOff 而不是通用的 ✕：左边紧挨着就是返回键（←），
+          // 再摆一个 ✕ 会让同一个工具栏上出现两个「离开」性质的图标，
+          // 一个退搜索、一个退整个库，很容易点错。SearchOff 保留放大镜意象，
+          // 一眼还能看出它跟搜索有关。
           IconButton(onClick = {
             searchActive = !searchActive
             if (!searchActive) {
@@ -725,7 +833,10 @@ data class EmbyLibraryScreen(
               scope.launch { load(reset = true) }
             }
           }) {
-            Icon(Icons.Default.Search, contentDescription = "搜索")
+            Icon(
+              imageVector = if (searchActive) Icons.Default.SearchOff else Icons.Default.Search,
+              contentDescription = if (searchActive) "退出搜索" else "搜索",
+            )
           }
         },
       )
@@ -734,7 +845,9 @@ data class EmbyLibraryScreen(
       // 搜索时藏起来：那一排「全部 / 继续播放 / 合集 / 收藏 / 文件夹」
       // 跟搜索结果没有对应关系，留着只是挤掉一整行，还容易让人以为结果按它筛过。
       // 只是不显示，分类状态本身保留，退出搜索回到原来的样子。
-      if (includeItemTypes == null && !searchActive) {
+      // 只要是演员作品子页（personId 非空）就藏：那一页本身就是「已按该演员筛过」的结果，
+      // 再摆一排「全部 / 继续播放 …」只会让人以为列表没被筛过
+      if (includeItemTypes == null && !searchActive && personId == null) {
         CategoryChips(
           selected = category,
           onSelect = {
@@ -746,6 +859,9 @@ data class EmbyLibraryScreen(
       }
 
       // ── 3. 工具行：数量 + 随机播放 + 视图 + 排序 ──
+      // 演员列表与「某演员作品」子页都不可随机播放，也没有样式 / 排序 / 再筛选可言，
+      // 这些按钮留着只会让人点了没反应 —— 收掉，只保留左边的数量
+      val hideToolbarButtons = isActorListMode || personId != null
       Row(
         modifier = Modifier
           .fillMaxWidth()
@@ -754,6 +870,8 @@ data class EmbyLibraryScreen(
       ) {
         Text(
           text = when {
+            // 「演员」分类统计的是演员人数，不是媒体条目数
+            isActorListMode -> if (actorLoading) "加载演员中…" else "$actorTotal 位演员"
             // 客户端筛选（中文字幕）走全量扫描：扫的时候显示进度，扫完显示命中数。
             // 服务端 totalCount 是「整个库的条目数」，客户端筛过之后对不上，所以分开显示。
             isScanning -> "扫描中… 已扫 $scanScanned" +
@@ -774,45 +892,53 @@ data class EmbyLibraryScreen(
         )
         Spacer(modifier = Modifier.weight(1f))
 
-        IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = false) }) {
-          Icon(Icons.Default.Shuffle, contentDescription = "随机播放")
-        }
-        // 同上，只是范围再限定「已收藏」：避免随机到没看过的
-        IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = true) }) {
-          // 区别于上面的「随机播放」：用它自己的 Emby 收藏随机图标，
-          // 原先用的 ShuffleOn 只比 Shuffle 多一条下划线，并排根本分不出来
-          Icon(EmbyFavoriteRandomIcon, contentDescription = "随机播放收藏")
-        }
-        // 筛选：有生效条件时图标高亮，让人一眼看出列表不是全量
-        IconButton(onClick = { releaseInputFocus(); showFilterDialog = true }) {
-          Icon(
-            imageVector = Icons.Default.FilterAlt,
-            contentDescription = "筛选",
-            tint = if (hasActiveFilter) {
-              MaterialTheme.colorScheme.primary
-            } else {
-              MaterialTheme.colorScheme.onSurface
+        if (!hideToolbarButtons) {
+          IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = false) }) {
+            Icon(Icons.Default.Shuffle, contentDescription = "随机播放")
+          }
+          // 同上，只是范围再限定「已收藏」：避免随机到没看过的
+          IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = true) }) {
+            // 区别于上面的「随机播放」：用它自己的 Emby 收藏随机图标，
+            // 原先用的 ShuffleOn 只比 Shuffle 多一条下划线，并排根本分不出来
+            Icon(EmbyFavoriteRandomIcon, contentDescription = "随机播放收藏")
+          }
+          // 视界流：随机一批进仿抖音竖屏上下滑连播页。
+          // 图标刻意不用「随机」语义 —— 前两个按钮已经把那层意思占满了，
+          // 第三个得靠形状本身说话，否则一排三个图标看着像三个一样的按钮。
+          IconButton(onClick = { releaseInputFocus(); startFeedPlayback(favoritesOnly = false) }) {
+            Icon(VideoFeedIcon, contentDescription = "视界流")
+          }
+          // 筛选：有生效条件时图标高亮，让人一眼看出列表不是全量
+          IconButton(onClick = { releaseInputFocus(); showFilterDialog = true }) {
+            Icon(
+              imageVector = Icons.Default.FilterAlt,
+              contentDescription = "筛选",
+              tint = if (hasActiveFilter) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.onSurface
+              },
+            )
+          }
+          IconButton(onClick = { releaseInputFocus(); showStyleDialog = true }) {
+            Icon(Icons.Default.GridView, contentDescription = "视图样式")
+          }
+          SortMenu(
+            currentSort = sortBy,
+            currentOrder = sortOrder,
+            onSortChange = { newSort ->
+              browserPreferences.embyLibrarySortBy.set(newSort)
+              // 换排序项就丢掉手动方向，回到该排序项的自然方向
+              browserPreferences.embyLibrarySortOrder.set("")
             },
+            onOrderChange = { newOrder ->
+              browserPreferences.embyLibrarySortOrder.set(newOrder)
+            },
+            // 展开菜单之前先收焦点：菜单一关，焦点若已经不在输入框上，
+            // 就没有「还给输入框」这回事，软键盘也就不会跟着弹出来
+            onRequestClearFocus = ::releaseInputFocus,
           )
         }
-        IconButton(onClick = { releaseInputFocus(); showStyleDialog = true }) {
-          Icon(Icons.Default.GridView, contentDescription = "视图样式")
-        }
-        SortMenu(
-          currentSort = sortBy,
-          currentOrder = sortOrder,
-          onSortChange = { newSort ->
-            browserPreferences.embyLibrarySortBy.set(newSort)
-            // 换排序项就丢掉手动方向，回到该排序项的自然方向
-            browserPreferences.embyLibrarySortOrder.set("")
-          },
-          onOrderChange = { newOrder ->
-            browserPreferences.embyLibrarySortOrder.set(newOrder)
-          },
-          // 展开菜单之前先收焦点：菜单一关，焦点若已经不在输入框上，
-          // 就没有「还给输入框」这回事，软键盘也就不会跟着弹出来
-          onRequestClearFocus = ::releaseInputFocus,
-        )
       }
 
       // 兜底：排序方式 / 升降序一变，就确保焦点不在输入框上。
@@ -881,11 +1007,78 @@ data class EmbyLibraryScreen(
       // 用下拉刷新包裹：返回页面不会自动刷新，只有用户主动下拉才重新拉取
       PullRefreshGridBox(
         isRefreshing = isRefreshing,
-        onRefresh = { load(reset = true) },
+        // 演员分类下拉刷新要重拉演员，而不是去重拉媒体
+        onRefresh = { if (isActorListMode) loadActors() else load(reset = true) },
         gridState = gridState,
         modifier = Modifier.weight(1f).fillMaxWidth(),
       ) {
         when {
+          // ── 「演员」分类：本库演员网格（头像 + 左下角作品数角标），点击进该演员的作品 ──
+          isActorListMode && !searchActive && actorLoading && actorItems.isEmpty() -> Column(
+            modifier = Modifier.align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            CircularProgressIndicator()
+          }
+
+          isActorListMode && !searchActive && actorError != null && actorItems.isEmpty() ->
+            EmbyEmptyState(
+              message = actorError ?: "加载演员失败",
+              buttonText = "重试",
+              onAction = { scope.launch { loadActors() } },
+              modifier = Modifier.align(Alignment.Center),
+            )
+
+          isActorListMode && !searchActive && actorItems.isEmpty() -> EmbyEmptyState(
+            message = "该媒体库没有演员",
+            buttonText = "刷新",
+            onAction = { scope.launch { loadActors() } },
+            modifier = Modifier.align(Alignment.Center),
+          )
+
+          isActorListMode && !searchActive -> {
+            LazyVerticalGrid(
+              state = gridState,
+              // 人物只有一张头像图，网格固定海报（一行三个），不跟媒体卡片样式切换
+              columns = GridCells.Fixed(3),
+              modifier = Modifier.fillMaxSize(),
+              contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 96.dp),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+              items(actorItems, key = { it.Id ?: it.Name ?: "" }) { person ->
+                val s = server ?: return@items
+                EmbyMediaCard(
+                  title = person.Name.orEmpty(),
+                  subtitle = null,
+                  // 人物只有 Primary（头像），不跟着 cardStyle 跑去取 Backdrop
+                  imageUrl = viewModel.imageUrl(s, person, "Primary", 480),
+                  progress = null,
+                  isFavorite = false,
+                  // 左下角角标 = 该演员在本库参与的作品数
+                  badgeText = person.ChildCount?.takeIf { it > 0 }?.let { "$it 部" },
+                  style = EmbyCardStyle.POSTER,
+                  fillWidth = true,
+                  onClick = {
+                    val pid = person.Id ?: return@EmbyMediaCard
+                    backStack.add(
+                      EmbyLibraryScreen(
+                        libraryId = libraryId,
+                        title = "演员：${person.Name.orEmpty()}",
+                        collectionType = collectionType,
+                        personId = pid,
+                        personName = person.Name,
+                      ),
+                    )
+                  },
+                  // 演员不是文件条目，长按那套「收藏 / 已看 / 刮削 / 删除」不适用
+                  onLongClick = null,
+                )
+              }
+            }
+          }
+
           // 刚点开搜索、还没输入：顶掉网格，用历史词占位
           searchActive && searchQuery.isBlank() -> SearchHistoryPanel(
             history = searchHistory,
@@ -970,6 +1163,10 @@ data class EmbyLibraryScreen(
                   imageUrl = viewModel.imageUrl(s, item, imageTypeFor(cardStyle), 480),
                   fallbackImageUrl = viewModel.imageUrl(s, item, "Primary", 480),
                   mosaicUrls = folderCover,
+                  // 搜索时勾「演员」搜出来的 Person 也带作品数，跟演员分类里同一套角标
+                  badgeText = item.ChildCount
+                    ?.takeIf { item.Type == "Person" && it > 0 }
+                    ?.toString(),
                   progress = itemProgress(item),
                   isFavorite = item.UserData?.IsFavorite == true,
                   onClick = { openItem(item, backStack, s, context) },
@@ -1464,6 +1661,11 @@ private enum class EmbyCategory(
   BOXSET("合集", listOf("BoxSet"), null),
   FAVORITE("收藏", null, listOf("IsFavorite")),
   FOLDER("文件夹", listOf("Folder", "CollectionFolder", "UserView"), null),
+  /**
+   * 演员：不是媒体条目，是**本库出现过的演员**。
+   * 走 /Persons 端点单独拉（见 loadActors），不进媒体那套分页 / 筛选 / 扫描。
+   */
+  ACTOR("演员", null, null),
 }
 
 @Composable
@@ -1769,6 +1971,9 @@ private val SORT_OPTIONS = listOf(
   "CriticRating" to "影评评分",
   "Runtime" to "时长",
   "PlayCount" to "播放次数",
+  // 文件大小：EmbyItem.Size 已在 ITEM_FIELDS 里显式索取（老服务端没有时退回
+  // MediaSources 的大小），搜索路径的 applyClientSort 也已支持 "Size"
+  "Size" to "大小",
   "Random" to "随机",
 )
 
@@ -1828,12 +2033,13 @@ private fun applyClientSort(
 }
 
 /**
- * 随机播放一次取多少条。
+ * 随机播放一次取多少条 —— 读设置项并做护栏。
  *
- * 让服务端按 `SortBy=Random` 抽这么多条出来组成播放队列 —— 抽多了没必要，
- * 队列太长反而不好切；100 条足够覆盖「换一批」的随机感。
+ * 下限 1 是硬性的：填 0 会让「随机播放」变成一个永远点不出东西的按钮；
+ * 上限 500 是软性的：再多服务端一次也给不出有意义的结果，而且这批 Uri
+ * 要经 Intent 传给播放器，太大有撑爆 Binder 事务上限的风险。
  */
-private const val RANDOM_LIMIT = 100
+private fun Preference<Int>.randomPlayLimit(): Int = get().coerceIn(1, 500)
 
 /** 文件夹类条目。只在「文件夹」分类里显示，其它分类一律排除。 */
 private val FOLDER_TYPES = listOf("Folder", "CollectionFolder", "UserView")

@@ -239,6 +239,24 @@
             android:supportsPictureInPicture="true"
             android:theme="@style/Theme.mpvex" />
 
+        <!--
+          「视界流」：仿抖音竖屏上下滑连播的播放器。
+
+          单独一个 Activity：configChanges 里自己接管旋转，横竖屏切换不会重建
+          —— 重建会把 MPVLib 的解码实例跟着一起销毁重建，画面要黑一整轮。
+        -->
+        <activity
+            android:name=".ui.player.feed.VerticalFeedActivity"
+            android:autoRemoveFromRecents="true"
+            android:noHistory="false"
+            android:excludeFromRecents="false"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:documentLaunchMode="never"
+            android:resizeableActivity="true"
+            android:theme="@style/Theme.mpvex" />
+
         <activity android:name=".presentation.crash.CrashActivity" />
 
         <activity

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  视界流里「单页」的画面容器。
+
+  ── 为什么不用 PlayerView ──
+  截图必须从画面取像素，而 SurfaceView 的画面在独立图层里、拿不到帧数据，
+  只有 TextureView 能 getBitmap()。用 PlayerView 时，「画面装在哪个 View 上」
+  是它内部自己决定的（取决于 surface_type 是否被正确解析、以及内部
+  updateSurfaceView() 的调用时机），我们只能事后 getVideoSurfaceView() 去猜，
+  猜错就是「截图失败」。
+
+  这里改成**自己声明 TextureView 并持有引用**：画面渲染到哪完全由我们决定，
+  截图就是从这个引用上 getBitmap()，没有任何不确定性。
+
+  ── 为什么画面尺寸也自己算，不用 AspectRatioFrameLayout ──
+  原来是 `AspectRatioFrameLayout(app:resize_mode=zoom)` + 运行时 setResizeMode。
+  这条路出了两次问题：
+  1. 它只有一个**全局**的 resizeMode 开关，表达不了「不同比例要不同处理」这件事；
+     而它的 `aspectRatio` 属性在宽高都被约束成 EXACTLY 时（match_parent 正是如此）
+     根本不生效 —— 真正决定显示效果的只剩那个全局开关；
+  2. 横竖屏切换时容器尺寸变了，却没有任何回调提示它重算，模式就停在旧方向上，
+     画面比例随之崩掉。
+
+  现在改成最朴素的 `FrameLayout` + 由 ExoPlayerPool 按**容器实测宽高**直接设置
+  TextureView 的 LayoutParams：等比缩放到刚好放下，**完整显示，不裁任何画面**，
+  多出来的地方留黑边。
+
+  - clipChildren：画面理论上不会溢出，留着只是防御。
+  - layout_gravity=center：画面比屏幕小时居中显示，不居中就会偏在一边。
+  - TextureView 的宽高只是初始值，运行时会被 ExoPlayerPool 覆盖。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/feedRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:clipChildren="true">
+
+    <TextureView
+        android:id="@+id/feedTexture"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center" />
+
+</FrameLayout>

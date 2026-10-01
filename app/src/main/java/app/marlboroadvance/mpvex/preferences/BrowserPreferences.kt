@@ -17,6 +17,12 @@ class BrowserPreferences(
   val folderSortType = preferenceStore.getEnum("folder_sort_type", FolderSortType.Title)
   val folderSortOrder = preferenceStore.getEnum("folder_sort_order", SortOrder.Ascending)
 
+  /**
+   * 随机播放取多少条。**所有随机入口统一读这里**：
+   * 媒体库工具行上的「随机播放 / 随机播放收藏」、以及视界流（仿抖音竖屏连播）。
+   */
+  val randomPlayCount = preferenceStore.getInt("random_play_count", 100)
+
   // Video sorting preferences
   val videoSortType = preferenceStore.getEnum("video_sort_type", VideoSortType.Title)
   val videoSortOrder = preferenceStore.getEnum("video_sort_order", SortOrder.Ascending)

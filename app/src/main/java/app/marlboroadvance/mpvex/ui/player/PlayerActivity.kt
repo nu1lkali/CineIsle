@@ -10,6 +10,10 @@ import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalConfiguration
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -271,9 +275,15 @@ open class PlayerActivity :
   }
 
   /**
-   * Current index in the playlist
+   * Current index in the playlist.
+   *
+   * 用 `mutableStateOf` 暴露给 Compose：切集（playNext/playPrevious）改的是这个值，
+   * 但上一集/下一集按钮的 enabled、悬浮切换件的显隐都是**组合期**读 `hasPrevious()/
+   * hasNext()` 算出来的 —— 若它是普通 var，值变了不会触发重组，按钮就「卡」在旧状态
+   * （实测横屏尤其明显：切了下一集后上一集按钮仍是灰色、点不动）。改成可观察状态后，
+   * 位置一变 UI 立即刷新。所有非组合场景的读写照常当普通 Int 用，零影响。
    */
-  internal var playlistIndex: Int = 0
+  internal var playlistIndex: Int by mutableStateOf(0)
 
   /**
    * Shuffled order of playlist indices (when shuffle is enabled)
@@ -281,9 +291,10 @@ open class PlayerActivity :
   private var shuffledIndices: List<Int> = emptyList()
 
   /**
-   * Current position in shuffled playlist (when shuffle is enabled)
+   * Current position in shuffled playlist (when shuffle is enabled).
+   * 同样做成可观察状态，保证随机模式下上一集/下一集按钮的 enabled 也随位置即时刷新。
    */
-  private var shuffledPosition: Int = 0
+  private var shuffledPosition: Int by mutableStateOf(0)
 
   /**
    * Playlist ID for tracking play history (optional, only for custom playlists)
@@ -319,6 +330,11 @@ open class PlayerActivity :
   private var isManualBackgroundPlayback = false // Track manual background playback trigger
   private var noisyReceiverRegistered = false
   private var mpvInitialized = false // Track MPV initialization state
+  /**
+   * 首帧视频尺寸到达后只据此设一次方向；之后切集不再调用 [setOrientation]，
+   * 否则「按视频方向」模式下下一集若是竖屏内容会被翻成竖屏，违背用户当前方向。
+   */
+  private var videoParamsOrientationHandled = false
   private var savePlaybackStateJob: kotlinx.coroutines.Job? = null // Track ongoing save job
   private var wasPlayingBeforePause = false // Track if video was playing before pause
 
@@ -697,10 +713,23 @@ open class PlayerActivity :
               autoplayCancelled = true
               cancelAutoplayCountdown()
             },
-            // 放右下角，不压画面中间，也不挡底部的进度条
+            // 右下角，抬高到控制条按钮簇上方：84dp 时正好压在右下控件上，
+            // 太高又飘到画面中央 —— 136dp 刚好越过「seekbar + 按钮簇」的总高度
             modifier = Modifier
               .align(Alignment.BottomEnd)
-              .padding(end = 16.dp, bottom = 84.dp),
+              .padding(end = 16.dp, bottom = 136.dp),
+          )
+          // 左下角悬浮的上一条/下一条：常驻显示（不随控件显隐）。
+          // bottom=120dp：比倒计时卡片(136)更低、更贴角，但压在底部控件条(含 seekbar +
+          // 按钮簇，顶部约在距底 108dp)上方，控件显示时也不遮挡。
+          FloatingPlaylistSwitcher(
+            viewModel = viewModel,
+            modifier = Modifier
+              .align(Alignment.BottomStart)
+              .padding(
+                start = 14.dp,
+                bottom = if (LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE) 92.dp else 120.dp,
+              ),
           )
         }
       }
@@ -1759,8 +1788,13 @@ open class PlayerActivity :
         Log.d(TAG, "Video dimension changed: $property, aspect: $aspect")
         pipHelper.updatePictureInPictureParams()
         // Update orientation when video dimensions change (fixes Video orientation mode)
+        // 但仅首帧设一次：之后切集不再调用 setOrientation，避免「按视频方向」模式下
+        // 下一集若是竖屏内容被翻成竖屏，违背用户当前方向（最佳体验：切集不改方向）。
         if (playerPreferences.orientation.get() == PlayerOrientation.Video && aspect != null) {
-          setOrientation()
+          if (!videoParamsOrientationHandled) {
+            setOrientation()
+            videoParamsOrientationHandled = true
+          }
         }
 
         // Re-apply Anime4K shaders (check for resolution limit) —— mpv 专属
@@ -2065,10 +2099,15 @@ private fun cancelAutoplayCountdown() {
         // BUT: Don't update if aspect is being overridden (stretch/custom aspect mode)
         // to prevent infinite orientation switching loop
         val aspectOverride = PlayerLib.getPropertyDouble("video-aspect-override") ?: -1.0
-        if (playerPreferences.orientation.get() == PlayerOrientation.Video && 
-            aspect != null && 
-            aspectOverride <= 0.0) {
-          setOrientation()
+        if (playerPreferences.orientation.get() == PlayerOrientation.Video &&
+            aspect != null &&
+            aspectOverride <= 0.0
+        ) {
+          // 仅首帧按宽高比设一次；之后冻结，切集不翻转（与 handleFileLoaded / w·h 处理器共用标记）
+          if (!videoParamsOrientationHandled) {
+            setOrientation()
+            videoParamsOrientationHandled = true
+          }
         }
       }
     }
@@ -2208,24 +2247,28 @@ private fun cancelAutoplayCountdown() {
       }
     }
 
-    // Only set orientation immediately if NOT in Video mode
-    // For Video mode, wait for video-params/aspect to become available
-    // 用户手动指定过方向时直接沿用（setOrientation 内部处理覆盖值），不做宽高比推导
-    if (viewModel.manualOrientationOverrideValue != null ||
-      playerPreferences.orientation.get() != PlayerOrientation.Video
-    ) {
+    // 用户手动指定过方向时直接沿用：cycleScreenRotations 已经直接改写 requestedOrientation，
+    // 这里**不再**调 setOrientation()（否则会按宽高比把它覆盖掉），保证本次会话内切集沿用。
+    if (viewModel.manualOrientationOverrideValue != null) {
+      // no-op：保持用户手动选择的方向
+    } else if (playerPreferences.orientation.get() != PlayerOrientation.Video) {
+      // 非「按视频」模式：方向是确定的（横/竖/自由），直接套用（幂等，切集不会翻转）
       setOrientation()
     } else {
-      // For Video mode, try to set orientation after a short delay to ensure
-      // video dimensions are available
-      lifecycleScope.launch {
-        kotlinx.coroutines.delay(100)
-        if (isFinishing) return@launch
-        if (engineKind == EngineKind.MPV && (!mpvInitialized || player.isExiting)) return@launch
-        val aspect = currentVideoAspect()
-        Log.d(TAG, "handleFileLoaded - Video mode, aspect after delay: $aspect")
-        if (aspect != null && aspect > 0) {
-          setOrientation()
+      // 「按视频」模式：仅在首帧按宽高比设一次方向，之后冻结，
+      // 切集不再随视频内容（竖屏/横屏）翻转 —— 符合「切集不变方向」的诉求。
+      // 注意：videoParamsOrientationHandled 一旦置真，本会话内再也不自动改方向。
+      if (!videoParamsOrientationHandled) {
+        lifecycleScope.launch {
+          kotlinx.coroutines.delay(100)
+          if (isFinishing) return@launch
+          if (engineKind == EngineKind.MPV && (!mpvInitialized || player.isExiting)) return@launch
+          val aspect = currentVideoAspect()
+          Log.d(TAG, "handleFileLoaded - Video mode, aspect after delay: $aspect")
+          if (aspect != null && aspect > 0) {
+            setOrientation()
+            videoParamsOrientationHandled = true
+          }
         }
       }
     }

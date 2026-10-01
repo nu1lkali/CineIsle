@@ -38,7 +38,7 @@ class AppearancePreferences(
   val topRightControls =
     preferenceStore.getString(
       "top_right_controls",
-      "CURRENT_CHAPTER,DECODER,AUDIO_TRACK,SUBTITLES,EMBY_FAVORITE,CAST,MORE_OPTIONS",
+      "CURRENT_CHAPTER,EMBY_FAVORITE,CAST,MORE_OPTIONS",
     )
 
   /**
@@ -53,13 +53,13 @@ class AppearancePreferences(
   val bottomRightControls =
     preferenceStore.getString(
       "bottom_right_controls_v2",
-      "FRAME_NAVIGATION,VIDEO_ZOOM,PICTURE_IN_PICTURE,SCREEN_ROTATION",
+      "PICTURE_IN_PICTURE,SCREEN_ROTATION",
     )
 
   val bottomLeftControls =
     preferenceStore.getString(
       "bottom_left_controls_v2",
-      "PREVIOUS,NEXT,BACKGROUND_PLAYBACK,LOCK_CONTROLS,ASPECT_RATIO,PLAYBACK_SPEED,REPEAT_MODE,SHUFFLE,AB_LOOP",
+      "BACKGROUND_PLAYBACK,LOCK_CONTROLS,REPEAT_MODE,SHUFFLE,AB_LOOP",
     )
 
   /**
@@ -88,8 +88,7 @@ class AppearancePreferences(
   val portraitBottomControls =
     preferenceStore.getString(
       "portrait_bottom_controls_v3",
-      "PREVIOUS,NEXT,EMBY_FAVORITE,DECODER,AUDIO_TRACK,SUBTITLES," +
-        "PLAYBACK_SPEED,REPEAT_MODE,LOCK_CONTROLS," +
+      "PREVIOUS,NEXT,EMBY_FAVORITE,REPEAT_MODE,LOCK_CONTROLS," +
         "PICTURE_IN_PICTURE,SCREEN_ROTATION,CAST,MORE_OPTIONS",
     )
 

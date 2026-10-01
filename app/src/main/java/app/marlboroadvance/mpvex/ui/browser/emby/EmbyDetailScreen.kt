@@ -118,8 +118,11 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyIdentifyDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyRefreshMetadataDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
+import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import android.net.Uri
 import androidx.compose.material.icons.outlined.Cast
@@ -170,6 +173,9 @@ data class EmbyDetailScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    // 「更多」菜单里的刮削 / 刷新元数据：改为与媒体库长按菜单同一套的抽屉式实现
+    var showIdentifySheet by remember { mutableStateOf(false) }
+    var showRefreshSheet by remember { mutableStateOf(false) }
     // 下拉刷新的转圈状态（转完由 PullRefreshBox 自己收起）
     val isRefreshing = remember { mutableStateOf(false) }
 
@@ -376,32 +382,11 @@ data class EmbyDetailScreen(
                   castSheetShown = true
                 }
               },
-              onRefreshMetadata = {
-                val id = current.Id
-                if (id != null) {
-                  scope.launch {
-                    val ok = viewModel.refreshMetadata(currentServer, id, full = false)
-                    Toast.makeText(
-                      context,
-                      if (ok) "已触发刷新元数据" else "刷新失败",
-                      Toast.LENGTH_SHORT,
-                    ).show()
-                  }
-                }
-              },
-              onScrapeMetadata = {
-                val id = current.Id
-                if (id != null) {
-                  scope.launch {
-                    val ok = viewModel.refreshMetadata(currentServer, id, full = true)
-                    Toast.makeText(
-                      context,
-                      if (ok) "已触发刮削元数据" else "刮削失败",
-                      Toast.LENGTH_SHORT,
-                    ).show()
-                  }
-                }
-              },
+              // 以前这两项是「点了直接对服务器发一把 full 刷新」，现在换成
+              // 媒体库长按菜单同款的抽屉：刮削=可检索的识别（EmbyIdentifyDialog），
+              // 刷新=带选项的确认（EmbyRefreshMetadataDialog），见文件底部挂载处
+              onRefreshMetadata = { showRefreshSheet = true },
+              onScrapeMetadata = { showIdentifySheet = true },
               onEditMetadata = { showEditMeta = true },
               onPersonClick = { pid, pname, tag ->
                 backStack.add(

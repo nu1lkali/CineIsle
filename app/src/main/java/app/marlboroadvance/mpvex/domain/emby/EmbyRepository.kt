@@ -469,6 +469,20 @@ class EmbyRepository(
     EmbyClient.searchItems(server, term, includeItemTypes, limit, sortBy, sortOrder)
   }
 
+  /**
+   * 搜演员（走 `/Persons`）。
+   *
+   * 与 [searchItems] 分开，因为 `/Users/{id}/Items` 那条端点不返回 Person。
+   */
+  suspend fun searchPersons(
+    server: EmbyServer,
+    term: String,
+    parentId: String? = null,
+    limit: Int = 60,
+  ): List<EmbyItem> = withContext(Dispatchers.IO) {
+    EmbyClient.searchPersons(server, term, parentId, limit)
+  }
+
   /** 剧集的季列表 */
   suspend fun getSeasons(
     server: EmbyServer,

@@ -16,6 +16,8 @@ class PlayerPreferences(
   val showDynamicSpeedOverlay = preferenceStore.getBoolean("show_dynamic_speed_overlay", true)
   val showDoubleTapOvals = preferenceStore.getBoolean("show_double_tap_ovals", true)
   val showSeekTimeWhileSeeking = preferenceStore.getBoolean("show_seek_time_while_seeking", true)
+  /** 左下角悬浮的「上一条 / 下一条」小切换按钮；控制条显示期间它会自动让位 */
+  val showFloatingPlaylistSwitcher = preferenceStore.getBoolean("show_floating_playlist_switcher", true)
   val usePreciseSeeking = preferenceStore.getBoolean("use_precise_seeking", false)
 
   val brightnessGesture = preferenceStore.getBoolean("gestures_brightness", true)

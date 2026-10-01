@@ -663,6 +663,70 @@ object EmbyClient {
     mapOf("PersonTypes" to personTypes.joinToString("|")),
   )
 
+  /**
+   * 某媒体库里出现过的演员（PersonTypes=Actor）。
+   *
+   * 用于媒体库「演员」分类：返回**完整 EmbyItem**（带 [EmbyItem.ImageTags] 头像），
+   * 复用现有媒体卡片渲染；强制 [EmbyItem.Type]="Person"，点击时走「该演员作品」路由。
+   */
+  fun getActors(
+    server: EmbyServer,
+    parentId: String? = null,
+  ): List<EmbyItem> =
+    runCatching {
+      val q = LinkedHashMap<String, String?>()
+      q["UserId"] = server.userId
+      parentId?.let { q["ParentId"] = it }
+      q["Recursive"] = "true"
+      q["SortBy"] = "SortName"
+      q["PersonTypes"] = "Actor"
+      // 带上 ChildCount：Person 在该字段里就是「参与的作品数」，用来给演员卡片垫左下角角标
+      q["Fields"] = "ChildCount"
+      getJson<EmbyItemsResult>(server, "/Persons", q)
+        .Items
+        .mapNotNull { item ->
+          val id = item.Id ?: return@mapNotNull null
+          val name = item.Name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+          item.copy(Type = "Person")
+        }
+    }.getOrDefault(emptyList())
+
+  /**
+   * 按名字搜演员。
+   *
+   * 必须走 `/Persons`：`/Users/{id}/Items` 这条拿媒体的端点**不返回 Person**，
+   * 所以即便传了 `IncludeItemTypes=Person`，[getItems] 也永远只能拿到空列表 ——
+   * 表现就是「勾选『演员』筛选后什么都搜不到」。
+   *
+   * @param parentId 限定某个媒体库；null 表示跨库（全库搜索用）
+   */
+  fun searchPersons(
+    server: EmbyServer,
+    term: String,
+    parentId: String? = null,
+    limit: Int = 60,
+  ): List<EmbyItem> =
+    runCatching {
+      val q = LinkedHashMap<String, String?>()
+      q["UserId"] = server.userId
+      parentId?.let { q["ParentId"] = it }
+      q["Recursive"] = "true"
+      q["SortBy"] = "SortName"
+      q["SearchTerm"] = term
+      q["Limit"] = limit.toString()
+      // 与 [getActors] 一致带上 ChildCount：卡片左下角要显示「TA 参演了几部」
+      q["Fields"] = "ChildCount"
+      q["EnableImages"] = "true"
+      q["ImageTypeLimit"] = "1"
+      getJson<EmbyItemsResult>(server, "/Persons", q)
+        .Items
+        .mapNotNull { item ->
+          val id = item.Id ?: return@mapNotNull null
+          val name = item.Name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+          item.copy(Type = "Person")
+        }
+    }.getOrDefault(emptyList())
+
   /** 某媒体库里出现过的工作室（出品方） */
   fun getStudios(server: EmbyServer, parentId: String? = null): List<EmbyIdName> =
     idNameList(server, "/Studios", parentId)

@@ -1,10 +1,12 @@
 package app.marlboroadvance.mpvex.ui.preferences
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,14 +24,18 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material.icons.outlined.Subtitles
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -45,6 +51,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
@@ -53,6 +61,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.ProvidePreferenceLocals
+import org.koin.compose.koinInject
 
 @Serializable
 object PreferencesScreen : Screen {
@@ -394,6 +403,44 @@ object PreferencesScreen : Screen {
             }
           }
 
+          item {
+            // 随机播放取多少条 —— 媒体库的两个随机按钮和「视界流」统一读这一个值。
+            // 做成可编辑而不是写死：库里片子多的用户想要更长的一批，
+            // 库小的用户觉得刷来刷去都是重复的，需要能缩短。
+            val browserPreferences = koinInject<BrowserPreferences>()
+            val randomCount by browserPreferences.randomPlayCount.collectAsState()
+            var showRandomDialog by remember { mutableStateOf(false) }
+            PreferenceCard {
+              Preference(
+                title = { Text(text = "随机播放视频数量") },
+                summary = {
+                  Text(
+                    text = "当前 $randomCount 条 · 用于随机播放、随机播放收藏与视界流",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.Shuffle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = { showRandomDialog = true },
+              )
+            }
+            if (showRandomDialog) {
+              RandomPlayCountDialog(
+                current = randomCount,
+                onConfirm = { value ->
+                  showRandomDialog = false
+                  browserPreferences.randomPlayCount.set(value)
+                },
+                onCancel = { showRandomDialog = false },
+              )
+            }
+          }
+
           // Advanced & About Section
           item {
             PreferenceSectionHeader(title = "高级与关于")
@@ -456,3 +503,49 @@ private fun formatCacheBytes(bytes: Long): String =
     bytes >= 1L shl 10 -> "%.1f KB".format(bytes.toDouble() / (1L shl 10))
     else -> "$bytes B"
   }
+
+/**
+ * 「随机播放视频数量」的输入框。
+ *
+ * 只接受数字（[Char.isDigit] 逐字符过滤），确认时再夹到 1~500 —— 空串 / 越界
+ * 一律回落到默认值 100，而不是 disabling 按钮不给任何反馈：
+ * 用户填了个 0 却点不动「确定」，他会以为是 App 坏了。
+ */
+@Composable
+private fun RandomPlayCountDialog(
+  current: Int,
+  onConfirm: (Int) -> Unit,
+  onCancel: () -> Unit,
+) {
+  var text by remember { mutableStateOf(current.toString()) }
+  AlertDialog(
+    onDismissRequest = onCancel,
+    title = { Text(text = "随机播放视频数量") },
+    text = {
+      Column {
+        Text(
+          text = "取值 1~500。数量越大，每次随机取片越慢；视界流的一批视频也按这个数量来。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.outline,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+          value = text,
+          onValueChange = { input -> text = input.filter(Char::isDigit).take(3) },
+          singleLine = true,
+          label = { Text(text = "数量") },
+        )
+      }
+    },
+    confirmButton = {
+      TextButton(
+        onClick = { onConfirm(text.toIntOrNull()?.coerceIn(1, 500) ?: 100) },
+      ) {
+        Text(text = "确定")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onCancel) { Text(text = "取消") }
+    },
+  )
+}

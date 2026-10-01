@@ -319,6 +319,8 @@ fun EmbyMediaCard(
   fillWidth: Boolean = false,
   mosaicUrls: List<String>? = null,
   onLongClick: ((Offset) -> Unit)? = null,
+  /** 左下角角标文案（如演员卡片的「128 部」作品数），null 时不显示 */
+  badgeText: String? = null,
 ) {
   Column(modifier = if (fillWidth) modifier.fillMaxWidth() else modifier.width(style.width)) {
     Card(
@@ -372,6 +374,26 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
               .fillMaxWidth()
               .height(3.dp),
           )
+        }
+
+        // 左下角角标：演员卡片用来垫「参与作品数」；覆盖在底部进度条上方一点，避免压住
+        if (!badgeText.isNullOrBlank()) {
+          Surface(
+            modifier = Modifier
+              .align(Alignment.BottomStart)
+              .padding(start = 6.dp, bottom = 8.dp),
+            shape = RoundedCornerShape(6.dp),
+            color = MEDIA_BADGE_BG,
+          ) {
+            Text(
+              text = badgeText,
+              style = MaterialTheme.typography.labelSmall,
+              color = Color.White,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+            )
+          }
         }
       }
     }
