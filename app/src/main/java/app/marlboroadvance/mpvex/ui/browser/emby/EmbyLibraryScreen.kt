@@ -559,15 +559,29 @@ data class EmbyLibraryScreen(
       val current = viewModel.currentServerOrAwait() ?: return
       actorLoading = true
       actorError = null
-      runCatching {
+      val loaded = runCatching {
         viewModel.getActors(current, libraryId)
-      }.onSuccess { list ->
+      }
+      loaded.onSuccess { list ->
         actorItems = list
         actorTotal = list.size
       }.onFailure {
         actorError = it.message ?: "加载演员失败"
       }
       actorLoading = false
+
+      // 作品数角标：/Persons 的 Fields 不支持 ChildCount，服务端从不返回该字段
+      // （见 EmbyClient.getPersonWorkCounts 的说明），所以自己数一遍补上。
+      // 放在 loading 结束之后 —— 头像网格先出来，数字随后补，不让首屏等这次全库统计。
+      // 服务端哪天真的返回了 ChildCount，就跳过统计、直接用它。
+      val list = loaded.getOrNull().orEmpty()
+      if (list.isEmpty() || list.any { it.ChildCount != null }) return
+      val counts = viewModel.getPersonWorkCounts(current, libraryId)
+      if (counts.isEmpty()) return
+      actorItems = actorItems.map { person ->
+        val n = person.Id?.let { counts[it] } ?: 0
+        if (n > 0) person.copy(ChildCount = n) else person
+      }
     }
 
     // 首次进入 / 筛选条件变化：只有没有可用缓存时才请求。

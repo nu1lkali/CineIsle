@@ -321,6 +321,16 @@ object EmbyClient {
     // Size 是「按文件大小排序」的数据来源，Emby 默认不返回，必须显式索取
     "Tags,SortName,ProductionLocations,Path,Size"
 
+  /** 统计演员作品数时每页拉多少条。开大一点，几千条的库几次就能拉完 */
+  private const val COUNT_PAGE_SIZE = 500
+
+  /**
+   * 统计能接受的库规模上限（条数）。超过就整体放弃统计（角标留空），
+   * 免得为了几十个角标去拉几十 MB 的响应。它同时也是翻页的硬上限 ——
+   * 服务端万一忽略 StartIndex，配合按 Id 去重不会死循环。
+   */
+  private const val COUNT_MAX_ITEMS = 10_000
+
   // ─── 内部工具 ───
 
   private fun authedRequest(
@@ -562,6 +572,13 @@ object EmbyClient {
     hasSubtitles: Boolean? = null,
     /** 工作室（出品方）Id 列表，多选取并集 */
     studioIds: List<String>? = null,
+    /**
+     * 覆盖默认的 [ITEM_FIELDS]。
+     *
+     * 统计类请求（如数每个演员有多少部作品）只需要 `People`，用这个参数把
+     * `MediaSources`、`Overview` 这些大字段去掉 —— 一页 500 条时响应体能小掉一大半。
+     */
+    fields: String = ITEM_FIELDS,
   ): EmbyItemsResult {
     val q = LinkedHashMap<String, String?>()
     parentId?.let { q["ParentId"] = it }
@@ -592,7 +609,7 @@ object EmbyClient {
     q["StartIndex"] = startIndex.toString()
     q["Limit"] = limit.toString()
     q["Recursive"] = recursive.toString()
-    q["Fields"] = ITEM_FIELDS
+    q["Fields"] = fields
     q["EnableImages"] = "true"
     q["EnableUserData"] = "true"
     q["ImageTypeLimit"] = "1"
@@ -680,7 +697,12 @@ object EmbyClient {
       q["Recursive"] = "true"
       q["SortBy"] = "SortName"
       q["PersonTypes"] = "Actor"
-      // 带上 ChildCount：Person 在该字段里就是「参与的作品数」，用来给演员卡片垫左下角角标
+      // 这里本来想直接要 ChildCount —— Person 在该字段里确实是「参与的作品数」，
+      // 但 /Persons 端点的 Fields 白名单里没有它（官方文档的选项是 Budget / Chapters /
+      // Genres / MediaStreams / People … ），传了会被服务端忽略，Person 的 ChildCount
+      // 于是恒为 null，演员卡片左下角的角标永远画不出来。
+      // 真正的数据来源是 [getPersonWorkCounts]（客户端自己数）。这行留着，万一某个
+      // 服务端认它就能省掉那次统计。
       q["Fields"] = "ChildCount"
       getJson<EmbyItemsResult>(server, "/Persons", q)
         .Items
@@ -690,6 +712,64 @@ object EmbyClient {
           item.copy(Type = "Person")
         }
     }.getOrDefault(emptyList())
+
+  /**
+   * 数每个演员在该媒体库里参与了多少部作品：PersonId → 条目数。
+   *
+   * **为什么不直接读 `ChildCount`**：`/Persons` 端点的 `Fields` 参数并不支持
+   * `ChildCount`（官方文档列出的可选项是 Budget / Chapters / Genres / MediaStreams /
+   * People … ，没有它），传了也会被服务端忽略，Person 的 `ChildCount` 于是恒为
+   * null —— 演员卡片左下角那个作品数角标就永远画不出来。所以自己数一遍。
+   *
+   * 口径与「点进这位演员」那一页保持一致（同一个库 + 递归 + 只要非容器条目），
+   * 角标上的数字因此和点进去看到的条数对得上。
+   *
+   * 代价是把整个库逐页拉一遍，所以只索取 `People`、把 MediaSources 这类大字段去掉；
+   * 几千条的库通常几次请求就够。调用方应放在后台，不要挡首屏。
+   */
+  fun getPersonWorkCounts(server: EmbyServer, parentId: String?): Map<String, Int> =
+    runCatching {
+      val counts = HashMap<String, Int>()
+      // 按 Id 去重：服务端若忽略 StartIndex 反复返回同一批，没有这层就会把同一部数好几次
+      val seen = HashSet<String>()
+      var start = 0
+      while (true) {
+        val page = getItems(
+          server = server,
+          parentId = parentId,
+          startIndex = start,
+          limit = COUNT_PAGE_SIZE,
+          recursive = true,
+          // 只要「本身能播」的条目：把 Folder / Season / BoxSet 这些容器挡掉，
+          // 否则一季、一个合集都会被算成一部作品，数字虚高
+          isFolder = false,
+          fields = "People",
+        )
+        var fresh = 0
+        page.Items.forEach itemLoop@{ item ->
+          val id = item.Id
+          if (id != null && !seen.add(id)) return@itemLoop
+          fresh++
+          item.People?.forEach { person ->
+            person.Id?.let { pid -> counts[pid] = (counts[pid] ?: 0) + 1 }
+          }
+        }
+        // 库太大就整体放弃：与其拉几十 MB 响应，不如让这几个角标先空着。
+        // 只看第一页拿到的总数就够判断，不必真拉完
+        if (start == 0 && page.TotalRecordCount > COUNT_MAX_ITEMS) {
+          android.util.Log.d(
+            "EmbyClient",
+            "库规模 ${page.TotalRecordCount} 超过统计上限 $COUNT_MAX_ITEMS，跳过演员作品数统计",
+          )
+          return@runCatching emptyMap()
+        }
+        // 本页一条新的都没有 = 服务端在重复给同一批，收手
+        if (fresh == 0 || page.Items.size < COUNT_PAGE_SIZE) break
+        start += COUNT_PAGE_SIZE
+        if (start >= COUNT_MAX_ITEMS) break
+      }
+      counts
+    }.getOrDefault(emptyMap())
 
   /**
    * 按名字搜演员。
@@ -714,7 +794,8 @@ object EmbyClient {
       q["SortBy"] = "SortName"
       q["SearchTerm"] = term
       q["Limit"] = limit.toString()
-      // 与 [getActors] 一致带上 ChildCount：卡片左下角要显示「TA 参演了几部」
+      // 与 [getActors] 同样的情况：Fields 里的 ChildCount 不被 /Persons 支持，
+      // 搜索结果那张卡片的作品数同样得靠调用方另行统计（见 [getPersonWorkCounts]）
       q["Fields"] = "ChildCount"
       q["EnableImages"] = "true"
       q["ImageTypeLimit"] = "1"

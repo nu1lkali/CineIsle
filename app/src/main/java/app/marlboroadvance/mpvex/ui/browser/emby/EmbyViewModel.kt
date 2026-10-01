@@ -725,6 +725,15 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   suspend fun getActors(server: EmbyServer, parentId: String?): List<EmbyItem> =
     withContext(Dispatchers.IO) { EmbyClient.getActors(server, parentId) }
 
+  /**
+   * 数每位演员在该库参与的作品数（PersonId → 条数）。
+   *
+   * /Persons 拿不到这个数（Fields 不支持 ChildCount），只能逐页把库拉一遍自己算，
+   * 所以调用方要放在后台、别挡首屏。详见 [EmbyClient.getPersonWorkCounts]。
+   */
+  suspend fun getPersonWorkCounts(server: EmbyServer, parentId: String?): Map<String, Int> =
+    withContext(Dispatchers.IO) { EmbyClient.getPersonWorkCounts(server, parentId) }
+
   /** 刷新 / 刮削元数据。full=true 走全量重刮（FullRefresh），否则默认刷新（Default）。 */
   suspend fun refreshMetadata(
     server: EmbyServer,
