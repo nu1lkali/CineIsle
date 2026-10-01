@@ -2,6 +2,7 @@ package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
 import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -21,6 +22,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyScanChunk
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.ui.player.GsyPlayerActivity
 import app.marlboroadvance.mpvex.ui.player.PlayerActivity
@@ -51,6 +53,7 @@ private val GLOBAL_SEARCH_DEFAULT_TYPES =
 class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   private val repository by inject<EmbyRepository>(EmbyRepository::class.java)
   private val playerPreferences by inject<PlayerPreferences>(PlayerPreferences::class.java)
+  private val browserPreferences by inject<BrowserPreferences>(BrowserPreferences::class.java)
 
   val servers: StateFlow<List<EmbyServer>> = repository.servers
     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -536,6 +539,130 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   /**
+   * 用**服务器转码**后的流播放当前媒体。
+   *
+   * 【什么时候用它】默认的 [play] 是「直连原文件」—— 最快、服务器零负担，但能不能播
+   * 全看本机解不解得了这个编码。下面这两类源一定会失败，换内核也没用：
+   *
+   *  · 远程 STRM（`.strm` 里指向一个远端地址，源文件是 AVI）；
+   *  · AVI + Xvid / DivX（MPEG-4 ASP）等老编码 —— 手机的硬解不出画面、软解又跟不上。
+   *
+   * 这时让服务器用 ffmpeg 转成 H.264 + AAC 再下发，客户端拿到的就是最普通的流。
+   * 代价是**服务器要跑实时转码**（CPU 占用明显上升），所以做成显式入口、不自动触发。
+   *
+   * 与 [playWithExternalPlayer] 一样返回 [Result]：失败原因（转码被禁用、服务器连不上）
+   * 要能原样说给用户听，闷在那儿只会让人以为按钮坏了。
+   */
+  suspend fun playTranscoded(
+    server: EmbyServer,
+    item: EmbyItem,
+    resumeSeconds: Long = 0,
+    reverseEngine: Boolean = false,
+  ): Result<Unit> {
+    val itemId = item.Id ?: return Result.failure(IllegalArgumentException("缺少媒体 Id"))
+    return runCatching {
+      val url =
+        repository.transcodeStreamUrl(
+          server = server,
+          itemId = itemId,
+          startTimeTicks = EmbyTicks.secondsToTicks(resumeSeconds),
+        )
+      launchSingle(
+        server = server,
+        item = item,
+        resumeSeconds = resumeSeconds,
+        engine = resolveEngine(reverseEngine),
+        overrideUrl = url,
+      )
+    }
+  }
+
+  /**
+   * 列出本机能打开这条流的**外部播放器**候选（已剔除自家两个播放页）。
+   *
+   * 枚举规则见 [queryExternalPlayers] —— 关键在于**不能只查一次带 URI 的 intent**，
+   * 否则只声明了 `file` / `content` 的播放器会因为 scheme 对不上而全部消失。
+   */
+  fun listExternalPlayers(server: EmbyServer, item: EmbyItem): Result<List<ExternalPlayerOption>> {
+    val itemId = item.Id
+      ?: return Result.failure(IllegalStateException("这个条目没有可播放的媒体 Id"))
+    val app = getApplication<Application>()
+    val players =
+      queryExternalPlayers(
+        context = app,
+        uri = externalStreamUri(server, itemId),
+        selfPackageName = app.packageName,
+      )
+    return if (players.isEmpty()) {
+      Result.failure(IllegalStateException("手机里没有找到能播放视频的外部播放器"))
+    } else {
+      Result.success(players)
+    }
+  }
+
+  /** 上次用过的外部播放器（`包名/Activity名`，空串 = 还没用过） */
+  fun lastExternalPlayerKey(): String = browserPreferences.embyExternalPlayer.get()
+
+  /**
+   * 用**指定的外部播放器**打开当前媒体。
+   *
+   * 与 [play] 的区别：那条走的是 App 自带的两个内核（mpv / GSY），这条把流地址交给
+   * 系统里别的播放器（MX、VLC、各类投屏 App…）。用的是静态直链（`static=true`），
+   * 拿到 URL 的播放器自己拉流，完全不依赖我们的播放页。
+   *
+   * 两点取舍：不带续播位置（外部播放器不认我们的 `position` extra，硬塞没用），
+   * 这条链路的进度也不会回传到 Emby 服务器。
+   */
+  fun playWithExternalPlayer(
+    server: EmbyServer,
+    item: EmbyItem,
+    player: ExternalPlayerOption,
+  ): Result<Unit> {
+    val itemId = item.Id
+      ?: return Result.failure(IllegalStateException("这个条目没有可播放的媒体 Id"))
+    val app = getApplication<Application>()
+    val intent =
+      externalPlayerLaunchIntent(
+        uri = externalStreamUri(server, itemId),
+        option = player,
+        title = displayTitle(item),
+      )
+    return runCatching {
+      app.startActivity(intent)
+      // 记住这次的选择：下次列表里那一项会打上勾，并排到已知播放器里的原位置
+      browserPreferences.embyExternalPlayer.set(player.key)
+    }
+  }
+
+  /**
+   * 兜底：交给系统自己的选择器。候选同样是剔除自家之后的那批，
+   * 所以系统选择器里也不会冒出影屿自己。
+   */
+  fun playWithExternalPlayerChooser(server: EmbyServer, item: EmbyItem): Result<Unit> {
+    val itemId = item.Id
+      ?: return Result.failure(IllegalStateException("这个条目没有可播放的媒体 Id"))
+    val app = getApplication<Application>()
+    val chooser =
+      externalPlayerChooserIntent(
+        context = app,
+        uri = externalStreamUri(server, itemId),
+        selfPackageName = app.packageName,
+        title = displayTitle(item),
+      )
+        ?: return Result.failure(IllegalStateException("手机里没有找到能播放视频的外部播放器"))
+    return runCatching { app.startActivity(chooser) }
+  }
+
+  /**
+   * 交给外部播放器的直链。
+   *
+   * `static=true` = 服务器原样吐原文件，一个字节都不改 —— 外部播放器自带解码器，
+   * 用不着服务器帮它转码。
+   */
+  private fun externalStreamUri(server: EmbyServer, itemId: String): Uri =
+    Uri.parse(repository.videoStreamUrl(server, itemId, static = true))
+
+  /**
    * 取同季剧集中「当前集及其之后」的列表；失败时只返回当前集。
    */
   private suspend fun buildEpisodePlaylist(
@@ -600,9 +727,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     item: EmbyItem,
     resumeSeconds: Long,
     engine: EngineKind? = resolveEngine(false),
+    /**
+     * 覆盖播放地址。null = 默认的「直连原文件」（`static=true`，服务器不动数据）。
+     * 传值只有一条来源：[playTranscoded] 拿到的服务端转码地址。
+     */
+    overrideUrl: String? = null,
   ) {
     val itemId = item.Id ?: return
-    val url = repository.videoStreamUrl(server, itemId, static = true)
+    val url = overrideUrl ?: repository.videoStreamUrl(server, itemId, static = true)
     val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
       setClass(getApplication(), PlayerActivity::class.java)
       putExtra("internal_launch", true)

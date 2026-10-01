@@ -331,6 +331,23 @@ object EmbyClient {
    */
   private const val COUNT_MAX_ITEMS = 10_000
 
+  // ── 「服务器转码」的默认参数（见 [transcodeStreamUrl]）──
+
+  /**
+   * 转码目标：H.264 + AAC。
+   *
+   * 这两个是**所有 Android 设备都硬解得了**的编码，转完就再没有兼容性问题。
+   * 不用 HEVC 是因为它虽然更省码率，但老设备 / 低端机的硬解支持参差不齐，
+   * 转码本来就是为了兼容，没有必要在这里引入新的不确定性。
+   */
+  private const val TRANSCODE_VIDEO_CODEC = "h264"
+  private const val TRANSCODE_AUDIO_CODEC = "aac"
+
+  /** 转码分辨率上限：1080p 封顶。源多半是 480p/720p，再高只是白烧服务器 CPU */
+  private const val TRANSCODE_MAX_HEIGHT = 1080
+  private const val TRANSCODE_VIDEO_BITRATE = 6_000_000
+  private const val TRANSCODE_AUDIO_BITRATE = 192_000
+
   // ─── 内部工具 ───
 
   private fun authedRequest(
@@ -1401,6 +1418,105 @@ object EmbyClient {
   }
 
   /**
+   * 「让**服务器转码**」后的播放地址 —— 本机解不了的文件走这条路。
+   *
+   * ## 为什么需要它
+   *
+   * [videoStreamUrl] 的 `static=true` 是「原样吐原文件」，服务器一个字节都不动。
+   * 这对「本机能解的编码」最省资源，但遇到下面这些源就一定翻车：
+   *
+   *  · **远程 STRM**：`.strm` 里指向一个远端地址，源文件是 AVI；
+   *  · **AVI + Xvid / DivX（MPEG-4 ASP）**：手机上的 MediaCodec 普遍没有
+   *    `video/mp4v-es` 解码器 —— 硬解直接不出画面，软解又常常跟不上；
+   *  · 其它老旧编码 / 容器：本机解不了，**换内核也没用**（两条路用的都是系统解码器）。
+   *
+   * 这种情况下唯一可靠的办法是**让服务器转**：Emby 侧用 ffmpeg 转成 H.264 + AAC，
+   * 客户端拿到的就是最普通的流。官方客户端、Infuse 那类第三方客户端在同样的片子上能放、
+   * 我们放不了，差别就在这一步 —— 它们会先问服务器 PlaybackInfo，服务器发现
+   * 「这个客户端不支持 mpeg4」就把转码地址给它。
+   *
+   * ## 两步（都是 Emby 官方接口）
+   *
+   * 1. `POST /Items/{id}/PlaybackInfo`，声明「只要转码」，换回 `MediaSources[0].Id`
+   *    （MediaSourceId）与 `PlaySessionId`，响应里通常还会直接给一条 `TranscodingUrl`；
+   * 2. 有 `TranscodingUrl` 就用它（服务器把参数都拼好了，最稳）；没有就自己拼
+   *    `/Videos/{id}/stream?Static=false&...` —— `Static=false` 即触发服务端转码。
+   *
+   * @param startTimeTicks 从哪开始（Emby 的 tick，1 tick = 100ns）；续播时传进来
+   * @return 可直接交给播放器的完整 URL
+   * @throws EmbyApiException 服务器拒绝转码（例如策略里关了视频转码）
+   */
+  suspend fun transcodeStreamUrl(
+    server: EmbyServer,
+    itemId: String,
+    startTimeTicks: Long = 0L,
+    maxHeight: Int = TRANSCODE_MAX_HEIGHT,
+    videoBitrate: Int = TRANSCODE_VIDEO_BITRATE,
+    audioBitrate: Int = TRANSCODE_AUDIO_BITRATE,
+  ): String {
+    // ── 1. 向服务器要一份「只转码」的播放方案 ──
+    val payload =
+      jsonObjectOf(
+        mapOf(
+          "UserId" to server.userId.takeIf { it.isNotEmpty() },
+          // 三个开关是本方法的核心：禁掉直连、禁掉直接串流、只留转码
+          "EnableDirectPlay" to false,
+          "EnableDirectStream" to false,
+          "EnableTranscoding" to true,
+          "AllowVideoStreamCopy" to false,
+          "AllowAudioStreamCopy" to false,
+          "MaxStreamingBitrate" to (videoBitrate + audioBitrate),
+        ),
+      ).toString()
+
+    val info =
+      execJson<PlaybackInfoResult>(
+        authedRequest(server, "/Items/$itemId/PlaybackInfo")
+          .post(payload.toRequestBody(jsonMedia))
+          .build(),
+      )
+
+    val source = info.MediaSources?.firstOrNull()
+      ?: throw EmbyApiException(0, info.ErrorCode ?: "服务器没有返回可播放的媒体源（可能转码被禁用）")
+
+    // ── 2a. 服务器自己给的转码地址优先（参数齐全、已含 api_key）──
+    source.TranscodingUrl?.takeIf { it.isNotBlank() }?.let { return absolutize(server, it) }
+
+    // ── 2b. 没给就自己拼老的 /stream 端点（Static=false 即转码）──
+    val q = LinkedHashMap<String, String?>()
+    q["Static"] = "false"
+    source.Id?.let { q["MediaSourceId"] = it }
+    q["DeviceId"] = androidDeviceId(server.id.toString())
+    info.PlaySessionId?.let { q["PlaySessionId"] = it }
+    if (startTimeTicks > 0) q["StartTimeTicks"] = startTimeTicks.toString()
+    q["MaxHeight"] = maxHeight.toString()
+    q["VideoCodec"] = TRANSCODE_VIDEO_CODEC
+    q["AudioCodec"] = TRANSCODE_AUDIO_CODEC
+    q["VideoBitRate"] = videoBitrate.toString()
+    q["AudioBitRate"] = audioBitrate.toString()
+    q["TranscodingMaxAudioChannels"] = "2"
+    if (server.apiToken.isNotEmpty()) q["api_key"] = server.apiToken
+
+    val qs = q.entries.filter { it.value != null }.joinToString("&") { (k, v) ->
+      "$k=${java.net.URLEncoder.encode(v!!, "UTF-8")}"
+    }
+    return "${server.hostUrl}/emby/Videos/$itemId/stream?$qs"
+  }
+
+  /**
+   * 把服务器返回的相对地址补成完整 URL。
+   *
+   * `TranscodingUrl` 长这样：`/videos/{id}/master.m3u8?DeviceId=...&api_key=...`
+   * —— 注意它**不带 `/emby` 前缀**（虽然调用时是打在 `/emby` 下的），
+   * 所以这里统一补回 `${hostUrl}/emby`。已经是绝对地址的原样返回。
+   */
+  private fun absolutize(server: EmbyServer, url: String): String {
+    if (url.startsWith("http://") || url.startsWith("https://")) return url
+    val path = if (url.startsWith("/")) url else "/$url"
+    return server.hostUrl + "/emby" + path
+  }
+
+  /**
    * 构造「下载原始文件」URL。
    *
    * Emby 的 `/Items/{id}/Download` 会把服务器上的原文件以附件形式吐出（不转码），
@@ -1463,3 +1579,28 @@ private fun jsonObjectOf(entries: Map<String, Any?>): JsonObject {
   }
   return JsonObject(map)
 }
+
+/**
+ * `POST /Items/{id}/PlaybackInfo` 的响应。
+ *
+ * 只声明 [transcodeStreamUrl] 真正用得到的那几个字段 —— Emby 的完整响应有几十个字段，
+ * 靠 `ignoreUnknownKeys` 忽略掉即可（`json` 已配置）。
+ */
+@Serializable
+private data class PlaybackInfoResult(
+  val MediaSources: List<PlaybackMediaSource>? = null,
+  /** 本次转码会话 Id，自己拼 URL 时要带上，服务器靠它复用 / 回收转码进程 */
+  val PlaySessionId: String? = null,
+  /** 拿不到可用源时的错误码，例如 `NoCompatibleStream` */
+  val ErrorCode: String? = null,
+)
+
+/** [PlaybackInfoResult] 里的一条媒体源 */
+@Serializable
+private data class PlaybackMediaSource(
+  /** 即 MediaSourceId */
+  val Id: String? = null,
+  /** 服务器拼好的转码地址（通常是 HLS 的 master.m3u8），优先用它 */
+  val TranscodingUrl: String? = null,
+  val DirectStreamUrl: String? = null,
+)

@@ -26,6 +26,59 @@
         android:name="android.hardware.usb.host"
         android:required="false" />
 
+    <!--
+        Android 11+ 的包可见性：详情页的「用外部播放器打开」要先问系统
+        「还有谁能打开 video/*」，才能把自家播放页以外的候选列进选择器。
+        少了这一段，queryIntentActivities 会一直返回空。
+
+        只声明一条不带 scheme 的是**不够的**：Emby 的流地址是 https://…，
+        而 intent 匹配要求 scheme 也对得上 —— 只注册了 file / content 的播放器
+        会因为 scheme 不匹配整个消失，列表里就只剩「视频」这种声明得最宽的系统播放器。
+        这里把常见 scheme 逐个声明一遍，再补上常用播放器的包名。
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="video/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+            <data android:mimeType="video/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="http" />
+            <data android:mimeType="video/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" />
+            <data android:mimeType="video/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="file" />
+            <data android:mimeType="video/*" />
+        </intent>
+
+        <!--
+            常见播放器包名。要与 ExternalPlayers.kt 里的 KNOWN_EXTERNAL_PLAYERS
+            一一对应 —— 那边少一条，这里对应的播放器在 Android 11+ 上就可能探测不到。
+        -->
+        <package android:name="com.mxtech.videoplayer.pro" />
+        <package android:name="com.mxtech.videoplayer.ad" />
+        <package android:name="org.videolan.vlc" />
+        <package android:name="com.newin.nplayer.pro" />
+        <package android:name="com.brouken.player" />
+        <package android:name="is.xyz.mpv" />
+        <package android:name="org.xbmc.kodi" />
+        <package android:name="com.kmplayer" />
+        <package android:name="com.plexapp.android" />
+        <package android:name="com.emby.mobile" />
+        <package android:name="org.jellyfin.mobile" />
+    </queries>
+
     <application
         android:name=".App"
         android:appCategory="video"

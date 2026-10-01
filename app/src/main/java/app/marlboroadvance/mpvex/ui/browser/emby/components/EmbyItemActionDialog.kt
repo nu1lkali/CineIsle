@@ -3,24 +3,34 @@ package app.marlboroadvance.mpvex.ui.browser.emby.components
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.FormatListNumbered
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -33,9 +43,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.domain.emby.LibraryOrdering
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -110,6 +123,11 @@ fun runEmbyLibraryAction(
  *
  * @param name 条目名称（库名 / 文件夹名）
  * @param kindLabel 条目类型文案（「媒体库」/「文件夹」），用来拼说明文字
+ * @param isPinned 仅首页媒体库卡片传值：null = 这一类不支持置顶（文件夹），此时
+ *   置顶与顺序号两项都不显示。已置顶时菜单项文案换成「取消置顶媒体库」——
+ *   两个状态合成一项，用户不用在两条永远只有一条可用的菜单里找。
+ * @param onTogglePin 点「置顶 / 取消置顶」时回调
+ * @param onAdjustOrder 点「调整顺序号」时回调（打开 [EmbyLibraryOrderDialog]）
  */
 @Composable
 fun EmbyItemActionsDialog(
@@ -118,6 +136,9 @@ fun EmbyItemActionsDialog(
   onDismissRequest: () -> Unit,
   onScan: () -> Unit,
   onRefreshMetadata: (replaceAllMetadata: Boolean, replaceAllImages: Boolean) -> Unit,
+  isPinned: Boolean? = null,
+  onTogglePin: (() -> Unit)? = null,
+  onAdjustOrder: (() -> Unit)? = null,
 ) {
   // 二级框（刷新元数据的选项）是否展开。一级框关掉后这个状态自然随组合一起销毁
   var showMetadataOptions by remember { mutableStateOf(false) }
@@ -144,6 +165,20 @@ fun EmbyItemActionsDialog(
       overflow = TextOverflow.Ellipsis,
       modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
     )
+    if (isPinned != null && onTogglePin != null) {
+      DropdownMenuItem(
+        text = { Text(if (isPinned) "取消置顶$kindLabel" else "置顶$kindLabel") },
+        leadingIcon = { Icon(Icons.Default.PushPin, contentDescription = null) },
+        onClick = onTogglePin,
+      )
+    }
+    if (onAdjustOrder != null) {
+      DropdownMenuItem(
+        text = { Text("调整顺序号") },
+        leadingIcon = { Icon(Icons.Default.FormatListNumbered, contentDescription = null) },
+        onClick = onAdjustOrder,
+      )
+    }
     DropdownMenuItem(
       text = { Text("扫描$kindLabel") },
       leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
@@ -155,6 +190,113 @@ fun EmbyItemActionsDialog(
       onClick = { showMetadataOptions = true },
     )
   }
+}
+
+/**
+ * 「调整顺序号」对话框：把首页媒体库的显示顺序一屏管全。
+ *
+ * 为什么用「−/+ 步进」而不是让用户填数字：改号是**互换**语义（见
+ * [LibraryOrdering.assignNumber]），点一下 ＋ 就等价于「和下面那位换位置」，
+ * 结果马上在首页可见；直接填数字反而要用户自己保证不撞号。
+ *
+ * 置顶的库也在这里出现（放在最前、带「已置顶」标注），
+ * 因为它们的序号要等取消置顶后才生效，不给个说法会让人以为改不动。
+ */
+@Composable
+fun EmbyLibraryOrderDialog(
+  /** 已经按当前显示顺序排好的媒体库列表 */
+  libraries: List<EmbyItem>,
+  pinnedIds: List<String>,
+  numbers: Map<String, Int>,
+  onNumberChange: (libraryId: String, newNumber: Int) -> Unit,
+  onDismissRequest: () -> Unit,
+) {
+  val maxNumber = LibraryOrdering.maxNumber(numbers, libraries.mapNotNull { it.Id })
+    .coerceAtLeast(1)
+
+  AlertDialog(
+    onDismissRequest = onDismissRequest,
+    title = { Text("调整顺序号") },
+    text = {
+      Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+        Text(
+          text = "序号越小越靠前。置顶的媒体库固定排在最前面（最多 ${LibraryOrdering.MAX_PINNED} 个，" +
+            "最后置顶的排第一），所以序号 1 也会排在它们之后。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+          text = "改成一个已被占用的序号时，两者互换。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        libraries.forEach { library ->
+          val id = library.Id ?: return@forEach
+          val number = numbers[id] ?: 0
+          val pinned = id in pinnedIds
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            // 序号步进：左减右加，钳在 [1, 当前最大号]
+            IconButton(
+              onClick = { onNumberChange(id, number - 1) },
+              enabled = number > 1,
+              modifier = Modifier.size(32.dp),
+            ) {
+              Icon(
+                Icons.Default.Remove,
+                contentDescription = "序号前移",
+                modifier = Modifier.size(18.dp),
+              )
+            }
+            Text(
+              text = if (number > 0) number.toString() else "—",
+              style = MaterialTheme.typography.titleMedium,
+              textAlign = TextAlign.Center,
+              modifier = Modifier.width(28.dp),
+            )
+            IconButton(
+              onClick = { onNumberChange(id, number + 1) },
+              enabled = number in 1 until maxNumber,
+              modifier = Modifier.size(32.dp),
+            ) {
+              Icon(
+                Icons.Default.Add,
+                contentDescription = "序号后移",
+                modifier = Modifier.size(18.dp),
+              )
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = library.Name ?: "媒体库",
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              if (pinned) {
+                Text(
+                  text = "已置顶 · 固定在最前，取消置顶后按序号排",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.primary,
+                )
+              }
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      TextButton(onClick = onDismissRequest) { Text("完成") }
+    },
+  )
 }
 
 /**

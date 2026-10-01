@@ -39,6 +39,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
@@ -121,6 +122,7 @@ import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefresh
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyIdentifyDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyRefreshMetadataDialog
+import app.marlboroadvance.mpvex.ui.browser.emby.components.ExternalPlayerPickerDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
@@ -176,6 +178,9 @@ data class EmbyDetailScreen(
     // 「更多」菜单里的刮削 / 刷新元数据：改为与媒体库长按菜单同一套的抽屉式实现
     var showIdentifySheet by remember { mutableStateOf(false) }
     var showRefreshSheet by remember { mutableStateOf(false) }
+    // 「用外部播放器打开」：null = 弹窗没开；非 null = 这份候选列表
+    var externalPlayers by remember { mutableStateOf<List<ExternalPlayerOption>?>(null) }
+    var externalLastKey by remember { mutableStateOf("") }
     // 下拉刷新的转圈状态（转完由 PullRefreshBox 自己收起）
     val isRefreshing = remember { mutableStateOf(false) }
 
@@ -382,6 +387,40 @@ data class EmbyDetailScreen(
                   castSheetShown = true
                 }
               },
+              // 外部播放器：先枚举本机能吃这条流的播放器，再用我们自己的列表让用户挑
+              // （为什么不用系统选择器，见 ExternalPlayerPickerDialog 的注释）。
+              // 一个都没枚举到时把原因说出来，否则点了没反应会让人以为是按钮坏了
+              onPlayExternal = {
+                viewModel.listExternalPlayers(currentServer, current)
+                  .onSuccess { list ->
+                    externalLastKey = viewModel.lastExternalPlayerKey()
+                    externalPlayers = list
+                  }
+                  .onFailure { e ->
+                    Toast.makeText(
+                      context,
+                      e.message ?: "打开外部播放器失败",
+                      Toast.LENGTH_LONG,
+                    ).show()
+                  }
+              },
+              // 服务器转码：要先向服务器问一次播放方案（有网络往返），
+              // 所以立刻回一个提示，免得点完一两秒里毫无动静、让人以为没反应
+              onPlayTranscoded = {
+                val resumeSeconds =
+                  EmbyTicks.ticksToSeconds(current.UserData?.PlaybackPositionTicks ?: 0L)
+                Toast.makeText(context, "正在请求服务器转码…", Toast.LENGTH_SHORT).show()
+                scope.launch {
+                  viewModel.playTranscoded(currentServer, current, resumeSeconds)
+                    .onFailure { e ->
+                      Toast.makeText(
+                        context,
+                        e.message ?: "服务器转码失败",
+                        Toast.LENGTH_LONG,
+                      ).show()
+                    }
+                }
+              },
               // 以前这两项是「点了直接对服务器发一把 full 刷新」，现在换成
               // 媒体库长按菜单同款的抽屉：刮削=可检索的识别（EmbyIdentifyDialog），
               // 刷新=带选项的确认（EmbyRefreshMetadataDialog），见文件底部挂载处
@@ -414,6 +453,35 @@ data class EmbyDetailScreen(
 
     if (castSheetShown) {
       DlnaSheet(onDismissRequest = { castSheetShown = false })
+    }
+
+    // ── 外部播放器选择弹窗：把本机能吃这条流的播放器全列出来（已剔除自家两个播放页）──
+    externalPlayers?.let { list ->
+      val playerTarget = item
+      val serverTarget = server
+      ExternalPlayerPickerDialog(
+        players = list,
+        lastUsedKey = externalLastKey.takeIf { it.isNotEmpty() },
+        onPick = { player ->
+          externalPlayers = null
+          if (playerTarget != null && serverTarget != null) {
+            viewModel.playWithExternalPlayer(serverTarget, playerTarget, player)
+              .onFailure { e ->
+                Toast.makeText(context, e.message ?: "打开外部播放器失败", Toast.LENGTH_LONG).show()
+              }
+          }
+        },
+        onSystemChooser = {
+          externalPlayers = null
+          if (playerTarget != null && serverTarget != null) {
+            viewModel.playWithExternalPlayerChooser(serverTarget, playerTarget)
+              .onFailure { e ->
+                Toast.makeText(context, e.message ?: "打开外部播放器失败", Toast.LENGTH_LONG).show()
+              }
+          }
+        },
+        onDismiss = { externalPlayers = null },
+      )
     }
 
     // ── 编辑元数据弹窗：名称 / 原名 / 排序名 / 简介 / 年份 / 首映日期 /
@@ -654,6 +722,16 @@ private fun DetailBody(
   onDelete: () -> Unit,
   onDownload: () -> Unit,
   onCast: () -> Unit,
+  /** 交给系统里别的播放器打开（不进 App 自己的播放页） */
+  onPlayExternal: () -> Unit,
+  /**
+   * 让**服务器转码**后播放。
+   *
+   * 默认播放是「直连原文件」，能不能播全看本机解不解得了这个编码。远程 strm 指向的
+   * AVI、AVI + Xvid（MPEG-4 ASP）这类源，手机上硬解不出画面、软解又跟不上，
+   * 换内核也救不了（两条路都用系统解码器）—— 这时让服务器转成 H.264 再下发就通了。
+   */
+  onPlayTranscoded: () -> Unit,
   onEditMetadata: () -> Unit,
   onScrapeMetadata: () -> Unit,
   onRefreshMetadata: () -> Unit,
@@ -705,6 +783,7 @@ private fun DetailBody(
           onPlay = onPlay,
           onDownload = onDownload,
           onCast = onCast,
+          onPlayExternal = onPlayExternal,
           downloadLabel = downloadLabel,
           downloadStatus = downloadStatus,
           downloadProgress = downloadProgress,
@@ -946,6 +1025,15 @@ private fun DetailBody(
                 onTogglePlayed(!isPlayed)
               },
             )
+            // 直连播不动时才需要它：本机解不了的老编码（AVI/Xvid、WMV…）、远程 strm 源。
+            // 放菜单里而不是动作行 —— 它是「备用方案」，不该和播放键抢位置。
+            DropdownMenuItem(
+              text = { Text("服务器转码播放") },
+              onClick = {
+                onMoreMenuChange(false)
+                onPlayTranscoded()
+              },
+            )
             DropdownMenuItem(
               text = { Text("删除媒体") },
               onClick = {
@@ -1152,6 +1240,7 @@ private fun PlaySection(
   onPlay: (resumeSeconds: Long, reverseEngine: Boolean) -> Unit,
   onDownload: () -> Unit,
   onCast: () -> Unit,
+  onPlayExternal: () -> Unit,
   downloadLabel: String?,
   downloadStatus: EmbyDownloadStatus?,
   /** 下载填充进度 0..1；null = 没有下载任务（不画填充） */
@@ -1178,7 +1267,9 @@ private fun PlaySection(
   ) {
     Row(
       modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      // 这一行现在有四个动作（播放 + 下载 + 投屏 + 外部播放），间距收到 8dp、
+      // 三个图标键收到 48dp，留给播放按钮的宽度才够放「继续播放 · 1:23:45」
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       // 播放按钮：单击用默认内核（有进度即续播），长按用「另一个」内核（Media3 ↔ mpv）应急。
@@ -1226,7 +1317,7 @@ private fun PlaySection(
         Box(
           modifier =
             Modifier
-              .size(52.dp)
+              .size(48.dp)
               .clip(RoundedCornerShape(16.dp))
               .background(
                 if (downloadLabel == null) {
@@ -1275,7 +1366,7 @@ private fun PlaySection(
       Box(
         modifier =
           Modifier
-            .size(52.dp)
+            .size(48.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.primaryContainer)
             .clickable(onClick = onCast),
@@ -1284,6 +1375,25 @@ private fun PlaySection(
         Icon(
           imageVector = Icons.Outlined.Cast,
           contentDescription = "投屏",
+          tint = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+      }
+
+      // 外部播放器：把流地址交给 MX / VLC 这类第三方播放器。
+      // 用「方框 + 右上角箭头」的 OpenInNew，和旁边的投屏（Cast）区分得开 ——
+      // 两者都是「把内容送出去」，光看图标不会混。
+      Box(
+        modifier =
+          Modifier
+            .size(48.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .clickable(onClick = onPlayExternal),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+          contentDescription = "用外部播放器打开",
           tint = MaterialTheme.colorScheme.onPrimaryContainer,
         )
       }
@@ -1349,6 +1459,9 @@ private fun PlayButton(
         text = label,
         color = MaterialTheme.colorScheme.onPrimary,
         style = MaterialTheme.typography.labelLarge,
+        // 动作键多了一个之后播放按钮更窄，「继续播放 · 1:23:45」得能优雅收尾
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
       )
     }
   }

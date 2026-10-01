@@ -21,6 +21,21 @@ import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import kotlin.reflect.KProperty
 
+/**
+ * 允许交给 Android MediaCodec 硬解的编码白名单（`--hwdec-codecs`）。
+ *
+ * **不要写成 `all`。** `all` 会让 mpv 拿硬件解码器去啃 AVI 里那批老编码
+ * （Xvid / DivX / MPEG-4 ASP，fourCC 常见 XVID / DIVX / MP42）—— 而 AVI 容器
+ * 不把 codec-specific data（VOL 头）放在容器头里，MediaCodec 于是"解码器建起来了、
+ * 一帧也吐不出来"，表现就是**有声音、画面全黑**，而且换内核也未必好使：
+ * 另一条路（ExoPlayer）同样依赖设备的 `video/mp4v-es` 解码器，绝大多数手机没有。
+ *
+ * 这类编码交给 ffmpeg 软解成本极低（480p / 720p 的 Xvid 轻松跑满），所以
+ * mpeg4 / msmpeg4 / wmv / mpeg1 系列一律留在名单外。名单本身取 mpv 自带的
+ * `hwdec-codecs` 默认值，只做加法不做减法，不会削弱 H.264 / HEVC 的硬解。
+ */
+private const val MPV_HWDEC_CODECS = "h264,hevc,mpeg2video,vc1,vp8,vp9,av1"
+
 class MPVView(
   context: Context,
   attributes: AttributeSet,
@@ -105,11 +120,26 @@ class MPVView(
     }
 
     // Set hwdec with fallback order: HW+ (mediacodec) -> HW (mediacodec-copy) -> SW (no)
+    //
+    // 注：Android 上 `mediacodec`（零拷贝）要求 `--vo=mediacodec_embed`，本项目用的是
+    // gpu / gpu-next，所以这一段实际会被跳过，真正生效的是 `mediacodec-copy`，
+    // 最后兜到 `no`（ffmpeg 软解）。
     MPVLib.setOptionString(
       "hwdec",
       if (decoderPreferences.tryHWDecoding.get()) "mediacodec,mediacodec-copy,no" else "no",
     )
-    MPVLib.setOptionString("hwdec-codecs", "all")
+    // 硬解白名单：**这里不能用 `all`**。
+    //
+    // AVI 里那批老视频编码（Xvid / DivX / MPEG-4 ASP，fourCC 常见为 XVID / DIVX / MP42）
+    // 就是被 `all` 坑得最狠的一类：AVI 容器不会把编码的 codec-specific data（VOL 头）
+    // 放在容器头里，而是混在码流里，Android 的 MediaCodec 于是"解码器建起来了、却一帧
+    // 也吐不出来"—— 表现就是**有声音、画面全黑**，而且换内核也不见得好，因为另一条路
+    // （ExoPlayer）同样依赖设备的 `video/mp4v-es` 解码器，绝大多数手机根本没有。
+    //
+    // 这类编码交给 ffmpeg 软解成本极低（480p / 720p 的 Xvid 轻松跑满），所以把
+    // mpeg4 / msmpeg4 / wmv / mpeg1 这些统统留在名单外。
+    // 名单本身 = mpv 自带的 hwdec-codecs 默认值，只做加法不做减法，不会削弱 H.264 / HEVC 的硬解。
+    MPVLib.setOptionString("hwdec-codecs", MPV_HWDEC_CODECS)
 
     if (decoderPreferences.useYUV420P.get()) {
       MPVLib.setOptionString("vf", "format=yuv420p")
@@ -119,6 +149,23 @@ class MPVView(
     val cacheMegs = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) 64 else 32
     MPVLib.setOptionString("demuxer-max-bytes", "${cacheMegs * 1024 * 1024}")
     MPVLib.setOptionString("demuxer-max-back-bytes", "${cacheMegs * 1024 * 1024}")
+
+    // ── 远程流（Emby 直连、strm 指向的远端地址…）的缓冲与重连 ──
+    //
+    // 这些片子的瓶颈通常在「取数据」而不是「解码」：源是远端 AVI 时，
+    // AVI 的索引在文件尾部，播放器要反复回头读；一旦中间那层（Emby 中转、远端服务器）
+    // 抖动或断一下，画面就卡住甚至再也不动 —— 观感上就是「软解卡得动不了」。
+    // 所以把预读和重连都拉起来：抖动能自愈，不要一路卡到用户重进页面。
+    MPVLib.setOptionString("cache-secs", "30")
+    MPVLib.setOptionString("demuxer-readahead-secs", "30")
+    // 单次网络读取的缓冲区（默认仅 128KiB，高延迟链路上吞吐会很难看）
+    MPVLib.setOptionString("stream-buffer-size", "4MiB")
+    MPVLib.setOptionString("network-timeout", "30")
+    // lavf 的 HTTP 重连：中途断了接着拉，而不是直接判死
+    MPVLib.setOptionString(
+      "stream-lavf-o",
+      "reconnect=1,reconnect_streamed=1,reconnect_delay_max=20",
+    )
     
     val logLevel = if (advancedPreferences.verboseLogging.get()) "v" else "warn"
     MPVLib.setOptionString("msg-level", "all=$logLevel")

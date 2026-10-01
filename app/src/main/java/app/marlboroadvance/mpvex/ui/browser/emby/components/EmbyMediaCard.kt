@@ -16,11 +16,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -492,6 +494,8 @@ fun EmbyLibraryCard(
   itemCount: Int?,
   imageUrl: String?,
   icon: ImageVector,
+  /** 是否已置顶：右上角钉一枚小图钉。置顶的库固定排在首页最前面 */
+  pinned: Boolean = false,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
   onLongClick: ((Offset) -> Unit)? = null,
@@ -514,6 +518,26 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
         contentScale = ContentScale.Crop,
         placeholder = icon,
       )
+      // 置顶标记：右上角一枚小图钉。置顶的库本来就排在最前面，但这枚钉子能让人
+      // 一眼看出「是哪几个被钉住了」—— 光靠位置看不出是被钉的还是碰巧排前面。
+      if (pinned) {
+        Surface(
+          shape = CircleShape,
+          color = MEDIA_BADGE_BG,
+          modifier = Modifier
+            .align(Alignment.TopEnd)
+            .padding(6.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Filled.PushPin,
+            contentDescription = "已置顶",
+            tint = Color.White,
+            modifier = Modifier
+              .padding(4.dp)
+              .size(14.dp),
+          )
+        }
+      }
       // 库名不再靠「整片渐变遮罩」压暗，而是直接给文字垫一块实心底色
       // —— 跟「继续观看」卡片左下角那个「剩余 XX分XX秒」角标同一套做法：
       // 深蓝底 + 圆角 + 半透明，只盖住文字那一小块。

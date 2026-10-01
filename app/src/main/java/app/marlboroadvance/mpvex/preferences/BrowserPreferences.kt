@@ -103,6 +103,26 @@ class BrowserPreferences(
     preferenceStore.getString("emby_library_category_$libraryId", "")
 
   /**
+   * 首页「媒体库」卡片的**置顶列表**（逗号分隔的库 Id）。
+   *
+   * 顺序即优先级：第 0 个排最前 —— 也就是「最后置顶的排第一」，
+   * 所以置顶动作是把 Id 插到表头（规则见 [app.marlboroadvance.mpvex.domain.emby.LibraryOrdering]）。
+   *
+   * **按服务器分开存**：不同服务器的库 Id 完全不同，混在一起会互相挤名额。
+   */
+  fun embyLibraryPins(serverId: Long): Preference<String> =
+    preferenceStore.getString("emby_library_pins_$serverId", "")
+
+  /**
+   * 首页「媒体库」卡片的**顺序号**（`id:号` 逗号分隔）。
+   *
+   * 置顶的库固定排在最前，所以序号实际决定的是「非置顶那一段」的先后；
+   * 有置顶库时，序号 1 的库也排在所有置顶库之后。
+   */
+  fun embyLibraryNumbers(serverId: Long): Preference<String> =
+    preferenceStore.getString("emby_library_numbers_$serverId", "")
+
+  /**
    * 「中文字幕」路径标记配置（[ChineseSubtitleMarks] 的 JSON 串，空串 = 用默认标记）。
    *
    * 全局一份、不按库分：标记是**资源命名惯例**，跟具体哪个库无关。
@@ -110,6 +130,15 @@ class BrowserPreferences(
    * 不必重新发版。
    */
   val embyChineseSubtitleMarks = preferenceStore.getString("emby_chinese_subtitle_marks", "")
+
+  /**
+   * 「用外部播放器打开」记住的播放器，存 `包名/Activity名`（空串 = 还没用过）。
+   *
+   * 只用来在选择弹窗里标出「上次使用」那一项，**不改变列表顺序** ——
+   * 顺序仍由 [KNOWN_EXTERNAL_PLAYERS] 的推荐位次决定，免得点了一次
+   * 某个播放器之后列表就整个重排、下次找不到别的。
+   */
+  val embyExternalPlayer = preferenceStore.getString("emby_external_player", "")
 }
 
 /**

@@ -57,7 +57,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.database.repository.SearchHistoryRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.domain.emby.LibraryOrdering
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyLibraryCard
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyLibraryOrderDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMaintainButton
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyPosterCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
@@ -125,6 +129,34 @@ fun EmbyHomeScreen(
   /** 长按位置（root 坐标）：菜单锚在手指旁边展开 */
   var menuAnchor by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
 
+  // ── 媒体库的置顶 / 顺序号 ──
+  // 两条偏好都按服务器分开存，切换服务器时各用各的；用 serverId（没服务器时取 0）
+  // 当 remember 的键，切服务器会重新取到那个服务器自己的偏好。
+  val browserPreferences = koinInject<BrowserPreferences>()
+  val serverId = server?.id ?: 0L
+  val pinsPreference = remember(serverId) { browserPreferences.embyLibraryPins(serverId) }
+  val numbersPreference = remember(serverId) { browserPreferences.embyLibraryNumbers(serverId) }
+  val pinsRaw by pinsPreference.collectAsState()
+  val numbersRaw by numbersPreference.collectAsState()
+  val pins = remember(pinsRaw) { LibraryOrdering.parsePins(pinsRaw) }
+  val numbers = remember(numbersRaw) { LibraryOrdering.parseNumbers(numbersRaw) }
+  // 显示顺序 = 置顶优先，其次序号（规则见 LibraryOrdering 的类注释）
+  val orderedLibraries = remember(libraries, pins, numbers) {
+    LibraryOrdering.sortLibraries(libraries, pins, numbers)
+  }
+  var orderDialogShown by remember { mutableStateOf(false) }
+
+  // 新出现的媒体库（服务端新加了库 / 换了服务器）补一个序号，落在队尾。
+  // 只在真的缺号时才写盘，避免每次重组都往偏好里塞一遍同样的值。
+  LaunchedEffect(libraries, serverId) {
+    if (serverId == 0L || libraries.isEmpty()) return@LaunchedEffect
+    val current = LibraryOrdering.parseNumbers(numbersPreference.get())
+    val updated = LibraryOrdering.ensureNumbers(libraries.mapNotNull { it.Id }, current)
+    if (updated != current) {
+      numbersPreference.set(LibraryOrdering.serializeNumbers(updated))
+    }
+  }
+
   // ── 全库搜索 ──
   // 不带 ParentId，Emby 会跨所有媒体库检索，所以这里搜的是「全部媒体」而不是某个库。
   var searchActive by remember { mutableStateOf(false) }
@@ -157,10 +189,42 @@ fun EmbyHomeScreen(
       ) {
         val targetId = target.Id
         val targetName = target.Name ?: "媒体库"
+        val targetPinned = targetId != null && targetId in pins
         EmbyItemActionsDialog(
           name = targetName,
           kindLabel = "媒体库",
           onDismissRequest = { scanTarget = null },
+          // 置顶 / 取消置顶合并成一项，文案跟着当前状态走
+          isPinned = targetPinned,
+          onTogglePin = {
+            val id = targetId
+            scanTarget = null
+            if (id == null) return@EmbyItemActionsDialog
+            if (targetPinned) {
+              pinsPreference.set(LibraryOrdering.serializePins(LibraryOrdering.unpin(pins, id)))
+              Toast.makeText(context, "已取消置顶「$targetName」", Toast.LENGTH_SHORT).show()
+            } else {
+              // 名额满了会挤掉最早置顶的那个 —— 提示里把被挤走的名字说出来，
+              // 否则用户看到的只是「另一个库突然不置顶了」
+              val (nextPins, evicted) = LibraryOrdering.pin(pins, id)
+              pinsPreference.set(LibraryOrdering.serializePins(nextPins))
+              val evictedName = evicted?.let { eid -> libraries.firstOrNull { it.Id == eid }?.Name }
+              Toast.makeText(
+                context,
+                if (evictedName != null) {
+                  "已置顶「$targetName」，同时取消「$evictedName」的置顶" +
+                    "（最多置顶 ${LibraryOrdering.MAX_PINNED} 个）"
+                } else {
+                  "已置顶「$targetName」"
+                },
+                Toast.LENGTH_SHORT,
+              ).show()
+            }
+          },
+          onAdjustOrder = {
+            scanTarget = null
+            orderDialogShown = true
+          },
           onScan = {
             scanTarget = null
             runEmbyLibraryAction(
@@ -189,6 +253,23 @@ fun EmbyHomeScreen(
           },
         )
       }
+    }
+
+    // 调整顺序号：一屏管全部媒体库的先后。
+    // 列表传的是**已排好序**的 orderedLibraries —— 用户看到的就是首页那一眼的顺序，
+    // 点 ＋/− 后的变化也能立刻对上号。
+    if (orderDialogShown) {
+      EmbyLibraryOrderDialog(
+        libraries = orderedLibraries,
+        pinnedIds = pins,
+        numbers = numbers,
+        onNumberChange = { id, newNumber ->
+          numbersPreference.set(
+            LibraryOrdering.serializeNumbers(LibraryOrdering.assignNumber(numbers, id, newNumber)),
+          )
+        },
+        onDismissRequest = { orderDialogShown = false },
+      )
     }
     TopAppBar(
       title = {
@@ -432,13 +513,15 @@ fun EmbyHomeScreen(
                   contentPadding = PaddingValues(horizontal = 16.dp),
                   horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                  items(libraries, key = { it.Id ?: it.Name ?: "" }) { library ->
+                  items(orderedLibraries, key = { it.Id ?: it.Name ?: "" }) { library ->
                     val libraryName = library.Name ?: "媒体库"
                     EmbyLibraryCard(
                       name = libraryName,
                       itemCount = library.ChildCount,
                       imageUrl = viewModel.imageUrl(server!!, library, "Primary", 300),
                       icon = libraryIcon(library.CollectionType),
+                      // 置顶的在卡片右上角钉一枚小图钉，用户一眼能看出哪两个被钉住了
+                      pinned = library.Id != null && library.Id in pins,
                       onClick = { onOpenLibrary(library) },
                       // 长按 = 弹出操作框（扫描媒体库等）。扫描是作用在服务器上的异步任务、
                       // 发出去撤不回来，所以不直接执行，先让用户确认

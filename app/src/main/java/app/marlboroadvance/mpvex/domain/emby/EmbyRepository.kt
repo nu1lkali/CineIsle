@@ -532,6 +532,18 @@ class EmbyRepository(
     mediaSourceId: String? = null,
   ): String = EmbyClient.videoStreamUrl(server, itemId, static, mediaSourceId)
 
+  /**
+   * 「让服务器转码」后的播放地址（本机解不了的编码走这条，见 [EmbyClient.transcodeStreamUrl]）。
+   *
+   * 会先向服务器要一次播放方案（`PlaybackInfo`），所以是个挂起函数、有网络往返；
+   * 只在用户明确选择「服务器转码播放」时才调用，不要放进默认播放路径。
+   */
+  suspend fun transcodeStreamUrl(
+    server: EmbyServer,
+    itemId: String,
+    startTimeTicks: Long = 0L,
+  ): String = EmbyClient.transcodeStreamUrl(server, itemId, startTimeTicks)
+
   /** 离线下载原始文件的 URL（支持 Range，可断点续传）。 */
   fun itemDownloadUrl(server: EmbyServer, itemId: String): String =
     EmbyClient.itemDownloadUrl(server, itemId)

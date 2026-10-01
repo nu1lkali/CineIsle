@@ -134,6 +134,18 @@ class GsyPlayerActivity : ComponentActivity() {
   private var seriesKeys: List<String> = emptyList()
   private var currentIndex: Int = 0
   private var currentUri: Uri? = null
+
+  /**
+   * 本次播放**临时强制**使用的 GSY 解码内核（null = 用偏好里选的那个）。
+   *
+   * 只有一条来源：解码失败后的自动降级（见 [fallbackToIjk]）。它必须能跨 `recreate()`
+   * 存活 —— `PlayerFactory` 上的是进程级静态值，只有重建播放页才真正生效，
+   * 所以降级走的是「重建 + intent 里带上本项」这条路（和「换渲染载体」同一套机制）。
+   */
+  private var forcedKernel: GsyKernelKind? = null
+
+  /** 这条视频已经降过一次级了 —— 防止「失败 → 降级 → 又失败」反复重建 */
+  private var kernelFallbackUsed = false
   private var playlistId: Int? = null
   private var embyServerId: Long? = null
   private var embyItemIds: List<String> = emptyList()
@@ -278,6 +290,12 @@ class GsyPlayerActivity : ComponentActivity() {
     embyServerId = handoff.embyServerId
     embyItemIds = handoff.embyItemIds
     headers = handoff.headers
+
+    // 解码失败降级时由 recreate 带过来的「强制内核」；普通起播时没有这一项（null）
+    forcedKernel =
+      source.getStringExtra(EXTRA_FORCE_KERNEL)?.let { name ->
+        GsyKernelKind.entries.firstOrNull { it.name == name }
+      }
 
     currentUri =
       playlist.getOrNull(currentIndex)
@@ -466,7 +484,8 @@ class GsyPlayerActivity : ComponentActivity() {
    * 而且按官方文档「设置时机：`setUp` 之前生效」。
    */
   private fun applyStatics() {
-    val kernel = prefs.kernel.get()
+    // 「临时强制内核」优先：只有解码失败自动降级时才会被设上（见 [fallbackToIjk]）
+    val kernel = forcedKernel ?: prefs.kernel.get()
 
     // 解码内核：PlayerFactory 内部用 newInstance() 反射构造，所以只能传 Class
     PlayerFactory.setPlayManager(
@@ -672,6 +691,17 @@ class GsyPlayerActivity : ComponentActivity() {
             finish()
           }
         }
+
+        /**
+         * 解码 / 解封装失败 → 自动换内核再试一次（见 [fallbackToIjk]）。
+         *
+         * 这条是「AVI 放不了」的通用解药：GSY 的 Exo / System 两个内核都依赖设备自带的
+         * 解码器，碰到 AVI + Xvid（MPEG-4 ASP）、WMV、RMVB 这类就必挂；只有 IJK
+         * 是自带 ffmpeg 的。与其让用户自己跑去设置里翻内核，不如这里直接兜住。
+         */
+        override fun onPlayError(url: String?, vararg objects: Any?) {
+          fallbackToIjk()
+        }
       },
     )
   }
@@ -706,10 +736,38 @@ class GsyPlayerActivity : ComponentActivity() {
         }
       }
 
+      /** 全屏实例同样要接解码失败降级，否则「竖屏能放、一进全屏就黑」 */
+      override fun onPlayError(url: String?, vararg objects: Any?) {
+        fallbackToIjk()
+      }
+
       override fun onQuitFullscreen(url: String?, vararg objects: Any?) {
         handleFullExited()
       }
     }
+
+  /**
+   * 解码失败时的兜底：改用 IJK（自带 ffmpeg）重播一次。
+   *
+   * 为什么必须是「重建播放页」而不是就地换：`PlayerFactory.setPlayManager` 写的是
+   * 进程级静态值，而 GSYVideoManager 手里那个 manager 实例是在 prepare 时就建好的 ——
+   * 就地改对**正在播的这一次**不生效。换渲染载体也是同一个道理，走的也是重建
+   * （见 [recreateKeepingPosition]）。
+   *
+   * 只降一次：降完还失败就直接把话说清楚，不要无限重建把用户卡在闪屏里。
+   */
+  private fun fallbackToIjk() {
+    val current = forcedKernel ?: prefs.kernel.get()
+    if (current == GsyKernelKind.IJK) {
+      Toast.makeText(this, "这个文件连 IJK（ffmpeg）内核也解不了，可能源本身有问题", Toast.LENGTH_LONG).show()
+      return
+    }
+    if (kernelFallbackUsed) return
+    kernelFallbackUsed = true
+    forcedKernel = GsyKernelKind.IJK
+    Toast.makeText(this, "当前内核解不了这个文件，已自动改用 IJK（ffmpeg）重试", Toast.LENGTH_LONG).show()
+    recreateKeepingPosition()
+  }
 
   /** 带上当前播放进度重建播放页（换渲染载体 / 开滤镜的唯一办法） */
   private fun recreateKeepingPosition() {
@@ -732,6 +790,9 @@ class GsyPlayerActivity : ComponentActivity() {
       handoff.writeTo(this)
       putExtra("play_from_start", false)
       putExtra(EXTRA_RESTORE_POSITION, true)
+      // 降级出来的「强制内核」必须跟着重建一起带过去。否则重建后 `readSession` 读不到它，
+      // 又会用回用户选的那个内核 → 再失败 → 再降级，就成了死循环。
+      forcedKernel?.let { putExtra(EXTRA_FORCE_KERNEL, it.name) }
       setIntent(this)
     }
     recreate()
@@ -1448,6 +1509,9 @@ class GsyPlayerActivity : ComponentActivity() {
 
     /** 重建播放页时强制按 position 续播（不受「续播到上次位置」开关影响） */
     private const val EXTRA_RESTORE_POSITION = "gsy_restore_position"
+
+    /** 解码失败降级时，重建播放页要带上「本次强制用哪个内核」（值 = [GsyKernelKind].name） */
+    private const val EXTRA_FORCE_KERNEL = "gsy_force_kernel"
 
     /** 字幕延迟一次调整的步长 */
     private const val SUBTITLE_STEP_MS = 500L

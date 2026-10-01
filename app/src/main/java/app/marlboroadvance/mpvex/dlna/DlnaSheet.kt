@@ -32,8 +32,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.collectAsState
@@ -160,23 +162,99 @@ private fun CastingControls(
   manager: DlnaCastManager,
 ) {
   val playing = state.playbackState == DLNACast.PlaybackState.PLAYING
+  val durationMs = state.durationMs
+  val hasDuration = durationMs > 0
+
+  // 拖动中的本地比例。拖动期间**不**读设备上报 —— 轮询 1.5 秒一次，
+  // 跟着它走会出现「手指还在拖，滑块被上一拍的位置拽回去」，根本拖不动。
+  var dragFraction by remember { mutableStateOf<Float?>(null) }
+  // 松手后到设备真正追上来之间，界面继续显示我们下发的目标值。
+  // 不顶住的话会「松手 → 弹回原处 → 再跳到目标」连闪两下 —— 而且那两下都发生在
+  // 用户盯着看「到底定到哪一秒」的时候，最容易让人觉得没定准。
+  var pendingSeekMs by remember { mutableStateOf<Long?>(null) }
+
+  // 设备回报的位置离目标足够近 → 认为已追上，放开顶住
+  LaunchedEffect(state.positionMs, pendingSeekMs) {
+    val target = pendingSeekMs ?: return@LaunchedEffect
+    if (kotlin.math.abs(state.positionMs - target) <= SEEK_SETTLE_TOLERANCE_MS) {
+      pendingSeekMs = null
+    }
+  }
+  // 兜底：设备可能压根不回报新位置，顶太久就成假状态了
+  LaunchedEffect(pendingSeekMs) {
+    if (pendingSeekMs == null) return@LaunchedEffect
+    kotlinx.coroutines.delay(SEEK_SETTLE_TIMEOUT_MS)
+    pendingSeekMs = null
+  }
+
+  // 界面上真正显示的时间：拖动值 > 待落定目标 > 设备上报值
+  val drag = dragFraction
+  val shownMs = if (drag != null && hasDuration) {
+    (drag * durationMs).toLong()
+  } else {
+    pendingSeekMs ?: state.positionMs
+  }
+
+  /** 拖动 / 微调 / 点击统一走这里下发：一律落到整秒 */
+  fun seekTo(rawMs: Long) {
+    if (!hasDuration) return
+    // 落到整秒：设备侧本来也只认到秒，亚秒的抖动只会让「预览显示的时间」和
+    // 「实际落点」差个零头，用户量一下就觉得对不准。
+    val target = (rawMs / 1000L * 1000L).coerceIn(0L, durationMs)
+    dragFraction = null
+    pendingSeekMs = target
+    manager.controlSeek(target)
+  }
+
   Text("正在投屏到「${state.device.name}」", style = MaterialTheme.typography.bodyLarge)
   Spacer(Modifier.height(4.dp))
-  Text(
-    "${formatMs(state.positionMs)} / ${formatMs(state.durationMs)} · ${state.playbackState.name}",
-    style = MaterialTheme.typography.bodySmall,
-    color = MaterialTheme.colorScheme.onSurfaceVariant,
-  )
-  Spacer(Modifier.height(10.dp))
 
-  val dur = if (state.durationMs > 0) state.durationMs else 1L
-  val seekTarget = remember { mutableStateOf(0f) }
-  Slider(
-    value = (state.positionMs.toFloat() / dur).coerceIn(0f, 1f),
-    onValueChange = { seekTarget.value = it },
-    onValueChangeFinished = { manager.controlSeek((seekTarget.value * dur).toLong()) },
-  )
+  // 时间显示：拖动时前面挂「定位到」，一眼能分清这是预览值而不是播放位置
+  Row(verticalAlignment = Alignment.CenterVertically) {
+    Text(
+      text = if (drag != null) "定位到 ${formatMs(shownMs)}" else formatMs(shownMs),
+      style = MaterialTheme.typography.titleMedium,
+      color = if (drag != null) MaterialTheme.colorScheme.primary else Color.Unspecified,
+    )
+    if (hasDuration) {
+      Text(
+        text = " / ${formatMs(durationMs)} · ${state.playbackState.name}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+  }
   Spacer(Modifier.height(8.dp))
+
+  Slider(
+    value = if (hasDuration) (shownMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
+    onValueChange = { dragFraction = it },
+    onValueChangeFinished = {
+      val f = dragFraction
+      if (f != null && hasDuration) seekTo((f * durationMs).toLong()) else dragFraction = null
+    },
+    // 直播 / 时长未上报时不给拖：没有总时长，比例算不出来，拖了也只能瞎跳
+    enabled = hasDuration,
+  )
+
+  // ── 微调 ──
+  // 整条进度条摊在手机宽度上，一部 2 小时的片子 1 像素就是十几秒，
+  // 光靠拖永远对不准。补四个步进键，每次 1 秒 / 10 秒，落点精确到秒。
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    FINE_SEEK_STEPS.forEach { (deltaMs, label) ->
+      TextButton(
+        onClick = { seekTo(shownMs + deltaMs) },
+        enabled = hasDuration,
+        modifier = Modifier.weight(1f),
+      ) {
+        Text(label, style = MaterialTheme.typography.labelMedium)
+      }
+    }
+  }
+  Spacer(Modifier.height(4.dp))
 
   Row(
     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -205,6 +283,20 @@ private fun CastingControls(
     )
   }
 }
+
+/** 微调步进：负值往前、正值往后，单位毫秒 */
+private val FINE_SEEK_STEPS = listOf(
+  -10_000L to "-10秒",
+  -1_000L to "-1秒",
+  1_000L to "+1秒",
+  10_000L to "+10秒",
+)
+
+/** 设备回报的位置离下发目标多近就算「已追上」，不用再顶住显示 */
+private const val SEEK_SETTLE_TOLERANCE_MS = 1_500L
+
+/** 顶住目标值的兜底时长：设备可能压根不回报新位置 */
+private const val SEEK_SETTLE_TIMEOUT_MS = 6_000L
 
 private fun formatMs(ms: Long): String {
   val totalSec = (ms / 1000).toInt()
