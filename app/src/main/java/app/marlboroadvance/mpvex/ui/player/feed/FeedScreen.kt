@@ -259,12 +259,13 @@ internal fun FeedScreen(
       }
     } else {
       // 转圈**淡出**，不做硬切。
-      // 首帧上屏（onRenderedFirstFrame）与状态回填之间哪怕只差一帧，硬切也会被看成
-      // 一次闪烁；220ms 的淡出让画面从转圈背后浮现，观感上就是「无缝」。
+      // 判据已经是「帧真的画到屏幕上」了（见 ExoPlayerPool.frameOnScreen），所以这里
+      // 主要是把最后那一点点余量抹平：淡出期间画面从转圈背后浮上来，观感上就是「无缝」。
+      // 硬切的话，哪怕只差一两个 vsync 也会被看成闪了一下。
       AnimatedVisibility(
         visible = !vm.buffered,
         enter = fadeIn(tween(120)),
-        exit = fadeOut(tween(220)),
+        exit = fadeOut(tween(260)),
         modifier = Modifier.align(Alignment.Center),
       ) {
         CircularProgressIndicator(

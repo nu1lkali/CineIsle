@@ -2,4 +2,13 @@
 <resources>
 
     <style name="Theme.mpvex" parent="Theme.Material3.DynamicColors.DayNight.NoActionBar" />
+
+    <!--
+      视界流是全屏黑底页面。用 DayNight 的默认底色时，浅色模式下窗口底色是浅的 ——
+      从窗口创建到 Compose 第一帧画上去之间会露一下那个底色。给它一个纯黑窗口底色，
+      这一段与页面内容同色，冷启动也就没有那一下「白闪/灰闪」。
+    -->
+    <style name="Theme.mpvex.Feed" parent="Theme.mpvex">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
 </resources>

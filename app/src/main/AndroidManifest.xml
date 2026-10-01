@@ -255,7 +255,7 @@
             android:launchMode="singleTask"
             android:documentLaunchMode="never"
             android:resizeableActivity="true"
-            android:theme="@style/Theme.mpvex" />
+            android:theme="@style/Theme.mpvex.Feed" />
 
         <activity android:name=".presentation.crash.CrashActivity" />
 

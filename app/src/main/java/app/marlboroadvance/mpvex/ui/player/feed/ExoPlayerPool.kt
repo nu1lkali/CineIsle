@@ -2,6 +2,8 @@ package app.marlboroadvance.mpvex.ui.player.feed
 
 import android.content.Context
 import android.graphics.SurfaceTexture
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.TextureView
 import android.view.View
@@ -64,7 +66,13 @@ import kotlin.math.roundToInt
 internal class ExoPlayerPool(
   private val context: Context,
   private val onError: (index: Int, reason: String) -> Unit,
-  private val onFirstFrameReady: (index: Int) -> Unit,
+  /**
+   * `index` 这一条的**帧真的画到了屏幕上**时回调一次（同一个 index 只回调一次）。
+   *
+   * 注意是「画到屏幕上」，不是「渲染器交出去了」—— 两者的区别见 [frameOnScreen] 的注释。
+   * 加载态的结束判据必须是这一个：早任何一步，用户看到的都是「转圈消失 → 黑屏 → 画面浮现」。
+   */
+  private val onFrameVisible: (index: Int) -> Unit,
 ) {
 
   /** index → 实例。只包含当前窗口（±1）内的条目 */
@@ -100,13 +108,38 @@ internal class ExoPlayerPool(
   private val boundTextures = HashMap<Int, TextureView>()
 
   /**
-   * index → 是否已经**真正把第一帧画到了屏幕上**。
+   * index → 渲染器是否已经**产出过**第一帧（`Player.Listener.onRenderedFirstFrame`）。
    *
-   * 这份账本单独记，是因为它和 `players` 的存在并不同步：一个实例可能已经
-   * `STATE_READY`（解码器建好、缓冲够了），却还没有渲染出任何一帧。加载态必须等
-   * 到这一份为真才能撤 —— 早撤一步，用户看到的就是「转圈消失 → 黑屏 → 画面浮现」。
+   * ⚠️ 它**不等于「用户看到了」**。这个回调是 ExoPlayer 把这一帧**交给输出面**的那一刻
+   * 发出的（`releaseOutputBuffer` + 预定的上屏时刻），而 TextureView 还要等自己的绘制
+   * 流程跑完 —— `onFrameAvailable` → `invalidate` → 下一个绘制帧里 `updateTexImage` →
+   * 硬件层合成上屏 —— 中间隔着若干个 vsync。
+   *
+   * 曾经直接拿它撤加载圈，结果就是「转圈消失 → 一段黑屏 → 画面浮现」：圈撤掉了，可
+   * 屏幕上还没有东西。所以它现在只用来给 [frameOnScreen] 排一个兜底定时器。
    */
   private val firstFrameRendered = HashSet<Int>()
+
+  /**
+   * index → 这一帧**真的已经画到那块 TextureView 上了**（`SurfaceTextureListener.onSurfaceTextureUpdated`）。
+   *
+   * 这才是「画面好了」的最终判据：它由 TextureView 自己的绘制流程在 `updateTexImage()`
+   * 之后发出，意味着像素这一帧就会进到 View 的硬件层里。比 [firstFrameRendered] 晚几个
+   * vsync，但只有它能把「撤加载圈」与「屏幕上有东西」对齐 —— 而那一下黑屏的闪烁，
+   * 差的就是这几个 vsync。
+   */
+  private val frameOnScreen = HashSet<Int>()
+
+  /**
+   * index → 兜底定时器：渲染器说「第一帧交出去了」，可 TextureView 迟迟没回报「我画上去了」。
+   *
+   * 正常情况两者只差一两个 vsync，定时器根本不会跑到。留着只为极端情形（这一页这一段
+   * 恰好没走到绘制流程）不让转圈永远转下去。
+   */
+  private val revealFallbacks = HashMap<Int, Runnable>()
+
+  /** 兜底定时器跑在主线程 —— 账本和回调本来就都约定在主线程上碰 */
+  private val mainHandler = Handler(Looper.getMainLooper())
 
   /** 当前真正出声出画面的那一条 */
   private var activeIndex = -1
@@ -153,15 +186,14 @@ internal class ExoPlayerPool(
 
   private fun listenerFor(index: Int) = object : Player.Listener {
     /**
-     * 「画面好了」的判据用这里，**不是** onPlaybackStateChanged 的 STATE_READY。
+     * 「渲染器产出了第一帧」—— 但**还没上屏**（原因见 [firstFrameRendered]）。
      *
-     * READY 只说明解码器建好了、缓冲够了，第一帧未必已经画到那块 TextureView 上。
-     * 拿 READY 去撤加载态，用户看到的是「转圈消失 → 黑屏 → 画面浮现」——
-     * 也就是刚进页面时那一下闪烁。[onRenderedFirstFrame] 才是「帧真的上屏了」。
+     * 这里只把这件事记下来、并给 [frameOnScreen] 排一个兜底；真正通知调用方「画面好了」
+     * 要等 TextureView 回报 [markFrameOnScreen]。
      */
     override fun onRenderedFirstFrame() {
       firstFrameRendered.add(index)
-      onFirstFrameReady(index)
+      scheduleRevealFallback(index)
     }
 
     override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -249,6 +281,45 @@ internal class ExoPlayerPool(
     texture.layoutParams = lp
   }
 
+  // ══════════════════ 「画面好了」的判据 ══════════════════
+
+  /**
+   * 这一帧真的上屏了：记账，并且**第一次**发生时才通知上层。
+   *
+   * 去重是必须的 —— `onSurfaceTextureUpdated` 每出一帧都会被调一次（一秒几十次），
+   * 而「画面好了」只需要对外说一次。
+   */
+  private fun markFrameOnScreen(index: Int) {
+    revealFallbacks.remove(index)?.let { mainHandler.removeCallbacks(it) }
+    if (frameOnScreen.add(index)) onFrameVisible(index)
+  }
+
+  /**
+   * 给 [index] 排一个兜底：渲染器已经把第一帧交出去了，但 TextureView 迟迟没回报
+   * 「我画上去了」——正常情况两者只差一两个 vsync，所以这个定时器几乎从不生效。
+   *
+   * 留着它是为了不让加载圈卡死：万一这一页这一段确实没走到绘制流程（例如刚切过去、
+   * 还在被裁剪），也不能让用户对着一个永远转的圈。
+   */
+  private fun scheduleRevealFallback(index: Int) {
+    if (index in frameOnScreen || revealFallbacks.containsKey(index)) return
+    val runnable = Runnable { markFrameOnScreen(index) }
+    revealFallbacks[index] = runnable
+    mainHandler.postDelayed(runnable, REVEAL_FALLBACK_MS)
+  }
+
+  /**
+   * 把某个 index 的两份首帧账本连同兜底定时器一起作废。
+   *
+   * 触发点有三类，共同点是「之前那份『画面已经好了』的结论不再成立」：
+   * 实例被释放（[releaseSlot]）、SurfaceTexture 被重建或被销毁。
+   */
+  private fun forgetFrameLedgers(index: Int) {
+    firstFrameRendered.remove(index)
+    frameOnScreen.remove(index)
+    revealFallbacks.remove(index)?.let { mainHandler.removeCallbacks(it) }
+  }
+
   /**
    * 给画面 View 装一次 SurfaceTexture 监听。
    *
@@ -266,6 +337,10 @@ internal class ExoPlayerPool(
         // 新 SurfaceTexture 就位：先把账本抹掉，再让 bind 真的下发一次
         // （账本还在的话 bind 会以为已经绑好，直接 return）
         boundTextures.remove(index)
+        // 「已经上屏」这个结论属于**上一块** SurfaceTexture：它连同上面那一帧一起
+        // 没了。不抹掉的话，旋转 / 重新 attach 之后加载圈会以为画面早就好了，
+        // 撤掉圈露出的就是一片黑 —— 又是一次一模一样的闪烁。
+        forgetFrameLedgers(index)
         players[index]?.let { player -> bind(index, player) }
         applyVideoLayout(index)
       }
@@ -275,6 +350,17 @@ internal class ExoPlayerPool(
         applyVideoLayout(index)
       }
 
+      /**
+       * 这一帧已经进到 View 的硬件层里了 —— 这才是「画面好了」。
+       *
+       * 它由 TextureView 的绘制流程在 `updateTexImage()` 之后发出，也就是撤掉加载圈的
+       * 那一刻屏幕上确实有东西。每秒会被调很多次，靠 [markFrameOnScreen] 里的去重
+       * 保证每个 index 只往上层通知一次。
+       */
+      override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+        markFrameOnScreen(index)
+      }
+
       override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
         // 返回 true 让系统释放这块 SurfaceTexture。同时必须显式断开 ExoPlayer 与它的
         // 连接 —— 否则它会继续往一块已释放的 Surface 上写。
@@ -282,10 +368,9 @@ internal class ExoPlayerPool(
           boundTextures.remove(index)
           players[index]?.let { player -> runCatching { player.clearVideoTextureView(texture) } }
         }
+        forgetFrameLedgers(index)
         return true
       }
-
-      override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
     }
   }
 
@@ -372,8 +457,8 @@ internal class ExoPlayerPool(
   /** 当前这条是不是竖屏内容（UI 据此决定「翻转」按钮是否可用） */
   fun activeIsPortrait(): Boolean = isPortraitAt(activeIndex)
 
-  /** 当前活动页是否已经真正把第一帧画出来了（加载态的判据） */
-  fun activeHasRenderedFirstFrame(): Boolean = activeIndex in firstFrameRendered
+  /** 当前活动页的帧是否已经真的画到了屏幕上（加载态的判据） */
+  fun activeFrameVisible(): Boolean = activeIndex in frameOnScreen
 
   /**
    * 抄一份 [index] 实例此刻的播放状态。
@@ -391,7 +476,7 @@ internal class ExoPlayerPool(
       durationMs = player.duration.takeIf { it > 0L } ?: 0L,
       positionMs = player.currentPosition.coerceAtLeast(0L),
       playing = player.playWhenReady,
-      firstFrameRendered = index in firstFrameRendered,
+      frameVisible = index in frameOnScreen,
     )
   }
 
@@ -497,8 +582,8 @@ internal class ExoPlayerPool(
   private fun releaseSlot(index: Int) {
     val player = players.remove(index) ?: return
     val texture = boundTextures.remove(index)
-    // 首帧账本跟着实例走：实例都没了，它渲染过的那一帧自然也不作数了
-    firstFrameRendered.remove(index)
+    // 首帧账本跟着实例走：实例都没了，它渲染过、上屏过的那一帧自然也不作数了
+    forgetFrameLedgers(index)
     runCatching {
       if (texture != null) player.clearVideoTextureView(texture)
       player.stop()
@@ -520,6 +605,9 @@ internal class ExoPlayerPool(
     videoSizes.clear()
     boundTextures.clear()
     firstFrameRendered.clear()
+    frameOnScreen.clear()
+    revealFallbacks.clear()
+    mainHandler.removeCallbacksAndMessages(null)
     players.clear()
     activeIndex = -1
   }
@@ -539,6 +627,15 @@ internal data class FeedPlaybackSnapshot(
   val durationMs: Long,
   val positionMs: Long,
   val playing: Boolean,
-  /** 首帧是否真的已经上屏；加载态据此决定撤不撤 */
-  val firstFrameRendered: Boolean,
+  /** 这一帧是否已经**真的画到屏幕上**；加载态据此决定撤不撤 */
+  val frameVisible: Boolean,
 )
+
+/**
+ * 「渲染器交出第一帧」之后最多再等多久，就认定画面已经好了。
+ *
+ * 只作兜底用：正常路径由 `TextureView.onSurfaceTextureUpdated` 回报，通常只差一两个
+ * vsync（几十毫秒）。这个值给得远大于它，是为了「宁可多转一下圈，也不要撤早了露黑屏」
+ * 的前提下仍不至于卡死。
+ */
+private const val REVEAL_FALLBACK_MS = 1200L

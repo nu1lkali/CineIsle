@@ -156,9 +156,10 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     pool = ExoPlayerPool(
       context = this,
       onError = { index, reason -> viewModel.errors[index] = reason },
-      // 首帧真的上屏了 → 整份状态一起抄回来：加载圈撤下、进度条同时拿到真实时长。
-      // 只把 buffered 置真是不够的 —— 那样进度条还得再等 250ms 的心跳才有数字。
-      onFirstFrameReady = { index ->
+      // 帧**真的画到屏幕上**了（不是「渲染器交出去了」）→ 整份状态一起抄回来：
+      // 加载圈在这一刻才撤、进度条同时拿到真实时长。只把 buffered 置真是不够的 ——
+      // 那样进度条还得再等 250ms 的心跳才有数字。
+      onFrameVisible = { index ->
         if (index == viewModel.index) viewModel.applySnapshot(pool.snapshotOf(index))
       },
     )
@@ -400,9 +401,9 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
       viewModel.positionSec = snap.positionMs / 1000.0
       viewModel.durationSec = snap.durationMs / 1000.0
       if (snap.durationMs > 0L) loadStartedAt = 0L
-      // 撤加载态必须等首帧真的上屏。只凭「时长出来了」就撤，撤掉的是转圈、
-      // 露出的是黑屏 —— 那一下闪烁就是这么来的。
-      if (snap.firstFrameRendered) viewModel.buffered = true
+      // 撤加载态必须等帧**真的上屏**。只凭「时长出来了」甚至只凭「渲染器交出第一帧了」
+      // 就撤，撤掉的是转圈、露出的是黑屏 —— 那一下闪烁就是这么来的。
+      if (snap.frameVisible) viewModel.buffered = true
     }
 
     // ── 播放 / 暂停 / 缓冲：跟**真正出声出画面的那一条**走 ──

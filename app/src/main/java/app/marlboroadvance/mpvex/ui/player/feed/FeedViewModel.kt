@@ -159,7 +159,7 @@ class FeedViewModel(
     durationSec = snapshot.durationMs / 1000.0
     positionSec = snapshot.positionMs / 1000.0
     paused = !snapshot.playing
-    buffered = snapshot.firstFrameRendered
+    buffered = snapshot.frameVisible
   }
 
   /**
@@ -191,11 +191,15 @@ class FeedViewModel(
   }
 
   /**
-   * 当前这条是不是**已经真正把第一帧画到屏幕上了** —— 加载态的结束判据。
+   * 当前这条是不是**已经真正把帧画到屏幕上了** —— 加载态的结束判据。
    *
-   * 注意判据是「帧上屏」（`Player.Listener.onRenderedFirstFrame`），不是「时长已
-   * 知」也不是「内核 STATE_READY」：后两者都早于首帧，拿它们撤加载圈，用户会先
-   * 看到一段黑屏再看到画面 —— 那就是刚进页面时闪的那一下。
+   * 这个判据被试错着往后挪过两次，每一次「晚一点撤」都会好一点，原因值得记住：
+   * 1. 内核 `STATE_READY` 只是「解码器建好了、缓冲够了」，早于任何一帧；
+   * 2. `Player.Listener.onRenderedFirstFrame` 是「这一帧**交给了输出面**」，
+   *    而 TextureView 还得再走一遍自己的绘制流程才把像素显示出来。
+   * 所以真正的判据是**帧真的画到了那块 TextureView 上**
+   * （`SurfaceTextureListener.onSurfaceTextureUpdated`，见 `ExoPlayerPool.frameOnScreen`）。
+   * 判据早一步，用户看到的就是「转圈消失 → 黑屏 → 画面浮现」那一下闪烁。
    */
   var buffered by mutableStateOf(false)
 
