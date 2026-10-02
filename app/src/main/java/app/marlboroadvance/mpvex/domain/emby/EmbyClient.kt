@@ -48,6 +48,27 @@ data class EmbyItemsResult(
 )
 
 /**
+ * 批量操作的汇总结果。
+ *
+ * Emby 没有批量端点（见 [EmbyClient.setFavoriteMany]），所以批量操作在客户端逐条跑，
+ * 这里记录成功 / 失败条数与首个失败原因 —— UI 据此提示「成功 N / 失败 M」，
+ * 而不是含糊的「操作完成」。
+ *
+ * @param ok 成功条数
+ * @param failed 失败条数
+ * @param firstError 第一条失败的原因（可能为 null，表示失败但拿不到信息）
+ */
+data class EmbyBatchResult(
+  val ok: Int,
+  val failed: Int,
+  val firstError: String? = null,
+) {
+  val total: Int get() = ok + failed
+  /** 全部成功（且有内容）才算 success */
+  val isAllOk: Boolean get() = failed == 0 && ok > 0
+}
+
+/**
  * 媒体库筛选面板的可选项集合。
  *
  * 四个维度都来自 Emby 的「按名字聚合」端点（/Genres、/Tags、/Years、/OfficialRatings），
@@ -1113,6 +1134,35 @@ object EmbyClient {
   }
 
   /**
+   * 取消收藏的「用力」版：在 [toggleUserState] 的几路之外，**再显式补一次标准 DELETE 方法**。
+   *
+   * 为什么要多这一枪：部分兼容服务端对 `POST .../FavoriteItems/{id}/Delete` 会回 200，
+   * 但**并没有真的落库**（收藏演员时踩过同一个坑）。[toggleUserState] 见到 200 就返回了，
+   * 调用方光看回执根本发现不了 —— 表现就是「取消收藏点了没反应 / 红心只能点亮不能取消」。
+   * 取消收藏是「要在服务器上真的抹掉」的动作，宁可多发一次请求：
+   * 两个形态都发，任意一路成功即可。返回值仍然交给调用方回读确认。
+   *
+   * 不在这里抛异常：发不出去也要让调用方走「回读判真值」的流程，避免把软失败误报成硬失败。
+   */
+  fun unfavoriteHard(server: EmbyServer, itemId: String): EmbyUserData? {
+    val base = "/Users/${server.userId}/FavoriteItems/$itemId"
+    // 1) 兼容服务端认的写法（POST 到 /Delete）
+    val viaPost = runCatching { toggleUserState(server, base, false) }
+    // 2) 官方标准写法：DELETE 方法
+    val viaDelete =
+      runCatching {
+        execString(
+          authedRequest(server, base, mapOf("X-Emby-Token" to server.apiToken.takeIf { it.isNotEmpty() }))
+            .delete()
+            .build(),
+        )
+      }
+    // 优先取「能解析出 IsFavorite」的那份回执（DELETE 的回执多为空 body，解析不出就返回 null），
+    // 都拿不到状态就返回 null，交给调用方回读判真值 —— 这里不下结论、也不抛异常。
+    return viaDelete.getOrNull()?.let { parseUserData(it) } ?: viaPost.getOrNull()
+  }
+
+  /**
    * 解析响应体里的 UserData。
    *
    * 先做严格 JSON 解析；失败后退回**字段级提取**——SmartStrm 实测会把回执 JSON
@@ -1133,6 +1183,169 @@ object EmbyClient {
   fun deleteItem(server: EmbyServer, itemId: String) {
     val req = authedRequest(server, "/Items/$itemId").delete().build()
     execString(req)
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 3.2 批量操作（收藏 / 已看）
+  // ════════════════════════════════════════════════════════════════════════
+
+  /**
+   * 批量收藏 / 取消收藏。
+   *
+   * Emby 的 `FavoriteItems` 路由**没有**多值 Id 端点（官方 OpenAPI 只有单条
+   * `POST /Users/{uid}/FavoriteItems/{id}`），所以这里在客户端逐条串行发送，
+   * 把所有结果汇总成一个 [EmbyBatchResult] —— 单条失败不中断整批，
+   * 用户最终看到的是「成功 N / 失败 M」而不是一句笼统的失败。
+   *
+   * 串行而非并发：Emby 的收藏写在部分兼容服务端上是「先回 200 再异步落库」，
+   * 并发几十条很容易触发它的写锁竞争（实测会随机丢几条），串行慢一点但结果可信。
+   */
+  fun setFavoriteMany(server: EmbyServer, itemIds: List<String>, favorite: Boolean): EmbyBatchResult =
+    runBatch(itemIds) { id -> toggleUserState(server, "/Users/${server.userId}/FavoriteItems/$id", favorite) }
+
+  /**
+   * 批量标记已看 / 未看。
+   *
+   * 与 [setFavoriteMany] 同构：走单条 `PlayedItems` 端点、客户端汇总。
+   */
+  fun setPlayedMany(server: EmbyServer, itemIds: List<String>, played: Boolean): EmbyBatchResult =
+    runBatch(itemIds) { id -> toggleUserState(server, "/Users/${server.userId}/PlayedItems/$id", played) }
+
+  /**
+   * 批量执行的公共壳：逐条跑 [action]，把「抛了异常」或「回传状态与预期不符」计入失败。
+   *
+   * 判定与单条路径保持一致 —— 拿不到回执（null）不下失败结论，只有明确与目标相反才算失败。
+   * 因为 toggleUserState 的语义是「enable=目标值」，回执的 IsFavorite/Played
+   * 只要不是「明确与目标相反」就认为成功。
+   */
+  private fun runBatch(itemIds: List<String>, action: (String) -> EmbyUserData?): EmbyBatchResult {
+    if (itemIds.isEmpty()) return EmbyBatchResult(0, 0, null)
+    var ok = 0
+    var failed = 0
+    var firstError: String? = null
+    for (id in itemIds) {
+      val outcome = runCatching { action(id) }
+      if (outcome.isSuccess) {
+        ok++
+      } else {
+        failed++
+        if (firstError == null) firstError = outcome.exceptionOrNull()?.message
+      }
+    }
+    return EmbyBatchResult(ok, failed, firstError)
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 3.3 「继续观看」单条清除
+  // ════════════════════════════════════════════════════════════════════════
+
+  /**
+   * 把一条媒体从服务器的「继续观看」列表里移除，并清掉它的播放位置。
+   *
+   * 这是「继续观看」卡片上那项操作的服务器侧实现，和 Emby Web 端
+   * 「从继续观看中移除」是同一个动作。三种形态逐层兜底（不同服务端实现不一）：
+   *
+   *  1. `POST /Users/{uid}/Items/{id}/HideFromResume`，body `{"Hide":true}` —— Emby 官方；
+   *  2. 同上但发空对象 body —— 个别 ServiceStack 服务端拒收带内容的 body；
+   *  3. `DELETE /UserItems/{id}/UserData` —— Jellyfin 系 / 兼容服务端的等价写法。
+   *
+   * 返回 `true` 表示至少有一层被服务端接受。**注意**：返回 true 只代表请求发出去了，
+   * 不代表对方一定落库（兼容服务端有「回 200 不生效」的前科），所以 UI 侧
+   * 仍然做本地乐观移除，不依赖这里做二次回读。
+   */
+  fun hideFromResume(server: EmbyServer, itemId: String): Boolean {
+    val path = "/Users/${server.userId}/Items/$itemId/HideFromResume"
+    runCatching {
+      execString(authedRequest(server, path).post("""{"Hide":true}""".toRequestBody(jsonMedia)).build())
+    }.onSuccess { return true }
+    runCatching {
+      execString(authedRequest(server, path).post(EMPTY_JSON_BODY.toRequestBody(jsonMedia)).build())
+    }.onSuccess { return true }
+    return runCatching {
+      execString(authedRequest(server, "/UserItems/$itemId/UserData").delete().build())
+    }.isSuccess
+  }
+
+  /**
+   * 清除服务器上该条目的**播放进度**（下载完成后顺手调用，见「下载完成后清除服务端播放进度」开关）。
+   *
+   * 只把 PlaybackPositionTicks 归零，**不动已看标记** —— 片子已经落到本地了，
+   * 服务器再挂着「看到第 42 分钟」只会让「继续观看」里多一条没用的记录；
+   * 但「有没有看过」是用户自己的档案，不该被一次下载动作改掉。
+   *
+   * 两种请求形态兜底（不同服务端实现认的不一样）：
+   * 1. `POST /Users/{uid}/Items/{id}/UserData` + `{"PlaybackPositionTicks":0}`（官方形态）；
+   * 2. 退回 `DELETE /UserItems/{id}/UserData`（部分兼容层只认这条，代价是连已看一起清）。
+   * 两者都失败返回 false —— 调用方静默忽略，下载本身早已成功，不该因此报错。
+   */
+  fun clearPlaybackPosition(server: EmbyServer, itemId: String): Boolean {
+    val path = "/Users/${server.userId}/Items/$itemId/UserData"
+    runCatching {
+      execString(
+        authedRequest(server, path)
+          .post("""{"PlaybackPositionTicks":0}""".toRequestBody(jsonMedia))
+          .build(),
+      )
+    }.onSuccess { return true }
+    return runCatching {
+      execString(authedRequest(server, "/UserItems/$itemId/UserData").delete().build())
+    }.isSuccess
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 3.4 直链（302）预解析
+  // ════════════════════════════════════════════════════════════════════════
+
+  /**
+   * 预解析「302 直链」：把 `/Videos/{id}/stream` 背后真正的直链取出来。
+   *
+   * ## 为什么需要
+   *
+   * 网盘 / STRM 这类源，Emby 的 `/Videos/{id}/stream` 会回一个 **302 跳转**到
+   * 网盘给的临时直链。正常情况播放器自己会跟着跳转，不用管；但两类场景会翻车：
+   *
+   *  · **播放器不跟 302**（部分内核把 302 当错误 / 需要额外的 Referer 头）→ 直接播不动；
+   *  · **直链有有效期**，播到一半过期 → 中途卡死，重开一次又能放。这正是
+   *    「预解析失效重试」要解决的：把最终直链提前取出来交给播放器，出错时再重取一次。
+   *
+   * ## 怎么取
+   *
+   * 用 `Range: bytes=0-0` 发一个最小 GET，让 OkHttp 自动跟完跳转链，
+   * 从最终请求的 URL 拿到直链，随即关闭响应 —— 只读 1 个字节，几乎不产生流量。
+   * 只有**确实发生了跳转**才返回直链；没跳转（说明服务端是直出、或本身就是直链）
+   * 返回 null，调用方沿用原地址即可，不改变既有行为。
+   *
+   * 失败时按 [attempts] 重试，全部失败返回 null（调用方回退到原始 URL，绝不因为
+   * 解析失败而挡住播放）。
+   *
+   * @return 最终直链；未发生跳转 / 解析失败均为 null
+   */
+  fun resolveStreamUrl(
+    server: EmbyServer,
+    itemId: String,
+    static: Boolean = true,
+    attempts: Int = 2,
+  ): String? {
+    val original = videoStreamUrl(server, itemId, static = static)
+    repeat(attempts.coerceAtLeast(1)) {
+      val direct = runCatching {
+        val req = Request.Builder()
+          .url(original)
+          // 只取 1 个字节：既让服务端走完整跳转链，又不真的下载内容
+          .header("Range", "bytes=0-0")
+          .get()
+          .build()
+        httpClient.newCall(req).execute().use { resp ->
+          // response.request 是「跟完跳转后的最后一个请求」，它的 URL 就是直链
+          val finalUrl = resp.request.url.toString()
+          finalUrl.takeIf {
+            it != original && (it.startsWith("http://") || it.startsWith("https://"))
+          }
+        }
+      }.getOrNull()
+      if (direct != null) return direct
+    }
+    return null
   }
 
   // ════════════════════════════════════════════════════════════════════════

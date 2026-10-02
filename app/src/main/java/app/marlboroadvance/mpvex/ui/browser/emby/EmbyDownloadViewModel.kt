@@ -34,6 +34,9 @@ class EmbyDownloadViewModel(application: Application) : AndroidViewModel(applica
 
   fun resumeAll() = manager.resumeAll()
 
+  /** 把一条排队中的任务提到队列最前（优先级调整） */
+  fun prioritize(itemId: String) = manager.prioritize(itemId)
+
   fun remove(itemId: String, deleteFile: Boolean) = manager.remove(itemId, deleteFile)
 
   fun clearCompleted() = manager.clearCompleted()

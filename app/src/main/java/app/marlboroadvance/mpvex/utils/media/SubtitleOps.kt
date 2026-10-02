@@ -34,10 +34,17 @@ object SubtitleOps : KoinComponent {
     return looksLikePlaylist || genericName
   }
 
+  /**
+   * 自动加载与视频同名的外挂字幕（本地同目录 / 网络同路径 / 下载目录）。
+   *
+   * @param autoSelectFirst 是否自动选中找到的第一条字幕。**恢复上次播放状态时必须传 false**，
+   *   否则这里会把用户上次记住的字幕选择抢掉（存档里的选择在恢复流程后面才套）。
+   */
   suspend fun autoloadSubtitles(
     videoFilePath: String,
     videoFileName: String,
     networkConnectionId: Long = -1L,
+    autoSelectFirst: Boolean = true,
   ) = withContext(Dispatchers.IO) {
     try {
       // Skip file descriptor URIs (these don't have a parent directory concept)
@@ -49,7 +56,7 @@ object SubtitleOps : KoinComponent {
       // Check if this is a network file with connection ID (SMB/FTP/WebDAV via proxy)
       if (networkConnectionId != -1L) {
         // For network files, scan the directory using network client
-        autoloadNetworkFileSubtitles(videoFilePath, videoFileName, networkConnectionId)
+        autoloadNetworkFileSubtitles(videoFilePath, videoFileName, networkConnectionId, autoSelectFirst)
         return@withContext
       }
 
@@ -62,10 +69,10 @@ object SubtitleOps : KoinComponent {
           return@withContext
         }
         // For network streams, try to load subtitles with common extensions
-        autoloadNetworkSubtitles(videoFilePath, videoFileName)
+        autoloadNetworkSubtitles(videoFilePath, videoFileName, autoSelectFirst)
       } else {
         // For local files, scan the directory
-        autoloadLocalSubtitles(videoFilePath, videoFileName)
+        autoloadLocalSubtitles(videoFilePath, videoFileName, autoSelectFirst)
       }
     } catch (e: Exception) {
       Log.e(TAG, "Error loading subtitles", e)
@@ -80,6 +87,7 @@ object SubtitleOps : KoinComponent {
     videoFilePath: String,
     videoFileName: String,
     networkConnectionId: Long,
+    autoSelectFirst: Boolean,
   ) {
     try {
       Log.d(TAG, "Autoloading subtitles for network file: $videoFilePath")
@@ -160,7 +168,7 @@ object SubtitleOps : KoinComponent {
           val trackCountBefore = PlayerLib.getPropertyInt("track-list/count") ?: 0
 
           // Use "select" for the first subtitle, "auto" for others
-          val flag = if (index == 0) "select" else "auto"
+          val flag = if (index == 0 && autoSelectFirst) "select" else "auto"
           PlayerLib.command("sub-add", proxyUrl, flag)
 
           // Set the title for the newly added subtitle track
@@ -184,6 +192,7 @@ object SubtitleOps : KoinComponent {
   private suspend fun autoloadLocalSubtitles(
     videoFilePath: String,
     videoFileName: String,
+    autoSelectFirst: Boolean,
   ) {
     val videoFile = File(videoFilePath)
     val videoDirectory = videoFile.parentFile ?: return
@@ -201,7 +210,8 @@ object SubtitleOps : KoinComponent {
         subtitles.forEachIndexed { index, subtitle ->
           // MPV command format: sub-add <url> [<flags> [<title>]]
           // Use "select" for the first autoloaded subtitle so it is enabled by default
-          val flag = if (index == 0) "select" else "auto"
+          // （恢复存档时 autoSelectFirst=false：只把字幕挂上去，选哪条由存档说了算）
+          val flag = if (index == 0 && autoSelectFirst) "select" else "auto"
           PlayerLib.command("sub-add", subtitle.absolutePath, flag, subtitle.name)
           Log.d(TAG, "Loaded local subtitle: ${subtitle.name} (flag=$flag)")
         }
@@ -212,6 +222,7 @@ object SubtitleOps : KoinComponent {
   private suspend fun autoloadNetworkSubtitles(
     videoFilePath: String,
     videoFileName: String,
+    autoSelectFirst: Boolean,
   ) {
     // Get base name without extension
     val baseName = videoFileName.substringBeforeLast('.')
@@ -233,7 +244,7 @@ object SubtitleOps : KoinComponent {
         // Try to add the subtitle - MPV will handle if it doesn't exist
         // Use "auto" flag so MPV doesn't select it if it's not found
         // Only use "select" for the first one (.srt)
-        val flag = if (index == 0) "select" else "auto"
+        val flag = if (index == 0 && autoSelectFirst) "select" else "auto"
         PlayerLib.command("sub-add", subtitleUrl, flag, "$baseName.$ext")
         Log.d(TAG, "Attempting to load network subtitle: $subtitleUrl (flag=$flag)")
       } catch (e: Exception) {

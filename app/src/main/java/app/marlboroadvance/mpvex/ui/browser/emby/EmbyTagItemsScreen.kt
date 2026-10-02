@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -35,6 +34,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.serialization.Serializable
 
@@ -120,7 +120,8 @@ data class EmbyTagItemsScreen(
       Box(modifier = Modifier.fillMaxSize()) {
         when {
           isLoading && items.isEmpty() -> {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            // 与下面结果的版式对齐（海报卡、约三列）
+            EmbySkeletonGrid(columns = 3, ratio = 3f / 4f)
           }
 
           error != null && items.isEmpty() -> {

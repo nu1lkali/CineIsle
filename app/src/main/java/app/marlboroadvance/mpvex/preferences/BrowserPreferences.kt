@@ -148,6 +148,104 @@ class BrowserPreferences(
    * 存进偏好后，返回、甚至重启 App 都还停在用户上次选的类型。
    */
   val embyFavoritesTab = preferenceStore.getString("emby_favorites_tab", "")
+
+  /**
+   * 收藏页的排序方式（存枚举名，空串 = 默认「名称」）。
+   *
+   * 收藏页是一次性拉全量（200 条）后本地排序，所以排序切换是即时的、不再发请求。
+   */
+  val embyFavoritesSort = preferenceStore.getString("emby_favorites_sort", "")
+
+  /**
+   * 「预解析直链（302）」开关。
+   *
+   * 打开后，播放前先把 `/Videos/{id}/stream` 背后跳转到的真实直链取出来再交给播放器。
+   * 针对网盘 / STRM 这类**有 302 跳转、且直链带有效期**的源 ——
+   * 某些播放器内核不跟跳转、或播到一半直链过期会卡死，预解析能绕开这两个坑。
+   *
+   * 默认**关闭**：多一次网络往返，对直出型的服务器（绝大多数）没有收益；
+   * 由用户按自己的源决定要不要开（解析失败会自动回退到原始地址，不会挡住播放）。
+   */
+  val embyResolveDirectLink = preferenceStore.getBoolean("emby_resolve_direct_link", false)
+
+  /**
+   * 媒体库内的**视图模式**（[EmbyLibraryViewMode] 的枚举名，空串 = 网格）。
+   *
+   * 三种：网格（海报 / 背景图 / 横幅三选一）、紧凑列表（一行一条，信息密度最高）、
+   * 年份时间轴（按播出年份分组，跨年找片快）。落盘的理由和分类一样 ——
+   * 从库里钻进文件夹再返回时这一页会被重建，只放 `remember` 会掉回默认值。
+   */
+  val embyLibraryViewMode = preferenceStore.getString("emby_library_view_mode", "")
+
+  /**
+   * 海报网格**每行几个卡片**（2~6，默认 3）。
+   *
+   * 只对「海报」样式生效：背景图 / 横幅是宽图，行数由自身最小宽度自适应决定，
+   * 硬塞进固定列数会被压得又窄又小。屏幕大的设备可以调到 5~6，
+   * 手机上一行 2~3 个看得清封面上的字。
+   */
+  val embyLibraryGridColumns = preferenceStore.getInt("emby_library_grid_columns", 3)
+
+  /**
+   * 「下载完成后清除服务端播放进度」开关。
+   *
+   * 打开后，一条媒体下载完成时会顺手把 Emby 服务器上这条的**播放位置**清零 ——
+   * 片子已经在本地了，「继续观看」再挂着「上次看到 42 分钟」就是噪音。
+   *
+   * 默认**关闭**：这是会改动服务器数据的行为，未必人人想要（有人本地留一份、
+   * 服务器上也继续追进度）。只清播放位置，不动「已看」标记。
+   */
+  val embyClearProgressOnDownload =
+    preferenceStore.getBoolean("emby_clear_progress_on_download", false)
+
+  // ── Emby 卡片外观（统一项）──
+  //
+  // 这三项是「把散落的视觉常量收口成设置」：圆角原来写死在 EMBY_CARD_CORNER，
+  // 角标（进度 / 作品数）也是硬开着。收口之后卡片的样子只有**一个来源**，
+  // 用户在「设置 → Emby 媒体库 → 卡片外观」里改一次，全 App 的卡片一起变。
+
+  /** 卡片圆角（dp），范围 0~24，默认 12 */
+  val embyCardCorner = preferenceStore.getInt("emby_card_corner", 12)
+
+  /** 卡片间距（dp），网格与紧凑列表共用，范围 2~24，默认 8 */
+  val embyCardSpacing = preferenceStore.getInt("emby_card_spacing", 8)
+
+  /**
+   * 是否显示封面角标（播放进度条 / 作品数）。
+   *
+   * 关掉后卡片更干净，代价是看不出「看到哪儿了」；默认**开**，
+   * 因为进度条是大部分人判断「要不要接着看」的主要线索。
+   */
+  val embyShowCardBadges = preferenceStore.getBoolean("emby_show_card_badges", true)
+
+  // ── Emby 浏览交互开关 ──
+
+  /**
+   * 卡片右上角「快捷收藏」心形开关。
+   *
+   * 打开时媒体库卡片右上角的心形是**可点按钮**（点一下收藏 / 取消收藏）；
+   * 关闭后退回原来的只读角标 —— 只在已收藏时显示一颗实心红心，避免误触。
+   * 默认**开**：快捷收藏是这一批需求里的核心交互。
+   */
+  val embyQuickFavorite = preferenceStore.getBoolean("emby_quick_favorite", true)
+
+  /**
+   * 详情页是否显示推荐区（「推荐」+「同类型推荐」两个横向区块）。
+   *
+   * 关掉后媒体详情页只留影片信息与演职员，不再往下展示推荐内容 ——
+   * 页面更短，也省掉两次推荐相关的网络请求。默认**开**。
+   */
+  val embyShowRecommendations = preferenceStore.getBoolean("emby_show_recommendations", true)
+
+  /**
+   * 详情页「同类型」推荐是否**随机选取类型**。
+   *
+   * 一部片子往往属于多个类型（剧情 / 惊悚 / 犯罪…）。固定取第一个类型的话，
+   * 同一部片每次打开看到的推荐都一模一样。打开后每次进详情页从它的类型里随机挑一个，
+   * 于是每次刷新都能看到不同题材的同类片。默认**开**。
+   */
+  val embyRandomGenreRecommend =
+    preferenceStore.getBoolean("emby_random_genre_recommend", true)
 }
 
 /**

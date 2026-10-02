@@ -17,6 +17,7 @@ import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.AudioTrack
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.ChaptersSheet
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.DecodersSheet
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.FrameNavigationSheet
+import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.GifRecordSheet
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.MoreSheet
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.PlaybackSpeedSheet
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.PlaylistSheet
@@ -185,6 +186,9 @@ fun PlayerSheets(
         onShowSheet = onShowSheet,
         // 最后一项是把整个播放会话交给 GSY 内核（面板内只在 mpv 下显示）
         onSwitchToGsy = onSwitchToGsy,
+        // 自动裁黑边（cropdetect，仅 mpv）
+        onToggleAutoCrop = viewModel::toggleAutoCrop,
+        onSetAutoCrop = viewModel::setAutoCrop,
       )
     }
 
@@ -298,11 +302,34 @@ fun PlayerSheets(
           onItemClick = { item ->
             viewModel.playPlaylistItem(item.index)
           },
+          // M3U 列表是从数据库/M3U 文件读出来的只读队列，不改它的顺序与内容
+          onMoveItem = { from, to ->
+            if (!isM3U) viewModel.movePlaylistItem(from, to)
+          },
+          onRemoveItem =
+            if (isM3U) {
+              null
+            } else {
+              { index -> viewModel.removePlaylistItem(index) }
+            },
           totalCount = totalCount,
           isM3UPlaylist = isM3U,
           playerPreferences = playerPreferences,
         )
       }
+    }
+
+    Sheets.GifRecord -> {
+      val gifPreferences = koinInject<app.marlboroadvance.mpvex.preferences.PlayerPreferences>()
+      val gifProgress by viewModel.gifProgress.composeCollectAsState()
+      val gifWidth by gifPreferences.gifWidth.collectAsState()
+      GifRecordSheet(
+        progress = gifProgress,
+        qualityWidth = gifWidth,
+        onQualityChange = { gifPreferences.gifWidth.set(it) },
+        onStart = viewModel::startGifRecording,
+        onDismissRequest = onDismissRequest,
+      )
     }
   }
 }

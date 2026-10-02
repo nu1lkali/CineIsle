@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AudioChannels
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
+import app.marlboroadvance.mpvex.preferences.VolumeNormalizationStrength
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
@@ -140,6 +141,25 @@ object AudioPreferencesScreen : Screen {
             },
           )
           
+          // 夜间模式强度档：只在开关打开时才有意义，关掉就整行不显示，避免误导成"设了没用"
+          if (volumeNormalization) {
+            PreferenceDivider()
+            val normalizationStrength by preferences.normalizationStrength.collectAsState()
+            ListPreference(
+              value = normalizationStrength,
+              onValueChange = { preferences.normalizationStrength.set(it) },
+              values = VolumeNormalizationStrength.entries,
+              valueToText = { value -> AnnotatedString(stringResource(value.title)) },
+              title = { Text(text = stringResource(id = R.string.pref_audio_normalization_strength)) },
+              summary = {
+                Text(
+                  text = context.getString(normalizationStrength.title),
+                  color = MaterialTheme.colorScheme.outline,
+                )
+              },
+            )
+          }
+
           PreferenceDivider()
           val automaticBackgroundPlayback by preferences.automaticBackgroundPlayback.collectAsState()
           SwitchPreference(

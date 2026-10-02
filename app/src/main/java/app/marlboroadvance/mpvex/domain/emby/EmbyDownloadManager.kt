@@ -2,6 +2,8 @@ package app.marlboroadvance.mpvex.domain.emby
 
 import android.content.ContentValues
 import android.content.Context
+import app.marlboroadvance.mpvex.database.repository.EmbyServerRepository
+import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -123,7 +125,17 @@ enum class EmbyEnqueueResult {
  * 任务元数据持久化在 SharedPreferences，进程被杀后重新打开应用，
  * 未完成的任务会停在「已暂停」，可以手动继续。
  */
-class EmbyDownloadManager(context: Context) {
+/**
+ * @param serverRepo 下载完成要按需回清服务器播放进度（开关见 [preferenceStore]），
+ *   需要按 serverId 找回服务器配置。
+ * @param preferenceStore 读「下载完成后清除服务端播放进度」开关；每次都现读，
+ *   用户在设置里改完立刻生效，不需要重启。
+ */
+class EmbyDownloadManager(
+  context: Context,
+  private val serverRepo: EmbyServerRepository,
+  private val preferenceStore: PreferenceStore,
+) {
   private val appContext = context.applicationContext
   private val json = Json {
     ignoreUnknownKeys = true
@@ -241,6 +253,26 @@ class EmbyDownloadManager(context: Context) {
   fun clearCompleted() {
     _tasks.value = _tasks.value.filterNot { it.status == EmbyDownloadStatus.COMPLETED }
     persist()
+  }
+
+  /**
+   * 把一条排队中的任务提到**最前**（优先级调整）。
+   *
+   * 实现是「在列表里挪到表头 + 把 createdAt 压到当前最小值之前」：
+   * [pump] 是按 createdAt 挑下一条的，改完它就排在下一位启动；列表本身也同步挪到最前，
+   * 界面顺序与实际调度顺序始终一致 —— 不会出现「显示在第一条、却是最后一个下」的错位。
+   *
+   * 只对「排队中 / 已暂停」生效：正在下的那条本来就占着并发位，已完成 / 失败的不参与调度，
+   * 都不该被挪动。
+   */
+  fun prioritize(itemId: String) {
+    val task = taskFor(itemId) ?: return
+    if (task.status != EmbyDownloadStatus.QUEUED && task.status != EmbyDownloadStatus.PAUSED) return
+    val minCreatedAt = _tasks.value.minOfOrNull { it.createdAt } ?: task.createdAt
+    val bumped = task.copy(createdAt = minCreatedAt - 1)
+    _tasks.value = listOf(bumped) + _tasks.value.filterNot { it.itemId == itemId }
+    persist()
+    pump()
   }
 
   // ──────────────────────────── 调度 ────────────────────────────
@@ -369,6 +401,29 @@ class EmbyDownloadManager(context: Context) {
         )
       }
       persist()
+
+      // 下完了：按开关决定要不要顺手清掉服务器上这条的播放进度。
+      // 放在最后且整体 try 住 —— 这只是锦上添花的收尾动作，失败了也不影响「下载已完成」。
+      clearServerProgressIfEnabled(itemId)
+    }
+  }
+
+  /**
+   * 「下载完成后清除服务端播放进度」（可开关，默认关）。
+   *
+   * 打开时：按任务的 serverId 找回服务器配置，调 [EmbyClient.clearPlaybackPosition]
+   * 把服务器上这条的续播位置归零，让「继续观看」不再挂着它。
+   *
+   * 失败一律静默：服务器已被删掉、没登录、服务端不认这条接口 —— 都不影响下载本身。
+   * 开关 key 与 [app.marlboroadvance.mpvex.preferences.BrowserPreferences.embyClearProgressOnDownload]
+   * 保持一致。
+   */
+  private suspend fun clearServerProgressIfEnabled(itemId: String) {
+    if (!preferenceStore.getBoolean("emby_clear_progress_on_download", false).get()) return
+    val task = taskFor(itemId) ?: return
+    runCatching {
+      val server = serverRepo.getAll().firstOrNull { it.id == task.serverId } ?: return@runCatching
+      EmbyClient.clearPlaybackPosition(server, task.itemId)
     }
   }
 

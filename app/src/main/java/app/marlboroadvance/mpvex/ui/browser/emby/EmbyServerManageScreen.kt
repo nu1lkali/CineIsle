@@ -33,6 +33,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -51,11 +52,14 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import org.koin.compose.koinInject
 
 /**
  * Emby 服务器管理页：新增、编辑、删除、切换服务器。
@@ -76,6 +80,12 @@ object EmbyServerManageScreen : Screen {
     var editing by remember { mutableStateOf<EmbyServer?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<EmbyServer?>(null) }
+
+    // 全局播放偏好：与具体哪台服务器无关，所以不挂在某个 ServerCard 上，
+    // 单独放在列表最上面一张「播放设置」卡里。
+    val browserPreferences = koinInject<BrowserPreferences>()
+    val resolveDirectLink by browserPreferences.embyResolveDirectLink.collectAsState()
+    val clearProgressOnDownload by browserPreferences.embyClearProgressOnDownload.collectAsState()
 
     Scaffold(
       topBar = {
@@ -111,6 +121,19 @@ object EmbyServerManageScreen : Screen {
           contentPadding = PaddingValues(16.dp),
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+          // 全局播放设置（与服务器无关），排在服务器卡片前面
+          item {
+            PlaybackSettingsCard(
+              resolveDirectLink = resolveDirectLink,
+              onToggleResolveDirectLink = {
+                browserPreferences.embyResolveDirectLink.set(it)
+              },
+              clearProgressOnDownload = clearProgressOnDownload,
+              onToggleClearProgressOnDownload = {
+                browserPreferences.embyClearProgressOnDownload.set(it)
+              },
+            )
+          }
           items(servers, key = { it.id }) { server ->
             ServerCard(
               server = server,
@@ -179,6 +202,79 @@ object EmbyServerManageScreen : Screen {
         },
         onCancel = { pendingDelete = null },
       )
+    }
+  }
+}
+
+/**
+ * 「播放设置」卡片：与服务端无关的全局开关。
+ *
+ * 目前只有「预解析直链（302）」一项：针对网盘 / STRM 这类会 302 跳转、直链还带有效期的源。
+ * 默认关闭 —— 对直出型服务器（绝大多数）多一次往返没有收益，交给用户按自己的源决定。
+ */
+@Composable
+private fun PlaybackSettingsCard(
+  resolveDirectLink: Boolean,
+  onToggleResolveDirectLink: (Boolean) -> Unit,
+  clearProgressOnDownload: Boolean,
+  onToggleClearProgressOnDownload: (Boolean) -> Unit,
+) {
+  Card(
+    modifier = Modifier.fillMaxWidth(),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+  ) {
+    Column(modifier = Modifier.padding(16.dp)) {
+      Text(
+        text = "播放设置",
+        style = MaterialTheme.typography.titleMedium,
+      )
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(top = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "预解析直链（302）",
+            style = MaterialTheme.typography.titleSmall,
+          )
+          Text(
+            text = "播放前先取出跳转后的真实地址。用于网盘 / STRM 这类带 302 跳转、" +
+              "直链有有效期的源；解析失败会自动回退，不影响正常播放。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        Switch(
+          checked = resolveDirectLink,
+          onCheckedChange = onToggleResolveDirectLink,
+        )
+      }
+      // ── 下载完成后清除服务端播放进度（默认关）──
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(top = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "下载完成后清除服务端播放进度",
+            style = MaterialTheme.typography.titleSmall,
+          )
+          Text(
+            text = "下载完一条就把服务器上这条的续播位置清零，「继续观看」不再挂着它。" +
+              "只清进度，不动「已看」标记。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        Switch(
+          checked = clearProgressOnDownload,
+          onCheckedChange = onToggleClearProgressOnDownload,
+        )
+      }
     }
   }
 }

@@ -54,7 +54,6 @@ import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -116,14 +115,18 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyStudio
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyIdentifyDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyRefreshMetadataDialog
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonDetail
 import app.marlboroadvance.mpvex.ui.browser.emby.components.ExternalPlayerPickerDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
+import app.marlboroadvance.mpvex.ui.browser.emby.components.rememberDominantColor
 import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import android.net.Uri
@@ -183,6 +186,9 @@ data class EmbyDetailScreen(
     var externalLastKey by remember { mutableStateOf("") }
     // 下拉刷新的转圈状态（转完由 PullRefreshBox 自己收起）
     val isRefreshing = remember { mutableStateOf(false) }
+    // 收藏请求进行中：挡住连点。否则「点了取消、请求还没回来又点一下」会拿旧状态
+    // 再算一次方向，把刚取消的又收藏回去 —— 看起来就像「只能点亮、取消不了」。
+    var favoriteBusy by remember { mutableStateOf(false) }
 
     suspend fun load() {
       // 冷启动时当前服务器可能还没恢复，这里等一下，避免静默不加载
@@ -215,7 +221,7 @@ data class EmbyDetailScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
       when {
-        isLoading && item == null -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+        isLoading && item == null -> EmbySkeletonDetail()
 
         error != null && item == null -> EmbyEmptyState(
           message = error ?: "加载失败",
@@ -259,28 +265,41 @@ data class EmbyDetailScreen(
                 scope.launch { viewModel.play(currentServer, current, resume, reverse) }
               },
               onToggleFavorite = {
-                val wasFavorite = current.UserData?.IsFavorite == true
-                // 乐观更新：先把红心翻过来，动效才跟得上手指；失败再回滚
-                item = current.copy(
-                  UserData = (current.UserData ?: EmbyUserData()).copy(IsFavorite = !wasFavorite),
-                )
-                scope.launch {
-                  val result = viewModel.toggleFavorite(currentServer, current)
-                  val nowFavorite = result.getOrNull()
+                if (!favoriteBusy) {
+                  val wasFavorite = current.UserData?.IsFavorite == true
+                  // 目标状态在**这里**定死，并显式传给 ViewModel：
+                  // 由 ViewModel 从传进去的 item 反推方向的话，item 是旧快照时
+                  // 方向就会跟用户看到的相反（红心只能点亮、取消不了）。
+                  val target = !wasFavorite
+                  favoriteBusy = true
+                  // 乐观更新：先把红心翻过来，动效才跟得上手指；失败再回滚
                   item = current.copy(
-                    UserData = (current.UserData ?: EmbyUserData())
-                      .copy(IsFavorite = nowFavorite ?: wasFavorite),
+                    UserData = (current.UserData ?: EmbyUserData()).copy(IsFavorite = target),
                   )
-                  // 红心有动效，但「到底收没收藏成功」得给个字，服务端失败时才不会误以为成了
-                  Toast.makeText(
-                    context,
-                    when (nowFavorite) {
-                      true -> "已加入收藏"
-                      false -> "已取消收藏"
-                      null -> "收藏失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
-                    },
-                    Toast.LENGTH_SHORT,
-                  ).show()
+                  scope.launch {
+                    val result = viewModel.toggleFavorite(currentServer, current, target)
+                    val nowFavorite = result.getOrNull()
+                    item = current.copy(
+                      UserData = (current.UserData ?: EmbyUserData())
+                        .copy(IsFavorite = nowFavorite ?: wasFavorite),
+                    )
+                    favoriteBusy = false
+                    // 同步媒体库的进程内缓存：从详情页返回列表时命中缓存、不重新请求，
+                    // 缓存不同步的话列表卡片上的红心会停在旧状态
+                    current.Id?.let { id ->
+                      EmbyLibraryCache.updateFavorite(id, nowFavorite ?: wasFavorite)
+                    }
+                    // 红心有动效，但「到底收没收藏成功」得给个字，服务端失败时才不会误以为成了
+                    Toast.makeText(
+                      context,
+                      when (nowFavorite) {
+                        true -> "已加入收藏"
+                        false -> "已取消收藏"
+                        null -> "收藏失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
+                      },
+                      Toast.LENGTH_SHORT,
+                    ).show()
+                  }
                 }
               },
               onTogglePlayed = { played ->
@@ -753,6 +772,10 @@ private fun DetailBody(
   /** 点推荐卡片：打开对应媒体的详情页（itemId / 标题） */
   onRecommendClick: (String, String) -> Unit,
 ) {
+  // 详情页推荐区开关：关闭后「推荐」与「同类型推荐」两块整块不渲染，也不发那几次请求。
+  val showRecommendations by
+    koinInject<BrowserPreferences>().embyShowRecommendations.collectAsState()
+
   val listState = rememberLazyListState()
   val isFavorite = item.UserData?.IsFavorite == true
   val isPlayed = item.UserData?.Played == true
@@ -917,13 +940,26 @@ private fun DetailBody(
 
       // ── 推荐：同一位演员 / 导演参与的其他影片 ──
       // 放在演职员之后：看完了主演阵容，顺势往下推荐 TA 的片子，上下文是连着的。
-      item {
-        RecommendationSection(
-          item = item,
-          server = server,
-          viewModel = viewModel,
-          onOpenItem = onRecommendClick,
-        )
+      // 设置里关掉「详情页推荐」后整块不渲染（连带省掉下面的网络请求）。
+      if (showRecommendations) {
+        item {
+          RecommendationSection(
+            item = item,
+            server = server,
+            viewModel = viewModel,
+            onOpenItem = onRecommendClick,
+          )
+        }
+
+        // ── 同类型推荐：按本片第一个类型（Genres）横向推荐 ──
+        // 与上面的「演员 / 导演」推荐互补：那边按人找，这边按题材找。
+        item {
+          GenreRecommendationSection(
+            item = item,
+            server = server,
+            onOpenItem = onRecommendClick,
+          )
+        }
       }
 
       // ── 媒体信息（含完整视频 / 音频编码信息）──
@@ -1093,6 +1129,22 @@ private fun DetailBody(
  *
  * **注意：本函数的高度由调用方决定**（折叠时容器会变矮），所以这里一律 [Modifier.fillMaxSize]。
  */
+/**
+ * 把 [accent] 按 [weight] 混进 [base]。
+ *
+ * 用于「海报主色渐变」：直接拿封面主色铺背景容易和下面的主题底色打架，
+ * 掺进主题色里既带上封面的调子，又保证深浅风格一致。
+ */
+private fun mixColor(base: Color, accent: Color, weight: Float): Color {
+  val w = weight.coerceIn(0f, 1f)
+  return Color(
+    red = base.red * (1f - w) + accent.red * w,
+    green = base.green * (1f - w) + accent.green * w,
+    blue = base.blue * (1f - w) + accent.blue * w,
+    alpha = base.alpha,
+  )
+}
+
 @Composable
 private fun BackdropHeader(
   item: EmbyItem,
@@ -1124,7 +1176,14 @@ private fun BackdropHeader(
       )
     }
 
-    // ② 暗化渐变：顶上有白图标、底部压着白字，无论剧照多亮都要看得清
+    // ② 暗化渐变：顶上有白图标、底部压着白字，无论剧照多亮都要看得清。
+    //    最下面两层现在掺入**海报主色**（需求里的「海报主色渐变」）：
+    //    整页往下过渡到封面自己的色调，比直接切成中性主题底色更有整体感。
+    //    取不到主色（图挂了 / 图片太灰）时回退成原来的主题底色，观感不变差；
+    //    混合时以主题底色为主 —— 否则头部一片暖色、下面列表还是冷色，衔接处会断成两截。
+    val surface = MaterialTheme.colorScheme.surface
+    val dominant = rememberDominantColor(backdropUrl ?: posterUrl)
+    val bottomTint = dominant?.let { mixColor(surface, it, 0.45f) } ?: surface
     Box(
       modifier = Modifier
         .fillMaxSize()
@@ -1134,8 +1193,8 @@ private fun BackdropHeader(
               Color.Black.copy(alpha = 0.45f),
               Color.Transparent,
               Color.Transparent,
-              MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
-              MaterialTheme.colorScheme.surface,
+              bottomTint.copy(alpha = 0.75f),
+              bottomTint,
             ),
           ),
         ),
@@ -1912,6 +1971,116 @@ private fun RecommendationSection(
     ) {
       items(
         items = recommendations,
+        key = { it.Id ?: it.Name.orEmpty() },
+      ) { rec ->
+        RecommendationCard(
+          server = server,
+          item = rec,
+          onClick = {
+            val id = rec.Id ?: return@RecommendationCard
+            onOpenItem(id, rec.Name ?: "")
+          },
+        )
+      }
+    }
+  }
+}
+
+/**
+ * 详情页的「同类型」推荐区：按本片的某个类型（Genres）横向列出同类影片。
+ *
+ * 与 [RecommendationSection]（按演员 / 导演推荐）互补 —— 那边按「人」找，这边按「题材」找；
+ * 冷门片常常凑不出足够的同演员作品，但题材相同的片子通常管够。
+ *
+ * **用哪个类型**：一部片子常同时属于多个类型（剧情 / 惊悚 / 犯罪…）。固定取第一个
+ * 的话，同一部片每次打开看到的推荐都一模一样。开关 `embyRandomGenreRecommend` 打开时
+ * 每次进入把本片的类型**随机打乱**再取，于是每次打开题材都不同；关闭时退回「取第一个」。
+ *
+ * 随机容易挑到没几部同类的冷门类型，所以这里按打乱后的顺序**逐个尝试、取第一个查得到
+ * 同类的**，避免「随机之后整块推荐消失」。全查不到（或服务端没刮削）才整块不显示。
+ */
+@Composable
+private fun GenreRecommendationSection(
+  item: EmbyItem,
+  server: EmbyServer?,
+  onOpenItem: (String, String) -> Unit,
+) {
+  val browserPreferences = koinInject<BrowserPreferences>()
+  val randomGenre by browserPreferences.embyRandomGenreRecommend.collectAsState()
+
+  // 候选类型：随机开关打开 → 本片类型打乱后的顺序；关闭 → 只用第一个。
+  // remember 以 item.Id 为键：离开详情页再进来组合重建，于是「每次打开都换一批」。
+  val genres = item.Genres
+  val candidateGenres =
+    remember(item.Id, genres, randomGenre) {
+      when {
+        genres.isEmpty() -> emptyList()
+        randomGenre -> genres.shuffled()
+        else -> listOf(genres.first())
+      }
+    }
+
+  var genre by remember(item.Id) { mutableStateOf<String?>(null) }
+  var picks by remember(item.Id) { mutableStateOf<List<EmbyItem>>(emptyList()) }
+
+  LaunchedEffect(item.Id, candidateGenres, server) {
+    val current = server ?: return@LaunchedEffect
+    if (candidateGenres.isEmpty()) return@LaunchedEffect
+    picks = emptyList()
+    genre = null
+    // 按候选顺序逐个试，命中第一个就停；全空才放弃（见上方注释）
+    for (g in candidateGenres) {
+      val found =
+        withContext(Dispatchers.IO) {
+          runCatching {
+            EmbyClient.getItems(
+              server = current,
+              genres = listOf(g),
+              includeItemTypes = RECOMMEND_ITEM_TYPES,
+              // 随机排序：每次进详情页看到的同类顺序不同，避免「永远是那几部」
+              sortBy = "Random",
+              recursive = true,
+              startIndex = 0,
+              limit = 60,
+            ).Items
+          }.getOrDefault(emptyList())
+            // 剔掉自己，并按 Id 去重（服务端偶发重复条目）
+            .filter { it.Id != null && it.Id != item.Id }
+            .distinctBy { it.Id }
+            .take(RECOMMEND_COUNT)
+        }
+      if (found.isNotEmpty()) {
+        genre = g
+        picks = found
+        break
+      }
+    }
+  }
+
+  val activeGenre = genre
+  if (picks.isEmpty() || activeGenre == null) return
+
+  Column(modifier = Modifier.padding(top = 16.dp)) {
+    Row(
+      modifier = Modifier.padding(horizontal = 16.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector = Icons.Default.Movie,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(20.dp),
+      )
+      Spacer(modifier = Modifier.width(6.dp))
+      Text("同类型 · $activeGenre", style = MaterialTheme.typography.titleMedium)
+    }
+    Spacer(modifier = Modifier.height(8.dp))
+    LazyRow(
+      contentPadding = PaddingValues(horizontal = 16.dp),
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      items(
+        items = picks,
         key = { it.Id ?: it.Name.orEmpty() },
       ) { rec ->
         RecommendationCard(

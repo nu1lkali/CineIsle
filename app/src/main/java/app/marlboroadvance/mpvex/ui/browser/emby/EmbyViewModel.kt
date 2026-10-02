@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
+import app.marlboroadvance.mpvex.domain.emby.EmbyBatchResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyExternalIdInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyFilterOptions
 import app.marlboroadvance.mpvex.domain.emby.EmbyImageInfo
@@ -459,32 +460,39 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   // ==================== 媒体操作 ====================
 
   /**
-   * 切换收藏。
-   *
-   * 返回 [Result]：成功时携带**切换后**的状态（true = 已收藏），失败时携带异常，
+   * 切换收藏。返回 [Result]：成功时携带**切换后**的状态（true = 已收藏），失败时携带异常，
    * 由调用方决定提示文案与是否回滚本地状态 —— 详情页要据此弹 Toast，
    * 所以这里不自己吞掉错误（内部同步写 [_error] 供其他观察者使用）。
-   */
-  /**
-   * 切换收藏。返回 [Result]，值 = 切换后的收藏状态。
    *
-   * **成败以服务器回传的 UserData 为准**：这条接口的响应体本身就是最新的
-   * `{"IsFavorite":true/false,...}`，直接采信它最可靠 ——
-   * 之前用「再拉一次条目」回查，而详情接口在这台服务器上返回的 Content-Length
-   * 比实际 body 长，OkHttp 读不满会抛异常，回查一失败就把「其实成功了」误报成失败。
+   * [favorite] 是要落到的**目标状态**，默认按 [item] 当前状态取反。调用方（详情页 /
+   * 媒体库卡片）在点了红心之后，应当把自己**已经乐观切换到的那个目标**显式传进来 ——
+   * 否则一旦传进来的 [item] 是旧快照，这里算出的方向就可能和用户看到的方向相反，
+   * 表现就是「红心只能点亮、取消不了」。
+   *
+   * **成败以服务器回读的真实状态为准**：兼容服务端的回执（200 + UserData）并不可信 ——
+   * 实测会「回 200 但没落库」。这个回读最早只做在演员收藏上（那是最先踩坑的地方），
+   * 现在媒体条目的**取消收藏**也必须做（同一个坑，用户反馈「媒体详情页红心只能点亮
+   * 不能取消」）。回执本身就与目标一致时走快路径、不回读；否则回读确认，
+   * 确认下来没生效就换更用力的写法补一次（取消收藏会补标准 DELETE），再做最终确认。
    */
-  suspend fun toggleFavorite(server: EmbyServer, item: EmbyItem): Result<Boolean> {
+  suspend fun toggleFavorite(
+    server: EmbyServer,
+    item: EmbyItem,
+    favorite: Boolean = item.UserData?.IsFavorite != true,
+  ): Result<Boolean> {
     val itemId = item.Id ?: return Result.failure(IllegalArgumentException("缺少条目 Id"))
-    val target = item.UserData?.IsFavorite != true
+    val target = favorite
     val isPerson = item.Type?.equals("Person", ignoreCase = true) == true
     val result = runCatching {
       val data = repository.setFavorite(server, itemId, target)
+      // 回执里的状态；**只有「与目标一致」才直接采信**，否则一律回读服务器真值
       var confirmed = data?.IsFavorite
-      // 演员收藏的回执在这类兼容服务端上不可信：实测返回 200、回执看似成功，
-      // 服务器却没落库（Emby Web 验证仍是未收藏）——用户碰到的「假成功」。
-      // 所以 Person 一律回读服务器上的真实状态做确认，回执只作参考；
-      // 媒体条目的收藏长期使用验证过可靠，维持原判定、不增加额外往返。
+      var authoritative = confirmed == target
+
       if (isPerson) {
+        // 演员收藏的回执在这类兼容服务端上不可信：实测返回 200、回执看似成功，
+        // 服务器却没落库（Emby Web 验证仍是未收藏）——用户碰到的「假成功」。
+        // 所以 Person 一律回读，回执只作参考。
         // 部分服务端是「先回 200 再异步落库」，先等一拍再读，避免把刚提交的成功误判成失败
         delay(400)
         var read = readbackFavoriteState(server, item, itemId)
@@ -492,27 +500,49 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
           delay(600)
           read = readbackFavoriteState(server, item, itemId)
         }
-        if (read != null) confirmed = read
-        // 回读明确显示没生效：对齐媒体收藏的同一接口再重试一次 POST
-        //（兼容服务端偶发「回 200 但第一次没落库」的软失败），然后做最终确认
-        if (confirmed != null && confirmed != target) {
-          delay(200)
-          repository.setFavorite(server, itemId, target)
+        if (read != null) {
+          confirmed = read
+          authoritative = true
+        }
+      } else if (!authoritative) {
+        // 媒体条目：回执没给出「等于目标」的状态（空 body / 旧值 / 解析不出），回读一次。
+        // 「取消收藏」被服务端静默忽略就是从这里被抓出来的。
+        delay(300)
+        var read = readbackFavoriteState(server, item, itemId)
+        if (read == null) {
           delay(400)
-          val retryRead = readbackFavoriteState(server, item, itemId)
-          if (retryRead != null) confirmed = retryRead
+          read = readbackFavoriteState(server, item, itemId)
+        }
+        if (read != null) {
+          confirmed = read
+          authoritative = true
         }
       }
-      // 只有「明确确认与目标不符」才算失败；拿不到状态时不下失败结论
-      if (target && confirmed == false) {
+
+      // 回读明确显示没生效：换更用力的写法再补一次，然后做最终确认。
+      // 取消收藏用 [EmbyRepository.unfavoriteHard]（补一枪标准 DELETE）——
+      // `POST .../Delete` 在部分兼容服务端上只是回 200、并不落库。
+      if (authoritative && confirmed != target) {
+        delay(200)
+        if (target) {
+          repository.setFavorite(server, itemId, true)
+        } else {
+          repository.unfavoriteHard(server, itemId)
+        }
+        delay(300)
+        readbackFavoriteState(server, item, itemId)?.let { confirmed = it }
+      }
+
+      // 只有「明确确认与目标不符」才算失败；读不到状态时不下失败结论
+      if (authoritative && confirmed != target) {
         throw IllegalStateException(
-          if (isPerson) "服务器未接受这次收藏（该服务端可能不支持收藏演员）" else "服务器未接受这次收藏",
+          if (isPerson) "服务器未接受这次收藏（该服务端可能不支持收藏演员）" else "服务器未接受这次操作",
         )
       }
       target
     }
     // 演员的收藏状态变了：收藏页「演员」tab 的缓存不再可信，作废掉
-    if (item.Type?.equals("Person", ignoreCase = true) == true) {
+    if (isPerson) {
       invalidateFavoritePersonsCache()
     }
     result.exceptionOrNull()?.let { _error.value = it.message ?: "操作失败" }
@@ -580,6 +610,81 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     return result
   }
 
+  // ==================== 批量操作 / 继续观看清除 / 直链预解析 ====================
+
+  /**
+   * 批量收藏 / 取消收藏。
+   *
+   * 走 [EmbyClient.setFavoriteMany]（Emby 无批量端点，客户端逐条汇总，单条失败不中断整批）。
+   * 只要这批里有演员（Person），顺带把「收藏演员」的进程内缓存作废 ——
+   * 否则退回收藏页「演员」tab 看到的还是旧名单。
+   */
+  suspend fun setFavoriteBatch(
+    server: EmbyServer,
+    items: List<EmbyItem>,
+    favorite: Boolean,
+  ): EmbyBatchResult = withContext(Dispatchers.IO) {
+    val ids = items.mapNotNull { it.Id }
+    if (ids.isEmpty()) return@withContext EmbyBatchResult(0, 0, null)
+    val result = runCatching { EmbyClient.setFavoriteMany(server, ids, favorite) }
+      .getOrElse { EmbyBatchResult(0, ids.size, it.message) }
+    if (items.any { it.Type?.equals("Person", ignoreCase = true) == true }) {
+      invalidateFavoritePersonsCache()
+    }
+    _error.value = if (result.failed > 0) result.firstError ?: "部分操作失败" else null
+    result
+  }
+
+  /** 批量标记已看 / 未看。与 [setFavoriteBatch] 同构。 */
+  suspend fun setPlayedBatch(
+    server: EmbyServer,
+    itemIds: List<String>,
+    played: Boolean,
+  ): EmbyBatchResult = withContext(Dispatchers.IO) {
+    if (itemIds.isEmpty()) return@withContext EmbyBatchResult(0, 0, null)
+    val result = runCatching { EmbyClient.setPlayedMany(server, itemIds, played) }
+      .getOrElse { EmbyBatchResult(0, itemIds.size, it.message) }
+    _error.value = if (result.failed > 0) result.firstError ?: "部分操作失败" else null
+    result
+  }
+
+  /**
+   * 把一条媒体从服务器的「继续观看」里移除（清掉服务器记录的播放位置）。
+   *
+   * 见 [EmbyClient.hideFromResume]：三种请求形态逐层兜底。返回 true 只代表
+   * 「请求被服务端接受」，UI 侧仍做本地乐观移除，不依赖这里回读。
+   */
+  suspend fun removeFromResume(server: EmbyServer, itemId: String): Boolean =
+    withContext(Dispatchers.IO) {
+      runCatching { EmbyClient.hideFromResume(server, itemId) }.getOrDefault(false)
+    }
+
+  /**
+   * 本地把一条从「继续观看」列表里摘掉。
+   *
+   * 配合 [removeFromResume] 的乐观移除：不管服务端是否真的落库，先让用户看到它消失，
+   * 免得「点了移除还杵在那儿」——兼容服务端有「回 200 不生效」的先例。
+   */
+  fun dropResumeItem(itemId: String) {
+    _resumeItems.value = _resumeItems.value.filterNot { it.Id == itemId }
+  }
+
+  /**
+   * 预解析「302 直链」：拿 `/Videos/{id}/stream` 背后跳转到的真实地址。
+   *
+   * 失败返回 null，调用方回退到原始流地址 —— 解析失败绝不挡播放。
+   */
+  suspend fun resolveDirectUrl(
+    server: EmbyServer,
+    itemId: String,
+    static: Boolean = true,
+  ): String? = withContext(Dispatchers.IO) {
+    runCatching { EmbyClient.resolveStreamUrl(server, itemId, static) }.getOrNull()
+  }
+
+  /** 是否开启「预解析直链」（设置项）。播放路径据此决定要不要多走一次解析。 */
+  fun shouldResolveDirectLink(): Boolean = browserPreferences.embyResolveDirectLink.get()
+
   // ==================== 播放 ====================
 
   /**
@@ -608,9 +713,15 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     if (playlist.size > 1) {
-      launchPlaylist(server, playlist, resumeSeconds, engine = engine)
+      // 「预解析直链」开关打开时，先逐条把 302 背后的真实地址取出来（见 resolveIfEnabled）。
+      // 解析失败/未发生跳转返回 null，播放列表里对应位置回退到原始地址。
+      val directUrls = playlist
+        .mapNotNull { it.Id }
+        .mapNotNull { id -> resolveIfEnabled(server, id)?.let { id to it } }
+        .toMap()
+      launchPlaylist(server, playlist, resumeSeconds, engine = engine, directUrls = directUrls)
     } else {
-      launchSingle(server, item, resumeSeconds, engine = engine)
+      launchSingle(server, item, resumeSeconds, engine = engine, overrideUrl = resolveIfEnabled(server, itemId))
     }
 
     // 上报播放开始，让服务器记录"正在播放"
@@ -847,6 +958,13 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     getApplication<Application>().startActivity(intent)
   }
 
+  /**
+   * 「预解析开关打开」时才去解析直链；关闭 → 直接返回 null（用原始流地址，零额外开销）。
+   * 解析不出真实跳转地址时也返回 null，调用方一律回退原始地址。
+   */
+  private suspend fun resolveIfEnabled(server: EmbyServer, itemId: String): String? =
+    if (shouldResolveDirectLink()) resolveDirectUrl(server, itemId) else null
+
   /** 播放一组媒体（剧集连播 / 随机播放） */
   fun launchPlaylist(
     server: EmbyServer,
@@ -862,6 +980,11 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
      * 指定内核；默认取设置里的「默认播放内核」（长按反选时由 [resolveEngine] 给出）
      */
     engine: EngineKind? = resolveEngine(false),
+    /**
+     * itemId → 预解析出来的直链。空 map = 全部走原始流地址（默认行为）。
+     * 只有开启「预解析直链」且该条确实发生 302 跳转时才会有内容。
+     */
+    directUrls: Map<String, String> = emptyMap(),
   ) {
     val uris = ArrayList<android.net.Uri>()
     val ids = ArrayList<String>()
@@ -873,7 +996,11 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     val seriesKeys = ArrayList<String>()
     items.forEach { item ->
       val id = item.Id ?: return@forEach
-      uris.add(android.net.Uri.parse(repository.videoStreamUrl(server, id, static = true)))
+      uris.add(
+        android.net.Uri.parse(
+          directUrls[id] ?: repository.videoStreamUrl(server, id, static = true),
+        ),
+      )
       ids.add(id)
       titles.add(displayTitle(item))
       seriesKeys.add(item.SeriesId ?: id)

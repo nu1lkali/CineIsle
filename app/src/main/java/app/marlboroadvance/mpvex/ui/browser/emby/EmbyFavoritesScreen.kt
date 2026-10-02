@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,7 +9,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -17,9 +21,13 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -27,9 +35,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -45,6 +55,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.domain.emby.EmbyBatchResult
+import app.marlboroadvance.mpvex.domain.emby.EmbyEnqueueResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
@@ -52,6 +64,7 @@ import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefresh
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMaintainButton
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -108,6 +121,45 @@ fun EmbyFavoritesScreen() {
 
   /** 展示列表 = 当前 tab 对应的那一份 */
   val items = if (tab == FavoriteTab.MOVIE) movieItems else actorItems
+
+  // ── 搜索 / 排序 ──
+  // 收藏页一次性拉全量（200 条）到内存，所以过滤与排序都在本地做：即时、不发请求。
+  var searchQuery by remember { mutableStateOf("") }
+  var sort by remember {
+    mutableStateOf(
+      FavoriteSort.entries.firstOrNull { it.name == browserPreferences.embyFavoritesSort.get() }
+        ?: FavoriteSort.NAME,
+    )
+  }
+  val visibleItems = items
+    .filter {
+      searchQuery.isBlank() || it.Name?.contains(searchQuery.trim(), ignoreCase = true) == true
+    }
+    .let { sort.apply(it) }
+
+  // ── 多选模式（批量操作）──
+  // 长按任意卡片进入；选中集合存条目 Id；退出时清空。
+  var selectionMode by remember { mutableStateOf(false) }
+  val selectedIds = remember { mutableStateListOf<String>() }
+  // 批量下载走的是与详情页同一个下载管理器（持久化在 manager 里，任务队列共享）
+  val downloadViewModel: EmbyDownloadViewModel = viewModel(
+    factory = EmbyDownloadViewModel.factory(context.applicationContext as Application),
+  )
+
+  /**
+   * 切换某条的选中态。
+   *
+   * 首次调用（还没进多选模式）会顺带进入多选并把这一条选上 —— 这样「长按 → 直接多选」
+   * 一步到位，不用先点一个「多选」按钮再点卡片。
+   */
+  fun toggleSelection(id: String?) {
+    if (id == null) return
+    if (!selectionMode) {
+      selectionMode = true
+      selectedIds.clear()
+    }
+    if (id in selectedIds) selectedIds.remove(id) else selectedIds.add(id)
+  }
 
   suspend fun loadMovies(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer, force: Boolean) {
     val cached = movieCache.value
@@ -167,26 +219,116 @@ fun EmbyFavoritesScreen() {
   // Scaffold + TopAppBar：自动为状态栏留出安全区域，避免网格压在状态栏下
   Scaffold(
     topBar = {
-      EmbyFavoritesTopBar(
-        tab = tab,
-        onTabChange = {
-          if (it != tab) {
-            tab = it
-            // 写回偏好：返回 / 重启都停在上次选的类型
-            browserPreferences.embyFavoritesTab.set(it.name)
-          }
-        },
-        onRefresh = { scope.launch { load(force = true) } },
-      )
+      if (selectionMode) {
+        FavoritesSelectionTopBar(
+          count = selectedIds.size,
+          total = visibleItems.size,
+          onSelectAll = {
+            selectedIds.clear()
+            visibleItems.mapNotNull { it.Id }.forEach { selectedIds.add(it) }
+          },
+          onClearSelection = { selectedIds.clear() },
+          onClose = {
+            selectionMode = false
+            selectedIds.clear()
+          },
+        )
+      } else {
+        EmbyFavoritesTopBar(
+          tab = tab,
+          onTabChange = {
+            if (it != tab) {
+              tab = it
+              // 写回偏好：返回 / 重启都停在上次选的类型
+              browserPreferences.embyFavoritesTab.set(it.name)
+            }
+          },
+          onRefresh = { scope.launch { load(force = true) } },
+        )
+      }
+    },
+    bottomBar = {
+      if (selectionMode) {
+        FavoritesBatchBar(
+          // 演员 tab 只有「取消收藏」有意义（有没有看过 / 时长这些是媒体条目的概念）
+          isActorTab = tab == FavoriteTab.ACTOR,
+          count = selectedIds.size,
+          onMarkPlayed = {
+            val current = server
+            val ids = selectedIds.toList()
+            if (current == null || ids.isEmpty()) return@FavoritesBatchBar
+            scope.launch {
+              val r = viewModel.setPlayedBatch(current, ids, true)
+              Toast.makeText(context, batchResultText("标为已看", r), Toast.LENGTH_SHORT).show()
+              selectionMode = false
+              selectedIds.clear()
+            }
+          },
+          onMarkUnplayed = {
+            val current = server
+            val ids = selectedIds.toList()
+            if (current == null || ids.isEmpty()) return@FavoritesBatchBar
+            scope.launch {
+              val r = viewModel.setPlayedBatch(current, ids, false)
+              Toast.makeText(context, batchResultText("标为未看", r), Toast.LENGTH_SHORT).show()
+              selectionMode = false
+              selectedIds.clear()
+            }
+          },
+          onUnfavorite = {
+            val current = server
+            val items = visibleItems.filter { it.Id != null && it.Id in selectedIds }
+            if (current == null || items.isEmpty()) return@FavoritesBatchBar
+            scope.launch {
+              val r = viewModel.setFavoriteBatch(current, items, false)
+              Toast.makeText(context, batchResultText("取消收藏", r), Toast.LENGTH_SHORT).show()
+              selectionMode = false
+              selectedIds.clear()
+              // 取消收藏后这批就不在收藏页了，重拉一次让列表同步
+              load(force = true)
+            }
+          },
+          onDownload = {
+            val items = visibleItems.filter { it.Id != null && it.Id in selectedIds }
+            if (items.isEmpty()) return@FavoritesBatchBar
+            var queued = 0
+            var skipped = 0
+            items.forEach { item ->
+              when (downloadViewModel.enqueue(server ?: return@forEach, item)) {
+                EmbyEnqueueResult.INVALID -> skipped++
+                else -> queued++
+              }
+            }
+            Toast.makeText(
+              context,
+              if (skipped == 0) "已加入下载队列：$queued 项" else "已加入下载队列：$queued 项，跳过 $skipped 项",
+              Toast.LENGTH_SHORT,
+            ).show()
+            selectionMode = false
+            selectedIds.clear()
+          },
+        )
+      }
     },
   ) { innerPadding ->
-    PullRefreshGridBox(
-      isRefreshing = isRefreshing,
-      onRefresh = { load(force = true) },
-      gridState = gridState,
-      modifier = Modifier.fillMaxSize().padding(innerPadding),
-    ) {
-      Box(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+      // 搜索 + 排序：只作用于当前 tab 的列表（见上方 visibleItems），本地过滤不发请求
+      FavoriteSearchSortRow(
+        query = searchQuery,
+        onQueryChange = { searchQuery = it },
+        sort = sort,
+        onSortChange = {
+          sort = it
+          browserPreferences.embyFavoritesSort.set(it.name)
+        },
+      )
+      PullRefreshGridBox(
+        isRefreshing = isRefreshing,
+        onRefresh = { load(force = true) },
+        gridState = gridState,
+        modifier = Modifier.fillMaxSize(),
+      ) {
+        Box(modifier = Modifier.fillMaxSize()) {
       when {
         // 加载尚未结束时不判定「没有服务器」，避免冷启动瞬间闪一下空状态
         server == null && !isLoading -> EmbyEmptyState(
@@ -196,7 +338,10 @@ fun EmbyFavoritesScreen() {
           modifier = Modifier.align(Alignment.Center),
         )
 
-        isLoading && items.isEmpty() -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+        isLoading && items.isEmpty() ->
+          // 骨架屏替代转圈：先把网格版式摆出来，收藏列表落下时不会整屏跳变。
+          // 演员 tab 也复用这套网格骨架 —— 栏数一致，观感上是同一套节奏。
+          EmbySkeletonGrid(columns = 3, ratio = 3f / 4f)
 
         error != null -> EmbyEmptyState(
           message = error ?: "加载失败",
@@ -212,6 +357,14 @@ fun EmbyFavoritesScreen() {
           modifier = Modifier.align(Alignment.Center),
         )
 
+        // 有收藏但被搜索框滤空：给一句提示，别让用户以为收藏丢了
+        visibleItems.isEmpty() -> EmbyEmptyState(
+          message = "没有匹配「${searchQuery.trim()}」的收藏",
+          buttonText = "清空搜索",
+          onAction = { searchQuery = "" },
+          modifier = Modifier.align(Alignment.Center),
+        )
+
         tab == FavoriteTab.MOVIE -> LazyVerticalGrid(
           // 与媒体库页统一：固定一行三个（含「文件夹」分类下的宫格封面保持一致观感）
           columns = GridCells.Fixed(3),
@@ -221,7 +374,7 @@ fun EmbyFavoritesScreen() {
           horizontalArrangement = Arrangement.spacedBy(12.dp),
           verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-          items(movieItems, key = { it.Id ?: it.Name ?: "" }) { item ->
+          items(visibleItems, key = { it.Id ?: it.Name ?: "" }) { item ->
             val currentServer = server ?: return@items
             EmbyMediaCard(
               title = viewModel.displayTitle(item),
@@ -230,10 +383,17 @@ fun EmbyFavoritesScreen() {
               fallbackImageUrl = viewModel.imageUrl(currentServer, item, "Backdrop", 480),
               progress = itemProgressOf(item),
               isFavorite = true,
+              selected = item.Id != null && item.Id in selectedIds,
               onClick = {
-                val id = item.Id
-                if (id != null) backStack.add(EmbyDetailScreen(id, item.Name ?: ""))
+                if (selectionMode) {
+                  toggleSelection(item.Id)
+                } else {
+                  val id = item.Id
+                  if (id != null) backStack.add(EmbyDetailScreen(id, item.Name ?: ""))
+                }
               },
+              // 长按 = 进入多选并选上这一条（已在多选模式则等价于切换）
+              onLongClick = { toggleSelection(item.Id) },
               style = EmbyCardStyle.POSTER,
               fillWidth = true,
             )
@@ -249,7 +409,7 @@ fun EmbyFavoritesScreen() {
           horizontalArrangement = Arrangement.spacedBy(12.dp),
           verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-          items(actorItems, key = { it.Id ?: it.Name ?: "" }) { person ->
+          items(visibleItems, key = { it.Id ?: it.Name ?: "" }) { person ->
             val currentServer = server ?: return@items
             EmbyMediaCard(
               title = person.Name.orEmpty(),
@@ -259,7 +419,12 @@ fun EmbyFavoritesScreen() {
               progress = null,
               isFavorite = true,
               placeholder = Icons.Default.Person,
+              selected = person.Id != null && person.Id in selectedIds,
               onClick = {
+                if (selectionMode) {
+                  toggleSelection(person.Id)
+                  return@EmbyMediaCard
+                }
                 val pid = person.Id ?: return@EmbyMediaCard
                 // 进该演员的作品清单页（与详情页点演职员头像同一条路由）
                 backStack.add(
@@ -270,6 +435,8 @@ fun EmbyFavoritesScreen() {
                   ),
                 )
               },
+              // 长按 = 进入多选并选上这一条
+              onLongClick = { toggleSelection(person.Id) },
               style = EmbyCardStyle.POSTER,
               fillWidth = true,
             )
@@ -277,6 +444,7 @@ fun EmbyFavoritesScreen() {
         }
       }
       }
+    }
     }
   }
 }
@@ -398,3 +566,217 @@ private fun itemProgressOf(item: EmbyItem): Float? {
   if (position <= 0) return null
   return (position.toFloat() / total.toFloat()).coerceIn(0f, 1f)
 }
+
+/**
+ * 收藏页的排序方式（本地排序，不发请求）。
+ *
+ * 选「名称」时用 [EmbyItem.SortName]（Emby 内部的排序名，已剥离 "The/A" 这类前缀）
+ * 而不是 Name —— 和服务器按 SortName 排序的口径保持一致，切到本地排序不会突然乱序。
+ */
+private enum class FavoriteSort(
+  val label: String,
+  /** 排序方向提示：菜单里作为副标题显示，避免「勾了但不知道是升还是降」 */
+  val hint: String,
+) {
+  NAME("名称", "A → Z"),
+  YEAR("年份", "新 → 旧"),
+  RATING("评分", "高 → 低"),
+  ADDED("最新添加", "新 → 旧"),
+  ;
+
+  fun apply(list: List<EmbyItem>): List<EmbyItem> = when (this) {
+    NAME -> list.sortedBy { (it.SortName ?: it.Name ?: "").lowercase() }
+    YEAR -> list.sortedByDescending { it.ProductionYear ?: 0 }
+    RATING -> list.sortedByDescending { it.CommunityRating ?: 0.0 }
+    // DateCreated 是 ISO-8601 串，字典序即时间序（同格式下成立）
+    ADDED -> list.sortedByDescending { it.DateCreated ?: "" }
+  }
+}
+
+/**
+ * 收藏页顶部的「搜索框 + 排序」一行。
+ *
+ * 搜索是即时的本地过滤（收藏页本来就一次拉全量），不做防抖也不需要防抖 ——
+ * 不打服务器，敲一个字就重算一次毫无成本。
+ */
+@Composable
+private fun FavoriteSearchSortRow(
+  query: String,
+  onQueryChange: (String) -> Unit,
+  sort: FavoriteSort,
+  onSortChange: (FavoriteSort) -> Unit,
+) {
+  var sortMenu by remember { mutableStateOf(false) }
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(horizontal = 16.dp, vertical = 8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    OutlinedTextField(
+      value = query,
+      onValueChange = onQueryChange,
+      modifier = Modifier.weight(1f),
+      singleLine = true,
+      shape = MaterialTheme.shapes.large,
+      placeholder = { Text("搜索收藏") },
+      leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+      trailingIcon = {
+        if (query.isNotEmpty()) {
+          IconButton(onClick = { onQueryChange("") }) {
+            Icon(Icons.Default.Clear, contentDescription = "清空搜索")
+          }
+        }
+      },
+    )
+    Spacer(modifier = Modifier.width(8.dp))
+    Box {
+      // 触发区直接标出「当前按什么排序」，不用点开就知道现在的排序方式
+      Surface(
+        modifier = Modifier.clickable { sortMenu = true },
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Sort,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(text = sort.label, style = MaterialTheme.typography.labelLarge)
+          Icon(
+            imageVector = Icons.Default.ArrowDropDown,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+      DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+        FavoriteSort.entries.forEach { option ->
+          val selected = option == sort
+          DropdownMenuItem(
+            text = {
+              Column {
+                Text(
+                  text = option.label,
+                  color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.onSurface
+                  },
+                )
+                // 方向副标题：让「名称 / 年份 / 评分」到底怎么排一目了然
+                Text(
+                  text = option.hint,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.outline,
+                )
+              }
+            },
+            // 勾放**尾部**（M3 惯例）：明确表示「当前选中的就是这一项」，
+            // 再用主色文字强化，不再靠一个位置飘忽的首位图标表达选中。
+            trailingIcon = {
+              if (selected) {
+                Icon(
+                  imageVector = Icons.Default.Check,
+                  contentDescription = "当前排序",
+                  tint = MaterialTheme.colorScheme.primary,
+                )
+              }
+            },
+            onClick = {
+              sortMenu = false
+              onSortChange(option)
+            },
+          )
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 多选模式下的顶栏：左侧关闭、中间「已选 N / 总数」、右侧全选 / 取消全选。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FavoritesSelectionTopBar(
+  count: Int,
+  total: Int,
+  onSelectAll: () -> Unit,
+  onClearSelection: () -> Unit,
+  onClose: () -> Unit,
+) {
+  TopAppBar(
+    title = { Text("已选 $count / $total") },
+    navigationIcon = {
+      IconButton(onClick = onClose) {
+        Icon(Icons.Default.Close, contentDescription = "退出多选")
+      }
+    },
+    actions = {
+      if (count < total) {
+        TextButton(onClick = onSelectAll) { Text("全选") }
+      } else {
+        TextButton(onClick = onClearSelection) { Text("取消全选") }
+      }
+    },
+  )
+}
+
+/**
+ * 多选模式下的底部批量操作条。
+ *
+ * 用文字按钮而不是图标：已看 / 未看这两个动作的图标语义很弱（对勾 / 叉太容易被
+ * 理解成「删除」），文字更不容易误解，也省掉一堆图标依赖。
+ * 演员 tab 只保留「取消收藏」—— 播放进度、下载这些是媒体条目的概念，对 Person 无意义。
+ */
+@Composable
+private fun FavoritesBatchBar(
+  isActorTab: Boolean,
+  count: Int,
+  onMarkPlayed: () -> Unit,
+  onMarkUnplayed: () -> Unit,
+  onUnfavorite: () -> Unit,
+  onDownload: () -> Unit,
+) {
+  val enabled = count > 0
+  Surface(
+    color = MaterialTheme.colorScheme.surfaceVariant,
+    tonalElevation = 3.dp,
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 8.dp, vertical = 6.dp),
+      horizontalArrangement = Arrangement.SpaceEvenly,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      if (!isActorTab) {
+        BatchActionButton("标为已看", enabled, onMarkPlayed)
+        BatchActionButton("标为未看", enabled, onMarkUnplayed)
+      }
+      BatchActionButton("取消收藏", enabled, onUnfavorite)
+      if (!isActorTab) {
+        BatchActionButton("下载", enabled, onDownload)
+      }
+    }
+  }
+}
+
+@Composable
+private fun BatchActionButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+  TextButton(onClick = onClick, enabled = enabled) { Text(label) }
+}
+
+/** 批量操作的结果文案：「动作：N 项」；有失败时补上「成功 N · 失败 M」。 */
+private fun batchResultText(action: String, result: EmbyBatchResult): String =
+  if (result.failed == 0) {
+    "$action：${result.ok} 项"
+  } else {
+    "$action：成功 ${result.ok} · 失败 ${result.failed}"
+  }

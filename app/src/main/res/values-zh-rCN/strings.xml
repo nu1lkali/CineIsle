@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="app_name">影屿</string>
+  <string name="widget_continue_watching">继续观看</string>
+  <string name="widget_continue_watching_empty">暂时没有看到一半的内容</string>
   <string name="generic_reset">重置</string>
   <string name="generic_share">分享</string>
   <string name="generic_confirm">确定</string>
@@ -191,8 +193,32 @@
   <string name="pref_audio_summary">首选语言、声道、音调校正</string>
   <string name="pref_audio_pitch_correction_title">启用音调校正</string>
   <string name="pref_audio_pitch_correction_summary">避免加速时音调变高、减速时音调变低</string>
-  <string name="pref_audio_volume_normalization_title">音量归一化</string>
-  <string name="pref_audio_volume_normalization_summary">自动调整音量以保持稳定的响度</string>
+  <string name="pref_audio_volume_normalization_title">夜间模式（音量均衡）</string>
+  <string name="pref_audio_volume_normalization_summary">压低爆音、提升弱对白，适合夜间观看</string>
+  <string name="pref_audio_normalization_strength">夜间模式强度</string>
+  <string name="pref_audio_normalization_light">轻度</string>
+  <string name="pref_audio_normalization_medium">中度</string>
+  <string name="pref_audio_normalization_strong">强力</string>
+  <string name="pref_auto_crop_black_bars_title">自动裁切黑边</string>
+  <string name="pref_auto_crop_black_bars_summary">每部新视频自动探测并裁掉四周黑边</string>
+  <string name="player_toggle_auto_crop_on">已开启 —— 每部视频自动探测</string>
+  <string name="player_toggle_auto_crop_off">已关闭 —— 可在快捷功能里手动探测</string>
+  <string name="player_action_auto_crop">自动裁黑边</string>
+  <string name="player_crop_applied">已裁掉黑边</string>
+  <string name="player_crop_failed">未识别到黑边</string>
+  <string name="player_crop_off">已还原画面</string>
+  <string name="player_gif_action">录制 GIF</string>
+  <string name="player_gif_title">录制 GIF 片段</string>
+  <string name="player_gif_hint">从当前位置开始录制，保存到相册的 Pictures/CineIsle 目录；清晰度越高文件越大</string>
+  <string name="player_gif_seconds">%1$d 秒</string>
+  <string name="player_gif_start">开始录制</string>
+  <string name="player_gif_recording">正在录制…请保持视频播放</string>
+  <string name="player_gif_saved">GIF 已保存到相册</string>
+  <string name="player_gif_failed">GIF 录制失败</string>
+  <string name="player_gif_quality">清晰度</string>
+  <string name="player_gif_quality_px">%1$dP</string>
+  <string name="player_speed_decrease">减速 0.05 倍</string>
+  <string name="player_speed_increase">加速 0.05 倍</string>
   <string name="pref_audio_channels">声道</string>
   <string name="pref_audio_channels_auto">自动</string>
   <string name="pref_audio_channels_auto_safe">安全自动</string>
@@ -676,6 +702,7 @@
   <string name="i18n_not_available_4k8k">4K/8K 视频不支持此功能</string>
   <string name="i18n_now_playing">正在播放</string>
   <string name="i18n_playing">播放中</string>
+  <string name="i18n_remove_from_queue">从队列移除</string>
   <string name="i18n_playlist_items">%d 个项目</string>
   <string name="i18n_switch_to_grid">切换到网格视图</string>
   <string name="i18n_switch_to_list">切换到列表视图</string>

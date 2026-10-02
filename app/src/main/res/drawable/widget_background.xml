@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面小组件「继续观看」的卡片底。
+
+  半透明深底 + 圆角：小组件压在任意壁纸上都要能看清白字，纯透明不行、
+  纯黑又太死板，所以取一个「接近黑但不全黑」的底。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#CC1B181D" />
+    <corners android:radius="18dp" />
+</shape>

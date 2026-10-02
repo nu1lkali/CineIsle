@@ -19,7 +19,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
@@ -33,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,7 +79,7 @@ fun EmbyPosterCard(
         .then(
 Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
         ),
-      shape = RoundedCornerShape(EMBY_CARD_CORNER),
+      shape = RoundedCornerShape(LocalEmbyAppearance.current.corner),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
       Box(modifier = Modifier.fillMaxSize()) {
@@ -172,7 +175,7 @@ fun EmbyWideCard(
         .then(
 Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
         ),
-      shape = RoundedCornerShape(EMBY_CARD_CORNER),
+      shape = RoundedCornerShape(LocalEmbyAppearance.current.corner),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
       Box(modifier = Modifier.fillMaxSize()) {
@@ -205,8 +208,8 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
           }
         }
 
-        // 左下角剩余时长角标，仅「继续观看」等带进度的卡片传入
-        if (!remainingText.isNullOrBlank()) {
+        // 左下角剩余时长角标，仅「继续观看」等带进度的卡片传入；受角标开关控制
+        if (LocalEmbyAppearance.current.showBadges && !remainingText.isNullOrBlank()) {
           Surface(
             modifier = Modifier
               .align(Alignment.BottomStart)
@@ -297,6 +300,26 @@ enum class EmbyCardStyle(
 }
 
 /**
+ * Emby 卡片的统一视觉参数：圆角大小 + 是否显示封面角标。
+ *
+ * 为什么用 CompositionLocal 而不是给每个卡片加参数：卡片被十几处调用
+ * （首页横滑行、媒体库、收藏、演员、详情推荐…），逐个加参数会把签名撑爆，
+ * 而且只要漏传一处，那个页面就会圆角不一致 —— 恰恰违背「统一」的初衷。
+ * 放到 CompositionLocal 里，**在主题层提供一次，全 App 所有卡片自动一致**，
+ * 用户改设置也能立刻全局生效。
+ *
+ * @param corner 卡片圆角
+ * @param showBadges 是否显示封面上的角标（播放进度条 / 作品数）
+ */
+data class EmbyAppearance(
+  val corner: Dp = EMBY_CARD_CORNER,
+  val showBadges: Boolean = true,
+)
+
+val LocalEmbyAppearance =
+  androidx.compose.runtime.staticCompositionLocalOf { EmbyAppearance() }
+
+/**
  * 通用媒体卡片。
  *
  * @param style 卡片样式（决定宽高比与宽度）
@@ -323,6 +346,19 @@ fun EmbyMediaCard(
   onLongClick: ((Offset) -> Unit)? = null,
   /** 左下角角标文案（如演员卡片的「128 部」作品数），null 时不显示 */
   badgeText: String? = null,
+  /** 多选模式下的选中态：压一层主色遮罩 + 左上角对勾 */
+  selected: Boolean = false,
+  /**
+   * 非 null 时，右上角的心形变成**可点的快捷收藏开关**。
+   *
+   * 需求是「卡片右上角心形快捷收藏」：以前红心只是「已收藏」的只读角标，
+   * 想收藏必须长按 → 菜单 → 收藏，三步。传了回调后点心形即可切换，
+   * 已收藏时是实心 + 主色，未收藏时是描边 + 半透明，一眼能分出状态。
+   *
+   * 不传（null）则保持原来的只读行为 —— 首页横滑行、详情页推荐位这类地方
+   * 不需要快捷开关，避免每张卡右上角都挂个可点按钮。
+   */
+  onToggleFavorite: (() -> Unit)? = null,
 ) {
   Column(modifier = if (fillWidth) modifier.fillMaxWidth() else modifier.width(style.width)) {
     Card(
@@ -332,7 +368,7 @@ fun EmbyMediaCard(
         .then(
 Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
         ),
-      shape = RoundedCornerShape(EMBY_CARD_CORNER),
+      shape = RoundedCornerShape(LocalEmbyAppearance.current.corner),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
       Box(modifier = Modifier.fillMaxSize()) {
@@ -349,7 +385,46 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
           )
         }
 
-        if (isFavorite) {
+        if (onToggleFavorite != null) {
+          // 快捷收藏开关：始终显示（未收藏是描边 + 半透明白，已收藏是实心 + 主色）。
+          // 用 pointerInput 而不是 IconButton / clickable：前者会把触控区撑到 48dp 压住封面，
+          // 后者要额外引一个 import；这里只需要「点一下别穿透到卡片」，detectTapGestures
+          // 会消费掉事件，父层 Card 的单击就收不到了 —— 正是想要的。
+          //
+          // ⚠️ 回调必须过一层 rememberUpdatedState：`pointerInput(Unit)` 的 key 是常量，
+          // 手势协程只在卡片**第一次**组合时启动一次，直接捕获 onToggleFavorite 会把
+          // 那一刻的 lambda 永久焊死 —— 而它闭包里是当时那一条 item（IsFavorite=false）。
+          // 卡片按 Id 复用、组合不重启，于是之后每次点心形都还在按「收藏」算，
+          // **永远取消不掉**（用户反馈的「只能收藏不能取消收藏」）。与播放队列拖拽那个
+          // pointerInput 坑同源：常量 key 的手势里，任何会变的东西都得走最新值。
+          val latestToggleFavorite by rememberUpdatedState(onToggleFavorite)
+          Surface(
+            modifier = Modifier
+              .align(Alignment.TopEnd)
+              .padding(6.dp)
+              .clip(RoundedCornerShape(50))
+              .pointerInput(Unit) { detectTapGestures { latestToggleFavorite?.invoke() } },
+            shape = RoundedCornerShape(50),
+            color = if (isFavorite) {
+              MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+            } else {
+              Color.Black.copy(alpha = 0.32f)
+            },
+          ) {
+            Icon(
+              imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+              contentDescription = if (isFavorite) "取消收藏" else "收藏",
+              modifier = Modifier
+                .padding(5.dp)
+                .size(15.dp),
+              tint = if (isFavorite) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+              } else {
+                Color.White
+              },
+            )
+          }
+        } else if (isFavorite) {
           Surface(
             modifier = Modifier
               .align(Alignment.TopEnd)
@@ -378,8 +453,35 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
           )
         }
 
-        // 左下角角标：演员卡片用来垫「参与作品数」；覆盖在底部进度条上方一点，避免压住
-        if (!badgeText.isNullOrBlank()) {
+        // 多选选中态：整卡压一层主色薄遮罩（一眼能看出选了哪些），
+        // 对勾放左上角 —— 右上角已经被收藏红心占了，别叠在一起。
+        if (selected) {
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)),
+          )
+          Surface(
+            modifier = Modifier
+              .align(Alignment.TopStart)
+              .padding(6.dp),
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.primary,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Check,
+              contentDescription = "已选择",
+              modifier = Modifier
+                .padding(3.dp)
+                .size(14.dp),
+              tint = MaterialTheme.colorScheme.onPrimary,
+            )
+          }
+        }
+
+        // 左下角角标：演员卡片用来垫「参与作品数」；覆盖在底部进度条上方一点，避免压住。
+        // 受「显示封面角标」设置控制（见 EmbyAppearance）
+        if (LocalEmbyAppearance.current.showBadges && !badgeText.isNullOrBlank()) {
           Surface(
             modifier = Modifier
               .align(Alignment.BottomStart)
@@ -507,7 +609,7 @@ fun EmbyLibraryCard(
       .then(
 Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
       ),
-    shape = RoundedCornerShape(EMBY_CARD_CORNER),
+    shape = RoundedCornerShape(LocalEmbyAppearance.current.corner),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
   ) {
     Box(modifier = Modifier.fillMaxSize()) {

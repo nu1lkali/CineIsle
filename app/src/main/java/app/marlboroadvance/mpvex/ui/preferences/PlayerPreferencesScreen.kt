@@ -498,7 +498,7 @@ object PlayerPreferencesScreen : Screen {
                 value = showFloatingPlaylistSwitcher,
                 onValueChange = preferences.showFloatingPlaylistSwitcher::set,
                 title = { Text("左下角悬浮切换按钮") },
-                summary = { Text("上一条 / 下一条视频的快捷切换；控制条显示时自动隐藏") },
+                summary = { Text("上一条 / 下一条视频的快捷切换；控制条显示时自动隐藏，打开播放队列时也会收起") },
               )
             }
           }
@@ -532,6 +532,23 @@ object PlayerPreferencesScreen : Screen {
                 value = reduceMotion,
                 onValueChange = preferences.reduceMotion::set,
                 title = { Text(stringResource(R.string.pref_player_display_reduce_player_animation)) },
+              )
+
+              PreferenceDivider()
+
+              // 自动裁黑边（cropdetect）：mpv 专属，探测有几百毫秒开销 + 可能误裁，
+              // 所以默认关闭、放在这里由用户自己决定
+              val autoCropBlackBars by preferences.autoCropBlackBars.collectAsState()
+              SwitchPreference(
+                value = autoCropBlackBars,
+                onValueChange = preferences.autoCropBlackBars::set,
+                title = { Text(stringResource(R.string.pref_auto_crop_black_bars_title)) },
+                summary = {
+                  Text(
+                    stringResource(R.string.pref_auto_crop_black_bars_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
               )
             }
           }

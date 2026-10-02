@@ -7,10 +7,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -24,9 +27,14 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.Shuffle
@@ -73,6 +81,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -90,6 +99,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyLibraryFilterState
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -97,12 +107,16 @@ import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshGridBox
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyFavoriteRandomIcon
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyProgressBar
 import app.marlboroadvance.mpvex.ui.browser.emby.components.VideoFeedIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyItemActionsDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaActionsDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonList
 import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
 import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
 import app.marlboroadvance.mpvex.ui.player.feed.FeedItem
@@ -193,6 +207,18 @@ data class EmbyLibraryScreen(
     val sortOrderOverride by browserPreferences.embyLibrarySortOrder.collectAsState()
     val cardStyleName by browserPreferences.embyLibraryCardStyle.collectAsState()
     val cardStyle = remember(cardStyleName) { embyCardStyleFromName(cardStyleName) }
+
+    // ── 视图模式 / 网格列数 ──
+    // 和排序一样按用户选择持久化：从文件夹返回、重启 App 都保留上次选的排法。
+    // （必须放在 browserPreferences 声明之后，否则引用不到。）
+    val savedViewMode by browserPreferences.embyLibraryViewMode.collectAsState()
+    val viewMode = remember(savedViewMode) { EmbyLibraryViewMode.fromKey(savedViewMode) }
+    val gridColumns by browserPreferences.embyLibraryGridColumns.collectAsState()
+    // 卡片右上角心形快捷收藏开关（默认开）。关掉后退回只读角标。
+    val quickFavoriteEnabled by browserPreferences.embyQuickFavorite.collectAsState()
+    // 快捷收藏的反馈 Toast：复用同一个实例、每次先 cancel，
+    // 避免连点几张卡片时 Toast 在系统里排成一长串、越积越久。
+    val quickFavoriteToast = remember { mutableStateOf<Toast?>(null) }
     // 没手动切过时跟随该排序项的自然方向：名称 / 年份升序，其余（加入时间、评分…）降序
     val sortOrder = sortOrderOverride.takeIf { it.isNotBlank() }
       ?: if (sortBy == "SortName" || sortBy == "ProductionYear") "Ascending" else "Descending"
@@ -746,6 +772,93 @@ data class EmbyLibraryScreen(
           true
         }
 
+    // 搜索结果的类型筛选统一由服务端的类型筛选条（`EmbySearchFilterRow`）负责 ——
+    // 这里原本还叠了一层「本地按 Type 切一刀」的结果分栏，但两行 chip 的标签一模一样
+    // （全部 / 电影 / 剧集 / 单集 / 合集 / 演员），用户根本分不清哪个才算数，属于重复入口。
+    // 已删掉本地那一层：类型筛选只保留一处，改它就重新查库，语义唯一。
+    val displayItems = visibleItems
+
+    /**
+     * 卡片右上角心形「快捷收藏」。
+     *
+     * 之前的实现只把请求发出去、**完全不动本地列表**：服务器那边收藏成功了，
+     * 卡片上的红心却仍是旧样子（未收藏还是描边），要点进详情页再退回来才同步 ——
+     * 就是用户反馈的「能触发收藏但红心不更新」。
+     *
+     * 这里改成**乐观更新 + 失败回滚**：
+     * 1. 先按取反把本地这一条（以及进程内缓存）改掉，红心立刻变，不用等网络往返；
+     * 2. 立刻弹一句 Toast 反馈（已收藏 / 已取消收藏），点一下就有回应，不必盯着红心看；
+     * 3. 再发请求，失败就把状态改回去、用失败提示替换掉刚才那句成功提示，
+     *    绝不让界面停在假的成功态上；
+     * 4. 同时写 [EmbyLibraryCache]，切换筛选条件（cacheKey 变）重新进列表时红心不会弹回。
+     */
+    fun toggleFavoriteQuick(
+      item: EmbyItem,
+      srv: EmbyServer,
+    ) {
+      val id = item.Id ?: return
+      // 目标状态取「当前列表里的真实状态」，而不是入参 item 里的快照：
+      // 卡片按 Id 复用、回调又可能晚一拍，入参未必是最新的（曾经就是它导致
+      // 「只能收藏、取消不掉」）。列表状态是我们刚刚乐观改过的那一份，最可信。
+      val liveFavorite =
+        items.firstOrNull { it.Id == id }?.UserData?.IsFavorite
+          ?: EmbyLibraryCache.favoriteStateOf(id)
+          ?: (item.UserData?.IsFavorite == true)
+      val target = !liveFavorite
+
+      fun applyLocal(fav: Boolean) {
+        items =
+          items.map { cur ->
+            if (cur.Id == id) {
+              cur.copy(UserData = (cur.UserData ?: EmbyUserData()).copy(IsFavorite = fav))
+            } else {
+              cur
+            }
+          }
+        EmbyLibraryCache.updateFavorite(id, fav)
+      }
+
+      // 复用同一个 Toast 实例：新的先 cancel 掉旧的，连点也不会排队堆积。
+      fun toast(msg: String) {
+        quickFavoriteToast.value?.cancel()
+        quickFavoriteToast.value =
+          Toast.makeText(context, msg, Toast.LENGTH_SHORT).also { it.show() }
+      }
+
+      applyLocal(target)
+      // 乐观更新已经把红心换色了，这里补一句明确反馈，点下去立刻有回应。
+      toast(if (target) "已收藏" else "已取消收藏")
+      scope.launch {
+        val result = viewModel.toggleFavorite(srv, item, target)
+        if (result.isFailure) {
+          applyLocal(!target)
+          toast(result.exceptionOrNull()?.message ?: "操作失败")
+        }
+      }
+    }
+
+    // 搜索联想候选：**结果里的片名 + 历史搜索词**，纯本地包含匹配。
+    //
+    // 为什么不走服务端 `/Search/Hints`：每敲一个字都发一次请求太重，而且那个端点
+    // 并非所有服务端实现（兼容层）都支持，失败时联想就整个没了。本地匹配在
+    // 没网 / 服务端不支持时照样能用，代价只是「候选只覆盖已经拉到的那批结果」——
+    // 对「记不全片名、想点一下补全」这个诉求已经够了。
+    val searchSuggestions = remember(searchQuery, searchHistory, displayItems) {
+      val q = searchQuery.trim()
+      if (q.isEmpty()) {
+        emptyList()
+      } else {
+        val fromHistory = searchHistory.filter {
+          it.contains(q, ignoreCase = true) && !it.equals(q, ignoreCase = true)
+        }
+        val fromItems = displayItems.asSequence()
+          .mapNotNull { it.Name }
+          .filter { it.contains(q, ignoreCase = true) && !it.equals(q, ignoreCase = true) }
+          .distinct()
+        (fromHistory + fromItems).distinct().take(8).toList()
+      }
+    }
+
     /**
      * 「随机播放」的取数。**口径：随机 = 把当前屏幕上这批结果打乱。**
      *
@@ -950,6 +1063,14 @@ data class EmbyLibraryScreen(
             // 选完立刻落盘：下次进这个库（含从文件夹返回、重启 App）都停在这一档
             browserPreferences.embyLibraryCategory(libraryId).set(it.name)
           },
+          // 「只看未看」快捷 chip：对应筛选里的 playedFilter，这里给一个一键入口 ——
+          // 找「还没看的」是最高频的诉求，不该藏在筛选弹窗里。
+          // 只在「未看 / 不限」之间循环，不动已看筛选（那个仍归筛选弹窗管）。
+          unwatchedOnly = playedFilter == false,
+          onToggleUnwatched = {
+            playedFilter = if (playedFilter == false) null else false
+            persistFilter()
+          },
         )
       }
 
@@ -1072,6 +1193,15 @@ data class EmbyLibraryScreen(
             }
           },
         )
+        // 搜索联想：点一下就把候选词填进输入框，省掉手动敲完整个片名
+        EmbySearchSuggestionRow(
+          suggestions = searchSuggestions,
+          onPick = { keyword ->
+            searchQuery = keyword
+            keyboardController?.hide()
+            scope.launch { searchHistoryRepository.record(keyword) }
+          },
+        )
         // 搜索的触发源不只是输入文字，还包括切排序、换类型筛选、开关「中文字幕」等 ——
         // 所以这里直接用 cacheKey 当 key：它已经聚合了所有会影响结果集的输入。
         //
@@ -1107,7 +1237,9 @@ data class EmbyLibraryScreen(
           }
           load(reset = true)
         }
-        // 类型筛选：默认「全部」不加限制；勾了电影/合集/演员这类就按类型查
+        // 类型筛选：默认「全部」不加限制；勾了电影/合集/演员这类就按类型查。
+        // 搜索里**只有这一处**类型筛选（原先下面还有一条标签完全相同的本地分栏，
+        // 已删除 —— 两个一模一样的入口会让人不知道以哪个为准）。
         EmbySearchFilterRow(
           selected = searchFilters,
           onSelectedChange = { searchFilters = it },
@@ -1125,13 +1257,9 @@ data class EmbyLibraryScreen(
       ) {
         when {
           // ── 「演员」分类：本库演员网格（头像 + 左下角作品数角标），点击进该演员的作品 ──
-          isActorListMode && !searchActive && actorLoading && actorItems.isEmpty() -> Column(
-            modifier = Modifier.align(Alignment.Center),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-          ) {
-            CircularProgressIndicator()
-          }
+          isActorListMode && !searchActive && actorLoading && actorItems.isEmpty() ->
+            // 演员是固定三列的头像网格，骨架屏也用三列，落下时不位移
+            EmbySkeletonGrid(columns = 3, ratio = 3f / 4f)
 
           isActorListMode && !searchActive && actorError != null && actorItems.isEmpty() ->
             EmbyEmptyState(
@@ -1211,19 +1339,35 @@ data class EmbyLibraryScreen(
             emptyHint = "输入关键词，搜索当前媒体库",
           )
 
-          isLoading && items.isEmpty() -> Column(
-            modifier = Modifier.align(Alignment.Center),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-          ) {
-            CircularProgressIndicator()
-            // 全量扫描可能要拉几十页，没有进度提示会让人以为卡死了
+          isLoading && items.isEmpty() -> {
+            // 骨架屏替代居中转圈：先把「待会儿会出现什么」按当前版式画出来，
+            // 内容真正落下来时不会整屏跳变。
             if (isScanning) {
-              Text(
-                text = "正在扫描媒体库… 已扫 $scanScanned" +
-                  (if (totalCount > 0) " / $totalCount" else ""),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              // 「中文字幕」全量扫描可能要拉几十页：光有骨架屏看不出还在动，
+              // 这一档额外给一个文字进度，其余情况直接用骨架屏。
+              Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+              ) {
+                CircularProgressIndicator()
+                Text(
+                  text = "正在扫描媒体库… 已扫 $scanScanned" +
+                    (if (totalCount > 0) " / $totalCount" else ""),
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+            } else if (viewMode == EmbyLibraryViewMode.COMPACT) {
+              EmbySkeletonList()
+            } else {
+              EmbySkeletonGrid(
+                columns = if (cardStyle == EmbyCardStyle.POSTER) {
+                  gridColumns.coerceIn(2, 6)
+                } else {
+                  3
+                },
+                ratio = cardStyle.ratio,
               )
             }
           }
@@ -1243,59 +1387,101 @@ data class EmbyLibraryScreen(
           )
 
           else -> {
-            LazyVerticalGrid(
-              state = gridState,
-              // 海报固定一行三个；横版 / 横幅样式本身更宽，仍按最小宽度自适应，避免被压得过小
-              columns =
-                if (cardStyle == EmbyCardStyle.POSTER) {
-                  GridCells.Fixed(3)
-                } else {
-                  GridCells.Adaptive(minSize = cardStyle.width)
-                },
-              modifier = Modifier.fillMaxSize(),
-              contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 96.dp),
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-              verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-              items(visibleItems, key = { it.Id ?: it.Name ?: "" }) { item ->
-                val s = server ?: return@items
-                val itemId = item.Id
-                // 文件夹 / 合集这类容器条目自身没有封面图，改用内部视频的缩略图拼宫格
-                val needsMosaic =
-                  itemId != null && isFolderLike(item) && item.ImageTags["Primary"] == null
-                val folderCover: List<String>? = if (needsMosaic && itemId != null) {
-                  val cached = folderCovers[itemId]
-                  LaunchedEffect(itemId, s.id) {
-                    if (cached == null && EmbyFolderCoverCache.beginLoad(itemId)) {
-                      val urls = viewModel.loadFolderCoverUrls(s, itemId, 4)
-                      EmbyFolderCoverCache.put(itemId, urls)
-                      folderCovers[itemId] = urls
+            when (viewMode) {
+              // ── 紧凑列表：一行一条（左侧小海报 + 片名 / 副标题 + 心形），信息密度最高 ──
+              EmbyLibraryViewMode.COMPACT -> LazyVerticalGrid(
+                state = gridState,
+                // 复用网格容器、只留一列，而不是换成 LazyColumn：这样能共用同一个
+                // 下拉刷新所依赖的 gridState，不必再维护第二份滚动状态。
+                columns = GridCells.Fixed(1),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+              ) {
+                items(displayItems, key = { it.Id ?: it.Name ?: "" }) { item ->
+                  val s = server ?: return@items
+                  EmbyCompactRow(
+                    title = viewModel.displayTitle(item),
+                    subtitle = itemSubtitle(item),
+                    imageUrl = viewModel.imageUrl(s, item, "Primary", 240),
+                    progress = itemProgress(item),
+                    isFavorite = item.UserData?.IsFavorite == true,
+                    onClick = { openItem(item, backStack, s, context) },
+                    onLongClick = { offset ->
+                      actionTarget = item
+                      menuAnchor = offset
+                    },
+                    onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
+                  )
+                }
+              }
+
+              // ── 网格 / 年份时间轴：都走同一个网格，时间轴只是多插了年份标题 ──
+              else -> LazyVerticalGrid(
+                state = gridState,
+                // 海报按用户选的每行个数（2~6）；横版 / 横幅样式本身更宽，
+                // 仍按最小宽度自适应，避免被压得过小。
+                columns =
+                  if (cardStyle == EmbyCardStyle.POSTER) {
+                    GridCells.Fixed(gridColumns.coerceIn(2, 6))
+                  } else {
+                    GridCells.Adaptive(minSize = cardStyle.width)
+                  },
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 96.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+              ) {
+                if (viewMode == EmbyLibraryViewMode.YEAR) {
+                  // 年份时间轴：按播出年份分组，新年份在前；没有年份的归到「年份未知」。
+                  // 标题横跨整行（span = 整行），不会被挤在某一格里。
+                  val grouped = displayItems
+                    .groupBy { it.ProductionYear ?: 0 }
+                    // 显式给出泛型参数：`compareByDescending { it }` 的 lambda 参数类型
+                    // 在这种链式上下文里推不出来，会报「缺少 operator 修饰符」
+                    .toSortedMap(compareByDescending<Int> { it })
+                  grouped.forEach { (year, group) ->
+                    item(
+                      key = "year_header_$year",
+                      span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
+                    ) {
+                      EmbyYearHeader(if (year > 0) "$year" else "年份未知", group.size)
+                    }
+                    items(group, key = { it.Id ?: it.Name ?: "" }) { item ->
+                      val s = server ?: return@items
+                      EmbyLibraryMediaCell(
+                        item = item,
+                        server = s,
+                        viewModel = viewModel,
+                        cardStyle = cardStyle,
+                        folderCovers = folderCovers,
+                        onClick = { openItem(item, backStack, s, context) },
+                        onLongClick = { offset ->
+                          actionTarget = item
+                          menuAnchor = offset
+                        },
+                        onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
+                      )
                     }
                   }
-                  cached
                 } else {
-                  null
+                  items(displayItems, key = { it.Id ?: it.Name ?: "" }) { item ->
+                    val s = server ?: return@items
+                    EmbyLibraryMediaCell(
+                      item = item,
+                      server = s,
+                      viewModel = viewModel,
+                      cardStyle = cardStyle,
+                      folderCovers = folderCovers,
+                      onClick = { openItem(item, backStack, s, context) },
+                      onLongClick = { offset ->
+                        actionTarget = item
+                        menuAnchor = offset
+                      },
+                      onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
+                    )
+                  }
                 }
-
-                EmbyMediaCard(
-                  title = viewModel.displayTitle(item),
-                  subtitle = itemSubtitle(item),
-                  imageUrl = viewModel.imageUrl(s, item, imageTypeFor(cardStyle), 480),
-                  fallbackImageUrl = viewModel.imageUrl(s, item, "Primary", 480),
-                  mosaicUrls = folderCover,
-                  // 搜索时勾「演员」搜出来的 Person 也带作品数，跟演员分类里同一套角标
-                  badgeText = item.ChildCount
-                    ?.takeIf { item.Type == "Person" && it > 0 }
-                    ?.toString(),
-                  progress = itemProgress(item),
-                  isFavorite = item.UserData?.IsFavorite == true,
-                  onClick = { openItem(item, backStack, s, context) },
-                  style = cardStyle,
-                  fillWidth = cardStyle == EmbyCardStyle.POSTER,
-                  // 长按 = 弹出操作框。文件夹与媒体是两套菜单：
-                  // 文件夹是「扫描 / 刷新元数据」，媒体是「收藏 / 已看 / 编辑元数据 / 编辑图片 / 刮削 / 刷新 / 删除」
-                  onLongClick = if (itemId != null) { { offset -> actionTarget = item; menuAnchor = offset } } else null,
-                )
               }
             }
           }
@@ -1662,26 +1848,91 @@ data class EmbyLibraryScreen(
     }
 
 
-    // 视图样式选择
+    // 视图设置：**排布方式**（网格 / 紧凑列表 / 年份时间轴）+ 卡片样式 + 每行个数。
+    // 合成一个弹窗（需求里说的「合并视图入口」）：原来这里只有卡片样式，
+    // 现在把「怎么排」「排几个」也收进来，一处就能把整个列表外观调完。
     if (showStyleDialog) {
       AlertDialog(
         onDismissRequest = { showStyleDialog = false },
-        title = { Text("视图样式") },
+        title = { Text("视图") },
         text = {
-          Column {
-            EmbyCardStyle.entries.forEach { style ->
+          Column(
+            modifier = Modifier
+              .heightIn(max = 440.dp)
+              .verticalScroll(rememberScrollState()),
+          ) {
+            Text("排布方式", style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(4.dp))
+            EmbyLibraryViewMode.entries.forEach { mode ->
               Row(
                 modifier = Modifier
                   .fillMaxWidth()
-                  .padding(vertical = 4.dp),
+                  .padding(vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
               ) {
                 RadioButton(
-                  selected = style == cardStyle,
-                  onClick = { browserPreferences.embyLibraryCardStyle.set(style.name) },
+                  selected = mode == viewMode,
+                  onClick = { browserPreferences.embyLibraryViewMode.set(mode.key) },
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(style.label)
+                Text(mode.label)
+              }
+            }
+
+            // 紧凑列表没有「卡片」这个概念，样式与列数对它都没有意义，整块收掉
+            if (viewMode != EmbyLibraryViewMode.COMPACT) {
+              Spacer(modifier = Modifier.height(12.dp))
+              Text("卡片样式", style = MaterialTheme.typography.titleSmall)
+              Spacer(modifier = Modifier.height(4.dp))
+              EmbyCardStyle.entries.forEach { style ->
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  RadioButton(
+                    selected = style == cardStyle,
+                    onClick = { browserPreferences.embyLibraryCardStyle.set(style.name) },
+                  )
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Text(style.label)
+                }
+              }
+            }
+
+            // 列数只对「海报」生效：背景图 / 横幅是宽图，列数由自身最小宽度自适应决定，
+            // 硬塞进固定列数会被压得又窄又小。
+            if (viewMode != EmbyLibraryViewMode.COMPACT && cardStyle == EmbyCardStyle.POSTER) {
+              Spacer(modifier = Modifier.height(12.dp))
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                  text = "每行个数",
+                  style = MaterialTheme.typography.titleSmall,
+                  modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                  onClick = {
+                    browserPreferences.embyLibraryGridColumns
+                      .set((gridColumns - 1).coerceAtLeast(2))
+                  },
+                  enabled = gridColumns > 2,
+                ) {
+                  Icon(Icons.Default.Remove, contentDescription = "减少每行个数")
+                }
+                Text(
+                  text = gridColumns.coerceIn(2, 6).toString(),
+                  style = MaterialTheme.typography.titleMedium,
+                )
+                IconButton(
+                  onClick = {
+                    browserPreferences.embyLibraryGridColumns
+                      .set((gridColumns + 1).coerceAtMost(6))
+                  },
+                  enabled = gridColumns < 6,
+                ) {
+                  Icon(Icons.Default.Add, contentDescription = "增加每行个数")
+                }
               }
             }
           }
@@ -1766,9 +2017,253 @@ data class EmbyLibraryScreen(
   }
 }
 
+/**
+ * 媒体库网格里的单张媒体卡。
+ *
+ * 抽成独立函数是为了让「网格」与「年份时间轴」共用同一份渲染逻辑 ——
+ * 时间轴相对网格只多了年份组标题，卡片本身完全一样。
+ */
+@Composable
+private fun EmbyLibraryMediaCell(
+  item: EmbyItem,
+  server: EmbyServer,
+  viewModel: EmbyViewModel,
+  cardStyle: EmbyCardStyle,
+  folderCovers: MutableMap<String, List<String>>,
+  onClick: () -> Unit,
+  onLongClick: ((androidx.compose.ui.geometry.Offset) -> Unit)?,
+  onToggleFavorite: (() -> Unit)?,
+) {
+  val itemId = item.Id
+  // 文件夹 / 合集这类容器条目自身没有封面图，改用内部视频的缩略图拼宫格
+  val needsMosaic = itemId != null && isFolderLike(item) && item.ImageTags["Primary"] == null
+  val folderCover: List<String>? = if (needsMosaic && itemId != null) {
+    val cached = folderCovers[itemId]
+    LaunchedEffect(itemId, server.id) {
+      if (cached == null && EmbyFolderCoverCache.beginLoad(itemId)) {
+        val urls = viewModel.loadFolderCoverUrls(server, itemId, 4)
+        EmbyFolderCoverCache.put(itemId, urls)
+        folderCovers[itemId] = urls
+      }
+    }
+    cached
+  } else {
+    null
+  }
+
+  EmbyMediaCard(
+    title = viewModel.displayTitle(item),
+    subtitle = itemSubtitle(item),
+    imageUrl = viewModel.imageUrl(server, item, imageTypeFor(cardStyle), 480),
+    fallbackImageUrl = viewModel.imageUrl(server, item, "Primary", 480),
+    mosaicUrls = folderCover,
+    // 搜索时勾「演员」搜出来的 Person 也带作品数，跟演员分类里同一套角标
+    badgeText = item.ChildCount?.takeIf { item.Type == "Person" && it > 0 }?.toString(),
+    progress = itemProgress(item),
+    isFavorite = item.UserData?.IsFavorite == true,
+    onClick = onClick,
+    style = cardStyle,
+    fillWidth = cardStyle == EmbyCardStyle.POSTER,
+    onLongClick = onLongClick,
+    onToggleFavorite = onToggleFavorite,
+  )
+}
+
+/**
+ * 紧凑列表的一行。
+ *
+ * 左侧一块 3:4 小海报（进度条贴在它底部），右侧片名 / 副标题，最右是心形快捷收藏。
+ * 不放封面宫格、作品数角标这类装饰 —— 这一档的诉求就是「一屏扫到尽可能多条」。
+ */
+@Composable
+private fun EmbyCompactRow(
+  title: String,
+  subtitle: String?,
+  imageUrl: String?,
+  progress: Float?,
+  isFavorite: Boolean,
+  onClick: () -> Unit,
+  onLongClick: ((androidx.compose.ui.geometry.Offset) -> Unit)?,
+  onToggleFavorite: (() -> Unit)?,
+) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .clip(RoundedCornerShape(10.dp))
+      .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+      .combinedClickable(
+        onClick = onClick,
+        // 紧凑行拿不到手指坐标（combinedClickable 不回传），长按菜单就锚在左上角。
+        // 这一档本来就是「快速扫列表」的用法，菜单落哪里不影响可用性。
+        onLongClick = { onLongClick?.invoke(androidx.compose.ui.geometry.Offset.Zero) },
+      )
+      .padding(6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Box(
+      modifier = Modifier
+        .width(52.dp)
+        .aspectRatio(3f / 4f)
+        .clip(RoundedCornerShape(6.dp))
+        .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+      EmbyImage(
+        url = imageUrl,
+        contentDescription = title,
+        modifier = Modifier.fillMaxSize(),
+        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+      )
+      if (progress != null && progress > 0f) {
+        EmbyProgressBar(
+          progress = progress,
+          modifier = Modifier
+            .align(Alignment.BottomStart)
+            .fillMaxWidth()
+            .height(3.dp),
+        )
+      }
+    }
+    Spacer(modifier = Modifier.width(10.dp))
+    Column(modifier = Modifier.weight(1f)) {
+      Text(
+        text = title,
+        style = MaterialTheme.typography.bodyMedium,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+      if (!subtitle.isNullOrBlank()) {
+        Text(
+          text = subtitle,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+    }
+    val onFav = onToggleFavorite
+    if (onFav != null) {
+      IconButton(onClick = onFav) {
+        Icon(
+          imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+          contentDescription = if (isFavorite) "取消收藏" else "收藏",
+          tint = if (isFavorite) {
+            MaterialTheme.colorScheme.primary
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          },
+          modifier = Modifier.size(20.dp),
+        )
+      }
+    } else if (isFavorite) {
+      // 快捷收藏关闭：退回只读角标，只在已收藏时露一颗实心红心，不占可点区域
+      Icon(
+        imageVector = Icons.Default.Favorite,
+        contentDescription = "已收藏",
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier
+          .padding(horizontal = 8.dp)
+          .size(20.dp),
+      )
+    }
+  }
+}
+
+/** 年份时间轴的组标题：横跨整行，左边年份、右边条数 */
+@Composable
+private fun EmbyYearHeader(year: String, count: Int) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(top = 8.dp, bottom = 2.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text = year,
+      style = MaterialTheme.typography.titleMedium,
+    )
+    Spacer(modifier = Modifier.width(8.dp))
+    Text(
+      text = "$count 项",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+/**
+ * 搜索联想行：把候选词排成一排小 chip，点一下直接填进输入框。
+ *
+ * 用横向 chip 而不是下拉列表：下拉会盖住下面的结果（用户可能正想边看边改词），
+ * chip 只占一行、也更好点。
+ */
+@Composable
+private fun EmbySearchSuggestionRow(
+  suggestions: List<String>,
+  onPick: (String) -> Unit,
+) {
+  if (suggestions.isEmpty()) return
+  androidx.compose.foundation.lazy.LazyRow(
+    contentPadding = PaddingValues(horizontal = 16.dp),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    items(suggestions.size) { index ->
+      val keyword = suggestions[index]
+      FilterChip(
+        selected = false,
+        onClick = { onPick(keyword) },
+        label = {
+          Text(
+            text = keyword,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        },
+      )
+    }
+  }
+}
+
 /** 不同卡片样式使用的图片类型：横版样式优先用背景图，海报用主封面 */
 private fun imageTypeFor(style: EmbyCardStyle): String =
   if (style == EmbyCardStyle.POSTER) "Primary" else "Backdrop"
+
+/**
+ * 媒体库的**视图模式**。与 [EmbyCardStyle]（卡片长什么样）是两个正交的轴：
+ * 这个决定「怎么排」，那个决定「每张卡长什么样」。
+ *
+ * - [GRID]：网格（一行 2~6 个，样式可选海报 / 背景图 / 横幅）—— 默认
+ * - [COMPACT]：紧凑列表，一行一条，左侧小图 + 标题 / 副标题，信息密度最高
+ * - [YEAR]：年份时间轴，按播出年份分组的网格，找老片快
+ */
+private enum class EmbyLibraryViewMode {
+  GRID,
+  COMPACT,
+  YEAR,
+  ;
+
+  /** 持久化键（英文），**不要改** —— 改了老用户的视图偏好会失效 */
+  val key: String
+    get() =
+      when (this) {
+        GRID -> "Grid"
+        COMPACT -> "Compact"
+        YEAR -> "Year"
+      }
+
+  val label: String
+    get() =
+      when (this) {
+        GRID -> "网格"
+        COMPACT -> "紧凑列表"
+        YEAR -> "年份时间轴"
+      }
+
+  companion object {
+    fun fromKey(raw: String?): EmbyLibraryViewMode =
+      entries.firstOrNull { it.key.equals(raw, ignoreCase = true) } ?: GRID
+  }
+}
 
 /**
  * 库内分类筛选。
@@ -1797,6 +2292,9 @@ private enum class EmbyCategory(
 private fun CategoryChips(
   selected: EmbyCategory,
   onSelect: (EmbyCategory) -> Unit,
+  /** 「只看未看」快捷 chip 是否打开 */
+  unwatchedOnly: Boolean = false,
+  onToggleUnwatched: (() -> Unit)? = null,
 ) {
   androidx.compose.foundation.lazy.LazyRow(
     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
@@ -1809,6 +2307,28 @@ private fun CategoryChips(
         onClick = { onSelect(category) },
         label = { Text(category.label) },
       )
+    }
+    // 「只看未看」：与分类并列的快捷开关 —— 分类管「看哪个来源」，
+    // 它管「看没看过」，两个轴独立，所以并排放而不是塞进分类里。
+    if (onToggleUnwatched != null) {
+      item(key = "unwatched_only") {
+        FilterChip(
+          selected = unwatchedOnly,
+          onClick = onToggleUnwatched,
+          label = { Text("只看未看") },
+          leadingIcon = if (unwatchedOnly) {
+            {
+              Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+              )
+            }
+          } else {
+            null
+          },
+        )
+      }
     }
   }
 }
@@ -2404,6 +2924,49 @@ internal object EmbyLibraryCache {
       }
     }
     lastRemovedItemId = itemId
+  }
+
+  /**
+   * 同步某条媒体的收藏状态到所有缓存分桶。
+   *
+   * 卡片上的快捷收藏只改了当前列表的组合状态，换个筛选条件（cacheKey 变）重新进列表
+   * 时会从缓存取值 —— 缓存不同步的话，红心会「弹回」未收藏。这里把每个分桶里
+   * 同 Id 的条目就地替换成新状态。
+   */
+  @Synchronized
+  fun updateFavorite(
+    itemId: String,
+    isFavorite: Boolean,
+  ) {
+    entries.values.forEach { entry ->
+      if (entry.items.any { it.Id == itemId }) {
+        entry.items =
+          entry.items.map { item ->
+            if (item.Id == itemId) {
+              item.copy(
+                UserData = (item.UserData ?: EmbyUserData()).copy(IsFavorite = isFavorite),
+              )
+            } else {
+              item
+            }
+          }
+      }
+    }
+  }
+
+  /**
+   * 查某条媒体在缓存里的收藏状态。
+   *
+   * 卡片心形的点击回调可能比列表状态晚一拍（或拿到旧快照），用它兜底取真实状态，
+   * 避免「明明已收藏、却还按收藏方向再发一次请求」——那就是「取消不掉收藏」的成因。
+   * 缓存里根本没有这条时返回 null，由调用方决定退回哪个值。
+   */
+  @Synchronized
+  fun favoriteStateOf(itemId: String): Boolean? {
+    entries.values.forEach { entry ->
+      entry.items.firstOrNull { it.Id == itemId }?.let { return it.UserData?.IsFavorite ?: false }
+    }
+    return null
   }
 
   /** 最近使用的挪到末尾，超出上限时淘汰最久未使用的 */

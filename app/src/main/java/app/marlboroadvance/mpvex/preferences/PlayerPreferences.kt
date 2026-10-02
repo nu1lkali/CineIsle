@@ -16,7 +16,14 @@ class PlayerPreferences(
   val showDynamicSpeedOverlay = preferenceStore.getBoolean("show_dynamic_speed_overlay", true)
   val showDoubleTapOvals = preferenceStore.getBoolean("show_double_tap_ovals", true)
   val showSeekTimeWhileSeeking = preferenceStore.getBoolean("show_seek_time_while_seeking", true)
-  /** 左下角悬浮的「上一条 / 下一条」小切换按钮；控制条显示期间它会自动让位 */
+  /**
+   * 左下角悬浮的「上一条 / 下一条」小切换按钮。
+   *
+   * 它是**控制条收起时**才出现的那一层常驻件：不用呼出控制条也能切上/下一条。
+   * 控制条一展开，中部已有大的上一集/下一集，这个小件自动让位。
+   * 另有三种情况不显示：设置关掉（本项）、队列里没有上/下一条（单文件播放）、
+   * 以及播放队列弹窗展开期间（否则会浮在弹窗之上压住左下角）。
+   */
   val showFloatingPlaylistSwitcher = preferenceStore.getBoolean("show_floating_playlist_switcher", true)
   val usePreciseSeeking = preferenceStore.getBoolean("use_precise_seeking", false)
 
@@ -67,6 +74,17 @@ class PlayerPreferences(
   val useWavySeekbar = preferenceStore.getBoolean("use_wavy_seekbar", true)
 
   val customSkipDuration = preferenceStore.getInt("custom_skip_duration", 90)
+
+  /**
+   * GIF 录制的输出宽度（px，等比缩放）。
+   *
+   * GIF 只有 256 色，宽度就是「清晰度 ↔ 体积」的主开关，而体积是**按宽度平方**涨的：
+   * 同一段 5 秒画面实测 480 约 1.3~8MB、640 约 2~10MB、960 约 3.6~9MB、1280 约 6~17MB。
+   * **默认 480** 兼顾两者；960 / 1280 用来看清细节（脸、字幕）。
+   * 录制面板里的「清晰度」五档写的就是这个值（与 GifRecorder.WIDTH_OPTIONS 对应），
+   * 实际输出还会封顶到视频自身分辨率（源比目标窄时不放大）。
+   */
+  val gifWidth = preferenceStore.getInt("gif_width", 480)
 
   val repeatMode = preferenceStore.getEnum("repeat_mode", RepeatMode.OFF)
   val shuffleEnabled = preferenceStore.getBoolean("shuffle_enabled", false)
@@ -145,6 +163,17 @@ class PlayerPreferences(
   val preloadNextVideo = preferenceStore.getBoolean("preload_next_video", false)
 
   val autoPiPOnNavigation = preferenceStore.getBoolean("auto_pip_on_navigation", false)
+
+  /**
+   * 自动裁切黑边（cropdetect）。
+   *
+   * 打开后：每次加载新文件都探测一次画面有效区域，裁掉四周黑边 ——
+   * 典型场景是老片 / 4:3 片源在宽屏上留下的上下黑边，以及少数压制时自带黑边的片子。
+   *
+   * 默认**关闭**：探测要额外跑几百毫秒的滤镜，而且个别母带自带很窄的黑边，
+   * 会被一并裁掉。是否值得取决于片源，交给用户自己决定。
+   */
+  val autoCropBlackBars = preferenceStore.getBoolean("auto_crop_black_bars", false)
 
   val keepScreenOnWhenPaused = preferenceStore.getBoolean("keep_screen_on_when_paused", false)
 

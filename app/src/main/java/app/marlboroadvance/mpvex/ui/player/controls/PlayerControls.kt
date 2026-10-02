@@ -614,8 +614,16 @@ fun PlayerControls(
                   // Simple compact indicator
                   CompactSpeedIndicator(currentSpeed = currentSpeed)
                 } else {
-                  // Full speed control slider
-                  SpeedControlSlider(currentSpeed = currentSpeed)
+                  // Full speed control slider —— 带上 0.05 步进的微调按钮
+                  SpeedControlSlider(
+                    currentSpeed = currentSpeed,
+                    onSpeedChange = { raw ->
+                      // 外部传入的已经是 0.05 的整数倍，这里再兜一次防止浮点累积误差
+                      val snapped = Math.round(raw * 20) / 20f
+                      PlayerLib.setPropertyFloat("speed", snapped)
+                      PlaybackMemory.saveSpeed(playerPreferences, viewModel.seriesKey, snapped)
+                    },
+                  )
                 }
               } else {
                 // fallback, simple indicator

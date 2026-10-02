@@ -28,6 +28,8 @@ import androidx.compose.material.icons.outlined.AspectRatio
 import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.Camera
+import androidx.compose.material.icons.outlined.Crop
+import androidx.compose.material.icons.outlined.Gif
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.SkipNext
@@ -93,6 +95,10 @@ fun MoreSheet(
   onShowSheet: (Sheets) -> Unit = {},
   /** 把当前视频 + 整份播放队列 + 进度交给 GSY 播放页（只在 mpv 播放页出现） */
   onSwitchToGsy: () -> Unit = {},
+  /** 一键「探测并裁黑边 / 还原」（cropdetect，仅 mpv），不改偏好 */
+  onToggleAutoCrop: () -> Unit = {},
+  /** 「自动裁黑边」开关：写偏好并立即生效（打开即探测，关闭即摘掉已挂的裁切） */
+  onSetAutoCrop: (Boolean) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val decoderPreferences = koinInject<DecoderPreferences>()
@@ -101,6 +107,7 @@ fun MoreSheet(
 
   val autoplayNextVideo by playerPreferences.autoplayNextVideo.collectAsState()
   val closeAfterEof by playerPreferences.closeAfterReachingEndOfVideo.collectAsState()
+  val autoCropBlackBars by playerPreferences.autoCropBlackBars.collectAsState()
 
   val enableAnime4K by decoderPreferences.enableAnime4K.collectAsState()
   val anime4kMode by decoderPreferences.anime4kMode.collectAsState()
@@ -222,6 +229,23 @@ val scope = rememberCoroutineScope()
           checked = closeAfterEof,
           onCheckedChange = { playerPreferences.closeAfterReachingEndOfVideo.set(it) },
         )
+
+        // 自动裁黑边（cropdetect）：vf 滤镜，Exo 内核没有，整行不显示
+        if (engineKind.supports(EngineFeature.VIDEO_FILTERS)) {
+          PlaybackToggleRow(
+            icon = Icons.Outlined.Crop,
+            title = stringResource(R.string.pref_auto_crop_black_bars_title),
+            summary = stringResource(
+              if (autoCropBlackBars) {
+                R.string.player_toggle_auto_crop_on
+              } else {
+                R.string.player_toggle_auto_crop_off
+              },
+            ),
+            checked = autoCropBlackBars,
+            onCheckedChange = { onSetAutoCrop(it) },
+          )
+        }
       }
 
       // ── 快捷功能 ──
@@ -254,6 +278,25 @@ val scope = rememberCoroutineScope()
           label = stringResource(R.string.player_control_video_zoom),
           onClick = { onShowSheet(Sheets.VideoZoom) },
         )
+        // 自动裁黑边：cropdetect 是 mpv 的 vf 滤镜，Exo 下没有，入口整体不显示
+        if (engineKind.supports(EngineFeature.VIDEO_FILTERS)) {
+          QuickActionItem(
+            icon = Icons.Outlined.Crop,
+            label = stringResource(R.string.player_action_auto_crop),
+            onClick = {
+              onDismissRequest()
+              onToggleAutoCrop()
+            },
+          )
+        }
+        // 录制 GIF：取帧走 mpv 的 grabThumbnail，Exo 内核没有，入口整体不显示
+        if (engineKind.supports(EngineFeature.VIDEO_FILTERS)) {
+          QuickActionItem(
+            icon = Icons.Outlined.Gif,
+            label = stringResource(R.string.player_gif_action),
+            onClick = { onShowSheet(Sheets.GifRecord) },
+          )
+        }
         // 逐帧依赖 mpv 的 frame-step / frame-back-step，章节与解码器同理 —— Exo 下无入口
         if (engineKind.supports(EngineFeature.FRAME_NAVIGATION)) {
           QuickActionItem(

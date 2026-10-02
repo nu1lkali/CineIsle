@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,6 +39,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMaintainButton
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySectionHeader
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonHistory
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyWideCard
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
@@ -123,7 +123,7 @@ fun EmbyHistoryScreen() {
         )
 
         isLoading && resumeItems.isEmpty() && historyItems.isEmpty() ->
-          CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+          EmbySkeletonHistory()
 
         error != null -> EmbyEmptyState(
           message = error ?: "加载失败",

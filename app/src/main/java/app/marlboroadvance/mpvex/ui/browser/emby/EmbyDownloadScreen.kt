@@ -136,6 +136,7 @@ object EmbyDownloadScreen : Screen {
                 task = task,
                 onPause = { viewModel.pause(task.itemId) },
                 onResume = { viewModel.resume(task.itemId) },
+                onPrioritize = { viewModel.prioritize(task.itemId) },
                 onCancel = { viewModel.remove(task.itemId, deleteFile = true) },
                 onDiscard = { viewModel.remove(task.itemId, deleteFile = false) },
                 onOpen = {
@@ -162,6 +163,7 @@ private fun DownloadTaskCard(
   task: EmbyDownloadTask,
   onPause: () -> Unit,
   onResume: () -> Unit,
+  onPrioritize: () -> Unit,
   onCancel: () -> Unit,
   onDiscard: () -> Unit,
   onOpen: () -> Unit,
@@ -210,11 +212,17 @@ private fun DownloadTaskCard(
         when (task.status) {
           EmbyDownloadStatus.RUNNING, EmbyDownloadStatus.QUEUED -> {
             OutlinedButton(onClick = onPause) { Text("暂停") }
+            // 置顶只对「排队中」有意义：正在下的那条本来就占着并发位
+            if (task.status == EmbyDownloadStatus.QUEUED) {
+              TextButton(onClick = onPrioritize) { Text("置顶") }
+            }
             TextButton(onClick = onCancel) { Text("取消") }
           }
 
           EmbyDownloadStatus.PAUSED -> {
             OutlinedButton(onClick = onResume) { Text("继续下载") }
+            // 暂停中的任务恢复后会重新排队，置顶同样影响它的启动顺序
+            TextButton(onClick = onPrioritize) { Text("置顶") }
             TextButton(onClick = onCancel) { Text("取消") }
           }
 

@@ -34,16 +34,19 @@ import org.koin.compose.koinInject
 /**
  * 左下角悬浮的「上一条 / 下一条」小切换按钮。
  *
- * 与控制条自带的上一集/下一集的区别：**它不随控件显隐**，
- * 控制条收起时仍然常驻在左下角，播放中随时可以切上一条/下一条，
- * 不用先点一下屏幕把控制条呼出来。
+ * 定位：它是**控制条收起时**那一层常驻 UI 的成员 —— 不用先点一下屏幕把控制条呼出来，
+ * 播放中随时能切上一条/下一条。控制条一旦展开，中部已经有大的上一集/下一集，
+ * 这个小件就是冗余的，所以**控制条显示期间自动让位**。
  *
  * 显隐规则（刻意做减法，避免「视觉散乱」）：
- * - 始终显示（不随控件显隐）：它是左下角常驻的小切换件，
- *   与控制条自带的上一集/下一集不抢位置（控制条中部那套是大的、居中）；
+ * - 控制条收起时显示、展开时隐藏（大的那套已经在屏幕上了）；
  * - 队列里既没有上一条也没有下一条（单文件播放）时整块隐藏，
  *   一排灰按钮挂着没有意义；
- * - 设置里可以整体关掉（[PlayerPreferences.showFloatingPlaylistSwitcher]）。
+ * - **队列弹窗（[Sheets.Playlist]）展开时隐藏**：本页里它是最后绘制的，
+ *   会浮在弹窗之上压住弹窗左下角；弹窗关掉后按上面的规则恢复。
+ *   （注意这条不能省：打开弹窗时控制条会被收起，只靠 `!controlsShown` 反而会把它放出来）
+ * - 设置里可以整体关掉（[PlayerPreferences.showFloatingPlaylistSwitcher]），
+ *   关掉后任何情况下都不显示。
  */
 @Composable
 fun FloatingPlaylistSwitcher(
@@ -52,12 +55,20 @@ fun FloatingPlaylistSwitcher(
 ) {
   val playerPreferences = koinInject<PlayerPreferences>()
   val switcherEnabled by playerPreferences.showFloatingPlaylistSwitcher.collectAsState()
+  // 控制条展开时让位给中部那套大的上一集/下一集；收起时才由它接管这一角
+  val controlsShown by viewModel.controlsShown.collectAsState()
+  // 队列弹窗展开时也收起（否则它会画在弹窗之上压住左下角）；关闭后按上面的规则恢复
+  val sheetShown by viewModel.sheetShown.collectAsState()
 
   val hasPrev = viewModel.hasPrevious()
   val hasNext = viewModel.hasNext()
 
   AnimatedVisibility(
-    visible = switcherEnabled && (hasPrev || hasNext),
+    visible =
+      switcherEnabled &&
+        !controlsShown &&
+        sheetShown != Sheets.Playlist &&
+        (hasPrev || hasNext),
     enter = fadeIn(tween(180)),
     exit = fadeOut(tween(180)),
     modifier = modifier,

@@ -61,7 +61,10 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.ProvidePreferenceLocals
+import me.zhanghai.compose.preference.SliderPreference
+import me.zhanghai.compose.preference.SwitchPreference
 import org.koin.compose.koinInject
+import kotlin.math.roundToInt
 
 @Serializable
 object PreferencesScreen : Screen {
@@ -348,6 +351,99 @@ object PreferencesScreen : Screen {
             }
           }
           
+          // Emby Media Library Section
+          item {
+            PreferenceSectionHeader(title = "Emby 媒体库")
+          }
+
+          item {
+            val browserPreferences = koinInject<BrowserPreferences>()
+            val quickFavorite by browserPreferences.embyQuickFavorite.collectAsState()
+            val randomGenreRecommend by browserPreferences.embyRandomGenreRecommend.collectAsState()
+            val showRecommendations by browserPreferences.embyShowRecommendations.collectAsState()
+            PreferenceCard {
+              // 卡片右上角心形快捷收藏：点一下即可收藏 / 取消收藏
+              SwitchPreference(
+                value = quickFavorite,
+                onValueChange = { browserPreferences.embyQuickFavorite.set(it) },
+                title = { Text(text = "卡片快捷收藏") },
+                summary = {
+                  Text(
+                    text = "媒体库卡片右上角显示可点的收藏心形；关闭后只作「已收藏」只读角标",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              // 详情页推荐总开关：关闭后「推荐」与「同类型推荐」在详情页整块不显示
+              SwitchPreference(
+                value = showRecommendations,
+                onValueChange = { browserPreferences.embyShowRecommendations.set(it) },
+                title = { Text(text = "详情页推荐") },
+                summary = {
+                  Text(
+                    text = "详情页显示「推荐」与「同类型推荐」；关闭后详情页不再展示推荐内容",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              // 详情页「同类型」随机选取类型：一部片常属多个类型，随机后每次打开题材不同
+              SwitchPreference(
+                value = randomGenreRecommend,
+                onValueChange = { browserPreferences.embyRandomGenreRecommend.set(it) },
+                title = { Text(text = "同类型推荐随机选取类型") },
+                summary = {
+                  Text(
+                    text = "详情页「同类型」每次从本片所属的多个类型里随机挑一个；关闭则固定用第一个类型",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+            }
+          }
+
+          item {
+            // 卡片外观（圆角 / 角标）—— 收口成设置，改一次全 App 的 Emby 卡片一起变
+            val browserPreferences = koinInject<BrowserPreferences>()
+            val cardCorner by browserPreferences.embyCardCorner.collectAsState()
+            val showCardBadges by browserPreferences.embyShowCardBadges.collectAsState()
+            PreferenceCard {
+              SliderPreference(
+                value = cardCorner.toFloat(),
+                onValueChange = { browserPreferences.embyCardCorner.set(it.roundToInt()) },
+                sliderValue = cardCorner.toFloat(),
+                onSliderValueChange = { browserPreferences.embyCardCorner.set(it.roundToInt()) },
+                title = { Text(text = "卡片圆角") },
+                valueRange = 0f..24f,
+                summary = {
+                  Text(
+                    text = "当前 ${cardCorner}dp · 全 App 的 Emby 卡片统一圆角",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              SwitchPreference(
+                value = showCardBadges,
+                onValueChange = { browserPreferences.embyShowCardBadges.set(it) },
+                title = { Text(text = "显示封面角标") },
+                summary = {
+                  Text(
+                    text = "在封面上显示播放进度条 / 作品数等角标；关闭后卡片更干净",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+            }
+          }
+
           // Data & Cache Section
           item {
             PreferenceSectionHeader(title = "数据与缓存")

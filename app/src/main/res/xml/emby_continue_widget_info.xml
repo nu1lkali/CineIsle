@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面小组件的配置：尺寸、更新周期、预览图、配置 Activity（无）。
+
+  updatePeriodMillis 给 30 分钟 —— 系统能接受的最小粒度之一，且系统本身会
+  按电量/流量节流。真正需要「立刻刷新」的时机（播放完一集、下拉刷新）
+  由 App 侧主动发广播触发，不指望这个周期。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:initialLayout="@layout/widget_emby_continue"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

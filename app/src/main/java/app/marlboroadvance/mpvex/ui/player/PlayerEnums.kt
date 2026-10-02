@@ -111,6 +111,8 @@ enum class Sheets {
   Playlist,
   FrameNavigation,
   Cast,
+  /** 录制 GIF 片段（3~10 秒） */
+  GifRecord,
 }
 
 enum class Panels {

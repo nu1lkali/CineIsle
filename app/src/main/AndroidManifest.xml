@@ -411,6 +411,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- 桌面小组件：「继续观看」（3 条最近没看完的内容） -->
+        <receiver
+            android:name=".widget.EmbyContinueWatchingWidget"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/emby_continue_widget_info" />
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"

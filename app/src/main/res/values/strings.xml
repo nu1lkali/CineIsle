@@ -1,5 +1,7 @@
 <resources>
   <string name="app_name" translatable="false">影屿</string>
+  <string name="widget_continue_watching">Continue Watching</string>
+  <string name="widget_continue_watching_empty">Nothing to continue</string>
   <string name="generic_reset">Reset</string>
   <string name="generic_share">Share</string>
   <string name="generic_confirm">Confirm</string>
@@ -190,8 +192,32 @@
   <string name="pref_audio_summary">Preferred languages, audio channels, pitch correction</string>
   <string name="pref_audio_pitch_correction_title">Enable audio pitch correction</string>
   <string name="pref_audio_pitch_correction_summary">Prevents the audio from becoming high-pitched at faster speeds and low-pitched at slower speeds</string>
-  <string name="pref_audio_volume_normalization_title">Volume normalization</string>
-  <string name="pref_audio_volume_normalization_summary">Automatically adjust audio volume to maintain consistent loudness levels</string>
+  <string name="pref_audio_volume_normalization_title">Night mode (volume leveling)</string>
+  <string name="pref_audio_volume_normalization_summary">Compress loud peaks and lift quiet dialogue — handy for late-night viewing</string>
+  <string name="pref_audio_normalization_strength">Night mode strength</string>
+  <string name="pref_audio_normalization_light">Light</string>
+  <string name="pref_audio_normalization_medium">Medium</string>
+  <string name="pref_audio_normalization_strong">Strong</string>
+  <string name="pref_auto_crop_black_bars_title">Auto-crop black bars</string>
+  <string name="pref_auto_crop_black_bars_summary">Detect and crop letterbox / pillarbox bars on every new video</string>
+  <string name="player_toggle_auto_crop_on">On — detected on every video</string>
+  <string name="player_toggle_auto_crop_off">Off — detect manually from Quick actions</string>
+  <string name="player_action_auto_crop">Auto-crop bars</string>
+  <string name="player_crop_applied">Black bars cropped</string>
+  <string name="player_crop_failed">No black bars detected</string>
+  <string name="player_crop_off">Cropping removed</string>
+  <string name="player_gif_action">Record GIF</string>
+  <string name="player_gif_title">Record a GIF clip</string>
+  <string name="player_gif_hint">Captures the next few seconds from the current position. Saved to Pictures/CineIsle. Higher quality means a larger file.</string>
+  <string name="player_gif_seconds">%1$ds</string>
+  <string name="player_gif_start">Start recording</string>
+  <string name="player_gif_recording">Recording… keep the video playing</string>
+  <string name="player_gif_saved">GIF saved to Gallery</string>
+  <string name="player_gif_failed">Couldn\'t record the GIF</string>
+  <string name="player_gif_quality">Quality</string>
+  <string name="player_gif_quality_px">%1$dP</string>
+  <string name="player_speed_decrease">Decrease speed by 0.05x</string>
+  <string name="player_speed_increase">Increase speed by 0.05x</string>
   <string name="pref_audio_channels">Audio channels</string>
   <string name="pref_audio_channels_auto">Auto</string>
   <string name="pref_audio_channels_auto_safe">Auto Safe</string>
@@ -678,6 +704,7 @@
   <string name="i18n_not_available_4k8k">Not available for 4K/8K video</string>
   <string name="i18n_now_playing">Now Playing</string>
   <string name="i18n_playing">Playing</string>
+  <string name="i18n_remove_from_queue">Remove from queue</string>
   <string name="i18n_playlist_items">%d items</string>
   <string name="i18n_switch_to_grid">Switch to Grid View</string>
   <string name="i18n_switch_to_list">Switch to List View</string>

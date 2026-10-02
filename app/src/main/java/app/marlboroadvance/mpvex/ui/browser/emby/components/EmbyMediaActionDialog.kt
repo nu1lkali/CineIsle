@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Upload
@@ -83,7 +84,9 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyRemoteImageInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyRemoteSearchResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbyPersonScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
+import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 
 /**
@@ -242,6 +245,8 @@ private fun EmbyMediaActionMenu(
   val isPlayed = item.UserData?.Played == true
   // 演员条目：裁剪到只剩收藏一项，文案也按「收藏 / 取消收藏」来
   val isPerson = item.Type?.equals("Person", ignoreCase = true) == true
+  // 「只看这位演员 / 导演」要跳作品页，用当前页栈 push（与详情页点头像同一条路由）
+  val backStack = LocalBackStack.current
 
   DropdownMenu(expanded = true, onDismissRequest = onDismissRequest) {
     DropdownMenuItem(
@@ -291,6 +296,48 @@ private fun EmbyMediaActionMenu(
           }
         },
       )
+      // 「更多 TA 出演 / 执导的作品」：取演职员表里第一个演员与第一个导演，各自跳 TA 的作品清单页
+      // （与详情页点头像同一条路由）。
+      // ⚠️ 两个身份**各自独立判断**：只有演员、没有导演的片子就只出现「出演」那一行，
+      // 不会留一个点了没反应的死项；两个都没有（条目缺演职员信息）则两行都不显示。
+      val people = item.People.orEmpty()
+      val leadActor = people.firstOrNull { it.Id != null && it.Type.equals("Actor", ignoreCase = true) }
+      val leadDirector = people.firstOrNull { it.Id != null && it.Type.equals("Director", ignoreCase = true) }
+      // 带上人名，菜单项能直接看出是谁；名字缺失时退回泛指说法
+      val leadActorName = leadActor?.Name?.takeIf { it.isNotBlank() }
+      val leadDirectorName = leadDirector?.Name?.takeIf { it.isNotBlank() }
+      if (leadActor?.Id != null) {
+        DropdownMenuItem(
+          text = { Text(leadActorName?.let { "更多 $it 出演的作品" } ?: "更多该演员的作品") },
+          leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+          onClick = {
+            onDismissRequest()
+            backStack.add(
+              EmbyPersonScreen(
+                personId = leadActor.Id,
+                personName = leadActor.Name.orEmpty(),
+                personImageTag = leadActor.PrimaryImageTag,
+              ),
+            )
+          },
+        )
+      }
+      if (leadDirector?.Id != null) {
+        DropdownMenuItem(
+          text = { Text(leadDirectorName?.let { "更多 $it 执导的作品" } ?: "更多该导演的作品") },
+          leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+          onClick = {
+            onDismissRequest()
+            backStack.add(
+              EmbyPersonScreen(
+                personId = leadDirector.Id,
+                personName = leadDirector.Name.orEmpty(),
+                personImageTag = leadDirector.PrimaryImageTag,
+              ),
+            )
+          },
+        )
+      }
       DropdownMenuItem(
         text = { Text("编辑元数据") },
         leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },

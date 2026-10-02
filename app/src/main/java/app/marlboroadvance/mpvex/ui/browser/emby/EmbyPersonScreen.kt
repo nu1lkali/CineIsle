@@ -14,15 +14,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
@@ -48,13 +51,16 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import org.koin.compose.koinInject
 
 /**
  * 演员 / 导演作品页：点详情页演职员头像进来，按 PersonIds 查 TA 参与过的条目。
@@ -79,6 +85,8 @@ data class EmbyPersonScreen(
     )
     val server by viewModel.currentServer.collectAsState()
     val scope = rememberCoroutineScope()
+    // 随机播放数量上限读用户设置，与媒体库的随机按钮同一口径
+    val browserPreferences = koinInject<BrowserPreferences>()
 
     var items by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -86,6 +94,59 @@ data class EmbyPersonScreen(
     // 演员本人的条目（含 UserData.IsFavorite）：右上角收藏红心的状态来源。
     // 进页面查一次；收藏/取消收藏成功后本地翻转，不再回查服务器。
     var personItem by remember { mutableStateOf<EmbyItem?>(null) }
+
+    // ── 作品聚合 / 筛选（纯本地，切 tab 不发请求）──
+    // 作品类型 tab：全部 / 电影 / 剧集 / 单集（按条目 Type 聚合）
+    var itemTab by remember { mutableStateOf(PersonItemTab.ALL) }
+    // 参与身份筛选：全部 / 演员 / 导演 / 编剧（按条目自带的 People 列表本地筛）
+    var roleFilter by remember { mutableStateOf(PersonRoleFilter.ALL) }
+    val visibleItems = items.filter { itemTab.matches(it) && roleFilter.matches(it, personId) }
+
+    // 「参与身份」只在**确实观察到**该身份时才提供对应 chip：
+    // 一个只演戏、从不导也不写的人，作品页再挂「导演 / 编剧」两个 chip，点下去永远是空 ——
+    // 既没用又让人以为数据缺了。这里根据已加载作品的 People 列表算出 TA 真实拥有的身份。
+    // ⚠️ 完全拿不到 People 数据时（部分服务端不返回该字段）退回「全部显示」，
+    // 与 PersonRoleFilter.matches 的宽松口径一致：不确定就都给，不制造假空白。
+    val availableRoles =
+      remember(items, personId) {
+        val observed =
+          items.asSequence()
+            .flatMap { it.People.orEmpty().asSequence() }
+            .filter { it.Id == personId }
+            .mapNotNull { it.Type?.lowercase() }
+            .toSet()
+        PersonRoleFilter.entries.filter { role ->
+          if (observed.isEmpty()) {
+            true
+          } else {
+            role.apiType == null || observed.contains(role.apiType.lowercase())
+          }
+        }
+      }
+    // 选中的身份若因数据变化不再可用（例如只演不导的人不再显示「导演」chip），
+    // 自动落回「全部」—— 否则会停在一个已隐藏的筛选上，看到一片空白。
+    LaunchedEffect(availableRoles) {
+      if (roleFilter !in availableRoles) roleFilter = PersonRoleFilter.ALL
+    }
+
+    /**
+     * 随机播放这位演员 / 导演的作品：把**当前筛选出的**列表打乱后丢给主播放器排队连播。
+     *
+     * 取「当前可见列表」而不是全量：用户筛了「只看电影」或某个身份，随机播放就该只在这些
+     * 里抽，否则点下去放出的是被筛掉的内容，跟眼前对不上。数量上限读用户设置（与媒体库的
+     * 随机按钮同一口径）。随机出的列表里常混着看过的剧，所以每条都从头放
+     * （playFromStartAll = true），避免切集时恢复进度直接跳到片尾。
+     */
+    fun startRandomPlayback() {
+      val current = server ?: return
+      val limit = browserPreferences.randomPlayCount.get().coerceIn(1, 500)
+      val pool = visibleItems.shuffled().take(limit)
+      if (pool.isEmpty()) {
+        Toast.makeText(context, "当前筛选下没有可播放的作品", Toast.LENGTH_SHORT).show()
+        return
+      }
+      viewModel.launchPlaylist(current, pool, playFromStartAll = true)
+    }
 
     suspend fun load() {
       val current = server
@@ -128,6 +189,16 @@ data class EmbyPersonScreen(
           }
         },
         actions = {
+          // ── 随机播放这位演员 / 导演的作品（在当前筛选范围内打乱连播）──
+          IconButton(
+            enabled = visibleItems.isNotEmpty(),
+            onClick = { startRandomPlayback() },
+          ) {
+            Icon(
+              imageVector = Icons.Default.Shuffle,
+              contentDescription = "随机播放作品",
+            )
+          }
           // ── 右上角收藏红心 ──
           // 与详情页同一套交互：乐观更新红心 → 请求服务器 → 按结果修正并弹 Toast；
           // 动效复用 FavoriteHeartIcon（弹跳 + 星光 + 红心渐变）。
@@ -207,22 +278,57 @@ data class EmbyPersonScreen(
             overflow = TextOverflow.Ellipsis,
           )
           Text(
-            text = if (isLoading) "加载中…" else "共 ${items.size} 部作品",
+            text = if (isLoading) "加载中…" else "共 ${visibleItems.size} 部作品",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
       }
 
+      // 类型 / 身份两组筛选 chips：只过滤本页已加载的数据，切 tab 不发请求
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(top = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+      ) {
+        FilterChipRow(
+          options = PersonItemTab.entries,
+          selected = itemTab,
+          label = { it.label },
+          onSelect = { itemTab = it },
+        )
+        FilterChipRow(
+          // 只列出这个人真实拥有的身份（见 availableRoles）：只演戏的人不再出现「导演 / 编剧」
+          options = availableRoles,
+          selected = roleFilter,
+          label = { it.label },
+          onSelect = { roleFilter = it },
+        )
+      }
+
       Box(modifier = Modifier.fillMaxSize()) {
         when {
           isLoading && items.isEmpty() -> {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            // 一行三列海报卡，和下面真实结果的版式对齐
+            EmbySkeletonGrid(columns = 3, ratio = 3f / 4f)
           }
 
           error != null && items.isEmpty() -> {
             Text(
               text = error ?: "",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier
+                .align(Alignment.Center)
+                .padding(24.dp),
+            )
+          }
+
+          // 有数据但被当前筛选条件滤空：给一句提示，别让用户以为加载失败
+          visibleItems.isEmpty() -> {
+            Text(
+              text = "这个筛选条件下没有作品",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               modifier = Modifier
@@ -241,7 +347,7 @@ data class EmbyPersonScreen(
               horizontalArrangement = Arrangement.spacedBy(8.dp),
               modifier = Modifier.fillMaxSize(),
             ) {
-              items(items, key = { it.Id ?: it.Name ?: "" }) { item ->
+              items(visibleItems, key = { it.Id ?: it.Name ?: "" }) { item ->
                 EmbyMediaCard(
                   title = item.Name ?: "",
                   subtitle = item.ProductionYear?.toString(),
@@ -260,6 +366,74 @@ data class EmbyPersonScreen(
           }
         }
       }
+    }
+  }
+}
+
+/**
+ * 作品类型聚合 tab（本地过滤，不改变服务器查询）。
+ *
+ * 演员作品清单里 Movie / Series / Episode 常常混在一起（尤其是剧集演员），
+ * 所以按 Type 拆成几个 tab，用户想只看电影或只看剧集时一键切换。
+ */
+private enum class PersonItemTab(val label: String) {
+  ALL("全部"),
+  MOVIE("电影"),
+  SERIES("剧集"),
+  EPISODE("单集"),
+  ;
+
+  fun matches(item: EmbyItem): Boolean = when (this) {
+    ALL -> true
+    MOVIE -> item.Type.equals("Movie", ignoreCase = true)
+    SERIES -> item.Type.equals("Series", ignoreCase = true)
+    EPISODE -> item.Type.equals("Episode", ignoreCase = true)
+  }
+}
+
+/**
+ * 「参与身份」筛选：同一部片里这个人可能是主演、也可能是导演 / 编剧，
+ * 按 [apiType]（Emby 的 People.Type 英文值）过滤条目的 People 列表。
+ *
+ * ⚠️ People 缺失时**不过滤**（返回 true）：服务端没返回 People 字段的情况真实存在，
+ * 若此时一律判 false，用户切到「导演」会看到空白页、误以为没有作品。
+ * 宁可宽松（多显示几条），也不要制造「筛选后没东西」的假象。
+ */
+private enum class PersonRoleFilter(val label: String, val apiType: String?) {
+  ALL("全部", null),
+  ACTOR("演员", "Actor"),
+  DIRECTOR("导演", "Director"),
+  WRITER("编剧", "Writer"),
+  ;
+
+  fun matches(item: EmbyItem, personId: String): Boolean {
+    val type = apiType ?: return true
+    val people = item.People ?: return true
+    val self = people.filter { it.Id == personId }
+    if (self.isEmpty()) return true
+    return self.any { it.Type.equals(type, ignoreCase = true) }
+  }
+}
+
+/** 一行可横向滚动的单选 FilterChip，类型 / 身份两组筛选共用。 */
+@Composable
+private fun <T> FilterChipRow(
+  options: List<T>,
+  selected: T,
+  label: (T) -> String,
+  onSelect: (T) -> Unit,
+) {
+  LazyRow(
+    contentPadding = PaddingValues(horizontal = 16.dp),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    items(options) { option ->
+      FilterChip(
+        selected = option == selected,
+        onClick = { onSelect(option) },
+        label = { Text(label(option)) },
+      )
     }
   }
 }

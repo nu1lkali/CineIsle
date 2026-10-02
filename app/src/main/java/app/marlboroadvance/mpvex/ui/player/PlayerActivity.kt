@@ -73,6 +73,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.koin.android.ext.android.inject
@@ -744,12 +745,17 @@ open class PlayerActivity :
   }
 
   private fun setupAudio() {
-    audioPreferences.audioChannels.get().let {
-      runCatching {
-        PlayerLib.setPropertyString(it.property, it.value)
-      }.onFailure { e ->
-        Log.e(TAG, "Error setting audio channels: ${it.property}=${it.value}", e)
+    val channels = audioPreferences.audioChannels.get()
+    runCatching {
+      // 非「反向立体声」的声道档位走 audio-channels 属性；
+      // 反向立体声（pan）与夜间模式（dynaudnorm）都属于 af 链，统一由 AudioFilters 组装后写入，
+      // 否则两者会各自 setPropertyString("af", ...) 而互相覆盖。
+      if (channels.property != "af") {
+        PlayerLib.setPropertyString(channels.property, channels.value)
       }
+      app.marlboroadvance.mpvex.ui.player.engine.AudioFilters.applyAf(audioPreferences, channels)
+    }.onFailure { e ->
+      Log.e(TAG, "Error applying audio settings: $channels", e)
     }
 
     if (!serviceBound) {
@@ -1605,6 +1611,96 @@ open class PlayerActivity :
   }
 
   /**
+   * 队列内拖动排序：把 [from] 处的条目移动到 [to]（[to] 是移动**之后**的目标下标）。
+   *
+   * `playlist` / `playlistTitles` / `playlistSeriesKeys` 三条平行数组必须同步换位，
+   * 否则切集后标题、记忆键（「每部剧记住速度/音轨」的 key）会整体错位。
+   * 若三条数组长度不一致（例如 windowed 加载只填了一部分），只换主数组并放弃标题数组，
+   * 保证不会越界 —— 错位比崩溃好，且这种情况极少。
+   */
+  internal fun movePlaylistItem(
+    from: Int,
+    to: Int,
+  ) {
+    if (from == to) return
+    if (from !in playlist.indices || to !in playlist.indices) return
+
+    /** 拖动后的旧下标 → 新下标映射，用于同步 playlistIndex 与随机序列。 */
+    fun remap(index: Int): Int =
+      when {
+        index == from -> to
+        from < to && index in (from + 1)..to -> index - 1
+        from > to && index in to until from -> index + 1
+        else -> index
+      }
+
+    val movedItems = playlist.toMutableList()
+    movedItems.add(to, movedItems.removeAt(from))
+    playlist = movedItems
+
+    if (playlistTitles.size == movedItems.size) {
+      val t = playlistTitles.toMutableList()
+      t.add(to, t.removeAt(from))
+      playlistTitles = t
+    }
+    if (playlistSeriesKeys.size == movedItems.size) {
+      val k = playlistSeriesKeys.toMutableList()
+      k.add(to, k.removeAt(from))
+      playlistSeriesKeys = k
+    }
+
+    playlistIndex = remap(playlistIndex)
+    // 随机播放序列存的是下标，换位后必须按同一映射重算，否则「下一条」会重复或跳条
+    if (shuffledIndices.isNotEmpty()) shuffledIndices = shuffledIndices.map(::remap)
+
+    viewModel.refreshPlaylistItems()
+  }
+
+  /**
+   * 从队列移除一条。
+   *
+   * - 只剩一条时**拒绝移除**（返回 false）：队列清空后播放页没有任何可播项，
+   *   等于让用户点的按钮把当前视频也停了，不是他想要的；
+   * - 移除的正好是「正在播放」那一条时，原地播放接替它的下一条（已是最后一条则退到前一条）。
+   *
+   * @return 是否真的移除了。
+   */
+  internal fun removePlaylistItem(index: Int): Boolean {
+    if (index !in playlist.indices) return false
+    if (playlist.size <= 1) return false
+
+    val wasCurrent = index == playlistIndex
+    val items = playlist.toMutableList()
+    items.removeAt(index)
+    playlist = items
+
+    if (playlistTitles.size == items.size + 1) {
+      playlistTitles = playlistTitles.toMutableList().also { it.removeAt(index) }
+    }
+    if (playlistSeriesKeys.size == items.size + 1) {
+      playlistSeriesKeys = playlistSeriesKeys.toMutableList().also { it.removeAt(index) }
+    }
+    if (shuffledIndices.isNotEmpty()) {
+      // 被删的下标从随机序列里摘掉，其后所有下标整体前移一位
+      shuffledIndices =
+        shuffledIndices.filter { it != index }.map { if (it > index) it - 1 else it }
+      shuffledPosition = shuffledPosition.coerceIn(0, (shuffledIndices.size - 1).coerceAtLeast(0))
+    }
+
+    when {
+      wasCurrent -> {
+        val next = index.coerceAtMost(playlist.size - 1)
+        playlistIndex = next
+        loadPlaylistItem(next)
+      }
+      index < playlistIndex -> playlistIndex -= 1
+    }
+
+    viewModel.refreshPlaylistItems()
+    return true
+  }
+
+  /**
    * Extracts the URI from the intent based on intent type.
    *
    * @param intent The intent to extract URI from
@@ -2196,9 +2292,30 @@ private fun cancelAutoplayCountdown() {
 
     setIntentExtras(intent.extras)
 
+    // mpv 已经换成新文件：轨道列表重建了，外挂字幕跟踪表必须跟着清。
+    // 不清的话恢复流程会以为「这条字幕已经加过了」而跳过，字幕就再也加不回来。
+    viewModel.resetExternalSubtitles()
+
+    // 先落媒体标题、再进下面的恢复流程 —— 顺序很关键：
+    // 1) setMediaTitle 会 clear() 外挂字幕列表。若它排在外挂字幕恢复**之后**，刚恢复的记录
+    //    会被抹掉 → 退出时保存成空 → 下次打开无从恢复。这正是「外挂字幕记不住」的根因之一。
+    // 2) 它还负责把 zoom / pan 归零，也必须早于 applyPlaybackState 里的 zoom 恢复。
+    // Don't force media-title for m3u/m3u8 streams - let MPV provide it
+    if (!isCurrentStreamM3U()) {
+      PlayerLib.setPropertyString("force-media-title", fileName)
+      viewModel.setMediaTitle(fileName)
+    }
+
     lifecycleScope.launch(Dispatchers.IO) {
+      // Load playback state. 这几步的**顺序**是外挂字幕能记住的关键：
+      // 1) loadVideoPlaybackState 里会把存档中的外挂字幕加回 mpv，并等轨道真正挂上；
+      // 2) 「同名外挂字幕自动加载」与 TrackSelector 并行跑（网络目录列举可能很慢，
+      //    不能挡住音轨偏好等其他恢复步骤）；有存档时不抢选择（autoSelectFirst = false）；
+      // 3) 等自动加载也挂完，最后才把存档里的字幕选择套一次 —— 此时所有字幕轨都已就位。
       // Load playback state (will skip track restoration if preferred language configured)
       val hasState = loadVideoPlaybackState(fileName)
+
+      val autoloadJob = launch { autoloadMatchingSubtitles(autoSelectFirst = !hasState) }
 
       // Apply track selection logic (defaults only apply when no saved state)
       trackSelector.onFileLoaded(hasState)
@@ -2233,6 +2350,12 @@ private fun cancelAutoplayCountdown() {
           viewModel.changeVideoAspect(savedAspect, showUpdate = false)
         }
       }
+
+      // 等自动加载的同名字幕也挂上之后，再确定性地套一次存档里的字幕选择。
+      // 这里不设死等：网络目录列举可能很慢，最多等 1.2s 就照旧套存档 —— 宁可忽略
+      // 一条同名外挂字幕，也不能把「记住的字幕」拖着不显示。
+      withTimeoutOrNull(1200) { autoloadJob.join() }
+      applyRestoredSubtitleSelection()
     }
 
     // Save to recently played when video actually loads and plays
@@ -2279,39 +2402,11 @@ private fun cancelAutoplayCountdown() {
 
     applySubtitlePreferences()
 
-    // Don't force media-title for m3u/m3u8 streams - let MPV provide it
-    if (!isCurrentStreamM3U()) {
-      PlayerLib.setPropertyString("force-media-title", fileName)
-      viewModel.setMediaTitle(fileName)
-    }
+    // 黑边自动裁切：开关打开则探测并裁掉四周黑边；关掉的路径也要清一次 ——
+    // 裁切是挂在 mpv 的 vf 链上的，不会随换片自动消失，不清就会带着上一条的黑边偏移播。
+    viewModel.applyAutoCropPolicy()
 
     viewModel.unpause()
-
-    if (subtitlesPreferences.autoloadMatchingSubtitles.get()) {
-      lifecycleScope.launch {
-        // For network files played via proxy (SMB/WebDAV/FTP), use the original network file path
-        val networkFilePath = intent.getStringExtra("network_file_path")
-        val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
-
-        if (networkFilePath != null && networkConnectionId != -1L) {
-          // Pass network file path and connection ID for subtitle discovery
-          SubtitleOps.autoloadSubtitles(
-            videoFilePath = networkFilePath,
-            videoFileName = fileName,
-            networkConnectionId = networkConnectionId,
-          )
-        } else {
-          // Regular file or direct network stream
-          val filePath = parsePathFromIntent(intent)
-          if (filePath != null) {
-            SubtitleOps.autoloadSubtitles(
-              videoFilePath = filePath,
-              videoFileName = fileName,
-            )
-          }
-        }
-      }
-    }
 
     updateMediaSessionMetadata(
       title = fileName,
@@ -2718,6 +2813,11 @@ private fun cancelAutoplayCountdown() {
     val playFromStart = playFromStartOnce || playFromStartAllSession
     playFromStartOnce = false
 
+    // 先清掉上一集留下的「待恢复字幕选择」，避免 mediaIdentifier 为空直接 return 时
+    // 把上一集的 sid 误套到本集上（会连累 applyRestoredSubtitleSelection）。
+    restoredSubtitleSid = NO_SAVED_SUBTITLE_SELECTION
+    restoredSecondarySubtitleSid = NO_SAVED_SUBTITLE_SELECTION
+
     if (mediaIdentifier.isBlank()) return false
 
     return runCatching {
@@ -2733,50 +2833,154 @@ private fun cancelAutoplayCountdown() {
   }
 
   /**
+   * 本次加载从存档里读到的字幕选择（主 / 副）。哨兵值见 [NO_SAVED_SUBTITLE_SELECTION]。
+   * 先记下来、等所有字幕来源都挂上之后再统一套 —— 见 [applyRestoredSubtitleSelection]。
+   */
+  private var restoredSubtitleSid: Int = NO_SAVED_SUBTITLE_SELECTION
+
+  private var restoredSecondarySubtitleSid: Int = NO_SAVED_SUBTITLE_SELECTION
+
+  /**
+   * 自动加载与视频同名的外挂字幕（本地同目录 / 同网络路径），受设置开关控制。
+   *
+   * @param autoSelectFirst 有存档时传 false：只把字幕挂上去、**不选**，选哪条留给存档说了算。
+   *   否则这里会把用户上次手动选的那条顶掉，「记住的字幕」看起来就没生效。
+   */
+  private suspend fun autoloadMatchingSubtitles(autoSelectFirst: Boolean) {
+    if (!subtitlesPreferences.autoloadMatchingSubtitles.get()) return
+    runCatching {
+      // For network files played via proxy (SMB/WebDAV/FTP), use the original network file path
+      val networkFilePath = intent.getStringExtra("network_file_path")
+      val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
+
+      if (networkFilePath != null && networkConnectionId != -1L) {
+        // Pass network file path and connection ID for subtitle discovery
+        SubtitleOps.autoloadSubtitles(
+          videoFilePath = networkFilePath,
+          videoFileName = fileName,
+          networkConnectionId = networkConnectionId,
+          autoSelectFirst = autoSelectFirst,
+        )
+      } else {
+        // Regular file or direct network stream
+        val filePath = parsePathFromIntent(intent)
+        if (filePath != null) {
+          SubtitleOps.autoloadSubtitles(
+            videoFilePath = filePath,
+            videoFileName = fileName,
+            autoSelectFirst = autoSelectFirst,
+          )
+        }
+      }
+    }.onFailure { e -> Log.e(TAG, "Autoload subtitles failed", e) }
+  }
+
+  /**
+   * 把存档里的字幕选择**最后一次**确定地套到播放器上。
+   *
+   * 必须等「存档外挂字幕 + 同名自动加载 + 下载目录扫描」都做完之后再调：这些来源都是
+   * 异步挂轨的，谁先挂上不确定，而「上次选的是哪条」只能以存档为准 ——
+   *   · 早一步设 `sid`，轨道可能还不存在，mpv 会把这次选择丢掉（外挂字幕就是这样丢的）；
+   *   · 晚一步又会被自动加载的 `select` 抢走。
+   * 所以统一收口在这里，一次套准。三种情况：选中某条 / 只选了副字幕 / 上次就没字幕。
+   */
+  private fun applyRestoredSubtitleSelection() {
+    // 外部应用经 intent 显式指定要启用的字幕（subs.enable）优先级最高 —— 那是用户在
+    // 文件管理器里点「用影屿播放 + 带上这条字幕」，不该被存档里的旧选择盖掉。
+    if (intent.hasExtra("subs.enable")) return
+
+    val sid = restoredSubtitleSid
+    if (sid == NO_SAVED_SUBTITLE_SELECTION) return
+    val secondarySid = restoredSecondarySubtitleSid
+
+    when {
+      sid > 0 -> {
+        if (player.sid != sid) player.sid = sid
+        if (secondarySid > 0 && secondarySid != sid) {
+          if (player.secondarySid != secondarySid) player.secondarySid = secondarySid
+        } else if (player.secondarySid > 0) {
+          player.secondarySid = -1
+        }
+        Log.d(TAG, "Restored subtitle selection: sid=$sid, secondary=$secondarySid")
+      }
+
+      secondarySid > 0 -> {
+        // 只有副字幕：提到主字幕（单条字幕必须贴底显示）
+        player.secondarySid = -1
+        player.sid = secondarySid
+        Log.d(TAG, "Promoted saved secondary subtitle track $secondarySid to primary (single subtitle must stay at bottom)")
+      }
+
+      else -> {
+        // 上次没有选中任何字幕：保持关闭 —— 否则「同名自动加载」或文件自带的默认轨会把它
+        // 重新打开，用户会以为「我把字幕关了」这个选择没被记住。
+        if (player.sid > 0) {
+          player.sid = -1
+          Log.d(TAG, "Restored 'subtitles off' state from saved state")
+        }
+        if (player.secondarySid > 0) player.secondarySid = -1
+      }
+    }
+  }
+
+  /**
    * Applies saved playback state to MPV.
    *
-   * Restores subtitle delay, audio delay, audio and track selections, and playback speed.
+   * Restores subtitle delay, audio delay, audio track selection, and playback speed.
+   * 字幕的**选中**不在这里做（见 [applyRestoredSubtitleSelection]），本函数只负责把
+   * 存档里的外挂字幕加回 mpv 并等它们真正挂上。
    * Also restores saved time position if enabled.
    *
    * @param state The saved playback state entity
    * @param playFromStart true 表示用户显式点了「从头播放」，本地续播位置一律不恢复
    */
-  private fun applyPlaybackState(
+  private suspend fun applyPlaybackState(
     state: PlaybackStateEntity?,
     playFromStart: Boolean = false,
   ) {
-    if (state == null) return
+    if (state == null) {
+      // 没有存档：字幕交给 TrackSelector 按偏好决定，这里不记任何「待恢复的选择」
+      restoredSubtitleSid = NO_SAVED_SUBTITLE_SELECTION
+      restoredSecondarySubtitleSid = NO_SAVED_SUBTITLE_SELECTION
+      return
+    }
+
+    // 先把存档里的字幕选择记下来，等所有字幕来源（存档外挂字幕 / 同名自动加载 /
+    // 下载目录扫描）都挂上之后，再由 applyRestoredSubtitleSelection() 统一定夺。
+    restoredSubtitleSid = state.sid
+    restoredSecondarySubtitleSid = state.secondarySid
 
     val subDelay = state.subDelay / DELAY_DIVISOR
     val audioDelay = state.audioDelay / DELAY_DIVISOR
 
-    // Restore external subtitles first
+    // Restore external subtitles first.
+    //
+    // ⚠️ 这里必须**等轨道真正挂进 track-list** 再往下走：`sub-add` 是异步命令，
+    // 命令返回时轨道还没建出来，紧接着设 `sid` 会被 mpv 当成「不存在的轨道」直接丢弃
+    // —— 外挂字幕「重开 app 就没了」正是这个顺序造成的。
+    // （内嵌字幕轨在文件加载时就已经存在，所以只有外挂字幕会中招。）
     if (state.externalSubtitles.isNotBlank()) {
       val externalSubUris = state.externalSubtitles.split("|").filter { it.isNotBlank() }
       Log.d(TAG, "Restoring ${externalSubUris.size} external subtitle(s)")
 
+      // 已经被跟踪的（例如刚被下载目录扫描加过）不会再下发 sub-add，等轨道数时要按
+      // 实际会新增的条数算，否则会白等一个超时。
+      val pendingCount = externalSubUris.count { !viewModel.externalSubtitles.contains(it) }
+      val tracksBefore = PlayerLib.getPropertyInt("track-list/count") ?: 0
+
       for (subUri in externalSubUris) {
-        viewModel.addSubtitle(Uri.parse(subUri), select = false, silent = true)
+        // 用可挂起的版本：加完再往下，不再即发即忘
+        viewModel.loadSubtitle(Uri.parse(subUri), select = false, silent = true)
+      }
+
+      if (pendingCount > 0) {
+        viewModel.awaitTrackCountAtLeast(tracksBefore + pendingCount)
       }
     }
 
-    // Always restore subtitle and audio tracks from saved state
-    // User's manual selection has highest priority
-    if (state.sid > 0) {
-      player.sid = state.sid
-      Log.d(TAG, "Restored primary subtitle track: ${state.sid} (user selection)")
-      if (state.secondarySid > 0 && state.secondarySid != state.sid) {
-        player.secondarySid = state.secondarySid
-        Log.d(TAG, "Restored secondary subtitle track: ${state.secondarySid} (user selection)")
-      } else {
-        player.secondarySid = -1
-      }
-    } else if (state.secondarySid > 0) {
-      player.sid = state.secondarySid
-      player.secondarySid = -1
-      Log.d(TAG, "Promoted saved secondary subtitle track ${state.secondarySid} to primary: single subtitle must stay at bottom")
-    }
-
+    // 字幕轨的选中**不在这里做**：此刻「同名外挂字幕自动加载」可能还没挂上，
+    // 统一留到 applyRestoredSubtitleSelection()（排在自动加载之后）一次套准。
+    // 音轨不依赖异步添加，照旧在这里恢复。
     if (state.aid > 0) {
       player.aid = state.aid
       Log.d(TAG, "Restored audio track: ${state.aid} (user selection)")
@@ -4303,6 +4507,13 @@ private fun cancelAutoplayCountdown() {
      * Intent action used to return playback result data to the calling activity.
      */
     private const val RESULT_INTENT = "app.marlboroadvance.mpvex.ui.player.PlayerActivity.result"
+
+    /**
+     * 「本次加载没有字幕存档」的哨兵值。用 [Int.MIN_VALUE] 而不是 0 / -1：
+     * mpv 的空轨道（`sid=no`）读回来就是 -1，必须和「压根没有存档」区分开 ——
+     * 前者要如实恢复成「字幕关着」，后者则完全不该碰字幕选择。
+     */
+    private const val NO_SAVED_SUBTITLE_SELECTION = Int.MIN_VALUE
 
     /**
      * intent 里指定播放内核的 extra key（详情页长按播放按钮 → 备用内核）。

@@ -26,7 +26,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -42,11 +44,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.presentation.components.RepeatingIconButton
 import app.marlboroadvance.mpvex.ui.theme.spacing
 import kotlinx.coroutines.delay
+
+/** 精细调速的步进与边界。 */
+private const val SPEED_STEP = 0.05f
+private const val MIN_SPEED = 0.05f
+private const val MAX_SPEED = 4.0f
 
 /**
  * A compact speed control display that shows available speed options (0.25x to 4x)
@@ -59,6 +70,11 @@ import kotlinx.coroutines.delay
 fun SpeedControlSlider(
   currentSpeed: Float,
   modifier: Modifier = Modifier,
+  /**
+   * 精细调速回调（0.05 步进）。传 null 时只展示、不给按钮 —— 
+   * 面板里已有 PlaybackSpeedSheet 提供同样的调节能力。
+   */
+  onSpeedChange: ((Float) -> Unit)? = null,
 ) {
   // Speed presets from 0.25x to 4x
   val speedPresets = listOf(0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f)
@@ -177,6 +193,43 @@ fun SpeedControlSlider(
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.padding(start = 4.dp),
           )
+        }
+
+        // 0.05 步进微调：点一下走一格，**长按连续走**（RepeatingIconButton）。
+        // 预设档只覆盖 0.25/0.5/1/1.5…，想看「1.15x 刚刚好」这类刻度只能靠这个。
+        if (onSpeedChange != null) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            RepeatingIconButton(
+              onClick = { onSpeedChange((currentSpeed - SPEED_STEP).coerceAtLeast(MIN_SPEED)) },
+              modifier = Modifier.size(32.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Filled.Remove,
+                contentDescription = stringResource(R.string.player_speed_decrease),
+                modifier = Modifier.size(18.dp),
+              )
+            }
+            Text(
+              text = "${currentSpeed.format()}x",
+              fontSize = 13.sp,
+              fontWeight = FontWeight.SemiBold,
+              modifier = Modifier.width(56.dp),
+              textAlign = TextAlign.Center,
+            )
+            RepeatingIconButton(
+              onClick = { onSpeedChange((currentSpeed + SPEED_STEP).coerceAtMost(MAX_SPEED)) },
+              modifier = Modifier.size(32.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Filled.Add,
+                contentDescription = stringResource(R.string.player_speed_increase),
+                modifier = Modifier.size(18.dp),
+              )
+            }
+          }
         }
       }
     }

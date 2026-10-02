@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.player
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
+import app.marlboroadvance.mpvex.ui.player.engine.VideoCrop
 
 import android.content.Context
 import android.content.Intent
@@ -453,63 +454,93 @@ class PlayerViewModel(
     }
   }
 
+  /**
+   * mpv 加载新文件时清空外挂字幕跟踪表。
+   *
+   * mpv 的轨道列表随文件重建，旧的 URI 记录不再对应任何轨道；不清的话恢复流程会以为
+   * 「这条字幕已经加过了」而跳过，字幕就再也加不回来了（同一部片重开时必然踩到）。
+   */
+  fun resetExternalSubtitles() {
+    _externalSubtitles.clear()
+    mpvPathToUriMap.clear()
+  }
+
+  /** 用户主动添加外挂字幕（即发即忘）。要「加完再选中」请用 [loadSubtitle]。 */
   fun addSubtitle(uri: Uri, select: Boolean = true, silent: Boolean = false) {
     viewModelScope.launch(Dispatchers.IO) {
-      val uriString = uri.toString()
-      if (_externalSubtitles.contains(uriString)) {
-        android.util.Log.d("PlayerViewModel", "Subtitle already tracked, skipping: $uriString")
-        return@launch
+      loadSubtitle(uri, select, silent)
+    }
+  }
+
+  /**
+   * 把外挂字幕真正交给 mpv，**在调用方协程里顺序执行**。
+   *
+   * 与 [addSubtitle] 的唯一区别是「这里是挂起函数」：返回时 `sub-add` 命令已经下发。
+   * 恢复播放状态必须用这个版本 —— `addSubtitle` 是即发即忘的，而恢复流程紧接着就要用
+   * 存档里的 `sid` 选中字幕，那时轨道还没建出来，mpv 会把这次选择当成「不存在的轨道」
+   * 直接丢弃。表现就是「上次加的外挂字幕，重开 app 就没了」。
+   *
+   * 注意：命令下发 ≠ 轨道已就绪。mpv 挂轨道是异步的，之后还要 [awaitTrackCountAtLeast] 等一拍。
+   */
+  internal suspend fun loadSubtitle(uri: Uri, select: Boolean, silent: Boolean) {
+    val uriString = uri.toString()
+    if (_externalSubtitles.contains(uriString)) {
+      Log.d("PlayerViewModel", "Subtitle already tracked, skipping: $uriString")
+      return
+    }
+
+    runCatching {
+      val fileName = getFileNameFromUri(uri) ?: "subtitle.srt"
+
+      if (!isValidSubtitleFile(fileName)) {
+        if (!silent) withContext(Dispatchers.Main) { showToast("Invalid subtitle file format") }
+        return
       }
 
-      runCatching {
-        val fileName = getFileNameFromUri(uri) ?: "subtitle.srt"
-
-        if (!isValidSubtitleFile(fileName)) {
-          return@launch withContext(Dispatchers.Main) {
-            showToast("Invalid subtitle file format")
-          }
-        }
-
-        // Take persistent URI permission for content:// URIs
-        if (uri.scheme == "content") {
-          try {
-            host.context.contentResolver.takePersistableUriPermission(
-              uri,
-              Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-          } catch (e: SecurityException) {
-            // Permission already granted, not available, or not needed (e.g. from tree).
-            android.util.Log.i("PlayerViewModel", "Persistent permission not taken for $uri (may already have it via tree)")
-          }
-        }
-
-        val mpvPath = uri.resolveUri(host.context) ?: uri.toString()
-        val mode = if (select) "select" else "auto"
-        
-        // Store mapping for reliable physical deletion later
-        mpvPathToUriMap[mpvPath] = uri.toString()
-        
-        PlayerLib.command("sub-add", mpvPath, mode)
-
-        // Track external subtitle URI for persistence
-        val uriString = uri.toString()
-        if (!_externalSubtitles.contains(uriString)) {
-          _externalSubtitles.add(uriString)
-        }
-
-        val displayName = fileName.take(30).let { if (fileName.length > 30) "$it..." else it }
-        if (!silent) {
-          withContext(Dispatchers.Main) {
-            showToast("$displayName added")
-          }
-        }
-      }.onFailure {
-        if (!silent) {
-          withContext(Dispatchers.Main) {
-            showToast("Failed to load subtitle")
-          }
+      // Take persistent URI permission for content:// URIs
+      if (uri.scheme == "content") {
+        try {
+          host.context.contentResolver.takePersistableUriPermission(
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+          )
+        } catch (e: SecurityException) {
+          // Permission already granted, not available, or not needed (e.g. from tree).
+          Log.i("PlayerViewModel", "Persistent permission not taken for $uri (may already have it via tree)")
         }
       }
+
+      val mpvPath = uri.resolveUri(host.context) ?: uri.toString()
+
+      // Store mapping for reliable physical deletion later
+      mpvPathToUriMap[mpvPath] = uriString
+
+      PlayerLib.command("sub-add", mpvPath, if (select) "select" else "auto")
+
+      // Track external subtitle URI for persistence
+      if (!_externalSubtitles.contains(uriString)) _externalSubtitles.add(uriString)
+
+      val displayName = fileName.take(30).let { if (fileName.length > 30) "$it..." else it }
+      if (!silent) withContext(Dispatchers.Main) { showToast("$displayName added") }
+    }.onFailure {
+      if (!silent) withContext(Dispatchers.Main) { showToast("Failed to load subtitle") }
+    }
+  }
+
+  /**
+   * 等 mpv 的轨道列表涨到至少 [target] 条（最多等 [timeoutMs]）。
+   *
+   * `sub-add` 是异步命令：命令返回那一刻轨道还没进 `track-list`，这时候去设 `sid`
+   * 会被 mpv 当成「不存在的轨道」丢掉。恢复外挂字幕时必须等这一拍。
+   */
+  internal suspend fun awaitTrackCountAtLeast(
+    target: Int,
+    timeoutMs: Long = 1000,
+  ) {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+      if ((PlayerLib.getPropertyInt("track-list/count") ?: 0) >= target) return
+      delay(30)
     }
   }
 
@@ -1747,6 +1778,21 @@ class PlayerViewModel(
 
   fun hasNext(): Boolean = (host as? PlayerActivity)?.hasNext() ?: false
 
+  /** 队列内拖动排序：[to] 是移动之后的目标下标（见 PlayerActivity.movePlaylistItem）。 */
+  fun movePlaylistItem(
+    from: Int,
+    to: Int,
+  ) {
+    (host as? PlayerActivity)?.movePlaylistItem(from, to)
+  }
+
+  /**
+   * 从队列移除一条。
+   *
+   * @return 是否移除成功 —— 队列只剩一条时会拒绝（返回 false），由 UI 决定怎么提示。
+   */
+  fun removePlaylistItem(index: Int): Boolean = (host as? PlayerActivity)?.removePlaylistItem(index) ?: false
+
   fun hasPrevious(): Boolean = (host as? PlayerActivity)?.hasPrevious() ?: false
 
   fun playNext() {
@@ -1893,6 +1939,215 @@ class PlayerViewModel(
     }
 
     playerUpdate.value = PlayerUpdates.ShowText(if (newState) "V-Flip On" else "V-Flip Off")
+  }
+
+  // ==================== 黑边自动裁切（cropdetect） ====================
+
+  /** 当前是否已应用自动裁切，供 UI 显示状态。 */
+  private val _isAutoCropped = MutableStateFlow(false)
+  val isAutoCropped: StateFlow<Boolean> = _isAutoCropped.asStateFlow()
+
+  /** 探测协程。同一时刻只允许一条，避免连点叠加出多条 cropdetect 滤镜。 */
+  private var cropJob: Job? = null
+
+  /**
+   * 手动「自动裁黑边 / 还原」。
+   *
+   * 已在裁切状态时点击即还原 —— 探测不准（比如把暗场戏当成黑边）时用户能一键退回去。
+   */
+  fun toggleAutoCrop() {
+    if (VideoCrop.isApplied) {
+      VideoCrop.clear()
+      _isAutoCropped.value = false
+      playerUpdate.value = PlayerUpdates.ShowText(host.context.getString(R.string.player_crop_off))
+      return
+    }
+    runAutoCrop(userInitiated = true)
+  }
+
+  /**
+   * 「自动裁黑边」开关：写偏好并**立即**生效。
+   *
+   * 打开 → 马上对当前画面探测一次（不等下一次换片）；
+   * 关闭 → 立刻摘掉已挂上的裁切，不然用户看着开关是关的、画面却还裁着。
+   */
+  fun setAutoCrop(enabled: Boolean) {
+    playerPreferences.autoCropBlackBars.set(enabled)
+    if (enabled) {
+      runAutoCrop(userInitiated = true)
+    } else {
+      cropJob?.cancel()
+      cropJob = null
+      VideoCrop.clear()
+      _isAutoCropped.value = false
+      playerUpdate.value = PlayerUpdates.ShowText(host.context.getString(R.string.player_crop_off))
+    }
+  }
+
+  /**
+   * 每次加载新文件后按偏好套用裁切策略。
+   *
+   * - 开关打开 → 探测并裁切；
+   * - 开关关闭 → **主动清一次**：上一条片子的裁切滤镜会留在 mpv 的 vf 链上，
+   *   不清的话新片会带着上一条的黑边偏移继续播。
+   */
+  fun applyAutoCropPolicy() {
+    if (playerPreferences.autoCropBlackBars.get()) {
+      runAutoCrop(userInitiated = false)
+    } else {
+      VideoCrop.clear()
+      _isAutoCropped.value = false
+    }
+  }
+
+  private fun runAutoCrop(userInitiated: Boolean) {
+    if (cropJob?.isActive == true) return
+    cropJob =
+      viewModelScope.launch {
+        val crop = VideoCrop.detectAndApply()
+        _isAutoCropped.value = crop != null
+        if (userInitiated) {
+          val msg =
+            if (crop != null) {
+              host.context.getString(R.string.player_crop_applied)
+            } else {
+              host.context.getString(R.string.player_crop_failed)
+            }
+          playerUpdate.value = PlayerUpdates.ShowText(msg)
+        }
+      }
+  }
+
+  /** 播放页退出 / 换内核时把裁切滤镜摘干净。 */
+  fun clearAutoCrop() {
+    cropJob?.cancel()
+    cropJob = null
+    VideoCrop.clear()
+    _isAutoCropped.value = false
+  }
+
+  // ==================== GIF 片段录制 ====================
+
+  /** 录制进度（0f..1f）；null 表示当前没有在录。 */
+  private val _gifProgress = MutableStateFlow<Float?>(null)
+  val gifProgress: StateFlow<Float?> = _gifProgress.asStateFlow()
+
+  /**
+   * 录制一段 GIF 并存入相册。
+   *
+   * 整个流程（取帧 → 编码 → 入库）都在协程里跑，UI 只订阅 [gifProgress]。
+   * 重复点击会被忽略（[gifProgress] 非 null 时直接返回），避免两次录制互相抢帧。
+   */
+  fun startGifRecording(durationSec: Int) {
+    if (_gifProgress.value != null) return
+    viewModelScope.launch {
+      _gifProgress.value = 0f
+      var clip: GifRecorder.GifClip? = null
+      try {
+        // 采集是「跟着视频实时走」的，固定花掉 durationSec 秒；编码耗时则随分辨率增长。
+        // 进度条把前 60% 给采集、后 40% 给编码：否则高分辨率下进度会先走满，
+        // 然后一动不动地卡在 100% 干等编码，看着像卡死。
+        val captureShare = 0.6f
+        val captured =
+          GifRecorder.captureFrames(
+            host.context,
+            durationSec,
+            targetWidth = playerPreferences.gifWidth.get(),
+          ) { progress ->
+            _gifProgress.value = progress * captureShare
+          }
+        clip = captured
+        if (captured == null) {
+          showToast(host.context.getString(R.string.player_gif_failed))
+          return@launch
+        }
+        val saved =
+          saveGifToGallery(host.context, captured) { progress ->
+            _gifProgress.value = captureShare + progress * (1f - captureShare)
+          }
+        showToast(
+          host.context.getString(
+            if (saved) R.string.player_gif_saved else R.string.player_gif_failed,
+          ),
+        )
+      } catch (t: Throwable) {
+        Log.w("PlayerViewModel", "GIF recording failed", t)
+        showToast(host.context.getString(R.string.player_gif_failed))
+      } finally {
+        // 截图临时目录在这里统一清；采集帧现在留在磁盘上，不清会在 cache 里堆积
+        clip?.cleanup()
+        _gifProgress.value = null
+      }
+    }
+  }
+
+  /**
+   * 把采集到的帧编码成 GIF 并写入系统相册。
+   *
+   * Android 10+ 走 MediaStore + RELATIVE_PATH（无需存储权限）；更低版本回落到
+   * 公共 Pictures 目录 + 手动触发媒体扫描。
+   *
+   * 帧本身由 [GifRecorder.encode] 在磁盘上逐帧流式处理、编完即弃，所以这里不再需要
+   * 「回收位图」；要清的只有那个临时 GIF 文件（截图目录归调用方的 cleanup 管）。
+   */
+  private suspend fun saveGifToGallery(
+    context: Context,
+    clip: GifRecorder.GifClip,
+    onProgress: (Float) -> Unit,
+  ): Boolean {
+    val name =
+      "cineisle_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())}.gif"
+    val tempFile = File(context.cacheDir, name)
+    return try {
+      java.io.FileOutputStream(tempFile).use { out ->
+        GifRecorder.encode(clip, out, onProgress)
+      }
+      if (!tempFile.exists() || tempFile.length() == 0L) {
+        return false
+      }
+
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+        val values =
+          android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+            put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/gif")
+            put(
+              android.provider.MediaStore.Images.Media.RELATIVE_PATH,
+              "${android.os.Environment.DIRECTORY_PICTURES}/CineIsle",
+            )
+            put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
+          }
+        val uri =
+          context.contentResolver.insert(
+            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            values,
+          ) ?: return false
+        context.contentResolver.openOutputStream(uri)?.use { output ->
+          tempFile.inputStream().use { input -> input.copyTo(output) }
+        }
+        values.clear()
+        values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
+        context.contentResolver.update(uri, values, null, null)
+      } else {
+        @Suppress("DEPRECATION")
+        val dir =
+          android.os.Environment.getExternalStoragePublicDirectory(
+            android.os.Environment.DIRECTORY_PICTURES,
+          )
+        val target = File(dir, "CineIsle").apply { mkdirs() }
+        val dest = File(target, name)
+        tempFile.copyTo(dest, overwrite = true)
+        android.media.MediaScannerConnection.scanFile(context, arrayOf(dest.absolutePath), null, null)
+      }
+
+      true
+    } catch (t: Throwable) {
+      Log.w("PlayerViewModel", "Failed to save GIF", t)
+      false
+    } finally {
+      // 成功时已经拷进相册、失败时它是垃圾，两条路都不留
+      tempFile.delete()
+    }
   }
 
   // ==================== Utility ====================

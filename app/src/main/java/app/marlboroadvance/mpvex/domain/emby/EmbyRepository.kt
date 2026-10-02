@@ -420,6 +420,16 @@ class EmbyRepository(
     EmbyClient.setFavorite(server, itemId, favorite)
   }
 
+  /**
+   * 取消收藏的「用力」版：额外补一次标准 DELETE 方法（见 [EmbyClient.unfavoriteHard]）。
+   *
+   * 只在回读确认「取消收藏没生效」时作为重试用 —— 部分兼容服务端对
+   * `POST .../Delete` 回 200 却不落库，需要标准写法兜底。
+   */
+  suspend fun unfavoriteHard(server: EmbyServer, itemId: String): EmbyUserData? = withContext(Dispatchers.IO) {
+    EmbyClient.unfavoriteHard(server, itemId)
+  }
+
   suspend fun deleteItem(server: EmbyServer, itemId: String) = withContext(Dispatchers.IO) {
     EmbyClient.deleteItem(server, itemId)
   }

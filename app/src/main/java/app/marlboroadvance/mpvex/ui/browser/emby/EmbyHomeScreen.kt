@@ -25,8 +25,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -67,6 +67,8 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyPosterCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySectionHeader
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonHome
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyWideCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyItemActionsDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
@@ -129,6 +131,9 @@ fun EmbyHomeScreen(
   /** 长按位置（root 坐标）：菜单锚在手指旁边展开 */
   var menuAnchor by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
 
+  // 长按「继续观看」卡片 → 弹确认框，确认后从服务器与本机列表一起移除
+  var resumeTarget by remember { mutableStateOf<EmbyItem?>(null) }
+
   // ── 媒体库的置顶 / 顺序号 ──
   // 两条偏好都按服务器分开存，切换服务器时各用各的；用 serverId（没服务器时取 0）
   // 当 remember 的键，切服务器会重新取到那个服务器自己的偏好。
@@ -174,6 +179,43 @@ fun EmbyHomeScreen(
   val keyboardController = LocalSoftwareKeyboardController.current
 
   Column(modifier = Modifier.fillMaxSize()) {
+    // 长按「继续观看」卡片弹出的确认框：确认后清掉服务器记录的播放位置，
+    // 并把这条从本机列表摘掉（乐观移除，不等服务端回读）
+    val removingResume = resumeTarget
+    if (removingResume != null) {
+      AlertDialog(
+        onDismissRequest = { resumeTarget = null },
+        title = { Text("从继续观看中移除？") },
+        text = {
+          Text("「${viewModel.displayTitle(removingResume)}」的播放进度会从服务器清除，之后不再出现在「继续观看」里。")
+        },
+        confirmButton = {
+          TextButton(
+            onClick = {
+              val target = removingResume
+              val current = server
+              val id = target.Id
+              resumeTarget = null
+              if (current == null || id == null) return@TextButton
+              // 乐观移除：先让用户看到它消失，服务器清位置在后台跑
+              viewModel.dropResumeItem(id)
+              scanScope.launch {
+                val ok = viewModel.removeFromResume(current, id)
+                Toast.makeText(
+                  context,
+                  if (ok) "已从继续观看移除" else "服务器未接受这次移除，稍后可再试",
+                  Toast.LENGTH_SHORT,
+                ).show()
+              }
+            },
+          ) { Text("移除") }
+        },
+        dismissButton = {
+          TextButton(onClick = { resumeTarget = null }) { Text("取消") }
+        },
+      )
+    }
+
     // 长按媒体库卡片弹出的操作框（扫描媒体库 / 刷新元数据）
     //
     // ⚠️ 这个锚定 Box **必须放在 Column 的第一个子元素**：它包的是 DropdownMenu
@@ -432,9 +474,8 @@ fun EmbyHomeScreen(
             emptyHint = "输入关键词，搜索全部媒体库",
           )
         } else if (isSearching) {
-          Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-          }
+          // 搜索期间用骨架屏而不是居中转圈：结果卡片的版式先摆出来，落地时不会整屏跳
+          EmbySkeletonGrid(columns = 3, ratio = 3f / 4f, itemCount = 9)
         } else if (searchResults.isEmpty()) {
           Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
@@ -481,12 +522,7 @@ fun EmbyHomeScreen(
         onAction = { viewModel.refreshHome() },
       )
 
-      isLoading && libraries.isEmpty() -> Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-      ) {
-        CircularProgressIndicator()
-      }
+      isLoading && libraries.isEmpty() -> EmbySkeletonHome()
 
       else -> {
         PullRefreshBox(
@@ -552,6 +588,8 @@ fun EmbyHomeScreen(
                       isFavorite = item.UserData?.IsFavorite == true,
                       // 单击进入详情页，播放由详情页发起
                       onClick = { onOpenDetail(item) },
+                      // 长按 → 从「继续观看」移除（清服务器播放位置 + 本机列表摘掉）
+                      onLongClick = { resumeTarget = item },
                     )
                   }
                 }

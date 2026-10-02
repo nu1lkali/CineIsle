@@ -576,6 +576,9 @@ val DatabaseModule =
     single {
       app.marlboroadvance.mpvex.domain.emby.EmbyDownloadManager(
         context = androidContext(),
+        // 下载完成要按需回清服务器播放进度（可开关），需要按 serverId 找回服务器配置
+        serverRepo = get(),
+        preferenceStore = get(),
       )
     }
 

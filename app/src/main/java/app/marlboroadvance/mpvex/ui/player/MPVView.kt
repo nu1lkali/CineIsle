@@ -294,10 +294,13 @@ class MPVView(
     MPVLib.setOptionString("audio-pitch-correction", audioPreferences.audioPitchCorrection.get().toString())
     MPVLib.setOptionString("volume-max", (audioPreferences.volumeBoostCap.get() + 100).toString())
     
-    // Volume normalization using dynamic audio normalization filter
-    if (audioPreferences.volumeNormalization.get()) {
-      MPVLib.setOptionString("af", "dynaudnorm")
-    }
+    // 音频滤镜链：夜间模式（dynaudnorm，带强度档）+ 反向立体声（pan）
+    // 统一由 AudioFilters 组装成一条 af，避免两个功能各自 setOptionString("af") 互相覆盖
+    MPVLib.setOptionString(
+      "af",
+      app.marlboroadvance.mpvex.ui.player.engine.AudioFilters
+        .buildAf(audioPreferences, audioPreferences.audioChannels.get()),
+    )
   }
 
   // Setup
