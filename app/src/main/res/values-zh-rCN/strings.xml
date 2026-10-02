@@ -290,8 +290,8 @@
   <string name="player_sheets_sub_color_alpha">透明度</string>
   <string name="player_sheets_sub_override_ass">覆盖 ASS/SSA 字幕样式</string>
   <string name="player_sheets_sub_override_ass_subtitle">强制覆盖 ASS/SSA 字幕的样式</string>
-  <string name="player_sheets_sub_scale_by_window">按窗口缩放</string>
-  <string name="player_sheets_sub_scale_by_window_summary">按窗口大小缩放字幕并使用视频边距</string>
+  <string name="player_sheets_sub_follow_picture">字幕跟随画面缩放</string>
+  <string name="player_sheets_sub_follow_picture_summary">字幕大小随画面等比缩放，横竖屏观感一致；关闭则随窗口大小</string>
   <string name="player_sheets_sub_scale">缩放</string>
   <string name="player_sheets_sub_position">位置</string>
   <string name="player_sheets_sub_typography_card_title">字体排版</string>
@@ -606,7 +606,7 @@
   <string name="pref_about_donate_kofi_url">https://ko-fi.com/adityanarvekar</string>
   <string name="pref_about_donate_paypal_url">https://paypal.me/aadinarvekar</string>
   <string name="pref_about_donate_upi_id">aadiinarvekar@upi</string>
-  <string name="github_repo_url">https://github.com/marlboro-advance/mpvex</string>
+  <string name="github_repo_url">https://github.com/nu1lkali/CineIsle</string>
   <string name="player_sheets_track_title_w_lang">#%1$d: %2$s (%3$s)</string>
   <string name="player_sheets_track_title_wo_lang">#%1$d: %2$s</string>
   <string name="player_sheets_track_lang_wo_title">#%1$d: %2$s</string>

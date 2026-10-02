@@ -380,11 +380,16 @@ class MPVView(
     // Position secondary subtitle at top (10) instead of bottom to avoid overlap with primary
     MPVLib.setOptionString("secondary-sub-pos", "10")
 
-    val scaleByWindow = if (subtitlesPreferences.scaleByWindow.get()) "yes" else "no"
-    MPVLib.setOptionString("sub-scale-by-window", scaleByWindow)
-    MPVLib.setOptionString("sub-use-margins", scaleByWindow)
-    MPVLib.setOptionString("secondary-sub-scale-by-window", scaleByWindow)
-    MPVLib.setOptionString("secondary-sub-use-margins", scaleByWindow)
+    // 字号基准：跟随画面（sub-scale-with-window=no）→ 字号按画面高度等比，横竖屏一致。
+    // 详见 PlayerActivity.applySubtitlePreferences 里那段说明。
+    val withWindow = if (subtitlesPreferences.followPictureScale.get()) "no" else "yes"
+    MPVLib.setOptionString("sub-scale-with-window", withWindow)
+    MPVLib.setOptionString("secondary-sub-scale-with-window", withWindow)
+    MPVLib.setOptionString("sub-scale-by-window", "yes")
+    MPVLib.setOptionString("secondary-sub-scale-by-window", "yes")
+    // 位置基准：贴画面底部，不落进上下黑边
+    MPVLib.setOptionString("sub-use-margins", "no")
+    MPVLib.setOptionString("secondary-sub-use-margins", "no")
   }
 
 

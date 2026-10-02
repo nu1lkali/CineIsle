@@ -37,7 +37,20 @@ class SubtitlesPreferences(
   val subPos = preferenceStore.getInt("sub_pos", 100)
 
   val overrideAssSubs = preferenceStore.getBoolean("sub_override_ass")
-  val scaleByWindow = preferenceStore.getBoolean("sub_scale_by_window", true)
+
+  /**
+   * 字幕大小是否**跟随画面**（默认开）。
+   *
+   * 对应 mpv 的 `sub-scale-with-window`：开着它时 mpv 按**窗口高度**缩放字号，
+   * 竖屏窗口高而画面只占中间一条，字会被放大 3~4 倍；横屏又偏小 —— 也就是
+   * 「横屏调好竖屏太大、竖屏调好横屏太小」。关掉后字号改成按**画面高度**等比，
+   * 横竖屏占画面的比例一致（也是 VLC / MPC 的做法）。
+   *
+   * ⚠️ 键名/含义与旧版 `sub_scale_by_window` **相反**（那个是「按窗口缩放」），
+   * 所以换了新键 `sub_follow_picture_scale`，不复用旧值 —— 旧用户一律落到默认「跟随画面」，
+   * 正是想要的行为。
+   */
+  val followPictureScale = preferenceStore.getBoolean("sub_follow_picture_scale", true)
 
   val defaultSubDelay = preferenceStore.getInt("sub_default_delay")
   val defaultSubSpeed = preferenceStore.getFloat("sub_default_speed", 1f)

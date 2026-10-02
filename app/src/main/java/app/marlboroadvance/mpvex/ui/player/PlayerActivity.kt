@@ -2685,10 +2685,28 @@ private fun cancelAutoplayCountdown() {
     PlayerLib.setPropertyString("sub-ass-override", if (overrideAssSubs) "force" else "scale")
     PlayerLib.setPropertyString("secondary-sub-ass-override", if (overrideAssSubs) "force" else "scale")
 
-    val scaleByWindow = subtitlesPreferences.scaleByWindow.get()
-    val scaleValue = if (scaleByWindow) "yes" else "no"
-    PlayerLib.setPropertyString("sub-scale-by-window", scaleValue)
-    PlayerLib.setPropertyString("sub-use-margins", scaleValue)
+    // ── 字号基准：跟随画面 ──
+    // mpv 的 sub-font-size 单位是「窗口高 720 时的缩放像素」，实际大小随**窗口高度**走。
+    // 只设 sub-scale-by-window 时 mpv 默认还开着 sub-scale-with-window，于是
+    // sd_ass.c 里 `set_font_scale *= dim->h / 画面在窗口内的高度`：竖屏窗口高、画面只占
+    // 中间一条 → 字号被放大 3~4 倍；横屏画面铺满 → 约 1 倍。这正是
+    // 「横屏调好竖屏太大、竖屏调好横屏太小」的根因。
+    // 关掉 sub-scale-with-window 后字号改为**按画面高度**等比（mpv 手册原话：
+    // "To make the font size scale with video size instead, set only
+    //  --sub-scale-with-window to no"），横竖屏占画面的比例由此一致。
+    val followPicture = subtitlesPreferences.followPictureScale.get()
+    val withWindow = if (followPicture) "no" else "yes"
+    PlayerLib.setPropertyString("sub-scale-with-window", withWindow)
+    PlayerLib.setPropertyString("secondary-sub-scale-with-window", withWindow)
+    // sub-scale-by-window 保持 mpv 默认 yes：它只管「窗口变化时要不要重算」，不影响基准。
+    PlayerLib.setPropertyString("sub-scale-by-window", "yes")
+    PlayerLib.setPropertyString("secondary-sub-scale-by-window", "yes")
+
+    // ── 位置基准：贴画面底部 ──
+    // 关掉 sub-use-margins 后字幕不再往上下黑边里跑，横竖屏都紧贴画面下沿。
+    // 配合上面的「跟随画面」，字号与位置一起随画面走，方向一变不会互相打架。
+    PlayerLib.setPropertyString("sub-use-margins", "no")
+    PlayerLib.setPropertyString("secondary-sub-use-margins", "no")
 
     PlayerLib.setPropertyFloat("sub-scale", subtitlesPreferences.subScale.get())
     PlayerLib.setPropertyInt("sub-pos", subtitlesPreferences.subPos.get())

@@ -424,9 +424,9 @@ object SearchablePreferences {
                 screen = SubtitlesPreferencesScreen,
             ))
             add(SearchablePreference(
-                titleRes = R.string.player_sheets_sub_scale_by_window,
-                summaryRes = R.string.player_sheets_sub_scale_by_window_summary,
-                keywords = listOf("scale", "window", "subtitle", "size", "resize", "fit"),
+                titleRes = R.string.player_sheets_sub_follow_picture,
+                summaryRes = R.string.player_sheets_sub_follow_picture_summary,
+                keywords = listOf("scale", "window", "subtitle", "size", "resize", "fit", "picture", "orientation"),
                 category = "Subtitles",
                 screen = SubtitlesPreferencesScreen,
             ))

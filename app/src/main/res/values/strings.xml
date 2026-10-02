@@ -299,8 +299,8 @@
   <string name="player_sheets_sub_color_alpha">Alpha</string>
   <string name="player_sheets_sub_override_ass">Override ASS/SSA subtitles</string>
   <string name="player_sheets_sub_override_ass_subtitle">Force override ASS/SSA subtitle formatting</string>
-  <string name="player_sheets_sub_scale_by_window">Scale by window</string>
-  <string name="player_sheets_sub_scale_by_window_summary">Scale subtitles by window size and use video margins</string>
+  <string name="player_sheets_sub_follow_picture">Scale subtitles to the picture</string>
+  <string name="player_sheets_sub_follow_picture_summary">Keep subtitle size proportional to the video, so portrait and landscape look the same</string>
   <string name="player_sheets_sub_scale">Scale</string>
   <string name="player_sheets_sub_position">Position</string>
   <string name="player_sheets_sub_typography_card_title">Typography</string>
@@ -371,7 +371,7 @@
   <string name="toast_file_no_longer_exists">File no longer exists</string>
   <string name="toast_playback_failed">Playback failed: the media could not be opened</string>
   <string name="volume_slider_absolute_value" translatable="false">%d</string>
-  <string name="github_repo_url" translatable="false">https://github.com/marlboro-advance/mpvex</string>
+  <string name="github_repo_url" translatable="false">https://github.com/nu1lkali/CineIsle</string>
   <string name="swap_the_volume_and_brightness_slider">Swap volume and brightness slider</string>
   <string name="pref_player_display_reduce_player_animation">Reduce player animation</string>
   <string name="pref_player_display_hide_player_control_time">Hide player control time</string>

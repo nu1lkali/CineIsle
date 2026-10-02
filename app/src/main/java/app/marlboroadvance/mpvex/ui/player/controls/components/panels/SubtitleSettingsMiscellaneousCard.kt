@@ -69,20 +69,23 @@ fun SubtitlesMiscellaneousCard(modifier: Modifier = Modifier) {
           },
           { Text(stringResource(R.string.player_sheets_sub_override_ass)) },
         )
-        var scaleByWindow by remember {
-          mutableStateOf(PlayerLib.getPropertyString("sub-scale-by-window") == "yes")
+        // 字幕大小基准：开 = 跟随画面（横竖屏观感一致），关 = 随窗口/屏幕大小。
+        // 对应 mpv 的 `sub-scale-with-window=no` —— 关掉「随窗口缩放」后，字号改成按
+        // **画面高度**等比。开着时 mpv 按窗口高度缩放，竖屏窗口高会把字放大好几倍。
+        var followPicture by remember {
+          mutableStateOf(PlayerLib.getPropertyString("sub-scale-with-window") != "yes")
         }
         SwitchPreference(
-          scaleByWindow,
+          followPicture,
           onValueChange = {
-            scaleByWindow = it
-            preferences.scaleByWindow.set(it)
-            val value = if (it) "yes" else "no"
-            PlayerLib.setPropertyString("sub-scale-by-window", value)
-            PlayerLib.setPropertyString("sub-use-margins", value)
+            followPicture = it
+            preferences.followPictureScale.set(it)
+            val withWindow = if (it) "no" else "yes"
+            PlayerLib.setPropertyString("sub-scale-with-window", withWindow)
+            PlayerLib.setPropertyString("secondary-sub-scale-with-window", withWindow)
           },
-          { Text(stringResource(R.string.player_sheets_sub_scale_by_window)) },
-          summary = { Text(stringResource(R.string.player_sheets_sub_scale_by_window_summary)) },
+          { Text(stringResource(R.string.player_sheets_sub_follow_picture)) },
+          summary = { Text(stringResource(R.string.player_sheets_sub_follow_picture_summary)) },
         )
         val subScale by PlayerLib.propFloat["sub-scale"].collectAsState()
         val subPos by PlayerLib.propInt["sub-pos"].collectAsState()
@@ -137,11 +140,11 @@ fun SubtitlesMiscellaneousCard(modifier: Modifier = Modifier) {
               overrideAssSubs = defaultOverride
               PlayerLib.setPropertyString("sub-ass-override", if (defaultOverride) "force" else "scale")
               PlayerLib.setPropertyString("secondary-sub-ass-override", if (defaultOverride) "force" else "scale")
-              val defaultScaleByWindow = preferences.scaleByWindow.deleteAndGet()
-              scaleByWindow = defaultScaleByWindow
-              val scaleValue = if (defaultScaleByWindow) "yes" else "no"
-              PlayerLib.setPropertyString("sub-scale-by-window", scaleValue)
-              PlayerLib.setPropertyString("sub-use-margins", scaleValue)
+              val defaultFollowPicture = preferences.followPictureScale.deleteAndGet()
+              followPicture = defaultFollowPicture
+              val withWindow = if (defaultFollowPicture) "no" else "yes"
+              PlayerLib.setPropertyString("sub-scale-with-window", withWindow)
+              PlayerLib.setPropertyString("secondary-sub-scale-with-window", withWindow)
             },
           ) {
             Row {

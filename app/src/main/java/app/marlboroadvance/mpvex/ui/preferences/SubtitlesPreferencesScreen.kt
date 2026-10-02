@@ -225,14 +225,14 @@ object SubtitlesPreferencesScreen : Screen {
 
               PreferenceDivider()
 
-              val scaleByWindow by preferences.scaleByWindow.collectAsState()
+              val followPicture by preferences.followPictureScale.collectAsState()
               SwitchPreference(
-                value = scaleByWindow,
-                onValueChange = { preferences.scaleByWindow.set(it) },
-                title = { Text(stringResource(R.string.player_sheets_sub_scale_by_window)) },
+                value = followPicture,
+                onValueChange = { preferences.followPictureScale.set(it) },
+                title = { Text(stringResource(R.string.player_sheets_sub_follow_picture)) },
                 summary = {
                   Text(
-                    stringResource(R.string.player_sheets_sub_scale_by_window_summary),
+                    stringResource(R.string.player_sheets_sub_follow_picture_summary),
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },
