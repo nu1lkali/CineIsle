@@ -29,9 +29,9 @@ import android.graphics.Bitmap
  * - 映射走 32768 格查找表，逐像素 O(1)。
  */
 internal class GifPalette(
-  /** 256 个颜色，0xRRGGBB；不足 256 时尾部补黑。 */
+  /** 256 个颜色，0xRRGGBB；不足 256 时尾部补黑。**下标 255 留给透明**，不用来放颜色。 */
   val colors: IntArray,
-  /** 32768（=32³）格的最近色查找表，值 = [colors] 的下标。 */
+  /** 32768（=32³）格的最近色查找表，值 = [colors] 的下标（恒定 < [OPAQUE_COLORS]）。 */
   private val lut: IntArray,
 ) {
   /** 8bit RGB → 调色板下标。与 [build] 里建表时的口径一致。 */
@@ -50,8 +50,20 @@ internal class GifPalette(
     private const val LEVELS = 1 shl BITS
     private const val BINS = LEVELS * LEVELS * LEVELS
 
-    /** GIF 单张色表上限。 */
+    /** GIF 单张色表上限（也决定色表大小字段 = 256 项）。 */
     const val MAX_COLORS = 256
+
+    /**
+     * 留给**透明**的色表槽位。
+     *
+     * 帧间差分靠「透明像素 = 保持上一帧」把整帧缩成一个子矩形，所以 256 项里必须留一项
+     * 给透明，实际颜色只有 255 项。少这一项对观感没有影响，但**少了它差分就没法做**
+     * （透明索引必须落在色表范围内，且 LZW 的最小码宽固定 8）。
+     */
+    const val TRANSPARENT_INDEX = MAX_COLORS - 1
+
+    /** 真正用来表示颜色的项数。 */
+    const val OPAQUE_COLORS = MAX_COLORS - 1
 
     /** 采样步长：每 N 个像素取一个进直方图。统计量不需要全量，2 已经足够稳。 */
     private const val DEFAULT_SAMPLE_STEP = 2
@@ -122,7 +134,7 @@ internal class GifPalette(
       }
 
       val order = IntArray(n) { it }
-      val boxes = ArrayList<Box>(MAX_COLORS)
+      val boxes = ArrayList<Box>(OPAQUE_COLORS)
 
       fun makeBox(
         start: Int,
@@ -156,7 +168,7 @@ internal class GifPalette(
       // ── 反复切分，直到 256 个箱或没有可切的箱 ──
       val sortTmp = IntArray(n)
       val hist = IntArray(LEVELS)
-      while (boxes.size < MAX_COLORS) {
+      while (boxes.size < OPAQUE_COLORS) {
         var bestIndex = -1
         var bestPriority = -1L
         for (i in boxes.indices) {
@@ -245,7 +257,7 @@ internal class GifPalette(
         val g = ((sg + total / 2) / total).toInt().coerceIn(0, 255)
         val b = ((sb + total / 2) / total).toInt().coerceIn(0, 255)
         colors[written++] = (r shl 16) or (g shl 8) or b
-        if (written == MAX_COLORS) break
+        if (written == OPAQUE_COLORS) break
       }
 
       // ── 32768 格最近色查找表 ──
