@@ -209,10 +209,11 @@
   <string name="player_crop_off">已还原画面</string>
   <string name="player_gif_action">录制 GIF</string>
   <string name="player_gif_title">录制 GIF 片段</string>
-  <string name="player_gif_hint">从当前位置开始录制，保存到相册的 Pictures/CineIsle 目录；清晰度越高文件越大</string>
+  <string name="player_gif_hint">从当前位置开始录制（暂停中会自动继续播放），保存到相册的 Pictures/CineIsle 目录；清晰度越高文件越大</string>
   <string name="player_gif_seconds">%1$d 秒</string>
   <string name="player_gif_start">开始录制</string>
-  <string name="player_gif_recording">正在录制…请保持视频播放</string>
+  <string name="player_gif_recording">正在录制…（已自动继续播放）</string>
+  <string name="player_gif_cancel">取消录制</string>
   <string name="player_gif_saved">GIF 已保存到相册</string>
   <string name="player_gif_failed">GIF 录制失败</string>
   <string name="player_gif_quality">清晰度</string>

@@ -208,10 +208,11 @@
   <string name="player_crop_off">Cropping removed</string>
   <string name="player_gif_action">Record GIF</string>
   <string name="player_gif_title">Record a GIF clip</string>
-  <string name="player_gif_hint">Captures the next few seconds from the current position. Saved to Pictures/CineIsle. Higher quality means a larger file.</string>
+  <string name="player_gif_hint">Captures the next few seconds from the current position (playback resumes automatically if paused). Saved to Pictures/CineIsle. Higher quality means a larger file.</string>
   <string name="player_gif_seconds">%1$ds</string>
   <string name="player_gif_start">Start recording</string>
-  <string name="player_gif_recording">Recording… keep the video playing</string>
+  <string name="player_gif_recording">Recording… playback is kept running</string>
+  <string name="player_gif_cancel">Cancel recording</string>
   <string name="player_gif_saved">GIF saved to Gallery</string>
   <string name="player_gif_failed">Couldn\'t record the GIF</string>
   <string name="player_gif_quality">Quality</string>

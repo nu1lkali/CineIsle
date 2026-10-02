@@ -67,6 +67,16 @@ private val sheetAnimationSpec = tween<Float>(350)
 fun PlayerSheet(
   onDismissRequest: () -> Unit,
   modifier: Modifier = Modifier,
+  /**
+   * 是否允许关闭（点空白 / 下拉 / 返回）。
+   *
+   * 传 false 时任何关闭动作都会被**弹回原位**，而不是「面板滑走了、状态还占着」。
+   * 后者会让这层全屏遮罩留在原地继续吃掉所有点击 —— 表现就是播放器 UI 整个失灵，
+   * 点空白再也叫不出控制条（GIF 录制中就是这么踩的）。
+   *
+   * 需要「不能关」的面板（如录制中）就传 false，别在 [onDismissRequest] 里自己吞掉。
+   */
+  dismissEnabled: Boolean = true,
   tonalElevation: Dp = 1.dp,
   customMaxWidth: Dp? = null,
   customMaxHeight: Dp? = null,
@@ -76,6 +86,7 @@ fun PlayerSheet(
   val scope = rememberCoroutineScope()
   val density = LocalDensity.current
   val latestOnDismissRequest by rememberUpdatedState(onDismissRequest)
+  val latestDismissEnabled by rememberUpdatedState(dismissEnabled)
   val maxWidth = customMaxWidth ?:
   if (LocalConfiguration.current.orientation == ORIENTATION_LANDSCAPE) {
     640.dp
@@ -108,8 +119,18 @@ fun PlayerSheet(
         velocityThreshold = { with(density) { 125.dp.toPx() } },
       )
     }
+  /** 把已经滑走的面板拉回展开位（用于「此刻不允许关闭」）。 */
+  val springBack = {
+    scope.launch {
+      backgroundAlpha = 0.5f
+      anchoredDraggableState.animateTo(0)
+    }
+  }
   val internalOnDismissRequest = {
-    if (anchoredDraggableState.currentValue == 0) {
+    if (!latestDismissEnabled) {
+      // 不允许关闭：看得见的面板才关得掉，绝不留下一个隐形却还吃点击的空壳
+      if (anchoredDraggableState.currentValue != 0) springBack()
+    } else if (anchoredDraggableState.currentValue == 0) {
       scope.launch {
         backgroundAlpha = 0f
         anchoredDraggableState.animateTo(1)
@@ -184,7 +205,16 @@ fun PlayerSheet(
       snapshotFlow { anchoredDraggableState.currentValue }
         .drop(1)
         .filter { it == 1 }
-        .collectLatest { latestOnDismissRequest() }
+        .collectLatest {
+          if (latestDismissEnabled) {
+            latestOnDismissRequest()
+          } else {
+            // 拖拽 / 惯性把它甩到了关闭位，但调用方此刻不让关 → 弹回展开位。
+            // 这里绝不能「什么都不做」：那正是面板消失后整屏点击失灵的原因。
+            backgroundAlpha = 0.5f
+            anchoredDraggableState.animateTo(0)
+          }
+        }
     }
   }
 }

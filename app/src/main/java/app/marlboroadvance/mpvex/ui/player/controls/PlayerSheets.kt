@@ -328,6 +328,7 @@ fun PlayerSheets(
         qualityWidth = gifWidth,
         onQualityChange = { gifPreferences.gifWidth.set(it) },
         onStart = viewModel::startGifRecording,
+        onCancel = viewModel::cancelGifRecording,
         onDismissRequest = onDismissRequest,
       )
     }

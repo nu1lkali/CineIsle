@@ -2032,15 +2032,27 @@ class PlayerViewModel(
   private val _gifProgress = MutableStateFlow<Float?>(null)
   val gifProgress: StateFlow<Float?> = _gifProgress.asStateFlow()
 
+  /** 当前录制任务；用来实现「取消录制」。 */
+  private var gifJob: Job? = null
+
   /**
    * 录制一段 GIF 并存入相册。
    *
    * 整个流程（取帧 → 编码 → 入库）都在协程里跑，UI 只订阅 [gifProgress]。
    * 重复点击会被忽略（[gifProgress] 非 null 时直接返回），避免两次录制互相抢帧。
+   *
+   * 开录前若视频是暂停的会**自动继续播放**：取帧是跟着画面实时走的，暂停状态下
+   * 每一帧都长得一样，录出来是一张静图。
    */
   fun startGifRecording(durationSec: Int) {
     if (_gifProgress.value != null) return
-    viewModelScope.launch {
+    if (PlayerLib.getPropertyBoolean("pause") == true) {
+      // 走和 unpause() 一样的路径（申请音频焦点 + 置 pause=no），这里同步执行，
+      // 保证第一帧取到时画面已经在动了。
+      host.requestAudioFocus()
+      PlayerLib.setPropertyBoolean("pause", false)
+    }
+    gifJob = viewModelScope.launch {
       _gifProgress.value = 0f
       var clip: GifRecorder.GifClip? = null
       try {
@@ -2077,8 +2089,21 @@ class PlayerViewModel(
         // 截图临时目录在这里统一清；采集帧现在留在磁盘上，不清会在 cache 里堆积
         clip?.cleanup()
         _gifProgress.value = null
+        gifJob = null
       }
     }
+  }
+
+  /**
+   * 取消正在进行的录制。
+   *
+   * 协程被取消后 `finally` 照跑：进度归零、临时帧目录删掉（采集侧自己也会在异常路径
+   * 清一遍），所以取消后不会在 cache 里留下一堆截图。
+   */
+  fun cancelGifRecording() {
+    gifJob?.cancel()
+    gifJob = null
+    _gifProgress.value = null
   }
 
   /**
