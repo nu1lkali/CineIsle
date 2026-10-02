@@ -178,8 +178,14 @@ class MPVView(
       "reconnect=1,reconnect_streamed=1,reconnect_delay_max=20",
     )
     
-    val logLevel = if (advancedPreferences.verboseLogging.get()) "v" else "warn"
+    val verbose = advancedPreferences.verboseLogging.get()
+    val logLevel = if (verbose) "v" else "warn"
     MPVLib.setOptionString("msg-level", "all=$logLevel")
+    // 连诊断日志一起初始化：详细日志开着时，把 mpv 自己那一路（vo 重建 / 硬解重协商 /
+    // 字幕渲染…）落到**应用外部目录**的一份文件里。手机上的第三方 logcat 应用在非 root 下
+    // 读不到别的应用日志，落盘才是能把日志取回来的唯一办法。
+    PlayerDiagLog.configure(context, verbose)
+    PlayerDiagLog.mpvLogPath(context)?.let { MPVLib.setOptionString("log-file", it) }
 
     MPVLib.setPropertyBoolean("keep-open", true)
     MPVLib.setPropertyBoolean("input-default-bindings", true)

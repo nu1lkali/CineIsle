@@ -1304,6 +1304,10 @@ open class PlayerActivity :
   override fun onResume() {
     super.onResume()
     updateVolume()
+    // 诊断日志跟着「详细日志」开关走：这样用户在设置里改完开关、回到播放页就生效，
+    // 不用重启应用。顺带把日志目录写进日志本身，省得还要翻代码找路径。
+    PlayerDiagLog.configure(this, advancedPreferences.verboseLogging.get())
+    PlayerDiagLog.log("session", "diag dir=${PlayerDiagLog.dirPath(this)}")
   }
 
   /**
@@ -1843,15 +1847,46 @@ open class PlayerActivity :
    */
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
+    // ── 诊断埋点 ──
+    // 「挂了外挂字幕时旋转会卡一下」这条线，在排除掉 Activity 重建 / 我们自己的旋转路径 /
+    // 字体重解析 / 字幕恢复链重跑这四条之后，只剩 mpv 内部的 resize 路径，没有实机数据定不了案。
+    // 这里在**旋转那一刻**与**1.2 秒后**各拍一行：播放位置走了多少、丢帧计数涨了多少 ——
+    // 用来区分「画面真的停住」和「只是观感上卡」。只在设置里打开「详细日志」时才写文件。
+    PlayerDiagLog.log("rotate", "orient=${orientationName(newConfig)} ${playbackProbe()}")
+    lifecycleScope.launch {
+      kotlinx.coroutines.delay(1200)
+      PlayerDiagLog.log("rotate+1200ms", playbackProbe())
+    }
     if (isReady) {
       handleConfigurationChange()
     }
   }
 
+  /** 诊断用：横竖屏名，只为日志好读。 */
+  private fun orientationName(config: Configuration): String =
+    if (config.orientation == Configuration.ORIENTATION_LANDSCAPE) "landscape" else "portrait"
+
+  /**
+   * 诊断用：把「这一刻播到哪儿、丢了多少帧、字幕选的是哪条」拍成一行。
+   *
+   * `time-pos` 两次采样的差值 + `frame-drop-count` 的增量，是判断旋转时**画面是否真的停住**
+   * 的客观依据 —— 光靠「感觉卡」定位不了（这也是为什么要专门把日志落盘：
+   * 非 root 手机上第三方 logcat 应用读不到别的应用的日志）。
+   */
+  private fun playbackProbe(): String =
+    runCatching {
+      val pos = PlayerLib.getPropertyDouble("time-pos")
+      val drops = PlayerLib.getPropertyInt("frame-drop-count")
+      val sid = PlayerLib.getPropertyInt("sid")
+      val vo = PlayerLib.getPropertyString("current-vo")
+      "pos=%.3f drops=%d sid=%d vo=%s".format(pos ?: -1.0, drops ?: -1, sid ?: -2, vo ?: "?")
+    }.getOrElse { "probe-failed=${it.message}" }
+
   /**
    * Handles configuration changes by updating video aspect ratio.
    */
   private fun handleConfigurationChange() {
+    PlayerDiagLog.log("rotate-handled", "pip=$isInPictureInPictureMode")
     if (!isInPictureInPictureMode) {
       // Configuration changes don't affect aspect ratio
     } else {
