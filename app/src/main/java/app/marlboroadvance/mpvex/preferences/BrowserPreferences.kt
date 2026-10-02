@@ -246,6 +246,29 @@ class BrowserPreferences(
    */
   val embyRandomGenreRecommend =
     preferenceStore.getBoolean("emby_random_genre_recommend", true)
+
+  /**
+   * 「合并完成后自动清理孤立演员」开关。
+   *
+   * 打开后，每次合并成功会顺手触发服务端的「刷新人员」任务，把**已经没有任何作品**的
+   * 演员条目回收掉（合并剩下的空壳变体）。
+   *
+   * 默认**关闭**，和「合并」本身同一个口径：它虽然风险低（只是让服务端回收没用的条目、
+   * 幂等、不会删任何影片），但**它会静默触发一个服务端任务** ——
+   * 万一那个任务顺带扫了正在刮削中的条目，排查起来很麻烦。
+   * 所以要开自己开，不替用户决定。
+   */
+  val embyAutoCleanOrphans = preferenceStore.getBoolean("emby_auto_clean_orphans", false)
+
+  /**
+   * 搜索联想词列表是否**收起**。
+   *
+   * 联想只是「顺手补全」的参考，不是主角 —— 下面才是真正的搜索结果。展开时最多占
+   * 三行出头的高度（再多就在卡片内部滚动），收起后只留一行标题。
+   * 记的是「收起」而不是「展开」：默认展开，用户点一次收起后就一直保持收起
+   * （默认值 false = 展开，与改之前的表现一致）。
+   */
+  val embySearchSuggestCollapsed = preferenceStore.getBoolean("emby_search_suggest_collapsed", false)
 }
 
 /**

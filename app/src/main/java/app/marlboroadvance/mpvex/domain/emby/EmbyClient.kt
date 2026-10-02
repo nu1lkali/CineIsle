@@ -288,6 +288,22 @@ data class EmbyStudio(
   val Name: String? = null,
 )
 
+/**
+ * 服务端定时任务（`GET /ScheduledTasks` 的一项）。
+ *
+ * 只用到 [Key] / [Name] 两个字段去认「刷新人员」那个任务，其余字段忽略。
+ * ⚠️ [Name] 是**本地化**的（中文服务器给「刷新人员」，英文给 "Refresh people"），
+ * 所以匹配顺序必须先是 [Key]，名字只作兜底。
+ */
+@Serializable
+data class EmbyScheduledTask(
+  val Id: String? = null,
+  val Key: String? = null,
+  val Name: String? = null,
+  val Description: String? = null,
+  val Category: String? = null,
+)
+
 // ════════════════════════════════════════════════════════════════════════
 // EmbyClient —— 单例 HTTP 客户端，所有 Emby REST API 调用集中在此
 // ════════════════════════════════════════════════════════════════════════
@@ -333,6 +349,15 @@ object EmbyClient {
   /** 无 body 的 POST（OkHttp 的 post 必须给 body，给空串就是 content-length=0，跟 Web 端一致） */
   private val EMPTY_BODY = "".toRequestBody(null)
 
+  /**
+   * 拉流时统一使用的 User-Agent。
+   *
+   * 「预解析直链（302）」探测与播放器真正拉流**必须用同一个 UA**：
+   * 网盘直链的签名常把 UA 算进校验，两边不一致时探测能过、播放被 403。
+   * 播放器侧通过 intent extra `headers` 收到同一个值（见 EmbyViewModel 的播放入口）。
+   */
+  const val STREAM_USER_AGENT = "mpvex/1.0"
+
   /** 视频类媒体（用于把音乐、图片从影视列表中过滤掉） */
   private const val VIDEO_MEDIA_TYPE = "Video"
 
@@ -341,6 +366,18 @@ object EmbyClient {
     "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources," +
     // Size 是「按文件大小排序」的数据来源，Emby 默认不返回，必须显式索取
     "Tags,SortName,ProductionLocations,Path,Size"
+
+  /**
+   * 取「整份条目原文」时索要的字段（演职员合并回写用）。
+   *
+   * 要点是**必须包含 `People`**：不带的话返回体里没有 People，
+   * [app.marlboroadvance.mpvex.domain.emby.rewriteItemPeople] 会认为这条不用改从而静默跳过。
+   * 其余是编辑元数据时用户可能已经改过的字段，一并要回来，
+   * 免得整包回写时把它们从「有值」变成「缺字段」。
+   */
+  private const val RAW_ITEM_FIELDS =
+    "Overview,OriginalTitle,SortName,Genres,Tags,Studios,ProductionLocations,People," +
+      "OfficialRating,CommunityRating,PremiereDate,ProductionYear,Path,ProviderIds,Taglines"
 
   /** 统计演员作品数时每页拉多少条。开大一点，几千条的库几次就能拉完 */
   private const val COUNT_PAGE_SIZE = 500
@@ -404,7 +441,7 @@ object EmbyClient {
 
   private fun execString(request: Request): String {
     httpClient.newCall(request).execute().use { resp ->
-      val body = resp.body?.string() ?: ""
+      val body = resp.body.string()
       if (!resp.isSuccessful) {
         throw EmbyApiException(resp.code, body.ifEmpty { resp.message })
       }
@@ -755,6 +792,87 @@ object EmbyClient {
           item.copy(Type = "Person")
         }
     }.getOrDefault(emptyList())
+
+  /** 「演职员合并」扫描时一页拉多少人 */
+  private const val PERSON_PAGE_SIZE = 500
+
+  /** 「演职员合并」扫描的人员上限。超过就截断并在 UI 里说明，不会无限翻页。 */
+  private const val PERSON_SCAN_MAX = 8_000
+
+  /**
+   * 拉**全服务器**的人员清单（演员 / 导演 / 编剧），给「演职员合并」扫重复用。
+   *
+   * 与 [getActors] 的三点差别：
+   *  1. **不限媒体库**（`ParentId` 不传）：一个人在不同库里各有一份，合并必须跨库看；
+   *  2. **工种可配**：重复的不只有演员，导演 / 编剧一样会裂，默认三种都要；
+   *  3. **自己翻页**：`/Persons` 一次能返回多少条由服务端决定（部分版本会截断 `Limit`），
+   *     所以用 `StartIndex` 逐页拉，并以**服务端给的 `TotalRecordCount`** 作为终止条件，
+   *     而不是「本页返回数 < 请求数」—— 后者在服务端截断 Limit 时会在第一页就退出、漏掉大半。
+   *
+   * `Fields=ProviderIds` 是**尝试性**的：`/Persons` 的 Fields 白名单很窄
+   * （[getActors] 已证实它会静默忽略 `ChildCount`）。能拿到就是「同名但其实是两个人」的
+   * 关键反证；拿不到也不影响流程（退化为按名字判断）。
+   */
+  fun getPersonsDetailed(
+    server: EmbyServer,
+    personTypes: List<String> = listOf("Actor", "Director", "Writer"),
+    maxItems: Int = PERSON_SCAN_MAX,
+  ): List<EmbyItem> = runCatching {
+    val out = ArrayList<EmbyItem>()
+    // 按 Id 去重：服务端若忽略 StartIndex 反复给同一批，没有这层会死循环
+    val seen = HashSet<String>()
+    var start = 0
+    while (out.size < maxItems) {
+      val q = LinkedHashMap<String, String?>()
+      q["UserId"] = server.userId
+      q["Recursive"] = "true"
+      q["SortBy"] = "SortName"
+      q["PersonTypes"] = personTypes.joinToString("|")
+      q["Fields"] = "ProviderIds"
+      q["EnableImages"] = "true"
+      q["ImageTypeLimit"] = "1"
+      q["StartIndex"] = start.toString()
+      q["Limit"] = PERSON_PAGE_SIZE.toString()
+      val page = getJson<EmbyItemsResult>(server, "/Persons", q)
+      if (page.Items.isEmpty()) break
+      var fresh = 0
+      page.Items.forEach { item ->
+        val id = item.Id ?: return@forEach
+        if (!seen.add(id)) return@forEach
+        val name = item.Name?.takeIf { it.isNotBlank() } ?: return@forEach
+        fresh++
+        out.add(item.copy(Type = "Person", Name = name))
+      }
+      // 一条新的都没有 = 服务端在重复给同一批，收手（这也是防死循环的硬闸门）
+      if (fresh == 0) break
+      start += page.Items.size
+      if (page.TotalRecordCount > 0 && start >= page.TotalRecordCount) break
+    }
+    out.take(maxItems)
+  }.getOrDefault(emptyList())
+
+  /**
+   * 一个人**参与了多少部作品** —— 用 `PersonIds` 查询的 `TotalRecordCount` 直接拿。
+   *
+   * 为什么不复用 [getPersonWorkCounts]：那个方法是把**整个库逐页拉下来自己数**，
+   * 几千条的库要几十个请求，而且超过 1 万条时会整体放弃返回空表。
+   * 这里只要一个数字，问服务端一次就够了（`Limit=1` 只取一条，响应很小）。
+   *
+   * `IsFolder=false` 与「作品数」的口径保持一致：只数**本身能播**的条目，
+   * 免得一季、一个合集被算成一部作品。
+   */
+  fun getPersonWorkCount(server: EmbyServer, personId: String): Int =
+    runCatching {
+      getItems(
+        server = server,
+        personIds = listOf(personId),
+        recursive = true,
+        startIndex = 0,
+        limit = 1,
+        isFolder = false,
+        fields = "People",
+      ).TotalRecordCount
+    }.getOrDefault(0)
 
   /**
    * 收藏的演员列表（收藏页「演员」tab 用）。
@@ -1333,9 +1451,25 @@ object EmbyClient {
           .url(original)
           // 只取 1 个字节：既让服务端走完整跳转链，又不真的下载内容
           .header("Range", "bytes=0-0")
+          // ⚠️ 必须显式带上与播放器一致的 UA。网盘直链（115 这类）的签名常把 UA
+          // 算进去：探测用 OkHttp 默认 UA 拿到直链、再交给 mpv 用另一套 UA 去请求，
+          // 服务端就会以 403 拒绝 —— 现象是「解析成功、播放必失败」。
+          .header("User-Agent", STREAM_USER_AGENT)
           .get()
           .build()
         httpClient.newCall(req).execute().use { resp ->
+          // ⭐ 只有**确实取到了内容**才认这条直链。
+          // 早期版本只判断「有没有发生跳转」，于是服务端回 403 / 404 时照样把那条
+          // 死链当成直链交给播放器 —— 播放器必然失败，且无从回退。
+          // 这里一票否决：非 2xx 一律当解析失败，调用方回退到原始 Emby 地址
+          // （那条路径由播放器自己跟 302，实测可播）。
+          if (!resp.isSuccessful) {
+            android.util.Log.w(
+              "EmbyClient",
+              "预解析直链被拒（HTTP ${resp.code} @ ${resp.request.url.host}），回退原始地址",
+            )
+            return@runCatching null
+          }
           // response.request 是「跟完跳转后的最后一个请求」，它的 URL 就是直链
           val finalUrl = resp.request.url.toString()
           finalUrl.takeIf {
@@ -1569,6 +1703,101 @@ object EmbyClient {
       .build()
     execString(req)
   }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 3.8 演职员合并（Person 去重）：整包读写条目 / 管理员探测 / 服务端任务
+  // ════════════════════════════════════════════════════════════════════════
+
+  /**
+   * 取条目的**原始 JSON 文本**（不解析成 [EmbyItem]）。
+   *
+   * ⚠️ 演职员合并改的是条目里的 `People` 引用，而 `POST /Items/{id}` **必须回传完整 payload**
+   * （Emby 开发者 Luke 官方确认："you have to include the complete payload"，
+   * 缺字段会被**清空** —— 社区里有人被清掉 plot / year / rating）。
+   * 我们的 [EmbyItem] 只声明了四十来个字段，序列化回去恰好就是「不完整的 payload」，
+   * 所以这里必须原文进、原文出，中途只在 `JsonObject` 上做定点修改。
+   *
+   * 走 `Users/{uid}/Items/{id}` 这条（Luke 明确推荐）而不是 `/Items/{id}`：
+   * 用户维度的那条会带上 UserData，字段更全。
+   *
+   * `Fields` 里**必须包含 `People`** —— 不带的话返回体里没有 People，
+   * 改写函数会认为「这条没事要改」从而静默跳过，表现就是「合并点了但作品一部都没动」。
+   */
+  fun getItemRawJson(server: EmbyServer, itemId: String): String =
+    execString(
+      authedRequest(
+        server,
+        "/Users/${server.userId}/Items/$itemId",
+        mapOf("Fields" to RAW_ITEM_FIELDS),
+      ).get().build(),
+    )
+
+  /**
+   * 回写「整份条目 JSON」。
+   *
+   * 两种形态都试：主用 `POST /Items/{id}`（官方路由，社区脚本用的也是它），
+   * 被拒就退 `PUT /Items/{id}`（本仓库原有的「编辑元数据」走的就是 PUT，在用户的服务端上已证实可用）。
+   * 哪个先由 [preferPut] 决定 —— 合并引擎会在首条做一次回读校验，
+   * 发现 POST 被「回 200 但没落库」时，把整批切到 PUT。
+   *
+   * @return true 表示服务端接受了这次写入（**不代表真的落库**，落库由调用方回读校验）
+   */
+  fun updateItemRawJson(
+    server: EmbyServer,
+    itemId: String,
+    rawJson: String,
+    preferPut: Boolean = false,
+  ): String {
+    val buildRequest = { verb: String ->
+      val builder = authedRequest(server, "/Items/$itemId")
+      val body = rawJson.toRequestBody(jsonMedia)
+      (if (verb == "PUT") builder.put(body) else builder.post(body)).build()
+    }
+    var lastError: Throwable? = null
+    for (verb in if (preferPut) listOf("PUT", "POST") else listOf("POST", "PUT")) {
+      val outcome = runCatching { execString(buildRequest(verb)) }
+      if (outcome.isSuccess) return verb
+      lastError = outcome.exceptionOrNull() ?: lastError
+    }
+    throw (lastError ?: EmbyApiException(0, "更新条目失败"))
+  }
+
+  /**
+   * 当前登录账号是不是管理员。
+   *
+   * 为什么必须先问：改条目元数据（`POST /Items/{id}`）是**管理员操作**，
+   * 非管理员会被拒。与其让用户点了半天在每个条目上吃 403，
+   * 不如进页面就把整块写作能力禁掉并说明原因。
+   *
+   * 探测失败（网络 / 端点不可用）返回 false —— **保守当作没有权限**，
+   * 不能让一次失败的网络请求把「不能写」误判成「能写」。
+   */
+  fun fetchIsAdmin(server: EmbyServer): Boolean =
+    runCatching {
+      getJson<EmbyUserDetailDto>(server, "/Users/${server.userId}").Policy?.IsAdministrator == true
+    }.getOrDefault(false)
+
+  /** 服务端定时任务清单（找「刷新人员」用） */
+  fun getScheduledTasks(server: EmbyServer): List<EmbyScheduledTask> =
+    runCatching { getJson<List<EmbyScheduledTask>>(server, "/ScheduledTasks") }
+      .getOrDefault(emptyList())
+
+  /**
+   * 立刻触发一个服务端定时任务。
+   *
+   * 这是「清理孤立演员」的实现方式：**不自己去删 Person**，而是让 Emby 跑它自己的
+   * 「刷新人员」任务去回收已经没有任何作品引用的条目。
+   * 好处是**零风险**（完全走 Emby 自己的逻辑，不会误删有引用的条目），
+   * 代价是**异步** —— 接口立刻返回，实际清理要过一会儿。
+   */
+  fun runScheduledTask(server: EmbyServer, taskId: String): Boolean = runCatching {
+    execString(
+      authedRequest(server, "/ScheduledTasks/Running/$taskId")
+        .post(EMPTY_JSON_BODY.toRequestBody(jsonMedia))
+        .build(),
+    )
+    true
+  }.getOrDefault(false)
 
   // ════════════════════════════════════════════════════════════════════════
   // 4. 播放进度上报（Playstate）
@@ -1892,4 +2121,23 @@ private data class PlaybackMediaSource(
   /** 服务器拼好的转码地址（通常是 HLS 的 master.m3u8），优先用它 */
   val TranscodingUrl: String? = null,
   val DirectStreamUrl: String? = null,
+)
+
+/**
+ * `GET /Users/{id}` 的响应，只为拿 [Policy]。
+ *
+ * 声明成 private：外面只关心「是不是管理员」这一个布尔值（见 [EmbyClient.fetchIsAdmin]），
+ * 权限模型的其余十几个字段不该泄漏成公共 API。
+ */
+@Serializable
+private data class EmbyUserDetailDto(
+  val Id: String? = null,
+  val Name: String? = null,
+  val Policy: EmbyUserPolicyDto? = null,
+)
+
+/** [EmbyUserDetailDto] 里的权限块。只声明要用的那个字段，其余靠 ignoreUnknownKeys 丢掉。 */
+@Serializable
+private data class EmbyUserPolicyDto(
+  val IsAdministrator: Boolean = false,
 )

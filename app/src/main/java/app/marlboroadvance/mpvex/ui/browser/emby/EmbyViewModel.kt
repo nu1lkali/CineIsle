@@ -24,6 +24,19 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyScanChunk
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.domain.emby.DuplicateGroup
+import app.marlboroadvance.mpvex.domain.emby.MergeItemRef
+import app.marlboroadvance.mpvex.domain.emby.MergeOutcome
+import app.marlboroadvance.mpvex.domain.emby.MergePhase
+import app.marlboroadvance.mpvex.domain.emby.OrphanCleanOutcome
+import app.marlboroadvance.mpvex.domain.emby.PersonMergeBatch
+import app.marlboroadvance.mpvex.domain.emby.PersonMergeJournal
+import app.marlboroadvance.mpvex.domain.emby.PersonMerger
+import app.marlboroadvance.mpvex.domain.emby.PersonRef
+import app.marlboroadvance.mpvex.domain.emby.UndoOutcome
+import app.marlboroadvance.mpvex.domain.emby.autoMergeableGroups
+import app.marlboroadvance.mpvex.domain.emby.clusterDuplicatePersons
+import app.marlboroadvance.mpvex.domain.emby.toPersonRef
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.ui.player.GsyPlayerActivity
@@ -35,8 +48,13 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.java.KoinJavaComponent.inject
@@ -46,6 +64,30 @@ private const val PERSON_TYPE = "Person"
 
 private val GLOBAL_SEARCH_DEFAULT_TYPES =
   listOf("Movie", "Series", "Episode", "Video", "MusicVideo")
+
+/**
+ * 「演职员合并」的运行态快照。
+ *
+ * 进度**必须是 ViewModel 上的状态**而不是页面里的 `remember`：
+ * 合并几十条作品要跑一两分钟，用户很可能切走再回来（甚至退到设置页），
+ * 挂在组合里的话一离开就断了、回来看到的是「什么都没发生」。
+ *
+ * @param message 跑完/取消/失败后要给用户看的一句话；页面弹过提示后调
+ *   [EmbyViewModel.clearMergeMessage] 清掉，避免旋转屏幕又弹一遍。
+ */
+data class MergeUiState(
+  val running: Boolean = false,
+  /** 进度框标题（单组合并 = 保留项名字；自动合并 = 「自动合并同名 (3/12)」） */
+  val title: String = "",
+  val phase: MergePhase = MergePhase.COLLECTING,
+  val done: Int = 0,
+  val total: Int = 0,
+  /** 正在处理的作品名 / 正在扫描的演员数 */
+  val currentName: String = "",
+  val wrote: Int = 0,
+  val failed: Int = 0,
+  val message: String? = null,
+)
 
 /**
  * Emby 模块共享 ViewModel。
@@ -953,9 +995,29 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       // 电影没有 SeriesId，就用它自己的 Id。
       putExtra("emby_series_key", item.SeriesId ?: itemId)
       putEngine(engine)
+      // 这条是「预解析」探出来的直链：探测与真正拉流必须用同一套请求头。
+      // 网盘直链（115 这类）常把 UA / Referer 算进签名校验，两边不一致就会被 403
+      // —— 现象正是「解析成功、播放必失败」。播放器侧的 headers 约定：
+      // 第 0/1 位是 User-Agent，其后两两成对（见 PlayerActivity.setHttpHeadersFromExtras）。
+      // Referer 统一给**服务器**的来源，而不是直链自己（自引用常被网盘判为非法）。
+      if (overrideUrl != null) putStreamHeaders(server)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     getApplication<Application>().startActivity(intent)
+  }
+
+  /**
+   * 给播放 intent 补上「与预解析探测一致」的请求头。
+   *
+   * 只在**确实用了预解析直链**时才加（普通直出路径播放器原本就能播，
+   * 平白改 UA / Referer 反而可能打破现有可用组合）。
+   */
+  private fun Intent.putStreamHeaders(server: EmbyServer) {
+    val origin = "${if (server.useHttps) "https" else "http"}://${server.host}:${server.port}"
+    putExtra(
+      "headers",
+      arrayOf("User-Agent", EmbyClient.STREAM_USER_AGENT, "Referer", origin),
+    )
   }
 
   /**
@@ -1033,6 +1095,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       // 播放列表的 ID 顺序与 uris 一致，切集时据此把"正在播放"同步给服务器
       putEmbyPlaybackExtras(server, ids)
       putEngine(engine)
+      // 列表里只要有用预解析直链换掉的条目，就得同步请求头（理由见 [putStreamHeaders]）
+      if (directUrls.isNotEmpty()) putStreamHeaders(server)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     getApplication<Application>().startActivity(intent)
@@ -1262,20 +1326,34 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     server: EmbyServer,
     personId: String,
     startIndex: Int = 0,
-    limit: Int = 60,
+    limit: Int = 100,
     includeItemTypes: List<String> = listOf("Movie", "Series", "Episode", "Video", "MusicVideo"),
   ): List<EmbyItem> = withContext(Dispatchers.IO) {
     runCatching {
-      EmbyClient.getItems(
-        server = server,
-        personIds = listOf(personId),
-        includeItemTypes = includeItemTypes,
-        sortBy = "SortName",
-        sortOrder = "Ascending",
-        recursive = true,
-        startIndex = startIndex,
-        limit = limit,
-      ).Items
+      // ⚠️ 必须分页拉全：高产演员能有几百部作品（实测有 200+ 的），只拉一页 60 条
+      // 会让人以为「合并丢了一半作品」。TotalRecordCount 是服务端给的总数，
+      // 循环到拉完为止；maxItems 是异常数据兜底，防止无限循环拖死设备。
+      val out = ArrayList<EmbyItem>()
+      val maxItems = 2_000
+      var index = startIndex
+      var total = Int.MAX_VALUE
+      while (index < total && out.size < maxItems) {
+        val resp = EmbyClient.getItems(
+          server = server,
+          personIds = listOf(personId),
+          includeItemTypes = includeItemTypes,
+          sortBy = "SortName",
+          sortOrder = "Ascending",
+          recursive = true,
+          startIndex = index,
+          limit = limit,
+        )
+        if (resp.Items.isEmpty()) break
+        out += resp.Items
+        total = resp.TotalRecordCount
+        index += resp.Items.size
+      }
+      out
     }.getOrDefault(emptyList())
   }
 
@@ -1287,6 +1365,300 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    */
   suspend fun loadPersonById(server: EmbyServer, personId: String): EmbyItem? =
     withContext(Dispatchers.IO) { EmbyClient.getPersonById(server, personId) }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 演职员合并（Person 去重）
+  //
+  // 一条铁律：**判重是纯函数、执行顺序限速、账本必须落盘**。
+  // 写服务器元数据是「影响全局、而且不报错」的操作 —— 一旦误合，
+  // 别人的作品会挂到你名下，而且**你看不到任何异常**。
+  // 所以这里没有任何自动触发的路径：每一批合并都由用户在确认弹窗里点过。
+  // ══════════════════════════════════════════════════════════════════════
+
+  /** 撤销账本：一个批次一个 JSON 文件，落在 App 私有目录（见 [PersonMergeJournal] 的说明） */
+  private val personMergeJournal by lazy {
+    PersonMergeJournal(java.io.File(getApplication<Application>().filesDir, "person_merge"))
+  }
+
+  private val personMerger by lazy { PersonMerger(personMergeJournal) }
+
+  private val _mergeState = MutableStateFlow(MergeUiState())
+  val mergeState: StateFlow<MergeUiState> = _mergeState.asStateFlow()
+
+  private var mergeJob: Job? = null
+
+  /**
+   * 扫重复演员：拉全量人员 → 纯函数聚类 → **只给进了重复组的人**补作品数。
+   *
+   * 为什么只补组内的人：作品数要一个人一次请求，全库上千人就是上千次。
+   * 而只有重复组才需要它（挑保留项、以及给人看「谁作品多」）。
+   */
+  suspend fun scanDuplicateGroups(
+    server: EmbyServer,
+    onProgress: ((Int, Int) -> Unit)? = null,
+  ): List<DuplicateGroup> = withContext(Dispatchers.IO) {
+    val refs = EmbyClient.getPersonsDetailed(server).mapNotNull { it.toPersonRef() }
+    val groups = clusterDuplicatePersons(refs)
+    val needCount = groups.flatMap { g -> g.members.map { it.id } }.distinct()
+    if (needCount.isEmpty()) return@withContext emptyList()
+    val counts = HashMap<String, Int>(needCount.size)
+    needCount.forEachIndexed { index, id ->
+      currentCoroutineContext().ensureActive()
+      onProgress?.invoke(index + 1, needCount.size)
+      counts[id] = EmbyClient.getPersonWorkCount(server, id)
+    }
+    groups.map { g -> g.copy(members = g.members.map { m -> m.copy(workCount = counts[m.id] ?: m.workCount) }) }
+  }
+
+  /** 当前登录账号是不是管理员 —— 不是的话整个「写服务器」的能力都要禁掉 */
+  suspend fun isEmbyAdmin(server: EmbyServer): Boolean =
+    withContext(Dispatchers.IO) { EmbyClient.fetchIsAdmin(server) }
+
+  /** 按名字搜演员（工具页搜索框）。走 /Persons、跨库 */
+  suspend fun searchPersonsForMerge(server: EmbyServer, term: String, limit: Int = 60): List<EmbyItem> =
+    withContext(Dispatchers.IO) {
+      runCatching { EmbyClient.searchPersons(server, term, null, limit) }.getOrDefault(emptyList())
+    }
+
+  /**
+   * 按 Id 批量取作品数（一次请求一个人，只读 TotalRecordCount，很轻）。
+   *
+   * ⚠️ 循环里必须夹 `ensureActive()`：这几个是**阻塞**请求（`EmbyClient` 全是非挂起函数），
+   * 中间没有挂起点，不加这句的话「用户退出页面」根本打断不了循环 ——
+   * 几百个人的全量核对会一直跑到头，白烧流量还占着 IO。
+   */
+  suspend fun loadPersonWorkCounts(
+    server: EmbyServer,
+    ids: List<String>,
+    onProgress: ((Int, Int) -> Unit)? = null,
+  ): Map<String, Int> = withContext(Dispatchers.IO) {
+    val unique = ids.distinct()
+    if (unique.isEmpty()) return@withContext emptyMap()
+    val out = LinkedHashMap<String, Int>(unique.size)
+    unique.forEachIndexed { index, id ->
+      currentCoroutineContext().ensureActive()
+      onProgress?.invoke(index + 1, unique.size)
+      out[id] = EmbyClient.getPersonWorkCount(server, id)
+    }
+    out
+  }
+
+  /** 手动绑定的「预览」：先看看会影响到几部作品，再让用户点确认 */
+  suspend fun previewMergeItems(server: EmbyServer, members: List<PersonRef>): List<MergeItemRef> =
+    withContext(Dispatchers.IO) { personMerger.collectAffectedItems(server, members.map { it.id }) }
+
+  /** 合并历史（按时间倒序） */
+  fun mergeHistory(): List<PersonMergeBatch> = personMergeJournal.list()
+
+  /** 账本里出现过的所有「被并掉的 Person Id」（清理孤立演员默认只在这个范围里找） */
+  fun knownMergeMemberIds(): Set<String> = personMergeJournal.knownMemberIds()
+
+  /**
+   * 服务器上**全部人员**的 Id。
+   *
+   * 只给「孤立演员」的**全库**核对用（账本范围之外的也一起看）。这一步本身是分页拉
+   * `/Persons`，还算轻；重的是后面**逐个**问作品数（一人一次请求）—— 所以调用方
+   * 必须先跟用户确认、并对数量设上限（见 `PersonMergeScreen` 的 800 上限）。
+   */
+  suspend fun allPersonIds(server: EmbyServer): List<String> =
+    withContext(Dispatchers.IO) { EmbyClient.getPersonsDetailed(server).mapNotNull { it.Id } }
+
+  /**
+   * 合并一组：把 [members] 全部并入 [canonical]。
+   *
+   * 跑在 [viewModelScope] 而不是页面作用域：用户切走 / 退页都不能中断一次写了一半的合并。
+   */
+  fun startMerge(server: EmbyServer, canonical: PersonRef, members: List<PersonRef>) {
+    runMergeJob {
+      val outcome = personMerger.merge(server, canonical, members) { p ->
+        _mergeState.value = MergeUiState(
+          running = true,
+          title = canonical.name,
+          phase = p.phase,
+          done = p.done,
+          total = p.total,
+          currentName = p.currentName,
+          wrote = p.wrote,
+          failed = p.failed,
+        )
+      }
+      refreshAfterMerge(members.map { it.id })
+      val autoNote = autoCleanIfEnabled(server, members.map { it.id })
+      _mergeState.value = MergeUiState(
+        message = mergeSummary("「${canonical.name}」", outcome) + autoNote,
+      )
+    }
+  }
+
+  /**
+   * 自动合并全部同名组。
+   *
+   * ⚠️ 只吃 [autoMergeableGroups] 的结果 —— 那一层已经排除了「名字相近」档与
+   * 「同名但外部 ID 冲突」（= 两个同名的不同人）。这是整块里唯一会连着写很多组的路径，
+   * 所以它拿到的必须是最可信的那一档。
+   */
+  fun startAutoMerge(server: EmbyServer, groups: List<DuplicateGroup>) {
+    val todo = autoMergeableGroups(groups)
+    if (todo.isEmpty()) {
+      _mergeState.value = MergeUiState(message = "没有可自动合并的同名组")
+      return
+    }
+    runMergeJob {
+      var groupsDone = 0
+      var wrote = 0
+      var failed = 0
+      var skipped = 0
+      val removed = LinkedHashSet<String>()
+      for (group in todo) {
+        val canonical = group.suggestedCanonical
+        val members = group.members.filter { it.id != canonical.id }
+        val label = "自动合并同名（${groupsDone + 1}/${todo.size}）"
+        _mergeState.value = MergeUiState(
+          running = true, title = label, phase = MergePhase.COLLECTING,
+          total = todo.size, done = groupsDone,
+        )
+        val outcome = personMerger.merge(server, canonical, members) { p ->
+          _mergeState.value = MergeUiState(
+            running = true, title = label, phase = p.phase,
+            done = groupsDone, total = todo.size, currentName = p.currentName,
+            wrote = wrote + p.wrote, failed = failed + p.failed,
+          )
+        }
+        groupsDone++
+        wrote += outcome.wrote
+        failed += outcome.failed
+        skipped += outcome.skipped
+        removed += members.map { it.id }
+      }
+      refreshAfterMerge(removed)
+      val autoNote = autoCleanIfEnabled(server, removed)
+      _mergeState.value = MergeUiState(
+        message = "自动合并完成：$groupsDone 组 → 改写 $wrote 部作品" +
+          (if (skipped > 0) "，另有 $skipped 部本来就是它" else "") +
+          (if (failed > 0) "，失败 $failed 部" else "") + autoNote,
+      )
+    }
+  }
+
+  /** 撤销一批合并 */
+  fun startUndo(server: EmbyServer, batch: PersonMergeBatch) {
+    runMergeJob {
+      _mergeState.value = MergeUiState(running = true, title = "撤销合并", phase = MergePhase.WRITING)
+      val outcome = personMerger.undo(server, batch) { done, total ->
+        _mergeState.value = MergeUiState(
+          running = true, title = "撤销合并", phase = MergePhase.WRITING, done = done, total = total,
+        )
+      }
+      // 撤销会把被并掉的演员「还回」作品里，但缓存当时已经单向剔除了它们 ——
+      // 单向剔除救不回来，只能整片作废让下次进页面重新拉
+      EmbyLibraryCache.clear()
+      invalidateFavoritePersonsCache()
+      _mergeState.value = MergeUiState(message = undoSummary(outcome))
+    }
+  }
+
+  /**
+   * 清理孤立演员：**触发服务端自己的「刷新人员」任务**，而不是我们直接删 Person。
+   *
+   * @param auto true = 合并完成后由开关自动跑，false = 用户点了按钮
+   */
+  fun startCleanOrphans(server: EmbyServer, candidateIds: Collection<String>, auto: Boolean) {
+    runMergeJob {
+      _mergeState.value = MergeUiState(
+        running = true,
+        title = if (auto) "自动清理孤立演员" else "清理孤立演员",
+        phase = MergePhase.WRITING,
+      )
+      val result = personMerger.cleanOrphans(server, candidateIds) { done, total ->
+        _mergeState.value = MergeUiState(
+          running = true, title = "清理孤立演员", phase = MergePhase.WRITING,
+          done = done, total = total, currentName = "正在核对演员作品数",
+        )
+      }
+      _mergeState.value = MergeUiState(message = orphanSummary(result, auto))
+    }
+  }
+
+  /** 进度框上的「取消」 */
+  fun cancelMerge() {
+    mergeJob?.cancel()
+  }
+
+  /** 结果提示已弹过，清掉 —— 免得旋转屏幕又弹一遍 */
+  fun clearMergeMessage() {
+    _mergeState.update { it.copy(message = null) }
+  }
+
+  /**
+   * 合并完按开关决定要不要顺手清理孤立演员，返回要追加到结果文案后面的后缀（不需要就是空串）。
+   *
+   * ⚠️ 这里**直接调引擎**而不是再走 [startCleanOrphans]：那个入口用的是同一个 [mergeJob] 槽位，
+   * job 还在跑时会被「已有任务在跑」挡掉，表现就是「开关明明开着、却从来没清理过」。
+   */
+  private suspend fun autoCleanIfEnabled(server: EmbyServer, memberIds: Collection<String>): String {
+    if (memberIds.isEmpty()) return ""
+    if (!browserPreferences.embyAutoCleanOrphans.get()) return ""
+    val result = personMerger.cleanOrphans(server, memberIds)
+    return if (result.orphanCount == 0) "" else "；" + orphanSummary(result, auto = true)
+  }
+
+  private fun runMergeJob(block: suspend () -> Unit) {
+    if (mergeJob?.isActive == true) return
+    mergeJob = viewModelScope.launch {
+      _mergeState.value = MergeUiState(running = true)
+      try {
+        block()
+      } catch (e: CancellationException) {
+        // 取消不是失败：账本在引擎里已经落盘（哪怕协程被取消了），提示里要把这点说出来
+        _mergeState.value = MergeUiState(message = "已取消：已经写入的部分仍可在「合并历史」里撤销")
+        throw e
+      } catch (e: Throwable) {
+        _mergeState.value = MergeUiState(message = "操作失败：${e.message ?: "未知错误"}")
+      }
+    }
+  }
+
+  /**
+   * 合并之后收拾缓存：被并掉的那几个演员条目**当场**从各列表里消失，不用等用户手动刷新
+   * （[EmbyLibraryCache.removeItem] 会置一个 compose 状态，媒体库页即便还活着也会立刻重组剔除）。
+   */
+  private fun refreshAfterMerge(memberIds: Collection<String>) {
+    memberIds.forEach { EmbyLibraryCache.removeItem(it) }
+    // 收藏页的「演员」tab 是按服务器缓存的整份名单，也得作废
+    invalidateFavoritePersonsCache()
+  }
+
+  private fun mergeSummary(subject: String, o: MergeOutcome): String = buildString {
+    // 回读（含换动词重写、补扫之后）仍看到被并条目挂在原处 —— 明确告知「没写进去」，
+    // 同时说明数据没有被破坏、可撤销；括号里是排障现场，用户原样发回即可定位。
+    if (!o.verified) {
+      append(subject).append("：已向服务器提交 ").append(o.wrote).append(" 部作品的改写，")
+      append("但抽查发现服务器没有接受这次改动（数据没有被破坏，可在「合并历史」里撤销；")
+      append("若重试仍失败，请把括号里的内容发回以便定位）")
+      if (o.failed > 0) append("；另有 ").append(o.failed).append(" 部提交失败")
+      o.writeVerbs?.let { append("；服务器接受的写入方式：").append(it) }
+      o.verifyDetail?.let { append("（").append(it).append("）") }
+      return@buildString
+    }
+    append(subject).append("：改写 ").append(o.wrote).append(" 部作品")
+    if (o.repaired > 0) append("（其中 ").append(o.repaired).append(" 部为二次补写）")
+    if (o.skipped > 0) append("，另有 ").append(o.skipped).append(" 部本来就是它")
+    if (o.failed > 0) append("，失败 ").append(o.failed).append(" 部")
+  }
+
+  private fun undoSummary(o: UndoOutcome): String = buildString {
+    append("已撤销并恢复 ").append(o.restored).append(" 部作品")
+    if (o.renamesRestored > 0) append("，").append(o.renamesRestored).append(" 条演员已恢复原名")
+    if (o.skipped > 0) append("，跳过 ").append(o.skipped).append(" 部（之后被别处改过，未覆盖）")
+    if (o.failed > 0) append("，失败 ").append(o.failed).append(" 部")
+  }
+
+  private fun orphanSummary(result: OrphanCleanOutcome, auto: Boolean): String = when {
+    result.orphanCount == 0 -> "没有发现「已无任何作品」的演员，无需清理"
+    result.noTask -> "发现 ${result.orphanCount} 位已无作品的演员，但服务器上没有可用的「刷新人员」任务，请在 Emby 后台手动跑一次"
+    auto -> "已自动通知服务器执行「${result.taskName}」，将回收 ${result.orphanCount} 位已无作品的演员（后台任务，稍后生效）"
+    else -> "已通知服务器执行「${result.taskName}」，将回收 ${result.orphanCount} 位已无作品的演员（后台任务，稍后生效）"
+  }
 
   /**
    * 按「类型」查作品：走 Emby 的 Genres 过滤。

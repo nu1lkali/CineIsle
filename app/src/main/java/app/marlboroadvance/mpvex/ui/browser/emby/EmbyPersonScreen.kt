@@ -58,6 +58,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.longPressToCopy
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.koin.compose.koinInject
@@ -94,6 +95,8 @@ data class EmbyPersonScreen(
     // 演员本人的条目（含 UserData.IsFavorite）：右上角收藏红心的状态来源。
     // 进页面查一次；收藏/取消收藏成功后本地翻转，不再回查服务器。
     var personItem by remember { mutableStateOf<EmbyItem?>(null) }
+    // 是否完成过一次加载：ON_RESUME 刷新只在「已经加载过」时才做，避免首次进入重复拉取
+    var hasLoaded by remember { mutableStateOf(false) }
 
     // ── 作品聚合 / 筛选（纯本地，切 tab 不发请求）──
     // 作品类型 tab：全部 / 电影 / 剧集 / 单集（按条目 Type 聚合）
@@ -129,6 +132,14 @@ data class EmbyPersonScreen(
       if (roleFilter !in availableRoles) roleFilter = PersonRoleFilter.ALL
     }
 
+    // 本页是「演员 / 导演 / 编剧」共用的，界面上的称呼要跟着 TA 真实拥有的身份走：
+    // 只导不演的人不该被叫「演员」。多身份或拿不到 People 时退回中性的「人物」。
+    val personLabel =
+      remember(availableRoles) {
+        val concrete = availableRoles.filter { it != PersonRoleFilter.ALL }
+        if (concrete.size == 1) concrete[0].label else "人物"
+      }
+
     /**
      * 随机播放这位演员 / 导演的作品：把**当前筛选出的**列表打乱后丢给主播放器排队连播。
      *
@@ -157,6 +168,7 @@ data class EmbyPersonScreen(
       val list = viewModel.loadPersonItems(current, personId).distinctBy { it.Id ?: it.Name ?: "" }
       items = list
       isLoading = false
+      hasLoaded = true
       if (list.isEmpty()) error = "没有找到「$personName」的作品"
     }
 
@@ -171,6 +183,20 @@ data class EmbyPersonScreen(
           ?: EmbyItem(Id = personId, Name = personName, Type = "Person")
     }
 
+    // 回到本页时刷新列表：从「演职员合并」工具页 / 详情页返回时，本页只是从返回栈恢复，
+    // 上面的 LaunchedEffect 不会重跑 —— 合并把作品挪给保留项之后不重拉的话，
+    // 看到的还是离开前的旧数据（「明明合并了却还是旧的」多半是这个）。
+    val personLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(personLifecycleOwner, personId, server) {
+      val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+        if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && hasLoaded) {
+          scope.launch { load() }
+        }
+      }
+      personLifecycleOwner.lifecycle.addObserver(observer)
+      onDispose { personLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
       TopAppBar(
         title = {
@@ -178,6 +204,7 @@ data class EmbyPersonScreen(
             text = personName,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.longPressToCopy(personName, "姓名"),
           )
         },
         navigationIcon = {
@@ -276,11 +303,23 @@ data class EmbyPersonScreen(
             style = MaterialTheme.typography.titleLarge,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.longPressToCopy(personName, "姓名"),
           )
           Text(
             text = if (isLoading) "加载中…" else "共 ${visibleItems.size} 部作品",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          // 人物 ID：排查「同名分裂成多条 Person」问题时最有用的信息 ——
+          // 服务器上看是同一个人，App 里可能是两个不同的 Id。长按复制。
+          // 前缀用 personLabel（演员 / 导演 / 编剧 / 人物），不写死成「演员」。
+          Text(
+            text = "$personLabel ID：$personId",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.longPressToCopy(personId, "$personLabel ID"),
           )
         }
       }

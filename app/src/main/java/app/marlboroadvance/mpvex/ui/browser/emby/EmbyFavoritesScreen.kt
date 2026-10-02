@@ -2,6 +2,7 @@ package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,16 +20,22 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -37,11 +45,16 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -52,6 +65,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -141,10 +156,37 @@ fun EmbyFavoritesScreen() {
   // 长按任意卡片进入；选中集合存条目 Id；退出时清空。
   var selectionMode by remember { mutableStateOf(false) }
   val selectedIds = remember { mutableStateListOf<String>() }
+  // 批量动作完成后的结果提示 + **一次性撤销**入口：Snackbar 上的「撤销」把刚做的动作
+  // 用反向动作跑一遍（取消收藏 → 收藏回去、标为未看 → 标为已看…）。只保留最近一次。
+  val snackbarHostState = remember { SnackbarHostState() }
+  // 错误点（防误触）：点底部按钮先只记下意图，弹窗确认之后才真正执行。
+  var pendingBatch by remember { mutableStateOf<BatchAction?>(null) }
   // 批量下载走的是与详情页同一个下载管理器（持久化在 manager 里，任务队列共享）
   val downloadViewModel: EmbyDownloadViewModel = viewModel(
     factory = EmbyDownloadViewModel.factory(context.applicationContext as Application),
   )
+
+  // 进多选就把外层底部导航栏收起来 —— 本页的批量操作条画在屏幕最底部，
+  // 而宿主 MainScreen 的内容是**全屏铺**的（导航栏浮在内容之上、没让出高度），
+  // 不收起来这条就会被导航栏整条盖住，用户根本看不到按钮（用户报障）。
+  // 与「本地」文件浏览页多选时的做法一致（见 FileSystemBrowserScreen）。
+  DisposableEffect(selectionMode) {
+    app.marlboroadvance.mpvex.ui.browser.MainScreen.updateBottomBarVisibility(!selectionMode)
+    onDispose {
+      // key 变化时 onDispose 先跑、之后才执行上面那行，两次写入语义一致；
+      // 离开页面（多选还没退）时则由这里负责恢复。
+      app.marlboroadvance.mpvex.ui.browser.MainScreen.updateBottomBarVisibility(true)
+    }
+  }
+
+  // 多选态下系统返回（含边缘滑动）**先退多选**，别直接退页面。
+  // 顶部那个 ✕ 走的是同一件事；导航栏这时已被收起，不给返回键兜住的话
+  // 用户按一下返回就直接退出 App（比看不到按钮更糟）。enabled = selectionMode
+  // ⇒ 非多选态完全不拦截，交给宿主正常出栈。
+  BackHandler(enabled = selectionMode) {
+    selectionMode = false
+    selectedIds.clear()
+  }
 
   /**
    * 切换某条的选中态。
@@ -210,6 +252,98 @@ fun EmbyFavoritesScreen() {
     isLoading = false
   }
 
+  /**
+   * 一次批量操作的收尾：退出多选态 → 弹结果 Snackbar。
+   *
+   * [undo] 非空时 Snackbar 上会多一个「撤销」按钮，点了就把**反向动作**跑一遍
+   * （取消收藏 → 收藏回去、标为未看 → 标为已看…）。只保证「最近一次」可撤销，
+   * 再操作一次就被新的覆盖 —— 一次性回退，不做撤销栈。
+   */
+  fun finishBatch(
+    actionLabel: String,
+    result: EmbyBatchResult,
+    undo: (suspend () -> Unit)?,
+  ) {
+    selectionMode = false
+    selectedIds.clear()
+    scope.launch {
+      val res = snackbarHostState.showSnackbar(
+        message = batchResultText(actionLabel, result),
+        actionLabel = if (undo != null) "撤销" else null,
+        duration = if (undo != null) SnackbarDuration.Long else SnackbarDuration.Short,
+      )
+      if (res == SnackbarResult.ActionPerformed && undo != null) {
+        undo()
+        snackbarHostState.showSnackbar("已撤销")
+      }
+    }
+  }
+
+  /**
+   * 执行一个**已确认**的批量动作。底部按钮本身只负责弹确认框（防误触），
+   * 真正发请求都在这里；跑完把反向动作交给 [finishBatch] 当撤销凭据。
+   *
+   * ⚠️ ids / items 都要在进协程**之前**取快照：finishBatch 一进来就清空 selectedIds，
+   * 闭包里再去读只剩空集合。定义在 [load] 之后也是必须的 —— 局部函数不能前向引用。
+   */
+  fun executeBatch(action: BatchAction) {
+    val current = server
+    val ids = selectedIds.toList()
+    val picked = visibleItems.filter { it.Id != null && it.Id in selectedIds }
+    when (action) {
+      BatchAction.MARK_PLAYED ->
+        if (current != null && ids.isNotEmpty()) {
+          scope.launch {
+            val r = viewModel.setPlayedBatch(current, ids, true)
+            finishBatch("标为已看", r) { viewModel.setPlayedBatch(current, ids, false) }
+          }
+        }
+
+      BatchAction.MARK_UNPLAYED ->
+        if (current != null && ids.isNotEmpty()) {
+          scope.launch {
+            val r = viewModel.setPlayedBatch(current, ids, false)
+            finishBatch("标为未看", r) { viewModel.setPlayedBatch(current, ids, true) }
+          }
+        }
+
+      BatchAction.UNFAVORITE ->
+        if (current != null && picked.isNotEmpty()) {
+          scope.launch {
+            val r = viewModel.setFavoriteBatch(current, picked, false)
+            // 取消收藏后这批就不在收藏页了，重拉一次让列表同步
+            load(force = true)
+            finishBatch("取消收藏", r) {
+              // 撤销 = 收藏回去（影片 / 演员同一条路，setFavoriteBatch 内部按类型分流）
+              viewModel.setFavoriteBatch(current, picked, true)
+              load(force = true)
+            }
+          }
+        }
+
+      BatchAction.DOWNLOAD -> {
+        if (picked.isEmpty()) return
+        var queued = 0
+        var skipped = 0
+        picked.forEach { item ->
+          when (downloadViewModel.enqueue(server ?: return@forEach, item)) {
+            EmbyEnqueueResult.INVALID -> skipped++
+            else -> queued++
+          }
+        }
+        // 下载只是「加入队列」：误触的代价小（下载页里随时能暂停 / 删除），
+        // 所以只给确认、不给撤销，免得「撤销」把用户之前在队列里的任务也误删。
+        selectionMode = false
+        selectedIds.clear()
+        Toast.makeText(
+          context,
+          if (skipped == 0) "已加入下载队列：$queued 项" else "已加入下载队列：$queued 项，跳过 $skipped 项",
+          Toast.LENGTH_SHORT,
+        ).show()
+      }
+    }
+  }
+
   LaunchedEffect(server?.id, tab) { load(force = false) }
 
   // 下拉刷新：绕过本页缓存与 ViewModel 缓存强制重拉当前 tab
@@ -218,6 +352,17 @@ fun EmbyFavoritesScreen() {
 
   // Scaffold + TopAppBar：自动为状态栏留出安全区域，避免网格压在状态栏下
   Scaffold(
+    // 批量操作的结果提示挂在本页自己的 Snackbar 上 —— 一次性「撤销」入口也在这里。
+    // ⚠️ 内容区是全屏铺的、宿主底部导航栏浮在其上：Snackbar 默认贴底会被导航栏整条盖住，
+    // 所以先让开导航栏的高度，再叠上**系统**手势条的高度，把它抬到导航栏之上。
+    snackbarHost = {
+      SnackbarHost(
+        hostState = snackbarHostState,
+        modifier = Modifier
+          .padding(bottom = app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight.current)
+          .navigationBarsPadding(),
+      )
+    },
     topBar = {
       if (selectionMode) {
         FavoritesSelectionTopBar(
@@ -253,60 +398,11 @@ fun EmbyFavoritesScreen() {
           // 演员 tab 只有「取消收藏」有意义（有没有看过 / 时长这些是媒体条目的概念）
           isActorTab = tab == FavoriteTab.ACTOR,
           count = selectedIds.size,
-          onMarkPlayed = {
-            val current = server
-            val ids = selectedIds.toList()
-            if (current == null || ids.isEmpty()) return@FavoritesBatchBar
-            scope.launch {
-              val r = viewModel.setPlayedBatch(current, ids, true)
-              Toast.makeText(context, batchResultText("标为已看", r), Toast.LENGTH_SHORT).show()
-              selectionMode = false
-              selectedIds.clear()
-            }
-          },
-          onMarkUnplayed = {
-            val current = server
-            val ids = selectedIds.toList()
-            if (current == null || ids.isEmpty()) return@FavoritesBatchBar
-            scope.launch {
-              val r = viewModel.setPlayedBatch(current, ids, false)
-              Toast.makeText(context, batchResultText("标为未看", r), Toast.LENGTH_SHORT).show()
-              selectionMode = false
-              selectedIds.clear()
-            }
-          },
-          onUnfavorite = {
-            val current = server
-            val items = visibleItems.filter { it.Id != null && it.Id in selectedIds }
-            if (current == null || items.isEmpty()) return@FavoritesBatchBar
-            scope.launch {
-              val r = viewModel.setFavoriteBatch(current, items, false)
-              Toast.makeText(context, batchResultText("取消收藏", r), Toast.LENGTH_SHORT).show()
-              selectionMode = false
-              selectedIds.clear()
-              // 取消收藏后这批就不在收藏页了，重拉一次让列表同步
-              load(force = true)
-            }
-          },
-          onDownload = {
-            val items = visibleItems.filter { it.Id != null && it.Id in selectedIds }
-            if (items.isEmpty()) return@FavoritesBatchBar
-            var queued = 0
-            var skipped = 0
-            items.forEach { item ->
-              when (downloadViewModel.enqueue(server ?: return@forEach, item)) {
-                EmbyEnqueueResult.INVALID -> skipped++
-                else -> queued++
-              }
-            }
-            Toast.makeText(
-              context,
-              if (skipped == 0) "已加入下载队列：$queued 项" else "已加入下载队列：$queued 项，跳过 $skipped 项",
-              Toast.LENGTH_SHORT,
-            ).show()
-            selectionMode = false
-            selectedIds.clear()
-          },
+          // 四个动作都只「记下意图」并弹确认框 —— 真正发请求在 executeBatch（防误触）
+          onMarkPlayed = { pendingBatch = BatchAction.MARK_PLAYED },
+          onMarkUnplayed = { pendingBatch = BatchAction.MARK_UNPLAYED },
+          onUnfavorite = { pendingBatch = BatchAction.UNFAVORITE },
+          onDownload = { pendingBatch = BatchAction.DOWNLOAD },
         )
       }
     },
@@ -446,6 +542,44 @@ fun EmbyFavoritesScreen() {
       }
     }
     }
+  }
+
+  // ── 批量操作的二次确认弹窗 ──
+  // 点底部按钮只走到这里：确认过才调 executeBatch；做错的那一次可在结果提示上「撤销」。
+  pendingBatch?.let { action ->
+    val (title, body, confirmLabel) =
+      when (action) {
+        BatchAction.MARK_PLAYED ->
+          Triple("标为已看", "将把选中的 ${selectedIds.size} 项标记为已看。", "标为已看")
+
+        BatchAction.MARK_UNPLAYED ->
+          Triple("标为未看", "将把选中的 ${selectedIds.size} 项标记为未看，并清除它们的观看进度。", "标为未看")
+
+        BatchAction.UNFAVORITE ->
+          Triple(
+            "取消收藏",
+            "将从收藏中移除选中的 ${selectedIds.size} 项。\n\n完成后的提示里可以点「撤销」再收藏回来。",
+            "取消收藏",
+          )
+
+        BatchAction.DOWNLOAD ->
+          Triple("下载", "将把选中的 ${selectedIds.size} 项加入下载队列。", "加入队列")
+      }
+    AlertDialog(
+      onDismissRequest = { pendingBatch = null },
+      title = { Text(title) },
+      text = { Text(body) },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            val act = action
+            pendingBatch = null
+            executeBatch(act)
+          },
+        ) { Text(confirmLabel) }
+      },
+      dismissButton = { TextButton(onClick = { pendingBatch = null }) { Text("取消") } },
+    )
   }
 }
 
@@ -731,9 +865,12 @@ private fun FavoritesSelectionTopBar(
 /**
  * 多选模式下的底部批量操作条。
  *
- * 用文字按钮而不是图标：已看 / 未看这两个动作的图标语义很弱（对勾 / 叉太容易被
- * 理解成「删除」），文字更不容易误解，也省掉一堆图标依赖。
- * 演员 tab 只保留「取消收藏」—— 播放进度、下载这些是媒体条目的概念，对 Person 无意义。
+ * 每个动作 = 「图标 + 文字」竖排、等宽平分，点按有水波纹 —— 比原来一排光秃秃的文字按钮
+ * 更好认，点击区也更大（原来文字按钮的可点范围只有文字本身那么宽，很容易点空）。
+ *
+ * 图标会歧义的顾虑用**文字兜底**：图标只当视觉锚点，下面一行始终写着动作名。
+ * 演员 tab 只保留「取消收藏」—— 播放进度、下载是媒体条目的概念，对 Person 无意义；
+ * 只剩一个动作时让它占满整行居中，不至于孤零零挤在左边。
  */
 @Composable
 private fun FavoritesBatchBar(
@@ -748,29 +885,92 @@ private fun FavoritesBatchBar(
   Surface(
     color = MaterialTheme.colorScheme.surfaceVariant,
     tonalElevation = 3.dp,
+    // 应用自己的底部导航栏已被收起（见上面的 DisposableEffect），但**系统**手势条还在，
+    // 留出它的高度：否则按钮会被系统导航条压住，手指从手势区起划还会误触发「返回」。
+    modifier = Modifier.navigationBarsPadding(),
   ) {
     Row(
       modifier = Modifier
         .fillMaxWidth()
         .padding(horizontal = 8.dp, vertical = 6.dp),
-      horizontalArrangement = Arrangement.SpaceEvenly,
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       if (!isActorTab) {
-        BatchActionButton("标为已看", enabled, onMarkPlayed)
-        BatchActionButton("标为未看", enabled, onMarkUnplayed)
+        BatchActionItem(
+          modifier = Modifier.weight(1f),
+          icon = Icons.Filled.CheckCircle,
+          label = "标为已看",
+          enabled = enabled,
+          onClick = onMarkPlayed,
+        )
+        BatchActionItem(
+          modifier = Modifier.weight(1f),
+          icon = Icons.Filled.RadioButtonUnchecked,
+          label = "标为未看",
+          enabled = enabled,
+          onClick = onMarkUnplayed,
+        )
       }
-      BatchActionButton("取消收藏", enabled, onUnfavorite)
+      BatchActionItem(
+        modifier = Modifier.weight(1f),
+        icon = Icons.Filled.FavoriteBorder,
+        label = "取消收藏",
+        enabled = enabled,
+        // 破坏性动作：用 error 色区分，别和「标为已看」这类平行动作混作一块
+        danger = true,
+        onClick = onUnfavorite,
+      )
       if (!isActorTab) {
-        BatchActionButton("下载", enabled, onDownload)
+        BatchActionItem(
+          modifier = Modifier.weight(1f),
+          icon = Icons.Filled.Download,
+          label = "下载",
+          enabled = enabled,
+          onClick = onDownload,
+        )
       }
     }
   }
 }
 
+/**
+ * 批量条上的单个动作：图标 + 文字竖排，宽度由调用方的 weight 决定（等分）。
+ *
+ * [danger] = 破坏性动作（取消收藏），用 error 色区分；禁用态统一降到 38% 不透明度。
+ */
 @Composable
-private fun BatchActionButton(label: String, enabled: Boolean, onClick: () -> Unit) {
-  TextButton(onClick = onClick, enabled = enabled) { Text(label) }
+private fun BatchActionItem(
+  icon: ImageVector,
+  label: String,
+  enabled: Boolean,
+  modifier: Modifier = Modifier,
+  danger: Boolean = false,
+  onClick: () -> Unit,
+) {
+  val base = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+  val contentColor = if (enabled) base else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+  Column(
+    modifier = modifier
+      .clip(RoundedCornerShape(12.dp))
+      .clickable(enabled = enabled, onClick = onClick)
+      .padding(vertical = 8.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    Icon(
+      imageVector = icon,
+      contentDescription = null,
+      tint = contentColor,
+      modifier = Modifier.size(22.dp),
+    )
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelMedium,
+      color = contentColor,
+      maxLines = 1,
+    )
+  }
 }
 
 /** 批量操作的结果文案：「动作：N 项」；有失败时补上「成功 N · 失败 M」。 */
@@ -780,3 +980,6 @@ private fun batchResultText(action: String, result: EmbyBatchResult): String =
   } else {
     "$action：成功 ${result.ok} · 失败 ${result.failed}"
   }
+
+/** 底部批量条上的动作。点一下先弹确认框，确认过才执行（见 executeBatch）。 */
+private enum class BatchAction { MARK_PLAYED, MARK_UNPLAYED, UNFAVORITE, DOWNLOAD }

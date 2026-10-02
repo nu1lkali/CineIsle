@@ -86,6 +86,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyPersonScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
+import app.marlboroadvance.mpvex.ui.browser.emby.PersonMergeScreen
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 
@@ -274,6 +275,25 @@ private fun EmbyMediaActionMenu(
         )
       },
     )
+    // 演员条目的第二个动作：进「演职员合并」工具页，并把这位演员预置成主条目 ——
+    // 就地开合并，不用先退到设置里再进工具页。它属于工具类操作（会写服务器），
+    // 所以只给入口、真正的确认与保留项选择都在工具页里做。
+    if (isPerson) {
+      DropdownMenuItem(
+        text = { Text("合并演职员…") },
+        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+        onClick = {
+          onDismissRequest()
+          backStack.add(
+            PersonMergeScreen(
+              prefillPersonId = item.Id,
+              prefillPersonName = item.Name,
+              prefillPersonImageTag = item.ImageTags["Primary"],
+            ),
+          )
+        },
+      )
+    }
     // 演员到收藏为止：其余操作都不适用于 Person，整块收掉
     if (!isPerson) {
       DropdownMenuItem(

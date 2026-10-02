@@ -101,6 +101,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -129,6 +130,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.rememberDominantColor
 import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.longPressToCopy
 import android.net.Uri
 import androidx.compose.material.icons.outlined.Cast
 import org.koin.compose.koinInject
@@ -500,6 +502,47 @@ data class EmbyDetailScreen(
           }
         },
         onDismiss = { externalPlayers = null },
+      )
+    }
+
+    // ── 刮削元数据（= Emby 的「识别」）：与媒体库长按菜单同一个组件 ──
+    // ⚠️ 这两个弹窗此前**只声明了开关、忘了挂载**，所以「更多」里点它们毫无反应。
+    val identifyItem = item
+    val identifyServer = server
+    if (showIdentifySheet && identifyItem != null && identifyServer != null) {
+      EmbyIdentifyDialog(
+        server = identifyServer,
+        item = identifyItem,
+        viewModel = viewModel,
+        onDismissRequest = { showIdentifySheet = false },
+        // 应用成功后片名 / 简介 / 图片都可能被换掉，重拉一次详情
+        onApplied = { scope.launch { load() } },
+      )
+    }
+
+    // ── 刷新元数据：与媒体库长按菜单同一个二级选项框（可选强制覆盖）──
+    if (showRefreshSheet && item != null) {
+      val refreshName = item?.Name ?: ""
+      EmbyRefreshMetadataDialog(
+        name = refreshName,
+        kindLabel = "条目",
+        onDismissRequest = { showRefreshSheet = false },
+        onConfirm = { replaceMetadata, replaceImages ->
+          showRefreshSheet = false
+          runEmbyLibraryAction(
+            context = context,
+            // 抽屉一点完就关：这类「发出去就该跑完」的动作挂 ViewModel 作用域，
+            // 免得退出页面把请求连坐取消（与 EmbyIdentifyDialog 同一口径）
+            scope = viewModel.viewModelScope,
+            server = server,
+            itemId = itemId,
+            name = refreshName,
+            okMessage = "已通知服务器刷新「$refreshName」的元数据，稍后下拉刷新查看",
+            action = { s, id ->
+              runCatching { viewModel.refreshLibraryMetadata(s, id, replaceMetadata, replaceImages) }
+            },
+          )
+        },
       )
     }
 
@@ -922,6 +965,8 @@ private fun DetailBody(
                     text = person.Name ?: "",
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 2,
+                    // 这一栏是「演职员」，混着演员 / 导演 / 编剧，复制提示用中性的「姓名」
+                    modifier = Modifier.longPressToCopy(person.Name, "姓名"),
                   )
                   person.Role?.let {
                     Text(
@@ -1008,6 +1053,8 @@ private fun DetailBody(
       title = {
         Text(
           text = item.Name ?: "",
+          // 顶栏标题也支持长按复制：片名常有生僻字 / 外文，用户要拿去别处搜
+          modifier = Modifier.longPressToCopy(item.Name, "片名"),
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
           // 折叠加深到一定程度才把标题放出来，避免展开时和封面区的大标题重复
@@ -1233,8 +1280,22 @@ private fun BackdropHeader(
               shadow = Shadow(color = Color.Black.copy(alpha = 0.55f), blurRadius = 8f),
             ),
             color = Color.White.copy(alpha = 0.85f),
+            modifier = Modifier.longPressToCopy(it, "原名"),
           )
         }
+      // 媒体 ID：排障与「App 里看到的条目到底是不是服务器上那一条」对照用，长按复制。
+      item.Id?.takeIf { it.isNotBlank() }?.let { id ->
+        Text(
+          text = "媒体 ID：$id",
+          style = MaterialTheme.typography.labelSmall.copy(
+            shadow = Shadow(color = Color.Black.copy(alpha = 0.55f), blurRadius = 8f),
+          ),
+          color = Color.White.copy(alpha = 0.6f),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.longPressToCopy(id, "媒体 ID"),
+        )
+      }
       Spacer(modifier = Modifier.height(6.dp))
       // 年份 / 时长 / 评分 / 分级：包成圆角角标，压在剧照上也看得清。
       // 用 FlowRow 而不是 Row —— 片名长、角标多的时候会自动换行，不会把角标挤出屏幕边缘。

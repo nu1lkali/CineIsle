@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Gesture
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Search
@@ -55,6 +56,7 @@ import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
+import app.marlboroadvance.mpvex.ui.browser.emby.PersonMergeScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
@@ -440,6 +442,30 @@ object PreferencesScreen : Screen {
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },
+              )
+            }
+          }
+
+          item {
+            // 演职员合并：同一个演员因为名字写法不同会裂成多条 Person（作品页缺片、演职员表重复）。
+            // 这是唯一会写服务器元数据的工具，单独一个页面承载，这里只放入口。
+            PreferenceCard {
+              Preference(
+                title = { Text(text = "演职员合并") },
+                summary = {
+                  Text(
+                    text = "把重复的演员条目归并成一条（写入服务器，所有客户端生效，可撤销）· 需要管理员",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.People,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = { backstack.add(PersonMergeScreen()) },
               )
             }
           }

@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -73,6 +74,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
@@ -83,13 +85,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import app.marlboroadvance.mpvex.database.repository.SearchHistoryRepository
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleFilter
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleHit
@@ -216,6 +225,11 @@ data class EmbyLibraryScreen(
     val gridColumns by browserPreferences.embyLibraryGridColumns.collectAsState()
     // 卡片右上角心形快捷收藏开关（默认开）。关掉后退回只读角标。
     val quickFavoriteEnabled by browserPreferences.embyQuickFavorite.collectAsState()
+    // 搜索联想词列表是否收起（默认展开）。联想只是参考，用户收起后一直记着。
+    val suggestCollapsed by browserPreferences.embySearchSuggestCollapsed.collectAsState()
+    // 联想词的「自动收起」标记：不是用户手动收的，而是程序按下面的判据自己收的。
+    // 单独一个状态而不是直接写偏好 —— 自动行为不该污染用户的手动选择。
+    var suggestAutoCollapsed by remember { mutableStateOf(false) }
     // 快捷收藏的反馈 Toast：复用同一个实例、每次先 cancel，
     // 避免连点几张卡片时 Toast 在系统里排成一长串、越积越久。
     val quickFavoriteToast = remember { mutableStateOf<Toast?>(null) }
@@ -658,16 +672,30 @@ data class EmbyLibraryScreen(
     // 首次进入 / 筛选条件变化：只有没有可用缓存时才请求。
     // 有缓存说明是刚从详情页或播放器返回，直接复用列表，不刷新。
     // 首次运行不归位 = 「从详情页返回要停在离开时的位置」；之后凡 cacheKey 变化
-    // （切分类 / 改筛选 / 改排序 / 退出搜索换回浏览列表），呈现的都是新的一批内容，
-    // 网格必须归位到第一条 —— 否则就是「从中间开始显示」（用户反馈）。
+    // （切分类 / 改筛选 / 改排序）呈现的都是新的一批内容，网格必须归位到第一条
+    // —— 否则就是「从中间开始显示」（用户反馈）。「退出搜索」是唯一例外：
+    // 那批内容没变，要连位置一起接回来（见下面 restoringBrowse 分支）。
     var firstBrowseKeyRun by remember { mutableStateOf(true) }
+    // 「退出搜索」要回到的是**同一批**浏览数据（items 从缓存原样起值、也不重拉），
+    // 所以滚动位置也得接回去；其余 cacheKey 变化（切分类 / 改筛选 / 改排序）呈现的是
+    // 新的一批内容，仍要归位到第一条。两者靠这个一次性标记区分。
+    var pendingBrowseRestore by remember { mutableStateOf(false) }
     LaunchedEffect(cacheKey) {
       // 搜索走下面带防抖的那个 effect，这里跳过，避免每敲一个字就立刻发一次请求
       if (searchQuery.isNotBlank()) return@LaunchedEffect
-      if (firstBrowseKeyRun) {
-        firstBrowseKeyRun = false
-      } else {
-        gridState.scrollToItem(0)
+      val restoringBrowse = pendingBrowseRestore
+      pendingBrowseRestore = false
+      when {
+        // 退出搜索：内容与滚动位置都原样接回，不归位
+        restoringBrowse -> {
+          // 顺手把「首次运行」标记消费掉：用户可能一进库就直接搜索、上面这一次
+          // 浏览态的运行从没发生过，不消费的话它会把之后第一次切分类的归位也吃掉。
+          firstBrowseKeyRun = false
+          val restore = EmbyLibraryCache.get(cacheKey)
+          gridState.scrollToItem(restore?.scrollIndex ?: 0, restore?.scrollOffset ?: 0)
+        }
+        firstBrowseKeyRun -> firstBrowseKeyRun = false
+        else -> gridState.scrollToItem(0)
       }
       // 「演员」分类：走独立的演员加载，跳过媒体那套分页 / 缓存 / 扫描
       if (isActorListMode) {
@@ -855,7 +883,8 @@ data class EmbyLibraryScreen(
           .mapNotNull { it.Name }
           .filter { it.contains(q, ignoreCase = true) && !it.equals(q, ignoreCase = true) }
           .distinct()
-        (fromHistory + fromItems).distinct().take(8).toList()
+        // 只留 5 条：联想是「顺手补全」，条目一多反而要逐条扫，比手打还慢。
+        (fromHistory + fromItems).distinct().take(5).toList()
       }
     }
 
@@ -994,6 +1023,47 @@ data class EmbyLibraryScreen(
       focusManager.clearFocus()
     }
 
+    /**
+     * 退出搜索态（回到「这个库的媒体列表」）。
+     *
+     * 抽成函数是为了让**系统返回**与工具行上的搜索按钮走**同一条**路径 ——
+     * 两处各写一份的话，快照 / 接回滚动位置这些副作用迟早会走偏。
+     *
+     * ⚠️ **退出搜索不重新加载列表**：浏览列表本来就有缓存，再拉一次纯属浪费，
+     * 随机排序下还会整批换一个顺序（用户报障「返回后数据重载、随机排序又重排一遍」）。
+     */
+    fun exitSearch() {
+      // 把「词 + 结果 + 滚动位置」整个拍成本地快照，再进时原样回放 ——
+      // 不重搜、不闪中间态（点得多快都一样）
+      lastSearchQuery = searchQuery
+      lastSearchSnapshot =
+        EmbySearchSnapshot(
+          query = searchQuery,
+          items = items,
+          totalCount = totalCount,
+          scrollIndex = gridState.firstVisibleItemIndex,
+          scrollOffset = gridState.firstVisibleItemScrollOffset,
+        )
+      searchActive = false
+      searchQuery = ""
+      releaseInputFocus()
+      // 回去时把离开前的滚动位置接回去（配合上面的 LaunchedEffect(cacheKey)）
+      pendingBrowseRestore = true
+      // ⚠️ 这里**不要**再 load(reset = true)。
+      // cacheKey 一变，items / totalCount / isLoading / chineseHits 都会按 remember(cacheKey)
+      // 从**浏览分桶**重新起值（缓存是 16 槽 LRU，搜索分桶挤不掉浏览分桶）；
+      // 上面那个 LaunchedEffect(cacheKey) 命中缓存也不会重拉 —— 列表本来就能原样回来。
+      // 多发这一枪只会白跑一次请求；而且随机排序是**服务端**出的（客户端 applyClientSort
+      // 只用在搜索 / 中文字幕两条路上），回一批新顺序 = 列表被整个重排（用户报障）。
+      // 唯一还要保留的副作用：作废在途请求，别让姗姗返回的搜索结果盖掉浏览列表。
+      loadGeneration++
+    }
+
+    // 搜索态下系统返回（含边缘滑动）**先退搜索**，而不是直接退掉整个库页面。
+    // 返回键对应「上一层」，而搜索是叠在列表之上的一层 —— 直接出栈不符合预期。
+    // enabled = searchActive ⇒ 非搜索态完全不拦截，交给系统正常出栈。
+    BackHandler(enabled = searchActive) { exitSearch() }
+
     Column(modifier = Modifier.fillMaxSize()) {
       // ── 1. 顶栏：返回 + 库名 + 搜索 ──
       TopAppBar(
@@ -1014,21 +1084,7 @@ data class EmbyLibraryScreen(
           // 一眼还能看出它跟搜索有关。
           IconButton(onClick = {
             if (searchActive) {
-              // 退出搜索：把「词 + 结果 + 滚动位置」整个拍成本地快照，
-              // 再进时原样回放 —— 不重搜、不闪中间态（点得多快都一样）
-              lastSearchQuery = searchQuery
-              lastSearchSnapshot = EmbySearchSnapshot(
-                query = searchQuery,
-                items = items,
-                totalCount = totalCount,
-                scrollIndex = gridState.firstVisibleItemIndex,
-                scrollOffset = gridState.firstVisibleItemScrollOffset,
-              )
-              searchActive = false
-              searchQuery = ""
-              // 演员分类的网格吃的是 actorItems，这次媒体加载没有意义；
-              // 留着它还会在「再进搜索」后姗姗返回，把搜索结果覆盖成全库媒体
-              if (!isActorListMode) scope.launch { load(reset = true) }
+              exitSearch()
             } else {
               searchActive = true
               val snap = lastSearchSnapshot
@@ -1165,6 +1221,41 @@ data class EmbyLibraryScreen(
         if (searchActive) focusManager.clearFocus()
       }
 
+      // ── 联想词什么时候该自动收起 ──
+      // 两条判据，都是「用户的心思已经不在联想上了」的信号：
+      //  ① **键盘从弹起变回收起**（而不是「当前没弹键盘」）：打字结束的那一刻收起，
+      //     把空间让给结果。用「变化」而不是「状态」判断是有意的 —— 进搜索页时键盘
+      //     本来就没弹，用状态判断会一进来就收起，那才是真的莫名。
+      //     键盘再次弹起（回去改词）→ 立刻展开。
+      //  ② **用户开始滚动结果**：注意力明确转到结果上，本次搜索内保持收起。
+      // 手动点标题行随时可以覆盖（见 onToggleCollapsed），且不会写进偏好。
+      // ⚠️ 这几段必须放在 `if (searchActive)` **外面**：放进条件分支里的话，
+      // 退出搜索的那一瞬间整块会先离开组合，`LaunchedEffect` 的重置分支根本不会执行。
+      val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+      var imeWasVisible by remember { mutableStateOf(false) }
+      LaunchedEffect(imeVisible, searchActive) {
+        if (!searchActive) return@LaunchedEffect
+        if (imeVisible) {
+          imeWasVisible = true
+          suggestAutoCollapsed = false
+        } else if (imeWasVisible) {
+          imeWasVisible = false
+          suggestAutoCollapsed = true
+        }
+      }
+      LaunchedEffect(gridState.isScrollInProgress, searchActive) {
+        if (searchActive && gridState.isScrollInProgress && searchQuery.isNotBlank()) {
+          suggestAutoCollapsed = true
+        }
+      }
+      // 退出搜索时清掉自动档与键盘记忆：下次进来是干净状态，由上面的判据重新决定
+      LaunchedEffect(searchActive) {
+        if (!searchActive) {
+          suggestAutoCollapsed = false
+          imeWasVisible = false
+        }
+      }
+
       if (searchActive) {
         OutlinedTextField(
           value = searchQuery,
@@ -1193,9 +1284,20 @@ data class EmbyLibraryScreen(
             }
           },
         )
-        // 搜索联想：点一下就把候选词填进输入框，省掉手动敲完整个片名
+        // 搜索联想：点一下就把候选词填进输入框，省掉手动敲完整个片名。
+        // 高度由卡片自己控制（封顶 + 可收起 + 自动收起），不会把下面的结果挤没。
+        val suggestionsCollapsed = suggestCollapsed || suggestAutoCollapsed
         EmbySearchSuggestionRow(
           suggestions = searchSuggestions,
+          query = searchQuery,
+          collapsed = suggestionsCollapsed,
+          onToggleCollapsed = {
+            // 手动点击一律作数：清掉自动档，再把偏好翻到「与当前相反」的那个状态。
+            // 不清自动档的话，自动收起的当口点「展开」会毫无反应（自动档仍为 true）。
+            val wantCollapsed = !suggestionsCollapsed
+            suggestAutoCollapsed = false
+            browserPreferences.embySearchSuggestCollapsed.set(wantCollapsed)
+          },
           onPick = { keyword ->
             searchQuery = keyword
             keyboardController?.hide()
@@ -2192,35 +2294,131 @@ private fun EmbyYearHeader(year: String, count: Int) {
 }
 
 /**
- * 搜索联想行：把候选词排成一排小 chip，点一下直接填进输入框。
+ * 搜索联想：输入框下方浮出一张圆角建议卡，一行一个候选词，点一下直接填进输入框。
  *
- * 用横向 chip 而不是下拉列表：下拉会盖住下面的结果（用户可能正想边看边改词），
- * chip 只占一行、也更好点。
+ * ## 高度为什么要「封顶 + 可收起」
+ * 联想只是**顺手补全的参考**，真正的主角是下面的搜索结果。早先这张卡会随候选条数
+ * 长到五行（≈220dp），键盘一弹，下面 `weight(1f)` 的结果网格只剩一条缝。
+ * 所以这里改三件事：
+ *  1. **高度封顶**：展开时最多三行出头（[SUGGEST_LIST_MAX_HEIGHT]），更多候选在卡片
+ *     内部滚动 —— 是「随内容长、但长到上限就停」的弹性，不是写死一个固定高度；
+ *  2. **可收起**：点标题行即可整卡收起（只留一行），收起状态记在偏好里，
+ *     不需要联想的用户收一次就一直是收起的；
+ *  3. **也会自己收**：打字结束（键盘收起）或用户开始滚动结果时自动收起、把空间让给结果，
+ *     回去改词（键盘弹起）又自动展开。判据见调用点，这里只管显示。
+ *
+ * 仍不用覆盖式下拉菜单：结果网格就在下面，盖住它会让人没法边看边改词。
  */
 @Composable
 private fun EmbySearchSuggestionRow(
   suggestions: List<String>,
+  query: String,
+  collapsed: Boolean,
+  onToggleCollapsed: () -> Unit,
   onPick: (String) -> Unit,
 ) {
   if (suggestions.isEmpty()) return
-  androidx.compose.foundation.lazy.LazyRow(
-    contentPadding = PaddingValues(horizontal = 16.dp),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(horizontal = 16.dp, vertical = 4.dp)
+      .clip(RoundedCornerShape(12.dp))
+      .background(MaterialTheme.colorScheme.surfaceVariant),
   ) {
-    items(suggestions.size) { index ->
-      val keyword = suggestions[index]
-      FilterChip(
-        selected = false,
-        onClick = { onPick(keyword) },
-        label = {
-          Text(
-            text = keyword,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        },
+    // ── 标题行：整行可点，用来收起 / 展开 ──
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .clickable { onToggleCollapsed() }
+        .padding(horizontal = 12.dp, vertical = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "联想词",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Spacer(Modifier.width(6.dp))
+      Text(
+        text = "共 ${suggestions.size} 条",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Spacer(Modifier.weight(1f))
+      if (collapsed) {
+        Text(
+          text = "展开",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.width(2.dp))
+      }
+      Icon(
+        imageVector = if (collapsed) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+        contentDescription = if (collapsed) "展开联想词" else "收起联想词",
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(18.dp),
       )
     }
+
+    if (!collapsed) {
+      Column(
+        // 封顶三行出头：再多就在这张卡里滚动，不去挤下面的结果网格
+        modifier = Modifier
+          .fillMaxWidth()
+          .heightIn(max = SUGGEST_LIST_MAX_HEIGHT)
+          .verticalScroll(rememberScrollState()),
+      ) {
+        suggestions.forEachIndexed { index, keyword ->
+          if (index > 0) {
+            HorizontalDivider(
+              modifier = Modifier.padding(start = 36.dp),
+              thickness = 0.5.dp,
+              color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+            )
+          }
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clickable { onPick(keyword) }
+              .padding(horizontal = 12.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(
+              imageVector = Icons.Filled.Search,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+              text = highlightMatch(keyword, query),
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+/** 联想列表展开时的最大高度：约三行半（每行 ≈41dp + 分隔线），再多就在卡内滚动 */
+private val SUGGEST_LIST_MAX_HEIGHT = 144.dp
+
+/** 把 [query] 在 [text] 里命中的那一段加粗，其余保持常规字重 —— 便于一眼对上是哪几个字匹配上的。 */
+private fun highlightMatch(text: String, query: String): AnnotatedString {
+  val q = query.trim()
+  if (q.isEmpty()) return AnnotatedString(text)
+  val start = text.indexOf(q, ignoreCase = true)
+  if (start < 0) return AnnotatedString(text)
+  val end = start + q.length
+  return buildAnnotatedString {
+    append(text.substring(0, start))
+    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(text.substring(start, end)) }
+    append(text.substring(end))
   }
 }
 
@@ -2924,6 +3122,20 @@ internal object EmbyLibraryCache {
       }
     }
     lastRemovedItemId = itemId
+  }
+
+  /**
+   * 整片作废所有分桶缓存。
+   *
+   * 「撤销演职员合并」时用：合并那会儿把被并掉的演员卡从各分桶里 [removeItem] 掉了，
+   * 撤销之后它们**又回到作品里**，但缓存里已经没有它们，光靠 `removeItem` 的
+   * 单向剔除救不回来 —— 只能整片丢掉，让下次进页面重新拉。
+   * 代价是回库时会重新请求一次（可接受：撤销本来就是低频操作）。
+   */
+  @Synchronized
+  fun clear() {
+    entries.clear()
+    lastRemovedItemId = null
   }
 
   /**

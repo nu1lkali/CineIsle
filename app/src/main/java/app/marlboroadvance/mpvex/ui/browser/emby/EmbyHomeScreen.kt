@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -177,6 +178,17 @@ fun EmbyHomeScreen(
   val searchHistory by searchHistoryFlow.collectAsState(initial = emptyList())
   val historyScope = rememberCoroutineScope()
   val keyboardController = LocalSoftwareKeyboardController.current
+
+  // 搜索态下系统返回（含边缘滑动）**先退搜索**，而不是直接退掉首页。
+  // 返回键对应「上一层」，而搜索是叠在首页之上的一层；直接出栈不符合预期。
+  // enabled = searchActive ⇒ 非搜索态完全不拦截，交给系统正常出栈。
+  BackHandler(enabled = searchActive) {
+    searchActive = false
+    searchQuery = ""
+    searchResults = emptyList()
+    isSearching = false
+    keyboardController?.hide()
+  }
 
   Column(modifier = Modifier.fillMaxSize()) {
     // 长按「继续观看」卡片弹出的确认框：确认后清掉服务器记录的播放位置，
