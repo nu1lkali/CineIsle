@@ -1,10 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -85,6 +81,7 @@ import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.copyTextWithToast
 import app.marlboroadvance.mpvex.ui.utils.longPressToCopy
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -434,7 +431,7 @@ data class PersonMergeScreen(
                     onToggle = { togglePick(p) },
                     onSetCanonical = { setCanonical(p) },
                     // 这里搜的是服务器上的「人员」（含导演 / 编剧），不写死成「演员」
-                    onCopyId = { copyToClipboard(context, "人员 Id", p.id) },
+                    onCopyId = { copyTextWithToast(context, "人员 Id", p.id) },
                   )
                 }
               }
@@ -1390,15 +1387,6 @@ private fun ProgressBar(fraction: Float) {
         .fillMaxHeight()
         .background(MaterialTheme.colorScheme.primary),
     )
-  }
-}
-
-private fun copyToClipboard(context: Context, label: String, text: String) {
-  if (text.isBlank()) return
-  runCatching {
-    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-    cm?.setPrimaryClip(ClipData.newPlainText(label, text))
-    Toast.makeText(context, "已复制$label", Toast.LENGTH_SHORT).show()
   }
 }
 

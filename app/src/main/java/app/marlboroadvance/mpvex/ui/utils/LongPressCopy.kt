@@ -1,6 +1,8 @@
 package app.marlboroadvance.mpvex.ui.utils
 
 import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -33,7 +35,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
  * 不需要 Compose 那层抽象。
  *
  * @param text 要复制的内容；**null / 全空白时完全不挂手势**（不留一个长按了没反应的死区）
- * @param label 提示文案里的名字，例如「片名」→「已复制片名」
+ * @param label 剪贴板条目的标签（系统「复制自 XXX」提示用），只影响剪贴板元信息
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -49,14 +51,9 @@ fun Modifier.longPressToCopy(text: String?, label: String = "内容"): Modifier 
       interactionSource = interaction,
       indication = null,
       onLongClick = {
-        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
-        runCatching {
-          clipboard?.setPrimaryClip(ClipData.newPlainText(label, value))
-        }.onSuccess {
+        // 触觉只在**真的复制成功**时给：失败还震一下等于骗人。
+        if (copyTextWithToast(context, label, value)) {
           haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-          Toast.makeText(context, "已复制$label", Toast.LENGTH_SHORT).show()
-        }.onFailure {
-          Toast.makeText(context, "复制失败", Toast.LENGTH_SHORT).show()
         }
       },
       // combinedClickable 的 onClick 是必填项。这些文字本来就没有点击行为，
@@ -65,3 +62,61 @@ fun Modifier.longPressToCopy(text: String?, label: String = "内容"): Modifier 
     )
   }
 }
+
+/**
+ * 复制到剪贴板并弹 Toast，供**非 Modifier 场景**（菜单项 / 对话框按钮）复用。
+ *
+ * Toast 文案带**实际复制的值**，而不是「已复制姓名」这种只报字段名的提示：
+ * 用户长按之后要确认的是「粘到手里的是不是我要的那串」，只告诉他「复制了姓名」等于没说。
+ *
+ * @return 是否复制成功（供调用方决定要不要给触觉 / 其它反馈）
+ */
+fun copyTextWithToast(context: Context, label: String, text: String): Boolean {
+  val value = text.trim()
+  if (value.isEmpty()) return false
+  val shown = value.toastSnippet()
+  val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+  val ok =
+    clipboard != null &&
+      runCatching { clipboard.setPrimaryClip(ClipData.newPlainText(label, value)) }.isSuccess
+  val tip = if (ok) "已复制：$shown" else "复制失败：$shown"
+  Toast.makeText(context, tip, Toast.LENGTH_SHORT).show()
+  return ok
+}
+
+/** Toast 里最多显示这么多个「半角宽度」（全角 / 中日韩字符按 2 记），超了截断加省略号 */
+private const val TOAST_MAX_WIDTH = 44
+
+/**
+ * 截成适合 Toast 的一行：压掉换行 / 连续空白（Toast 里多行会把横幅撑成一大块），
+ * 再按显示宽度截断。原名可能很长、媒体 ID 是 32 位 GUID，硬塞会铺满半个屏幕。
+ */
+private fun String.toastSnippet(): String {
+  val flat = trim().replace(Regex("\\s+"), " ")
+  if (flat.displayWidth() <= TOAST_MAX_WIDTH) return flat
+  val sb = StringBuilder()
+  var width = 0
+  for (ch in flat) {
+    val w = ch.displayWidth()
+    if (width + w > TOAST_MAX_WIDTH) break
+    width += w
+    sb.append(ch)
+  }
+  return sb.toString() + "…"
+}
+
+private fun String.displayWidth(): Int = sumOf { it.displayWidth() }
+
+/** 东亚全角字形按 2 个半角宽算，其余按 1 —— 只用于判断 Toast 会不会太宽 */
+private fun Char.displayWidth(): Int =
+  when {
+    this.code < 0x1100 -> 1
+    this in '\u1100'..'\u115F' ||
+      this in '\u2E80'..'\uA4CF' ||
+      this in '\uAC00'..'\uD7A3' ||
+      this in '\uF900'..'\uFAFF' ||
+      this in '\uFE30'..'\uFE6F' ||
+      this in '\uFF00'..'\uFF60' ||
+      this in '\uFFE0'..'\uFFE6' -> 2
+    else -> 1
+  }
