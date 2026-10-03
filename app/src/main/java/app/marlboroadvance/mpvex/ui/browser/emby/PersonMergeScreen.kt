@@ -37,6 +37,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -75,6 +76,7 @@ import app.marlboroadvance.mpvex.domain.emby.MergeItemRef
 import app.marlboroadvance.mpvex.domain.emby.MergePhase
 import app.marlboroadvance.mpvex.domain.emby.MERGE_STATE_REVERTED
 import app.marlboroadvance.mpvex.domain.emby.PersonMergeBatch
+import app.marlboroadvance.mpvex.domain.emby.PersonMergeRule
 import app.marlboroadvance.mpvex.domain.emby.PersonRef
 import app.marlboroadvance.mpvex.domain.emby.autoMergeableGroups
 import app.marlboroadvance.mpvex.domain.emby.findOrphanPersons
@@ -97,13 +99,13 @@ import org.koin.compose.koinInject
 /**
  * 「演职员合并」独立工具页 —— 整个 Person 去重功能的**主场**。
  *
- * 结构（自上而下）：说明卡 → 搜索演员 → 手动绑定（选择区）→ 扫描重复 → 自动合并同名
- * → 孤立演员清理 → 合并历史。
+ * 结构（自上而下）：说明卡 → 搜索演员 → 手动绑定（选择区）→ 判重规则 → 扫描重复
+ * → 自动合并 → 孤立演员清理 → 合并历史。
  *
  * ## 为什么所有写操作都先问一句
  * 这是**唯一会改服务器元数据**的页面，而且改坏了**不会报错**（把两个人的作品搅在一起，
- * 界面上看不出来）。所以：需要管理员、自动合并只吃「同名且无 ID 冲突」那一档、
- * 每次落地前都弹确认框并把「保留哪条」摆出来；非管理员整页只读。
+ * 界面上看不出来）。所以：需要管理员、自动合并吃哪一档由用户选的**判重规则**决定
+ * （默认最保守的「严格」）、每次落地前都弹确认框并把「保留哪条」摆出来；非管理员整页只读。
  *
  * @param prefillPersonId 从演员卡长按菜单进来时预置的「主条目」；为空则是空页
  */
@@ -151,6 +153,15 @@ data class PersonMergeScreen(
     var groups by remember { mutableStateOf<List<DuplicateGroup>?>(null) }
     var scanning by remember { mutableStateOf(false) }
     var scanText by remember { mutableStateOf("") }
+
+    // ── 判重规则（用户选，存偏好）──
+    // 真实库里「同名但外部 ID 不一致」绝大多数是同一个人（不同来源抓的 / 来源后来改了 id），
+    // 一律当成两个人会逼用户一组组手点。所以把判据交给用户选，默认仍是最保守的严格档。
+    var mergeRule by remember { mutableStateOf(browserPreferences.embyPersonMergeRule.get()) }
+
+    // 按当前规则会参与「自动合并」的组。扫描卡片与自动合并卡片**共用同一份判据** ——
+    // 两处各算一次迟早会不一致（按钮写 30 组、列表里看着却像 12 组）。
+    val autoGroups = groups?.let { autoMergeableGroups(it, mergeRule) } ?: emptyList()
 
     // ── 合并确认（选择区的「合并」按钮 / 每个组的「合并…」都走这里）──
     var mergeConfirmOpen by remember { mutableStateOf(false) }
@@ -507,7 +518,42 @@ data class PersonMergeScreen(
             }
           }
 
-          // ④ 扫描重复
+          // ④ 判重规则（决定「自动合并」碰哪些组）
+          item {
+            SectionCard(title = "判重规则") {
+              Text(
+                text = "名字一样的人到底算不算同一个人，不同库差别很大 —— 下面三档只影响「自动合并」会碰哪些组；" +
+                  "扫描结果始终全量列出，手动合并任何时候都能用。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+              Spacer(Modifier.height(8.dp))
+              // 用 FlowRow 而不是 Row：三个中文 chip 挤一行会被压缩、折行再被裁掉
+              FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+              ) {
+                PersonMergeRule.values().forEach { rule ->
+                  FilterChip(
+                    selected = mergeRule == rule,
+                    onClick = {
+                      mergeRule = rule
+                      browserPreferences.embyPersonMergeRule.set(rule)
+                    },
+                    label = { Text(mergeRuleLabel(rule), maxLines = 1) },
+                  )
+                }
+              }
+              Spacer(Modifier.height(6.dp))
+              Text(
+                text = mergeRuleHint(mergeRule),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+
+          // ⑤ 扫描重复
           item {
             SectionCard(title = "扫描重复演员") {
               Text(
@@ -548,6 +594,7 @@ data class PersonMergeScreen(
                         group = g,
                         server = s,
                         enabled = writable,
+                        inAuto = g in autoGroups,
                         onMerge = {
                           picked = g.members.associateBy { it.id }
                           canonicalId = g.suggestedCanonical.id
@@ -564,6 +611,7 @@ data class PersonMergeScreen(
                         group = g,
                         server = s,
                         enabled = writable,
+                        inAuto = g in autoGroups,
                         onMerge = {
                           picked = g.members.associateBy { it.id }
                           canonicalId = g.suggestedCanonical.id
@@ -577,12 +625,12 @@ data class PersonMergeScreen(
             }
           }
 
-          // ⑤ 自动合并全部同名
+          // ⑥ 自动合并（按上面选的规则）
           item {
-            val autoGroups = groups?.let { autoMergeableGroups(it) } ?: emptyList()
-            SectionCard(title = "自动合并全部同名") {
+            SectionCard(title = "自动合并") {
               Text(
-                text = "只处理「规范化后名字完全相同」的组，且跳过「同名但外部 ID 冲突」（那多半是两个同名的不同人）。",
+                text = "按上面的规则，一次性合并全部符合条件的组（${mergeRuleLabel(mergeRule)}）：" +
+                  mergeRuleHint(mergeRule) + " 每组合并前仍会列出保留项让你确认。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
@@ -598,13 +646,13 @@ data class PersonMergeScreen(
                   onClick = { autoGroupsToConfirm = autoGroups },
                   enabled = writable && autoGroups.isNotEmpty(),
                 ) {
-                  Text("自动合并全部同名（${autoGroups.size} 组）", maxLines = 1)
+                  Text("自动合并 ${autoGroups.size} 组", maxLines = 1)
                 }
               }
             }
           }
 
-          // ⑥ 孤立演员清理
+          // ⑦ 孤立演员清理
           item {
             SectionCard(title = "孤立演员清理") {
               Text(
@@ -845,11 +893,12 @@ data class PersonMergeScreen(
     autoGroupsToConfirm?.let { gs ->
       AlertDialog(
         onDismissRequest = { autoGroupsToConfirm = null },
-        title = { Text("自动合并全部同名") },
+        title = { Text("自动合并（${mergeRuleLabel(mergeRule)}）") },
         text = {
           Column {
             Text(
-              text = "将处理 ${gs.size} 组，保留项按「作品最多 → 名字最长 → 字典序」自动选：",
+              text = "将按「${mergeRuleLabel(mergeRule)}」处理 ${gs.size} 组，保留项按" +
+                "「作品最多 → 名字最长 → 字典序」自动选：",
               style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(8.dp))
@@ -880,7 +929,9 @@ data class PersonMergeScreen(
           TextButton(onClick = {
             val s = server
             autoGroupsToConfirm = null
-            if (s != null) viewModel.startAutoMerge(s, gs)
+            // ⚠️ 规则要一起传：VM 侧会再筛一次，不传就回落到默认 STRICT，
+            // 宽松规则下选中的组会被静默丢掉。
+            if (s != null) viewModel.startAutoMerge(s, gs, mergeRule)
           }) {
             Text("开始合并")
           }
@@ -1039,6 +1090,38 @@ private fun SectionCard(
   }
 }
 
+/** 规则在 chip 上的短名（必须短：三个中文 chip 要能在窄屏一行放得下） */
+private fun mergeRuleLabel(rule: PersonMergeRule): String =
+  when (rule) {
+    PersonMergeRule.STRICT -> "严格"
+    PersonMergeRule.SAME_NAME_ANY_ID -> "同名即合并"
+    PersonMergeRule.INCLUDE_SIMILAR -> "含相近名"
+  }
+
+/** 规则的一句话说明：说清「会被跳过的那部分是什么」，用户才知道该选哪档 */
+private fun mergeRuleHint(rule: PersonMergeRule): String =
+  when (rule) {
+    PersonMergeRule.STRICT ->
+      "只合并名字完全相同、且外部 ID 不冲突的组。同名但 Tmdb/Imdb 不一致的会被跳过 —— " +
+        "那种多半是同一人被不同来源抓了两次，也可能是两个同名的人。"
+    PersonMergeRule.SAME_NAME_ANY_ID ->
+      "只要名字相同就合并，忽略外部 ID 冲突。库里同名不同人的情况很少时用它，一次能清掉大量重复。"
+    PersonMergeRule.INCLUDE_SIMILAR ->
+      "名字相同、或名字互为前缀（如「成龙」与「成龙 Jackie Chan」）都合并，最激进 —— 合并前请看清列表。"
+  }
+
+/** 组行尾的状态说明：当前规则下会不会被自动合并带上，以及为什么 */
+private fun groupRuleNote(
+  group: DuplicateGroup,
+  inAuto: Boolean,
+): String =
+  when {
+    group.conflictingIds && !inAuto -> " · ⚠ 外部 ID 冲突，当前规则不自动合并（可手动合并）"
+    group.conflictingIds -> " · ⚠ 外部 ID 冲突（当前规则会一起合并）"
+    !inAuto && group.kind == DuplicateKind.SIMILAR_NAME -> " · 名字相近，当前规则不自动合并（可手动合并）"
+    else -> ""
+  }
+
 @Composable
 private fun GroupHeader(text: String) {
   Text(
@@ -1054,6 +1137,8 @@ private fun DuplicateGroupRow(
   group: DuplicateGroup,
   server: EmbyServer?,
   enabled: Boolean,
+  /** 按当前规则，这组会不会被「自动合并」带上。false 时给出原因，别让用户猜。 */
+  inAuto: Boolean,
   onMerge: () -> Unit,
 ) {
   Row(
@@ -1081,7 +1166,7 @@ private fun DuplicateGroupRow(
       )
       Text(
         text = "建议保留：${group.suggestedCanonical.name} · 合计 ${group.totalWorks} 部作品" +
-          if (group.conflictingIds) " · ⚠ 外部 ID 冲突（可能是两个同名的人）" else "",
+          groupRuleNote(group, inAuto),
         style = MaterialTheme.typography.labelSmall,
         color = if (group.conflictingIds) {
           MaterialTheme.colorScheme.error

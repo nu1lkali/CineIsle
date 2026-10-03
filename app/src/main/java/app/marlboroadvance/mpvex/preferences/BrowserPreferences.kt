@@ -2,6 +2,7 @@ package app.marlboroadvance.mpvex.preferences
 
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleMarks
 import app.marlboroadvance.mpvex.domain.emby.EmbyLibraryFilterState
+import app.marlboroadvance.mpvex.domain.emby.PersonMergeRule
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
 import app.marlboroadvance.mpvex.preferences.preference.getEnum
@@ -269,6 +270,14 @@ class BrowserPreferences(
    * （默认值 false = 展开，与改之前的表现一致）。
    */
   val embySearchSuggestCollapsed = preferenceStore.getBoolean("emby_search_suggest_collapsed", false)
+
+  /**
+   * 演职员合并的**判重规则**（[PersonMergeRule]），默认 [PersonMergeRule.STRICT]。
+   *
+   * 只影响「自动合并」会碰哪些组；扫描结果全量展示、手动合并始终可用。
+   * 存的是枚举名，取不到（旧值 / 手改坏了）时 `getEnum` 会退回默认值。
+   */
+  val embyPersonMergeRule = preferenceStore.getEnum("emby_person_merge_rule", PersonMergeRule.STRICT)
 }
 
 /**

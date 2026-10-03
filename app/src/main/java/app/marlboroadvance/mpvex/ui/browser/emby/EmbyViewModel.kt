@@ -35,6 +35,7 @@ import app.marlboroadvance.mpvex.domain.emby.PersonMerger
 import app.marlboroadvance.mpvex.domain.emby.PersonRef
 import app.marlboroadvance.mpvex.domain.emby.UndoOutcome
 import app.marlboroadvance.mpvex.domain.emby.autoMergeableGroups
+import app.marlboroadvance.mpvex.domain.emby.PersonMergeRule
 import app.marlboroadvance.mpvex.domain.emby.clusterDuplicatePersons
 import app.marlboroadvance.mpvex.domain.emby.toPersonRef
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
@@ -1491,14 +1492,18 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   /**
-   * 自动合并全部同名组。
+   * 自动合并一整批组。
    *
-   * ⚠️ 只吃 [autoMergeableGroups] 的结果 —— 那一层已经排除了「名字相近」档与
-   * 「同名但外部 ID 冲突」（= 两个同名的不同人）。这是整块里唯一会连着写很多组的路径，
-   * 所以它拿到的必须是最可信的那一档。
+   * @param rule 判重规则（用户在工具页选的）。⚠️ **必须传**：调用方给的是已经按同一规则
+   *   筛过的列表，这里若回落到默认 STRICT 再筛一次，宽松规则下选中的组会被静默丢掉
+   *   —— 确认弹窗写着 30 组、实际只合了 12 组，且不报错。
    */
-  fun startAutoMerge(server: EmbyServer, groups: List<DuplicateGroup>) {
-    val todo = autoMergeableGroups(groups)
+  fun startAutoMerge(
+    server: EmbyServer,
+    groups: List<DuplicateGroup>,
+    rule: PersonMergeRule,
+  ) {
+    val todo = autoMergeableGroups(groups, rule)
     if (todo.isEmpty()) {
       _mergeState.value = MergeUiState(message = "没有可自动合并的同名组")
       return

@@ -95,6 +95,27 @@ fun EmbyItem.toPersonRef(workCount: Int = 0): PersonRef? {
   )
 }
 
+/**
+ * 合并规则（严格度）—— 决定「哪些组算同一个人的重复」。
+ *
+ * 之所以要给用户选：外部 ID 冲突（同一家 provider 给了不同 id）在真实库里**大量误报** ——
+ * 同一个演员被两个不同的元数据来源抓过，或某个来源后来改了 id，都会留下两份不同的
+ * Tmdb/Imdb。把这种一律判成「两个同名的人」，用户就得一组一组手动点，等于功能废掉。
+ * 反过来也有人确实库里存在同名不同人的情况。所以正确做法是**把判据交给用户**。
+ *
+ * 只影响「自动合并」会碰哪些组；扫描结果始终全量展示，手动合并不受限制。
+ */
+enum class PersonMergeRule {
+  /** **严格**（默认）：规范化后同名，且外部 ID 不冲突 —— 最保守，几乎不会误合 */
+  STRICT,
+
+  /** **同名即合并**：只要同名就合并，忽略外部 ID 冲突（库里同名不同人的概率低时选它） */
+  SAME_NAME_ANY_ID,
+
+  /** **含相近名**：同名 + 名字互为前缀（如 `成龙` / `成龙 Jackie Chan`）都算，最激进 */
+  INCLUDE_SIMILAR,
+}
+
 /** 重复的成因分档：只影响展示分组与「默认勾不勾」，不影响合并本身的正确性。 */
 enum class DuplicateKind {
   /** 规范化后**名字完全相同** —— 这是「自动合并同名」唯一会碰的一档 */
@@ -272,9 +293,28 @@ fun clusterDuplicatePersons(persons: List<PersonRef>): List<DuplicateGroup> {
   )
 }
 
-/** 「自动合并同名」用的筛选：**只碰同名档，且排除 ID 冲突的组**。 */
-fun autoMergeableGroups(groups: List<DuplicateGroup>): List<DuplicateGroup> =
-  groups.filter { it.kind == DuplicateKind.SAME_NAME && !it.conflictingIds && it.members.size >= 2 }
+/**
+ * 「自动合并」会碰哪些组 —— 由 [rule] 决定（见 [PersonMergeRule]）。
+ *
+ * ⚠️ 调用方**必须把用户选的规则传进来**，不能落到默认值上：VM 侧（`startAutoMerge`）
+ * 拿到的是 UI 已经筛过一遍的列表，若再按默认 STRICT 过滤一次，宽松规则下选中的组
+ * 会被静默丢掉 —— 按钮上显示 30 组、实际只合 12 组。
+ */
+fun autoMergeableGroups(
+  groups: List<DuplicateGroup>,
+  rule: PersonMergeRule = PersonMergeRule.STRICT,
+): List<DuplicateGroup> =
+  groups.filter { g ->
+    if (g.members.size < 2) {
+      false
+    } else {
+      when (rule) {
+        PersonMergeRule.STRICT -> g.kind == DuplicateKind.SAME_NAME && !g.conflictingIds
+        PersonMergeRule.SAME_NAME_ANY_ID -> g.kind == DuplicateKind.SAME_NAME
+        PersonMergeRule.INCLUDE_SIMILAR -> true
+      }
+    }
+  }
 
 // ════════════════════════════════════════════════════════════════════════
 // 4. 改写条目的 People（纯 JSON 级，不碰 data class）
