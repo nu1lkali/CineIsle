@@ -5,6 +5,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,6 +33,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FilterAlt
@@ -44,16 +47,18 @@ import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -92,7 +97,6 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.AnnotatedString
@@ -1690,16 +1694,24 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
         } // 关闭锚定 Box（菜单跟着长按的那一点走）
       }
 
-    // ── 筛选弹窗：类型 / 标签 / 年份 / 官方分级 / 评分 / 只看收藏 ──
-    // 弹窗里改的是草稿副本，只有点「确定」才写回，避免每点一个 chip 就发一次请求。
-    // 点弹窗外部 / 返回键 = 放弃本次改动。
-    // ── 筛选面板：底部上划，每个维度一个下拉；选中立即生效，不用点确定 ──
-    // 之所以不用「草稿 + 确定」：筛选的结果在下面列表里是实时可见的，
-    // 每点一项就刷新一次，比「点完确定才知道对不对」少一次试错。
+    // ── 筛选面板（2026-10-09 改为「加号 + 复选对话框 + 圆角标签」版式）──
+    //
+    // 版式：抽屉里每个「多选」类目一行 = 类目名 + 右侧 `+` 圆钮。
+    // 点 `+` 弹一个复选框对话框（取消 / 确定），确定后把选中的项作为
+    // **带叉号的圆角标签**追加到该类目下方；点标签上的叉即可单独移除。
+    //
+    // 为什么改成这样：原先每个类目一个就地展开的下拉，12 个维度叠起来又长又乱，
+    // 展开/收起还会引起「弹窗跳动」与「点选项没反应」等一串问题（见 2026-10-09 回退记录）。
+    // 现在把「选什么」收进独立的对话框，抽屉只负责展示「已选了什么」，
+    // 层次清楚、也不再有任何就地展开的重排。
+    //
+    // 形态分工：
+    // - 多选类目（类型 / 标签 / 年份 / 官方分级 / 评分）→ 加号 + 对话框 + 圆角标签
+    // - 单选类目（播放状态 / 字幕）→ 保留下拉收缩框（语义上就是「从几项里挑一个」）
+    // - 开关类（中文字幕 / 只看收藏）→ Switch
+    // 已删除：演员 / 导演、工作室、清晰度、3D（用户要求去掉这些维度）。
     if (showFilterDialog) {
       // skipPartiallyExpanded：面板只有「展开 / 收起」两态，不允许停在半展开。
-      // 半展开态会和内容里的下拉列表抢嵌套滚动 —— 表现为拖不动、滑一下就
-      // 变成拖面板、点击偶尔被吞。
       val filterSheetState =
         androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
       ModalBottomSheet(
@@ -1744,91 +1756,61 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
             }
           }
 
-          // 类型：多选
-          FilterDropdown(
+          // 类型：多选（加号 → 复选对话框 → 圆角标签）
+          FilterCategoryRow(
             label = "类型",
-            options = filterOptions.genres,
-            selectedNames = filterOptions.genres.filter { it in selectedGenres }.toSet(),
-            onToggle = { name ->
-              selectedGenres = if (name in selectedGenres) selectedGenres - name else selectedGenres + name
-              persistFilter()
-            },
-            onClear = { selectedGenres = emptySet(); persistFilter() },
+            allOptions = filterOptions.genres,
+            selected = selectedGenres,
+            onConfirm = { picked -> selectedGenres = picked; persistFilter() },
+            onRemove = { name -> selectedGenres = selectedGenres - name; persistFilter() },
           )
           // 标签：多选
-          FilterDropdown(
+          FilterCategoryRow(
             label = "标签",
-            options = filterOptions.tags,
-            selectedNames = filterOptions.tags.filter { it in selectedTags }.toSet(),
-            onToggle = { name ->
-              selectedTags = if (name in selectedTags) selectedTags - name else selectedTags + name
+            allOptions = filterOptions.tags,
+            selected = selectedTags,
+            onConfirm = { picked -> selectedTags = picked; persistFilter() },
+            onRemove = { name -> selectedTags = selectedTags - name; persistFilter() },
+          )
+          // 年份：多选（对外是字符串，切回 Int 再存）
+          FilterCategoryRow(
+            label = "年份",
+            allOptions = filterOptions.years.map { it.toString() },
+            selected = selectedYears.map { it.toString() }.toSet(),
+            onConfirm = { picked ->
+              selectedYears = picked.mapNotNull { it.toIntOrNull() }.toSet()
               persistFilter()
             },
-            onClear = { selectedTags = emptySet(); persistFilter() },
-          )
-          // 年份：下拉里是字符串，切回 Int 再存（多选）
-          FilterDropdown(
-            label = "年份",
-            options = filterOptions.years.map { it.toString() },
-            selectedNames = selectedYears.map { it.toString() }.toSet(),
-            onToggle = { v ->
-              v.toIntOrNull()?.let { y ->
-                selectedYears = if (y in selectedYears) selectedYears - y else selectedYears + y
-                persistFilter()
-              }
+            onRemove = { v ->
+              v.toIntOrNull()?.let { selectedYears = selectedYears - it }
+              persistFilter()
             },
-            onClear = { selectedYears = emptySet(); persistFilter() },
           )
           // 官方分级：多选
-          FilterDropdown(
+          FilterCategoryRow(
             label = "官方分级",
-            options = filterOptions.officialRatings,
-            selectedNames = filterOptions.officialRatings.filter { it in selectedRatings }.toSet(),
-            onToggle = { name ->
-              selectedRatings = if (name in selectedRatings) selectedRatings - name else selectedRatings + name
-              persistFilter()
-            },
-            onClear = { selectedRatings = emptySet(); persistFilter() },
+            allOptions = filterOptions.officialRatings,
+            selected = selectedRatings,
+            onConfirm = { picked -> selectedRatings = picked; persistFilter() },
+            onRemove = { name -> selectedRatings = selectedRatings - name; persistFilter() },
           )
-          // 演员 / 导演：显示名字，按 Id 筛（同名不同人只能靠 Id 区分），多选
-          FilterDropdown(
-            label = "演员 / 导演",
-            options = filterOptions.persons.map { it.name },
-            selectedNames = filterOptions.persons
-              .filter { it.id in selectedPersonIds }
-              .map { it.name }
-              .toSet(),
-            onToggle = { name ->
-              val person = filterOptions.persons.firstOrNull { it.name == name } ?: return@FilterDropdown
-              selectedPersonIds = if (person.id in selectedPersonIds) {
-                selectedPersonIds - person.id
-              } else {
-                selectedPersonIds + person.id
+          // 评分：单选语义，但沿用「加号 + 对话框」；确定后同样以圆角标签展示
+          FilterCategoryRow(
+            label = "评分",
+            allOptions = RATING_OPTIONS.map { it.first }.filter { it != "不限" },
+            selected = RATING_OPTIONS.firstOrNull { it.second == minRating }?.let { setOf(it.first) }
+              ?: emptySet(),
+            onConfirm = { picked ->
+              // 单选：取最后一个（对话框内是单选行为，picked 至多一个）
+              minRating = picked.lastOrNull()?.let { v ->
+                RATING_OPTIONS.firstOrNull { it.first == v }?.second
               }
               persistFilter()
             },
-            onClear = { selectedPersonIds = emptySet(); persistFilter() },
+            onRemove = { minRating = null; persistFilter() },
           )
-          // 工作室：多选
-          FilterDropdown(
-            label = "工作室",
-            options = filterOptions.studios.map { it.name },
-            selectedNames = filterOptions.studios
-              .filter { it.id in selectedStudioIds }
-              .map { it.name }
-              .toSet(),
-            onToggle = { name ->
-              val studio = filterOptions.studios.firstOrNull { it.name == name } ?: return@FilterDropdown
-              selectedStudioIds = if (studio.id in selectedStudioIds) {
-                selectedStudioIds - studio.id
-              } else {
-                selectedStudioIds + studio.id
-              }
-              persistFilter()
-            },
-            onClear = { selectedStudioIds = emptySet(); persistFilter() },
-          )
-          // 播放状态：单选，再点一次已选的那项就取消
+
+          // 播放状态：单选，再点一次已选的那项就取消（保留下拉收缩框）
           FilterDropdown(
             label = "播放状态",
             options = listOf("已看", "未看"),
@@ -1844,39 +1826,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
             },
             onClear = { playedFilter = null; persistFilter() },
           )
-          // 清晰度：单选
-          FilterDropdown(
-            label = "清晰度",
-            options = listOf("高清", "标清"),
-            selectedNames = when (hdFilter) {
-              true -> setOf("高清")
-              false -> setOf("标清")
-              null -> emptySet()
-            },
-            onToggle = { v ->
-              val target = v == "高清"
-              hdFilter = if (hdFilter == target) null else target
-              persistFilter()
-            },
-            onClear = { hdFilter = null; persistFilter() },
-          )
-          // 3D：单选
-          FilterDropdown(
-            label = "3D",
-            options = listOf("3D", "非 3D"),
-            selectedNames = when (threeDFilter) {
-              true -> setOf("3D")
-              false -> setOf("非 3D")
-              null -> emptySet()
-            },
-            onToggle = { v ->
-              val target = v == "3D"
-              threeDFilter = if (threeDFilter == target) null else target
-              persistFilter()
-            },
-            onClear = { threeDFilter = null; persistFilter() },
-          )
-          // 字幕：单选
+          // 字幕：单选（保留下拉收缩框）
           FilterDropdown(
             label = "字幕",
             options = listOf("有字幕", "无字幕"),
@@ -1891,21 +1841,6 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               persistFilter()
             },
             onClear = { subtitlesFilter = null; persistFilter() },
-          )
-          // 评分：单选
-          FilterDropdown(
-            label = "评分",
-            options = RATING_OPTIONS.map { it.first }.filter { it != "不限" },
-            selectedNames = RATING_OPTIONS
-              .firstOrNull { it.second == minRating }
-              ?.let { setOf(it.first) }
-              ?: emptySet(),
-            onToggle = { v ->
-              val target = RATING_OPTIONS.firstOrNull { it.first == v }?.second
-              minRating = if (minRating == target) null else target
-              persistFilter()
-            },
-            onClear = { minRating = null; persistFilter() },
           )
 
           // 中文字幕：按路径标记做客户端匹配（Emby 服务端没有这类筛选）。
@@ -1974,132 +1909,81 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
     }
 
 
-    // 视图设置：**排布方式**（网格 / 紧凑列表 / 年份时间轴）+ 卡片样式 + 每行个数。
-    // 合成一个弹窗（需求里说的「合并视图入口」）：原来这里只有卡片样式，
-    // 现在把「怎么排」「排几个」也收进来，一处就能把整个列表外观调完。
+    // 视图设置：**排布方式** + 卡片样式 + 每行个数 + 标题行数。
+    //
+    // 设计约束（重做过一版）：**一屏放下、不滚动**。上一版每一项都铺成一整行
+    // 带单选钮的列表，四个分区叠下来超出屏幕、必须滚动，既显得笨重又把
+    // 「随手调一下」这件事变得很沉。现在改成：
+    // - 排布方式 / 卡片样式用 `FilterChip` 横排 —— 一眼看全所有选项，点一下即生效；
+    // - 两个 `− N +` 数字调节器收进 `Row`，各占一半宽，不再各占一整行；
+    // - 不写长说明（说明挪进选项文案本身，比如「年份」）。
+    // 即选即存（没有「确定」按钮），所以底部只留一个「完成」。
     if (showStyleDialog) {
       AlertDialog(
         onDismissRequest = { showStyleDialog = false },
         title = { Text("视图") },
         text = {
-          Column(
-            modifier = Modifier
-              .heightIn(max = 440.dp)
-              .verticalScroll(rememberScrollState()),
-          ) {
-            Text("排布方式", style = MaterialTheme.typography.titleSmall)
-            Spacer(modifier = Modifier.height(4.dp))
-            EmbyLibraryViewMode.entries.forEach { mode ->
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                RadioButton(
+          Column(modifier = Modifier.fillMaxWidth()) {
+            // ── 排布方式 ──
+            SectionLabel("排布方式")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              EmbyLibraryViewMode.entries.forEach { mode ->
+                FilterChip(
                   selected = mode == viewMode,
                   onClick = { browserPreferences.embyLibraryViewMode.set(mode.key) },
+                  label = { Text(mode.label) },
+                  leadingIcon = if (mode == viewMode) {
+                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                  } else {
+                    null
+                  },
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(mode.label)
               }
             }
 
-            // 紧凑列表没有「卡片」这个概念，样式与列数对它都没有意义，整块收掉
+            // 紧凑列表没有「卡片」这个概念：样式 / 列数 / 标题行数全都不适用，
+            // 下面三块整体收掉，弹窗也顺势变矮。
             if (viewMode != EmbyLibraryViewMode.COMPACT) {
-              Spacer(modifier = Modifier.height(12.dp))
-              Text("卡片样式", style = MaterialTheme.typography.titleSmall)
-              Spacer(modifier = Modifier.height(4.dp))
-              EmbyCardStyle.entries.forEach { style ->
-                Row(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 2.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                ) {
-                  RadioButton(
+              Spacer(modifier = Modifier.height(16.dp))
+              SectionLabel("卡片样式")
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                EmbyCardStyle.entries.forEach { style ->
+                  FilterChip(
                     selected = style == cardStyle,
                     onClick = { browserPreferences.embyLibraryCardStyle.set(style.name) },
+                    label = { Text(style.label) },
+                    leadingIcon = if (style == cardStyle) {
+                      { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                    } else {
+                      null
+                    },
                   )
-                  Spacer(modifier = Modifier.width(8.dp))
-                  Text(style.label)
                 }
               }
-            }
 
-            // 列数只对「海报」生效：背景图 / 横幅是宽图，列数由自身最小宽度自适应决定，
-            // 硬塞进固定列数会被压得又窄又小。
-            if (viewMode != EmbyLibraryViewMode.COMPACT && cardStyle == EmbyCardStyle.POSTER) {
-              Spacer(modifier = Modifier.height(12.dp))
-              Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                  text = "每行个数",
-                  style = MaterialTheme.typography.titleSmall,
+              Spacer(modifier = Modifier.height(16.dp))
+              Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                // 列数只对「海报」生效：背景图 / 横幅是宽图，列数由自身最小宽度
+                // 自适应决定，硬塞进固定列数会被压得又窄又小。
+                if (cardStyle == EmbyCardStyle.POSTER) {
+                  CompactStepper(
+                    label = "每行个数",
+                    value = gridColumns.coerceIn(2, 6),
+                    min = 2,
+                    max = 6,
+                    onChange = { browserPreferences.embyLibraryGridColumns.set(it) },
+                    modifier = Modifier.weight(1f),
+                  )
+                }
+                CompactStepper(
+                  label = "标题行数",
+                  value = titleLines.coerceIn(1, 2),
+                  min = 1,
+                  max = 2,
+                  onChange = { browserPreferences.embyLibraryTitleLines.set(it) },
                   modifier = Modifier.weight(1f),
                 )
-                IconButton(
-                  onClick = {
-                    browserPreferences.embyLibraryGridColumns
-                      .set((gridColumns - 1).coerceAtLeast(2))
-                  },
-                  enabled = gridColumns > 2,
-                ) {
-                  Icon(Icons.Default.Remove, contentDescription = "减少每行个数")
-                }
-                Text(
-                  text = gridColumns.coerceIn(2, 6).toString(),
-                  style = MaterialTheme.typography.titleMedium,
-                )
-                IconButton(
-                  onClick = {
-                    browserPreferences.embyLibraryGridColumns
-                      .set((gridColumns + 1).coerceAtMost(6))
-                  },
-                  enabled = gridColumns < 6,
-                ) {
-                  Icon(Icons.Default.Add, contentDescription = "增加每行个数")
-                }
               }
-            }
-
-            // 标题行数：只对网格 / 年份时间轴生效。紧凑列表本来就是「一屏扫尽量多条」，
-            // 把标题撑成两行会砸掉它的定位，所以整块收掉。
-            if (viewMode != EmbyLibraryViewMode.COMPACT) {
-              Spacer(modifier = Modifier.height(12.dp))
-              Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                  text = "标题行数",
-                  style = MaterialTheme.typography.titleSmall,
-                  modifier = Modifier.weight(1f),
-                )
-                IconButton(
-                  onClick = {
-                    browserPreferences.embyLibraryTitleLines
-                      .set((titleLines - 1).coerceAtLeast(1))
-                  },
-                  enabled = titleLines > 1,
-                ) {
-                  Icon(Icons.Default.Remove, contentDescription = "减少标题行数")
-                }
-                Text(
-                  text = titleLines.coerceIn(1, 2).toString(),
-                  style = MaterialTheme.typography.titleMedium,
-                )
-                IconButton(
-                  onClick = {
-                    browserPreferences.embyLibraryTitleLines
-                      .set((titleLines + 1).coerceAtMost(2))
-                  },
-                  enabled = titleLines < 2,
-                ) {
-                  Icon(Icons.Default.Add, contentDescription = "增加标题行数")
-                }
-              }
-              Text(
-                text = "片名过长时多显示一行，卡片会相应变高",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
-              )
             }
           }
         },
@@ -2487,6 +2371,81 @@ private fun EmbySearchSuggestionRow(
 /** 联想列表展开时的最大高度：约三行半（每行 ≈41dp + 分隔线），再多就在卡内滚动 */
 private val SUGGEST_LIST_MAX_HEIGHT = 144.dp
 
+/**
+ * 「视图」弹窗里的分区小标题。
+ *
+ * 弹窗要挤在一屏内，标题不能像正文那样占一整行，所以用 `labelLarge` + 主题色的
+ * 克制样式，只起到「下面这排属于哪一项」的提示作用。
+ */
+@Composable
+private fun SectionLabel(text: String) {
+  Text(
+    text = text,
+    style = MaterialTheme.typography.labelLarge,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    modifier = Modifier.padding(bottom = 6.dp),
+  )
+}
+
+/**
+ * 「视图」弹窗里的紧凑数字调节器：`标签` 在上，`− N +` 在下。
+ *
+ * 为什么不复用上一版的写法（标签占一整行、加减键各一个 `IconButton`）：
+ * 那样一个调节器就要占掉整整一行，四个分区叠起来必然超屏、只能滚动。
+ * 这里把加减键缩成 32dp 的小按钮，两个调节器并排放进同一个 `Row`，高度减半。
+ *
+ * 与旧版一致：**钳到边界时对应按钮自动禁用**（`enabled = value > min / < max`），
+ * 让人一眼看出已经到头了，点了不会没反应。
+ */
+@Composable
+private fun CompactStepper(
+  label: String,
+  value: Int,
+  min: Int,
+  max: Int,
+  onChange: (Int) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Column(modifier = modifier) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelLarge,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(modifier = Modifier.height(6.dp))
+    Surface(
+      shape = RoundedCornerShape(10.dp),
+      color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        IconButton(
+          onClick = { onChange((value - 1).coerceAtLeast(min)) },
+          enabled = value > min,
+          modifier = Modifier.size(36.dp),
+        ) {
+          Icon(Icons.Default.Remove, contentDescription = "减少$label", modifier = Modifier.size(18.dp))
+        }
+        Text(
+          text = value.toString(),
+          style = MaterialTheme.typography.titleMedium,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+        IconButton(
+          onClick = { onChange((value + 1).coerceAtMost(max)) },
+          enabled = value < max,
+          modifier = Modifier.size(36.dp),
+        ) {
+          Icon(Icons.Default.Add, contentDescription = "增加$label", modifier = Modifier.size(18.dp))
+        }
+      }
+    }
+  }
+}
+
 /** 把 [query] 在 [text] 里命中的那一段加粗，其余保持常规字重 —— 便于一眼对上是哪几个字匹配上的。 */
 private fun highlightMatch(text: String, query: String): AnnotatedString {
   val q = query.trim()
@@ -2533,7 +2492,9 @@ private enum class EmbyLibraryViewMode {
       when (this) {
         GRID -> "网格"
         COMPACT -> "紧凑列表"
-        YEAR -> "年份时间轴"
+        // ⚠️ 必须是短词：这一行三个 chip 并排，`年份时间轴` 五个字挤不下会折成两行，
+        // 三个 chip 高度不齐、看着很割裂。含义靠 `key` / 枚举名与分组标题保留。
+        YEAR -> "年份"
       }
 
   companion object {
@@ -2705,11 +2666,184 @@ private fun openItem(
 }
 
 /**
- * 筛选弹窗里的一组可多选 chip（类型 / 标签 / 年份 / 官方分级 / 评分共用）。
+ * 筛选面板里的「类目行」：一行类目名 + 右侧 `+` 圆钮；下方铺已选中的圆角标签。
  *
- * 选项为空时整组隐藏：说明该维度服务端没给或这个库用不上，
- * 与其显示一个空标题，不如直接不占地方。
+ * 交互（2026-10-09 新版式）：
+ * - 点 `+` → 弹 [FilterOptionPickerDialog]（复选框列表 + 取消 / 确定）；
+ * - 点确定 → 回传整份新选中集合（`onConfirm`），对话框关闭、抽屉保持打开；
+ * - 已选项在下方以**带叉号的圆角标签**呈现，点标签上的 `×` 单独移除该项（`onRemove`）。
+ *
+ * 为什么不做成就地展开的下拉：12 个维度一旦就地展开又长又乱，
+ * 展开/收起还会引起「弹窗跳动」与「点选项没反应」等一串问题（见 2026-10-09 记录）。
+ * 把「选什么」收进独立对话框后，抽屉只负责展示「已选了什么」，层次清楚、无重排。
+ *
+ * [allOptions] 为空时整组隐藏（服务端没给或该库没有这个维度），不占地方。
  */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FilterCategoryRow(
+  label: String,
+  allOptions: List<String>,
+  selected: Set<String>,
+  onConfirm: (Set<String>) -> Unit,
+  onRemove: (String) -> Unit,
+) {
+  if (allOptions.isEmpty()) return
+  var showPicker by remember { mutableStateOf(false) }
+  // 已选但当前选项列表里没有的（例如换了库、或标记配置变了）也要显示，
+  // 否则用户看得到筛选在生效、却在抽屉里找不到是哪个条件。
+  val shown = allOptions.filter { it in selected } + selected.filter { it !in allOptions }
+
+  Column(modifier = Modifier.fillMaxWidth()) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text(
+        text = label,
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.weight(1f),
+      )
+      // 「+」：形状明确的圆形按钮，点开复选对话框
+      FilledTonalIconButton(
+        onClick = { showPicker = true },
+        modifier = Modifier.size(32.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Add,
+          contentDescription = "添加$label",
+          modifier = Modifier.size(18.dp),
+        )
+      }
+    }
+    // 已选项：带叉号的圆角标签，点叉单独移除
+    if (shown.isNotEmpty()) {
+      FlowRow(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        shown.forEach { name ->
+          FilterTag(text = name, onRemove = { onRemove(name) })
+        }
+      }
+    }
+  }
+
+  if (showPicker) {
+    FilterOptionPickerDialog(
+      title = label,
+      allOptions = allOptions,
+      initiallySelected = selected,
+      onDismiss = { showPicker = false },
+      onConfirm = { picked ->
+        onConfirm(picked)
+        showPicker = false
+      },
+    )
+  }
+}
+
+/** 已选筛选条件的一枚圆角标签：文字 + 尾部 `×`；点 `×` 移除该项。 */
+@Composable
+private fun FilterTag(
+  text: String,
+  onRemove: () -> Unit,
+) {
+  Row(
+    modifier = Modifier
+      .clip(RoundedCornerShape(50))
+      .background(MaterialTheme.colorScheme.secondaryContainer)
+      .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    Text(
+      text = text,
+      style = MaterialTheme.typography.labelLarge,
+      color = MaterialTheme.colorScheme.onSecondaryContainer,
+    )
+    // 只有叉号可点（不用整枚标签可点）：避免误触把标签删掉
+    IconButton(
+      onClick = onRemove,
+      modifier = Modifier.size(20.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Default.Close,
+        contentDescription = "移除 $text",
+        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.size(14.dp),
+      )
+    }
+  }
+}
+
+/**
+ * 「类目 → 复选框列表 → 取消 / 确定」的选项对话框。
+ *
+ * 内部维护一份**草稿**（`draft`）：勾选只改草稿，点「确定」才回传，
+ * 这样用户在对话框里来回勾的结果是一次性生效的，也才谈得上「取消」。
+ *
+ * 选项多时列表自身滚动（封顶 380dp），不会把对话框撑出屏幕。
+ */
+@Composable
+private fun FilterOptionPickerDialog(
+  title: String,
+  allOptions: List<String>,
+  initiallySelected: Set<String>,
+  onDismiss: () -> Unit,
+  onConfirm: (Set<String>) -> Unit,
+) {
+  // key 用 initiallySelected：每次从抽屉打开都从「当前已选」起勾
+  var draft by remember(initiallySelected) { mutableStateOf(initiallySelected) }
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text(title) },
+    text = {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .heightIn(max = 380.dp)
+          .verticalScroll(rememberScrollState()),
+      ) {
+        allOptions.forEach { option ->
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clickable {
+                draft = if (option in draft) draft - option else draft + option
+              }
+              .padding(horizontal = 4.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Checkbox(
+              checked = option in draft,
+              onCheckedChange = {
+                draft = if (option in draft) draft - option else draft + option
+              },
+            )
+            Text(
+              text = option,
+              style = MaterialTheme.typography.bodyMedium,
+              modifier = Modifier.weight(1f),
+            )
+          }
+        }
+      }
+    },
+    confirmButton = {
+      TextButton(onClick = { onConfirm(draft) }) { Text("确定") }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) { Text("取消") }
+    },
+  )
+}
+
 /**
  * 筛选面板里的「下拉选择」：一行摘要 + 点开后纵向铺开全部选项。
  *
@@ -2718,6 +2852,10 @@ private fun openItem(
  *
  * 选项为空时整组隐藏：说明这个维度服务端没给或该库没有，不占地方。
  * 展开区最高 260dp，超出后自己在组内滚动，不会把整个面板撑得很长。
+ *
+ * ⚠️ 2026-10-09：中间试过一版「两列网格 + 就地展开 + 选中自动收起」，真机上点选项
+ * 没反应。已整体回退成这一版（展开状态由组件自己持有，不再由外部互斥控制）。
+ * 目前仅「播放状态 / 字幕」这类单选维度还在用它（多选维度改走 `FilterCategoryRow`）。
  */
 @Composable
 private fun FilterDropdown(

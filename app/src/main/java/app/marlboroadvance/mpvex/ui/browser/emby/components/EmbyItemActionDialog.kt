@@ -4,6 +4,7 @@ import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -29,6 +30,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,7 +46,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
@@ -201,6 +203,16 @@ fun EmbyItemActionsDialog(
  *
  * 置顶的库也在这里出现（放在最前、带「已置顶」标注），
  * 因为它们的序号要等取消置顶后才生效，不给个说法会让人以为改不动。
+ *
+ * 版式（第三版，头两版都被嫌「丑」）：
+ * - 第一版：两段说明堆顶 + 一排裸 `− 3 +`，没有视觉锚点；
+ * - 第二版：每行一张灰卡片 + 序号小徽标 + 库名，卡片套卡片显得糊、序号也弱；
+ * - **现在**：序号做成**左端一个方章**（`primary` 实心、比正文大一号，整行最强的锚点），
+ *   库名跟在右边；`−/+` 用 `FilledTonalIconButton` 给两个明确的按钮形状，
+ *   不再是无边的裸图标；容器用**一张** `surfaceVariant` 大圆角卡把整列装起来，
+ *   行与行之间只用一条细分隔线 —— 取代「每行一张卡」的层层套娃；
+ *   置顶行**不整行染色**，只在名字前钉一枚小图钉 + 一枚淡色「置顶」小标签，
+ *   背景与其它行一致，靠小标记区分，视觉噪音小得多。
  */
 @Composable
 fun EmbyLibraryOrderDialog(
@@ -213,81 +225,52 @@ fun EmbyLibraryOrderDialog(
 ) {
   val maxNumber = LibraryOrdering.maxNumber(numbers, libraries.mapNotNull { it.Id })
     .coerceAtLeast(1)
+  val rows = libraries.mapNotNull { lib -> lib.Id?.let { lib to it } }
 
   AlertDialog(
     onDismissRequest = onDismissRequest,
     title = { Text("调整顺序号") },
     text = {
-      Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+      Column(modifier = Modifier.fillMaxWidth()) {
+        // 说明压成一句：细节（互换、置顶优先）在本行内内联到具体行上，不必在顶部全讲一遍
         Text(
-          text = "序号越小越靠前。置顶的媒体库固定排在最前面（最多 ${LibraryOrdering.MAX_PINNED} 个，" +
-            "最后置顶的排第一），所以序号 1 也会排在它们之后。",
+          text = "序号越小越靠前；改成已占用的序号时两者互换",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-          text = "改成一个已被占用的序号时，两者互换。",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        libraries.forEach { library ->
-          val id = library.Id ?: return@forEach
-          val number = numbers[id] ?: 0
-          val pinned = id in pinnedIds
-          Row(
+        // 容器只有这一张：整列裹在一个圆角面里，行与行之间用细分隔线，
+        // 不再每行各套一张卡（套娃是上一版显得脏的主因）
+        Surface(
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(14.dp),
+          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        ) {
+          Column(
             modifier = Modifier
-              .fillMaxWidth()
-              .padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
+              .heightIn(max = 380.dp)
+              .verticalScroll(rememberScrollState()),
           ) {
-            // 序号步进：左减右加，钳在 [1, 当前最大号]
-            IconButton(
-              onClick = { onNumberChange(id, number - 1) },
-              enabled = number > 1,
-              modifier = Modifier.size(32.dp),
-            ) {
-              Icon(
-                Icons.Default.Remove,
-                contentDescription = "序号前移",
-                modifier = Modifier.size(18.dp),
-              )
-            }
-            Text(
-              text = if (number > 0) number.toString() else "—",
-              style = MaterialTheme.typography.titleMedium,
-              textAlign = TextAlign.Center,
-              modifier = Modifier.width(28.dp),
-            )
-            IconButton(
-              onClick = { onNumberChange(id, number + 1) },
-              enabled = number in 1 until maxNumber,
-              modifier = Modifier.size(32.dp),
-            ) {
-              Icon(
-                Icons.Default.Add,
-                contentDescription = "序号后移",
-                modifier = Modifier.size(18.dp),
-              )
-            }
-
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = library.Name ?: "媒体库",
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              if (pinned) {
-                Text(
-                  text = "已置顶 · 固定在最前，取消置顶后按序号排",
-                  style = MaterialTheme.typography.labelSmall,
-                  color = MaterialTheme.colorScheme.primary,
+            rows.forEachIndexed { index, (library, id) ->
+              val number = numbers[id] ?: 0
+              val pinned = id in pinnedIds
+              if (index > 0) {
+                HorizontalDivider(
+                  modifier = Modifier.padding(start = 56.dp),
+                  thickness = 0.6.dp,
+                  color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                 )
               }
+              LibraryOrderRow(
+                name = library.Name ?: "媒体库",
+                number = number,
+                pinned = pinned,
+                canDecrease = number > 1,
+                canIncrease = number in 1 until maxNumber,
+                onDecrease = { onNumberChange(id, number - 1) },
+                onIncrease = { onNumberChange(id, number + 1) },
+              )
             }
           }
         }
@@ -297,6 +280,99 @@ fun EmbyLibraryOrderDialog(
       TextButton(onClick = onDismissRequest) { Text("完成") }
     },
   )
+}
+
+/**
+ * 顺序号弹窗里的一行：左端序号方章 + 库名（置顶带图钉与标签）+ 右端 `−/+`。
+ *
+ * 抽出来只是为了 [EmbyLibraryOrderDialog] 的 `forEachIndexed` 读起来清爽，
+ * 没有状态，纯展示 + 两个回调。
+ */
+@Composable
+private fun LibraryOrderRow(
+  name: String,
+  number: Int,
+  pinned: Boolean,
+  canDecrease: Boolean,
+  canIncrease: Boolean,
+  onDecrease: () -> Unit,
+  onIncrease: () -> Unit,
+) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(horizontal = 12.dp, vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(10.dp),
+  ) {
+    // 序号方章：整个弹窗里最重的一块 —— 它就是用户在找的那个数字。
+    // `primary` 实心 + `onPrimary` 字，深浅主题下都够对比，不硬编码任何颜色。
+    Surface(
+      shape = RoundedCornerShape(9.dp),
+      color = if (number > 0) {
+        MaterialTheme.colorScheme.primary
+      } else {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+      },
+      modifier = Modifier.size(30.dp),
+    ) {
+      Box(contentAlignment = Alignment.Center) {
+        Text(
+          text = if (number > 0) number.toString() else "—",
+          style = MaterialTheme.typography.labelLarge,
+          color = if (number > 0) {
+            MaterialTheme.colorScheme.onPrimary
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          },
+        )
+      }
+    }
+
+    Column(modifier = Modifier.weight(1f)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        if (pinned) {
+          Icon(
+            Icons.Default.PushPin,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(13.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+        }
+        Text(
+          text = name,
+          style = MaterialTheme.typography.bodyMedium,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      if (pinned) {
+        Text(
+          text = "置顶 · 取消后按序号排",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+
+    // `−/+` 做成有形状的 tonal 按钮：比裸图标可点、也比裸图标"整齐"，
+    // 两个并排时大小一致、不会显得一重一轻。
+    FilledTonalIconButton(
+      onClick = onDecrease,
+      enabled = canDecrease,
+      modifier = Modifier.size(32.dp),
+    ) {
+      Icon(Icons.Default.Remove, contentDescription = "序号前移", modifier = Modifier.size(16.dp))
+    }
+    FilledTonalIconButton(
+      onClick = onIncrease,
+      enabled = canIncrease,
+      modifier = Modifier.size(32.dp),
+    ) {
+      Icon(Icons.Default.Add, contentDescription = "序号后移", modifier = Modifier.size(16.dp))
+    }
+  }
 }
 
 /**
