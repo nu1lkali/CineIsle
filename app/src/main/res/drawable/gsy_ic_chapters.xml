@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  GSY 播放页专用图标：章节。
+
+  画法是「三条横线 + 左侧三个圆点」—— 圆点是章节起点，横线是章节条，
+  正好对应进度条上的章节刻度这个视觉语言（mpv 侧的章节面板也是这个隐喻）。
+
+  刻意不画成「书签 / 列表」形状：那个已经被 PlayerButton.BOOKMARKS_CHAPTERS
+  占用在别处了，两处用同一张图会让人以为是同一个东西。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 三条章节条 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7,5.5h13v1.6H7V5.5zM7,11.2h13v1.6H7v-1.6zM7,16.9h13v1.6H7v-1.6z" />
+    <!-- 左侧三个起点圆点 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,4.7m-1.85,0a1.85,1.85 0,1 1,3.7 0a1.85,1.85 0,1 1,-3.7 0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,10.4m-1.85,0a1.85,1.85 0,1 1,3.7 0a1.85,1.85 0,1 1,-3.7 0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,16.1m-1.85,0a1.85,1.85 0,1 1,3.7 0a1.85,1.85 0,1 1,-3.7 0" />
+</vector>

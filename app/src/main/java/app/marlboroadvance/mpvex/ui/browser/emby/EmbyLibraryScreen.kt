@@ -69,6 +69,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -81,6 +82,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -176,7 +178,9 @@ data class EmbyLibraryScreen(
   val personId: String? = null,
   val personName: String? = null,
 ) : Screen {
-  @OptIn(ExperimentalMaterial3Api::class)
+  // ⚠️ ExperimentalFoundationApi 是为了 `LazyGridScope.stickyHeader`（年份吸顶，清单 4.1）。
+  // 它在 foundation 1.7 里从 Experimental 升为 Stable 了，但为兼容旧版本仍保留注解写法。
+  @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
   @Composable
   override fun Content() {
     val context = LocalContext.current
@@ -263,7 +267,11 @@ data class EmbyLibraryScreen(
         }
       }.getOrDefault(EmbyLibraryFilterState())
     }
-    var showFilterDialog by remember { mutableStateOf(false) }
+    // 筛选弹窗的开关。用 rememberSaveable：同一次 alive 期内旋转屏幕时，
+    // 弹窗不该自己关掉 —— 用户可能正在里面勾选，一转屏全白干。
+    // （下面那些 selected* 筛选项是**跨会话**语义，走 SharedPreferences 落盘，
+    //  与这里的 saveable 是互补的两层，别混。）
+    var showFilterDialog by rememberSaveable { mutableStateOf(false) }
     var selectedGenres by remember(libraryId) { mutableStateOf(savedFilter.genres.toSet()) }
     var selectedTags by remember(libraryId) { mutableStateOf(savedFilter.tags.toSet()) }
     var selectedYears by remember(libraryId) { mutableStateOf(savedFilter.years.toSet()) }
@@ -657,11 +665,16 @@ data class EmbyLibraryScreen(
 
       // 作品数角标：/Persons 的 Fields 不支持 ChildCount，服务端从不返回该字段
       // （见 EmbyClient.getPersonWorkCounts 的说明），所以自己数一遍补上。
-      // 放在 loading 结束之后 —— 头像网格先出来，数字随后补，不让首屏等这次全库统计。
+      // 放在 loading 结束之后 —— 头像网格先出来，数字随后补，不让首屏等这次统计。
       // 服务端哪天真的返回了 ChildCount，就跳过统计、直接用它。
+      //
+      // 走 getPersonWorkCountsCached 而不是原始的 getPersonWorkCounts：自适应库规模
+      // + 带10 分钟缓存，避免每次进「演员」分类都把整库逐页拉一遍（见 1.4 优化）。
       val list = loaded.getOrNull().orEmpty()
       if (list.isEmpty() || list.any { it.ChildCount != null }) return
-      val counts = viewModel.getPersonWorkCounts(current, libraryId)
+      val ids = list.mapNotNull { it.Id }
+      if (ids.isEmpty()) return
+      val counts = viewModel.getPersonWorkCountsCached(current, libraryId, ids)
       if (counts.isEmpty()) return
       actorItems = actorItems.map { person ->
         val n = person.Id?.let { counts[it] } ?: 0
@@ -1534,39 +1547,45 @@ data class EmbyLibraryScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
               ) {
-                if (viewMode == EmbyLibraryViewMode.YEAR) {
-                  // 年份时间轴：按播出年份分组，新年份在前；没有年份的归到「年份未知」。
-                  // 标题横跨整行（span = 整行），不会被挤在某一格里。
-                  val grouped = displayItems
-                    .groupBy { it.ProductionYear ?: 0 }
-                    // 显式给出泛型参数：`compareByDescending { it }` 的 lambda 参数类型
-                    // 在这种链式上下文里推不出来，会报「缺少 operator 修饰符」
-                    .toSortedMap(compareByDescending<Int> { it })
-                  grouped.forEach { (year, group) ->
-                    item(
-                      key = "year_header_$year",
-                      span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
-                    ) {
-                      EmbyYearHeader(if (year > 0) "$year" else "年份未知", group.size)
-                    }
-                    items(group, key = { it.Id ?: it.Name ?: "" }) { item ->
-                      val s = server ?: return@items
-                      EmbyLibraryMediaCell(
-                        item = item,
-                        server = s,
-                        viewModel = viewModel,
-                        cardStyle = cardStyle,
-                        folderCovers = folderCovers,
-                        onClick = { openItem(item, backStack, s, context) },
-                        onLongClick = { offset ->
-                          actionTarget = item
-                          menuAnchor = offset
-                        },
-                        onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
-                      )
-                    }
-                  }
-                } else {
+if (viewMode == EmbyLibraryViewMode.YEAR) {
+       // 年份时间轴：按播出年份分组，新年份在前；没有年份的归到「年份未知」。
+    // 标题用 stickyHeader —— 往下滚时它吸在网格顶部，
+  // 随时告诉你「现在看的是哪一年」。这一点对「时间轴」这个视图模式是本质的：
+       // 不吸顶的话它就和普通分组列表没区别了（清单 4.1）。
+     //
+       // ⚠️ stickyHeader 里**不能**再写 `span` —— stickyHeader 本身就是整行占满的，
+       // 给它 span 反而会报编译错。
+  val grouped = displayItems
+      .groupBy { it.ProductionYear ?: 0 }
+   // 显式给出泛型参数：`compareByDescending { it }` 的 lambda 参数类型
+           // 在这种链式上下文里推不出来，会报「缺少 operator 修饰符」
+   .toSortedMap(compareByDescending<Int> { it })
+   grouped.forEach { (year, group) ->
+  stickyHeader(key = "year_header_$year") {
+    EmbyYearHeader(
+   year = if (year > 0) "$year" else "年份未知",
+    count = group.size,
+    modifier = Modifier.background(MaterialTheme.colorScheme.surface),
+   )
+   }
+           items(group, key = { it.Id ?: it.Name ?: "" }) { item ->
+        val s = server ?: return@items
+ EmbyLibraryMediaCell(
+        item = item,
+      server = s,
+      viewModel = viewModel,
+      cardStyle = cardStyle,
+          folderCovers = folderCovers,
+   onClick = { openItem(item, backStack, s, context) },
+    onLongClick = { offset ->
+  actionTarget = item
+               menuAnchor = offset
+         },
+          onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
+        )
+    }
+  }
+      } else {
                   items(displayItems, key = { it.Id ?: it.Name ?: "" }) { item ->
                     val s = server ?: return@items
                     EmbyLibraryMediaCell(
@@ -2271,12 +2290,25 @@ private fun EmbyCompactRow(
   }
 }
 
-/** 年份时间轴的组标题：横跨整行，左边年份、右边条数 */
+/**
+ * 年份时间轴的组标题：**吸顶**（清单 4.1）。
+ *
+ * 原来它是一个普通 `item(span = 整行)`，会随网格一起滚走 ——
+ * 那就只是「按年份分了段的列表」，看不出「时间轴」的意思。
+ * 改成 `stickyHeader` 之后，往下滚时年份一直挂在网格顶部。
+ *
+ * @param modifier 外部传入背景色：吸顶元素**必须有不透明背景**，
+ *   否则下层卡片会透上来，看着像重影。
+ */
 @Composable
-private fun EmbyYearHeader(year: String, count: Int) {
+private fun EmbyYearHeader(
+  year: String,
+  count: Int,
+  modifier: Modifier = Modifier,
+) {
   Row(
-    modifier = Modifier
-      .fillMaxWidth()
+    modifier = modifier
+   .fillMaxWidth()
       .padding(top = 8.dp, bottom = 2.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
@@ -2286,7 +2318,7 @@ private fun EmbyYearHeader(year: String, count: Int) {
     )
     Spacer(modifier = Modifier.width(8.dp))
     Text(
-      text = "$count 项",
+  text = "$count 项",
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -2532,23 +2564,19 @@ private fun CategoryChips(
 }
 
 /**
- * 「幽灵条目」：服务端偶尔混进列表、但实际上打不开的条目。
- *
- * 典型来源：库里放着指向远程 ISO 的 strm（文件内容就是 `http://cdn/xxx.iso` 这种 URL）。
- * Emby 在解析它时会把 URL 的 scheme 部分当成一个**名为 `http:` 的条目**返回，
- * Id 也跟着变成那个 URL 片段。结果就是：
- *
- * - 列表比官方客户端多出一条（用户实测：别的客户端 40 个，这里 41 个）；
- * - 点它一下就闪退 —— 拿一个「不是条目 Id 的字符串」去当 ParentId / ItemId 发请求，
- *   后续拼出来的地址是坏的。
+ * 过滤「幽灵条目」：服务端混进列表、但本质上不是媒体的条目。
  *
  * 判据刻意只取几条很保守的特征，正常媒体（Id 是数字 / GUID、名字是片名）不会被误伤：
  *
- * - Id 里带 `://`（Emby 的条目 Id 永远不含这个）；
- * - 名字就叫 `http:` / `https:`（URL scheme 被当成目录名时的产物）；
+ * - Id 里带 `://`（Emby 的条目 Id 永远不含这个）——
+ *   扫描时把文件内容当成条目名的产物，比如名字就叫 `http:`（URL 的 scheme 那截）；
  * - 名字 / Id 里出现 JSON 的 `"键":` 片段 —— 元数据文件里是一段 JSON 时，
  *   Emby 会把其中一节解析成「条目」，名字长成 `frames":2670` 这样；
  * - 名字以 `{` / `[` 开头（整段 JSON 被当成名字）。
+ *
+ * ⚠️ **不要**因为「库里有 strm 指向远程 ISO」就把URL 型条目放进来 ——
+ * 那两件事没有因果关系。曾把它们保留并接上 ISO 播放，是把两个不相干的现象
+ * 硬连成一块（详见 `MEMORY.md` 的 ISO 章节）。ISO 播放只走「正常条目」那条路。
  */
 private val JSON_FRAGMENT = Regex("\"[A-Za-z_][A-Za-z0-9_]*\"\\s*:")
 

@@ -674,7 +674,7 @@ private fun FolderListContent(
           LoadingState(
             icon = Icons.Filled.Folder,
             title = "正在扫描视频…",
-            message = scanStatus ?: "Please wait while we search your device",
+            message = scanStatus ?: "正在搜索设备上的视频文件",
           )
         } else if (showEmpty) {
           EmptyState(

@@ -4,6 +4,9 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import app.marlboroadvance.mpvex.database.converters.NetworkProtocolConverter
+import app.marlboroadvance.mpvex.database.dao.DislikeDao
+import app.marlboroadvance.mpvex.database.dao.DownloadedMediaDao
+import app.marlboroadvance.mpvex.database.dao.EmbyDownloadDao
 import app.marlboroadvance.mpvex.database.dao.EmbyServerDao
 import app.marlboroadvance.mpvex.database.dao.NetworkConnectionDao
 import app.marlboroadvance.mpvex.database.dao.PlaybackStateDao
@@ -11,6 +14,9 @@ import app.marlboroadvance.mpvex.database.dao.PlaylistDao
 import app.marlboroadvance.mpvex.database.dao.RecentlyPlayedDao
 import app.marlboroadvance.mpvex.database.dao.SearchHistoryDao
 import app.marlboroadvance.mpvex.database.dao.VideoMetadataDao
+import app.marlboroadvance.mpvex.database.entities.DislikedMediaEntity
+import app.marlboroadvance.mpvex.database.entities.DownloadedMediaEntity
+import app.marlboroadvance.mpvex.database.entities.EmbyDownloadEntity
 import app.marlboroadvance.mpvex.database.entities.PlaybackStateEntity
 import app.marlboroadvance.mpvex.database.entities.PlaylistEntity
 import app.marlboroadvance.mpvex.database.entities.PlaylistItemEntity
@@ -30,8 +36,15 @@ import app.marlboroadvance.mpvex.domain.network.NetworkConnection
     PlaylistItemEntity::class,
     EmbyServer::class,
     SearchHistoryEntity::class,
+    // 清单 4.2：下载任务从 SharedPreferences 的 JSON 迁到 Room；
+    // 已下载内容单独一张表，与任务表解耦（清任务记录不该让已下的片子从离线列表消失）
+    EmbyDownloadEntity::class,
+    DownloadedMediaEntity::class,
+    // 「标记为不喜欢」。主键 (serverId, itemId) 由数据库保证去重，
+    // 见 DislikedMediaEntity 的 KDoc
+    DislikedMediaEntity::class,
   ],
-  version = 12,
+  version = 14,
   exportSchema = true,
 )
 @TypeConverters(NetworkProtocolConverter::class)
@@ -49,4 +62,10 @@ abstract class MpvExDatabase : RoomDatabase() {
   abstract fun embyServerDao(): EmbyServerDao
 
   abstract fun searchHistoryDao(): SearchHistoryDao
+
+  abstract fun embyDownloadDao(): EmbyDownloadDao
+
+  abstract fun downloadedMediaDao(): DownloadedMediaDao
+
+  abstract fun dislikeDao(): DislikeDao
 }

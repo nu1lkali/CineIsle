@@ -86,8 +86,54 @@ class PlayerPreferences(
    */
   val gifWidth = preferenceStore.getInt("gif_width", 480)
 
+  // ── mpv 播放缓存（清单 #18 / 原 3.3）──
+  //
+  // ⚠️ 在做之前先纠正一个误解：mpv **本来就有**内存缓冲（`MPVView.initOptions` 里
+  // `cache-secs=30` / `demuxer-max-bytes=64MiB`），所以「mpv 完全没有缓存」是错的。
+  // 真正缺的是**落盘**那部分：没设 `cache-dir`，缓存只活在一块内存里，
+  // 退出播放就没了 ⇒ 同一片子第二次看仍然要从服务器重新拉一遍。
+  // 下面这三项就是为了把落盘缓存打开、并把上限交给用户控制。
+
+  /**
+   * 是否把网络流缓存**落盘**（`cache-dir` + `cache-persize`），默认**开**。
+   *
+   * 关掉后 mpv 退回纯内存缓冲：起播更快、不占存储，但**每次播都要重拉**，
+   * 且网速一抖就卡（内存缓存被冲掉后没有后备）。适合「只看不重复看、
+   * 存储紧张」的用户。
+   *
+   * 只对**网络流**生效 —— mpv 走 `file://` 读本地文件时本来就不经过缓存层，
+   * 所以这里不必（也无法）按片源区分。
+   */
+  val diskCacheEnabled = preferenceStore.getBoolean("mpv_disk_cache_enabled", true)
+
+  /**
+   * 每条流落盘缓存的上限（MB，`cache-persize`），范围 64~2048，默认 512。
+   *
+   * 512MB 大约够缓存一部 1080p 的长片（按 8Mbps 估算 ≈ 8 分钟视频，
+   * 实际取决于码率）。上限刻意封在 2GB：mpv 的落盘缓存是**单文件按流**的，
+   * 给太大反而会在低端机上把存储撑满，且 LRU 淘汰变慢。
+   */
+  val diskCacheSizeMb = preferenceStore.getInt("mpv_disk_cache_size_mb", 512)
+
   val repeatMode = preferenceStore.getEnum("repeat_mode", RepeatMode.OFF)
   val shuffleEnabled = preferenceStore.getBoolean("shuffle_enabled", false)
+
+  /**
+   * 播放器**震动反馈总开关**，默认**开**。
+   *
+   * 统一管着三处震动（issue 反馈后新增/调整的都在这里受控）：
+   * 1. 横滑快进每跨一档的轻震（见 `SEEK_HAPTIC_INTERVAL_SEC`）
+   * 2. 长按开始播放倍速调节
+   * 3. 长按倍速**跨档位**时
+   *
+   * 做成总开关而不是只给「快进震动」单独一项，是因为**震动本身就有反对的声音**：
+   * 手机马达强弱因人而异，长时间播放时反复震动也可能让人不适。
+   * 给一个一键全关的出口，比让用户逐项去关更实际。
+   *
+   * ⚠️ 这里**只管震动**，不管触觉反馈（`performHapticFeedback` 的其余用法）。
+   * 那些都是「点到了 / 拖到哪了」这类纯视觉替代，关掉反而影响可用性。
+   */
+  val hapticFeedbackEnabled = preferenceStore.getBoolean("haptic_feedback_enabled", true)
 
   // New: autoplay next video when current file ends
   val autoplayNextVideo = preferenceStore.getBoolean("autoplay_next_video", true)

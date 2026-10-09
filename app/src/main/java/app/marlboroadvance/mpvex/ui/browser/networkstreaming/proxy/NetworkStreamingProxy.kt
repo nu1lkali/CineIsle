@@ -15,9 +15,12 @@ import com.hierynomus.smbj.session.Session
 import com.hierynomus.smbj.share.DiskShare
 import fi.iki.elonen.NanoHTTPD
 import kotlinx.coroutines.runBlocking
+import okhttp3.OkHttpClient
 import java.io.InputStream
 import java.util.EnumSet
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
@@ -26,11 +29,59 @@ import java.util.concurrent.TimeUnit
  */
 class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
 
-  companion object {
+  /**
+   * WebDAV Range 请求专用的 OkHttp 客户端（**全进程复用**）。
+   *
+   * ⚠️ 原来在 [getStreamWithOffsetWebDAV] 方法体内每次 `OkHttpClient.Builder()...build()`。
+   * 而拖进度条会**高频**调这个方法（每次 seek 一次），于是每次都新建一套
+   * 连接池 + 线程池 —— 这是「拖动时卡顿、连接数暴涨」的直接原因。
+   *
+   * 提到这里复用后，连接得以复用，seek 也就不再每次握手了。
+   *
+   * 不并入 [app.marlboroadvance.mpvex.domain.emby.EmbyHttp]共享池：那是给 Emby
+   * API 用的（带 token 注入 / 401 重登），而这里访问的是**用户自己的 WebDAV**，
+   * 鉴权是 Basic 且服务器来源跟 Emby 无关。
+   */
+  private val webDavRangeClient: OkHttpClient by lazy {
+    OkHttpClient.Builder()
+      .connectTimeout(15, TimeUnit.SECONDS)
+      .readTimeout(30, TimeUnit.SECONDS)
+      .retryOnConnectionFailure(true)
+      .build()
+  }
+
+companion object {
     private const val TAG = "NetworkStreamingProxy"
 
-    @Volatile
+@Volatile
     private var instance: NetworkStreamingProxy? = null
+
+    /**
+     * 专供 [NetworkStreamingProxy] 关闭连接用的后台线程（清单 #20 必修 3）。
+     *
+     * 为什么需要它：`NetworkClient.disconnect()` 是 `suspend`，而关连接的路径
+     * （`stopInstance` → `cleanup` → `unregisterStream`）是从 Activity 的 `onDestroy`
+     * 一路同步调下来的，也就是**主线程**。原来那里直接 `runBlocking`，
+     * 于是「退app」会被 SMB/FTP/WebDAV 的握手超时（`SmbConfig` 里给到 30s）拖住，
+     * 最坏情况就是 ANR / 「无响应」弹窗。
+     *
+     * 关键点：用**自建线程**而不是 `GlobalScope`：这样
+     * ① 不受协程取消作用域影响 —— 页面都destroy 了，连接还是要关干净；
+     * ② 单线程 ⇒ 天然保持原先 cleanup 的「按注册顺序逐个关」语义。
+     *
+     * daemon 线程：进程本来就要退了，不该被它挂住。
+     */
+    private val disconnectExecutor: ExecutorService
+      get() = synchronized(this) {
+        if (disconnectExecutorInstance == null || disconnectExecutorInstance!!.isShutdown) {
+          disconnectExecutorInstance = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "net-proxy-disconnect").apply { isDaemon = true }
+          }
+        }
+        disconnectExecutorInstance!!
+      }
+
+    private var disconnectExecutorInstance: ExecutorService? = null
 
     fun getInstance(): NetworkStreamingProxy {
       return instance ?: synchronized(this) {
@@ -41,14 +92,28 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
       }
     }
 
+    /**
+     * 停掉本地 HTTP 服务，并**异步**关闭所有连接。
+     *
+     * ⚠️ 不再阻塞调用方（清单 #20 必修 3）：原来这里同步 `runBlocking` 等
+     * 每个客户端 `disconnect()`，而它在主线程（Activity `onDestroy`）。
+     * 现在「关连接」丢到 [disconnectExecutor]，本函数只做必须同步的两件事：
+     * 停 HTTP server（这是纯内存操作，微秒级）+ 把单例引用摘掉。
+     *
+     * 因为单例引用已经摘掉，即使还有连接正在异步关闭，
+     * 下一次 [getInstance] 也会建出一个全新的代理实例，两批连接互不干扰。
+     */
     fun stopInstance() {
+      val proxy: NetworkStreamingProxy
       synchronized(this) {
-        instance?.let { proxy ->
-          proxy.stop()
-          proxy.cleanup()
-          instance = null
-        }
+   proxy = instance ?: return
+ instance = null
       }
+      // 这两行是内存操作，留在调用线程同步做完
+      runCatching { proxy.stop() }
+        .onFailure { Log.w(TAG, "Failed to stop proxy server", it) }
+      // 关连接是网络 IO，丢后台
+      proxy.cleanupAsync()
     }
   }
 
@@ -89,27 +154,43 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
     return "http://127.0.0.1:$listeningPort/$streamId"
   }
 
-  /**
-   * Unregister a stream
+/**
+   * Unregister a stream.
+   *
+   * [NetworkClient.disconnect] 是挂起函数，而这条路径可能来自主线程
+   * （`stopInstance` ← Activity `onDestroy`），所以**绝不**在这里等它。
+   * 先把条目从 map 里摘掉（这一步是纯内存，立刻生效），
+   * 再把真正的关闭丢给 [disconnectExecutor]（清单 #20 必修 3）。
    */
   fun unregisterStream(streamId: String) {
-    activeStreams.remove(streamId)?.let { streamInfo ->
-      runBlocking {
-        try {
-          streamInfo.client.disconnect()
-        } catch (e: Exception) {
-          // Ignore disconnect errors
-        }
+    val streamInfo = activeStreams.remove(streamId) ?: return
+    disconnectExecutor.execute {
+      try {
+        runBlocking { streamInfo.client.disconnect() }
+      } catch (e: Exception) {
+        // Ignore disconnect errors
+        Log.w(TAG, "disconnect failed for stream $streamId", e)
       }
     }
   }
 
   /**
-   * Cleanup all streams
+   * 关闭所有活动连接（**异步**，清单 #20 必修 3）。
+   *
+   * 先把 map 一次性取空，再逐条丢后台关 —— 这样 `serve()` 里的
+   * `activeStreams[streamId]` 会立刻开始返回 404，不会有「HTTP 服务已停、
+   * 但还能命中旧条目」的中间态。
    */
-  private fun cleanup() {
-    val streamIds = activeStreams.keys.toList()
-    streamIds.forEach { unregisterStream(it) }
+  private fun cleanupAsync() {
+    val orphaned = activeStreams.values.toList()
+    activeStreams.clear()
+    if (orphaned.isEmpty()) return
+    disconnectExecutor.execute {
+      orphaned.forEach { info ->
+        runCatching { runBlocking { info.client.disconnect() } }
+          .onFailure { Log.w(TAG, "disconnect failed during cleanup", it) }
+      }
+    }
   }
 
   override fun serve(session: IHTTPSession): Response {
@@ -633,18 +714,15 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
       Log.d(TAG, "WebDAV stream request - Protocol: $protocol, URL: $url")
 
       // Use OkHttp directly to add Range header support
-      val okHttpClient = okhttp3.OkHttpClient.Builder()
-        .addInterceptor { chain ->
-          val request = chain.request().newBuilder()
-            .addHeader("Range", "bytes=$offset-")
-            .build()
-          chain.proceed(request)
-        }
-        .build()
-
+      // ⚠️ 客户端复用 [webDavRangeClient]（见其注释）：原来在这个方法体内每次都new 一个，
+      // 而拖动进度条会高频调它—— 每次都新建连接池 + 线程池，
+      // 是「拖动时卡顿 / 连接数暴涨」的直接原因。
+      //
       // Build the request
       val requestBuilder = okhttp3.Request.Builder()
         .url(url)
+        // Range 每次请求都不同（拖动进度条 → offset 变），所以加在请求上而不是拦截器里
+        .addHeader("Range", "bytes=$offset-")
         .get()
 
       // Add auth if needed
@@ -654,7 +732,7 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
       }
 
       val request = requestBuilder.build()
-      val response = okHttpClient.newCall(request).execute()
+      val response = webDavRangeClient.newCall(request).execute()
 
       if (!response.isSuccessful && response.code != 206) {
         response.close()

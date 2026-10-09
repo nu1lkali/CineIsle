@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.PictureInPictureAlt
 import androidx.compose.material.icons.outlined.ScreenRotation
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Subtitles
+import androidx.compose.material.icons.outlined.HeartBroken
 import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material.icons.outlined.Flip
 import androidx.compose.material.icons.outlined.Repeat
@@ -66,6 +67,13 @@ enum class PlayerButton(
   PREVIOUS(Icons.Outlined.SkipPrevious),
   NEXT(Icons.Outlined.SkipNext),
   EMBY_FAVORITE(Icons.Outlined.FavoriteBorder),
+  /**
+   * 「标记为不喜欢」。空心的**心碎**，已标记时换成实心 + 转红。
+   *
+   * ⚠️ 原先是「拇指向下」，用户实测反馈**看不懂** —— 中文语境里它先被读成
+   * 「点踩 / 差评」，而这里是「我不想再看到这部」，与收藏（心形）是一对。
+   */
+  DISLIKE(Icons.Outlined.HeartBroken),
   CAST(Icons.Outlined.Cast),
   NONE(Icons.Outlined.Bookmarks),
 }
@@ -112,6 +120,7 @@ fun getPlayerButtonLabel(button: PlayerButton): String =
     PlayerButton.PREVIOUS -> stringResource(R.string.btn_label_previous)
     PlayerButton.NEXT -> stringResource(R.string.btn_label_next)
     PlayerButton.EMBY_FAVORITE -> stringResource(R.string.btn_label_emby_favorite)
+    PlayerButton.DISLIKE -> stringResource(R.string.btn_label_dislike)
     PlayerButton.CAST -> stringResource(R.string.btn_label_cast)
     PlayerButton.NONE -> stringResource(R.string.btn_label_none)
   }

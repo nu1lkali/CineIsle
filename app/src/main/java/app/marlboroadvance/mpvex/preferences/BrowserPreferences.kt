@@ -6,6 +6,7 @@ import app.marlboroadvance.mpvex.domain.emby.PersonMergeRule
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
 import app.marlboroadvance.mpvex.preferences.preference.getEnum
+import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarAlgorithm
 
 /**
  * Preferences for the video browser (folder and video lists)
@@ -249,6 +250,36 @@ class BrowserPreferences(
     preferenceStore.getBoolean("emby_random_genre_recommend", true)
 
   /**
+   * 首页是否显示「随便看看」区块（即混的一批）。
+   *
+   * 这个区块是首页「最新加入」下面那一行横滑，作用是给首页一个「点开有惊喜」的入口。
+   * 有人喜欢一进首页就看到推荐，也有人只想看新片 —— 所以做成可关。
+   *
+   * 关掉后**同时**不再发起那一次推荐请求（`EmbyHomeScreen` 里的
+   * `LaunchedEffect(serverId)` 会一起被跳过），不是只把 UI 藏起来。
+   * 默认**开**。
+   */
+  val embyHomeShowMix = preferenceStore.getBoolean("emby_home_show_mix", true)
+
+  /**
+   * 「随便看看」区块的条目数。
+   *
+   * 一行横滑放太多会让人滑不到头就腻，放太少又不像「一堆」。默认 12。
+   * 范围 4~30，超出直接夹到边界（偏好值可能被手改成任意数）。
+   */
+  val embyHomeMixCount = preferenceStore.getInt("emby_home_mix_count", 12)
+
+  /**
+   * 「猜你喜欢」页里**「连播列表」区块**每行放几个（2~6，默认 3）。
+   *
+   * 刻意与 [embyLibraryGridColumns] 分开存：媒体库列数是跟着屏幕宽窄调的，
+   * 连播列表的列数是「一批推荐想看几列」的偏好。共用一个键就会出现「改一边、两边一起变」。
+   *
+   * 读取处一律要 `coerceIn(2, 6)`：偏好文件可能被外部改坏，而 0 列会让网格直接崩。
+   */
+  val embyMixGridColumns = preferenceStore.getInt("emby_mix_grid_columns", 3)
+
+  /**
    * 「合并完成后自动清理孤立演员」开关。
    *
    * 打开后，每次合并成功会顺手触发服务端的「刷新人员」任务，把**已经没有任何作品**的
@@ -278,6 +309,103 @@ class BrowserPreferences(
    * 存的是枚举名，取不到（旧值 / 手改坏了）时 `getEnum` 会退回默认值。
    */
   val embyPersonMergeRule = preferenceStore.getEnum("emby_person_merge_rule", PersonMergeRule.STRICT)
+
+  /**
+   * 「相似推荐 / 即混」用哪套算法（[SimilarAlgorithm]），默认 [SimilarAlgorithm.EMBY]。
+   *
+   * 服务端算法更准但依赖服务端支持与元数据完整度；本地算法（`LocalSimilarity`）
+   * 永远能出结果。选 LOCAL 的典型场景：自建服务没开推荐索引、元数据刮削不全、
+   * 或者用的是第三方兼容实现（`/Items/{Id}/Similar` 直接 404）。
+   *
+   * ⚠️ 存的是枚举名，常量名发布后不能改。
+   */
+  val embySimilarAlgorithm =
+    preferenceStore.getEnum("emby_similar_algorithm", SimilarAlgorithm.Default)
+
+  /**
+   * 本地算法是否**排除已看过的条目**。
+   *
+   * 默认**开**（「你刚看完的片子不用再推给你」）；关掉后可以把看过的也列出来，
+   * 用于「重刷一遍老片」的场景。
+   */
+  val embySimilarExcludePlayed = preferenceStore.getBoolean("emby_similar_exclude_played", true)
+
+  // ── 显示偏好服务端同步（清单 #16）──
+  //
+  // 这三项是给 [app.marlboroadvance.mpvex.ui.browser.emby.displayprefs.EmbyDisplayPrefsSync]
+  // 用的。⚠️ 同步的粒度是**每个媒体库一份**、写操作是**整体覆盖**，
+  // 且 `Client` 分区键固定为 `mpvex-android`（不与 Emby Web 互通，理由见 EmbyClient 5.8 节）。
+
+  /**
+   * 「打开 App 时自动从服务端拉显示偏好」开关，默认**关**。
+   *
+   * 打开后每次进入 Emby 模块都会读一次服务端，把网格密度 / 卡片外观 / 排序拉回本地。
+   * 前提是用户**至少手动上传过一次**（见 [embyDisplayPrefsPushed]）——
+   * 否则新装的 App 会用默认值把服务端那份顶掉。
+   */
+  val embyDisplayPrefsAutoSync = preferenceStore.getBoolean("emby_display_prefs_auto_sync", false)
+
+  /**
+   * 「是否曾经把本地显示偏好上传到过服务端」标记，默认 false。
+   *
+   * 它是「首启不覆盖」那条规则的开关：没上传过就说明服务端那份是别人的
+   * （或根本是空的），这时候自动拉取只会把用户本机的设置冲掉。
+   *
+   * 只在**上传成功**时置 true；上传失败绝不能置 —— 否则用户会以为已经同步了，
+   * 下次启动自动拉取时把本地覆盖成服务端那份（其实还是空的/旧的）。
+   */
+  val embyDisplayPrefsPushed = preferenceStore.getBoolean("emby_display_prefs_pushed", false)
+
+  // ── 「标记为不喜欢」显示开关 ──
+  //
+  // 三处入口各自独立开关：藏在播放器里的按钮与详情页菜单项是**不同的打扰程度**，
+  // 有人不介意在详情页用（那里本来就有收藏/已播放），但不想在播放器里被提醒。
+  // 分开给开关比一个总开关有用。默认**开** —— 标记本身要用户主动点，
+  // 不会自己跳出来，只是不显示入口而已。
+
+  /** 媒体详情页「更多」菜单里的「标记为不喜欢」项。 */
+  val dislikeShowInDetailMenu =
+    preferenceStore.getBoolean("dislike_show_in_detail_menu", true)
+
+  /** mpv / GSY 播放器控制栏上的「不喜欢」按钮。 */
+  val dislikeShowInPlayerControls =
+    preferenceStore.getBoolean("dislike_show_in_player_controls", true)
+
+  /** 视界流（竖屏连播）右侧工具栏上的「不喜欢」按钮。 */
+  val dislikeShowInFeed =
+    preferenceStore.getBoolean("dislike_show_in_feed", true)
+
+  /**
+   * 「不喜欢」按钮当前在**哪个控件簇**（存 [app.marlboroadvance.mpvex.ui.preferences.DislikeLayoutSync.CONTROL_KEYS]
+   * 里的 key）。
+   *
+   * 存在偏好里而不是每次现查，是因为双向同步需要**还原到原处**：
+   * 用户可能把按钮从顶栏挪到了左下簇，关开关再打开时不该被 App 猜回顶栏。
+   *
+   * 空串 = 从没在编辑器里放过 ⇒ 加回时用默认簇（见设置页）。
+   */
+  val dislikeLayoutCluster = preferenceStore.getString("dislike_layout_cluster", "")
+
+  /**
+   * 出厂播种的**版本号**：0 = 从没播过。
+   *
+   * ## 为什么非得有这个标记
+   *
+   * 本功能的开关语义是「关开关 ⇒ 从布局里清掉；开开关 ⇒ 只置开关、不主动加回」。
+   * 这个语义成立的前提是**出厂时按钮已经在布局里**，所以 App 启动时要播种一次。
+   * 但播种不能每次启动都做：用户如果**故意**把按钮从所有控件簇里删掉（他有权这么干），
+   * 每次启动又给塞回去，等于用户的布局决定被反复撤销。
+   *
+   * ## 为什么是版本号而不是布尔
+   *
+   * 播种的**目标簇会变**（v1 只播了横屏，v2 补上竖屏 —— 横竖屏是两套独立的簇，
+   * 漏一个就等于那个方向没有入口）。布尔量只能表达「播过/没播过」，
+   * 已经播过 v1 的用户会被永久跳过，竖屏那个洞永远补不上。
+   * 用版本号就能表达「播到哪一版了」，升级时再补一次。
+   *
+   * 见 [app.marlboroadvance.mpvex.ui.preferences.DislikeLayoutSync.planSeed]。
+   */
+  val dislikeLayoutSeedVersion = preferenceStore.getInt("dislike_layout_seed_version", 0)
 }
 
 /**

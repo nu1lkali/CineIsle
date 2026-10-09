@@ -2,13 +2,15 @@ package app.marlboroadvance.mpvex.domain.emby
 
 import android.content.ContentValues
 import android.content.Context
-import app.marlboroadvance.mpvex.database.repository.EmbyServerRepository
-import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import app.marlboroadvance.mpvex.database.dao.DownloadedMediaDao
+import app.marlboroadvance.mpvex.database.dao.EmbyDownloadDao
+import app.marlboroadvance.mpvex.database.repository.EmbyServerRepository
+import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -26,15 +28,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.Transient
-import kotlinx.serialization.json.Json
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
 /** 单个下载任务的状态机。 */
-@Serializable
 enum class EmbyDownloadStatus {
   /** 已入队，等待前面的任务让出并发位 */
   QUEUED,
@@ -53,12 +51,12 @@ enum class EmbyDownloadStatus {
 }
 
 /**
- * 一条下载任务。
+ * 一条下载任务（运行时对象）。
  *
- * 这个对象会整体序列化成 JSON 存进 SharedPreferences，所以字段都要能序列化；
- * 运行期才算得出来的东西（速度）用 [Transient] 标掉。
+ * 持久化形态是 [app.marlboroadvance.mpvex.database.entities.EmbyDownloadEntity]，
+ * 两者之间的映射见 [toEntity] / [toTask]。清单 4.2 之前这里是直接
+ * `encodeToString` 成 JSON 存 SharedPreferences，现在换成了 Room。
  */
-@Serializable
 data class EmbyDownloadTask(
   /** Emby 的 ItemId，同时作为任务主键 */
   val itemId: String,
@@ -82,8 +80,8 @@ data class EmbyDownloadTask(
   /** 给人看的位置文本，如 Download/CineIsle/xxx.mkv */
   val locationLabel: String? = null,
   val createdAt: Long = System.currentTimeMillis(),
-  /** 实时速度（字节/秒）。只活在内存里，不落盘，所以标 [Transient]。 */
-  @Transient val speedBps: Long = 0L,
+  /** 实时速度（字节/秒）。只活在内存里，不落盘（见 [EmbyDownloadEntity] 的 KDoc）。 */
+  val speedBps: Long = 0L,
 ) {
   /** 进度 0..1；总大小未知时返回 null（界面走不确定进度动画） */
   val progressFraction: Float?
@@ -122,8 +120,10 @@ enum class EmbyEnqueueResult {
  * - 继续：新请求带 `Range: bytes=<已有大小>-`，以**追加**模式接着写。
  * - 进度：字节数写进 StateFlow，界面按 400ms 粒度刷新，5s 落一次盘。
  *
- * 任务元数据持久化在 SharedPreferences，进程被杀后重新打开应用，
- * 未完成的任务会停在「已暂停」，可以手动继续。
+ * 任务元数据持久化在 **Room**（清单 4.2 从 SharedPreferences 的 JSON 迁过来），
+ * 进程被杀后重新打开应用，未完成的任务会停在「已暂停」，可以手动继续。
+ * 下载完成的条目还会写一份到 `emby_downloaded_media` 表（见 [DownloadedMediaEntity]），
+ * 那是「离线可浏览内容」的权威清单，与任务表解耦。
  */
 /**
  * @param serverRepo 下载完成要按需回清服务器播放进度（开关见 [preferenceStore]），
@@ -135,20 +135,19 @@ class EmbyDownloadManager(
   context: Context,
   private val serverRepo: EmbyServerRepository,
   private val preferenceStore: PreferenceStore,
+  private val downloadDao: EmbyDownloadDao,
+  private val downloadedMediaDao: DownloadedMediaDao,
 ) {
   private val appContext = context.applicationContext
-  private val json = Json {
-    ignoreUnknownKeys = true
-    encodeDefaults = true
-  }
-  private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-  private val client = OkHttpClient.Builder()
-    .connectTimeout(20, TimeUnit.SECONDS)
-    .readTimeout(30, TimeUnit.SECONDS)
-    .writeTimeout(30, TimeUnit.SECONDS)
-    .build()
+  /**
+   * 走 [EmbyHttp.shared]（与其余客户端共享连接池 + 统一重试）。
+   *
+   * 原来这里自建（connect 20s / read 30s / write 30s）。⚠️ 档位统一后 read 变成 60s ——
+   * 对离线下载这是**更好**的方向（大文件慢网盘本来就容易读超时），且连接池共享省资源。
+   */
+  private val client = EmbyHttp.shared
 
   private val _tasks = MutableStateFlow<List<EmbyDownloadTask>>(emptyList())
   val tasks: StateFlow<List<EmbyDownloadTask>> = _tasks.asStateFlow()
@@ -162,7 +161,7 @@ class EmbyDownloadManager(
   private var lastPersistAt = 0L
 
   init {
-    restore()
+    scope.launch { restore() }
   }
 
   // ──────────────────────────── 对外操作 ────────────────────────────
@@ -197,6 +196,14 @@ class EmbyDownloadManager(
     )
     _tasks.value = _tasks.value + task
     persist()
+    // 元数据**入队时就落库**（此时 localUri 还是 null），不是下完才写。
+    // 理由：续传时手上已经没有原始 EmbyItem 了 —— 它来自详情页，那个对象早就不在了。
+    // 等下完再写，这一步就会缺字段（剧名/季集号/时长全丢），离线列表里只剩一个光秃秃的片名。
+    scope.launch {
+      runCatching { item.toDownloadedMediaEntity(server.id) }
+        .getOrNull()
+        ?.let { runCatching { downloadedMediaDao.upsert(it) } }
+    }
     pump()
     return EmbyEnqueueResult.STARTED
   }
@@ -245,11 +252,22 @@ class EmbyDownloadManager(
     speedTrack.remove(itemId)
     _tasks.value = _tasks.value.filterNot { it.itemId == itemId }
     persist()
-    if (deleteFile) task?.targetUri?.let { runCatching { deleteTarget(Uri.parse(it)) } }
+    if (deleteFile) {
+      task?.targetUri?.let { runCatching { deleteTarget(Uri.parse(it)) } }
+      // 文件没了，离线记录也必须跟着删 —— 否则离线内容页会列出一个
+      // 「点进去文件不存在」的条目，点了报「文件不存在」比不列更让人火大。
+      // ⚠️ 只在**删文件**时才删记录：只删任务记录（保留文件）时，离线列表要留着它。
+      scope.launch { runCatching { downloadedMediaDao.deleteRecord(itemId) } }
+    }
     pump()
   }
 
-  /** 清掉所有已完成任务的记录（文件保留在 Download 目录里）。 */
+  /**
+   * 清掉所有已完成任务的记录（文件保留在 Download 目录里）。
+   *
+   * 因为文件还在，**离线内容列表不受影响** —— 这正是「任务表」与「已下载内容表」
+   * 分开存的意义（见 [DownloadedMediaEntity]）。
+   */
   fun clearCompleted() {
     _tasks.value = _tasks.value.filterNot { it.status == EmbyDownloadStatus.COMPLETED }
     persist()
@@ -401,6 +419,28 @@ class EmbyDownloadManager(
         )
       }
       persist()
+
+      // 回填「已落盘」标记：localUri / fileSize / completedAt 三个字段，
+      // 补上之后这一行才会出现在离线内容页的查询里（判据是 localUri IS NOT NULL）。
+      val finished = taskFor(itemId)
+      if (finished != null) {
+        scope.launch {
+          runCatching {
+            downloadedMediaDao.find(itemId)
+          }.getOrNull()?.let { existing ->
+            runCatching {
+              downloadedMediaDao.upsert(
+                existing.copy(
+                  localUri = target.toString(),
+                  fileSize = if (total > 0) total else written,
+                  fileName = finished.fileName,
+                  completedAt = System.currentTimeMillis(),
+                ),
+              )
+            }
+          }
+        }
+      }
 
       // 下完了：按开关决定要不要顺手清掉服务器上这条的播放进度。
       // 放在最后且整体 try 住 —— 这只是锦上添花的收尾动作，失败了也不影响「下载已完成」。
@@ -559,21 +599,42 @@ class EmbyDownloadManager(
     _tasks.value = _tasks.value.map { if (it.itemId == task.itemId) task else it }
   }
 
+  /**
+   * 把内存态的 [_tasks] 全量写回 Room。
+   *
+   * ## 为什么是「全量 upsert」而不是「增量改一行」
+   * 任务数是**用户量级**的（几十条，不是几千条），全量 upsert 的成本可以忽略；
+   * 而增量写法要在每个状态变化点记得调对应方法，漏一处就是「界面显示已暂停、
+   * 重启后又是运行中」这类只在冷启动才暴露的 bug。全量写没有这个问题。
+   *
+   * 丢任务的风险用 `deleteAllThenInsert` 兜：它是**单事务**，不会出现「清空了还没插进去」的中间态。
+   *
+   * fire-and-forget（`scope.launch`）而不是挂起等它写完：调用点大多在下载协程里，
+   * 等一次磁盘 IO 只会拖慢响应；而 `launch` 出去的顺序由单线程 IO 调度器保证，
+   * 后发的写不会覆盖先发的。
+   */
   private fun persist() {
-    runCatching {
-      prefs.edit().putString(KEY_TASKS, json.encodeToString(_tasks.value)).apply()
+    val snapshot = _tasks.value.map { it.toEntity() }
+    scope.launch {
+      runCatching { downloadDao.replaceAll(snapshot) }
     }
   }
 
-  private fun restore() {
-    runCatching {
-      val raw = prefs.getString(KEY_TASKS, null) ?: return@runCatching
-      val saved = json.decodeFromString<List<EmbyDownloadTask>>(raw)
-      // 进程重启后不可能还有活跃连接：原来的 RUNNING/QUEUED 一律降级成「已暂停」，
-      // 用户点「继续」即可从断点续传。
-      _tasks.value = saved.map {
-        if (it.isActive) it.copy(status = EmbyDownloadStatus.PAUSED) else it
-      }
+  private suspend fun restore() {
+    val saved = runCatching { downloadDao.getAll() }.getOrDefault(emptyList())
+    // 进程重启后不可能还有活跃连接：原来的 RUNNING/QUEUED 一律降级成「已暂停」，
+    // 用户点「继续」即可从断点续传。
+    _tasks.value = saved
+      .map { it.toTask() }
+      .map { if (it.isActive) it.copy(status = EmbyDownloadStatus.PAUSED) else it }
+    // ⚠️ 降级只改内存，**必须紧接着落盘**：否则下次冷启动读到的还是 RUNNING，
+    // 又要降级一次；更糟的是某次降级没跑完就杀进程，库里会一直停在「运行中」。
+    // 只写「状态变了」的那些行，避免冷启动就把整表重写一遍。
+    val downgraded = _tasks.value.filter { task ->
+      saved.firstOrNull { it.itemId == task.itemId }?.status != task.status.name
+    }
+    if (downgraded.isNotEmpty()) {
+      runCatching { downloadDao.replaceAll(_tasks.value.map { it.toEntity() }) }
     }
   }
 
@@ -650,9 +711,6 @@ class EmbyDownloadManager(
   }
 
   companion object {
-    private const val PREFS_NAME = "emby_downloads"
-    private const val KEY_TASKS = "tasks_json"
-
     /** 同时下载数上限，太小跑不满带宽，太大容易被服务器限流 */
     private const val MAX_CONCURRENT = 2
     private const val BUFFER_SIZE = 256 * 1024

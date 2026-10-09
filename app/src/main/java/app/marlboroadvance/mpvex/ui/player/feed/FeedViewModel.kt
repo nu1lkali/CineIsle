@@ -10,10 +10,16 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import app.marlboroadvance.mpvex.domain.dislike.DislikeKey
+import app.marlboroadvance.mpvex.domain.dislike.DislikeMark
+import app.marlboroadvance.mpvex.domain.dislike.DislikeRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import org.koin.java.KoinJavaComponent.get
 
 /** 服务端分页时每页多少条 */
 private const val PAGE_SIZE = 30
@@ -48,6 +54,7 @@ class FeedViewModel(
   private val libraryId: String?,
   /** 只随机收藏条目（与媒体库工具行上的「随机播放收藏」同义） */
   private val favoritesOnly: Boolean,
+  private val dislikeRepository: DislikeRepository,
 ) : ViewModel() {
 
   /** 播放队列。整个列表是可观察的，追加下一页会直接反映到 UI 上的计数。 */
@@ -94,6 +101,45 @@ class FeedViewModel(
   val hasNext: Boolean get() = index in 0 until items.lastIndex
   val hasPrev: Boolean get() = index > 0
 
+  // ⚠️⚠️ 这三个字段**必须声明在 `init` 之前**。
+  // Kotlin 的属性初始化与 `init` 块**严格按源码顺序**执行：
+  // 之前它们写在文件末尾、而 `init` 在最前面，于是 `init` 里的 `syncDislike()`
+  // 去写一个还没初始化的 `mutableStateOf` ⇒ 后台字段是 null ⇒
+  // `NullPointerException: ... ParcelableSnapshotMutableState.setValue on a null object reference`
+  // —— **一进视界流 Activity 就崩**（构造 ViewModel 就挂）。编译器对这种顺序问题一声不响。
+
+  /** 当前条目的「不喜欢」记录（null = 未标记）。 */
+  var currentDislike by mutableStateOf<DislikeMark?>(null)
+    private set
+
+  /** 工具栏那颗「不喜欢」按钮是否显示（对应设置页的「视界流按钮」开关）。 */
+  var showDislike by mutableStateOf(true)
+    private set
+
+  /** 当前条目的 key。null = 拿不到 serverId ⇒ 按钮隐藏。 */
+  private var dislikeKey: DislikeKey? = null
+
+  init {
+    // 进页面先把当前这条的状态取好（O(1) 内存查找），按钮首帧就是对的
+    syncDislike()
+    observeDislikeChanges()
+    observeDislikeVisibility()
+    // 服务器是异步就绪的：初次 syncDislike() 时可能还没连上，
+    // 这里补一次「连上之后」的重算，否则按钮会一直不出现。
+    viewModelScope.launch {
+      embyRepository.currentServer.collect { syncDislike() }
+    }
+  }
+
+  /** 订阅设置页的「视界流按钮」开关，中途改了也能立刻生效。 */
+  private fun observeDislikeVisibility() {
+    val prefs = runCatching { get<BrowserPreferences>(BrowserPreferences::class.java) }.getOrNull()
+      ?: return
+    viewModelScope.launch {
+      prefs.dislikeShowInFeed.changes().collect { showDislike = it }
+    }
+  }
+
   /**
    * ±1 的邻居窗口（即 Flutter 版的 `_cacheRange`）。
    *
@@ -134,6 +180,8 @@ class FeedViewModel(
     if (newIndex == index || newIndex !in items.indices) return
     index = newIndex
     positionSec = 0.0
+    // 「不喜欢」状态与换页**同帧**完成：按钮不会先亮后暗。
+    syncDislike()
     // durationSec / buffered / paused **刻意不在这里归零**。
     //
     // 归零会让底部进度条在一帧之内从「滑块」塌成「一条细线」，下一拍心跳再把它撑
@@ -293,6 +341,76 @@ class FeedViewModel(
 
   private fun Boolean.toStringForHint() = if (this) "已加入收藏" else "已取消收藏"
 
+  // ────────────────────────── 标记为不喜欢 ──────────────────────────
+
+  /** 换页时同步「不喜欢」状态。O(1) 内存查找，不查库、不起协程。 */
+  private fun syncDislike() {
+    val item = items.getOrNull(index)
+    val server = embyRepository.currentServer.value
+    val key = if (item == null || server == null) null else DislikeKey(server.id, item.itemId)
+    dislikeKey = key
+    currentDislike = key?.let { dislikeRepository.markOf(it) }
+  }
+
+  /** 单击「不喜欢」：切换标记。**永不弹框**（弹框会挡住竖屏画面）。 */
+  fun toggleDislike() {
+    val key = dislikeKey
+    // 同 mpv / GSY：拿不到 key 必须给个说法，不能静默 return
+    // （用户点按钮什么都没发生，只会以为功能坏了）
+    if (key == null) {
+      showHint(app.marlboroadvance.mpvex.ui.player.DislikePlayerActions.UNAVAILABLE_MESSAGE)
+      return
+    }
+    val item = items.getOrNull(index) ?: return
+    if (dislikeRepository.isDisliked(key)) {
+      dislikeRepository.unmark(key)
+      showHint("已取消标记")
+    } else {
+      dislikeRepository.mark(key, item.title, reason = null, imageUrl = feedImageUrl(item))
+      showHint("已标记为不喜欢")
+    }
+    currentDislike = dislikeRepository.markOf(key)
+  }
+
+  /**
+   * 长按「不喜欢」：保存备注。
+   *
+   * **保存备注本身就算标记** —— 用户主动写了「剧情烂」却发现还得再点一下才生效，
+   * 是很别扭的两步（与 mpv / GSY 侧同一个语义）。
+   */
+  fun saveDislikeRemark(reason: String) {
+    val key = dislikeKey ?: return
+    val item = items.getOrNull(index) ?: return
+    val trimmed = reason.trim()
+    dislikeRepository.mark(key, item.title, reason = trimmed, imageUrl = feedImageUrl(item))
+    showHint(if (trimmed.isEmpty()) "已标记为不喜欢" else "备注已保存")
+    currentDislike = dislikeRepository.markOf(key)
+  }
+
+  /** 长按弹框的初始值 = 上次写的备注。 */
+  fun currentDislikeReason(): String = currentDislike?.reason.orEmpty()
+
+  /**
+   * 缩略图地址。管理页要显示封面，标的时候顺手存下来，省得管理页再联网查。
+   * 拿不到服务器就算了 —— 那一列显示占位图，不影响功能。
+   */
+  private fun feedImageUrl(item: FeedItem): String? =
+    embyRepository.currentServer.value?.let { embyRepository.imageUrl(it, item.itemId) }
+
+  /**
+   * 外部（详情页 / 管理页 / 另两个播放器）改了同一条的状态时，视界流按钮跟着变。
+   *
+   * 刻意**不**按 key 过滤：过滤后仍要读完整列表才能找到匹配项，
+   * 而列表就在内存里，读全量是零 IO 的。
+   */
+  private fun observeDislikeChanges() {
+    viewModelScope.launch {
+      dislikeRepository.all.collect {
+        syncDislike()
+      }
+    }
+  }
+
   /** 弹一条看得见但不抢戏的提示，[keep] 毫秒后自动消失 */
   fun showHint(text: String, keep: Long = 3000L) {
     hintJob?.cancel()
@@ -312,10 +430,11 @@ class FeedViewModel(
       embyRepository: EmbyRepository,
       libraryId: String?,
       favoritesOnly: Boolean,
+      dislikeRepository: DislikeRepository,
     ) = object : ViewModelProvider.Factory {
       @Suppress("UNCHECKED_CAST")
       override fun <T : ViewModel> create(modelClass: Class<T>): T =
-        FeedViewModel(initialItems, embyRepository, libraryId, favoritesOnly) as T
+        FeedViewModel(initialItems, embyRepository, libraryId, favoritesOnly, dislikeRepository) as T
     }
   }
 }

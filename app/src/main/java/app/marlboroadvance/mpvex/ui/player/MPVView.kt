@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.player
 import android.content.Context
 import android.os.Environment
 import android.util.AttributeSet
+import android.util.Log
 
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
@@ -177,6 +178,30 @@ class MPVView(
       "stream-lavf-o",
       "reconnect=1,reconnect_streamed=1,reconnect_delay_max=20",
     )
+
+    // ── 落盘缓存（清单 #18）──
+    //
+    // 上面那几项是**内存**缓冲：进程活着就有，退出就没了 ⇒ 同一片子第二次看
+    // 仍然要从服务器重拉。这里补上落盘那一半。
+    //
+    // 三条硬约束（少一条就是「开着但没效果」，而且 mpv **不报错**）：
+    //  · `cache-dir` 必须是**绝对路径**，相对路径会被静默忽略；
+    //  · 目录得**自己先建**，mpv 不会替我们 mkdirs；
+    //  · `cache-persize` 是**每条流**的上限，跟内存那侧（`demuxer-max-bytes`）
+    //    彼此独立 —— 调大它不会让内存缓冲变大。
+    if (playerPreferences.diskCacheEnabled.get()) {
+      val dir = MpvDiskCache.ensureDir(context)
+      if (dir != null) {
+        val limitMb = playerPreferences.diskCacheSizeMb.get()
+          .coerceIn(MpvDiskCache.MIN_SIZE_MB, MpvDiskCache.MAX_SIZE_MB)
+        MPVLib.setOptionString("cache", "yes")
+        MPVLib.setOptionString("cache-dir", dir.absolutePath)
+        MPVLib.setOptionString("cache-persize", "${limitMb}M")
+        // ⚠️ 故意**不**开 `cache-pause`：开了之后一旦服务器不支持 Range 请求
+        // （部分网盘直链、某些 SFTP/FTP 源），mpv 会误判成「缓冲完了」而**永久暂停**，
+        // 表现是画面停在缓冲动画上再也不动。宁可卡一下，也不要这种死局。
+      }
+    }
     
     val verbose = advancedPreferences.verboseLogging.get()
     val logLevel = if (verbose) "v" else "warn"
@@ -226,12 +251,14 @@ class MPVView(
       Debanding.GPU -> MPVLib.setOptionString("deband", "yes")
     }
 
-    advancedPreferences.enabledStatisticsPage.get().let {
-      if (it != 0) {
-        MPVLib.command("script-binding", "stats/display-stats-toggle")
-        MPVLib.command("script-binding", "stats/display-page-$it")
-      }
-    }
+    // 这里原来有一段「按 `enabledStatisticsPage` 偏好自动弹出 mpv 统计浮层」的代码，
+    // 已在清单 #19 移除。移除原因不是「统计没用」，而是**它变成了没有入口的功能**：
+    // 设置页那六个 chip（关闭 + 第 1~5 页）被整块删掉之后，唯一还能让它出现的方式
+    // 就是本地偏好里残留着旧值 —— 也就是「升级后凭空弹一个用户不知道怎么关掉的浮层」。
+    //
+    // 想要统计浮层的人：写进自己的 `mpv.conf`
+    // （`script-binding stats/display-stats-toggle`），本项目不拦配置。
+    // 对应的 [EngineFeature.STATS] 枚举项也已一并删除（它本来就零读点）。
   }
 
   @Suppress("ReturnCount", "DEPRECATION")
@@ -399,63 +426,57 @@ class MPVView(
   }
 
 
+/**
+   * 在 initOptions 阶段挂上 Anime4K shader。
+   *
+   * ⚠️ 这里**只读**已备好的文件，不再做任何拷贝（清单 #20 必修 2）。
+   * 原来这里调 [Anime4KManager.initialize]，它会`assets.list()` + 逐个
+   * `assets.open()` 几十个 .glsl —— 而本方法跑在主线程（mpv 初始化必须在主线程）。
+   * 现在 IO 那一半由 [prepareAnime4KOnIoThread] 在 IO 线程提前做完，
+   * 本方法只负责「把链路字符串写进 mpv 选项」。
+   */
   fun applyAnime4KShaders() {
     runCatching {
       val enabled = decoderPreferences.enableAnime4K.get()
-      if (!enabled) {
-        return
-      }
-      
-      // Anime4K requires the legacy GPU path unless gpu-next is running on Vulkan.
       val gpuNextActive = decoderPreferences.gpuNext.get()
       val useVulkan = decoderPreferences.useVulkan.get()
-      if (gpuNextActive && !useVulkan) {
-        return  // Abort shader loading to prevent incompatible state
+
+      val shaderChain =
+        anime4kManager.resolveChain(
+          isEnabled = enabled,
+          gpuNextActive = gpuNextActive,
+          useVulkan = useVulkan,
+          modeStr = decoderPreferences.anime4kMode.get(),
+          qualityStr = decoderPreferences.anime4kQuality.get(),
+        )
+
+      if (shaderChain.isEmpty()) return
+
+      // OpenGL-only tuning should not be pushed onto the Vulkan backend.
+      if (!useVulkan) {
+        MPVLib.setOptionString("opengl-pbo", "yes")
+        MPVLib.setOptionString("opengl-early-flush", "no")
       }
-      
-      // Initialize shader files if needed - THIS IS CRITICAL!
-      if (!anime4kManager.initialize()) {
-        return
-      }
-      
-      // Get preferences
-      val modeStr = decoderPreferences.anime4kMode.get()
-      
-      // Check if mode is OFF - if so, don't apply any shaders
-      if (modeStr == "OFF") {
-        return  // Exit early - user wants it OFF
-      }
-      
-      // Parse user's selected mode
-      val mode = try {
-          Anime4KManager.Mode.valueOf(modeStr)
-      } catch (e: IllegalArgumentException) {
-          Anime4KManager.Mode.OFF
-      }
-      
-      val qualityStr = decoderPreferences.anime4kQuality.get()
-      val quality = try {
-        Anime4KManager.Quality.valueOf(qualityStr)
-      } catch (e: IllegalArgumentException) {
-        Anime4KManager.Quality.BALANCED
-      }
-      
-      // Get shader chain from manager
-      val shaderChain = anime4kManager.getShaderChain(mode, quality)
-      
-      if (shaderChain.isNotEmpty()) {
-        // OpenGL-only tuning should not be pushed onto the Vulkan backend.
-        if (!useVulkan) {
-          MPVLib.setOptionString("opengl-pbo", "yes")
-          MPVLib.setOptionString("opengl-early-flush", "no")
-        }
-        MPVLib.setOptionString("vd-lavc-dr", "yes")
-        
-        // Apply shaders (MUST use setOptionString in initOptions!)
-        MPVLib.setOptionString("glsl-shaders", shaderChain)
-      }
+      MPVLib.setOptionString("vd-lavc-dr", "yes")
+
+      // Apply shaders (MUST use setOptionString in initOptions!)
+      MPVLib.setOptionString("glsl-shaders", shaderChain)
     }.onFailure {
       // Don't crash - just continue without shaders
     }
+  }
+
+  /**
+   * 在 IO 线程把 Anime4K 的 shader 从 assets 备到内部存储（清单 #20 必修 2）。
+   *
+   * 必须在 [initialize] 之前调 —— `glsl-shaders` 是 `setOptionString`，
+   * 过了初始化期再设就不生效了。
+   *
+   * 幂等且便宜：有「已拷完」标记文件时只做一次 `exists()` 判断，
+   * 连 `assets.list()` 都不进（[Anime4KManager.prepareOnIoThread] 里的快路径）。
+   */
+  fun prepareAnime4KOnIoThread() {
+ runCatching { anime4kManager.prepareOnIoThread() }
+      .onFailure { Log.w("MPVView", "Anime4K asset prepare failed", it) }
   }
 }

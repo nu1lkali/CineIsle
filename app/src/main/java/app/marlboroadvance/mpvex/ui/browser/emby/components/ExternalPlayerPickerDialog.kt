@@ -26,12 +26,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -162,7 +164,26 @@ private fun rememberAppIconBitmap(packageName: String?): ImageBitmap? {
       if (packageName == null) return@produceState
       value = withContext(Dispatchers.IO) { loadAppIconBitmap(pm, packageName) }
     }
-  return state.value
+  val bitmap = state.value
+
+  // 回收上一张图（清单 #20 建议项）。图标是 96×96 ARGB_8888（每张约 36KB），
+  // 播放器列表可能有几十个外部应用 —— 不回收就是几十张 native 图悬着等 GC。
+  //
+  // ⚠️ 用 `DisposableEffect(bitmap)` 而不是 `produceState` 里写 `onDispose`：
+  // 后者是 Compose 的顶层 API，只能在 composable 函数体里调；
+  // `produceState` 的 lambda 是 `ProduceStateScope`（协程作用域），不是 composable 作用域。
+  //
+  // key 用 `bitmap`（实例本身）：它每次加载都是新对象，
+  // 所以 key 一变就意味着「旧的可以扔了」，正好是我们要的时机。
+  DisposableEffect(bitmap) {
+    onDispose {
+      bitmap?.asAndroidBitmap()?.let { bmp ->
+        if (!bmp.isRecycled) runCatching { bmp.recycle() }
+      }
+    }
+  }
+
+  return bitmap
 }
 
 private fun loadAppIconBitmap(

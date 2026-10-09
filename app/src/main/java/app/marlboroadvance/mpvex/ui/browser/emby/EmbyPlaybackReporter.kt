@@ -78,6 +78,19 @@ object EmbyPlaybackReporter {
 
     // 让播放页的 Emby 快捷操作（收藏等）拿到当前 server / item
     EmbyPlayerActions.bind(intent)
+    // ⚠️「不喜欢」同样必须**起播时就 bind**。
+    //  之前只在 `reportProgressOnce()` 里、且仅当检测到切集时才 bind ——
+    //  于是刚进播放页那一整段时间 `DislikePlayerActions.currentKey` 还是 null，
+    //  横屏点按钮只会提示「当前视频没有可标记的来源」（用户实测反馈）。
+    //  切集时那次 bind 保留：它是「画面已经切到下一集」的权威时机。
+    //  bind 对相同 key 幂等（直接 return，零查询），两处都调没有额外开销。
+    app.marlboroadvance.mpvex.ui.player.DislikePlayerActions.bind(
+      app.marlboroadvance.mpvex.domain.dislike.DislikeKey(sid, firstId),
+      // ⚠️ 片名必须传。播放器里标记时**只有 id**，不传的话存进库里的记录
+      //   `title` 是空串 —— 管理页只能显示「（无标题）」，用户认不出标的是哪一部。
+      //   播放页本来就有片名（启动播放器时作为 title extra 传进来的），顺手带上即可。
+      title = intent?.getStringExtra("title").orEmpty(),
+    )
 
     startPolling()
     return true
@@ -142,6 +155,11 @@ object EmbyPlaybackReporter {
       currentItemId = playingItemId
       // 同步播放页 UI（收藏按钮等）到新的这一集
       EmbyPlayerActions.onItemChanged(playingItemId)
+      // 「不喜欢」按钮同样要跟着切。走**内存快照**（一次 HashMap 查找，无 IO），
+      // 所以连播时按钮状态与画面在同一帧完成，不会出现"先亮后暗"
+      app.marlboroadvance.mpvex.ui.player.DislikePlayerActions.bind(
+        app.marlboroadvance.mpvex.domain.dislike.DislikeKey(serverId, playingItemId),
+      )
 
       if (previousItemId != null) {
         runCatching {
@@ -206,6 +224,16 @@ object EmbyPlaybackReporter {
   const val EXTRA_ITEM_IDS = "emby_item_ids"
 
   /**
+   * 当前播放的媒体源 Id（在线字幕搜索要用）。
+   *
+   * 为什么单独一个 extra 而不是让播放页反查：反查要走
+   * `GET /Items/{Id}` 再从 `MediaSources` 里挑，播放页是**每切一集都变**的，
+   * 而这个值在启动播放器时就已经知道了。多版本媒体（4K/1080P 各带不同字幕）
+   * 时挑错就搜到别的版本的字幕，所以必须由启动侧显式传。
+   */
+  const val EXTRA_MEDIA_SOURCE_ID = "emby_media_source_id"
+
+  /**
    * 挂在 PlayerActivity 上的生命周期观察者。
    *
    * 用法：`lifecycle.addObserver(EmbyPlaybackLifecycleObserver(intent))`
@@ -225,11 +253,23 @@ object EmbyPlaybackReporter {
 
 /**
  * 供 EmbyViewModel 调用：写入上报所需的 extra。
+ *
+ * @param mediaSourceIds 与 [itemIds] **同序同长**的媒体源 Id 列表；
+ *   取不到的用空串占位（在线字幕搜索会跳过空串）。
+ *   用列表而不是单值，是因为播放器支持连播 —— 切集后当前媒体源会变，
+ *   播放页按当前 `playlistIndex` 取对应那个。
  */
 internal fun Intent.putEmbyPlaybackExtras(
   server: EmbyServer,
   itemIds: List<String>,
+  mediaSourceIds: List<String> = emptyList(),
 ) {
   putExtra(EmbyPlaybackReporter.EXTRA_SERVER_ID, server.id)
   putStringArrayListExtra(EmbyPlaybackReporter.EXTRA_ITEM_IDS, ArrayList(itemIds))
+  if (mediaSourceIds.isNotEmpty()) {
+    putStringArrayListExtra(
+      EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID,
+      ArrayList(mediaSourceIds),
+    )
+  }
 }

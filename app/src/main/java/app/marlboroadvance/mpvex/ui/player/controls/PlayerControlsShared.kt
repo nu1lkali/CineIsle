@@ -78,6 +78,10 @@ import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+// 偏好读值用项目自定义扩展（preference 的 receiver），与上面 Compose 那个并存：
+// 一个作用于 StateFlow，一个作用于 Preference<T>，同名不同 receiver。
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
+import org.koin.compose.koinInject
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -111,6 +115,8 @@ import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.PlayerButton
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlayerActions
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
+import app.marlboroadvance.mpvex.ui.player.DislikeControlsButton
+import app.marlboroadvance.mpvex.ui.player.DislikePlayerActions
 import app.marlboroadvance.mpvex.ui.player.Panels
 import app.marlboroadvance.mpvex.ui.player.PlayerActivity
 import app.marlboroadvance.mpvex.ui.player.PlayerViewModel
@@ -171,6 +177,14 @@ fun RenderPlayerButton(
   viewModel: PlayerViewModel,
   activity: PlayerActivity,
   buttonSize: Dp = 40.dp,
+  /**
+   * 长按「不喜欢」按钮 → 请求弹备注框。
+   *
+   * 为什么用回调而不是按钮自己弹：弹框需要 `Dialog` 宿主，而按钮渲染在
+   * 控制条的 `when` 分支里，那一层拿不到宿主的 `remember` 状态。
+   * 传 null ⇒ 长按无反应（单击仍可用），不会崩。
+   */
+  onDislikeRemarkRequest: (() -> Unit)? = null,
 ) {
   val clickEvent = LocalPlayerButtonsClickEvent.current
   when (button) {
@@ -934,6 +948,27 @@ fun RenderPlayerButton(
         EmbyFavoritePlayerButton(
           hideBackground = hideBackground,
           buttonSize = buttonSize,
+        )
+      }
+    }
+
+    PlayerButton.DISLIKE -> {
+      // 设置里关掉「播放器按钮」⇒ 整个按钮不渲染（而不是置灰：
+      // 用户主动关掉的东西还留在那儿置灰，只会让他以为开关没生效）。
+      // ⚠️ 偏好读值要用项目自定义的 `Preference<T>.collectAsState()`
+      // （preferences.preference 包里），不是 Compose 那个 ——
+      // 后者的 receiver 是 StateFlow，作用在 Preference 上编译不过，
+      // 且报 "receiver type mismatch" 很难看出是选错了扩展。
+      val browserPrefs = koinInject<app.marlboroadvance.mpvex.preferences.BrowserPreferences>()
+      val showDislike = browserPrefs.dislikeShowInPlayerControls.collectAsState().value
+      if (showDislike) {
+        val isMarked by DislikePlayerActions.isMarked.collectAsState()
+        DislikeControlsButton(
+          isMarked = isMarked,
+          onToggle = DislikePlayerActions::toggle,
+          onLongPress = { onDislikeRemarkRequest?.invoke() },
+          buttonSize = buttonSize,
+          controlColorValue = controlColor,
         )
       }
     }

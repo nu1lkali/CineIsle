@@ -108,6 +108,14 @@ internal class ExoPlayerPool(
   private val boundTextures = HashMap<Int, TextureView>()
 
   /**
+   * index → 装在那个实例上的 [Player.Listener]（清单 #20 建议项）。
+   *
+   * 只为释放时能成对摘掉而存在。listener 闭包捕获了 index 与本池，
+   * 实例 released 之后若还留着它，等于留了一条「已释放的实例仍可能回调进来」的路。
+   */
+  private val listeners = HashMap<Int, Player.Listener>()
+
+  /**
    * index → 渲染器是否已经**产出过**第一帧（`Player.Listener.onRenderedFirstFrame`）。
    *
    * ⚠️ 它**不等于「用户看到了」**。这个回调是 ExoPlayer 把这一帧**交给输出面**的那一刻
@@ -159,7 +167,13 @@ internal class ExoPlayerPool(
   private fun acquire(index: Int, url: String): ExoPlayer {
     players[index]?.let { return it }
     val player = build(url)
-    player.addListener(listenerFor(index))
+    val listener = listenerFor(index)
+    player.addListener(listener)
+    // 记下这一对，释放时成对摘掉（清单 #20 建议项）。
+    // 严格说 ExoPlayer.release() 自己会清空 listener 列表，所以这不算真泄漏；
+ // 但显式成对 removeListener 让「谁装谁摘」在代码上成对可见 ——
+    // 将来若改成复用实例（不 release 只 reset），漏摘就会立刻变成真泄漏。
+    listeners[index] = listener
     players[index] = player
     return player
   }
@@ -584,22 +598,27 @@ internal class ExoPlayerPool(
     val texture = boundTextures.remove(index)
     // 首帧账本跟着实例走：实例都没了，它渲染过、上屏过的那一帧自然也不作数了
     forgetFrameLedgers(index)
-    runCatching {
-      if (texture != null) player.clearVideoTextureView(texture)
+  runCatching {
+    if (texture != null) player.clearVideoTextureView(texture)
+      // 先摘 listener 再 release：listener 闭包捕获了 index 与本池，
+      // 留着它等于让一个已释放的实例继续可能回调进来
+      listeners.remove(index)?.let { player.removeListener(it) }
       player.stop()
       player.release()
     }
   }
 
-  /** 退出页面：全部释放。顺序是先解画面、再 stop、最后 release，反了会有 native 线程踩已释放的句柄 */
+/** 退出页面：全部释放。顺序是先解画面、再摘listener、再 stop、最后 release，反了会有 native 线程踩已释放的句柄 */
   fun releaseAll() {
     players.forEach { (index, player) ->
-      runCatching {
+    runCatching {
         boundTextures[index]?.let { player.clearVideoTextureView(it) }
-        player.stop()
+        listeners.remove(index)?.let { player.removeListener(it) }
+      player.stop()
         player.release()
       }
     }
+    listeners.clear()
     surfaces.clear()
     containers.clear()
     videoSizes.clear()

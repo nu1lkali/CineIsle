@@ -12,6 +12,13 @@ plugins {
   alias(libs.plugins.aboutlibraries)
 }
 
+// ── release lint 开关（清单 1.2）──
+// 定义在 android {} 之前，好让 lint { checkReleaseBuilds } 和下面的
+// tasks.matching { lintVital } 共用同一个值，避免两处各读一遍属性。
+// 取普通 Boolean 而非 Provider：checkReleaseBuilds 的签名不接受 Provider。
+// 这里用 orNull 而不是 .get()，是为了不强制求值、不打断配置缓存。
+val lintVitalOn: Boolean = providers.gradleProperty("lintVital").orNull?.toBoolean() ?: false
+
 android {
   namespace = "app.marlboroadvance.mpvex"
   compileSdk = 37
@@ -33,8 +40,8 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
-    versionCode = 5
-    versionName = "1.0.8"
+    versionCode = 15
+    versionName = "1.2.1"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -165,6 +172,47 @@ android {
     buildConfig = true
   }
 
+  // ── 测试（清单 1.2）──
+  sourceSets {
+    getByName("androidTest") {
+      // Room 迁移测试靠 MigrationTestHelper 从 **assets** 里读导出的 schema
+      // （路径固定为 schema/<canonicalName 首字母小写>/<version>.json，
+      //   本项目即 schema/app.marlboroadvance.mpvex.database.mpvExDatabase/12.json）。
+      // 不把 $projectDir/schemas 挂进 androidTest assets 的话，
+      // createDatabase()/runMigrationsAndValidate() 会全部抛
+      //「Unable to find schema file」—— 测试代码写得再对也一条都跑不了。
+      assets.srcDirs("$projectDir/schemas")
+    }
+  }
+
+  testOptions {
+    unitTests {
+      // Robolectric 需要 android.jar 的全部资源（不只是桩方法），
+      // 不开这个它读不到主题/字符串，纯逻辑测试也会在初始化时炸。
+      isIncludeAndroidResources = true
+      isReturnDefaultValues = true
+    }
+  }
+
+  // ── Lint（清单 1.2）──
+  // 规则集本身在 app/lint.xml 里（致命项 error、存量噪音降级 warning、误报 ignore）。
+  lint {
+    // 静态检查出错就中断构建 —— 前提是 lint.xml 已把存量噪音降级，
+    // 否则第一次跑就会被几百条历史问题卡住，配置也就白配了。
+    abortOnError = true
+    // 警告不阻断出包，但会写进报告供体检用。
+    warningsAsErrors = false
+    checkDependencies = false
+    // 项目里大量日志用的是 android.util.Log 而不是封装类，
+    // 这条与本项目现状相悖，直接关掉免得刷屏。
+    disable += "LogDetector"
+    // release 变体的 lint 检查很慢（实测 lintVitalAnalyze 要 7 分钟），
+    // 日常出包关掉；上线前体检加 -PlintVital=true 跑一次。
+    // 与下面那段 tasks.matching { name.startsWith("lintVital") } 开关是同一件事，
+    // 这里从 lint 配置侧再关一次，保证不带参数时任何路径都不会误触发。
+    checkReleaseBuilds = lintVitalOn
+  }
+
   packaging {
     resources {
       excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -195,9 +243,10 @@ android {
 // lintVital 是 AGP 给 release 变体加的「致命问题」静态检查，跑在 R8 之后、
 // 且几乎吃不掉并行度（它和 R8 抢 CPU），是本机构建最大的一块纯开销。
 // 日常出包关掉它；要上线前体检时加 -PlintVital=true 跑一次即可。
-val lintVitalEnabled = providers.gradleProperty("lintVital").map { it.toBoolean() }.orElse(false)
+// 值复用 android {} 之前声明的 lintVitalOn（那里 lint { checkReleaseBuilds } 也要用），
+// 避免同一个开关在两处各解析一遍。
 tasks.matching { it.name.startsWith("lintVital") }.configureEach {
-  enabled = lintVitalEnabled.get()
+  enabled = lintVitalOn
 }
 
 androidComponents {
@@ -326,17 +375,56 @@ dependencies {
     implementation(libs.lazycolumnscrollbar)
     implementation(libs.reorderable)
 
-    // Emby Java SDK (OpenAPI 生成) 依赖：源码已复制到 app/src/main/java/embyclient/，
-    // 由主项目 sourceSet 直接编译。SDK 基于 OkHttp2 + Gson + gson-fire + swagger-annotations。
-    // 注意：OkHttp2 用包名 com.squareup.okhttp.*，与项目主用的 OkHttp3 (okhttp3.*) 不冲突可共存。
-    implementation("com.squareup.okhttp:okhttp:2.7.5")
-    implementation("com.squareup.okhttp:logging-interceptor:2.7.5")
-    implementation("com.google.code.gson:gson:2.8.1")
-    implementation("io.gsonfire:gson-fire:1.8.3")
-    implementation("io.swagger.core.v3:swagger-annotations:2.0.0")
-    // javax.annotation.* 在 Android 上缺失，需补 jsr250-api（SDK 代码用 @Generated 等注解）
-    implementation("javax.annotation:jsr250-api:1.0")
+    // ── Emby Java SDK (OpenAPI 生成) ──
+    // 源码 `app/src/main/java/embyclient/` 已从 sourceSet 排除（见上方 android{} 里的说明），
+    // 它原本带来的 OkHttp2 + Gson + gson-fire + swagger-annotations 依赖**全部移除**：
+    //   - OkHttp2 (com.squareup.okhttp) 早已 EOL，且与主用的 OkHttp3 (okhttp3.*) 并存；
+    //   - Gson 同理，主项目统一用 kotlinx.serialization；
+    //   - 主项目源码里 grep 不到 gson / swagger / javax.annotation 的任何引用。
+    // 端点路径与参数仍可查 embyclient/ 源码（不参与编译，只作参考）。
+    // javax.annotation.* 在 Android 上缺失，若将来真要启用那份 SDK 再补 jsr250-api。
+
+    // ── 测试依赖（清单 1.2）──
+    // 之前项目**一个测试都没有**（app/src/test 与 androidTest 目录都不存在），
+    // 11 段手写 Room 迁移零覆盖 —— 这是全项目最高的风险点。
+    //
+    // 分工：
+    //   testImplementation  → JVM 单测（分页状态机、错误分类、正则筛选、排序…），秒级
+    //   androidTestImplementation → Room 迁移测试（MigrationTestHelper 需要真 SQLite）
+    testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.truth)
+
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.core.ktx)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.truth)
+    androidTestImplementation(libs.room.testing)
 }
+
+/*
+ * ── 关于 Emby Java SDK（OpenAPI 生成）目录 `app/src/main/java/embyclient/` ──
+ *
+ * 它**已从源码目录移出**到 `app/embyclient-reference/`，故不再参与编译，
+ * 上面那批 OkHttp2 + Gson + gson-fire + swagger-annotations 依赖才能全部移除。
+ *
+ * 移出理由（全部已核实，不是猜测）：
+ *   - 全项目零引用：`Grep "^import embyclient"` 在 mpvex 下无命中。实际请求全部走
+ *     `domain/emby/EmbyClient.kt` 手写的 OkHttp3 + kotlinx.serialization。
+ *   - OkHttp2 (`com.squareup.okhttp`) 早已 EOL，却和主用的 OkHttp3 (okhttp3.*) 并存 ——
+ *     包体、混淆、依赖冲突三重风险。
+ *   - Gson 与主项目统一的 kotlinx.serialization 重复；主项目源码里 grep 不到
+ *     gson / swagger / javax.annotation 的任何引用。
+ *
+ * ⚠️ 源码没删，只是挪了位置 —— 查某个 Emby 端点的确切路径 / 参数名时，
+ * 去 `app/embyclient-reference/` 照抄到 EmbyClient 手写即可，这本来就是生成它的用途。
+ * 新加的功能（播放列表 / 字幕下载 / 相似推荐 / 虚拟库等）都按这个流程做。
+ */
+
 
 /* ---------------- Git helpers ---------------- */
 

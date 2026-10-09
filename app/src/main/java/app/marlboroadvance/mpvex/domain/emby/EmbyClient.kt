@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.domain.emby
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -13,296 +14,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
-// ════════════════════════════════════════════════════════════════════════
-// Emby REST API 数据模型（只定义播放器需要的字段，Emby 返回 JSON 字段远多于此，
-// kotlinx.serialization 配合 ignoreUnknownKeys=true 会自动丢弃多余字段）
-// ════════════════════════════════════════════════════════════════════════
-
-@Serializable
-data class EmbyAuthResult(
-  val User: EmbyUserDto? = null,
-  val SessionInfo: JsonObject? = null,
-  val AccessToken: String? = null,
-  val ServerId: String? = null,
-)
-
-@Serializable
-data class EmbyUserDto(
-  val Id: String? = null,
-  val Name: String? = null,
-  val PrimaryImageTag: String? = null,
-)
-
-@Serializable
-data class EmbySystemInfo(
-  val ServerName: String? = null,
-  val Version: String? = null,
-  val Id: String? = null,
-  val OperatingSystem: String? = null,
-)
-
-@Serializable
-data class EmbyItemsResult(
-  val Items: List<EmbyItem> = emptyList(),
-  val TotalRecordCount: Int = 0,
-)
-
-/**
- * 批量操作的汇总结果。
- *
- * Emby 没有批量端点（见 [EmbyClient.setFavoriteMany]），所以批量操作在客户端逐条跑，
- * 这里记录成功 / 失败条数与首个失败原因 —— UI 据此提示「成功 N / 失败 M」，
- * 而不是含糊的「操作完成」。
- *
- * @param ok 成功条数
- * @param failed 失败条数
- * @param firstError 第一条失败的原因（可能为 null，表示失败但拿不到信息）
- */
-data class EmbyBatchResult(
-  val ok: Int,
-  val failed: Int,
-  val firstError: String? = null,
-) {
-  val total: Int get() = ok + failed
-  /** 全部成功（且有内容）才算 success */
-  val isAllOk: Boolean get() = failed == 0 && ok > 0
-}
-
-/**
- * 媒体库筛选面板的可选项集合。
- *
- * 四个维度都来自 Emby 的「按名字聚合」端点（/Genres、/Tags、/Years、/OfficialRatings），
- * 即该库里真实出现过的值。任一维度为空表示服务端没给或不可用，UI 会隐藏对应分组。
- */
-data class EmbyFilterOptions(
-  val genres: List<String> = emptyList(),
-  val tags: List<String> = emptyList(),
-  /** 发行年份，新的在前 */
-  val years: List<Int> = emptyList(),
-  val officialRatings: List<String> = emptyList(),
-  /** 演员 / 导演 / 编剧（走 /Persons，带 PersonTypes 过滤） */
-  val persons: List<EmbyIdName> = emptyList(),
-  /** 工作室（出品方） */
-  val studios: List<EmbyIdName> = emptyList(),
-)
-
-/**
- * 需要「按 Id 筛选」的可选项：名字给人看，Id 才是传给 /Items 的。
- *
- * 类型、标签这类是按**名字**筛（Genres=动作），
- * 演员和工作室是按**Id** 筛（PersonIds=xxx），同名不同人靠 Id 才能区分。
- */
-@Serializable
-data class EmbyIdName(
-  val id: String,
-  val name: String,
-)
-
-/** 筛选条件的持久化快照（按媒体库分别存，进库时恢复）。 */
-@Serializable
-data class EmbyLibraryFilterState(
-  val genres: List<String> = emptyList(),
-  val tags: List<String> = emptyList(),
-  val years: List<Int> = emptyList(),
-  val officialRatings: List<String> = emptyList(),
-  val personIds: List<String> = emptyList(),
-  val studioIds: List<String> = emptyList(),
-  /** null 不限，true 已看，false 未看 */
-  val isPlayed: Boolean? = null,
-  /** null 不限，true 高清 / false 标清 */
-  val isHD: Boolean? = null,
-  /** null 不限，true 3D / false 非 3D */
-  val is3D: Boolean? = null,
-  /** null 不限，true 有字幕 / false 无字幕 */
-  val hasSubtitles: Boolean? = null,
-  /**
-   * 只看文件名带「中文字幕」标记的（-C / CHS / 简体 / 中字 等，客户端按文件名匹配，
-   * Emby 服务端没有这类筛选）。
-   */
-  val chineseSubsOnly: Boolean = false,
-  val minRating: Float? = null,
-  val favoriteOnly: Boolean = false,
-) {
-  /** 全空 = 没有生效条件，用于决定图标高亮与「恢复默认」是否可用 */
-  fun isEmpty(): Boolean =
-    genres.isEmpty() && tags.isEmpty() && years.isEmpty() && officialRatings.isEmpty() &&
-      personIds.isEmpty() && studioIds.isEmpty() && isPlayed == null && isHD == null &&
-      is3D == null && hasSubtitles == null && minRating == null && !favoriteOnly &&
-      // 「中文字幕」也是筛选条件之一，漏了它会让「恢复默认」在只有它生效时显示成可点
-      !chineseSubsOnly
-}
-
-/**
- * Emby 媒体项。Emby 的 Item 类型丰富（Movie/Series/Episode/MusicAlbum/...），
- * 这里只定义播放器最关心的字段；UI 层根据 [type] 分支显示。
- */
-@Serializable
-data class EmbyItem(
-  val Id: String? = null,
-  val Name: String? = null,
-  val OriginalTitle: String? = null,
-  val Type: String? = null,
-  val MediaType: String? = null,
-  /** 媒体库类型：movies / tvshows / music / homevideos / photos / books / mixed（仅库视图有） */
-  val CollectionType: String? = null,
-  /** 季号（剧集隶属于第几季） */
-  val ParentIndexNumber: Int? = null,
-  /** 集号 / 季序号 */
-  val IndexNumber: Int? = null,
-  val SeriesName: String? = null,
-  val SeasonName: String? = null,
-  val SeriesId: String? = null,
-  val SeasonId: String? = null,
-  val ParentId: String? = null,
-  val PremiereDate: String? = null,
-  val DateCreated: String? = null,
-  val Overview: String? = null,
-  val RunTimeTicks: Long? = null,
-  val ProductionYear: Int? = null,
-  val CommunityRating: Double? = null,
-  val OfficialRating: String? = null,
-  /** 各类型图片 tag map：{Primary: "xxx", Backdrop: "yyy", ...} */
-  val ImageTags: Map<String, String> = emptyMap(),
-  /** 用于 backdrop 等多张图的 tags 数组（按 image type 分组） */
-  val BackdropImageTags: List<String> = emptyList(),
-  val UserData: EmbyUserData? = null,
-  /** 对于 Series 类型：季总数 */
-  val ChildCount: Int? = null,
-  /** 对于 Series：季列表 */
-  val Seasons: List<EmbyItem>? = null,
-  /** 对于 Series：剧集列表 */
-  val Episodes: List<EmbyItem>? = null,
-  /** 媒体源信息（包含容器、码率等） */
-  val MediaSources: List<EmbyMediaSource>? = null,
-  /** 演员/导演等人员 */
-  val People: List<EmbyPerson>? = null,
-  /** 类型标签（"动作"、"科幻" 等） */
-  val Genres: List<String> = emptyList(),
-  /** 工作室 */
-  val Studios: List<EmbyStudio>? = null,
-  /** 标签（Emby 的 Tags，和 Genres 是两套东西） */
-  val Tags: List<String> = emptyList(),
-  /** 排序名：Emby 内部排序用，界面一般不显示，但编辑元数据要能改 */
-  val SortName: String? = null,
-  /** 制作地区 / 国家 */
-  val ProductionLocations: List<String> = emptyList(),
-  val Path: String? = null,
-  val Taglines: List<String> = emptyList(),
-  val ProviderIds: Map<String, String> = emptyMap(),
-  /**
-   * 媒体文件总大小（字节），供「按文件大小排序」使用。
-   *
-   * 只有请求时 [ITEM_FIELDS] 带上 `Size` 服务端才会返回；取不到时排序会退回
-   * [MediaSources] 里第一个源的大小（实测两者一致），两边都没有就按 0 处理。
-   */
-  val Size: Long? = null,
-  /**
-   * 影评人评分（0~100）。
-   *
-   * 只用于客户端排序（服务端对「搜索 + SortBy」这个组合不保证认），界面不显示。
-   * 加在末尾并给默认值，避免影响既有的按位置构造。
-   */
-  val CriticRating: Double? = null,
-)
-
-@Serializable
-data class EmbyUserData(
-  val Played: Boolean = false,
-  val PlayCount: Int = 0,
-  val IsFavorite: Boolean = false,
-  val PlaybackPositionTicks: Long = 0,
-  val PlayedPercentage: Double? = null,
-  val UnplayedItemCount: Int? = null,
-  /** 最近播放时间（ISO-8601 字符串）。客户端按「播放时间」排序用 */
-  val LastPlayedDate: String? = null,
-)
-
-@Serializable
-data class EmbyMediaSource(
-  val Id: String? = null,
-  val Name: String? = null,
-  val Container: String? = null,
-  val Path: String? = null,
-  val RunTimeTicks: Long? = null,
-  val Size: Long? = null,
-  val Bitrate: Long? = null,
-  val MediaStreams: List<EmbyMediaStream>? = null,
-)
-
-@Serializable
-data class EmbyMediaStream(
-  val Index: Int? = null,
-  val Type: String? = null,
-  val Codec: String? = null,
-  /** 编码档次，如 HEVC 的 "Main 10"、AAC 的 "LC" */
-  val Profile: String? = null,
-  /** 编码级别，如 H.264 的 41（对应 4.1） */
-  val Level: Double? = null,
-  val CodecTag: String? = null,
-  val Language: String? = null,
-  val DisplayTitle: String? = null,
-  val Width: Int? = null,
-  val Height: Int? = null,
-  val AspectRatio: String? = null,
-  val BitRate: Long? = null,
-  /** 标称帧率（帧/秒） */
-  val FrameRate: Double? = null,
-  val AverageFrameRate: Double? = null,
-  val RealFrameRate: Double? = null,
-  val IsInterlaced: Boolean? = null,
-  /** 位深度（8 / 10 / 12） */
-  val BitDepth: Int? = null,
-  /** 像素格式，如 yuv420p10le */
-  val PixelFormat: String? = null,
-  /** 动态范围，如 SDR / HDR */
-  val VideoRange: String? = null,
-  /** 更细的动态范围类型，如 HDR10 / HLG / DolbyVision */
-  val VideoRangeType: String? = null,
-  val ColorSpace: String? = null,
-  val ColorTransfer: String? = null,
-  val ColorPrimaries: String? = null,
-  /** 参考帧数 */
-  val RefFrames: Int? = null,
-  // ── 音频流 ──
-  val Channels: Int? = null,
-  val ChannelLayout: String? = null,
-  val SampleRate: Int? = null,
-  // ── 字幕流 ──
-  val IsExternal: Boolean? = null,
-  val IsDefault: Boolean? = null,
-  val IsForced: Boolean? = null,
-)
-
-@Serializable
-data class EmbyPerson(
-  val Id: String? = null,
-  val Name: String? = null,
-  val Type: String? = null,
-  val Role: String? = null,
-  val PrimaryImageTag: String? = null,
-)
-
-@Serializable
-data class EmbyStudio(
-  val Id: String? = null,
-  val Name: String? = null,
-)
-
-/**
- * 服务端定时任务（`GET /ScheduledTasks` 的一项）。
- *
- * 只用到 [Key] / [Name] 两个字段去认「刷新人员」那个任务，其余字段忽略。
- * ⚠️ [Name] 是**本地化**的（中文服务器给「刷新人员」，英文给 "Refresh people"），
- * 所以匹配顺序必须先是 [Key]，名字只作兜底。
- */
-@Serializable
-data class EmbyScheduledTask(
-  val Id: String? = null,
-  val Key: String? = null,
-  val Name: String? = null,
-  val Description: String? = null,
-  val Category: String? = null,
-)
+// 数据模型（EmbyItem / EmbyUserDto / …）已搬到 EmbyModels.kt（清单 1.5 拆分第 1 刀），
+// 尾部与错误处理相关的 DTO 仍留在本文件末尾。
 
 // ════════════════════════════════════════════════════════════════════════
 // EmbyClient —— 单例 HTTP 客户端，所有 Emby REST API 调用集中在此
@@ -329,12 +42,18 @@ object EmbyClient {
     coerceInputValues = true
   }
 
-  private val httpClient: OkHttpClient = OkHttpClient.Builder()
-    .connectTimeout(15, TimeUnit.SECONDS)
-    .readTimeout(60, TimeUnit.SECONDS)
-    .writeTimeout(30, TimeUnit.SECONDS)
-    .retryOnConnectionFailure(true)
-    .build()
+  /**
+   * 走 [EmbyHttp.shared]（共享连接池 + 统一 UA + 指数退避重试 + 401 自动重登）。
+   *
+   * 原来是这里自己 `OkHttpClient.Builder()` 造一个，与另外5 个客户端各建各的连接池，
+   * 详见 [EmbyHttp] 的说明。
+   *
+   * `internal` 而非 `private`：拆出去的 [EmbySubtitles] 需要它 —— 字幕下载要拿
+   * **原始字节**（走完服务端格式转换的响应体），不能经过 [execString] 那条
+   * 「按文本解码 + 抛异常」的路径。同理它必须显式写 `EmbyClient.httpClient`，
+   * `internal` 不会把成员导入到别的 object 作用域里。
+   */
+  internal val httpClient: OkHttpClient = EmbyHttp.shared
 
   private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
@@ -362,7 +81,7 @@ object EmbyClient {
   private const val VIDEO_MEDIA_TYPE = "Video"
 
   /** 请求 Emby 时统一附加的扩展字段 */
-  private const val ITEM_FIELDS =
+  internal const val ITEM_FIELDS =
     "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources," +
     // Size 是「按文件大小排序」的数据来源，Emby 默认不返回，必须显式索取
     "Tags,SortName,ProductionLocations,Path,Size"
@@ -389,6 +108,16 @@ object EmbyClient {
    */
   private const val COUNT_MAX_ITEMS = 10_000
 
+  /**
+   * 小库阈值（条数）：不超过这个规模就整库扫一遍算齐所有演员角标。
+   *
+   * 定 3000 是因为 3000 / [COUNT_PAGE_SIZE] 500 = 6 个请求就能扫完，而单个响应
+   * 只带 `People` 一个字段（见 [getItems] 的 fields 参数），体量很小 ——
+   * 这个开销换「所有角标一次到位」很值。超过就转逐个问
+   * （见 [getPersonWorkCountsAdaptive]），避免为几十个角标把大库拉穿。
+   */
+  private const val COUNT_FULL_SCAN_MAX = 3_000
+
   // ── 「服务器转码」的默认参数（见 [transcodeStreamUrl]）──
 
   /**
@@ -408,7 +137,7 @@ object EmbyClient {
 
   // ─── 内部工具 ───
 
-  private fun authedRequest(
+  internal fun authedRequest(
     server: EmbyServer,
     path: String,
     extraQuery: Map<String, String?> = emptyMap(),
@@ -428,7 +157,7 @@ object EmbyClient {
     return b
   }
 
-  private fun authedRequestWithApiKey(
+  internal fun authedRequestWithApiKey(
     server: EmbyServer,
     path: String,
     extraQuery: Map<String, String?> = emptyMap(),
@@ -439,7 +168,7 @@ object EmbyClient {
     return authedRequest(server, path, withKey)
   }
 
-  private fun execString(request: Request): String {
+  internal fun execString(request: Request): String {
     httpClient.newCall(request).execute().use { resp ->
       val body = resp.body.string()
       if (!resp.isSuccessful) {
@@ -449,7 +178,7 @@ object EmbyClient {
     }
   }
 
-  private inline fun <reified T> execJson(request: Request): T {
+  internal inline fun <reified T> execJson(request: Request): T {
     val body = execString(request)
     if (body.isEmpty()) {
       // 返回空 body 时，尝试构造默认实例（kotlinx 不支持反射 default ctor，所以特殊处理）
@@ -462,7 +191,7 @@ object EmbyClient {
     return json.decodeFromString(body)
   }
 
-  private inline fun <reified T> postJson(
+  internal inline fun <reified T> postJson(
     server: EmbyServer,
     path: String,
     bodyJson: String,
@@ -474,7 +203,7 @@ object EmbyClient {
     return execJson(req)
   }
 
-  private inline fun <reified T> getJson(
+  internal inline fun <reified T> getJson(
     server: EmbyServer,
     path: String,
     query: Map<String, String?> = emptyMap(),
@@ -483,7 +212,7 @@ object EmbyClient {
     return execJson(req)
   }
 
-  private inline fun <reified T> deleteJson(
+  internal inline fun <reified T> deleteJson(
     server: EmbyServer,
     path: String,
     query: Map<String, String?> = emptyMap(),
@@ -694,6 +423,11 @@ object EmbyClient {
   /**
    * 取「按名字聚合」端点 /Genres、/Tags、/OfficialRatings、/Years 返回的名称列表。
    * 这四个端点返回体结构一致（Items[].Name），可以共用一个取法。
+   *
+   * ⚠️ 失败仍返回空列表（**故意不抛**）：这四组数据是「筛选面板的选项」，
+   * 缺了只是面板空着，不该因此让整个媒体库页面报错。**但必须留下日志** ——
+   * 以前是纯 `getOrDefault(emptyList())`，失败后UI 表现为「筛选器里没有类型」，
+   * 用户会以为库里真没有，而开发者根本查不到（这种静默失败最难查）。
    */
   private fun nameList(server: EmbyServer, path: String, parentId: String?): List<String> =
     runCatching {
@@ -706,6 +440,8 @@ object EmbyClient {
         .Items
         .mapNotNull { it.Name }
         .filter { it.isNotBlank() }
+    }.onFailure {
+      EmbyLog.warn("nameList($path) 失败：${it.message} —— 筛选面板会少这一组选项", it)
     }.getOrDefault(emptyList())
 
   /** 某媒体库下出现过的全部类型名 */
@@ -737,6 +473,8 @@ object EmbyClient {
           val name = item.Name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
           EmbyIdName(id, name)
         }
+    }.onFailure {
+      EmbyLog.warn("idNameList($path) 失败：${it.message} —— 筛选面板会少这一组选项", it)
     }.getOrDefault(emptyList())
 
   /**
@@ -791,6 +529,8 @@ object EmbyClient {
           val name = item.Name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
           item.copy(Type = "Person")
         }
+    }.onFailure {
+      EmbyLog.warn("getPersons 失败：${it.message} —— 演员/导演筛选会是空的", it)
     }.getOrDefault(emptyList())
 
   /** 「演职员合并」扫描时一页拉多少人 */
@@ -849,6 +589,8 @@ object EmbyClient {
       if (page.TotalRecordCount > 0 && start >= page.TotalRecordCount) break
     }
     out.take(maxItems)
+  }.onFailure {
+    EmbyLog.warn("scanAllPersons 失败：${it.message} —— 演职员合并的候选名单会是空的", it)
   }.getOrDefault(emptyList())
 
   /**
@@ -872,6 +614,8 @@ object EmbyClient {
         isFolder = false,
         fields = "People",
       ).TotalRecordCount
+    }.onFailure {
+      EmbyLog.warn("getPersonWorkCount($personId) 失败：${it.message} —— 该演员角标按0 处理", it)
     }.getOrDefault(0)
 
   /**
@@ -974,7 +718,59 @@ object EmbyClient {
         if (start >= COUNT_MAX_ITEMS) break
       }
       counts
+    }.onFailure {
+      EmbyLog.warn("getPersonWorkCounts 失败：${it.message} —— 演员角标会留空", it)
     }.getOrDefault(emptyMap())
+
+  /**
+   * 演员作品数角标 —— 按库规模自动挑一条路（[getPersonWorkCounts] 全库扫描太贵，
+   * 逐个问又不敢全信，两头都要的话这里统一收口）。
+   *
+   * 策略分两档，用**第一条请求的 TotalRecordCount** 判断：
+   *
+   * - **小库**（≤ [COUNT_FULL_SCAN_MAX]）：走 [getPersonWorkCounts] 全库扫描。
+   *   几千条 = 2~6 个请求就把**所有**演员的角标一次算齐，最划算。
+   * - **大库**：逐个 PersonId 问服务端要 `TotalRecordCount`（[getPersonWorkCount]，
+   *   `Limit=1` 响应极小），但**只查前 [ADAPTIVE_PER_PERSON_LIMIT] 个**。
+   *   角标是次要信息，为它把大库拉穿不划算 —— 查不到的留空即可。
+   *
+   * @param personIds 这一轮要画角标的演员（通常是当前列表那一批）
+   */
+  fun getPersonWorkCountsAdaptive(
+    server: EmbyServer,
+    parentId: String?,
+    personIds: List<String>,
+  ): Map<String, Int> {
+    val targets = personIds.filter { it.isNotBlank() }.distinct()
+    if (targets.isEmpty()) return emptyMap()
+
+    val total = runCatching {
+      getItems(
+        server = server,
+        parentId = parentId,
+        startIndex = 0,
+        limit = 1,
+        recursive = true,
+        isFolder = false,
+        fields = "",
+      ).TotalRecordCount
+    }.getOrDefault(0)
+
+    if (total in 1..COUNT_FULL_SCAN_MAX) {
+      val all = getPersonWorkCounts(server, parentId)
+      if (all.isNotEmpty()) return all
+    }
+
+    val out = HashMap<String, Int>(targets.size)
+    for (pid in targets.take(ADAPTIVE_PER_PERSON_LIMIT)) {
+      val n = getPersonWorkCount(server, pid)
+      if (n > 0) out[pid] = n
+    }
+    return out
+  }
+
+  /** 大库兜底时逐个问演员的个数上限：够铺满好几屏，又不至于把请求打爆 */
+  private const val ADAPTIVE_PER_PERSON_LIMIT = 60
 
   /**
    * 按名字搜演员。
@@ -1011,6 +807,8 @@ object EmbyClient {
           val name = item.Name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
           item.copy(Type = "Person")
         }
+    }.onFailure {
+      EmbyLog.warn("searchPersons(\"$term\") 失败：${it.message} —— 搜演员会搜不到", it)
     }.getOrDefault(emptyList())
 
   /** 某媒体库里出现过的工作室（出品方） */
@@ -1074,6 +872,29 @@ object EmbyClient {
     )
 
   /**
+   * 拉取条目的章节表。
+   *
+   * 对应 SDK：`ItemsServiceApi.getItemsByIdChapters` → `GET /Items/{Id}/Chapters`。
+   *
+   * ## 为什么 GSY 内核要靠这个端点（清单 #19）
+   *
+   * mpv 侧的章节来自容器内嵌章节表（`chapter-list` property，由 demuxer 解析），
+   * 所以本地文件也有章节。而 GSYVideoPlayer **没有任何章节 API** ——
+   * ExoPlayer 只认 mp4 的 `ChapterFrame`、IJK 的 `getMediaMeta()` 不保证有，
+   * 都不是可靠来源。唯一稳定的通道就是 Emby 侧这份元数据。
+   *
+   * ⚠️ 由此产生一条**必须说清的能力边界**（也写进了 [EngineFeature.CHAPTERS] 的 KDoc）：
+   * 同一个文件在两个内核下章节数量可能不同 —— mpv 从容器解析得到（本地文件也有），
+   * GSY 从 Emby 拿（纯本地文件没有）。这不是 bug，是两条数据来源的固有差异。
+   *
+   * 服务端没有章节时返回**空数组**（不是 404），所以正常路径下不会抛异常。
+   * [EmbyChapter.Name] 允许为空：不少刮削器只写了时间点没写标题，
+   * 这种情况在 UI 上按「第 N 章 / 时间」兜底展示（见 `GsyChapterSheet`）。
+   */
+  fun getItemChapters(server: EmbyServer, itemId: String): List<EmbyChapter> =
+    getJson(server, "/Items/$itemId/Chapters")
+
+  /**
    * 关键词搜索。
    *
    * @param includeItemTypes 限定类型，传 null 表示不限（Emby 默认只搜部分类型，
@@ -1102,31 +923,50 @@ object EmbyClient {
     limit = limit,
   )
 
-  /** 某剧集下的季列表 */
+  /**
+   * 某剧集下的季列表。
+   *
+   * ⚠️ [startIndex] / [limit] 是后加的分页参数（对应清单 1.1）——
+   * 原先这里一次性拿回全部季，长剧（几十季）会白拉一堆详情。
+   * 传 [limit] = 0 / 不传时行为与从前一致（服务端按默认返回）。
+   */
   fun getSeasons(
     server: EmbyServer,
     seriesId: String,
+    startIndex: Int = 0,
+    limit: Int? = null,
   ): EmbyItemsResult = getJson(
     server,
     "/Shows/$seriesId/Seasons",
     mapOf(
       "UserId" to server.userId,
+      "StartIndex" to startIndex.toString(),
+      "Limit" to (limit ?: 0).toString(),
       "Fields" to "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines",
       "EnableUserData" to "true",
     ),
   )
 
-  /** 某季（或整部剧集）下的剧集列表 */
+  /**
+   * 某季（或整部剧集）下的剧集列表。
+   *
+   * ⚠️ 分页参数是后加的（对应清单 1.1）：原先一次拿回全部集，
+   * 长剧（几百集）响应体很大且列表全进内存。现在由详情页按季分页拉。
+   */
   fun getEpisodes(
     server: EmbyServer,
     seriesId: String,
     seasonId: String? = null,
+    startIndex: Int = 0,
+    limit: Int? = null,
   ): EmbyItemsResult = getJson(
     server,
     "/Shows/$seriesId/Episodes",
     mapOf(
       "UserId" to server.userId,
       "SeasonId" to seasonId,
+      "StartIndex" to startIndex.toString(),
+      "Limit" to (limit ?: 0).toString(),
       "Fields" to "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources",
       "EnableUserData" to "true",
     ),
@@ -1187,6 +1027,118 @@ object EmbyClient {
     startIndex = 0,
     limit = limit,
     isFavorite = isFavorite,
+  )
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 2.5 相似推荐 / 即混（Instant Mix）/ 续播（NextUp）
+  // ════════════════════════════════════════════════════════════════════════
+  //
+  // 这三个端点是**服务端算法**。客户端还另有一套本地打分算法（见
+  // `ui/browser/emby/discover/LocalSimilarity.kt`），两者由
+  // `SimilarAlgorithm` 偏好切换 —— 服务端没刮削或算法不产结果时，
+  // 本地那套能兜住，不至于整个区块空着。
+
+  /**
+   * 相似推荐：`GET /Items/{Id}/Similar`。
+   *
+   * ⚠️ **没有** `MediaSourceId` / `IsMusic` / `IsLiveTvPrograms` / `IsNewsPrograms`
+   * 这几个参数（它们只存在于 Jellyfin，Emby 的参数集比 Jellyfin 少），
+   * 写上去会被服务端直接忽略，调试时极难发现「为什么筛选没生效」。
+   *
+   * @param itemId 种子条目（拿它的类型 / 人员 / 年代去做相似匹配）
+   * @param limit 返回条数。Emby 服务端对 `Similar` 的实现是「查库再算相似度」，
+   *   limit 给太大反而拖慢响应，20~50 比较合适。
+   * @param includeItemTypes 只要这些类型；不传表示不限。
+   *   默认 `Movie,Series` —— 单集（Episode）混进来会把区块塞满同一部剧的几十集。
+   * @param excludeIdList 要排除的条目 Id（例如种子自己）。
+   *   服务端通常自己会排除种子，但**实测第三方兼容实现不总是排除**，
+   *   所以客户端还会再滤一次（见 `SimilarRecommendationViewModel`）。
+   */
+  fun getSimilarItems(
+    server: EmbyServer,
+    itemId: String,
+    limit: Int = 24,
+    includeItemTypes: List<String>? = listOf("Movie", "Series"),
+    mediaTypes: List<String>? = listOf(VIDEO_MEDIA_TYPE),
+    excludeIdList: List<String>? = null,
+  ): EmbyItemsResult = getJson(
+    server,
+    "/Items/$itemId/Similar",
+    mapOf(
+      "UserId" to server.userId,
+      "Limit" to limit.toString(),
+      "Fields" to ITEM_FIELDS,
+      "IncludeItemTypes" to includeItemTypes?.joinToString(","),
+      "MediaTypes" to mediaTypes?.joinToString(","),
+      "ExcludeIdList" to excludeIdList?.joinToString(","),
+      "EnableImages" to "true",
+      "EnableUserData" to "true",
+      "ImageTypeLimit" to "1",
+      "EnableTotalRecordCount" to "true",
+    ),
+  )
+
+  /**
+   * 即混：`GET /Items/{Id}/InstantMix`（服务端基于种子自动续播一批）。
+   *
+   * 参数集与 [getSimilarItems] **完全一致**（同一个服务端实现里出来的），
+   * 所以复用一套参数拼装，不要以为它有什么特殊参数。
+   *
+   * ⚠️ **不存在 `/Shows/{Id}/InstantMix`** —— 那是幻觉端点。真要「按某部剧接着播」，
+   * 只能用 `/Items/{Id}/InstantMix` 再配 `Filters=IsResumable`。
+   */
+  fun getInstantMixItems(
+    server: EmbyServer,
+    itemId: String,
+    limit: Int = 20,
+    includeItemTypes: List<String>? = listOf("Movie", "Series"),
+    mediaTypes: List<String>? = listOf(VIDEO_MEDIA_TYPE),
+    filters: List<String>? = null,
+  ): EmbyItemsResult = getJson(
+    server,
+    "/Items/$itemId/InstantMix",
+    mapOf(
+      "UserId" to server.userId,
+      "Limit" to limit.toString(),
+      "Fields" to ITEM_FIELDS,
+      "IncludeItemTypes" to includeItemTypes?.joinToString(","),
+      "MediaTypes" to mediaTypes?.joinToString(","),
+      "Filters" to filters?.takeIf { it.isNotEmpty() }?.joinToString("|"),
+      "EnableImages" to "true",
+      "EnableUserData" to "true",
+      "ImageTypeLimit" to "1",
+      "EnableTotalRecordCount" to "true",
+    ),
+  )
+
+  /**
+   * 续播（NextUp）：`GET /Shows/NextUp`。
+   *
+   * ⚠️ **两个极易写错的点**：
+   * 1. `UserId` 是**必填 query 参数**，不是 path 段 —— 写成
+   *    `/Shows/{UserId}/NextUp` 会 404，且报错信息毫无指向性。
+   * 2. **不存在 `/Shows/{Id}/NextUp`**（按剧集取续播）这个端点。
+   *    要限定某部剧，用 `SeriesId` query 参数。
+   *
+   * 服务端没启用「剧集自动续播」时这个列表会是空的，UI 要能接受空态。
+   */
+  fun getNextUpItems(
+    server: EmbyServer,
+    limit: Int = 20,
+    seriesId: String? = null,
+  ): EmbyItemsResult = getJson(
+    server,
+    "/Shows/NextUp",
+    mapOf(
+      "UserId" to server.userId,
+      "Limit" to limit.toString(),
+      "SeriesId" to seriesId,
+      "Fields" to ITEM_FIELDS,
+      "EnableImages" to "true",
+      "EnableUserData" to "true",
+      "ImageTypeLimit" to "1",
+      "EnableTotalRecordCount" to "true",
+    ),
   )
 
   // ════════════════════════════════════════════════════════════════════════
@@ -1297,7 +1249,18 @@ object EmbyClient {
     return EmbyUserData(IsFavorite = match.groupValues[1].equals("true", ignoreCase = true))
   }
 
-  /** 删除媒体（需要相应权限） */
+  /**
+   * 删除媒体 —— **物理删除服务器上的文件**，不可逆。
+   *
+   * 用的是 Emby 官方的 `DELETE /Items/{Id}`，其定义就是
+   * 「Deletes an item from the library **and file system**」——
+   * 即同时从媒体库移除**并删除磁盘上的源文件**。这与「取消收藏 / 标未看」
+   * 完全不是一个量级：那两者只改用户数据，这个是销毁内容。
+   *
+   * ⚠️ 需要**管理员权限**。非管理员账号调这个会拿到 403，
+   *   [execString] 会抛 [EmbyApiException]（带服务端原话），调用方据此提示。
+   *   **不要**把它当"操作成功"来展示。
+   */
   fun deleteItem(server: EmbyServer, itemId: String) {
     val req = authedRequest(server, "/Items/$itemId").delete().build()
     execString(req)
@@ -1775,11 +1738,14 @@ object EmbyClient {
   fun fetchIsAdmin(server: EmbyServer): Boolean =
     runCatching {
       getJson<EmbyUserDetailDto>(server, "/Users/${server.userId}").Policy?.IsAdministrator == true
+    }.onFailure {
+      EmbyLog.warn("fetchIsAdmin 失败：${it.message} —— 保守当作无权限（写作能力会被禁掉）", it)
     }.getOrDefault(false)
 
   /** 服务端定时任务清单（找「刷新人员」用） */
   fun getScheduledTasks(server: EmbyServer): List<EmbyScheduledTask> =
     runCatching { getJson<List<EmbyScheduledTask>>(server, "/ScheduledTasks") }
+      .onFailure { EmbyLog.warn("getScheduledTasks 失败：${it.message}", it) }
       .getOrDefault(emptyList())
 
   /**
@@ -1797,6 +1763,8 @@ object EmbyClient {
         .build(),
     )
     true
+  }.onFailure {
+    EmbyLog.warn("runScheduledTask($taskId) 失败：${it.message}", it)
   }.getOrDefault(false)
 
   // ════════════════════════════════════════════════════════════════════════
@@ -2061,6 +2029,333 @@ object EmbyClient {
   }
 
   // ════════════════════════════════════════════════════════════════════════
+  // 5.5 播放列表（Emby 服务端）—— 实现在 EmbyPlaylists.kt，以下为转发
+  // ════════════════════════════════════════════════════════════════════════
+  //
+  // ⚠️ 与项目里**已有的本地播放列表**（Room 的 PlaylistEntity / PlaylistDao）完全是两回事：
+  // 这里的 playlist 存在 Emby 服务器上，多端共享、网页端也能看。
+  // 两者刻意不互相同步 —— 本地的是 M3U 导入 + 本地路径，Emby 的是 ItemId，两者无法可靠映射。
+  //
+  // 下面这些转发函数刻意**不用 inline**：inline + reified 泛型会要求调用方
+  // 直接依赖实现细节，而且网络调用被复制到每个调用点后更难排查。
+  // 留一层薄转发的好处是 —— 以后要在这里加统一的限流/日志/重试，只改这一处。
+  // 默认参数值必须与 EmbyPlaylists 里的**完全一致**，否则两边行为会分叉。
+
+  fun getPlaylists(
+    server: EmbyServer,
+    startIndex: Int = 0,
+    limit: Int = 100,
+  ): EmbyItemsResult = EmbyPlaylists.getPlaylists(server, startIndex, limit)
+
+  fun getPlaylistItems(
+    server: EmbyServer,
+    playlistId: String,
+    startIndex: Int = 0,
+    limit: Int = 100,
+  ): EmbyItemsResult = EmbyPlaylists.getPlaylistItems(server, playlistId, startIndex, limit)
+
+  fun createPlaylist(
+    server: EmbyServer,
+    name: String,
+    itemIds: List<String> = emptyList(),
+  ): EmbyPlaylistCreationResult = EmbyPlaylists.createPlaylist(server, name, itemIds)
+
+  fun addToPlaylist(
+    server: EmbyServer,
+    playlistId: String,
+    itemIds: List<String>,
+  ): EmbyPlaylistAddResult = EmbyPlaylists.addToPlaylist(server, playlistId, itemIds)
+
+  fun removeFromPlaylist(
+    server: EmbyServer,
+    playlistId: String,
+    entryIds: List<String>,
+  ) = EmbyPlaylists.removeFromPlaylist(server, playlistId, entryIds)
+
+  fun movePlaylistItem(
+    server: EmbyServer,
+    playlistId: String,
+    entryId: String,
+    newIndex: Int,
+  ) = EmbyPlaylists.movePlaylistItem(server, playlistId, entryId, newIndex)
+
+  fun deletePlaylist(
+    server: EmbyServer,
+    playlistId: String,
+  ) = EmbyPlaylists.deletePlaylist(server, playlistId)
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 5.6 字幕在线搜索（Emby 服务端）—— 实现在 EmbySubtitles.kt，以下为转发
+  // ════════════════════════════════════════════════════════════════════════
+  //
+  // ⚠️ 与 [subtitleUrl]（拼 URL 把**服务端已有**的字幕轨交给 mpv）是两回事：
+  // 这里是「搜字幕提供方 → 下载到服务器 → 再取字节」的三段式流程。
+  //
+  // 默认参数值必须与 EmbySubtitles 里的完全一致。
+
+  fun searchRemoteSubtitles(
+    server: EmbyServer,
+    itemId: String,
+    language: String,
+    mediaSourceId: String? = null,
+    isPerfectMatch: Boolean? = null,
+    isForced: Boolean? = null,
+    isHearingImpaired: Boolean? = null,
+  ) = EmbySubtitles.searchRemoteSubtitles(
+    server, itemId, language, mediaSourceId, isPerfectMatch, isForced, isHearingImpaired,
+  )
+
+  fun downloadRemoteSubtitle(
+    server: EmbyServer,
+    itemId: String,
+    subtitleId: String,
+    mediaSourceId: String? = null,
+  ) = EmbySubtitles.downloadRemoteSubtitle(server, itemId, subtitleId, mediaSourceId)
+
+  fun downloadSubtitleStream(
+    server: EmbyServer,
+    itemId: String,
+    mediaSourceId: String,
+    subtitleIndex: Int,
+    format: String = "srt",
+  ) = EmbySubtitles.downloadSubtitleStream(server, itemId, mediaSourceId, subtitleIndex, format)
+  // ════════════════════════════════════════════════════════════════════════
+  // 5.7 合集（Collection / 官方客户端叫 BoxSet）—— 媒体库结构管理
+  // ════════════════════════════════════════════════════════════════════════
+  //
+  // ⚠️⚠️ **本节最容易踩的坑：REST 路径是 `/Collections`，不是 `/BoxSets`**
+  //
+  // `/BoxSets` 是 **Jellyfin** 的命名。Emby 官方 Java 客户端里 BoxSet 走的是
+  // `CollectionServiceApi` → `/Collections`。照着 Jellyfin 的文档 / 网上教程写必然 404。
+  //
+  // 另一个要记的：**参数名是 `Ids` 不是 `EntryIds`**。
+  // 口诀 —— BoxSet(Collection) 一律 `Ids`；只有 Playlist 增删条目才用 `EntryIds`。
+  // 写错参数名服务端不报错，只是**静默不生效**（合集内容不变），极难排查。
+
+  /**
+   * 列出全部合集。
+   *
+   * 和播放列表一样，**没有** `GET /Collections` 这种「按类型拿」的专用端点 ——
+   * 合集本身就是一种 Item，只能走 `/Users/{id}/Items` + `IncludeItemTypes=BoxSet`。
+   *
+   * ⚠️ 返回里的 `ChildCount` 是服务端算的合集条目数，可能与实际差一
+   * （有条目被删但合集没刷新）。UI 显示它没问题，**拿它做判断条件不行**。
+   */
+  fun getCollections(
+    server: EmbyServer,
+    startIndex: Int = 0,
+    limit: Int = 100,
+  ): EmbyItemsResult = getJson(
+    server,
+    "/Users/${server.userId}/Items",
+    mapOf(
+      "StartIndex" to startIndex.toString(),
+      "Limit" to limit.toString(),
+      "IncludeItemTypes" to "BoxSet",
+      "Fields" to "Overview,DateCreated,ChildCount,Genres,ProductionYear",
+      "SortBy" to "SortName",
+      "SortOrder" to "Ascending",
+      "EnableImages" to "true",
+      "ImageTypeLimit" to "1",
+      "EnableUserData" to "true",
+    ),
+  )
+
+  /**
+   * 取合集里的条目（分页）。
+   *
+   * 对应 `GET /Collections/{Id}/Items`。
+   *
+   * 不用通用 `getItems(parentId = ...)` 的理由和播放列表一样：
+   * `ParentId` 传播合集 Id 时部分服务端会算成空，老实用专用端点。
+   */
+  fun getCollectionItems(
+    server: EmbyServer,
+    collectionId: String,
+    startIndex: Int = 0,
+    limit: Int = 100,
+  ): EmbyItemsResult = getJson(
+    server,
+    "/Collections/$collectionId/Items",
+    mapOf(
+      "UserId" to server.userId,
+      "StartIndex" to startIndex.toString(),
+      "Limit" to limit.toString(),
+      "Fields" to ITEM_FIELDS,
+      "EnableImages" to "true",
+      "ImageTypeLimit" to "1",
+      "EnableUserData" to "true",
+      "EnableTotalRecordCount" to "true",
+    ),
+  )
+
+  /**
+   * 新建合集。`POST /Collections`。
+   *
+   * ⚠️ **参数是 query 不是 body**（参考客户端里 `localVarPostBody = null`）。
+   * 传成 body 的话服务端会当没收到，建出一个**空的没有名字的合集**。
+   *
+   * @param name 合集名
+   * @param itemIds 初始条目（可空 = 建空合集）
+   * @param parentId 挂在哪个媒体库下；null 表示用户根
+   */
+  fun createCollection(
+    server: EmbyServer,
+    name: String,
+    itemIds: List<String> = emptyList(),
+    parentId: String? = null,
+  ): EmbyCollectionCreationResult = postJson(
+    server = server,
+    path = "/Collections",
+    bodyJson = "{}",
+    query = buildMap {
+      put("Name", name)
+      put("Ids", itemIds.joinToString(",").ifEmpty { null })
+      put("ParentId", parentId)
+      put("UserId", server.userId)
+    },
+  )
+
+  /**
+   * 往合集追加条目：`POST /Collections/{Id}/Items`。
+   *
+   * ⚠️ `Ids` 是 **query**（同 [createCollection]）。
+   * 返回体是空的，所以调用方拿不到「实际加了几条」——
+   * 重复添加是幂等的，UI 只能自己判断要不要刷新。
+   */
+  fun addToCollection(
+    server: EmbyServer,
+    collectionId: String,
+    itemIds: List<String>,
+  ): Boolean {
+    if (itemIds.isEmpty()) return true
+    val req = authedRequest(
+      server,
+      "/Collections/$collectionId/Items",
+      mapOf("Ids" to itemIds.joinToString(","), "UserId" to server.userId),
+    ).post("{}".toRequestBody(jsonMedia)).build()
+    httpClient.newCall(req).execute().use { resp ->
+      if (!resp.isSuccessful) {
+        throw EmbyApiException(resp.code, resp.body.string().ifEmpty { resp.message })
+      }
+    }
+    return true
+  }
+
+  /**
+   * 从合集移除条目：`DELETE /Collections/{Id}/Items`。
+   *
+   * ⚠️ **参数是 `Ids` 且指的是「媒体 Id」，不是合集内的条目 Id**
+   * （和 `POST /Playlists/{Id}/Items/Move` 那个 `ItemId` 正好相反，
+   * 那边要的是播放列表内的条目 Id —— 两者极易搞混）。
+   *
+   * 这是真 DELETE（不是 POST 一个 `Ids` 标记），响应体为空。
+   */
+  fun removeFromCollection(
+    server: EmbyServer,
+    collectionId: String,
+    itemIds: List<String>,
+  ): Boolean {
+    if (itemIds.isEmpty()) return true
+    val req = authedRequest(
+      server,
+      "/Collections/$collectionId/Items",
+      mapOf("Ids" to itemIds.joinToString(","))
+        .plus("UserId" to server.userId),
+    ).delete().build()
+    httpClient.newCall(req).execute().use { resp ->
+      if (!resp.isSuccessful) {
+        throw EmbyApiException(resp.code, resp.body.string().ifEmpty { resp.message })
+      }
+    }
+    return true
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 5.8 显示偏好（DisplayPreferences）
+  // ════════════════════════════════════════════════════════════════════════
+  //
+  // ⚠️ 三条容易踩空的真相，实现前务必先读完：
+  //
+  // 1. **粒度是「每个目标」而不是「每个用户」**。落点的Id 叫
+  //    `DisplayPreferencesId`，来自 `BaseItemDto.DisplayPreferencesId`，
+  //    媒体库和单条目各有一份。所以不存在「一个用户一份显示偏好」这种写法 ——
+  //    想让整个 App 的偏好跟着走，就得遍历所有目标库逐个写（见 EmbyDisplayPrefsSync）。
+  //
+  // 2. **`Client` 是必填的分区键**，不是可选的 UA。`GET` 时它是 query 参数
+  //    （`POST` 时它只在 body 里，见下），取不同值就读到不同的偏好副本。
+  //    本 App 用 [DISPLAY_PREFS_CLIENT] 作为一个**独立分区**，
+  //    好处是绝不会把 Emby Web 的排版偏好冲掉；代价是**不与网页端互通**，
+  //    这是有意取舍，不是没做完。
+  //
+  // 3. **不要写到 `/Users/{Id}/Configuration`**。`UserConfiguration` 的 17 个字段
+  //    （音频语言 / 字幕语言 / ProfilePin / 跳过片头 / 重播剩余秒数…）**全是播放类**，
+  //    一个显示字段都没有，网格密度写不进去。
+  //
+  // 参数位置逐条照抄 SDK（`DisplayPreferencesServiceApi`）：
+  //   GET  /DisplayPreferences/{Id}?UserId&Client← 只有 {Id} 在路径里
+  //   POST /DisplayPreferences/{DisplayPreferencesId}?UserId
+  //        body = 整个 DisplayPreferences（含 Client），**返回 Void（空 body）**
+
+  /**
+   * 本 App 在服务端显示偏好里的分区标识。
+   *
+   * 取值本身随意，只要**稳定** —— 换了它，之前写的偏好就读不到了（等于被清空）。
+   * 所以定下来就别改，也别跟别的客户端重名。
+   */
+  const val DISPLAY_PREFS_CLIENT = "mpvex-android"
+
+  /**
+   * 读某个目标（媒体库 / 条目）的显示偏好。
+   *
+   * 目标不存在时部分部署返回 **404**，也有返回空对象的 —— 两种都当「还没有偏好」处理，
+   * 由调用方决定是回落默认值还是提示用户。
+   */
+  fun getDisplayPreferences(
+    server: EmbyServer,
+    displayPreferencesId: String,
+    client: String = DISPLAY_PREFS_CLIENT,
+  ): EmbyDisplayPreferences? = getJson(
+    server,
+    "/DisplayPreferences/$displayPreferencesId",
+    mapOf(
+      "UserId" to server.userId,
+      "Client" to client,
+    ),
+  )
+
+  /**
+   * 写某个目标的显示偏好。**整体覆盖**（不是增量合并），所以调用方必须
+   * 先读出原有 `CustomPrefs` 再把自己的键merge 进去，否则会把别的客户端
+   * 或本客户端的其它键一起抹掉。
+   *
+   * 返回 true = 服务端收下了。注意这条路径**成功时返回空 body**，
+   * 不能拿去反序列化 —— 所以这里只判 HTTP 状态码。
+   */
+  fun postDisplayPreferences(
+    server: EmbyServer,
+    displayPreferencesId: String,
+    client: String,
+    preferences: EmbyDisplayPreferences,
+  ): Boolean {
+    val body = json.encodeToString(preferences)
+    val req = authedRequest(
+      server,
+      "/DisplayPreferences/$displayPreferencesId",
+      mapOf("UserId" to server.userId),
+    )
+      .post(body.toRequestBody(jsonMedia))
+      .header("Accept", "application/json")
+      .build()
+    httpClient.newCall(req).execute().use { resp ->
+      if (!resp.isSuccessful) {
+        throw EmbyApiException(resp.code, resp.body.string().ifEmpty { resp.message })
+      }
+    }
+    return true
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
   // 6. 辅助：基于 Android 设备 ID（用于 X-Emby-Authorization）
   // ════════════════════════════════════════════════════════════════════════
 
@@ -2079,8 +2374,68 @@ object EmbyClient {
 
 /**
  * Emby API 调用失败时抛出，包含 HTTP 状态码与原始 body。
+ *
+ * ## 为什么要给消息加前缀（对应清单 1.3「错误分类」）
+ *
+ * 以前 UI 层只能拿到 `it.message`，而那个message 就是裸的
+ * 「Emby API 500: <html>...</html>」—— 用户看到的是一坨 HTML，
+ * 开发者也无法据此区分「网络断了」「密码错了」「服务器炸了」。
+ *
+ * 现在 [errorKind] 把失败归成少数几类，UI 可以据此给**人话**提示
+ * （「网络不可用，检查连接」「账号或密码失效，请重新登录」）。
+ * 原始 body 仍然保留在 [body] 里，排障时照发不误。
  */
-class EmbyApiException(val code: Int, val body: String) : Exception("Emby API $code: ${body.take(200)}")
+class EmbyApiException(val code: Int, val body: String) :
+  Exception(buildMessage(code, body)) {
+
+  /** 归类后的错误种类，供 UI 决定提示文案 */
+  val errorKind: EmbyErrorKind
+    get() = EmbyErrorKind.of(code)
+}
+
+/** 错误归类（见 [EmbyApiException.errorKind]）。 */
+enum class EmbyErrorKind {
+  /** 断网 / 超时 / 连不上 */
+  NETWORK,
+
+  /** 401 / 403：token 过期或没权限 —— 该重登 / 重新登录 */
+  AUTH,
+
+  /** 404：资源没了（条目被删、Id 写错） */
+  NOT_FOUND,
+
+  /** 5xx：服务器自己出问题，可提示稍后重试 */
+  SERVER,
+
+  /** 其余（4xx 客户端错误等） */
+  UNKNOWN,
+  ;
+
+  companion object {
+    fun of(code: Int): EmbyErrorKind =
+      when {
+        code <= 0 -> NETWORK // 0 是本项目自定义的「没拿到响应码」⇒按网络问题处理
+        code == 401 || code == 403 -> AUTH
+        code == 404 -> NOT_FOUND
+        code in 500..599 -> SERVER
+        else -> UNKNOWN
+      }
+  }
+}
+
+/** 把原始响应包成人话；body 只留一小段，避免塞满 Toast。 */
+private fun buildMessage(code: Int, body: String): String {
+  val kind = EmbyErrorKind.of(code)
+  val head = when (kind) {
+    EmbyErrorKind.NETWORK -> "网络不可用"
+    EmbyErrorKind.AUTH -> "鉴权失败"
+    EmbyErrorKind.NOT_FOUND -> "资源不存在"
+    EmbyErrorKind.SERVER -> "服务器出错"
+    EmbyErrorKind.UNKNOWN -> "请求失败"
+  }
+  val detail = body.trim().take(120)
+  return if (detail.isEmpty()) "$head（$code）" else "$head（$code）：$detail"
+}
 
 /** kotlinx.serialization 的 JsonObject 构造辅助（避免每次写 JsonObject(mapOf(...)) 套娃） */
 private fun jsonObjectOf(entries: Map<String, Any?>): JsonObject {

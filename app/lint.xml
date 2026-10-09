@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Lint 配置（清单 1.2）
+
+  背景：本项目此前**完全没有 lint 配置**，所有检查都跑默认规则集。
+  默认规则集的问题不是「太严」，而是**太吵** —— 存量代码里几百处
+  硬编码中文字符串、几十处 deprecation 调用，每次跑 lint 都是一片红，
+  于是没人看、没人管，lint 事实上处于废弃状态。
+
+  所以这里的策略是：
+    1. **致命问题继续拦**（abortOnError = true 的那批）：真会出事的
+       —— 资源缺失、API 版本不兼容、Room 迁移链断裂、Manifest 错误。
+    2. **存量噪音降级为 warning**（severity="warning"）：不阻断构建，
+       但报告里仍可见，慢慢清。
+    3. **明确该关的关掉**（severity="ignore"）：对本项目无意义或
+       已知为误报的，避免稀释注意力。
+
+  怎么读报告：
+    .\gradlew.bat :app:lintStandardDebug -PlintVital=true
+  报告在 app/build/reports/lint-results-standardDebug.html
+  单条问题也可以命令行查：
+    .\gradlew.bat :app:lintStandardDebug
+-->
+<lint>
+
+    <!--
+      致命问题：不因存量欠债而放水。这几类一旦出现就是真 bug，
+      必须在出包前拦住。
+    -->
+
+    <!-- 资源问题：找不到 drawable/string、缺 contentDescription 等 -->
+    <issue id="MissingResources" severity="error" />
+    <issue id="MissingTranslation" severity="ignore" />
+    <issue id="ExtraTranslation" severity="ignore" />
+    <issue id="Typos" severity="error" />
+
+    <!--
+      API 兼容性：minSdk 26 但 compileSdk 37 意味着新 API 一眼看不见，
+      静态检查是唯一防线。这条绝不能降级。
+    -->
+    <issue id="NewApi" severity="error" />
+    <issue id="InlinedApi" severity="error" />
+
+    <!--
+      Room 迁移链：1.2 刚补了 MIGRATION_10_11（缺一段就整库删表重建），
+      迁移相关的警告必须当错误看。
+    -->
+    <issue id="UnsafeOptInUsageError" severity="error" />
+
+    <!-- Manifest / 打包 -->
+    <issue id="MissingApplicationIcon" severity="error" />
+    <issue id="AllowBackup" severity="ignore" />
+    <issue id="DataExtractionRules" severity="ignore" />
+
+    <!--
+      内存泄漏：Activity/Fragment 泄漏会累积，是低端机上 OOM 的主因。
+      3.5 正在清理原生实例泄漏，这条配合着看。
+    -->
+    <issue id="Recycle" severity="error" />
+
+    <!--
+      存量降级：这些是真问题，但当前代码里太多（几百处），
+      一次全改风险大于收益。先降到 warning，报告里可见，
+      随重构（1.5 拆巨型类）逐步清掉。
+    -->
+    <issue id="HardcodedText" severity="warning" />
+    <issue id="SetTextI18n" severity="warning" />
+    <issue id="ContentDescription" severity="warning" />
+    <issue id="LabelFor" severity="warning" />
+    <issue id="ButtonStyle" severity="warning" />
+    <issue id="SelectableText" severity="warning" />
+    <issue id="RtlHardcoded" severity="warning" />
+    <issue id="RtlSymmetry" severity="warning" />
+
+    <!-- 性能：存量较多（Compose 项目里 Compose 相关检测误报也多） -->
+    <issue id="UnusedResources" severity="warning" />
+    <issue id="ObsoleteLayoutParam" severity="warning" />
+    <issue id="UselessParent" severity="warning" />
+    <issue id="InefficientWeight" severity="warning" />
+    <issue id="NestedWeights" severity="warning" />
+    <issue id="Overdraw" severity="warning" />
+
+    <!--
+      弃用：本项目大量用 Material 旧图标别名（Icons.Filled.Sort 等已
+      迁移到 automated 变体），统一改造属于 4.3 主题优化的范围，
+      现在全量报红没意义。
+    -->
+    <issue id="Deprecated" severity="warning" />
+
+    <!-- 正确性但本项目基本不涉及 -->
+    <issue id="AutoboxingStateCreation" severity="warning" />
+    <issue id="UnreachableCode" severity="error" />
+    <issue id="EqualsWithHashCodeExist" severity="error" />
+    <issue id="Instantiatable" severity="warning" />
+    <issue id="WrongConstant" severity="error" />
+
+    <!--
+      明确关掉：
+      - VectorPath：项目不用 SVG 路径绘制；
+      - SyntheticAccessor / InnerClass：Kotlin 编译产物结构，AGP 误报多；
+      - GradleDependency / AndroidGradlePluginVersion：会拖慢检查且已由
+        人工控版本（记忆里的 env-build.md 有固定 Gradle 版本要求）。
+    -->
+    <issue id="VectorPath" severity="ignore" />
+    <issue id="SyntheticAccessor" severity="ignore" />
+    <issue id="GradleDependency" severity="ignore" />
+    <issue id="AndroidGradlePluginVersion" severity="ignore" />
+    <issue id="GradleOlderVersion" severity="ignore" />
+
+    <!-- 注释里的 TODO / 过期 SDK 提示：本项目 TODO 是有意留的施工清单 -->
+    <issue id="Todo" severity="ignore" />
+    <issue id="OldTargetApi" severity="ignore" />
+
+</lint>

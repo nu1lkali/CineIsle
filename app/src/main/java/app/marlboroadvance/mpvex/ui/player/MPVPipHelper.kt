@@ -43,6 +43,22 @@ class MPVPipHelper(
     }
   }
 
+  /**
+   * 彻底释放（清单 #20）。
+   *
+   * [unregisterPipReceiver] 原本是 private、只在「退出 PiP」时调用。
+   * 但存在一条漏掉的路径：**用户在看画中画时把应用从最近任务划掉 / 进程被回收**——
+   * 这时不会走 `onPictureInPictureModeChanged(false)`，receiver 就一直挂着。
+   * 而它是被 [activity] 强引用的（注册时传的就是 `activity`），
+   * 于是整个 Activity 连同 4600 行的播放页状态一起被拖住不放 ⇒ 泄漏。
+   *
+   * 对照组 `CineIsleGsyPipHelper` 本来就有 `fun release() { unregisterReceiver() }`
+   * 且 `GsyPlayerActivity.onDestroy` 调了它 —— mpv 这侧补齐成一样。
+   */
+  fun release() {
+    unregisterPipReceiver()
+  }
+
   @Suppress("UnspecifiedRegisterReceiverFlag")
   private fun registerPipReceiver() {
     pipReceiver =

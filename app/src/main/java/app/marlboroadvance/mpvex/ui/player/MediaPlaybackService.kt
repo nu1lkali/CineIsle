@@ -47,6 +47,25 @@ class MediaPlaybackService :
     @Volatile
     private var isServiceRunning = false
 
+    /**
+     * 换掉静态缩略图，并回收旧的那张（清单 #20）。
+     *
+     * 必须是 static 而不是只在实例方法里做，原因是 [app.marlboroadvance.mpvex.ui.player.PlayerActivity]
+     * 在 `startBackgroundPlayback` 里也要换图，而那一刻**服务还没绑定**（`serviceBound == false`），
+     * 根本拿不到实例 —— 原来那行 `MediaPlaybackService.thumbnail = thumbnail` 就是这么写的。
+     *
+     * ⚠️ 必须判 `!==`：`setMediaInfo` 与 `startBackgroundPlayback` 可能拿同一张图来赋值两次，
+     * 提前 recycle 会把还在用的 Bitmap 弄坏（`recycle()` 过再画抛 `IllegalStateException`）。
+     */
+    @JvmStatic
+    fun setStaticThumbnail(bitmap: Bitmap?) {
+      val previous = thumbnail
+      thumbnail = bitmap
+      if (previous !== bitmap) {
+        previous?.let { if (!it.isRecycled) it.recycle() }
+      }
+    }
+
     fun createNotificationChannel(context: Context) {
       val channel =
         NotificationChannel(
@@ -176,10 +195,32 @@ class MediaPlaybackService :
     artist: String,
     thumbnail: Bitmap? = null,
   ) {
-    MediaPlaybackService.thumbnail = thumbnail
+    // ⚠️ 旧图回收在 [setStaticThumbnail] 里做（清单 #20）。
+    // 原来只是直接覆盖赋值，而 PlayerActivity 会在「元数据更新」路径上反复调
+    // `setMediaInfo`（切集、追剧信息刷新…），每次都 `grabThumbnail(1080)` 抓一张
+    // 约 2.6MB 的新图 —— 旧图既没人引用也没 recycle，纯靠 GC 何时回收全看运气。
+    // 连播几十集就是几十张 1080 宽的图在等 GC，很容易 OOM。
+    setStaticThumbnail(thumbnail)
+
     mediaTitle = title
     mediaArtist = artist
     updateMediaSession()
+  }
+
+  /**
+   * 回收并清空静态缩略图（清单 #20）。
+   *
+   * 单独抽出来是因为**有三个地方要做同一件事**（`setMediaInfo` 换图、
+   * `onDestroy`、`onTaskRemoved`），而漏掉任何一处都会让 2.6MB 留在 native 堆上。
+   *
+   * ⚠️ 调用方必须保证「已经没人再拿这张图去画」——
+   * 通知栏的 `LargeIcon` 与 `MediaMetadataCompat` 持有的是**同一个实例**，
+   * 所以这个函数只能在这两样都撤掉之后调。
+   */
+  private fun releaseThumbnail() {
+    val current = thumbnail
+    thumbnail = null
+    current?.let { if (!it.isRecycled) it.recycle() }
   }
 
   private fun setupMediaSession() {
@@ -471,9 +512,12 @@ class MediaPlaybackService :
         Log.e(TAG, "Error releasing media session", e)
       }
       
-      // Clear thumbnail to prevent memory leak
-      thumbnail = null
-      
+      // 回收缩略图（清单 #20）。原来只是 `thumbnail = null` —— 那只是**解引用**，
+      // 不是回收，2.6MB 的 native 内存仍然挂着。
+      // 位置在 `releaseMediaSession()` 之后是对的：通知栏的 LargeIcon 还持有同一个实例，
+      // 先 recycle 会让系统画通知时抛 `IllegalStateException`。
+      releaseThumbnail()
+
       Log.d(TAG, "Service cleanup completed")
       super.onDestroy()
     } catch (e: Exception) {
@@ -513,8 +557,9 @@ class MediaPlaybackService :
         Log.e(TAG, "Error canceling notification in onTaskRemoved", e)
       }
       
-      // Clear thumbnail
-      thumbnail = null
+      // 回收缩略图（清单 #20）。必须在 `notificationManager.cancel()` **之后** ——
+      // 通知还没撤的时候系统可能正在拿这张图去画，recycle 掉会抛异常。
+      releaseThumbnail()
       
       // Stop the service which will trigger cleanup
       stopSelf()

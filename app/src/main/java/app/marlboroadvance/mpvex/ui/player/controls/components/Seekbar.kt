@@ -14,6 +14,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -66,6 +67,21 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+/**
+ * 进度条（左右各一个计时器）。
+ *
+ * ## 关于「拖动时显示预览图」（已移除，别再实现回来）
+ *
+ * 曾经这里有个浮在进度条上方的画面预览（清单 #17），已按用户判断删掉：
+ * **拖进度条时播放器画面本来就在跟着变**，预览图是重复信息；
+ * 更麻烦的是出图要跟播放抢 mpv 句柄（seek + 落盘 + 解码三段延迟），
+ * 反而让拖动不跟手。删掉后行为更简单，拖动只剩左右两个时间数字。
+ *
+ * 顺带记下当时踩过的两个坑，将来真要做的话别再踩：
+ * - 预览图**绝不能**作为 `Column` 的子项 —— 它一出现就把进度条整体下顶、
+ *   一消失又拉回来（用户反馈「把标题撑上去又拉下来」）。要浮层就得用 `Box` 叠放+ `offset`。
+ * - mpv 是**进程级单例**，任何后台出图都得 seek 主播放器，会让画面跳一下。
+ */
 @Composable
 fun SeekbarWithTimers(
   position: Float,
@@ -80,6 +96,45 @@ fun SeekbarWithTimers(
   seekbarStyle: SeekbarStyle = SeekbarStyle.Wavy,
   loopStart: Float? = null,
   loopEnd: Float? = null,
+  modifier: Modifier = Modifier,
+) {
+  SeekbarRow(
+    position = position,
+    duration = duration,
+    onValueChange = onValueChange,
+    onValueChangeFinished = onValueChangeFinished,
+    timersInverted = timersInverted,
+    positionTimerOnClick = positionTimerOnClick,
+    durationTimerOnCLick = durationTimerOnCLick,
+    chapters = chapters,
+    paused = paused,
+    seekbarStyle = seekbarStyle,
+    loopStart = loopStart,
+    loopEnd = loopEnd,
+    modifier = modifier,
+  )
+}
+
+/**
+ * 进度条本体。外面套两个计时器，拖动逻辑全在这里。
+ *
+ * 曾经它上方还挂过一个预览图组件，导致 [SeekbarWithTimers] 要分两条布局；
+ * 预览图移除后这个拆分也没了，[SeekbarWithTimers] 现在就是它外面加两个计时器。
+ */
+@Composable
+private fun SeekbarRow(
+  position: Float,
+  duration: Float,
+  onValueChange: (Float) -> Unit,
+  onValueChangeFinished: () -> Unit,
+  timersInverted: Pair<Boolean, Boolean>,
+  positionTimerOnClick: () -> Unit,
+  durationTimerOnCLick: () -> Unit,
+  chapters: ImmutableList<Segment>,
+  paused: Boolean,
+  seekbarStyle: SeekbarStyle,
+  loopStart: Float?,
+  loopEnd: Float?,
   modifier: Modifier = Modifier,
 ) {
   val clickEvent = LocalPlayerButtonsClickEvent.current

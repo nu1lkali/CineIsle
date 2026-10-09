@@ -302,6 +302,18 @@ private fun EmbyHomeRoute() {
     },
     onManageServers = { backStack.add(app.marlboroadvance.mpvex.ui.browser.emby.EmbyServerManageScreen) },
     onOpenSettings = { backStack.add(app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen) },
+    // 服务端播放列表（清单 #12）。Navigation3 不用注册：定义 Screen 类即可 push。
+    onOpenPlaylists = {
+      backStack.add(app.marlboroadvance.mpvex.ui.browser.emby.playlist.EmbyPlaylistScreen)
+    },
+    // 「猜你喜欢 / 即混」（清单 #14）
+    onOpenDiscover = {
+      backStack.add(app.marlboroadvance.mpvex.ui.browser.emby.discover.EmbyDiscoverScreen)
+    },
+    // 「合集」管理（清单 #15）
+    onOpenCollections = {
+      backStack.add(app.marlboroadvance.mpvex.ui.browser.emby.collection.EmbyCollectionScreen)
+    },
   )
 }
 

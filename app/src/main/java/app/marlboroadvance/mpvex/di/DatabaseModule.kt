@@ -499,6 +499,31 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
 
 
 /**
+ * Migration from version 10 to version 11
+ *
+ * ## 为什么这是一个「空迁移」，却必须存在
+ *
+ * v11 那次发版**只改了别的**（不是数据库），schema 与 v10 完全一致
+ * （对比 `app/schemas/…/10.json` 与 `11.json`：表、列、索引逐条一致）。
+ * 但 Room 的迁移是靠 `addMigrations` 里注册的相邻版本对来串路径的，
+ * **不会因为 schema 没变就自动跳过** —— 缺了 10→11 这一段，
+ * v10 的用户升到 v12 时找不到完整路径，会落到
+ * `fallbackToDestructiveMigration(true)`：**整库删表重建**，
+ * Emby 服务器配置、播放列表、播放进度、最近播放全部丢失。
+ *
+ * 所以哪怕 migrate 体是空的，也必须注册，Room 会在事务里自己把
+ * `user_version` 递到 11，再由 [MIGRATION_11_12] 建 search_history。
+ */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+  override fun migrate(db: SupportSQLiteDatabase) {
+    // 故意空：schema 无变化。留一条日志是为了让「升级时走过这一步」在 logcat 里可查 ——
+    // 用户报「数据没了」时，第一件事就是确认迁移链是否完整。
+    android.util.Log.d("Migration_10_11", "Schema unchanged between v10 and v11, nothing to do")
+  }
+}
+
+
+/**
  * Migration from version 11 to version 12
  *
  * 新增 search_history 表：首页全库搜索 + 媒体库搜索共用的搜索历史。
@@ -526,6 +551,145 @@ val MIGRATION_11_12 = object : Migration(11, 12) {
 }
 
 
+/**
+ * 12 → 13（清单 4.2）：下载相关两张表。
+ *
+ * - `emby_download_tasks`：下载任务从 SharedPreferences 的 JSON 迁到 Room。
+ *   ⚠️ **旧数据不迁移**：prefs 里那份 JSON 在迁移脚本里没法优雅地读回来
+ *   （要自己解析 + 自己映射，且 prefs 读不到就当空），而任务本身的价值是
+ *   「可以断点续传」——迁移过来的任务连 targetUri 都可能过期。
+ *   用户重下一次的成本远低于「迁一堆可能已经失效的记录」的风险。
+ *   已下载的文件本身不会因为这次迁移消失（文件在 Download 目录里，跟数据库无关）。
+ * - `emby_downloaded_media`：已落盘内容的离线元数据，首次建表。
+ *
+ * 列名与 [app.marlboroadvance.mpvex.database.entities.EmbyDownloadEntity] /
+ * [app.marlboroadvance.mpvex.database.entities.DownloadedMediaEntity] 严格一致 ——
+ * 少一列或多一列 Room 会在运行时抛 IllegalStateException（schema 校验失败）。
+ * ⚠️ 索引名是 Room 自动生成的 `index_emby_download_tasks_serverId` 这类，
+ * 建表语句里必须照抄，改名会导致校验失败。
+ */
+val MIGRATION_12_13 = object : Migration(12, 13) {
+  override fun migrate(db: SupportSQLiteDatabase) {
+    try {
+      android.util.Log.d("Migration_12_13", "Creating emby_download_tasks table")
+      db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `emby_download_tasks` (
+          `itemId` TEXT NOT NULL,
+          `serverId` INTEGER NOT NULL,
+          `title` TEXT NOT NULL,
+          `fileName` TEXT NOT NULL,
+          `url` TEXT NOT NULL,
+          `totalBytes` INTEGER NOT NULL,
+          `downloadedBytes` INTEGER NOT NULL,
+          `status` TEXT NOT NULL,
+          `message` TEXT,
+          `targetUri` TEXT,
+          `locationLabel` TEXT,
+          `createdAt` INTEGER NOT NULL,
+          PRIMARY KEY(`itemId`)
+        )
+        """.trimIndent()
+      )
+      db.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_emby_download_tasks_serverId` " +
+          "ON `emby_download_tasks` (`serverId`)"
+      )
+      db.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_emby_download_tasks_status` " +
+          "ON `emby_download_tasks` (`status`)"
+      )
+      db.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_emby_download_tasks_createdAt` " +
+          "ON `emby_download_tasks` (`createdAt`)"
+      )
+
+      android.util.Log.d("Migration_12_13", "Creating emby_downloaded_media table")
+      db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `emby_downloaded_media` (
+          `itemId` TEXT NOT NULL,
+          `serverId` INTEGER NOT NULL,
+          `title` TEXT NOT NULL,
+          `type` TEXT,
+          `seriesName` TEXT,
+          `seasonNumber` INTEGER,
+          `episodeNumber` INTEGER,
+          `overview` TEXT,
+          `runTimeTicks` INTEGER,
+          `productionYear` INTEGER,
+          `communityRating` REAL,
+          `officialRating` TEXT,
+          `imageTag` TEXT,
+          `fileName` TEXT,
+          `localUri` TEXT,
+          `fileSize` INTEGER NOT NULL,
+          `completedAt` INTEGER NOT NULL,
+          PRIMARY KEY(`itemId`)
+        )
+        """.trimIndent()
+      )
+      db.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_emby_downloaded_media_serverId` " +
+          "ON `emby_downloaded_media` (`serverId`)"
+      )
+      db.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_emby_downloaded_media_seriesName` " +
+          "ON `emby_downloaded_media` (`seriesName`)"
+      )
+      db.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_emby_downloaded_media_completedAt` " +
+          "ON `emby_downloaded_media` (`completedAt`)"
+      )
+
+      android.util.Log.d("Migration_12_13", "Migration completed successfully")
+    } catch (e: Exception) {
+      android.util.Log.e("Migration_12_13", "Migration failed", e)
+      throw e
+    }
+  }
+}
+
+/**
+ * v13 → v14：新增「标记为不喜欢」表。
+ *
+ * 纯新增表，不动任何已有表 ⇒ 老用户的服务器配置 / 播放列表 / 播放进度都不受影响。
+ * 语句与 [app.marlboroadvance.mpvex.database.entities.DislikedMediaEntity] 的声明**必须逐字对应**
+ * （列名、类型、复合主键），否则 Room 启动时的 schema 校验会直接抛异常。
+ */
+val MIGRATION_13_14 = object : Migration(13, 14) {
+  override fun migrate(db: SupportSQLiteDatabase) {
+    try {
+      android.util.Log.d("Migration_13_14", "Creating disliked_media table")
+      db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `disliked_media` (
+          `serverId` INTEGER NOT NULL,
+          `itemId` TEXT NOT NULL,
+          `title` TEXT NOT NULL,
+          `reason` TEXT NOT NULL,
+          `markedAt` INTEGER NOT NULL,
+          `imageUrl` TEXT,
+          `active` INTEGER NOT NULL DEFAULT 1,
+          PRIMARY KEY(`serverId`, `itemId`)
+        )
+        """.trimIndent()
+      )
+      // 管理页按标记时间倒序展示，这个索引直接服务该查询
+      db.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_disliked_media_markedAt` " +
+          "ON `disliked_media` (`markedAt`)"
+      )
+
+      android.util.Log.d("Migration_13_14", "Migration completed successfully")
+    } catch (e: Exception) {
+      android.util.Log.e("Migration_13_14", "Migration failed", e)
+      throw e
+    }
+  }
+}
+
+
 val DatabaseModule =
   module {
     single<Json> {
@@ -540,8 +704,25 @@ val DatabaseModule =
       Room
         .databaseBuilder(context, MpvExDatabase::class.java, "mpvex.db")
         .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_11_12)
-        .fallbackToDestructiveMigration(true) // Fallback if migration fails (last resort)
+        // ⚠️ 迁移链必须**逐段连续**（1→2→…→14），少一段就会退化成
+        // fallbackToDestructiveMigration = 整库删表重建（服务器配置 / 播放列表 / 播放进度全丢）。
+        // 任何一次改 @Database version 都要在这里补一对新的 Migration，别指望 Room 兜底。
+        .addMigrations(
+          MIGRATION_1_2,
+          MIGRATION_2_3,
+          MIGRATION_3_4,
+          MIGRATION_4_5,
+          MIGRATION_5_6,
+          MIGRATION_6_7,
+          MIGRATION_7_8,
+          MIGRATION_8_9,
+          MIGRATION_9_10,
+          MIGRATION_10_11,
+          MIGRATION_11_12,
+          MIGRATION_12_13,
+          MIGRATION_13_14,
+        )
+        .fallbackToDestructiveMigration(true) // 最后兜底：迁移链有洞时至少不崩 App
         .build()
     }
 
@@ -572,6 +753,44 @@ val DatabaseModule =
       )
     }
 
+    // 显示偏好服务端同步（清单 #16）。单例即可：它本身无状态，
+    // 状态全在 BrowserPreferences 里。
+    single {
+      app.marlboroadvance.mpvex.ui.browser.emby.displayprefs.EmbyDisplayPrefsSync(
+        repository = get(),
+        preferences = get(),
+      )
+    }
+
+    // GSY 内核的章节数据源（清单 #19）。**单例是必须的**，不是随手选的：
+    // 它内部持有「itemId → 章节」的缓存，做成多实例的话每进一次播放页就是一个新缓存，
+    // 章节会被反复拉取。缓存只在切集时按条目清（见 GsyChapterRepository.invalidate），
+    // 所以单个单例活到进程结束是安全的。
+    single {
+      app.marlboroadvance.mpvex.ui.player.gsy.GsyChapterRepository(
+        repository = get(),
+      )
+    }
+
+    // 清单 4.2：网络连通性监听。**单例**是必须的 ——
+    // registerDefaultNetworkCallback 是进程级的，一个 App 注册多个 callback 会互相覆盖，
+    // 也会让「注销」这件事变得不明确（注销一次就把所有 callback 都干掉了）。
+    // 所以整个 App 共用这一个实例，谁需要谁 collect。
+    single { app.marlboroadvance.mpvex.utils.network.NetworkMonitor(androidContext()) }
+
+    // 清单 4.2：下载任务表 + 已下载内容表
+    single { get<MpvExDatabase>().embyDownloadDao() }
+    single { get<MpvExDatabase>().downloadedMediaDao() }
+
+    // 「标记为不喜欢」：**必须单例** —— 它内部持有一份全量内存快照，
+    // 做成多实例的话播放器标记完，详情页读的还是另一个空快照，
+    // 表现为"标记了立刻又变回未标记"。单例是这套"快照即真相"设计的前提。
+    single { get<MpvExDatabase>().dislikeDao() }
+    single { app.marlboroadvance.mpvex.domain.dislike.DislikeRepository(dao = get()) }
+
+    // 清单 4.2：离线内容仓库（纯 Room 读，断网可用）
+    single { app.marlboroadvance.mpvex.domain.emby.DownloadedMediaRepository(dao = get()) }
+
     // Emby 离线下载管理器（支持暂停/续传，落盘到公共 Download/CineIsle）
     single {
       app.marlboroadvance.mpvex.domain.emby.EmbyDownloadManager(
@@ -579,6 +798,10 @@ val DatabaseModule =
         // 下载完成要按需回清服务器播放进度（可开关），需要按 serverId 找回服务器配置
         serverRepo = get(),
         preferenceStore = get(),
+        // 任务持久化走 Room（原来是 SharedPreferences 的 JSON，见 MIGRATION_12_13）
+        downloadDao = get(),
+        // 已落盘内容的离线元数据；离线内容页的数据源
+        downloadedMediaDao = get(),
       )
     }
 

@@ -46,6 +46,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.Player
 import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.domain.dislike.DislikeRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import kotlinx.coroutines.Job
@@ -89,6 +90,9 @@ private const val SEEK_PREVIEW_INTERVAL_MS = 120L
 class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGestureHost, KoinComponent {
 
   private val embyRepository: EmbyRepository by inject()
+
+  /** 「标记为不喜欢」的仓库。ViewModel 靠它读快照 / 写标记，UI 不直接碰。 */
+  private val dislikeRepository: DislikeRepository by inject()
 
   private lateinit var viewModel: FeedViewModel
   private lateinit var pool: ExoPlayerPool
@@ -148,6 +152,7 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
       FeedViewModel.factory(
         initialItems = items,
         embyRepository = embyRepository,
+        dislikeRepository = dislikeRepository,
         libraryId = intent.getStringExtra(EXTRA_LIBRARY_ID),
         favoritesOnly = intent.getBooleanExtra(EXTRA_FAVORITES_ONLY, false),
       ),

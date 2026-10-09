@@ -31,7 +31,9 @@ import org.koin.compose.koinInject
 import androidx.compose.runtime.collectAsState as composeCollectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 
 @Composable
 fun PlayerSheets(
@@ -94,6 +96,32 @@ fun PlayerSheets(
 
       var showFilePicker by remember { mutableStateOf(false) }
 
+      // ── 在线字幕搜索（Emby 专属）──
+      // 这里自己从 intent 解析 Emby 上下文，而不是让 PlayerActivity 一路传下来：
+      // PlayerSheets 已经能拿到宿主 Activity，加两个参数会让 PlayerControls
+      // 的参数表再涨一截，而在线字幕只有 Emby 播放才有。
+      val embyContext = rememberEmbySubtitleContext()
+      var showOnlineSubtitles by remember { mutableStateOf(false) }
+      val subtitleScope = rememberCoroutineScope()
+
+      if (showOnlineSubtitles && embyContext != null) {
+        app.marlboroadvance.mpvex.ui.browser.emby.subtitle.SubtitleSearchSheet(
+          server = embyContext.server,
+          itemId = embyContext.itemId,
+          mediaSourceId = embyContext.mediaSourceId,
+          mediaTitle = currentMediaTitle.ifBlank { embyContext.itemName },
+          // 下载完立刻挂载（走 loadSubtitle 会等轨道就绪，见 PlayerViewModel KDoc）
+          onDownloaded = { uri ->
+            subtitleScope.launch {
+              viewModel.loadSubtitle(uri, select = true, silent = false)
+            }
+          },
+          // 在线 sheet 里也给了「本地文件…」按钮，走同一个 SAF picker
+          onPickLocal = { showFilePicker = true },
+          onDismissRequest = { showOnlineSubtitles = false },
+        )
+      }
+
       if (showFilePicker) {
           app.marlboroadvance.mpvex.ui.browser.dialogs.FilePickerDialog(
               isOpen = true,
@@ -131,6 +159,9 @@ fun PlayerSheets(
         onToggleSubtitle = onToggleSubtitle,
         isSubtitleSelected = isSubtitleSelected,
         onAddSubtitle = { showFilePicker = true },
+        // 只有「正在播 Emby 媒体」时才给在线搜索 —— 本地文件 / 网盘直链
+        // 没有 itemId，按钮留着只会点了报错
+        onSearchOnline = embyContext?.let { { showOnlineSubtitles = true } },
         onRemoveSubtitle = onRemoveSubtitle,
         onOpenSubtitleSettings = { onOpenPanel(Panels.SubtitleSettings) },
         onOpenSubtitleDelay = { onOpenPanel(Panels.SubtitleDelay) },

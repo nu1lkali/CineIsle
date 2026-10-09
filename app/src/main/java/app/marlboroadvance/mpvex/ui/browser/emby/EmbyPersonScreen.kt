@@ -40,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -100,9 +101,12 @@ data class EmbyPersonScreen(
 
     // ── 作品聚合 / 筛选（纯本地，切 tab 不发请求）──
     // 作品类型 tab：全部 / 电影 / 剧集 / 单集（按条目 Type 聚合）
-    var itemTab by remember { mutableStateOf(PersonItemTab.ALL) }
+    // ⚠️ 用 rememberSaveable 而不是 remember：这两个页签是**纯本地切片**（不发请求），
+    // 旋转屏幕时它们本来完全有能力恢复。用 remember 的话转个屏就跳回「全部」，
+    // 用户会以为作品列表变了。两个枚举都能被 Saver 自动存下（枚举有 name）。
+    var itemTab by rememberSaveable { mutableStateOf(PersonItemTab.ALL) }
     // 参与身份筛选：全部 / 演员 / 导演 / 编剧（按条目自带的 People 列表本地筛）
-    var roleFilter by remember { mutableStateOf(PersonRoleFilter.ALL) }
+    var roleFilter by rememberSaveable { mutableStateOf(PersonRoleFilter.ALL) }
     val visibleItems = items.filter { itemTab.matches(it) && roleFilter.matches(it, personId) }
 
     // 「参与身份」只在**确实观察到**该身份时才提供对应 chip：

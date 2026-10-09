@@ -47,6 +47,21 @@ class EmbyRepository(
   private val restored = CompletableDeferred<Unit>()
 
   init {
+    // 让 [EmbyHttp] 的重试拦截器知道「当前该用哪个 token」——
+    // 401 自动重登后要拿**新** token 重放原请求，拦截器自己取不到。
+    EmbyHttp.installTokenSource { _currentServer.value?.apiToken.orEmpty() }
+    // 收到 401 时自动重登一次再重放请求（对应清单 1.3）。
+    // 以前 token 过期只能靠各调用点手动 ensureLoggedIn 补，漏掉的地方
+    // 用户看到的是「筛选面板空着」「列表不刷新」这类莫名其妙的表现。
+    EmbyHttp.onUnauthorized = {
+      val target = _currentServer.value
+      if (target != null && target.username.isNotBlank() && target.password.isNotBlank()) {
+        scope.launch {
+          runCatching { relogin(target) }.onSuccess { setCurrentServer(it) }
+        }
+      }
+    }
+
     // 启动后自动恢复上次使用的服务器
     scope.launch {
       try {
@@ -401,6 +416,249 @@ class EmbyRepository(
     EmbyClient.getRandomItems(server, parentId, includeItemTypes, limit, isFavorite)
   }
 
+  // ─── 相似推荐 / 即混 / 续播 ───
+  //
+  // 服务端算法那三套（`/Items/{Id}/Similar` / `/Items/{Id}/InstantMix` / `/Shows/NextUp`）
+  // 与本地算法（`LocalSimilarity`）由 `SimilarAlgorithm` 偏好二选一，
+  // 详见 `EmbyClient` 2.5 节的说明。
+
+  /** 相似推荐（服务端算法）。返回的是分页壳，用 [EmbyItemsResult.Items] 取。 */
+  suspend fun getSimilarItems(
+    server: EmbyServer,
+    itemId: String,
+    limit: Int = 24,
+    includeItemTypes: List<String>? = listOf("Movie", "Series"),
+    mediaTypes: List<String>? = listOf("Video"),
+    excludeIdList: List<String>? = null,
+  ): EmbyItemsResult = withContext(Dispatchers.IO) {
+    EmbyClient.getSimilarItems(server, itemId, limit, includeItemTypes, mediaTypes, excludeIdList)
+  }
+
+  /** 即混（服务端基于种子自动续播一批）。 */
+  suspend fun getInstantMixItems(
+    server: EmbyServer,
+    itemId: String,
+    limit: Int = 20,
+    includeItemTypes: List<String>? = listOf("Movie", "Series"),
+    mediaTypes: List<String>? = listOf("Video"),
+    filters: List<String>? = null,
+  ): EmbyItemsResult = withContext(Dispatchers.IO) {
+    EmbyClient.getInstantMixItems(server, itemId, limit, includeItemTypes, mediaTypes, filters)
+  }
+
+  /** 续播列表。服务端没开「剧集自动续播」时会是空列表。 */
+  suspend fun getNextUpItems(
+    server: EmbyServer,
+    limit: Int = 20,
+    seriesId: String? = null,
+  ): EmbyItemsResult = withContext(Dispatchers.IO) {
+    EmbyClient.getNextUpItems(server, limit, seriesId)
+  }
+
+  // ─── 合集（BoxSet）───
+  //
+  // ⚠️ REST 路径是 `/Collections` 不是 `/BoxSets`（那是 Jellyfin 的命名），
+  // 且参数名一律 `Ids`（只有 Playlist 增删用 `EntryIds`）。详见 [EmbyClient] 5.7 节。
+
+  suspend fun getCollections(
+    server: EmbyServer,
+    startIndex: Int = 0,
+    limit: Int = 100,
+  ): EmbyItemsResult = withContext(Dispatchers.IO) {
+    EmbyClient.getCollections(server, startIndex, limit)
+  }
+
+  suspend fun getCollectionItems(
+    server: EmbyServer,
+    collectionId: String,
+    startIndex: Int = 0,
+    limit: Int = 100,
+  ): EmbyItemsResult = withContext(Dispatchers.IO) {
+    EmbyClient.getCollectionItems(server, collectionId, startIndex, limit)
+  }
+
+  /**
+   * 新建合集。返回 null 表示**建成了但拿不到 Id**（部分部署只在 `Location` 头里给地址），
+   * 调用方要能接受这种情况：提示「已创建，请刷新」而不是当失败。
+   */
+  suspend fun createCollection(
+    server: EmbyServer,
+    name: String,
+    itemIds: List<String> = emptyList(),
+    parentId: String? = null,
+  ): EmbyCollectionCreationResult = withContext(Dispatchers.IO) {
+    EmbyClient.createCollection(server, name, itemIds, parentId)
+  }
+
+  suspend fun addToCollection(
+    server: EmbyServer,
+    collectionId: String,
+    itemIds: List<String>,
+  ): Boolean = withContext(Dispatchers.IO) {
+    EmbyClient.addToCollection(server, collectionId, itemIds)
+  }
+
+  suspend fun removeFromCollection(
+    server: EmbyServer,
+    collectionId: String,
+    itemIds: List<String>,
+  ): Boolean = withContext(Dispatchers.IO) {
+    EmbyClient.removeFromCollection(server, collectionId, itemIds)
+  }
+
+  // ─── 显示偏好（DisplayPreferences）───
+  //
+  // ⚠️ 粒度是「每个媒体库一份」而不是「每个用户一份」，且写操作是**整体覆盖**。
+  // 详见 [EmbyClient] 5.8 节与 [EmbyDisplayPrefsCodec]。
+
+  /** 读某个目标的显示偏好。目标不存在时返回 null（404 / 空响应都当「还没有」） */
+  suspend fun getDisplayPreferences(
+    server: EmbyServer,
+    displayPreferencesId: String,
+    client: String = EmbyClient.DISPLAY_PREFS_CLIENT,
+  ): EmbyDisplayPreferences? = withContext(Dispatchers.IO) {
+    EmbyClient.getDisplayPreferences(server, displayPreferencesId, client)
+  }
+
+  /** 写某个目标的显示偏好（整体覆盖，务必先读后写，理由见上） */
+  suspend fun postDisplayPreferences(
+    server: EmbyServer,
+    displayPreferencesId: String,
+    client: String,
+    preferences: EmbyDisplayPreferences,
+  ): Boolean = withContext(Dispatchers.IO) {
+    EmbyClient.postDisplayPreferences(server, displayPreferencesId, client, preferences)
+  }
+
+  /**
+   * 拉条目章节（清单 #19：GSY 内核的章节数据源）。
+   *
+   * mpv 侧的章节来自容器内嵌章节表；GSY 没有章节能力，只能走这里。
+   * 详见 [EmbyClient.getItemChapters] 的 KDoc —— 那里面写清了由此产生的
+   * 「同文件两内核章节数可能不同」的能力边界，别在别处重复解释。
+   *
+   * 拿不到就返回空列表**而不是抛异常**：本地文件根本没这个 Emby 条目、
+   * 或者服务端没刮削章节，都是正常情况，不该让播放页崩。
+   */
+  suspend fun getItemChapters(
+    server: EmbyServer,
+    itemId: String,
+  ): List<EmbyChapter> =
+    withContext(Dispatchers.IO) {
+      runCatching { EmbyClient.getItemChapters(server, itemId) }
+        .getOrDefault(emptyList())
+    }
+
+  // ─── 播放列表（Emby 服务端）───
+  //
+  // ⚠️ 与本地播放列表（Room `PlaylistRepository`）是两套完全独立的东西，
+  // 详见 [EmbyClient] 里 5.5 节的说明。
+
+  suspend fun getPlaylists(
+    server: EmbyServer,
+    startIndex: Int = 0,
+    limit: Int = 100,
+  ): EmbyItemsResult = withContext(Dispatchers.IO) {
+    EmbyClient.getPlaylists(server, startIndex, limit)
+  }
+
+  suspend fun getPlaylistItems(
+    server: EmbyServer,
+    playlistId: String,
+    startIndex: Int = 0,
+    limit: Int = 100,
+  ): EmbyItemsResult = withContext(Dispatchers.IO) {
+    EmbyClient.getPlaylistItems(server, playlistId, startIndex, limit)
+  }
+
+  suspend fun createPlaylist(
+    server: EmbyServer,
+    name: String,
+    itemIds: List<String> = emptyList(),
+  ): EmbyPlaylistCreationResult = withContext(Dispatchers.IO) {
+    EmbyClient.createPlaylist(server, name, itemIds)
+  }
+
+  suspend fun addToPlaylist(
+    server: EmbyServer,
+    playlistId: String,
+    itemIds: List<String>,
+  ): EmbyPlaylistAddResult = withContext(Dispatchers.IO) {
+    EmbyClient.addToPlaylist(server, playlistId, itemIds)
+  }
+
+  suspend fun removeFromPlaylist(
+    server: EmbyServer,
+    playlistId: String,
+    entryIds: List<String>,
+  ) = withContext(Dispatchers.IO) {
+    EmbyClient.removeFromPlaylist(server, playlistId, entryIds)
+  }
+
+  suspend fun movePlaylistItem(
+    server: EmbyServer,
+    playlistId: String,
+    entryId: String,
+    newIndex: Int,
+  ) = withContext(Dispatchers.IO) {
+    EmbyClient.movePlaylistItem(server, playlistId, entryId, newIndex)
+  }
+
+  suspend fun deletePlaylist(server: EmbyServer, playlistId: String) = withContext(Dispatchers.IO) {
+    EmbyClient.deletePlaylist(server, playlistId)
+  }
+
+  // ─── 字幕在线搜索 ───
+
+  /**
+   * 搜在线字幕候选（详见 [EmbyClient.searchRemoteSubtitles]）。
+   *
+   * ⚠️ 单语言单次请求 —— 搜双语就是两次调用，由调用方合并。
+   */
+  suspend fun searchRemoteSubtitles(
+    server: EmbyServer,
+    itemId: String,
+    language: String,
+    mediaSourceId: String? = null,
+    isPerfectMatch: Boolean? = null,
+  ): List<EmbyRemoteSubtitle> = withContext(Dispatchers.IO) {
+    EmbyClient.searchRemoteSubtitles(
+      server = server,
+      itemId = itemId,
+      language = language,
+      mediaSourceId = mediaSourceId,
+      isPerfectMatch = isPerfectMatch,
+    )
+  }
+
+  /**
+   * 让服务端把选中的在线字幕存进媒体库，返回新的字幕轨索引（可能为 null = 失败）。
+   */
+  suspend fun downloadRemoteSubtitle(
+    server: EmbyServer,
+    itemId: String,
+    subtitleId: String,
+    mediaSourceId: String? = null,
+  ): EmbySubtitleDownloadResult = withContext(Dispatchers.IO) {
+    EmbyClient.downloadRemoteSubtitle(server, itemId, subtitleId, mediaSourceId)
+  }
+
+  /**
+   * 取已存到服务器的字幕字节。
+   *
+   * ⚠️ 返回的是**内存里的字节**而不是落盘文件 —— 落盘与命名由 UI 层的
+   * `SubtitleDownloadSaver` 负责（它才知道该放进哪个字幕目录、叫什么名字）。
+   */
+  suspend fun downloadSubtitleStream(
+    server: EmbyServer,
+    itemId: String,
+    mediaSourceId: String,
+    subtitleIndex: Int,
+    format: String = "srt",
+  ): ByteArray = withContext(Dispatchers.IO) {
+    EmbyClient.downloadSubtitleStream(server, itemId, mediaSourceId, subtitleIndex, format)
+  }
+
   // ─── 收藏 / 删除 / 已看 ───
 
   suspend fun favorite(server: EmbyServer, itemId: String) = withContext(Dispatchers.IO) {
@@ -430,6 +688,11 @@ class EmbyRepository(
     EmbyClient.unfavoriteHard(server, itemId)
   }
 
+  /**
+   * 删除媒体 —— **物理删除服务器上的文件**（媒体库 + 磁盘），不可逆。
+   *
+   * 见 [EmbyClient.deleteItem]：需管理员权限，失败会抛 [app.marlboroadvance.mpvex.domain.emby.EmbyApiException]。
+   */
   suspend fun deleteItem(server: EmbyServer, itemId: String) = withContext(Dispatchers.IO) {
     EmbyClient.deleteItem(server, itemId)
   }
@@ -506,21 +769,29 @@ class EmbyRepository(
     EmbyClient.searchPersons(server, term, parentId, limit)
   }
 
-  /** 剧集的季列表 */
+  /**
+   * 剧集的季列表。
+   *
+   * [startIndex] / [limit] 是清单 1.1 补的分页透传；不传时行为与从前一致（一次拿全）。
+   */
   suspend fun getSeasons(
     server: EmbyServer,
     seriesId: String,
+    startIndex: Int = 0,
+    limit: Int? = null,
   ): EmbyItemsResult = withContext(Dispatchers.IO) {
-    EmbyClient.getSeasons(server, seriesId)
+    EmbyClient.getSeasons(server, seriesId, startIndex, limit)
   }
 
-  /** 某一季下的剧集列表 */
+  /** 某一季下的剧集列表（分页参数同上，见 [getSeasons]） */
   suspend fun getEpisodes(
     server: EmbyServer,
     seriesId: String,
     seasonId: String? = null,
+    startIndex: Int = 0,
+    limit: Int? = null,
   ): EmbyItemsResult = withContext(Dispatchers.IO) {
-    EmbyClient.getEpisodes(server, seriesId, seasonId)
+    EmbyClient.getEpisodes(server, seriesId, seasonId, startIndex, limit)
   }
 
   /** 按播放时间倒序拉取历史记录（Emby 的 DatePlayed 排序） */

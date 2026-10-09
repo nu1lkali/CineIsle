@@ -47,11 +47,13 @@ fun EngineKind.reversed(): EngineKind = if (this == EngineKind.MPV) EngineKind.G
 /**
  * 内核能力标记。
  *
- * mpv 几乎全支持；GSY 覆盖主干 + 一批「手动补齐」的 mpv 功能
- * （A-B 循环 / 逐帧 / 截图 / 外挂字幕 / 字幕延迟 / 镜像翻转 / 平移 都是自己实现的）。
- * mpv 特有的滤镜链 / 字幕排版 / 解码器选择 / 章节仍然不支持，
+ * mpv 几乎全支持；GSY 覆盖主干 + 一批能对齐的能力（画面比例、截图、外挂字幕、
+ * 字幕延迟、字幕样式、章节、画中画、后台播放）。
+ * mpv 特有的滤镜链 / GLSL 着色器 / 解码器切换 / 第二字幕 / 音轨延迟仍然不支持。
  * 界面按 [EngineKind.supports] 把对应入口**隐藏**而不是置灰 ——
  * 置灰了还能点，点了没反应更难受。
+ *
+ * 加新枚举项前先看 [GSY_SUPPORTED] 的约定：列进去就得真的有实现。
  */
 enum class EngineFeature {
   /**
@@ -67,34 +69,56 @@ enum class EngineFeature {
   /** 视频滤镜面板（vf / GL effect） */
   VIDEO_FILTERS,
 
-  /** 去色带（deband） */
+  /**
+   * 去色带（deband）。
+   *
+   * 没有独立读点 —— 面板入口是按 [EngineFeature.VIDEO_FILTERS] 显隐的，
+   * 去色带只是滤镜面板里的一个开关。保留这一项是为了**说清能力边界**：
+   * mpv 有 `vf=debund`，GSY 没有。
+   */
   DEBAND,
 
   /** GLSL 着色器链 */
   GLSL_SHADERS,
 
-  /** 字幕字体 / 颜色 / 描边 / 位置等排版设置 */
+  /**
+   * 字幕字体 / 颜色 / 描边 / 位置等排版设置。
+   *
+   * 两侧能力**不对等**，所以隐藏不等于「完全没有」：
+   *  - mpv：完整（字体、字号、粗斜体、对齐、描边样式与粗细、阴影、三色、位置、缩放、ASS 覆盖）；
+   *  - GSY：`GSYSubtitleStyle` 只有文字色、字号、背景色、阴影（色/半径/XY 偏移）、
+   *    上下左右边距、gravity（见 `GsySubtitleStyleMapper`）。字体名 / 描边样式 / ASS 覆盖都做不了。
+   *
+   * 所以 GSY 的样式面板是**同一个偏好（`SubtitlesPreferences`）的子集视图**：
+   * 用户在设置里调过的字号、颜色会一并生效，只是 GSY 侧能调的项更少。
+   */
   SUBTITLE_STYLE,
 
-  /** 第二字幕（secondary-sub-*） */
+  /** 第二字幕（secondary-sub-*）—— GSY 的字幕子系统只渲染一路，恒不支持 */
   SECONDARY_SUBTITLE,
 
   /** 字幕延迟 */
   SUBTITLE_DELAY,
 
-  /** 音轨延迟 */
+  /** 音轨延迟 —— GSY 无对应 API，恒不支持 */
   AUDIO_DELAY,
 
   /** 逐帧前进 / 后退 */
   FRAME_NAVIGATION,
 
-  /** mpv 统计信息页 */
-  STATS,
-
   /** 截图 */
   SCREENSHOT,
 
-  /** 章节跳转 */
+  /**
+   * 章节跳转。
+   *
+   * 两侧**数据来源完全不同**，这是补齐时最容易踩的坑：
+   *  - mpv：容器内嵌章节表（`chapter-list` property，由 demuxer 解析），本地文件也有；
+   *  - GSY：GSY 没有任何章节 API，只能走 Emby `GET /Items/{id}/Chapters`
+   *    （见 `GsyChapterRepository`），所以**纯本地文件在 GSY 下没有章节**。
+   *
+   * 这是能力本身的边界，不是没实现 —— 同一个文件在两个内核下章节数量可能不同。
+   */
   CHAPTERS,
 
   /** 外挂字幕（sub-add） */
@@ -125,26 +149,37 @@ enum class EngineFeature {
 /**
  * GSY 内核支持的能力。
  *
- * 与改造前的 Media3 裸 ExoPlayer 相比，多出来这几项都是**手动补齐**的：
- * - [EngineFeature.SUBTITLE_DELAY]：GSY 自带 `setSubtitleOffsetMs`，对外挂字幕生效；
- * - [EngineFeature.EXTERNAL_SUBTITLES]：GSY 自带 SRT / WebVTT 解析与渲染（`GSYSubtitleView`）；
- * - [EngineFeature.AB_LOOP]：后端里自己按 time-pos 兜回去；
- * - [EngineFeature.SCREENSHOT]：GSY 的 `saveFrame()` 抓帧存盘；
- * - [EngineFeature.FRAME_NAVIGATION]：按 40ms 一帧近似 seek；
- * - [EngineFeature.MIRROR_FLIP]：渲染视图 scaleX / scaleY 取反。
+ * ⚠️ **这个集合是「约定」，不是「愿望」** —— 列进来就等于告诉 UI「按钮可以显示」，
+ * 而 [PlayerControls] 只会按它过滤按钮，**不会**在点击后告诉你「这个内核其实没实现」。
+ * 所以加一项之前必须先确认 GSY 侧真的有对应实现，否则就是「按钮能点、点了没反应」，
+ * 比隐藏更糟。
+ *
+ * 复核结论（清单 #19）：上一版这里有 **5 项虚标** ——
+ * [EngineFeature.FRAME_NAVIGATION]、[EngineFeature.MIRROR_FLIP]、[EngineFeature.VIDEO_ZOOM]、
+ * [EngineFeature.VIDEO_ASPECT]、[EngineFeature.AB_LOOP] 声称支持，但
+ * `GsyPlayerActivity` / `CineIsleGsyPlayer` 里搜不到任何对应实现。
+ * 其中 [EngineFeature.VIDEO_ASPECT] 后来确认是**真做了**的（`CineIsleGsyPlayer.setShowTypeRatio`
+ * 走 `GSYVideoType.setShowType()`），已放回；其余四项要么补实现、要么老实移出。
+ *
+ * 现存各项的来源：
+ * - [EngineFeature.VIDEO_ASPECT]：`GSYVideoType.setShowType()` + `changeTextureViewShowType()`；
+ * - [EngineFeature.PICTURE_IN_PICTURE] / [EngineFeature.BACKGROUND_PLAYBACK]：官方能力，Activity 里接线；
+ * - [EngineFeature.SCREENSHOT]：`saveFrame(File, listener)`；
+ * - [EngineFeature.EXTERNAL_SUBTITLES] / [EngineFeature.SUBTITLE_DELAY] / [EngineFeature.SUBTITLE_STYLE]：
+ *   GSY 自带 SRT / WebVTT 字幕子系统（`GSYSubtitleController` + `GSYSubtitleStyle`）；
+ * - [EngineFeature.CHAPTERS]：数据来自 Emby API（GSY 本身无章节能力），见 `GsyChapterRepository`；
+ * - [EngineFeature.GSY_KERNEL_SWITCH]：GSY 播放页自己的内核切换。
  */
 private val GSY_SUPPORTED =
   setOf(
-    EngineFeature.VIDEO_ZOOM,
     EngineFeature.VIDEO_ASPECT,
     EngineFeature.PICTURE_IN_PICTURE,
     EngineFeature.BACKGROUND_PLAYBACK,
-    EngineFeature.AB_LOOP,
     EngineFeature.SCREENSHOT,
     EngineFeature.EXTERNAL_SUBTITLES,
     EngineFeature.SUBTITLE_DELAY,
-    EngineFeature.FRAME_NAVIGATION,
-    EngineFeature.MIRROR_FLIP,
+    EngineFeature.SUBTITLE_STYLE,
+    EngineFeature.CHAPTERS,
     EngineFeature.GSY_KERNEL_SWITCH,
   )
 

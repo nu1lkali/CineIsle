@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -44,6 +45,9 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyWideCard
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 
+/** 播放历史一页拉多少条（清单 1.1：原来固定 100 条） */
+private const val HISTORY_PAGE_SIZE = 100
+
 /**
  * Emby 历史记录页。
  *
@@ -62,9 +66,26 @@ fun EmbyHistoryScreen() {
   val scope = rememberCoroutineScope()
 
   val resumeItems = remember { mutableStateListOf<EmbyItem>() }
-  val historyItems = remember { mutableStateListOf<EmbyItem>() }
   var isLoading by remember { mutableStateOf(true) }
   var error by remember { mutableStateOf<String?>(null) }
+  val listState = rememberLazyListState()
+  val listSource = listState.pagingSource()
+
+  // 播放历史改真分页（清单 1.1）：原来固定 100 条，看过 300 部的人永远看不到第 101 部。
+  // 「继续观看」是横向卡片，数量天然有限（未看完的片子），仍一次拉完。
+  val historyPage = remember { PagedList<EmbyItem>(HISTORY_PAGE_SIZE, keyOf = { it.Id ?: it.Name ?: "" }) }
+
+  /** 播放历史的分页加载器 */
+  val historyLoader: suspend (Int, Int) -> PagedResult<EmbyItem> = hist@{ start, limit ->
+    val current = server ?: return@hist PagedResult(emptyList(), null, limit)
+    val page = viewModel.loadHistory(current, start, limit)
+    PagedResult(
+      // 按列表 key 的口径去重：服务端重复条目会把 LazyColumn 撞崩（与媒体库搜索同款问题）
+      items = page.items.distinctBy { it.Id ?: it.Name ?: "" },
+      totalCount = page.totalCount,
+      pageSize = limit,
+    )
+  }
 
   suspend fun load() {
     // 冷启动时当前服务器可能还没恢复，这里等一下，避免误判成「没有服务器」而空白
@@ -74,23 +95,28 @@ fun EmbyHistoryScreen() {
     }
     isLoading = true
     error = null
-    runCatching {
-      val resume = viewModel.loadResume(current, 40)
-      val history = viewModel.loadHistory(current, 0, 100)
-      resume to history
-    }.onSuccess { (resume, history) ->
-      // 按列表 key 的口径去重：服务端重复条目会把 LazyColumn/Row 撞崩（与媒体库搜索同款问题）
-      resumeItems.clear()
-      resumeItems.addAll(resume.distinctBy { it.Id ?: it.Name ?: "" })
-      historyItems.clear()
-      historyItems.addAll(history.items.distinctBy { it.Id ?: it.Name ?: "" })
-    }.onFailure {
-      error = it.message ?: "加载历史失败"
-    }
+    // 继续观看与播放历史分开处理：前者失败不影响后者（原来捆在一个 runCatching 里，
+    // 播放历史一失败，「继续观看」也跟着空着）
+    runCatching { viewModel.loadResume(current, 40) }
+      .onSuccess { list ->
+        resumeItems.clear()
+        resumeItems.addAll(list.distinctBy { it.Id ?: it.Name ?: "" })
+      }
+      .onFailure { error = it.message ?: "加载继续观看失败" }
+
+    historyPage.reload(historyLoader)
+    if (historyPage.error != null) error = historyPage.error
     isLoading = false
   }
 
   LaunchedEffect(server?.id) { load() }
+
+  // 触底自动续拉播放历史（继续观看是横向的，不参与）
+  historyPage.AutoLoadMore(
+    source = listSource,
+    enabled = server != null && resumeItems.isNotEmpty(),
+    loader = historyLoader,
+  )
 
   // Scaffold + TopAppBar：自动为状态栏留出安全区域，避免内容被状态栏遮挡
   Scaffold(
@@ -122,7 +148,7 @@ fun EmbyHistoryScreen() {
           modifier = Modifier.align(Alignment.Center),
         )
 
-        isLoading && resumeItems.isEmpty() && historyItems.isEmpty() ->
+        isLoading && resumeItems.isEmpty() && historyPage.items.isEmpty() ->
           EmbySkeletonHistory()
 
         error != null -> EmbyEmptyState(
@@ -132,7 +158,7 @@ fun EmbyHistoryScreen() {
           modifier = Modifier.align(Alignment.Center),
         )
 
-        resumeItems.isEmpty() && historyItems.isEmpty() -> EmbyEmptyState(
+        resumeItems.isEmpty() && historyPage.items.isEmpty() -> EmbyEmptyState(
           message = "还没有播放记录",
           buttonText = "刷新",
           onAction = { scope.launch { load() } },
@@ -141,6 +167,7 @@ fun EmbyHistoryScreen() {
 
         else -> {
           LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 96.dp),
           ) {
@@ -179,11 +206,14 @@ fun EmbyHistoryScreen() {
               }
             }
 
-            if (historyItems.isNotEmpty()) {
+            if (historyPage.items.isNotEmpty()) {
               item {
-                EmbySectionHeader(title = "播放历史", modifier = Modifier.padding(top = 8.dp))
+                EmbySectionHeader(
+                  title = "播放历史",
+                  modifier = Modifier.padding(top = 8.dp),
+                )
               }
-              items(historyItems, key = { it.Id ?: it.Name ?: "" }) { item ->
+              items(historyPage.items, key = { it.Id ?: it.Name ?: "" }) { item ->
                 HistoryRow(
                   item = item,
                   viewModel = viewModel,
@@ -192,6 +222,17 @@ fun EmbyHistoryScreen() {
                     val id = item.Id
                     if (id != null) backStack.add(EmbyDetailScreen(id, item.Name ?: ""))
                   },
+                )
+              }
+              // 底部：续拉中 / 出错重试 / 已全部加载
+              item {
+                EmbyPagingFooter(
+                  appending = historyPage.appending,
+                  hasMore = historyPage.hasMore,
+                  error = historyPage.error,
+                  loadedCount = historyPage.items.size,
+                  endText = historyPage.total?.let { "已显示全部 ${historyPage.items.size} / $it 条" },
+                  onRetry = { scope.launch { historyPage.retry(historyLoader) } },
                 )
               }
             }

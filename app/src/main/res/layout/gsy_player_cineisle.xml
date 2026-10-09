@@ -319,6 +319,18 @@
                 android:src="@drawable/gsy_ic_audio_track" />
 
             <ImageView
+                android:id="@+id/gsy_btn_chapters"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:background="@drawable/gsy_ctrl_circle"
+                android:contentDescription="@string/gsy_control_chapters"
+                android:padding="10dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/gsy_ic_chapters" />
+
+            <ImageView
                 android:id="@+id/gsy_btn_pip"
                 android:layout_width="42dp"
                 android:layout_height="42dp"
@@ -341,6 +353,25 @@
                 android:padding="10dp"
                 android:scaleType="centerInside"
                 android:src="@drawable/gsy_ic_cast" />
+
+            <!--
+              「标记为不喜欢」：单击切换、长按写备注。
+
+              ⚠️ 这里是 ComposeView 而不是 ImageView（与顶栏收藏键 `gsy_btn_favorite` 同一套路）：
+               · 图标状态由 `DislikePlayerActions` 单例驱动，Compose 自己订阅它的流 ——
+                 竖屏实例与全屏克隆实例是**两棵视图树**，ImageView 方案要给两棵树各推一次状态，
+                 漏一棵就会出现「全屏里标了、退出全屏还是空心」；Compose 各自订阅则天然同步。
+               · 图标用官方 Material Icon（心碎），未标记空心白、已标记实心红 ——
+                 原来的「拇指向下」被读成"点踩/差评"，且空心↔实心在玻璃按钮上几乎看不出差别。
+              背景圈仍走 `gsy_ctrl_circle`，与同排其它按钮一致。
+            -->
+            <androidx.compose.ui.platform.ComposeView
+                android:id="@+id/gsy_btn_dislike"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:background="@drawable/gsy_ctrl_circle" />
         </LinearLayout>
 
         <!-- ⑥-d 进度条行：已播时间 / 可拖进度条 / 总时长 / 全屏（＝横竖屏切换）键 -->

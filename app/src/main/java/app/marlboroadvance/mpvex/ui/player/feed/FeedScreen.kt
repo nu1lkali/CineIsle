@@ -5,7 +5,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,7 +34,9 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.HeartBroken
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.outlined.HeartBroken
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -57,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
+import app.marlboroadvance.mpvex.ui.player.DislikeRemarkDialog
 
 /**
  * 播放器 UI 需要内核做的动作，由 Activity 实现。
@@ -97,6 +103,9 @@ internal fun FeedScreen(
     animationSpec = tween(220),
     label = "controls",
   )
+  // 长按「不喜欢」弹备注。放在这里而不是按钮内部，是因为弹层要用满屏宽度 ——
+  // 右侧那一列只有 48dp 宽，塞不下输入框。
+  var showDislikeRemark by remember { mutableStateOf(false) }
 
   if (item == null) {
     // 空列表：Activity 入口就该拒绝启动，这里只是兜底，避免出现「 index -1 找不到条目 」
@@ -160,15 +169,35 @@ internal fun FeedScreen(
       // 一圈红色光环 + 8 颗金色四角星扩散淡出）。它是**状态驱动**的，所以
       // toggleFavorite 的乐观更新一翻转，动效立刻开始，不用等服务器回包。
       FeedToolButton(
-        icon = {
-          FavoriteHeartIcon(
-            isFavorite = item.isFavorite,
-            isToggling = false,
-            iconSize = 24.dp,
-          )
-        },
+        icon = { FavoriteHeartIcon(isFavorite = item.isFavorite, isToggling = false, iconSize = 24.dp) },
         onClick = { vm.toggleFavorite() },
       )
+      // 「不喜欢」：单击切换、长按写备注。与 mpv / GSY 用同一枚**心碎**图标 ——
+      // 原先的「拇指向下」用户反馈看不懂（易被读成"点踩/差评"），
+      // 而这里表达的是「不想再看到这部」，与收藏（心形）是一对。
+      // 选中态用**亮红**：视界流整体是黑底大图标，红得清清楚楚。
+      if (vm.showDislike) {
+        FeedToolButton(
+          icon = {
+            Icon(
+              imageVector = if (vm.currentDislike?.active == true) {
+                Icons.Filled.HeartBroken
+              } else {
+                Icons.Outlined.HeartBroken
+              },
+              contentDescription = "不喜欢",
+              tint = if (vm.currentDislike?.active == true) {
+                Color(0xFFFF5A5A)
+              } else {
+                Color.White
+              },
+              modifier = Modifier.size(26.dp),
+            )
+          },
+          onClick = { vm.toggleDislike() },
+          onLongClick = { showDislikeRemark = true },
+        )
+      }
       FeedToolButton(
         icon = { Icon(Icons.Filled.PhotoCamera, contentDescription = "截图", tint = Color.White, modifier = Modifier.size(26.dp)) },
         onClick = { controller.screenshot() },
@@ -352,9 +381,23 @@ internal fun FeedScreen(
       }
     }
 
+    // ── 长按「不喜欢」弹出的备注框 ──
+    // 复用 mpv 侧那份对话框：同一套文案、同一套「保存即标记」语义，
+    // 用户在三个播放器之间换来换去不用重新适应。
+    if (showDislikeRemark) {
+      DislikeRemarkDialog(
+        initialValue = vm.currentDislikeReason(),
+        showMarked = vm.currentDislike?.active == true,
+        onDismiss = { showDislikeRemark = false },
+        onConfirm = { reason ->
+          vm.saveDislikeRemark(reason)
+          showDislikeRemark = false
+        },
+      )
+    }
+
     // ── 已到尽头 ──
-    if (!vm.hasNext && vm.index == vm.items.lastIndex && vm.buffered) {
-      Column(
+    if (!vm.hasNext && vm.index == vm.items.lastIndex && vm.buffered) {      Column(
         modifier = Modifier
           .align(Alignment.BottomCenter)
           .fillMaxHeight(0.14f)
@@ -475,19 +518,41 @@ private fun SeekPreviewCard(
   }
 }
 
+/**
+ * 右侧工具栏的一颗圆钮。
+ *
+ * [onLongClick] 是可选的 —— 绝大多数按钮只有单击语义（截图 / 翻转 / 重载）。
+ * 给了它就用 [combinedClickable]，单击与长按分开走；
+ * 不给就退回普通 [Surface.onClick]，省掉一次手势层开销。
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FeedToolButton(
   icon: @Composable () -> Unit,
   onClick: () -> Unit,
+  onLongClick: (() -> Unit)? = null,
 ) {
-  Surface(
-    onClick = onClick,
-    shape = CircleShape,
-    color = Color.Black.copy(alpha = 0.35f),
-    modifier = Modifier.size(48.dp),
-  ) {
-    Box(contentAlignment = Alignment.Center) { icon() }
+  val shape = CircleShape
+  val bg = Color.Black.copy(alpha = 0.35f)
+  if (onLongClick == null) {
+    Surface(
+      onClick = onClick,
+      shape = shape,
+      color = bg,
+      modifier = Modifier.size(48.dp),
+    ) {
+      Box(contentAlignment = Alignment.Center) { icon() }
+    }
+    return
   }
+  Box(
+    modifier = Modifier
+      .size(48.dp)
+      .clip(shape)
+      .background(bg)
+      .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+    contentAlignment = Alignment.Center,
+  ) { icon() }
 }
 
 private fun fmtTime(sec: Double): String {

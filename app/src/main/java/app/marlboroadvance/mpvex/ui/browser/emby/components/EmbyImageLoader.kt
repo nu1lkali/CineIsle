@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
 import android.util.LruCache
+import app.marlboroadvance.mpvex.domain.emby.EmbyHttp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -30,10 +31,12 @@ import java.util.concurrent.TimeUnit
 object EmbyImageLoader {
   private const val TAG = "EmbyImageLoader"
 
-  private val client: OkHttpClient = OkHttpClient.Builder()
-    .connectTimeout(10, TimeUnit.SECONDS)
-    .readTimeout(20, TimeUnit.SECONDS)
-    .build()
+  /**
+   * 走 [EmbyHttp.images]（图片档：超时短、并发高，且与其余 5 个客户端**共享连接池**）。
+   *
+   * 原来这里自建一个（connect 10s / read 20s），现在档位挪到 [EmbyHttp.images] 统一管。
+   */
+  private val client: OkHttpClient = EmbyHttp.images
 
   /** 缓存上限取可用堆内存的 1/8 */
   private val cache: LruCache<String, Bitmap> = object : LruCache<String, Bitmap>(

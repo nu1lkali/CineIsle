@@ -6,9 +6,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,26 +20,35 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * åª’ä½“åº“ / æ”¶è—é¡µåŠ è½½æ—¶çš„**éª¨æ¶å±**ï¼šç›´æ¥æŒ‰ç›®æ ‡ç‰ˆå¼ç”»å‡ºç°å—ã€‚
+ * Emby Ä£¿éµÄ¹Ç¼ÜÆÁ£º¼ÓÔØÊ±°´Ä¿±ê°æÊ½Ë¦³ö»Ò¿é¡£
  *
- * å–ä»£å±…ä¸­çš„è½¬åœˆ â€”â€” è½¬åœˆåªè¯´æ˜ã€Œåœ¨åŠ è½½ã€ï¼Œéª¨æ¶å±é¡ºå¸¦æŠŠã€Œå¾…ä¼šå„¿ä¼šå‡ºç°ä»€ä¹ˆã€ä¹Ÿå…ˆæ‘†å‡ºæ¥ï¼Œ
- * åˆ—è¡¨çœŸæ­£è½ä¸‹æ¥æ—¶ä¸ä¼šæ•´å±è·³å˜ï¼Œè§‚æ„Ÿä¸Šæ›´æ¥è¿‘ã€Œå†…å®¹æœ¬æ¥å°±åœ¨ã€åªæ˜¯è¿˜æ²¡æ˜¾å½±ã€ã€‚
+ * È¡´ú¾ÓÖĞµÄ×ªÈ¦ ¡ª¡ª ×ªÈ¦Ö»ËµÃ÷¡¸ÔÚ¼ÓÔØ¡¹£¬¹Ç¼ÜÆÁË³´ø°Ñ¡¸´ı»á¶ù»á³öÏÖÊ²Ã´¡¹Ò²ÏÈ°Ú³öÀ´£¬
+ * ÁĞ±íÕæÕıÂäÏÂÀ´Ê±²»»áÕûÆÁÌø±ä£¬¹Û¸ĞÉÏ¸ü½Ó½ü¡¸ÄÚÈİ±¾À´¾ÍÔÚ¡¢Ö»ÊÇ»¹Ã»ÏÔÓ°¡¹¡£
  *
- * @param columns æ¯è¡Œå‡ ä¸ªï¼Œåº”å½“ä¸åˆ—è¡¨å®é™…åˆ—æ•°ä¸€è‡´ï¼Œè½ä¸‹æ¥æ—¶æ‰ä¸ä¼šä½ç§»
- * @param ratio å¡ç‰‡å®½é«˜æ¯”ï¼ˆæµ·æŠ¥ 3:4ã€èƒŒæ™¯å›¾ 16:9â€¦ï¼‰
- * @param itemCount å ä½å—æ•°é‡ï¼Œé»˜è®¤åˆšå¥½é“ºæ»¡ä¸€å±å¤šä¸€ç‚¹
+ * @param columns Ã¿ĞĞ¼¸¸ö£¬Ó¦µ±ÓëÁĞ±íÊµ¼ÊÁĞÊıÒ»ÖÂ£¬ÂäÏÂÀ´Ê±²Å²»»áÎ»ÒÆ
+ * @param ratio ¿¨Æ¬¿í¸ß±È£¨º£±¨ 3:4¡¢±³¾°Í¼ 16:9¡­£©
+ * @param itemCount Õ¼Î»¿éÊıÁ¿£¬Ä¬ÈÏ¸ÕºÃÆÌÂúÒ»ÆÁ¶àÒ»µã
+ * @param modifier ´«¸øÄÚ²¿ÁĞ±í¡£Scaffold µÄ `innerPadding` ±ØĞë¿¿Ëü´«½øÀ´£¬
+ *   ·ñÔò¹Ç¼Ü»á¶¥µ½¶¥À¸/µ×À¸µ×ÏÂ£¨`MainScreen` ºöÂÔ innerPadding µÄÀÏ¿Ó£¬¼û ui-patterns£©
  */
 @Composable
 fun EmbySkeletonGrid(
@@ -50,15 +56,16 @@ fun EmbySkeletonGrid(
   ratio: Float = 3f / 4f,
   itemCount: Int = 12,
   showTextLines: Boolean = true,
+  modifier: Modifier = Modifier,
 ) {
-  val shimmer = rememberShimmerBrush()
+  val shimmer = rememberShimmer()
   LazyVerticalGrid(
     columns = GridCells.Fixed(columns.coerceAtLeast(1)),
-    modifier = Modifier.fillMaxSize(),
+    modifier = modifier.fillMaxSize(),
     contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 96.dp),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
-    // éª¨æ¶å±åªæ˜¯ã€Œé¢„å‘Šã€ï¼Œè®©ç”¨æˆ·æ»šå®ƒæ²¡æœ‰æ„ä¹‰ï¼Œè¿˜ä¼šè·Ÿå‰ä¸€å±çš„æ»šåŠ¨ä½ç½®æ‰“æ¶
+    // ¹Ç¼ÜÆÁÖ»ÊÇ¡¸Ô¤¸æ¡¹£¬ÈÃÓÃ»§¹öËüÃ»ÓĞÒâÒå£¬»¹»á¸úÇ°Ò»ÆÁµÄ¹ö¶¯Î»ÖÃ´ò¼Ü
     userScrollEnabled = false,
   ) {
     items(itemCount) {
@@ -67,14 +74,14 @@ fun EmbySkeletonGrid(
           modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(ratio)
-            .clip(RoundedCornerShape(EMBY_CARD_CORNER))
-            .background(shimmer),
+            .clip(RoundedCornerShape(LocalEmbyAppearance.current.corner))
+            .shimmer(shimmer),
         )
         if (showTextLines) {
           Spacer(modifier = Modifier.height(6.dp))
-          SkeletonLine(widthFraction = 0.78f)
+          SkeletonLine(shimmer = shimmer, widthFraction = 0.78f)
           Spacer(modifier = Modifier.height(4.dp))
-          SkeletonLine(widthFraction = 0.48f, height = 9.dp)
+          SkeletonLine(shimmer = shimmer, widthFraction = 0.48f, height = 9.dp)
         }
       }
     }
@@ -82,14 +89,20 @@ fun EmbySkeletonGrid(
 }
 
 /**
- * ç´§å‡‘åˆ—è¡¨çš„éª¨æ¶å±ï¼šå·¦è¾¹ä¸€å—å°æµ·æŠ¥ + å³è¾¹ä¸¤è¡Œæ–‡å­—ï¼Œè§„æ ¼ä¸ [EmbyCompactRow] å¯¹é½ã€‚
+ * ½ô´ÕÁĞ±íµÄ¹Ç¼ÜÆÁ£º×ó±ßÒ»¿éĞ¡º£±¨ + ÓÒ±ßÁ½ĞĞÎÄ×Ö£¬¹æ¸ñÓë `EmbyCompactRow` ¶ÔÆë¡£
+ *
+ * @param modifier Í¬ [EmbySkeletonGrid]£»Õâ¸ö×é¼şÊÇ Column ²»ÊÇ LazyList£¬
+ *   ·Å½ø LazyColumn Àïµ± item Ê±**²»Òª**´« `fillMaxSize`£¨»á¶¥µôÕû¸öÁĞ±í¸ß¶È£©
  */
 @Composable
-fun EmbySkeletonList(itemCount: Int = 8) {
-  val shimmer = rememberShimmerBrush()
+fun EmbySkeletonList(
+  itemCount: Int = 8,
+  modifier: Modifier = Modifier,
+) {
+  val shimmer = rememberShimmer()
   Column(
-    modifier = Modifier
-      .fillMaxSize()
+    modifier = modifier
+      .fillMaxWidth()
       .padding(horizontal = 12.dp, vertical = 8.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
@@ -105,13 +118,13 @@ fun EmbySkeletonList(itemCount: Int = 8) {
             .width(52.dp)
             .aspectRatio(3f / 4f)
             .clip(RoundedCornerShape(6.dp))
-            .background(shimmer),
+            .shimmer(shimmer),
         )
         Spacer(modifier = Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
-          SkeletonLine(widthFraction = 0.7f)
+          SkeletonLine(shimmer = shimmer, widthFraction = 0.7f)
           Spacer(modifier = Modifier.height(6.dp))
-          SkeletonLine(widthFraction = 0.42f, height = 9.dp)
+          SkeletonLine(shimmer = shimmer, widthFraction = 0.42f, height = 9.dp)
         }
       }
     }
@@ -119,65 +132,51 @@ fun EmbySkeletonList(itemCount: Int = 8) {
 }
 
 /**
- * é¦–é¡µéª¨æ¶ï¼šå‡ ç»„ã€Œå°æ ‡é¢˜ + ä¸€æ’å®½å¡ã€ï¼Œè§„æ ¼ä¸é¦–é¡µçš„æ¨ªæ»‘è¡Œä¸€è‡´ã€‚
+ * Ê×Ò³¹Ç¼Ü£º¼¸×é¡¸Ğ¡±êÌâ + Ò»ÅÅ¿í¿¨¡¹£¬¹æ¸ñÓëÊ×Ò³µÄºá»¬ĞĞÒ»ÖÂ¡£
  *
- * é¦–é¡µæ˜¯ã€Œåª’ä½“åº“ / ç»§ç»­è§‚çœ‹ / æœ€æ–°åŠ å…¥ã€è‹¥å¹²ç»„æ¨ªæ»‘è¡Œæ‹¼èµ·æ¥çš„ï¼Œéª¨æ¶ä¹ŸæŒ‰è¿™ä¸ªç»“æ„æ‘†ï¼Œ
- * æ•°æ®è½åœ°æ—¶æ‰ä¸ä¼šæ•´å±è·³å˜ã€‚
+ * Ê×Ò³ÊÇ¡¸Ã½Ìå¿â / ¼ÌĞø¹Û¿´ / ×îĞÂ¼ÓÈë¡¹Èô¸É×éºá»¬ĞĞÆ´ÆğÀ´µÄ£¬¹Ç¼ÜÒ²°´Õâ¸ö½á¹¹°Ú£¬
+ * Êı¾İÂäµØÊ±²Å²»»áÕûÆÁÌø±ä¡£
+ *
+ * @param cardRatio ¿¨Æ¬¿í¸ß±È¡£Ê×Ò³ºá»¬ĞĞÓÃµÄÊÇ 16:9 ¿í¿¨£»
+ *   ÍÆ¼ö / ¼´»ìÒ³ÄÇÖÖÊú°æº£±¨ĞĞÒª´« `3f/4f`£¬·ñÔò¹Ç¼ÜºÍÂäµØµÄ¿¨Æ¬ĞÎ×´²»Ò»Ñù
+ * @param itemPerRow Ã¿ĞĞ¼¸ÕÅ£¬ÓÃ weight ¾ù·Ö
  */
 @Composable
-fun EmbySkeletonHome(rowCount: Int = 3) {
-  val shimmer = rememberShimmerBrush()
+fun EmbySkeletonHome(
+  rowCount: Int = 3,
+  cardRatio: Float = 16f / 9f,
+  itemPerRow: Int = 3,
+  modifier: Modifier = Modifier,
+) {
+  val shimmer = rememberShimmer()
   Column(
-    modifier = Modifier
+    modifier = modifier
       .fillMaxSize()
       .verticalScroll(rememberScrollState())
       .padding(vertical = 10.dp),
-    verticalArrangement = Arrangement.spacedBy(18.dp),
   ) {
+    // ¶Î¼ä¾àÓÉ EmbySkeletonSection ×Ô¼ºµÄ paddingBottom ¿ØÖÆ£¨Ä©¶ÎÎª 0£©£¬
+    // ÕâÀï²»ÔÙµş Arrangement.spacedBy£¬·ñÔò»á±ä³ÉÁ½±¶¼ä¾à
     repeat(rowCount) {
-      Column {
-        Box(
-          modifier = Modifier
-            .padding(horizontal = 16.dp)
-            .width(96.dp)
-            .height(16.dp)
-            .clip(RoundedCornerShape(5.dp))
-            .background(shimmer),
-        )
-        Spacer(modifier = Modifier.height(10.dp))
-        Row(
-          modifier = Modifier.padding(horizontal = 16.dp),
-          horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-          // ç”¨ weight è€Œä¸æ˜¯å›ºå®šå®½åº¦ï¼šçª„å±ä¸Šä¹Ÿä¸ä¼šæŠŠç¬¬ä¸‰å¼ æŒ¤åˆ°å±å¹•å¤–é¢
-          repeat(3) {
-            Column(modifier = Modifier.weight(1f)) {
-              Box(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .aspectRatio(16f / 9f)
-                  .clip(RoundedCornerShape(EMBY_CARD_CORNER))
-                  .background(shimmer),
-              )
-              Spacer(modifier = Modifier.height(6.dp))
-              SkeletonLine(widthFraction = 0.82f)
-            }
-          }
-        }
-      }
+      EmbySkeletonSection(
+        shimmer = shimmer,
+        cardRatio = cardRatio,
+        itemPerRow = itemPerRow,
+        modifier = Modifier.padding(bottom = if (it == rowCount - 1) 0.dp else 18.dp),
+      )
     }
   }
 }
 
 /**
- * æ’­æ”¾å†å²éª¨æ¶ï¼šä¸€æ’ã€Œç»§ç»­è§‚çœ‹ã€å®½å¡ + å‡ æ¡æ’­æ”¾å†å²åˆ—è¡¨è¡Œã€‚
- * ä¸ EmbyHistoryScreen çš„çœŸå®ç»“æ„ä¸€ä¸€å¯¹åº”ï¼ˆå®½å¡ 16:9 + ListItem è¡Œï¼‰ã€‚
+ * ²¥·ÅÀúÊ·¹Ç¼Ü£ºÒ»ÅÅ¡¸¼ÌĞø¹Û¿´¡¹¿í¿¨ + ¼¸ÌõÀúÊ·ÁĞ±íĞĞ¡£
+ * Óë `EmbyHistoryScreen` µÄÕæÊµ½á¹¹Ò»Ò»¶ÔÓ¦£¨¿í¿¨ 16:9 + ListItem ĞĞ£©¡£
  */
 @Composable
-fun EmbySkeletonHistory() {
-  val shimmer = rememberShimmerBrush()
+fun EmbySkeletonHistory(modifier: Modifier = Modifier) {
+  val shimmer = rememberShimmer()
   Column(
-    modifier = Modifier
+    modifier = modifier
       .fillMaxSize()
       .verticalScroll(rememberScrollState())
       .padding(vertical = 10.dp),
@@ -194,11 +193,11 @@ fun EmbySkeletonHistory() {
             modifier = Modifier
               .fillMaxWidth()
               .aspectRatio(16f / 9f)
-              .clip(RoundedCornerShape(EMBY_CARD_CORNER))
-              .background(shimmer),
+              .clip(RoundedCornerShape(LocalEmbyAppearance.current.corner))
+              .shimmer(shimmer),
           )
           Spacer(modifier = Modifier.height(6.dp))
-          SkeletonLine(widthFraction = 0.85f)
+          SkeletonLine(shimmer = shimmer, widthFraction = 0.85f)
         }
       }
     }
@@ -218,13 +217,13 @@ fun EmbySkeletonHistory() {
             .width(56.dp)
             .aspectRatio(16f / 9f)
             .clip(RoundedCornerShape(6.dp))
-            .background(shimmer),
+            .shimmer(shimmer),
         )
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-          SkeletonLine(widthFraction = 0.6f)
+          SkeletonLine(shimmer = shimmer, widthFraction = 0.6f)
           Spacer(modifier = Modifier.height(6.dp))
-          SkeletonLine(widthFraction = 0.35f, height = 9.dp)
+          SkeletonLine(shimmer = shimmer, widthFraction = 0.35f, height = 9.dp)
         }
       }
     }
@@ -232,33 +231,33 @@ fun EmbySkeletonHistory() {
 }
 
 /**
- * è¯¦æƒ…é¡µéª¨æ¶ï¼šé¡¶éƒ¨å¤§å›¾ + æ ‡é¢˜/å‰¯æ ‡é¢˜ + ä¸€æ’æŒ‰é’® + ç®€ä»‹å‡ è¡Œ + ä¸€æ’æ¨èå¡ã€‚
+ * ÏêÇéÒ³¹Ç¼Ü£º¶¥²¿´óÍ¼ + ±êÌâ/¸±±êÌâ + Ò»ÅÅ°´Å¥ + ¼ò½é¼¸ĞĞ + Ò»ÅÅÍÆ¼ö¿¨¡£
  *
- * è¯¦æƒ…é¡µåŸæ¥æ˜¯æ•´å±å±…ä¸­çš„ä¸€åœˆè½¬åœˆï¼šæ¡ç›®è¶Šå¤§ã€ç½‘ç»œè¶Šæ…¢ï¼Œç™½å±æ—¶é—´è¶Šé•¿ã€‚
- * æŒ‰çœŸç‰ˆå¼å…ˆæ‘†å¥½ï¼Œç”¨æˆ·ä¸€çœ¼å°±çŸ¥é“ã€Œé¡µé¢å·²ç»å¼€äº†ï¼Œå†…å®¹åœ¨è·¯ä¸Šã€ã€‚
+ * ÏêÇéÒ³Ô­À´ÊÇÕûÆÁ¾ÓÖĞµÄÒ»È¦×ªÈ¦£ºÌõÄ¿Ô½´ó¡¢ÍøÂçÔ½Âı£¬°×ÆÁÊ±¼äÔ½³¤¡£
+ * °´Õæ°æÊ½ÏÈ°ÚºÃ£¬ÓÃ»§Ò»ÑÛ¾ÍÖªµÀ¡¸Ò³ÃæÒÑ¾­¿ªÁË£¬ÄÚÈİÔÚÂ·ÉÏ¡¹¡£
  */
 @Composable
-fun EmbySkeletonDetail() {
-  val shimmer = rememberShimmerBrush()
+fun EmbySkeletonDetail(modifier: Modifier = Modifier) {
+  val shimmer = rememberShimmer()
   Column(
-    modifier = Modifier
+    modifier = modifier
       .fillMaxSize()
       .verticalScroll(rememberScrollState()),
   ) {
-    // é¡¶éƒ¨èƒŒæ™¯å¤§å›¾
+    // ¶¥²¿±³¾°´óÍ¼
     Box(
       modifier = Modifier
         .fillMaxWidth()
         .aspectRatio(16f / 9f)
-        .background(shimmer),
+        .shimmer(shimmer),
     )
     Column(modifier = Modifier.padding(16.dp)) {
-      SkeletonLine(widthFraction = 0.58f, height = 18.dp)
+      SkeletonLine(shimmer = shimmer, widthFraction = 0.58f, height = 18.dp)
       Spacer(modifier = Modifier.height(10.dp))
-      SkeletonLine(widthFraction = 0.34f, height = 10.dp)
+      SkeletonLine(shimmer = shimmer, widthFraction = 0.34f, height = 10.dp)
 
       Spacer(modifier = Modifier.height(16.dp))
-      // æ’­æ”¾ / ä¸‹è½½ / æ”¶è— é‚£ä¸€æ’åŠ¨ä½œé”®
+      // ²¥·Å / ÏÂÔØ / ÊÕ²Ø ÄÇÒ»ÅÅ¶¯×÷¼ü
       Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         repeat(3) {
           Box(
@@ -266,14 +265,14 @@ fun EmbySkeletonDetail() {
               .weight(1f)
               .height(42.dp)
               .clip(RoundedCornerShape(12.dp))
-              .background(shimmer),
+              .shimmer(shimmer),
           )
         }
       }
 
       Spacer(modifier = Modifier.height(18.dp))
       repeat(3) { index ->
-        SkeletonLine(widthFraction = if (index == 2) 0.62f else 1f)
+        SkeletonLine(shimmer = shimmer, widthFraction = if (index == 2) 0.62f else 1f)
         Spacer(modifier = Modifier.height(8.dp))
       }
 
@@ -283,18 +282,18 @@ fun EmbySkeletonDetail() {
           .width(110.dp)
           .height(16.dp)
           .clip(RoundedCornerShape(5.dp))
-          .background(shimmer),
+          .shimmer(shimmer),
       )
       Spacer(modifier = Modifier.height(12.dp))
-      // ã€ŒåŒç±»å‹æ¨èã€é‚£æ’æµ·æŠ¥
+      // ¡¸Í¬ÀàĞÍÍÆ¼ö¡¹ÄÇÅÅº£±¨
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         repeat(3) {
           Box(
             modifier = Modifier
               .weight(1f)
               .aspectRatio(3f / 4f)
-              .clip(RoundedCornerShape(EMBY_CARD_CORNER))
-              .background(shimmer),
+              .clip(RoundedCornerShape(LocalEmbyAppearance.current.corner))
+              .shimmer(shimmer),
           )
         }
       }
@@ -302,58 +301,181 @@ fun EmbySkeletonDetail() {
   }
 }
 
-/** éª¨æ¶å±é‡Œçš„åˆ†ç»„å°æ ‡é¢˜ */
+/**
+ * µ¥¸ö·Ö×éµÄ¹Ç¼Ü£º¡¸Ğ¡±êÌâ + Ò»ÅÅ¿¨Æ¬¡¹£¬¸ß¶ÈÖ»Õ¼ÕâÒ»¶Î¡£
+ *
+ * ºÍ [EmbySkeletonHome] µÄÇø±ğÊÇ**²»×Ô´ø¹ö¶¯** ¡ª¡ª ºóÕßÊÇÕûÆÁ×é¼ş£¬Èû½ø `LazyColumn`
+ * »áÒòÎªÇ¶Ì×Í¬Ïò¹ö¶¯Ö±½ÓÅ×Òì³£¡£¼´»ì/ÍÆ¼öÕâÀà¡¸±¾Éí¾ÍÊÇÒ»ÁĞ·Ö×é¡¹µÄÒ³ÃæÒªµÄÊÇÕâ¸ö¡£
+ *
+ * @param cardRatio ¿¨Æ¬¿í¸ß±È£¬16:9 ¿í¿¨´«Ä¬ÈÏÖµ£¬Êú°æº£±¨´« `3f/4f`
+ * @param itemPerRow ÕâÒ»¶Î°Ú¼¸ÕÅ
+ */
 @Composable
-private fun SkeletonSectionTitle(shimmer: Brush) {
+fun EmbySkeletonSection(
+  cardRatio: Float = 16f / 9f,
+  itemPerRow: Int = 3,
+  modifier: Modifier = Modifier,
+  shimmer: Shimmer = rememberShimmer(),
+) {
+  Column(modifier = modifier.fillMaxWidth()) {
+    SkeletonSectionTitle(shimmer)
+    Spacer(modifier = Modifier.height(10.dp))
+    Row(
+      modifier = Modifier.padding(horizontal = 16.dp),
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      repeat(itemPerRow.coerceAtLeast(1)) {
+        Column(modifier = Modifier.weight(1f)) {
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .aspectRatio(cardRatio)
+              .clip(RoundedCornerShape(LocalEmbyAppearance.current.corner))
+              .shimmer(shimmer),
+          )
+          Spacer(modifier = Modifier.height(6.dp))
+          SkeletonLine(shimmer = shimmer, widthFraction = 0.82f)
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Ò»×é¡¸ĞĞÄÚÎÄ×ÖÕ¼Î»¡¹£¬ÓÃÓÚµ¯´°/µ×²¿Ãæ°åÕâÀàĞ¡ÈİÆ÷¡£
+ *
+ * µ×²¿Ãæ°å£¨×ÖÄ»ËÑË÷¡¢²¥·ÅÁĞ±íÑ¡Ôñ¡­£©¿Õ¼äĞ¡£¬ÉÏ [EmbySkeletonGrid] »áÒç³ö¡¢
+ * ÉÏ [EmbySkeletonList] ÓÖÌ«ÖØ£¬ÕâÀï¸øÒ»¸ö¸ÕºÃºÏÉíµÄ¸ß¶È¡£
+ *
+ * @param lineCount ¼¸ĞĞ
+ * @param height Ã¿ĞĞ¸ß¶È
+ */
+@Composable
+fun EmbySkeletonLines(
+  lineCount: Int = 3,
+  height: Dp = 12.dp,
+  modifier: Modifier = Modifier,
+) {
+  val shimmer = rememberShimmer()
+  Column(
+    modifier = modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    repeat(lineCount.coerceAtLeast(1)) { index ->
+      // Ä©ĞĞ¶ÌÒ»µã£¬Ä£ÄâÕæÊµÎÄ±¾µÄ²Î²î¸Ğ
+      SkeletonLine(
+        shimmer = shimmer,
+        widthFraction = if (index == lineCount - 1) 0.55f else 1f,
+        height = height,
+      )
+    }
+  }
+}
+
+/** ¹Ç¼ÜÆÁÀïµÄ·Ö×éĞ¡±êÌâ */
+@Composable
+private fun SkeletonSectionTitle(shimmer: Shimmer) {
   Box(
     modifier = Modifier
       .padding(horizontal = 16.dp)
       .width(96.dp)
       .height(16.dp)
       .clip(RoundedCornerShape(5.dp))
-      .background(shimmer),
+      .shimmer(shimmer),
   )
 }
 
-/** éª¨æ¶å±é‡Œçš„ä¸€æ ¹ã€Œæ–‡å­—å ä½æ¡ã€ */
+/**
+ * ¹Ç¼ÜÆÁÀïµÄÒ»¸ù¡¸ÎÄ×ÖÕ¼Î»Ìõ¡¹¡£
+ *
+ * [shimmer] ÊÇ**²ÎÊı**¶ø²»ÊÇÄÚ²¿×Ô¼ºµ÷ `rememberShimmer()`£º
+ * ÔçÆÚ°æ±¾ÔÚº¯ÊıÌåÀïµ÷£¬¿´×Å¡¸Ã¿¸ö×é¼ş¶¼¶ÀÁ¢¡¹£¬Êµ¼ÊÉÏ
+ * `EmbySkeletonGrid` 12 Ïî ¡Á 2 ĞĞ = **24 ¸ö¶ÀÁ¢µÄ rememberInfiniteTransition**£¬
+ * Ã¿¸ö¶¼ÔÚÃ¿Ö¡Çı¶¯Ò»´Î¶¯»­¡£Í¬Ò»ÆÁ¼¸Ê®¸öÎŞÏŞ¶¯»­ÔÚÖĞµÍ¶Ë»úÉÏÊÇÊµ´òÊµµÄ·¢ÈÈÔ´¡£
+ * ÏÖÔÚÓÉ¸¸¼¶È¡Ò»·İ´«ÏÂÀ´£¬ÕûÆÁ¹²ÓÃÒ»¸ö¶¯»­ÊµÀı¡£
+ */
 @Composable
 private fun SkeletonLine(
+  shimmer: Shimmer,
   widthFraction: Float,
-  height: androidx.compose.ui.unit.Dp = 10.dp,
+  height: Dp = 10.dp,
 ) {
-  val shimmer = rememberShimmerBrush()
   Box(
     modifier = Modifier
       .fillMaxWidth(widthFraction)
       .height(height)
       .clip(RoundedCornerShape(5.dp))
-      .background(shimmer),
+      .shimmer(shimmer),
   )
 }
 
 /**
- * æ•´å±å…±ç”¨çš„ä¸€æ¡æ‰«å…‰æ¸å˜ã€‚
+ * ÕûÆÁ¹²ÓÃµÄÒ»ÌõÉ¨¹â½¥±ä¡£
  *
- * ç”¨ Brush è€Œä¸æ˜¯ç»™æ¯ä¸ªç°å—å•ç‹¬åšåŠ¨ç”»ï¼šå—çš„ç€è‰²åªæ˜¯ä¸€æ¬¡ `background(brush)`ï¼Œ
- * åŠ¨ç”»æœ¬èº«åªæœ‰ä¸€ä»½ï¼ˆæŒ‚åœ¨ rememberInfiniteTransition ä¸Šï¼‰ï¼Œå‡ åä¸ªå ä½å—ä¹Ÿä¸ä¼šå‘çƒ­ã€‚
+ * ## ÎªÊ²Ã´²»ÊÇ¡¸`rememberShimmerBrush()` Ã¿´Î×éºÏ·µ»ØÒ»¸öĞÂBrush¡¹
+ *
+ * ÄÇÑù×öµÄ»°£¬¶¯»­ÖµÊÇÔÚ**×éºÏÆÚ**±»¶Á³öÀ´µÄ£¨`animateFloat` µÄ `by` Î¯ÍĞ£©£¬
+ * ÓÚÊÇÃ¿Ò»Ö¡¶¼»á£º²ú³öÒ»¸öĞÂ `Brush` ¡ú ÈÃËùÓĞÄÃ×ÅËüµÄÕ¼Î»¿é**Õû¿ÃÖØ×é**¡£
+ * 24 ¸ö¶ÀÁ¢¶¯»­ÊÇ½µÏÂÀ´ÁË£¬µ«ÖØ×é¿ªÏúÔ­·â²»¶¯ ¡ª¡ª ¶ø¹Ç¼ÜÆÁÇ¡Ç¡ÊÇ×î²»¸Ã
+ * ÖØ×éµÄµØ·½£¨Ëü×Ô¼º¾ÍÊÇ¡¸ÕıÔÚÖØ×é¡¹µÄÊÓ¾õĞÅºÅ£©¡£
+ *
+ * ¿É¼ûĞÔ±ØĞëÊÇ public£ºËüÊÇ public µÄ [EmbySkeletonSection] µÄÄ¬ÈÏ²ÎÊıÀ´Ô´£¬
+ * ¿É¼ûĞÔ±ÈËŞÖ÷º¯ÊıµÍ»áÖ±½Ó±àÒëÊ§°Ü¡£
+ *
+ * ÏÖÔÚ¸Ä³É£º¶¯»­Öµ´æ½ø [Shimmer]£¬ÓÉ [shimmer] ÔÚ**»æÖÆÆÚ**¶ÁÈ¡¡£
+ * `drawBehind` µÄ lambda ÊôÓÚ draw scope£¬¶Á¶¯»­Ö»ÈÃÕâÒ»Ïî**ÖØ»æ**£¬
+ * ²»´¥·¢ÖØ×é¡£¸¸¼¶°ÑÍ¬Ò»¸ö [Shimmer] ÍùÏÂ´«£¬È«ÆÁ¹²ÓÃÒ»·İ¶¯»­×´Ì¬¡£
  */
 @Composable
-private fun rememberShimmerBrush(): Brush {
+fun rememberShimmer(): Shimmer {
   val base = MaterialTheme.colorScheme.surfaceContainerHighest
   val highlight = MaterialTheme.colorScheme.surfaceContainerHigh
   val transition = rememberInfiniteTransition(label = "emby_skeleton")
   val x by transition.animateFloat(
-    initialValue = -600f,
-    targetValue = 1400f,
+    initialValue = 0f,
+    targetValue = 1f,
     animationSpec = infiniteRepeatable(
       animation = tween(durationMillis = 1300, easing = LinearEasing),
       repeatMode = RepeatMode.Restart,
     ),
     label = "emby_skeleton_x",
   )
-  return Brush.linearGradient(
-    colors = listOf(base, highlight, base),
-    start = Offset(x, 0f),
-    end = Offset(x + 420f, 0f),
-  )
+  return remember(base, highlight) { Shimmer(base, highlight) { x } }
 }
+
+/**
+ * Ò»·İÉ¨¹â²ÎÊı¡£[x] ÊÇ 0f..1f µÄ½ø¶È£¬ÔÚ**»æÖÆÆÚ**±»¶Á£¬ËùÒÔËüÊÇ `() -> Float`
+ * ¶ø²»ÊÇ `Float` ¡ª¡ª ºóÕß»áÇ¿ÆÈÔÚ×éºÏÆÚÈ¡Öµ£¬ÕıÊÇÉÏÃæÒª±Ü¿ªµÄÊÂ¡£
+ *
+ * ¿É¼ûĞÔ±ØĞëÊÇ public£¨²»ÊÇ private Ò²²»ÊÇ internal£©£º[EmbySkeletonSection] ÊÇ
+ * public º¯ÊıÇÒ°ÑËüµ±²ÎÊıÀàĞÍ£¬Kotlin ²»ÔÊĞí public º¯Êı±©Â¶±ÈËü¿É¼ûĞÔ¸üµÍ/types ¸üµÍµÄÀàĞÍ
+ * ¡ª¡ª private ºÍ internal ¶¼»á±¨ "exposes its ... parameter type"¡£
+ */
+class Shimmer(
+  private val base: Color,
+  private val highlight: Color,
+  private val x: () -> Float,
+) {
+  /**
+   * @param size µ±Ç°Õ¼Î»¿éµÄ³ß´ç¡£É¨¹â´ø°´Ëü»»Ëã£¬¶ø²»ÊÇĞ´ËÀÏñËØ ¡ª¡ª
+   *   Ğ´ËÀµÄ»° 3x ÆÁÉÏÉ¨²»µ½¡¢1x ÆÁÉÏ´ó°ëÊ±¼äÉ¨²»µ½¿éÄÚ¡£
+   */
+  fun brushFor(size: Size): Brush {
+    val band = size.width * 0.6f
+    val travel = size.width + band
+    val head = x() * travel - band
+    return Brush.linearGradient(
+      colors = listOf(base, highlight, base),
+      start = Offset(head, 0f),
+      end = Offset(head + band, 0f),
+    )
+  }
+}
+
+/**
+ * ÓÃÉ¨¹â½¥±äÌî±³¾°¡£¶Á¶¯»­·¢ÉúÔÚ»æÖÆ½×¶Î£¬ËùÒÔÖ»Ê§Ğ§ draw£¬²»Ê§Ğ§×éºÏ¡£
+ *
+ * µÈ¼ÛÓÚ `background(Brush)`£¬µ«ÄÇ¸ö Brush Ã¿Ö¡¶¼²»Ò»Ñù¡£
+ */
+private fun Modifier.shimmer(shimmer: Shimmer): Modifier =
+  this.drawBehind { drawRect(shimmer.brushFor(size)) }

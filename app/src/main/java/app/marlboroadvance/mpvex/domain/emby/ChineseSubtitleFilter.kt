@@ -126,11 +126,11 @@ internal class ChineseSubtitleRules(
   /** 单字汉字标记：整词匹配 */
   private val cjkTokens: List<String> = all.filter { isHanOnly(it) && it.length == 1 }
 
-  private val regex: Regex? = build()
+  private val rules: Rules? = build()
 
   val signature: String = marks.signature()
 
-  private fun build(): Regex? {
+  private fun build(): Rules? {
     val parts = ArrayList<String>(4)
     if (latinPrefixed.isNotEmpty()) {
       // "-C" 这类自带 `-` 定界符：左边不用再判（`-` 本身就是边界），
@@ -146,13 +146,30 @@ internal class ChineseSubtitleRules(
       parts += "(?:${cjkPhrases.joinToString("|") { Regex.escape(it) }})"
     }
     if (cjkTokens.isNotEmpty()) {
-      // 单字必须整词：前后都不能再是汉字；「·」「・」也一起挡掉，
-      // 否则《简·爱》里的「简」会被当成简体标记（这是旧实现的已知误伤）。
-      parts += "(?<![\\u4e00-\\u9fff\\u00b7\\u30fb])(?:${cjkTokens.joinToString("|") { Regex.escape(it) }})(?![\\u4e00-\\u9fff\\u00b7\\u30fb])"
+      // ⚠️ 单字汉字**不进上面那个大正则**，由 [findMarker] 按「独立成段」单独判。
+      //
+      // 原因：要判「整段只有这一个字」就得跨过分隔符往两边看，而**变长
+      // lookbehind 是 Java 正则不支持的**。放进正则里只判紧邻字符会双向误判：
+      //   `简.爱.2020.mkv` → 「简」后面紧邻 `.`（非汉字）⇒ 误判成简体标记
+      //   `爱.简.2020.mkv` → 同理，漏判
+      // 而文件名里 `.` 恰恰是最常见的分隔符，这两种写法都很常见。
+      // 所以这里只把 tokens 交给 [Rules]，判定逻辑在代码里（切段比较）。
     }
-    if (parts.isEmpty()) return null
-    return runCatching { Regex(parts.joinToString("|"), RegexOption.IGNORE_CASE) }.getOrNull()
+    if (parts.isEmpty() && cjkTokens.isEmpty()) return null
+    val main = if (parts.isEmpty()) null else compileOrNull(parts.joinToString("|"))
+    return Rules(main, cjkTokens.toList())
   }
+
+  private fun compileOrNull(pattern: String): Regex? =
+    runCatching { Regex(pattern, RegexOption.IGNORE_CASE) }.getOrNull()
+
+  /** 编译好的规则集。主正则管子串匹配，单字标记走切段比较。 */
+  private data class Rules(
+    /** 拉丁标记 + 多字汉字标记合成的主正则（可能为 null：只配了单字汉字时）。 */
+    val main: Regex?,
+    /** 单个汉字标记，需要按「独立成段」规则单独判（见 [splitSegments]）。 */
+    val tokens: List<String>,
+  )
 
   /**
    * 在 [path] 上找标记。命中返回**配置里的标记原文**（大小写归一），未命中返回 null。
@@ -163,12 +180,95 @@ internal class ChineseSubtitleRules(
     } else {
       path.substringAfterLast('/').substringAfterLast('\\')
     }
-    val matched = regex?.find(target)?.value ?: return null
-    return all.firstOrNull { it.equals(matched, ignoreCase = true) } ?: matched
+    val r = rules ?: return null
+
+    // 主正则：拉丁标记 + 多字汉字标记（子串匹配）。
+    val main = r.main?.find(target)?.value
+    if (main != null) return all.firstOrNull { it.equals(main, ignoreCase = true) } ?: main
+
+    // 单字汉字标记：必须**独立成段，且右侧跨过分隔符后不是汉字**。
+    //
+    // ⚠️ 「切段后整段等于该单字」这条不够 —— 它挡不住《简·爱》：
+    //   `/m/简.爱.2020.mkv` 切成 [`m`, `简`, `爱`, `2020`, `mkv`]，
+    //   `简` 那一段确实等于标记，可它其实是片名的一部分。
+    // 所以还要看它右边第一个非分隔符字符（见 [isTokenBoundary]）。
+    if (r.tokens.isNotEmpty()) {
+      findStandaloneToken(target, r.tokens)?.let { return it }
+    }
+    return null
   }
+
+  /**
+   * 找出 [target] 里「独立成段」的那个单字标记，找不到返回 null。
+   *
+   * 判定分两步：
+   *  1. 按分隔符切段，段内容**去掉首尾空白**后完全等于某个 token；
+   *  2. 该段右侧跨过连续分隔符后，第一个非分隔符字符不是汉字（见 [isTokenBoundary]）。
+   *
+   * 分隔符不含间隔号（`·` `・`）—— 它们是片名内部结构的一部分，
+   * 切开反而会把《简·爱》拆成两个独立段（`简·爱` 整段 ≠ `简`，自然不命中）。
+   */
+  private fun findStandaloneToken(target: String, tokens: List<String>): String? {
+    val tokenSet = tokens.toHashSet()
+    var start = 0
+    while (start <= target.length) {
+      val end = target.indexOfAny(SEGMENT_DELIMITER_CHARS, start)
+        .let { if (it < 0) target.length else it }
+      val raw = target.substring(start, end)
+      val segment = raw.trim()
+      if (segment.isNotEmpty() && segment in tokenSet) {
+        val trimmedStart = start + raw.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0)
+        val trimmedEnd = trimmedStart + segment.length
+        if (isTokenBoundary(target, trimmedEnd)) return segment
+      }
+      if (end >= target.length) break
+      start = end + 1
+    }
+    return null
+  }
+
+  /**
+   * `[from, to)` 这段是不是「独立成词」。
+   *
+   * **只判右侧**：往右跨过连续分隔符，第一个非分隔符字符不能是汉字。
+   *
+   *   `某片.简.1080p` → 跨过 `.` 是 `1`  ⇒ 命中 ✔
+   *   `简.爱.2020`     → 跨过 `.` 是 `爱`  ⇒ 不命中 ✔
+   *   `简爱.2020`      → 紧邻就是 `爱`    ⇒ 不命中 ✔（切段时已是 `简爱` 整段）
+   *
+   * ⚠️ 左侧**故意不跨分隔符**判：`某片.简.` 里的左邻段是「某片」这种
+   * 通用占位（中文资源命名里极常见），若把左侧也跨分隔符判成汉字就会误杀
+   * `某片.简.1080p` 这种**真命中**。代价是 `爱.简.2020`（左邻是单字「爱」）
+   * 会漏判成命中 —— 但这种把标记字放在片名中间的命名远比 `某片.X.` 少见。
+   *
+   * 这条取舍是「宁可漏判也不能误杀」：漏判只是这一条资源没出现在筛选结果里，
+   * 误杀则会让整部影片（连带同目录其他资源）消失。
+   */
+  private fun isTokenBoundary(target: String, to: Int): Boolean {
+    var right = to
+    while (right < target.length && isSegmentDelimiter(target[right])) right++
+    if (right < target.length && isHanChar(target[right])) return false
+    return true
+  }
+
+  private fun isSegmentDelimiter(c: Char): Boolean = SEGMENT_DELIMITER_CHARS.contains(c)
 }
 
 private fun isHanOnly(s: String): Boolean = s.isNotEmpty() && s.all { it in '\u4e00'..'\u9fff' }
+
+/** CJK 统一表意文字区段，用来判断「这个字是不是汉字」。 */
+private fun isHanChar(c: Char): Boolean = c in '\u4e00'..'\u9fff'
+
+/**
+ * 资源文件名里当分隔符用的字符（**不含**间隔号 `·` `・`）。
+ *
+ * `|` 也算 —— 少见，但 SOME 场景下路径里会带。
+ * 刻意不含间隔号：它是片名内部结构（《简·爱》），切开反而会误判。
+ */
+private const val SEGMENT_DELIMITERS = "|.\\-_ /\\"
+
+/** [SEGMENT_DELIMITERS] 的字符数组形式，供 `indexOfAny` 用。 */
+private val SEGMENT_DELIMITER_CHARS = SEGMENT_DELIMITERS.toCharArray()
 
 /**
  * 「中文字幕」路径判定的全局入口。

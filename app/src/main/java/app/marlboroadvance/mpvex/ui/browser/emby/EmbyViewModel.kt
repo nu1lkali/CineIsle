@@ -17,6 +17,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyImageInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyImageProviderInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyItemLookupInfo
+import app.marlboroadvance.mpvex.domain.emby.EmbyItemsResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyRemoteImageInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyRemoteSearchResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
@@ -38,8 +39,10 @@ import app.marlboroadvance.mpvex.domain.emby.autoMergeableGroups
 import app.marlboroadvance.mpvex.domain.emby.PersonMergeRule
 import app.marlboroadvance.mpvex.domain.emby.clusterDuplicatePersons
 import app.marlboroadvance.mpvex.domain.emby.toPersonRef
+import app.marlboroadvance.mpvex.domain.iso.RemoteIsoPlayback
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
+import app.marlboroadvance.mpvex.ui.browser.emby.displayprefs.EmbyDisplayPrefsSync
 import app.marlboroadvance.mpvex.ui.player.GsyPlayerActivity
 import app.marlboroadvance.mpvex.ui.player.PlayerActivity
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
@@ -100,6 +103,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   private val repository by inject<EmbyRepository>(EmbyRepository::class.java)
   private val playerPreferences by inject<PlayerPreferences>(PlayerPreferences::class.java)
   private val browserPreferences by inject<BrowserPreferences>(BrowserPreferences::class.java)
+  private val displayPrefsSync by inject<EmbyDisplayPrefsSync>(EmbyDisplayPrefsSync::class.java)
 
   val servers: StateFlow<List<EmbyServer>> = repository.servers
     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -194,6 +198,24 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    */
   suspend fun refreshHomeAndWait() = loadHome()
 
+  /**
+   * 首页数据加载。
+   *
+   * ## ⚠️ 三发**各自独立**，不要合并成一个 `runCatching`（这条是用户真机报出来的）
+   *
+   * 原来三句是串在同一个 `runCatching` 里的：`getVirtualFolders` 一抛异常，
+   * 后面两发根本不会发，于是「继续观看」「最新加入」也跟着一起消失 ——
+   * 服务端只要有一小部分查询能力出问题（比如它自己的 SQLite 库报错），
+   * 整个首页就全空了。
+   *
+   * 现在每一发自己 `runCatching`：
+   * - **媒体库**挂了才算首页失败（没有库就确实什么也点不了，进错误态）；
+   * - 继续观看 / 最新加入挂了就只是那一块空着，其余照常显示。
+   *
+   * 顺带说明：`SQLitePCL.pretty.SQLiteException` 是**服务端**（.NET）的 SQLite
+   * 驱动抛的，不是本机数据库。本项目这三个请求的参数一个都没改过，
+   * 所以真出现这个错要去查服务端（库被锁 / 磁盘满 / 库损坏），不是改客户端能绕过的。
+   */
   private suspend fun loadHome() {
     _isLoading.value = true
     _error.value = null
@@ -206,18 +228,25 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       _isLoading.value = false
       return
     }
-    runCatching {
-      val libs = repository.getVirtualFolders(server)
-      val resume = repository.getResumeItems(server, limit = 20)
-      val latest = repository.getLatestItems(server, limit = 24)
-      Triple(libs, resume, latest)
-    }.onSuccess { (libs, resume, latest) ->
-      _libraries.value = libs
-      _resumeItems.value = resume
-      _latestItems.value = latest
-    }.onFailure {
-      _error.value = it.message ?: "加载失败"
+
+    val libs = runCatching { repository.getVirtualFolders(server) }
+    _libraries.value = libs.getOrElse { e ->
+      _error.value = e.message ?: "加载失败"
+      emptyList()
     }
+
+    // 下面两发失败只留空列表，不碰 _error —— 首页已经有内容了，
+    // 为「继续观看没加载出来」把整页标成失败是本末倒置。
+    _resumeItems.value = runCatching { repository.getResumeItems(server, limit = 20) }
+      .getOrElse { emptyList() }
+    _latestItems.value = runCatching { repository.getLatestItems(server, limit = 24) }
+      .getOrElse { emptyList() }
+
+    // 显示偏好自动恢复（清单 #16）。放在数据加载**之后**：
+    // 拉回来的偏好要影响本次已经渲染的首屏，重新触发一次重组就够了，
+    // 而放在前面会让首屏用旧偏好渲染一遍再跳变。
+    // 失败**不写 _error** —— 显示偏好是锦上添花，为它把整个首页标成「加载失败」不合理。
+    runCatching { displayPrefsSync.pullIfEnabled(server) }
     _isLoading.value = false
   }
 
@@ -322,14 +351,40 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       .getOrDefault(EmbyFilterOptions())
   }
 
-  suspend fun loadSeasons(server: EmbyServer, seriesId: String): List<EmbyItem> =
-    repository.getSeasons(server, seriesId).Items
+  /**
+   * 季列表。
+   *
+   * [limit] 默认给一个上限（清单 1.1）：原先不传 Limit，服务端一次把全部季连同
+   * People / Studios / MediaSources 一起返回，长剧（几十季）白拉一大堆字段。
+   * 季数超过上限的剧（几乎没有）会在日志里留痕，不静默截断。
+   */
+  suspend fun loadSeasons(
+    server: EmbyServer,
+    seriesId: String,
+    startIndex: Int = 0,
+    limit: Int = 50,
+  ): EmbyItemsPage {
+    val result = repository.getSeasons(server, seriesId, startIndex, limit)
+    if (result.TotalRecordCount > startIndex + result.Items.size) {
+      android.util.Log.w(
+        "EmbyViewModel",
+        "季列表被分页截断：共 ${result.TotalRecordCount} 季，本次只取到 ${result.Items.size}",
+      )
+    }
+    return EmbyItemsPage(result.Items, result.TotalRecordCount)
+  }
 
+  /** 某一季下的剧集列表（分页参数见 [loadSeasons]） */
   suspend fun loadEpisodes(
     server: EmbyServer,
     seriesId: String,
     seasonId: String?,
-  ): List<EmbyItem> = repository.getEpisodes(server, seriesId, seasonId).Items
+    startIndex: Int = 0,
+    limit: Int = EPISODE_PAGE_SIZE,
+  ): EmbyItemsPage {
+    val result = repository.getEpisodes(server, seriesId, seasonId, startIndex, limit)
+    return EmbyItemsPage(result.Items, result.TotalRecordCount)
+  }
 
   suspend fun loadFavorites(
     server: EmbyServer,
@@ -472,31 +527,45 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    *
    * [itemTypes] 由搜索框下方的筛选条给出：用户显式选了「合集」「演员」这类时，
    * 就按他选的类型查，不再套用上面的默认值。
+   *
+   * ⚠️ **这里刻意不做分页**（清单 1.1 的例外）：结果由**两条独立流**拼成 ——
+   * 人物走 `/Persons`、媒体走 `/Items`，两者的 offset 空间互不相通，
+   * 拼起来的混合列表根本没有「下一页」这个概念（要分页得维护两套游标再归并，
+   * 复杂度远大于收益）。所以这里取一个偏大的上限，[GLOBAL_SEARCH_LIMIT]，
+   * 并在 [EmbyGlobalSearchResult.totalCount] 里报服务端总数，让 UI 老实告诉用户
+   * 「只显示前 N 条」，而不是让人以为搜全了。
    */
   suspend fun searchGlobal(
     server: EmbyServer,
     term: String,
     itemTypes: List<String>? = null,
-  ): List<EmbyItem> =
+  ): EmbyGlobalSearchResult =
     withContext(Dispatchers.IO) {
       // 与 [search] 同理：Person 只能从 `/Persons` 拿，`/Items` 那条端点搜不出人；
       // 并且这里同样带上「服务端不认 SearchTerm 就本地过滤」的兜底
-      val persons = searchPersons(server, term, 100, itemTypes)
+      val persons = searchPersons(server, term, GLOBAL_SEARCH_LIMIT, itemTypes)
       val mediaTypes = itemTypes?.filter { it != PERSON_TYPE }?.takeIf { it.isNotEmpty() }
         ?: GLOBAL_SEARCH_DEFAULT_TYPES.takeIf { itemTypes == null }
       val media = if (mediaTypes.isNullOrEmpty()) {
-        emptyList()
+        EmbyItemsResult(emptyList(), 0)
       } else {
         runCatching {
           repository.searchItems(
             server = server,
             term = term,
             includeItemTypes = mediaTypes,
-            limit = 100,
-          ).Items
-        }.getOrDefault(emptyList())
+            limit = GLOBAL_SEARCH_LIMIT,
+          )
+        }.getOrDefault(EmbyItemsResult(emptyList(), 0))
       }
-      persons + media
+      EmbyGlobalSearchResult(
+        items = persons + media.Items,
+        // 只能拿媒体侧的总数（`/Persons` 那条走 [searchPersons] 时总数拿不到 ——
+        // 它有「服务端搜不到就退回全量演员本地过滤」的兜底路径，那种情况下没有权威总数）。
+        // 所以 totalCount 是**媒体部分的**总数，UI 提示截断时要说明「至少还有这么多条」。
+        totalCount = media.TotalRecordCount,
+        personCount = persons.size,
+      )
     }
 
 
@@ -764,7 +833,34 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         .toMap()
       launchPlaylist(server, playlist, resumeSeconds, engine = engine, directUrls = directUrls)
     } else {
-      launchSingle(server, item, resumeSeconds, engine = engine, overrideUrl = resolveIfEnabled(server, itemId))
+      // 单片播放。
+      //
+      // ⚠️ ISO 探测**不能挂在 `resolveIfEnabled` 下面** ——
+      // 「预解析直链」是个无关的优化开关（默认关，见 BrowserPreferences），
+      // 挂在它底下等于「用户没开这个开关就永远用不到 ISO 播放」。
+      // 而 ISO 探测自己是会判断的：花 2KB 读一下 PVD，不是 ISO 就立刻返回。
+      val direct = resolveIfEnabled(server, itemId)
+      // 独立再解析一次给 ISO 探测用（上面那次可能因为开关关着而没解）。
+      val isoSource = direct ?: resolveDirectUrl(server, itemId)
+      val isoUrl =
+        isoSource?.let {
+          prepareRemoteIso(
+            directUrl = it,
+            container = item.MediaSources?.firstOrNull()?.Container,
+            renewDirect = {
+              // 直链中途过期 → 重新走一次 302 解析换新的。
+              // ⚠️ 与探测必须同一套 UA，resolveDirectUrl 内部已经保证了。
+              resolveDirectUrl(server, itemId)
+            },
+          )
+        }
+      launchSingle(
+        server = server,
+        item = item,
+        resumeSeconds = resumeSeconds,
+        engine = engine,
+        overrideUrl = isoUrl ?: direct,
+      )
     }
 
     // 上报播放开始，让服务器记录"正在播放"
@@ -962,6 +1058,65 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
+  /**
+ * 这个地址是不是 [RemoteIsoPlayback]起的**本地** ISO 代理。
+ *
+ * 要分出来是因为请求头不能一视同仁：直链要带与探测一致的 UA / Referer
+ * （否则签名校验失败），而本地代理是mpv → localhost → CDN 的中转，
+ * 代理自己会补对头的 UA，给它加 Referer 只会让上游看到一堆乱 headers。
+ */
+private fun isLocalIsoProxyUrl(url: String): Boolean =
+  url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:")
+
+/**
+   * 试把这个条目当「远程 ISO 原盘」播，返回给播放器的本地代理地址。
+   *
+   * ## 为什么要单独一条路
+   *
+   * 蓝光/DVD 原盘的目录结构（`BDMV/STREAM`、`VIDEO_TS`）在**镜像内部**，
+   * 服务器那条流地址给的是整张 ISO —— mpv 拿到会当成普通字节流，
+   * 找不到 MPEG-TS 的 `0x47` 同步就一直缓冲黑屏。
+   * 所以做法是：客户端自己解析 ISO 目录、取出主影片那一个文件，
+   * 起一个本地 Range 代理把它伪装成普通媒体文件交给 mpv
+   * （纯客户端解码，**不需要服务端转码**）。
+   *
+   * ## 失败必须安静回退
+   *
+   * 探测不出来（不是 ISO / 签名过期 / 网络不通）就返回 null，
+   * 调用方继续走原来的直链播放。远程 ISO 是增强功能，**不能变成拦路石**。
+   *
+   * @param directUrl 已解析好的直链（`resolveStreamUrl` 的结果）。
+   * @param renewDirect 直链过期时的重新解析入口。正常条目传得上，
+   *   这样一部两小时的电影中途链接过期也不会断。
+   * @return 代理地址；不是 ISO / 探测失败返回 null。
+   */
+  private suspend fun prepareRemoteIso(
+    directUrl: String,
+    renewDirect: (suspend () -> String?)? = null,
+    /** 条目自报的容器（`MediaSources[0].Container`，Emby 扫描时就知道）。可空。 */
+    container: String? = null,
+  ): String? {
+    if (!directUrl.startsWith("http://") && !directUrl.startsWith("https://")) return null
+
+    // 预筛：能**确定**不是 ISO 就别发探测请求了。
+    //
+    // 两个判据都必须是「否定式」的 —— 只要存在任何疑点就继续探测：
+    // · 容器明确报了别的名字（mkv / mp4 / avi…）⇒ 肯定不是 ISO；
+    // · URL 路径里没有 .iso ⇒ 只是「看不出来」，**不能**据此排除，
+    //   因为 CDN 常把路径混淆成随机串（真 ISO 也可能叫 `/a/9f3c2b`）。
+    //   这种情况交给 PVD 探测定夺，那才是唯一可靠的判据。
+    if (container != null && !container.equals("iso", ignoreCase = true)) {
+      val isStrm = container.equals("strm", ignoreCase = true)
+      val pathLooksIso = Uri.parse(directUrl).path.orEmpty().lowercase().contains(".iso")
+      if (!isStrm && !pathLooksIso) return null
+    }
+    val prepared =
+      withContext(Dispatchers.IO) {
+        RemoteIsoPlayback.prepareFromDirectUrl(directUrl, onUrlExpired = renewDirect)
+      }
+    return prepared?.playbackUrl
+  }
+
   /** 播放单个媒体 */
   private fun launchSingle(
     server: EmbyServer,
@@ -970,7 +1125,9 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     engine: EngineKind? = resolveEngine(false),
     /**
      * 覆盖播放地址。null = 默认的「直连原文件」（`static=true`，服务器不动数据）。
-     * 传值只有一条来源：[playTranscoded] 拿到的服务端转码地址。
+     * 两个来源：
+     * · [playTranscoded] 拿到的服务端转码地址；
+     * · **本地 ISO Range 代理地址**（远程 ISO 原盘，见 [prepareRemoteIso]）。
      */
     overrideUrl: String? = null,
   ) {
@@ -1001,7 +1158,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       // —— 现象正是「解析成功、播放必失败」。播放器侧的 headers 约定：
       // 第 0/1 位是 User-Agent，其后两两成对（见 PlayerActivity.setHttpHeadersFromExtras）。
       // Referer 统一给**服务器**的来源，而不是直链自己（自引用常被网盘判为非法）。
-      if (overrideUrl != null) putStreamHeaders(server)
+      if (overrideUrl != null && !isLocalIsoProxyUrl(overrideUrl)) putStreamHeaders(server)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     getApplication<Application>().startActivity(intent)
@@ -1057,6 +1214,9 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     // 与 uris 下标一一对应的「记忆键」：剧集用 SeriesId（整季共用一份速度 / 音轨），
     // 电影没有 SeriesId 就用自身 Id。播放器切集时按下标取，实现「同剧继承」。
     val seriesKeys = ArrayList<String>()
+    // 与上面四条同序的媒体源 Id，供播放页的「在线字幕搜索」用。
+    // 取不到就填空串占位 —— 播放页会跳过空串（那时在线搜索按钮自动禁用）。
+    val mediaSourceIds = ArrayList<String>()
     items.forEach { item ->
       val id = item.Id ?: return@forEach
       uris.add(
@@ -1067,6 +1227,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       ids.add(id)
       titles.add(displayTitle(item))
       seriesKeys.add(item.SeriesId ?: id)
+      mediaSourceIds.add(item.MediaSources?.firstOrNull()?.Id ?: "")
     }
     if (uris.isEmpty()) return
 
@@ -1094,7 +1255,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       putStringArrayListExtra("playlist_series_keys", seriesKeys)
       putExtra("playlist_index", 0)
       // 播放列表的 ID 顺序与 uris 一致，切集时据此把"正在播放"同步给服务器
-      putEmbyPlaybackExtras(server, ids)
+      putEmbyPlaybackExtras(server, ids, mediaSourceIds)
       putEngine(engine)
       // 列表里只要有用预解析直链换掉的条目，就得同步请求头（理由见 [putStreamHeaders]）
       if (directUrls.isNotEmpty()) putStreamHeaders(server)
@@ -1139,11 +1300,65 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   /**
    * 数每位演员在该库参与的作品数（PersonId → 条数）。
    *
-   * /Persons 拿不到这个数（Fields 不支持 ChildCount），只能逐页把库拉一遍自己算，
-   * 所以调用方要放在后台、别挡首屏。详见 [EmbyClient.getPersonWorkCounts]。
+   * /Persons 拿不到这个数（Fields 不支持 ChildCount），只能自己算，所以调用方要放在
+   * 后台、别挡首屏。详见 [EmbyClient.getPersonWorkCounts]。
+   *
+   * ⚠️ 这条是**整库逐页扫描**（最坏 20 个请求），只给 [PersonMerge] / 孤立演员清理用；
+   * 列表角标请走 [getPersonWorkCountsCached]（自适应 + 带缓存）。
    */
   suspend fun getPersonWorkCounts(server: EmbyServer, parentId: String?): Map<String, Int> =
     withContext(Dispatchers.IO) { EmbyClient.getPersonWorkCounts(server, parentId) }
+
+  /**
+   * 演员角标用的作品数：**自适应 + 带缓存**（列表页专用，见 1.4 优化）。
+   *
+   * 原来的实现每次进「演员」分类都要把整库逐页拉一遍（500/页、上限 1 万条 ⇒ 最多
+   * 20 次串行请求），而角标只是次要信息。现在：
+   *
+   * 1. 交给 [EmbyClient.getPersonWorkCountsAdaptive] 按库规模挑路 ——
+   *    小库整库扫一次算齐，大库只逐个问前 60 个；
+   * 2. 结果按 (服务器, 库) 缓存 [PERSON_WORK_COUNTS_TTL_MS] —— 切分类、进出页面、
+   *    切tab 都不再重算。
+   *
+   * 缓存失效：刷新媒体库 / 扫描媒体库后调 [invalidatePersonWorkCountsCache]（角标会变）。
+   */
+  suspend fun getPersonWorkCountsCached(
+    server: EmbyServer,
+    parentId: String?,
+    personIds: List<String>,
+  ): Map<String, Int> {
+    val key = "${server.id}|$parentId"
+    val hit = personWorkCountsCache
+    if (hit != null && hit.first == key &&
+      SystemClock.elapsedRealtime() - hit.second < PERSON_WORK_COUNTS_TTL_MS
+    ) {
+      // 缓存是整张表，直接切片给这一轮要的演员
+      val ids = personIds.filter { it.isNotBlank() }.toSet()
+      return if (ids.isEmpty()) emptyMap() else hit.third.filterKeys { it in ids }
+    }
+    val counts = withContext(Dispatchers.IO) {
+      runCatching {
+        EmbyClient.getPersonWorkCountsAdaptive(server, parentId, personIds)
+      }.getOrDefault(emptyMap())
+    }
+    if (counts.isNotEmpty()) {
+      personWorkCountsCache = Triple(key, SystemClock.elapsedRealtime(), counts)
+    }
+    return counts
+  }
+
+  /**
+   * 演员作品数角标的进程内缓存：`(serverId|parentId)` → (缓存时间, PersonId → 条数)。
+   *
+   * 单独一份而不是并进 [actorsCache]：那份是「全量演员名单」（跨库、无 parentId），
+   * 这份是「某个库里的作品数」，键不一样，失效时机也不一样。
+   */
+  private var personWorkCountsCache: Triple<String, Long, Map<String, Int>>? = null
+
+  /** 媒体库内容变了（刷新 / 扫描 / 合并演职员）时调用：角标数字会变，缓存作废 */
+  fun invalidatePersonWorkCountsCache() {
+    personWorkCountsCache = null
+  }
 
   /** 刷新 / 刮削元数据。full=true 走全量重刮（FullRefresh），否则默认刷新（Default）。 */
   suspend fun refreshMetadata(
@@ -1152,8 +1367,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     full: Boolean = false,
     replaceAllMetadata: Boolean = false,
     replaceAllImages: Boolean = false,
-  ): Boolean =
-    withContext(Dispatchers.IO) {
+  ): Boolean {
+    val ok = withContext(Dispatchers.IO) {
       runCatching {
         EmbyClient.refreshItem(
           server = server,
@@ -1164,6 +1379,12 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         )
       }.isSuccess
     }
+    // 刷新 / 扫描都会改动库里的演职员 ⇒ 演员角标的数字全变，缓存作废。
+    // 放在这里而不是各个调用点：refreshMetadata 是「刷新元数据」「扫描媒体库」
+    // 两条路的共同入口（见 refreshLibraryMetadata / scanLibrary），一处收口。
+    if (ok) invalidatePersonWorkCountsCache()
+    return ok
+  }
 
   /**
    * 「刷新元数据」：全量重刮 + 可选的强制覆盖。
@@ -1631,6 +1852,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     memberIds.forEach { EmbyLibraryCache.removeItem(it) }
     // 收藏页的「演员」tab 是按服务器缓存的整份名单，也得作废
     invalidateFavoritePersonsCache()
+    // 作品数角标同样作废：合并会把 N 部作品的演职员改写成一个人，角标数字全变
+    invalidatePersonWorkCountsCache()
   }
 
   private fun mergeSummary(subject: String, o: MergeOutcome): String = buildString {
@@ -1674,23 +1897,26 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   suspend fun loadGenreItems(
     server: EmbyServer,
     genre: String,
+    startIndex: Int = 0,
     limit: Int = 120,
-  ): List<EmbyItem> = loadItemsByFacet(server, genres = listOf(genre), limit = limit)
+  ): EmbyItemsPage = loadItemsByFacet(server, genres = listOf(genre), startIndex = startIndex, limit = limit)
 
   /** 按「标签」查作品：走 Emby 的 Tags 过滤，规则同 [loadGenreItems]。 */
   suspend fun loadTagItems(
     server: EmbyServer,
     tag: String,
+    startIndex: Int = 0,
     limit: Int = 120,
-  ): List<EmbyItem> = loadItemsByFacet(server, tags = listOf(tag), limit = limit)
+  ): EmbyItemsPage = loadItemsByFacet(server, tags = listOf(tag), startIndex = startIndex, limit = limit)
 
   /** [loadGenreItems] / [loadTagItems] 的公共实现：只差 Genres / Tags 两个参数。 */
   private suspend fun loadItemsByFacet(
     server: EmbyServer,
     genres: List<String>? = null,
     tags: List<String>? = null,
+    startIndex: Int = 0,
     limit: Int = 120,
-  ): List<EmbyItem> = withContext(Dispatchers.IO) {
+  ): EmbyItemsPage = withContext(Dispatchers.IO) {
     runCatching {
       EmbyClient.getItems(
         server = server,
@@ -1700,10 +1926,22 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         sortBy = "SortName",
         sortOrder = "Ascending",
         recursive = true,
-        startIndex = 0,
+        startIndex = startIndex,
         limit = limit,
-      ).Items
-    }.getOrDefault(emptyList())
+      )
+    }.fold(
+      onSuccess = { EmbyItemsPage(it.Items, it.TotalRecordCount) },
+      // ⚠️ 这里以前是 getOrDefault(emptyList())：网络一抖，标签页就变成「该标签下没有作品」，
+      // 用户分不清是真没有还是拉失败。返回 total=0 的空页，让 UI 的错误提示有东西可显示。
+      onFailure = { e ->
+        android.util.Log.w(
+          "EmbyViewModel",
+          "按 Genres/Tags 取作品失败 genres=$genres tags=$tags",
+          e,
+        )
+        EmbyItemsPage(emptyList(), 0)
+      },
+    )
   }
 
   /**
@@ -1753,6 +1991,29 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     /** 收藏演员缓存的存活时间：超过就当过期重新拉，防止别处改了收藏状态这里还留着旧数据 */
     private const val FAVORITE_PERSONS_CACHE_TTL_MS = 60_000L
 
+    /**
+     * 演员作品数角标缓存的存活时间。
+     *
+     * 比收藏演员那份（60 秒）长得多：角标数字只随「媒体库里多了/少了作品」而变，
+     * 而那件事必然伴随一次刷新/扫描（会显式调invalidate），所以兜底过期可以很宽松，
+     * 换取「来回切分类/进出页面」时零请求。
+     */
+    private const val PERSON_WORK_COUNTS_TTL_MS = 10 * 60_000L
+
+    /**
+     * 某一季的剧集一页拉多少条（清单 1.1）。
+     *
+     * 一季 50 集已覆盖绝大多数剧；长剧（一季 100+ 集，多见于动画）会分页续拉。
+     */
+    const val EPISODE_PAGE_SIZE = 100
+
+    /**
+     * 全库搜索一次取多少条（清单 1.1 的例外，理由见 [searchGlobal] 的 KDoc）。
+     *
+     * 比原来的 100 略高：搜索结果的「浏览价值」随条数快速衰减，取太多反而让网格难用。
+     */
+    const val GLOBAL_SEARCH_LIMIT = 120
+
     fun factory(application: Application): ViewModelProvider.Factory = viewModelFactory {
       initializer { EmbyViewModel(application) }
     }
@@ -1764,3 +2025,24 @@ data class EmbyItemsPage(
   val items: List<EmbyItem>,
   val totalCount: Int,
 )
+
+/**
+ * 全库搜索的结果（人物 + 媒体两条流拼成）。
+ *
+ * @param items 拼好的结果：人物在前、媒体在后（沿用旧行为）
+ * @param totalCount **媒体部分**的服务端总数；人物那部分拿不到权威总数，见 [EmbyViewModel.searchGlobal]
+ * @param personCount 本次实际返回的人物条数
+ */
+data class EmbyGlobalSearchResult(
+  val items: List<EmbyItem>,
+  val totalCount: Int,
+  val personCount: Int,
+) {
+  /**
+   * 结果是不是被上限截断了。
+   *
+   * UI 据此显示「只显示前 N 条，请输入更精确的关键词」——
+   * 静默截断会让用户以为「搜全了就是这个结果」，从而错过想找的片。
+   */
+  val truncated: Boolean get() = totalCount > 0 && totalCount > items.size - personCount
+}

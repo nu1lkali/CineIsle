@@ -11,7 +11,31 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.HeartBroken
+import androidx.compose.material.icons.outlined.HeartBroken
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ripple
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import app.marlboroadvance.mpvex.preferences.GsyFilterKind
 import app.marlboroadvance.mpvex.preferences.GsyPreferences
 import app.marlboroadvance.mpvex.preferences.GsyRenderKind
@@ -49,8 +73,13 @@ class GsyGlassActions(
   val onScreenshot: () -> Unit = {},
   val onSubtitle: () -> Unit = {},
   val onAudioTrack: () -> Unit = {},
+  /** 章节（清单 #19）：数据来自 Emby，见 `GsyChapterRepository` */
+  val onChapters: () -> Unit = {},
   val onPictureInPicture: () -> Unit = {},
   val onCast: () -> Unit = {},
+  /** 「标记为不喜欢」：单击切换、长按写备注。 */
+  val onDislikeToggle: () -> Unit = {},
+  val onDislikeRemark: () -> Unit = {},
 )
 
 /**
@@ -84,8 +113,11 @@ class GsyGlassActions(
  *    | 上一集/下一集 | `setUp(url, cache, title)` + `startPlayLogic()`（GSY 官方「一个 View 连播多个视频」的用法） |
  *    | 截图 | `saveFrame(File, GSYVideoShotSaveListener)` |
  *    | 字幕 | `setSubtitleSource(GSYSubtitleSource)`（官方字幕子系统，见 GSYSubtitleController） |
+ *    | 字幕样式 | `setSubtitleStyle(GSYSubtitleStyle)` —— 与 mpv 侧共用 `SubtitlesPreferences` |
  *    | 音轨 | 见 Activity：IJK 内核的 `getTrackInfo()/selectTrack()` |
+ *    | 章节 | 见 Activity：章节数据来自 Emby（GSY 本身无章节 API），见 `GsyChapterRepository` |
  *    | 画中画 / 投屏 / 切换内核 | 交给 Activity（Activity 才拿得到窗口、DLNA 与另一套内核） |
+ *    | 不喜欢 | `DislikePlayerActions` 单例（跨三套播放器共享状态，见 [setDislikeActive]） |
  */
 class CineIsleGsyPlayer : StandardGSYVideoPlayer {
   constructor(context: Context) : super(context) {
@@ -541,6 +573,11 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
       actions.onAudioTrack()
     }
 
+    findViewById<ImageView>(R.id.gsy_btn_chapters)?.setOnClickListener {
+      keepControlsAlive()
+      actions.onChapters()
+    }
+
     findViewById<ImageView>(R.id.gsy_btn_pip)?.setOnClickListener {
       keepControlsAlive()
       actions.onPictureInPicture()
@@ -549,6 +586,13 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
     findViewById<ImageView>(R.id.gsy_btn_cast)?.setOnClickListener {
       keepControlsAlive()
       actions.onCast()
+    }
+
+    // 「标记为不喜欢」：单击切换、长按写备注。
+    // 这颗键是 ComposeView（见布局里的说明），点击与状态都在 Compose 里处理。
+    findViewById<ComposeView>(R.id.gsy_btn_dislike)?.apply {
+      setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+      setContent { DislikeButtonContent(actions) }
     }
 
     findViewById<ImageView>(R.id.gsy_btn_engine)?.setOnClickListener {
@@ -565,6 +609,64 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
     syncGlassButtonStates()
   }
 
+  /**
+   * 「标记为不喜欢」键。
+   *
+   * 状态直接订阅 [DislikePlayerActions.isMarked] —— 三套播放器共用的那个进程级单例。
+   * **不需要**由 Activity 把状态推给每个实例：竖屏实例与全屏克隆实例是两棵视图树，
+   * 各自 `setContent` 后各自订阅同一个流，天然同步（ImageView 方案要依次给两棵树推，
+   * 漏一棵就是「全屏标了、退出全屏还是空心」）。
+   *
+   * ## 为什么是心碎而不是拇指向下
+   *
+   * 拇指向下在中文语境里先被读成「点踩 / 差评」，而这里是「我不想再看到这部」，
+   * 与收藏（心形）是一对。心碎正好与它构成对仗，一眼能懂。
+   *
+   * ## 为什么标记后要换颜色
+   *
+   * 空心↔实心在玻璃圆底上差别太小，用户「看不出是标了还是没标」。
+   * 除了**轮廓改实心**，再叠一层**红色** —— 形状 + 填充 + 颜色三重区分。
+   *
+   * ⚠️ 颜色这里用固定色值是**对的**：播放器控件条是一套固定暗色 UI
+   * （同排其它图标也是硬编码白色），它不随 App 主题 / 系统深浅色变化。
+   * 若改用 `MaterialTheme.colorScheme.error`，在亮色主题下会取到偏深的红，
+   * 在这块黑底上几乎看不见。
+   */
+  @Composable
+  private fun DislikeButtonContent(actions: GsyGlassActions) {
+    val marked by DislikePlayerActions.isMarked.collectAsState()
+    MpvexTheme {
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .clip(CircleShape)
+          .combinedClickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = ripple(bounded = false),
+            onClick = {
+              keepControlsAlive()
+              actions.onDislikeToggle()
+            },
+            onLongClick = {
+              keepControlsAlive()
+              actions.onDislikeRemark()
+            },
+          ),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = if (marked) Icons.Filled.HeartBroken else Icons.Outlined.HeartBroken,
+          contentDescription = stringResource(
+            if (marked) R.string.gsy_control_dislike_on else R.string.gsy_control_dislike,
+          ),
+          tint = if (marked) DISLIKE_MARKED_COLOR else Color.White,
+          // 22dp：与同排玻璃按钮的图标尺寸一致（外框 42dp、内圈 40dp）
+          modifier = Modifier.size(22.dp),
+        )
+      }
+    }
+  }
+
   /** 把「开着」的按钮点亮、关着的压暗 —— 一眼能看出哪些能力正在生效 */
   private fun syncGlassButtonStates() {
     dim(findViewById<View>(R.id.gsy_btn_speed), abs(getSpeed() - 1f) > 0.001f)
@@ -578,6 +680,7 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
       button.contentDescription =
         context.getString(if (mutedState) R.string.gsy_control_unmute else R.string.gsy_control_mute)
     }
+    // 「不喜欢」不在这里刷 —— 它是 ComposeView，自己订阅 `DislikePlayerActions` 的流。
   }
 
   private fun dim(view: View?, active: Boolean) {
@@ -599,6 +702,16 @@ class CineIsleGsyPlayer : StandardGSYVideoPlayer {
   companion object {
     /** 未激活按钮的透明度（保留玻璃底，只压图标亮度） */
     private const val INACTIVE_ALPHA = 0.62f
+
+    /**
+     * 已标记「不喜欢」时图标的颜色。
+     *
+     * ⚠️ 固定色值在这里是**对的**：播放器控件条是一套固定暗色 UI（同排图标都是硬编码白色），
+     * 不随 App 主题 / 系统深浅色变化。若改用 `MaterialTheme.colorScheme.error`，
+     * 亮色主题下会取到偏深的红，在这块黑底上几乎看不见 —— 那就白改了。
+     * 取亮一档的红（M3 暗色 error 附近），在半透明黑玻璃底上最清楚。
+     */
+    private val DISLIKE_MARKED_COLOR = Color(0xFFFF6B6B)
 
     /** 单击画面后等多久再去检查控件有没有被官方逻辑呼出来（要排在 GestureDetector 的双击判定之后） */
     private const val CONTROL_FALLBACK_DELAY_MS = 400L

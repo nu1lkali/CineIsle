@@ -86,6 +86,7 @@ import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.presentation.components.PlayerSheet
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.theme.spacing
+import app.marlboroadvance.mpvex.utils.cache.LruCache
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -125,23 +126,49 @@ data class PlaylistItem(
 /**
  * LRU (Least Recently Used) cache for Bitmap thumbnails with a maximum size limit.
  * This prevents memory issues when dealing with large playlists (100+ videos).
+ *
+ * ## 为什么淘汰时要`recycle()`（清单 #20 建议项）
+ *
+ * 这个缓存的容量是 100+张缩略图（每张 512×512 ARGB_8888 约 1MB），
+ * 而淘汰逻辑原来只做 `cache.remove(...)` —— 那只是**解引用**，
+ * Bitmap 的 native 像素还在等 GC。快速划过 100 集播放列表就能堆出
+ * 上百 MB 的「已淘汰但没释放」的图，表现就是列表越划越卡、最后 OOM。
+ *
+ * ⚠️ `recycle()` 有个硬前提：**这张图不能再被任何人拿去画**。
+ * 所以 [clear] 交由调用方在**确认没有 UI 还持有它**的时候调；
+ * 淘汰单个条目则是安全的 —— 能被 LRU 淘汰说明容量已经超了，
+ * 而 Compose 侧每次都是重新 `get` 一遍，没有谁跨帧持有旧 Bitmap。
+ *
+ * 用 `isRecycled` 兜一层：Android 10+ 在内存紧张时会自己回收像素，
+ * 那种图再调 `recycle()` 是安全的 no-op，但反过来调就会抛。
  */
-class LRUBitmapCache(private val maxSize: Int) {
-  private val cache = LinkedHashMap<String, Bitmap?>(maxSize + 1, 1f, true)
+class LRUBitmapCache(maxSize: Int) {
+  // 纯容器在 [LruCache]（无 Android 依赖、可单测），这里只做「淘汰时 recycle」这一层。
+  private val cache = LruCache<String, Bitmap?>(maxSize) { evicted -> evicted.recycleIfAlive() }
 
-  operator fun get(key: String): Bitmap? = synchronized(this) { cache[key] }
+  operator fun get(key: String): Bitmap? = cache[key]
 
-  operator fun set(key: String, value: Bitmap?) = synchronized(this) {
+  operator fun set(key: String, value: Bitmap?) {
+    // LruCache 会把被替换掉的旧值交给回收回调 —— 这条正是原先漏掉的泄漏路径
+    //（「同一集反复刷新缩略图」，每刷一次漏一张 512×512）。
     cache[key] = value
-    if (cache.size > maxSize) {
-      // Remove the least recently used item
-      cache.remove(cache.keys.firstOrNull())
-    }
   }
 
-  fun containsKey(key: String): Boolean = synchronized(this) { cache.containsKey(key) }
+  fun containsKey(key: String): Boolean = cache.containsKey(key)
 
-  fun clear() = synchronized(this) { cache.clear() }
+  /**
+   * 清空并回收全部。
+   *
+   * ⚠️ 调用方必须保证此刻没有任何 UI 还在画这些图
+   *（Compose 侧一般是在页面 `DisposableEffect` 的 onDispose 里调）。
+   */
+  fun clear() = cache.clear()
+
+  private fun Bitmap?.recycleIfAlive() {
+    if (this != null && !isRecycled) {
+      runCatching { recycle() }
+    }
+  }
 }
 
 /**

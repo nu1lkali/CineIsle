@@ -32,11 +32,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
+/**
+ * 「正在扫描」整屏态：图标呼吸 + 标题 + 说明。
+ *
+ * 只有一个调用点（`FolderListScreen` 的本地目录扫描）。扫描是**秒级到分钟级**的
+ * 长任务，用骨架屏不合适（没有已知版式），所以保留这种「图标 + 文案」形态。
+ *
+ * 说明文案由调用方给（扫描进度），这里的默认值必须是中文 ——
+ * 早前默认写的是英文 "Please wait while we search your device"，
+ * 传了 `scanStatus` 的路径没问题，但 `scanStatus == null` 时会漏出英文。
+ */
 @Composable
 fun LoadingState(
   icon: ImageVector = Icons.Filled.FolderOpen,
   title: String = "正在扫描视频…",
-  message: String = "Please wait while we search your device",
+  message: String = "正在搜索设备上的视频文件",
   modifier: Modifier = Modifier,
 ) {
   // Animated alpha for subtle pulsing effect (same as EmptyState)

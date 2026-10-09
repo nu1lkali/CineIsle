@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -14,7 +15,13 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -24,9 +31,14 @@ import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
+import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
+import app.marlboroadvance.mpvex.ui.player.MpvDiskCache
 import app.marlboroadvance.mpvex.ui.player.PlayerOrientation
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.toFixed
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import me.zhanghai.compose.preference.ListPreference
 import me.zhanghai.compose.preference.ListPreferenceType
@@ -244,6 +256,97 @@ object PlayerPreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              // ── 落盘播放缓存（清单 #18）──
+              // 开关 + 上限 + 清除三件套。上限滑杆在开关关着时也照样能调：
+              // 用户往往是先调好上限、回头再打开开关，硬禁用会让人以为设置坏了。
+              val diskCacheEnabled by preferences.diskCacheEnabled.collectAsState()
+              val diskCacheSizeMb by preferences.diskCacheSizeMb.collectAsState()
+              val scope = rememberCoroutineScope()
+              // -1 = 还没量过。跟「真的是 0 字节」区分开，否则第一次进页面
+              // 在清完缓存后会分不清该不该刷新显示。
+              var cacheBytes by remember { mutableLongStateOf(-1L) }
+              var showClearCache by remember { mutableStateOf(false) }
+              // 缓存占用要读磁盘，别在重组里同步扫目录 —— 只在进页面和清完之后刷新
+              LaunchedEffect(Unit) {
+                cacheBytes = withContext(Dispatchers.IO) { MpvDiskCache.sizeBytes(context) }
+              }
+
+              SwitchPreference(
+                value = diskCacheEnabled,
+                onValueChange = preferences.diskCacheEnabled::set,
+                title = { Text(text = stringResource(R.string.pref_player_disk_cache)) },
+                summary = {
+                  Text(
+                    text = stringResource(R.string.pref_player_disk_cache_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              SliderPreference(
+                value = diskCacheSizeMb.toFloat(),
+                onValueChange = { preferences.diskCacheSizeMb.set(it.roundToInt()) },
+                sliderValue = diskCacheSizeMb.toFloat(),
+                onSliderValueChange = { preferences.diskCacheSizeMb.set(it.roundToInt()) },
+                title = { Text(text = stringResource(R.string.pref_player_disk_cache_size)) },
+                valueRange = MpvDiskCache.MIN_SIZE_MB.toFloat()..MpvDiskCache.MAX_SIZE_MB.toFloat(),
+                summary = {
+                  Text(
+                    text = stringResource(R.string.pref_player_disk_cache_size_summary) +
+                      " ($diskCacheSizeMb MB)",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              Preference(
+                title = { Text(text = stringResource(R.string.pref_player_clear_disk_cache)) },
+                summary = {
+                  Text(
+                    text = if (cacheBytes < 0L) {
+                      stringResource(R.string.pref_player_clear_disk_cache_summary)
+                    } else {
+                      stringResource(R.string.pref_player_clear_disk_cache_summary) +
+                        " · " + formatCacheBytes(cacheBytes)
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.PhotoLibrary,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = { showClearCache = true },
+              )
+
+              if (showClearCache) {
+                ConfirmDialog(
+                  title = "清除播放缓存",
+                  subtitle = "将删除已缓存的网络流数据。之后重看同一部片子需要重新下载，" +
+                    "已经下载到本地的文件（离线下载）不受影响。",
+                  onConfirm = {
+                    showClearCache = false
+                    scope.launch {
+                      withContext(Dispatchers.IO) { MpvDiskCache.clear(context) }
+                      cacheBytes = withContext(Dispatchers.IO) { MpvDiskCache.sizeBytes(context) }
+                      android.widget.Toast
+                        .makeText(context, "已清除播放缓存", android.widget.Toast.LENGTH_SHORT)
+                        .show()
+                    }
+                  },
+                  onCancel = { showClearCache = false },
+                )
+              }
+
+              PreferenceDivider()
+
               val playlistMode by preferences.playlistMode.collectAsState()
               SwitchPreference(
                 value = playlistMode,
@@ -338,7 +441,7 @@ object PlayerPreferencesScreen : Screen {
               )
               
               PreferenceDivider()
-              
+
               val customSkipDuration by preferences.customSkipDuration.collectAsState()
               SliderPreference(
                 value = customSkipDuration.toFloat(),
@@ -415,6 +518,25 @@ object PlayerPreferencesScreen : Screen {
                 },
                 onSliderValueChange = { preferences.horizontalSwipeSensitivity.set(it.toFixed(3)) },
                 sliderValue = horizontalSwipeSensitivity,
+              )
+
+              PreferenceDivider()
+
+              // 震动反馈总开关（issue 反馈新增）。
+              // 放在「手势」卡里、紧跟横滑快进与灵敏度 —— 震动就是这条手势的配套反馈，
+              // 放在这里用户能一眼看出「它管的是滑动时的手感」。
+              // 总开关而非只管快进：马达强弱因人而异，给一个一键全关的出口比逐项关更实际。
+              val hapticFeedbackEnabled by preferences.hapticFeedbackEnabled.collectAsState()
+              SwitchPreference(
+                value = hapticFeedbackEnabled,
+                onValueChange = preferences.hapticFeedbackEnabled::set,
+                title = { Text(stringResource(R.string.pref_player_haptic_feedback)) },
+                summary = {
+                  Text(
+                    text = stringResource(R.string.pref_player_haptic_feedback_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
               )
               
               PreferenceDivider()

@@ -74,6 +74,17 @@ import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.sqrt
 
+/**
+ * 横滑快进的震动间隔（秒，相对位移）。
+ *
+ * **必须是相对位移，不能是片子的绝对时间轴** —— 后者在长片上会一路震个不停：
+ * 拖到 3 小时位置的电影里，「每 2 秒震一次」意味着每 2 秒震一次，永远停不下来。
+ *
+ * 触发逻辑在 `horizontal_seek` 分支里，用「已震档数」单向推进，
+ * 所以手指滑回原处不会重复震动（那一段跳了多久，用户已经知道了）。
+ */
+private const val SEEK_HAPTIC_INTERVAL_SEC = 2
+
 @Suppress("CyclomaticComplexMethod", "MultipleEmitters")
 @Composable
 fun GestureHandler(
@@ -114,6 +125,9 @@ fun GestureHandler(
   val panAndZoomEnabled by playerPreferences.panAndZoomEnabled.collectAsState()
   val horizontalSwipeToSeek by playerPreferences.horizontalSwipeToSeek.collectAsState()
   val horizontalSwipeSensitivity by playerPreferences.horizontalSwipeSensitivity.collectAsState()
+  // 震动反馈总开关（issue 反馈新增）。下面三处震动都受它控制：
+  // 横滑快进每跨一档、长按开始、倍速跨档位。
+  val hapticFeedbackEnabled by playerPreferences.hapticFeedbackEnabled.collectAsState()
   var isLongPressing by remember { mutableStateOf(false) }
   var isDynamicSpeedControlActive by remember { mutableStateOf(false) }
   var dynamicSpeedStartX by remember { mutableStateOf(0f) }
@@ -370,7 +384,7 @@ fun GestureHandler(
                 longPressTriggered = true
                 isLongPressing = true
                 longPressTriggeredDuringTouch = true
-                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                if (hapticFeedbackEnabled) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 originalSpeed = playbackSpeed ?: 1f
                 // Ramp speed up incrementally to avoid audio filter stutter
                 val startSpeed = originalSpeed
@@ -481,7 +495,9 @@ fun GestureHandler(
                           val newSpeed = speedPresets[newIndex]
 
                           if (abs(lastAppliedSpeed - newSpeed) > 0.01f) {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            if (hapticFeedbackEnabled) {
+                              haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
                             lastAppliedSpeed = newSpeed
                             PlayerLib.setPropertyFloat("speed", newSpeed)
                             viewModel.playerUpdate.update { PlayerUpdates.DynamicSpeedControl(newSpeed, true) }
@@ -814,6 +830,13 @@ fun GestureHandler(
           var hasStartedSeeking = false
           var initialVideoPosition = 0f
           var wasPlayerAlreadyPaused = false
+          // ── 横滑快进的震动计数（issue 反馈新增）─────────────────────
+          //
+          // 记「已经震过几个 2 秒档」，而不是「上次震在哪」——
+          // 后者在手指抖回来时会立刻再震一次，手感很碎。
+          // 用「已震档数」单向推进，往回滑也不会重复震动，符合直觉：
+          // 你已经知道「刚才那一段跳了 10 秒」，再滑回去不该重复报。
+          var seekHapticBuckets = 0
           // Use the sensitivity preference instead of hardcoded value
           val seekSensitivity = horizontalSwipeSensitivity
           
@@ -864,6 +887,22 @@ fun GestureHandler(
                     // Use the same seeking mechanism as seekbar scrubbing
                     // This will update the seekbar position and provide live preview
                     viewModel.seekTo(clampedPosition.toInt())
+
+                    // ── 横滑快进的震动反馈（issue 反馈新增）─────────────
+                    //
+                    // 每跨过一个「2 秒」档震一次，让用户不看屏幕也知道跳了多少。
+                    // 刻意用「相对位移」而不是当前播放位置：
+                    // 若按绝对时间，滑到 3 小时位置的电影里就会一路震个不停。
+                    // 算式与下面 `seekDelta` 相同 —— 不能直接用 `seekDelta`，
+                    // 它声明在下方（那是给界面显示用的），这里得自己算。
+                    if (hapticFeedbackEnabled) {
+                      val movedSecs = abs(clampedPosition - initialVideoPosition).toInt()
+                      val bucket = movedSecs / SEEK_HAPTIC_INTERVAL_SEC
+                      if (bucket > seekHapticBuckets) {
+                        seekHapticBuckets = bucket
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                      }
+                    }
                     
                     // Format and display time position updates
                     val currentPos = clampedPosition.toInt()

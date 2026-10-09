@@ -134,6 +134,8 @@
   <string name="pref_player_gestures_horizontal_swipe_to_seek_summary">Swipe left or right on screen to seek forward or backward</string>
   <string name="pref_player_gestures_horizontal_swipe_sensitivity">Horizontal swipe sensitivity</string>
   <string name="pref_player_gestures_horizontal_swipe_sensitivity_summary">Adjust how much distance is covered per swipe</string>
+  <string name="pref_player_haptic_feedback">Vibration feedback</string>
+  <string name="pref_player_haptic_feedback_summary">Vibrate briefly while swiping to seek and while adjusting playback speed</string>
   <string name="pref_player_gestures_hold_for_multiple_speed">Hold for multi - x speed</string>
   <string name="pref_player_controls">Controls</string>
   <string name="pref_player_controls_allow_gestures_in_panels">Allow gestures in panels</string>
@@ -420,6 +422,12 @@
   <string name="notification_playing">Playing</string>
   <!-- Media Info Activity -->
   <string name="pref_player_use_precise_seeking">Use precise seeking</string>
+  <string name="pref_player_disk_cache">Cache streams to disk</string>
+  <string name="pref_player_disk_cache_summary">Keep watched network streams on disk so re-watching does not download them again</string>
+  <string name="pref_player_disk_cache_size">Cache size limit</string>
+  <string name="pref_player_disk_cache_size_summary">Per stream</string>
+  <string name="pref_player_clear_disk_cache">Clear stream cache</string>
+  <string name="pref_player_clear_disk_cache_summary">Delete cached stream data. Downloaded offline files are not affected</string>
   <!-- Folders Preferences -->
   <string name="pref_folders_title">Folders</string>
   <string name="pref_folders_summary">Manage folder blacklist</string>
@@ -583,8 +591,16 @@
   <string name="gsy_control_screenshot">Take screenshot</string>
   <string name="gsy_control_subtitle">Subtitles</string>
   <string name="gsy_control_audio_track">Audio track</string>
+  <string name="gsy_control_chapters">Chapters</string>
   <string name="gsy_control_pip">Picture in picture</string>
   <string name="gsy_control_cast">Cast (DLNA)</string>
+  <string name="gsy_control_dislike">标记为不喜欢</string>
+  <string name="gsy_control_dislike_on">已标记为不喜欢</string>
+  <string name="gsy_dislike_reason_title">为什么不喜欢它？</string>
+  <string name="gsy_dislike_reason_hint">写一句原因（可不填）</string>
+  <string name="gsy_dislike_unavailable">这一条无法标记</string>
+  <string name="gsy_dislike_reason_save">保存</string>
+  <string name="gsy_dislike_reason_save_and_mark">保存并标记</string>
 
   <string name="gsy_snapshot_saved">Saved to Pictures/CineIsleSnaps</string>
   <string name="gsy_snapshot_failed">Failed to save screenshot</string>
@@ -604,6 +620,42 @@
   <string name="gsy_audio_unsupported">Audio track switching needs the IJK kernel (current: %1$s)</string>
   <string name="gsy_audio_empty">No audio tracks found</string>
 
+  <string name="gsy_track_unsupported">Switching %1$s needs the IJK kernel (current: %2$s)</string>
+  <string name="gsy_track_empty">No %1$s found</string>
+  <string name="gsy_track_off">Off</string>
+  <string name="gsy_subtitle_track_title">Subtitle track</string>
+  <string name="gsy_track_kind_audio">audio tracks</string>
+  <string name="gsy_track_kind_subtitle">subtitle tracks</string>
+
+  <!-- 字幕样式（清单 #19）。全部与 mpv 侧共用同一份设置，切换内核后依然生效。 -->
+  <string name="gsy_subtitle_style">Subtitle style</string>
+  <!-- %1$s 是本内核做不到的项（字体名 / 粗体 / ASS 覆盖…），如实告知而不是默默忽略 -->
+  <string name="gsy_subtitle_style_with_unsupported">Subtitle style\nNot available on this kernel: %1$s</string>
+  <string name="gsy_subtitle_style_size">Size: %1$d</string>
+  <string name="gsy_subtitle_style_size_pick">Subtitle size</string>
+  <string name="gsy_subtitle_style_shadow">Outline: %1$d</string>
+  <string name="gsy_subtitle_style_shadow_pick">Outline thickness</string>
+  <string name="gsy_subtitle_style_color">Text colour</string>
+  <string name="gsy_subtitle_style_border_color">Outline colour</string>
+  <string name="gsy_subtitle_style_align">Alignment: %1$s</string>
+  <string name="gsy_subtitle_style_align_pick">Alignment</string>
+  <string name="gsy_subtitle_style_align_left">Left</string>
+  <string name="gsy_subtitle_style_align_center">Centre</string>
+  <string name="gsy_subtitle_style_align_right">Right</string>
+  <string name="gsy_subtitle_style_align_auto">Auto</string>
+  <string name="gsy_subtitle_style_reset">Reset style</string>
+  <string name="gsy_subtitle_style_reset_done">Subtitle style reset</string>
+
+  <!-- 章节（清单 #19）。数据来自 Emby，GSY 内核本身没有章节能力。 -->
+  <string name="gsy_chapters_title">Chapters</string>
+  <string name="gsy_chapters_loading">Loading chapters…</string>
+  <string name="gsy_chapters_empty">No chapters for this video</string>
+  <string name="gsy_chapters_local_no_server">Chapters need an Emby library — this file has none</string>
+  <string name="gsy_chapters_untitled">Chapter %1$d</string>
+  <string name="gsy_chapters_now">▶</string>
+  <string name="gsy_chapters_jumped">Jumped to chapter</string>
+  <string name="gsy_chapters_seek_failed">Could not jump to that chapter</string>
+
   <string name="gsy_pip_unsupported">Picture-in-picture is not supported on this device</string>
   <string name="gsy_pip_play">Play</string>
   <string name="gsy_pip_pause">Pause</string>
@@ -617,6 +669,11 @@
   <!-- ===== GSY 播放器独立设置页（与 mpv 的配置完全隔离） ===== -->
   <string name="pref_gsy_player">GSY Player</string>
   <string name="pref_gsy_player_summary">Kernel, rendering, display ratio, gestures, fullscreen and rotation of the standalone GSY player page</string>
+
+  <!-- ===== 「标记为不喜欢」设置页 ===== -->
+  <string name="pref_dislike_title">不喜欢视频管理</string>
+  <string name="pref_dislike_summary">设置「不喜欢」按钮在哪些地方显示，并管理已标记的列表</string>
+  <string name="btn_label_dislike">不喜欢</string>
 
   <!-- ===== 播放器「更多」面板：快捷功能宫格 =====
        原先这里放的是「默认统计页面」选择器，已移除；改用宫格收纳低频功能入口。 -->

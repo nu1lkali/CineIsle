@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,6 +26,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,7 +39,11 @@ import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+
+/** 标签 / 类型结果页一页拉多少条（清单 1.1：原来固定 120 条） */
+private const val TAG_PAGE_SIZE = 100
 
 /**
  * 「按类型 / 标签找片」结果页。
@@ -64,31 +71,50 @@ data class EmbyTagItemsScreen(
       factory = EmbyViewModel.factory(context.applicationContext as Application),
     )
     val server by viewModel.currentServer.collectAsState()
+    val scope = rememberCoroutineScope()
 
     val isGenre = kind == "genre"
     val kindLabel = if (isGenre) "类型" else "标签"
 
-    var items by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    // 分页状态（清单 1.1）：原来一次拉 120 条就结束了，热门类型（科幻 / 动作）远不止
+    val page = remember { PagedList<EmbyItem>(TAG_PAGE_SIZE, keyOf = { it.Id ?: it.Name ?: "" }) }
+    val gridState = rememberLazyGridState()
+    val gridSource = gridState.pagingSource()
+
+    /** 本页的加载器：类型与标签只差一个 ViewModel 方法 */
+    val loader: suspend (Int, Int) -> PagedResult<EmbyItem> = pageLoader@{ start, limit ->
+      val target = server ?: return@pageLoader PagedResult(emptyList(), null, limit)
+      val result = if (isGenre) {
+        viewModel.loadGenreItems(server = target, genre = keyword, startIndex = start, limit = limit)
+      } else {
+        viewModel.loadTagItems(server = target, tag = keyword, startIndex = start, limit = limit)
+      }
+      PagedResult(
+        // 网格 key = Id ?: Name：按同一口径去重，防止服务端重复条目把网格撞崩
+        items = result.items.distinctBy { it.Id ?: it.Name ?: "" },
+        totalCount = result.totalCount,
+        pageSize = limit,
+      )
+    }
+
     suspend fun load() {
-      val current = server
-      if (current == null) return
+      if (server == null) return
       isLoading = true
       error = null
-      // 网格 key = Id ?: Name：按同一口径去重，防止服务端重复条目把网格撞崩
-      val list = (if (isGenre) {
-        viewModel.loadGenreItems(current, keyword)
-      } else {
-        viewModel.loadTagItems(current, keyword)
-      }).distinctBy { it.Id ?: it.Name ?: "" }
-      items = list
+      page.reload(loader)
       isLoading = false
-      if (list.isEmpty()) error = "没有找到该${kindLabel}下的媒体"
+      // 加载成功但一条都没有：给一句人话，而不是干晾着空网格
+      if (page.error != null) error = page.error
+      else if (page.items.isEmpty()) error = "没有找到该${kindLabel}下的媒体"
     }
 
     LaunchedEffect(keyword, kind, server) { load() }
+
+    // 触底自动续拉
+    page.AutoLoadMore(source = gridSource, enabled = server != null, loader = loader)
 
     Column(modifier = Modifier.fillMaxSize()) {
       TopAppBar(
@@ -109,9 +135,15 @@ data class EmbyTagItemsScreen(
         },
       )
 
-      // 一行说明，告诉用户当前是按什么维度筛的
+      // 一行说明，告诉用户当前是按什么维度筛的。
+      // 分页之后报**服务端总数**而不是已加载条数 —— 否则用户会以为「就这么多」而不去滚。
       Text(
-        text = if (isLoading) "加载中…" else "$kindLabel · 共 ${items.size} 项",
+        text = when {
+          isLoading -> "加载中…"
+          error != null && page.items.isEmpty() -> "$kindLabel"
+          page.total != null -> "$kindLabel · 共 ${page.total} 项"
+          else -> "$kindLabel · 已加载 ${page.items.size} 项"
+        },
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -119,12 +151,12 @@ data class EmbyTagItemsScreen(
 
       Box(modifier = Modifier.fillMaxSize()) {
         when {
-          isLoading && items.isEmpty() -> {
+          isLoading && page.items.isEmpty() -> {
             // 与下面结果的版式对齐（海报卡、约三列）
             EmbySkeletonGrid(columns = 3, ratio = 3f / 4f)
           }
 
-          error != null && items.isEmpty() -> {
+          error != null && page.items.isEmpty() -> {
             Text(
               text = error ?: "",
               style = MaterialTheme.typography.bodyMedium,
@@ -138,12 +170,13 @@ data class EmbyTagItemsScreen(
           else -> {
             LazyVerticalGrid(
               columns = GridCells.Adaptive(minSize = 110.dp),
+              state = gridState,
               contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
               verticalArrangement = Arrangement.spacedBy(12.dp),
               horizontalArrangement = Arrangement.spacedBy(12.dp),
               modifier = Modifier.fillMaxSize(),
             ) {
-              items(items, key = { it.Id ?: it.Name ?: "" }) { item ->
+              items(page.items, key = { it.Id ?: it.Name ?: "" }) { item ->
                 EmbyMediaCard(
                   title = item.Name ?: "",
                   subtitle = item.ProductionYear?.toString(),
@@ -156,6 +189,17 @@ data class EmbyTagItemsScreen(
                       backStack.add(EmbyDetailScreen(itemId = id, title = item.Name ?: ""))
                     }
                   },
+                )
+              }
+              // 底部：续拉中 / 出错重试 / 已到底
+              item(span = { GridItemSpan(maxLineSpan) }) {
+                EmbyPagingFooter(
+                  appending = page.appending,
+                  hasMore = page.hasMore,
+                  error = page.error,
+                  loadedCount = page.items.size,
+                  endText = page.total?.let { "已显示全部 ${page.items.size} / $it 项" },
+                  onRetry = { scope.launch { page.retry(loader) } },
                 )
               }
             }

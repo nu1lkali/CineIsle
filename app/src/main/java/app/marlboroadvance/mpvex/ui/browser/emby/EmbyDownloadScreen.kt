@@ -97,6 +97,11 @@ object EmbyDownloadScreen : Screen {
             }
           },
           actions = {
+            // 离线内容（清单 4.2）：从首页顶栏搬过来的入口。
+            // 顶栏之前平铺了 6 个按钮把「设置」都挤没了，现在低频功能统一收进
+            // 首页的「更多」菜单 / 各页面自己的顶栏，离线内容跟下载管理本来就是一件事，
+            // 放在这里最顺 —— 「正在下」和「已下好」在同一页里对照。
+            EmbyOfflineEntryButton()
             IconButton(
               onClick = { if (anyActive) viewModel.pauseAll() else viewModel.resumeAll() },
               enabled = anyPausable,

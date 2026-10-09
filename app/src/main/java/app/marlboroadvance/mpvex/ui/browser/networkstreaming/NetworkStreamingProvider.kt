@@ -11,6 +11,7 @@ import android.util.Log
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.NetworkClientFactory
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * ContentProvider for streaming network files to MPV player
@@ -19,10 +20,20 @@ class NetworkStreamingProvider : ContentProvider() {
   companion object {
     private const val TAG = "NetworkStreamingProvider"
 
-    // Cache for active connections
-    private val connectionCache = mutableMapOf<Long, NetworkConnection>()
+    /**
+     * 活动连接的缓存（清单 #20 建议项）。
+     *
+     * ⚠️ 必须是 `ConcurrentHashMap` 而不是 `mutableMapOf`：
+     * 这个 ContentProvider 的方法（[openFile] 等）是**通过 Binder 被 mpv 进程/线程调的**，
+     * 而 [setConnection] 是应用内（主线程）调的 —— 两边并发读写同一张表。
+     * `mutableMapOf`（LinkedHashMap）在并发 put 时可能内部结构损坏，
+     * 表现为偶发的 `ConcurrentModificationException` 或直接死循环。
+     */
+    private val connectionCache = ConcurrentHashMap<Long, NetworkConnection>()
+
+    /** 同上，[clientCache] 也跨线程读写。 */
     private val clientCache =
-      mutableMapOf<Long, app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.NetworkClient>()
+   ConcurrentHashMap<Long, app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.NetworkClient>()
 
     fun getUri(context: android.content.Context, connectionId: Long, filePath: String): Uri {
       val authority = "${context.packageName}.networkstreaming"
@@ -33,18 +44,24 @@ class NetworkStreamingProvider : ContentProvider() {
       connectionCache[connectionId] = connection
     }
 
+    /**
+     * 关闭并清空所有缓存的连接。
+     *
+     * 原来这个方法**零调用点**（死代码），而且它自带 `runBlocking` 等`disconnect()` ——
+     * 一旦有人「顺手在 onDestroy 里调一下」，就是清单 #20 必修 3 的同一个坑。
+     * 所以改成：清表是同步的（纯内存），关连接丢后台。
+     */
     fun clearCache() {
-      runBlocking {
-        clientCache.values.forEach { client ->
-          try {
-            client.disconnect()
-          } catch (e: Exception) {
-            Log.e(TAG, "Error disconnecting client", e)
-          }
-        }
-      }
+   val clients = clientCache.values.toList()
       clientCache.clear()
       connectionCache.clear()
+      if (clients.isEmpty()) return
+      Thread({
+        clients.forEach { client ->
+       runCatching { runBlocking { client.disconnect() } }
+            .onFailure { Log.w(TAG, "Error disconnecting client", it) }
+        }
+      }, "net-stream-disconnect").apply { isDaemon = true }.start()
     }
   }
 
@@ -98,9 +115,16 @@ class NetworkStreamingProvider : ContentProvider() {
         return null
       }
 
-      // Get or create client
+// Get or create client
+      // ⚠️ 原来用 `clientCache.getOrPut(...)`：它是「先 get，再 put」，**不是原子的**。
+      // 两个 Binder 线程同时为同一个 connectionId 建 client 时，
+      // 会各自造出一个客户端实例，其中一个被丢进 map 之外 —— 那个孤儿 client
+      // 已经在 [NetworkClientFactory.createClient] 里开了一部分资源，却再也拿不到
+      // `disconnect()`（`clearCache` 只遍历 map），等于泄漏一条网络连接。
+      // `ConcurrentHashMap.getOrPut`（注意这里用的是 `kotlin.collections` 之外的
+      // `MutableMap.getOrPut` 对 ConcurrentMap 的重载）保证整个「取值或创建」原子化。
       val client = clientCache.getOrPut(connectionId) {
-        NetworkClientFactory.createClient(connection)
+NetworkClientFactory.createClient(connection)
       }
 
       // Create a pipe for streaming

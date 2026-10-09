@@ -2,7 +2,6 @@ package app.marlboroadvance.mpvex.ui.player
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
-import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -14,16 +13,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalConfiguration
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.media.MediaMetadata
-import android.media.session.MediaSession
-import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
 import android.view.KeyEvent
@@ -45,7 +40,6 @@ import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
 import app.marlboroadvance.mpvex.database.entities.PlaybackStateEntity
 import app.marlboroadvance.mpvex.databinding.PlayerLayoutBinding
@@ -267,6 +261,10 @@ open class PlayerActivity :
 
   /**
    * 预加载专用的 HTTP 客户端：超时压得很短，失败也不影响正常播放。
+   *
+   * ⚠️ **故意不并入 [EmbyHttp]共享池**：这里要的就是「5秒连不上立刻放弃」——
+   * 预加载是后台锦上添花，绝不能占着共享连接池里的连接等 15 秒超时，
+   * 把正在播的正片挤掉。独立的短超时客户端反而是这个场景的正确选择。
    */
   private val preloadHttpClient: OkHttpClient by lazy {
     OkHttpClient.Builder()
@@ -329,7 +327,6 @@ open class PlayerActivity :
   private var isReady = false // Single flag: true when video loaded and ready
   private var isUserFinishing = false
   private var isManualBackgroundPlayback = false // Track manual background playback trigger
-  private var noisyReceiverRegistered = false
   private var mpvInitialized = false // Track MPV initialization state
   /**
    * 首帧视频尺寸到达后只据此设一次方向；之后切集不再调用 [setOrientation]，
@@ -337,7 +334,6 @@ open class PlayerActivity :
    */
   private var videoParamsOrientationHandled = false
   private var savePlaybackStateJob: kotlinx.coroutines.Job? = null // Track ongoing save job
-  private var wasPlayingBeforePause = false // Track if video was playing before pause
 
   // ==================== Background Playback ====================
 
@@ -354,88 +350,44 @@ open class PlayerActivity :
   // ==================== MediaSession ====================
 
   /**
-   * MediaSession for integration with system media controls, Android Auto, and Wear OS.
+   * 系统媒体会话（清单 1.5 拆分第 3 刀）：锁屏 / 通知栏 / 蓝牙 / Android Auto 的播放控制。
+   *
+   * 懒加载：只有真正开始播放、且内核已就绪时才创建，避免冷启动就占系统资源。
    */
-  private lateinit var mediaSession: MediaSession
-
-  /**
-   * Tracks whether MediaSession has been successfully initialized.
-   */
-  private var mediaSessionInitialized = false
-
-  /**
-   * Builder for MediaSession playback states.
-   */
-  private lateinit var playbackStateBuilder: PlaybackState.Builder
+  private val mediaSession by lazy {
+    PlayerMediaSession(
+      appContext = applicationContext,
+      onPlay = { viewModel.unpause() },
+      onPause = { viewModel.pause() },
+      onSeekTo = { posMs -> viewModel.seekTo((posMs / 1000).toInt()) },
+      currentPositionMs = { (viewModel.pos ?: 0) * 1000L },
+      isPaused = { viewModel.paused ?: false },
+    )
+  }
 
   // ==================== Audio Focus ====================
 
   /**
-   * Audio focus request for API 26+.
+   * 音频焦点 + 拔耳机处理（清单 1.5 拆分第 2 刀）。
+   *
+   * 懒加载：它只在 [initializeMpvAndFinishSetup] 走到音频设置那一步时才被创建，
+   * 那时 viewModel 已经就绪，可以安全地把 `paused` 传成回调。
    */
-  private var audioFocusRequest: AudioFocusRequest? = null
-
-  /**
-   * Callback to restore audio focus after it's been lost and regained.
-   */
-  private var restoreAudioFocus: () -> Unit = {}
-
-  // ==================== Broadcast Receivers ====================
-
-  /**
-   * Receiver for handling noisy audio events.
-   */
-  private val noisyReceiver =
-    object : BroadcastReceiver() {
-      override fun onReceive(
-        context: Context?,
-        intent: Intent?,
-      ) {
-        if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-          viewModel.pause()
+  private val audioFocus by lazy {
+    PlayerAudioFocus(
+      context = this,
+      isPaused = { viewModel.paused ?: false },
+      onPause = { viewModel.pause() },
+      onResume = { viewModel.unpause() },
+      onScreenKeepOnChange = { keepOn ->
+        if (keepOn) {
+          window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
           window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
-      }
-    }
-
-  /**
-   * Listener for audio focus changes.
-   */
-  private val audioFocusChangeListener =
-    AudioManager.OnAudioFocusChangeListener { focusChange ->
-      when (focusChange) {
-        AudioManager.AUDIOFOCUS_LOSS,
-        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-          -> {
-          // Save current state to restore later
-          val oldRestore = restoreAudioFocus
-          val wasPlayerPaused = viewModel.paused ?: false
-          viewModel.pause()
-          restoreAudioFocus = {
-            oldRestore()
-            if (!wasPlayerPaused) viewModel.unpause()
-          }
-        }
-
-        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-          // Lower volume temporarily
-          PlayerLib.command("multiply", "volume", "0.5")
-          restoreAudioFocus = {
-            PlayerLib.command("multiply", "volume", "2")
-          }
-        }
-
-        AudioManager.AUDIOFOCUS_GAIN -> {
-          // Restore previous audio state
-          restoreAudioFocus()
-          restoreAudioFocus = {}
-        }
-
-        AudioManager.AUDIOFOCUS_REQUEST_FAILED -> {
-          Log.d(TAG, "Audio focus request failed")
-        }
-      }
-    }
+      },
+    )
+  }
 
   @RequiresApi(Build.VERSION_CODES.P)
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -459,7 +411,68 @@ open class PlayerActivity :
     // OPTIMIZATION: Set volume control stream so hardware buttons control media volume
     volumeControlStream = AudioManager.STREAM_MUSIC
 
-    setupMPV()
+    // ── 内核初始化：必须同步完成，onCreate 返回前 mpv 句柄就要可用 ──
+    //
+    // ## 这里曾经被改成异步，直接导致「点播放 → 闪退」（清单 #26 的由来）
+    //
+    // 原来的写法是 `lifecycleScope.launch { withContext(IO) { … } ; setupMPV() }`，
+    // 动机是「assets 拷贝 / SAF 读配置是纯 IO，别占住主线程」。但它破坏了一个
+    // 硬性前提：**`onCreate` 返回时 mpv 必须已经 create**。
+    //
+    // 原因在 `MPVView` 的继承链：`BaseMPVView extends SurfaceView`。
+    // `setContentView` 一执行，首帧 traversal 就会回调 `surfaceCreated`，
+    // 而它的实现是 `MPVLib.attachSurface(holder.surface)` —— 一个 native 调用。
+    // AAR 里所有 native 方法操作的句柄都由 `MPVLib.create()` 分配，
+    // 在 create 之前调用 = 解引用空指针 = **SIGSEGV**。
+    // 这类崩溃在 native 栈里，**JVM 的 try/catch 与 runCatching 都拦不住**，
+    // 表现就是整个进程直接消失、且拿不到任何 Java 堆栈。
+    //
+    // 时序上 IO 段要几百 ms 到几秒（首次进播放页要拷 scripts/shaders/fonts，
+    // 还要读 SAF 同步用户自建 mpv 目录），而首帧只要一帧（~16ms）——
+    // 异步化之后 `attachSurface` **必然**抢在内核 create 之前跑，100% 复现。
+    //
+    // 同一窗口里还有第二条路：`onResume → updateVolume() → viewModel` 让
+    // `PlayerViewModel` 构造，其字段初始化里的 `PlayerLib.propInt["volume-max"]`
+    // 首次访问会触发 native `observeProperty`，同样是死路。
+    //
+    // ## 现在的做法
+    //
+    // 同步调用（回到改造前的行为），**但先把 IO 挪出主线程的那部分成果保留**：
+    //  ① `Anime4KManager.prepareOnIoThread()` 自带 `.assets_copied` 标记文件的快路径，
+    //     冷启动第二次起连 `assets.list()` 都不进；
+    // ② [PlayerLib] 的内核就绪门禁作为第二道防线 ——
+    //     万一将来又有人挪动初始化时机，最坏也只是「值读不到」而不是「进程崩掉」。
+    //
+    // 想彻底去掉主线程 IO 的正确解法是**在 Application 启动时预热**拷贝，
+    // 而不是把内核 create 推迟到 Activity 里 —— 那是另一件事，不在这里做。
+    prepareMpvFilesOnIoThread()
+    initializeMpvAndFinishSetup()
+  }
+
+  /**
+   * mpv 配置文件就绪之后的初始化 + 页面装配（清单 #20 必修 1）。
+   *
+   * 从 [onCreate] 原样搬出来的部分，因此**整体仍跑在主线程**
+   *（[lifecycleScope] 的默认 dispatcher 就是 `Dispatchers.Main.immediate`）。
+   *
+   * 搬出来而不是只把 `setupMPV()` 异步化，是因为 `player.initialize()` 之后那一整段
+   * （`setupAudio` / `setupPlayerControls` / `player.playFile(uri)` …）全都依赖
+   * 内核**已经初始化完**这个前提 —— 只把 IO 挪走而把 `player.initialize()` 留在原地，
+   * 会让 `playFile` 有机会抢在内核就绪前跑。
+   */
+  @RequiresApi(Build.VERSION_CODES.P)
+  private fun initializeMpvAndFinishSetup() {
+    // NOW initialize MPV - it will find and load the scripts we just copied
+    player.initialize(filesDir.path, cacheDir.path)
+    mpvInitialized = true
+    // 句柄此刻才真正存在，开门禁（清单 #26）。
+    // 必须在任何 PlayerLib 调用之前 —— 下面紧接着就是 addObserver / observeProperty。
+    PlayerLib.markCoreReady()
+    Log.d(TAG, "MPV initialized")
+
+    // Add observer after initialization
+    PlayerLib.addObserver(playerObserver)
+
     MediaPlaybackService.createNotificationChannel(this)
     setupAudio()
     setupBackPressHandler()
@@ -759,46 +772,14 @@ open class PlayerActivity :
     }
 
     if (!serviceBound) {
-      audioFocusRequest =
-        AudioFocusRequest
-          .Builder(AudioManager.AUDIOFOCUS_GAIN)
-          .setAudioAttributes(
-            AudioAttributes
-              .Builder()
-              .setUsage(AudioAttributes.USAGE_MEDIA)
-              .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
-              .build(),
-          ).setOnAudioFocusChangeListener(audioFocusChangeListener)
-          .setAcceptsDelayedFocusGain(true)
-          .setWillPauseWhenDucked(true)
-          .build()
-      requestAudioFocus()
+      audioFocus.create()
     }
   }
 
   /**
    * @return true if audio focus was granted immediately, false otherwise
    */
-  override fun requestAudioFocus(): Boolean {
-    val req = audioFocusRequest ?: return false
-    val result = audioManager.requestAudioFocus(req)
-    return when (result) {
-      AudioManager.AUDIOFOCUS_REQUEST_GRANTED -> {
-        restoreAudioFocus = {}
-        true
-      }
-
-      AudioManager.AUDIOFOCUS_REQUEST_DELAYED -> {
-        restoreAudioFocus = { requestAudioFocus() }
-        false
-      }
-
-      else -> {
-        restoreAudioFocus = {}
-        false
-      }
-    }
-  }
+  override fun requestAudioFocus(): Boolean = audioFocus.requestAudioFocus()
 
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
@@ -829,32 +810,86 @@ open class PlayerActivity :
         mediaPlaybackService = null
       }
 
-      // Wait for any pending save operation to complete before destroying MPV
-      // This prevents the race condition where the save coroutine tries to access
-      // MPV properties after PlayerLib.destroy() has been called
+      // 存档协程正在读 mpv 属性并写 Room。原先这里 `runBlocking { job.join() }`
+      // **无限等它在主线程跑完** —— 那是 ANR 级的卡顿（Room 首次建表 + WAL fsync
+      // 可以到几百毫秒），而它要防的竞态其实有更省的办法：
+      //
+      // 竞态的本质是「destroy() 之后 job 还去读 mpv 属性」。所以只要**先冻结 mpv**
+      // （下面 cleanupMPV 里的 `player.isExiting = true` + `removeObserver`），
+      // job 读到的是什么就已经不重要了 —— 它写的要么是完整快照，要么是半截快照，
+      // 两种都不会让程序崩。
+      //
+      // 真正需要保证的是「别丢进度」，而那个由 onPause 的 `isSync` 分支负责
+      // （退出时那次是同步写的，见 saveVideoPlaybackState）。这里的 job 是
+      // onPause 之后的**异步补写**，它和 onPause 那次写的是同一份数据，
+      // 晚一点到账不会丢，只是时序上晚一点。
+      //
+      // 所以这里仍然等一下，但**必须有上限**：万一它真的卡住（磁盘满 / 数据库锁），
+      // 也不能让用户看着「退出应用」卡死在那儿。
       savePlaybackStateJob?.let { job ->
-        Log.d(TAG, "Waiting for save playback state job to complete...")
-        runCatching {
-          // Use runBlocking to ensure we wait for the job to finish
-          // This is safe here as onDestroy is already on the main thread
-          kotlinx.coroutines.runBlocking {
-            job.join()
+        if (job.isActive) {
+          Log.d(TAG, "Waiting for pending playback state save (max ${SAVE_JOIN_BUDGET_MS}ms)...")
+          runCatching {
+            kotlinx.coroutines.runBlocking {
+              withTimeoutOrNull(SAVE_JOIN_BUDGET_MS) { job.join() }
+            }
+          }.onFailure { Log.w(TAG, "Join playback state job failed", it) }
+          if (job.isActive) {
+            Log.w(TAG, "Playback state save still running after budget; releasing MPV anyway")
+            // 不 join 了：让这个协程随 Activity 一起结束。
+            // 它后续读 mpv 会拿到 null（内核已销毁），runCatching 会吞掉。
+            job.cancel()
           }
         }
-        Log.d(TAG, "Save playback state job completed")
       }
 
       cleanupMPV()
       cleanupAudio()
+      // PiP receiver 被 activity 强引用；「PiP 中划掉应用」这条路不会走
+      // onPictureInPictureModeChanged(false)，所以必须在这里显式反注册（清单 #20）
+      //
+      // `pipHelper` 是 `lateinit var`（非可空），所以判「有没有初始化过」而不是判 null ——
+      // 转交 GSY / 文件已不存在这两种提前 return 的路径上它压根没被赋值，
+      // 直接 `pipHelper.release()` 会抛 UninitializedPropertyAccessException。
+      if (::pipHelper.isInitialized) {
+        pipHelper.release()
+      }
       cleanupReceivers()
       releaseMediaSession()
     }.onFailure { e ->
       Log.e(TAG, "Error during onDestroy", e)
     }
 
+    // 「不喜欢」的当前条目是进程级单例，退出播放页要复位 ——
+    // 否则下次进来会先闪一下上一条视频的标记状态。
+    DislikePlayerActions.clear()
+
     super.onDestroy()
   }
 
+  /**
+   * 释放 mpv 内核（清单 #20）。
+   *
+   * ## 这里原先有两个 bug，都已修掉
+   *
+   * 1. **`command("quit")` 从未发出**（功能性 bug，可能原生崩溃）：
+   *    原来的判断写的是 `if (isReady)`，而 `onDestroy` 开头已经把 `isReady = false`
+   *    了 —— 于是 `quit` 与后面的等待整段都是**死代码**，直接从 `removeObserver`
+   *    跳到 `destroy()`。而硬解的 UI 线程此时可能正在访问被销毁的互斥量/队列。
+   *    现在改用 [mpvInitialized] 判断：它表示「内核有没有初始化过」，
+   *    不受 `onDestroy` 里那行 `isReady = false` 影响，语义也对。
+   *
+   * 2. **主线程 `Thread.sleep(100)`**：
+   *    每次退出播放页硬卡 100ms，而且「等固定时长」本身就不可靠（慢机器不够）。
+   *    现在改成轮询 [PlayerLib.isIdleActive] 到真正空闲为止，且**有上限**，
+   *    最坏情况才退化成原来的固定等待，不会无限卡住。
+   *
+   * ## 为什么这个等待不能搬到协程里
+   *
+   * `destroy()` 必须在等待完成**之后**同步调用（它是 native 的、不可挂起的）。
+   * 把等待挪到后台再回来调用 `destroy()` 会留下一个「内核还活着但没人管」的窗口，
+   * 反而更容易崩。所以这里保持同步 —— 区别是**从「盲等 100ms」变成「最多等 100ms，通常几毫秒就返回」**。
+   */
   private fun cleanupMPV() {
     if (!mpvInitialized) return
 
@@ -869,22 +904,20 @@ open class PlayerActivity :
     runCatching {
       PlayerLib.removeObserver(playerObserver)
 
-      if (isReady) {
-        // Pause playback first to reduce thread activity
-        PlayerLib.setPropertyBoolean("pause", true)
+      // 暂停可以真正降低活跃度，让 mpv 更快进入 idle
+      PlayerLib.setPropertyBoolean("pause", true)
+      // quit 是**异步**命令：投进队列就返回，此刻内部线程还在跑
+      PlayerLib.command("quit")
 
-        // Send quit command to gracefully shut down MPV
-        PlayerLib.command("quit")
+      // 等 mpv 真正空闲，而不是盲等固定时长
+      awaitMpvIdle()
 
-        // Wait briefly for MPV to process quit and clean up internal threads
-        // This prevents race conditions where hardware UI threads try to access
-        // mutexes/queues that are destroyed by PlayerLib.destroy()
-        // We use a short blocking wait here as onDestroy is already on the main thread
-        // and this ensures proper cleanup before activity destruction
-        Thread.sleep(100)
-      }
+      // ⚠️ 关闸必须在 destroy() **之前**（清单 #26）：
+      // destroy() 一执行句柄就失效，而后面 `cleanupAudio` / `releaseMediaSession`
+      // 以及 `onDestroy` 余下代码里仍有零散的属性访问（如音量、播放状态回写）。
+      // 门禁关上后那些调用会被静默挡掉；不关就是打在已释放的句柄上 —— native 崩溃。
+      PlayerLib.markCoreGone()
 
-      // Now safe to destroy MPV as internal threads have had time to shut down
       PlayerLib.destroy()
       mpvInitialized = false
     }.onFailure { e ->
@@ -892,11 +925,27 @@ open class PlayerActivity :
     }
   }
 
-  override fun abandonAudioFocus() {
-    if (restoreAudioFocus != {}) {
-      audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
-      restoreAudioFocus = {}
+  /**
+   * 等 mpv 进入空闲状态，带时间上限。
+   *
+   * 上限取 100ms：与原先的 `Thread.sleep(100)` 同量级，所以**最坏情况不比以前更差**，
+   * 而典型情况（quit 很快被处理）只等几毫秒。轮询间隔 5ms —— 再密也不会更准，
+   * 因为 mpv 处理命令的粒度远大于 5ms。
+   *
+   * 不用 `Thread.sleep` 而用 `SystemClock.sleep`：显式表达「我就是要阻塞在这里」，
+   * 避免以后有人 review 时以为这里挂错了线程。
+   */
+  private fun awaitMpvIdle() {
+    val deadline = SystemClock.uptimeMillis() + MPV_IDLE_WAIT_BUDGET_MS
+    while (SystemClock.uptimeMillis() < deadline) {
+      if (PlayerLib.isIdleActive()) return
+      SystemClock.sleep(MPV_IDLE_POLL_INTERVAL_MS)
     }
+    Log.w(TAG, "MPV did not go idle within ${MPV_IDLE_WAIT_BUDGET_MS}ms; destroying anyway")
+  }
+
+  override fun abandonAudioFocus() {
+    audioFocus.abandon()
   }
 
   private fun cleanupAudio() {
@@ -904,12 +953,7 @@ open class PlayerActivity :
   }
 
   private fun cleanupReceivers() {
-    if (noisyReceiverRegistered) {
-      runCatching {
-        unregisterReceiver(noisyReceiver)
-        noisyReceiverRegistered = false
-      }
-    }
+    audioFocus.unregisterNoisyReceiver()
   }
 
   @RequiresApi(Build.VERSION_CODES.P)
@@ -931,7 +975,9 @@ open class PlayerActivity :
         // Tell MPV to stop processing to reduce busywork during cleanup
         PlayerLib.command("stop")
       } else if (!isInPip && shouldPause) {
-        wasPlayingBeforePause = !(viewModel.paused ?: true)
+        // 这里原本还往 wasPlayingBeforePause 记一笔「暂停前在不在播」，但那个字段
+        // 在音频焦点逻辑搬进 PlayerAudioFocus（改用 isPaused 实时回调）后就没有
+        // 任何读取点了，属于拆分残留，已删。
         viewModel.pause()
       }
 
@@ -994,10 +1040,7 @@ open class PlayerActivity :
         saveVideoPlaybackState(fileName)
       }
 
-      if (noisyReceiverRegistered) {
-        unregisterReceiver(noisyReceiver)
-        noisyReceiverRegistered = false
-      }
+      audioFocus.unregisterNoisyReceiver()
 
       // Handle background playback based on preferences
       val shouldAllowBackgroundPlayback = isManualBackgroundPlayback || 
@@ -1022,11 +1065,7 @@ open class PlayerActivity :
       setupWindowFlags()
       setupSystemUI()
 
-      if (!noisyReceiverRegistered) {
-        val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
-        registerReceiver(noisyReceiver, filter)
-        noisyReceiverRegistered = true
-      }
+      audioFocus.registerNoisyReceiver()
 
       if (playerPreferences.rememberBrightness.get()) {
         val brightness = playerPreferences.defaultBrightness.get()
@@ -1111,195 +1150,51 @@ open class PlayerActivity :
   }
 
   /**
-   * Initializes the MPV player with the necessary paths and observers.
+   * 准备 mpv 的配置文件与脚本。
+   *
+   * ## 必须在 `player.initialize()` 之前、且在主线程调用
+   *
+   * 做三件纯文件 IO：
+   * - `Utils.copyAssets`：从 assets 拷 mpv.conf / input.conf / scripts / shaders / fonts
+   * - `syncFromUserMpvDirectory`：用户自建 mpv 目录（SAF）+ 字体目录同步
+   * - `prepareAnime4KOnIoThread`：Anime4K shader（内部有 `.assets_copied` 标记文件的快路径，
+   *   所以第二次起几乎不耗时间）
+   *
+   * ## 为什么这一段还是同步的（清单 #26 的教训）
+   *
+   * 曾经把它整块搬进 `lifecycleScope.launch { withContext(Dispatchers.IO) { … } }`，
+   * 结果 `onCreate` 在内核 create 之前就返回，而 `MPVView` 是 `SurfaceView` ——
+   * 首帧 traversal 触发的 `surfaceCreated → MPVLib.attachSurface()` 是 native 调用，
+   * 打在还没 create 的句柄上 = SIGSEGV，JVM 拦不住 ⇒ 点播放必闪退。
+   * 详见 `onCreate` 里那段注释。
+   *
+   * 真正该做的是「在 Application 启动时预热拷贝」，而不是把内核 create 推迟。
+   *
+   * 内核初始化本身在 [initializeMpvAndFinishSetup]（也是主线程，且必须如此：
+   * `setOptionString` / `SurfaceView` 都要在主线程）。
    */
-  private fun setupMPV() {
+  private fun prepareMpvFilesOnIoThread() {
     // Copy essential files FIRST, before MPV initialization
     runCatching {
       Utils.copyAssets(this@PlayerActivity)
-      syncFromUserMpvDirectory()
+      // 用户自建 mpv 目录（SAF）+ 字体目录同步。
+      // 逻辑已抽到 MpvAssetSync（清单 1.5 拆分第 1 刀）—— 它是纯文件 IO，
+      // 不碰任何播放器状态，留在 Activity 里只会挡住真正的初始化流程。
+      MpvAssetSync(
+        context = this@PlayerActivity,
+        advancedPreferences = advancedPreferences,
+        subtitlesPreferences = subtitlesPreferences,
+        fileManager = fileManager,
+      ).syncFromUserMpvDirectory()
+      // Anime4K 的 shader 也一起备好（清单 #20 必修 2）。
+      // 必须在 `player.initialize()` 之前，因为 `glsl-shaders` 是 setOptionString，
+      // 过了初始化期再设就不生效。
+      player.prepareAnime4KOnIoThread()
       Log.d(TAG, "MPV config and scripts prepared successfully")
     }.onFailure { e ->
       Log.e(TAG, "Error copying MPV config and scripts", e)
     }
-
-    // NOW initialize MPV - it will find and load the scripts we just copied
-    player.initialize(filesDir.path, cacheDir.path)
-    mpvInitialized = true
-    Log.d(TAG, "MPV initialized")
-
-    // Add observer after initialization
-    PlayerLib.addObserver(playerObserver)
   }
-
-  /**
-   * Syncs ALL MPV assets from the user's configured MPV directory to internal storage.
-   * Handles: mpv.conf, input.conf, scripts/, script-opts/, shaders/, fonts/
-   *
-   * Uses case-insensitive subfolder matching and falls back to root scanning
-   * if standard subfolders don't exist. Falls back to preferences-based config
-   * if no user directory is configured.
-   */
-  private fun syncFromUserMpvDirectory() {
-    val mpvConfStorageUri = advancedPreferences.mpvConfStorageUri.get()
-
-    // Try to open the user's MPV directory
-    val tree = if (mpvConfStorageUri.isNotBlank()) {
-      runCatching {
-        DocumentFile.fromTreeUri(this, mpvConfStorageUri.toUri())
-      }.getOrNull()?.takeIf { it.exists() && it.canRead() }
-    } else null
-
-    if (tree != null) {
-      Log.d(TAG, "Syncing from user MPV directory: ${tree.uri}")
-      syncConfigFiles(tree)
-      syncFonts(tree)
-      Log.d(TAG, "Full MPV directory sync completed")
-    } else {
-      // Fallback: use preferences-based config (no user directory set)
-      Log.d(TAG, "No MPV directory configured, using preferences fallback")
-      copyMPVConfigFromPreferences()
-    }
-  }
-
-  // ==================== Config Files Sync ====================
-
-  /**
-   * Syncs mpv.conf and input.conf from the user's MPV directory.
-   * Also caches the content in preferences for the config editor.
-   */
-  private fun syncConfigFiles(tree: DocumentFile) {
-    for (configName in listOf("mpv.conf", "input.conf")) {
-      runCatching {
-        val configFile = findFileCaseInsensitive(tree, configName)
-        if (configFile != null && configFile.exists() && configFile.canRead()) {
-          contentResolver.openInputStream(configFile.uri)?.use { input ->
-            val content = input.bufferedReader().readText()
-            File(filesDir, configName).writeText(content)
-            // Cache in preferences for the config editor
-            when (configName) {
-              "mpv.conf" -> advancedPreferences.mpvConf.set(content)
-              "input.conf" -> advancedPreferences.inputConf.set(content)
-            }
-            Log.d(TAG, "Synced config: $configName (${content.length} chars)")
-          }
-        } else {
-          // Config not in directory, fall back to preferences
-          val prefContent = when (configName) {
-            "mpv.conf" -> advancedPreferences.mpvConf.get()
-            "input.conf" -> advancedPreferences.inputConf.get()
-            else -> ""
-          }
-          File(filesDir, configName).apply {
-            if (!exists()) createNewFile()
-            if (prefContent.isNotBlank()) writeText(prefContent)
-          }
-          Log.d(TAG, "Config not found in directory, used preferences: $configName")
-        }
-      }.onFailure { e ->
-        Log.e(TAG, "Error syncing config: $configName", e)
-      }
-    }
-  }
-
-  // ==================== Fonts Sync ====================
-
-  /**
-   * Syncs font files (.ttf, .otf, .ttc, .woff, .woff2) from the user's MPV directory.
-   * Looks in fonts/ subfolder first (case-insensitive), falls back to root.
-   * Also syncs from the subtitle preferences font folder if set.
-   */
-  private fun syncFonts(tree: DocumentFile) {
-    val internalFontsDir = File(filesDir, "fonts")
-    internalFontsDir.mkdirs()
-
-    val fontsSubdir = findSubdirCaseInsensitive(tree, "fonts")
-    val sourceDir = fontsSubdir ?: tree
-    val fontExtensions = setOf("ttf", "otf", "ttc", "woff", "woff2")
-    var count = 0
-
-    sourceDir.listFiles().forEach { file ->
-      if (!file.isFile) return@forEach
-      val name = file.name ?: return@forEach
-      val ext = name.substringAfterLast('.', "").lowercase()
-      if (ext !in fontExtensions) return@forEach
-
-      val target = File(internalFontsDir, name)
-      // Skip if font already exists (fonts can be large)
-      if (target.exists()) return@forEach
-
-      runCatching {
-        contentResolver.openInputStream(file.uri)?.use { input ->
-          target.outputStream().use { output ->
-            input.copyTo(output)
-          }
-          count++
-          Log.d(TAG, "Synced font: $name")
-        }
-      }.onFailure { e ->
-        Log.e(TAG, "Error syncing font: $name", e)
-      }
-    }
-
-    // Also sync from subtitle preferences font folder if set
-    runCatching {
-      val fontsFolderUri = subtitlesPreferences.fontsFolder.get()
-      if (fontsFolderUri.isNotBlank()) {
-        val destDir = fileManager.fromPath("${filesDir.path}/fonts")
-        if (!fileManager.exists(destDir)) {
-          fileManager.createDir(fileManager.fromPath(filesDir.path), "fonts")
-        }
-        val fontsDir = fileManager.fromUri(fontsFolderUri.toUri())
-        if (fontsDir != null && fileManager.exists(fontsDir)) {
-          fileManager.copyDirectoryWithContent(fontsDir, destDir, false)
-        }
-      }
-    }.onFailure { e ->
-      Log.e(TAG, "Error syncing subtitle fonts: ${e.message}")
-    }
-
-    Log.d(TAG, "Fonts sync: $count file(s) from MPV directory")
-  }
-
-  // ==================== Helpers ====================
-
-  /**
-   * Fallback: copies config from preferences when no user MPV directory is set.
-   */
-  private fun copyMPVConfigFromPreferences() {
-    runCatching {
-      File(filesDir, "mpv.conf").apply {
-        if (!exists()) createNewFile()
-        val content = advancedPreferences.mpvConf.get()
-        if (content.isNotBlank()) writeText(content)
-      }
-      File(filesDir, "input.conf").apply {
-        if (!exists()) createNewFile()
-        val content = advancedPreferences.inputConf.get()
-        if (content.isNotBlank()) writeText(content)
-      }
-      // Ensure fonts directory exists even without user dir
-      File(filesDir, "fonts").mkdirs()
-    }.onFailure { e ->
-      Log.e(TAG, "Error creating fallback config files", e)
-    }
-  }
-
-  /**
-   * Finds a subdirectory by name (case-insensitive) within a DocumentFile.
-   */
-  private fun findSubdirCaseInsensitive(parent: DocumentFile, name: String): DocumentFile? =
-    parent.listFiles().firstOrNull {
-      it.isDirectory && it.name?.equals(name, ignoreCase = true) == true
-    }
-
-  /**
-   * Finds a file by name (case-insensitive) within a DocumentFile.
-   */
-  private fun findFileCaseInsensitive(parent: DocumentFile, name: String): DocumentFile? =
-    parent.listFiles().firstOrNull {
-      it.isFile && it.name?.equals(name, ignoreCase = true) == true
-    }
 
   override fun onResume() {
     super.onResume()
@@ -2325,6 +2220,17 @@ private fun cancelAutoplayCountdown() {
     // 否则新片开头那一秒会把上一条的缓冲量算进来，速度显示跳变
     MpvNetSpeedSampler.reset()
 
+    // 落盘缓存超限就先清一遍（清单 #18）。mpv 自己的 LRU 只管「单条流不超过
+    // cache-persize」，**不管总量** —— 连看 10 部片子总占用早就撑爆了，
+    // 到那时 mpv 写不进去，表现为「缓存开着但没效果」。
+    // 放在换片这一刻而不是开设置页时：这是缓存真正会被写入的前一刻。
+    runCatching {
+      MpvDiskCache.trimIfNeeded(
+        this,
+        playerPreferences.diskCacheSizeMb.get(),
+      )
+    }
+
     setIntentExtras(intent.extras)
 
     // mpv 已经换成新文件：轨道列表重建了，外挂字幕跟踪表必须跟着清。
@@ -2613,18 +2519,30 @@ private fun cancelAutoplayCountdown() {
             PlayerLib.setPropertyString("force-media-title", fileName)
             viewModel.setMediaTitle(fileName)
 
-            // Update media session
+// Update media session
             val durationMs = (PlayerLib.getPropertyDouble("duration")?.times(1000))?.toLong() ?: 0L
             updateMediaSessionMetadata(
-              title = fileName,
-              durationMs = durationMs,
+  title = fileName,
+    durationMs = durationMs,
             )
 
-            // Update background service if connected
+        // Update background service if connected
             if (serviceBound && mediaPlaybackService != null) {
-              val artist = runCatching { PlayerLib.getPropertyString("metadata/artist") }.getOrNull() ?: ""
-              val thumbnail = runCatching { PlayerLib.grabThumbnail(1080) }.getOrNull()
-              mediaPlaybackService?.setMediaInfo(title = fileName, artist = artist, thumbnail = thumbnail)
+            val artist = runCatching { PlayerLib.getPropertyString("metadata/artist") }.getOrNull() ?: ""
+        // 截图搬回后台（清单 #20 必修 4）。
+   // `MPVLib.grabThumbnail` 在 AAR 里是「另写的一套像素转换」——
+    // 它会把当前帧从解码器里拉出来、在 native 侧转成 Bitmap 再跨 JNI 传回来，
+     // 1080 宽一次约 2.6MB，而且**同步阻塞调用方**。
+                // 放在 `withContext(Dispatchers.Main)` 里就是拿 UI 线程去等一次硬解+内存分配。
+  launch {
+        val thumbnail = withContext(Dispatchers.IO) {
+                  runCatching { PlayerLib.grabThumbnail(NOTIFICATION_THUMBNAIL_SIZE) }.getOrNull()
+     }
+   // 服务可能在截图期间被解绑/销毁，回来时重新判一次
+   if (serviceBound && mediaPlaybackService != null) {
+     mediaPlaybackService?.setMediaInfo(title = fileName, artist = artist, thumbnail = thumbnail)
+   }
+              }
             }
           }
 
@@ -2844,7 +2762,23 @@ private fun cancelAutoplayCountdown() {
     }
 
     if (isSync) {
-      kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+      // 退出路径（`isFinishing` / `isUserFinishing`）原先是
+      // `runBlocking(Dispatchers.IO) { saveBlock() }` —— 看着「切了 IO 就不卡主线程」，
+      // 其实**完全误解了**：`runBlocking` 阻塞的是**调用线程**，
+      // 写成 `Dispatchers.IO` 只是让 `saveBlock` 在 IO 线程执行，
+      // 主线程照样原地等到磁盘写完。按返回键退出时每次都卡一下，
+      // 数据库慢一点（首次建表 / WAL fsync / 磁盘忙）就是 ANR。
+      //
+      // 关键在于**该保住的东西已经保住了**：上面 `currentPos` / `currentDuration` /
+      // `speed` / `sid` … 全都在**主线程同步从 mpv 读完了**（mpv 属性读取是纳秒级的
+      // 内存读，不涉及 IO），`saveBlock` 内部只剩 `getVideoDataByTitle` + `upsert`
+      // 两个 Room 调用。所以改成异步**不会丢任何数据** ——
+      // 进度值已经以本地变量的形式被捕获进闭包了。
+      //
+      // 那 `isSync` 这个参数还需要吗？需要，但要重新定义它：
+      // 它的意义从「同步写库」变成「**持有这个 Job 引用**」——
+      // 退出时把 job 记进 [savePlaybackStateJob]，onDestroy 里好去 join/取消。
+      savePlaybackStateJob = lifecycleScope.launch(Dispatchers.IO) {
         saveBlock()
       }
     } else {
@@ -3548,110 +3482,27 @@ private fun cancelAutoplayCountdown() {
     return super.onKeyUp(keyCode, event)
   }
 
-  // ==================== System UI Management ====================
-
-  /**
-   * Restores system UI to normal state (shows status and navigation bars).
-   * Called when finishing the activity to return to normal Android UI.
-   */
-
-  // ==================== MediaSession ====================
-
-  /**
-   * Initializes MediaSession for integration with system media controls.
-   * Supports Android Auto, Wear OS, Bluetooth controls, and notification controls.
-   */
+  /** 建立系统媒体会话。真正的实现在 [PlayerMediaSession]。 */
   private fun setupMediaSession() {
-    runCatching {
-      mediaSession =
-        MediaSession(this, TAG).apply {
-          setCallback(
-            object : MediaSession.Callback() {
-              override fun onPlay() {
-                viewModel.unpause()
-                updateMediaSessionPlaybackState(isPlaying = true)
-              }
-
-              override fun onPause() {
-                viewModel.pause()
-                updateMediaSessionPlaybackState(isPlaying = false)
-              }
-
-              override fun onSeekTo(pos: Long) {
-                viewModel.seekTo((pos / 1000).toInt())
-                updateMediaSessionPlaybackState(isPlaying = viewModel.paused == false)
-              }
-            },
-          )
-          isActive = true
-        }
-      playbackStateBuilder =
-        PlaybackState
-          .Builder()
-          .setActions(
-            PlaybackState.ACTION_PLAY or
-              PlaybackState.ACTION_PAUSE or
-              PlaybackState.ACTION_PLAY_PAUSE or
-              PlaybackState.ACTION_SEEK_TO,
-          )
-      mediaSessionInitialized = true
-    }.onFailure { e ->
-      Log.e(TAG, "Failed to initialize MediaSession", e)
-      mediaSessionInitialized = false
-    }
+    mediaSession.create()
   }
 
-  /**
-   * Updates MediaSession playback state (playing/paused).
-   *
-   * @param isPlaying true if currently playing, false if paused
-   */
+  /** 上报播放/暂停状态给系统。 */
   private fun updateMediaSessionPlaybackState(isPlaying: Boolean) {
-    if (!mediaSessionInitialized) return
-    runCatching {
-      val state = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
-      val positionMs = (viewModel.pos ?: 0) * 1000L
-      mediaSession.setPlaybackState(
-        playbackStateBuilder
-          .setState(state, positionMs, if (isPlaying) 1.0f else 0f)
-          .build(),
-      )
-    }.onFailure { e -> Log.e(TAG, "Error updating playback state", e) }
+    mediaSession.updatePlaybackState(isPlaying)
   }
 
-  /**
-   * Updates MediaSession metadata (title, duration, etc.).
-   *
-   * @param title The media title
-   * @param durationMs The media duration in milliseconds
-   */
+  /** 上报标题与时长给系统（锁屏 / 通知栏显示）。 */
   private fun updateMediaSessionMetadata(
     title: String,
     durationMs: Long,
   ) {
-    if (!mediaSessionInitialized) return
-    runCatching {
-      val metadata =
-        MediaMetadata
-          .Builder()
-          .putString(MediaMetadata.METADATA_KEY_TITLE, title)
-          .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs)
-          .build()
-      mediaSession.setMetadata(metadata)
-    }.onFailure { e -> Log.e(TAG, "Error updating metadata", e) }
+    mediaSession.updateMetadata(title, durationMs)
   }
 
-  /**
-   * Releases MediaSession resources.
-   * Called during activity cleanup.
-   */
+  /** 释放系统媒体会话。 */
   private fun releaseMediaSession() {
-    if (!mediaSessionInitialized) return
-    runCatching {
-      mediaSession.isActive = false
-      mediaSession.release()
-    }.onFailure { e -> Log.e(TAG, "Error releasing MediaSession", e) }
-    mediaSessionInitialized = false
+    mediaSession.release()
   }
 
   // ==================== Background Playback Service ====================
@@ -3702,25 +3553,44 @@ private fun cancelAutoplayCountdown() {
     // Ensure notification channel exists
     MediaPlaybackService.createNotificationChannel(this)
     
-    // Get media info before starting service
+// Get media info before starting service
     val artist = runCatching { PlayerLib.getPropertyString("metadata/artist") }.getOrNull() ?: ""
-    val thumbnail = runCatching { PlayerLib.grabThumbnail(1080) }.getOrNull()
-    
+
     // Pass media info via intent extras
     val intent = Intent(this, MediaPlaybackService::class.java).apply {
       putExtra("media_title", fileName)
       putExtra("media_artist", artist)
     }
-    
-    // Store thumbnail in companion object for service to access
-    MediaPlaybackService.thumbnail = thumbnail
-    
+
     try {
       startForegroundService(intent)
       bindService(intent, serviceConnection, BIND_AUTO_CREATE)
       Log.d(TAG, "Service start and bind initiated")
     } catch (e: Exception) {
       Log.e(TAG, "Error starting/binding service", e)
+    }
+
+    // 缩略图异步抓（清单 #20 必修 4）。
+    // 原来这里是主线程同步 `grabThumbnail(1080)`：一次约 2.6MB，
+    // 而且 `MPVLib.grabThumbnail` 内部会把当前帧从解码器拉出来做像素转换、跨 JNI 传回，
+    // **同步阻塞调用方** —— 也就是说在 UI 线程上等一次硬解 + 一次大块内存分配。
+    //
+    // 现在改成：先把服务起起来（通知先出来，封面可以晚几百毫秒），
+    // 抓图丢后台，回来再挂上。
+    //
+    // 用 `setStaticThumbnail` 而不是 `mediaPlaybackService?.setMediaInfo(...)`：
+    // 此刻可能还没绑定上（`bindService` 是异步回调），拿不到实例。
+    // 那个方法里判了 `!==`，所以「重新起服务时传的同一张」不会被误 recycle。
+    lifecycleScope.launch {
+      val thumbnail = withContext(Dispatchers.IO) {
+     runCatching { PlayerLib.grabThumbnail(NOTIFICATION_THUMBNAIL_SIZE) }.getOrNull()
+   }
+      if (isFinishing || isDestroyed) return@launch
+      MediaPlaybackService.setStaticThumbnail(thumbnail)
+      // 服务这会儿大概率已经绑上了，让它把新封面刷进通知里
+      if (serviceBound) {
+        mediaPlaybackService?.setMediaInfo(title = fileName, artist = artist, thumbnail = thumbnail)
+      }
     }
   }
 
@@ -4578,9 +4448,51 @@ private fun cancelAutoplayCountdown() {
     const val EXTRA_GSY_KERNEL = "gsy_kernel"
 
     /**
+     * 通知栏封面截图的宽度（像素）（清单 #20 必修 4）。
+     *
+     * 原来是 `grabThumbnail(1080)` —— **按高度还是宽度不确定**，但无论哪个，
+     * 一张 1080 级的图解码成 ARGB_8888 都在 2MB 以上（1080 宽×约 600 高×4B ≈ 2.6MB），
+     * 而 `MediaPlaybackService.thumbnail` 是静态字段，一路上还有多处引用。
+     *
+     * 640 是个够用的值：Android 通知栏的大图标在标准分辨率下也就是
+     * `Notification.largeIcon` 那一档，实际显示尺寸通常 < 300dp，
+     * 640 宽在 xxhdpi 上仍然绰绰有余，视觉上看不出差别。
+     *
+     * 省下的是实打实的 4 倍内存 + 4 倍拷贝时间，而这份内存是**要一直挂在进程上**的。
+     */
+    private const val NOTIFICATION_THUMBNAIL_SIZE = 640
+
+    /**
      * Constant for "brightness not set".
      */
     private const val BRIGHTNESS_NOT_SET = -1f
+
+    /**
+     * `onDestroy` 里等存档协程收尾的上限（毫秒）（清单 #20）。
+     *
+     * 原本是 `runBlocking { job.join() }` **无限等**，在慢机器 / 数据库锁 /
+     * 磁盘满的时候会直接 ANR。留一个上限后最坏情况是「进度晚一点到账」，
+     * 而晚到账本身不会丢数据（onPause 退出那次已经同步写过一遍）。
+     *
+     * 取 500ms：要能覆盖 Room 首次建表 + WAL fsync 的典型耗时，
+     * 又不至于让用户看着「退出应用」明显卡顿。
+     */
+    private const val SAVE_JOIN_BUDGET_MS = 500L
+
+    /**
+     * 等 mpv 进入 idle 的上限（毫秒）（清单 #20）。
+     *
+     * 与原先的 `Thread.sleep(100)` 同量级 —— **最坏情况不比以前更差**，
+     * 典型情况（quit 很快被处理）只等几毫秒。
+     */
+    private const val MPV_IDLE_WAIT_BUDGET_MS = 100L
+
+    /**
+     * 上面那个轮询的间隔（毫秒）。
+     *
+     * 5ms 足够：mpv 处理命令的粒度远大于 5ms，再密只是白烧 CPU。
+     */
+    private const val MPV_IDLE_POLL_INTERVAL_MS = 5L
 
     /**
      * Constant used when playback position is not set.

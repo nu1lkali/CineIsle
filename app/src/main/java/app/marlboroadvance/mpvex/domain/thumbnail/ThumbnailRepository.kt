@@ -293,6 +293,17 @@ class ThumbnailRepository(
     }
   }
 
+  /**
+   * 按 EXIF/容器里的旋转信息把缩略图转正。
+   *
+   * ⚠️ 旋转后**原图必须回收**（清单 #20 建议项）。
+   * `Bitmap.createBitmap` 会分配一张新的，把原图整个复制一遍；
+   * 而这条路径每次列表滚动都会走（每个视频一张缩略图），
+   * 原图既没人引用也没 recycle，就全靠 GC 何时收 —— 快速滑动时能堆出可观的一片 native 内存。
+   *
+   * 前提是「原图只此一份、没有被别人拿着」：`createBitmap` 的参数只用到
+   * width/height/matrix，返回值是完全独立的新实例，所以这里可以直接回收。
+   */
   private suspend fun rotateIfNeeded(
     video: Video,
     bitmap: Bitmap
@@ -301,7 +312,14 @@ class ThumbnailRepository(
     if (rotation == 0) return bitmap
     val matrix = android.graphics.Matrix()
     matrix.postRotate(rotation.toFloat())
-    return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    return try {
+    Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    } finally {
+      // 无论 createBitmap 成没成功，原图都不再需要了
+      if (!bitmap.isRecycled) {
+        runCatching { bitmap.recycle() }
+      }
+    }
   }
 
   private suspend fun generateWithFastThumbnails(

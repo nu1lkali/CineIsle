@@ -11,6 +11,8 @@ import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -18,6 +20,10 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
@@ -36,6 +42,15 @@ import app.marlboroadvance.mpvex.preferences.GsyKernelKind
 import app.marlboroadvance.mpvex.preferences.GsyPreferences
 import app.marlboroadvance.mpvex.preferences.GsyRenderKind
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
+import app.marlboroadvance.mpvex.preferences.SubtitleJustification
+import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
+import app.marlboroadvance.mpvex.domain.dislike.DislikeKey
+import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
+import app.marlboroadvance.mpvex.ui.player.engine.EngineFeature
+import app.marlboroadvance.mpvex.ui.player.gsy.GsyChapter
+import app.marlboroadvance.mpvex.ui.player.gsy.GsyChapterRepository
+import app.marlboroadvance.mpvex.ui.player.gsy.GsyChapterRepository.Companion.indexOfCurrent
+import app.marlboroadvance.mpvex.ui.player.gsy.GsySubtitleStyleMapper
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlayerActions
 import app.marlboroadvance.mpvex.ui.player.controls.EmbyFavoritePlayerButton
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
@@ -57,7 +72,10 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.inject
 import tv.danmaku.ijk.media.exo2.Exo2PlayerManager
 import tv.danmaku.ijk.media.exo2.ExoPlayerCacheManager
@@ -101,6 +119,29 @@ class GsyPlayerActivity : ComponentActivity() {
 
   /** 「播完自动下一集」沿用 mpv 那套全局播放偏好，避免同一件事在两处各有一份开关 */
   private val playerPreferences: PlayerPreferences by inject()
+
+  /**
+   * 字幕偏好 —— **与 mpv 播放页共用同一份**（清单 #19）。
+   *
+   * 这是「双内核共用一套 UI」的关键：字号、文字色、对齐这些在 GSY 侧改了，
+   * 切回 mpv 依然生效，反之亦然。不要在 GSY 侧另开一套 `gsy_sub_*` 偏好键 ——
+   * 那样用户会得到「两个内核两套外观」，切一下就变样。
+   *
+   * 代价是 GSY 能调的只是这个偏好的**子集**（GSY 没有字体名、没有描边样式、不认 ASS），
+   * 差集由 [GsySubtitleStyleMapper.unsupportedByGsy] 在样式面板标题里如实告知。
+   */
+  private val subtitlesPreferences: SubtitlesPreferences by inject()
+
+  /**
+   * GSY 内核的章节数据源（清单 #19）。
+   *
+   * 与 mpv 侧那套 `chapters: StateFlow` 无关 —— mpv 的章节来自容器内嵌章节表，
+   * GSY 没有章节 API，只能走 Emby。能力边界见 [EngineFeature.CHAPTERS] 的 KDoc。
+   */
+  private val chapterRepository: GsyChapterRepository by inject()
+
+  /** 拉章节要用当前登录的 Emby 服务器（清单 #19） */
+  private val embyRepository: EmbyRepository by inject()
 
   /** DLNA 投屏：与 mpv 播放页 / 详情页共用同一个单例（发现、连接、投屏状态都在它里面） */
   private val dlnaManager: DlnaCastManager by inject()
@@ -173,6 +214,14 @@ class GsyPlayerActivity : ComponentActivity() {
   /** 投屏面板（Compose）挂在内容根布局上的覆盖层 */
   private var castOverlay: ComposeView? = null
 
+  /**
+   * 打开投屏面板时，本地播放是不是**我们**暂停的。
+   *
+   * 只有我们暂停的才由我们恢复 —— 用户自己在面板打开前就已经暂停了的，
+   * 关掉面板不该擅自给他播起来。
+   */
+  private var pausedForCastSheet = false
+
   // ── 网络加载速度指示器（顶栏 gsy_net_speed）──
   /** 速度平滑器：压平 GSY 底层网速采样的毛刺，避免显示值一秒一个数（见 [NetworkSpeedSmoother]） */
   private val netSpeedSmoother = NetworkSpeedSmoother()
@@ -244,6 +293,7 @@ class GsyPlayerActivity : ComponentActivity() {
     bindControls(view)
     applyTitlePlacement(view)
     setUpFavoriteButton(view)
+    observeDislikeState()
 
     // 续播 / 起播；显式「从头播放」时带 play_from_start，重建播放页（换渲染方式）时带
     // gsy_restore_position，此时不受「续播到上次位置」开关影响。
@@ -378,8 +428,32 @@ class GsyPlayerActivity : ComponentActivity() {
 
     setUpCurrent(view)
     syncNavigation(view)
+    // ⚠️ 初次起播**也必须** bind「不喜欢」的 key。
+    //  之前只在 `playIndex()`（切上/下一集、播完自动下一集）里 bind，
+    //  于是「刚进播放器」这一整段时间里 `DislikePlayerActions.currentKey` 还是 null
+    //  ⇒ 点按钮走 `toggle()` 的 `key ?: return` 直接静默返回 ——
+    //  用户看到的就是「找到了按钮，点了完全没反应」。
+    bindDislikeForCurrent()
 
     view.startPlayLogic()
+  }
+
+  /**
+   * 把当前这一集的「不喜欢」key 交给 [DislikePlayerActions]。
+   *
+   * 每次换片都要调（起播 + 切集），否则按钮会停留在上一条视频的状态。
+   *
+   * ⚠️ [embyServerId] 是可空的：没绑服务器（本地 / SMB / 网络直链播放）时传 null
+   * ⇒ 按钮点了会提示「当前视频无法标记」，而不是拿一个假的 id 去查
+   * （查不到只是白查，但「没有来源」和「查过了没标记」在语义上必须分开）。
+   */
+  private fun bindDislikeForCurrent() {
+    DislikePlayerActions.bind(
+      embyItemIds.getOrNull(currentIndex)?.let { itemId ->
+        embyServerId?.let { DislikeKey(it, itemId) }
+      },
+      title = videoTitle,
+    )
   }
 
   /**
@@ -434,6 +508,9 @@ class GsyPlayerActivity : ComponentActivity() {
     // Emby 队列：让收藏按钮跟着切到这一集
     EmbyPlayerActions.onItemChanged(embyItemIds.getOrNull(index))
 
+    // 「不喜欢」按钮同样跟着切（内存快照 O(1)，无 IO ⇒ 与画面同帧）
+    bindDislikeForCurrent()
+
     // 小屏实例即使正在后台站着，也要知道「现在放的是哪一集」，
     // 否则退出全屏时标题 / 地址会回退到切集之前那一集。
     player?.takeIf { it !== target }?.getTitleTextView()?.let {
@@ -444,6 +521,10 @@ class GsyPlayerActivity : ComponentActivity() {
     target.setSeekOnStart(0)
     setUpCurrent(target)
     syncNavigation(target)
+    // 章节是**按 Emby 条目**缓存的（清单 #19）：切到新的一集要清掉别的条目的缓存，
+    // 否则用户从第 3 集跳到第 4 集、点开章节会看到第 3 集的章。
+    // 保留「切过去那一集」的缓存 —— 从第 3 集跳到第 4 集再跳回来时不该重新拉。
+    chapterRepository.invalidate(embyItemIds.getOrNull(index))
     target.startPlayLogic()
   }
 
@@ -681,12 +762,18 @@ class GsyPlayerActivity : ComponentActivity() {
           onScreenshot = { takeSnapshot() },
           onSubtitle = { showSubtitleMenu() },
           onAudioTrack = { showAudioTrackDialog() },
+          onChapters = { showChaptersDialog() },
           onPictureInPicture = { enterPip() },
           onCast = { showCastSheet() },
+          onDislikeToggle = { onDislikeToggle() },
+          onDislikeRemark = { showDislikeRemarkDialog() },
         ),
     )
     // 剪辑/切集后字幕键的激活态要跟着实例走
     view.setSubtitleActive(subtitleSource != null)
+    // 字幕样式要在**每个实例**上各刷一次（清单 #19）—— 全屏克隆实例是另一棵视图树，
+    // 它自带一个空的 GSYSubtitleView，不刷的话进全屏字号/颜色会回到 GSY 默认值。
+    applySubtitleStyleTo(view)
   }
 
   /**
@@ -953,20 +1040,135 @@ class GsyPlayerActivity : ComponentActivity() {
   }
 
   // ────────────────────────────────────────────────────────────────────────
+  // 章节（清单 #19）
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * 章节面板。
+   *
+   * ## 和 mpv 侧 `ChaptersSheet` 的差别
+   *
+   * mpv 侧是 Compose 弹层（`ChaptersSheet`，复用了 `GenericTracksSheet`），
+   * 数据来自 `PlayerLib.propNode["chapter-list"]` —— 一个 StateFlow，
+   * 章节在 `loadfile` 时就由 demuxer 解析好了，开面板零延迟。
+   *
+   * GSY 三样都没有：没有章节 property、没有当前章下标、也没有 `setPropertyInt("chapter", i)`。
+   * 所以这里是**先按需拉 Emby、拉完再弹**（[GsyChapterRepository.chaptersOf]）。
+   *
+   * ## 为什么要用 AlertDialog 而不是 Compose 弹层
+   *
+   * mpv 侧的 `ChaptersSheet` 依赖 Compose 的 `PlayerSheet` 宿主，而 GSY 播放页是
+   * **纯 View 体系**（`setContentView(R.layout.gsy_player_cineisle)`，没有 ComposeView）。
+   * 为了一个面板把 Compose 塞进 GSY 页不划算 —— 本页所有交互（音轨、字幕、屏幕比例）
+   * 都是 AlertDialog，章节跟着走才一致。
+   *
+   * ## 拿不到章节时的表现
+   *
+   * 直接 Toast 一句就完事，**不开空面板**。空列表弹一个没内容的对话框，
+   * 用户会以为是加载卡住了。
+   */
+  private fun showChaptersDialog() {
+    val itemId = embyItemIds.getOrNull(currentIndex)
+    // 已经在缓存里就直接弹，不让用户等网络
+    chapterRepository.cachedOf(itemId)?.let { cached ->
+      if (cached.isNotEmpty()) {
+        presentChapters(cached)
+        return
+      }
+    }
+
+    if (embyServerId == null || itemId.isNullOrBlank()) {
+      // 纯本地文件：GSY 没有从容器解析章节的能力，这是内核边界不是 bug
+      Toast.makeText(this, R.string.gsy_chapters_local_no_server, Toast.LENGTH_SHORT).show()
+      return
+    }
+
+    Toast.makeText(this, R.string.gsy_chapters_loading, Toast.LENGTH_SHORT).show()
+    lifecycleScope.launch {
+      val server = currentEmbyServer() ?: return@launch
+      val chapters = chapterRepository.chaptersOf(server, itemId)
+      if (chapters.isEmpty()) {
+        Toast.makeText(this@GsyPlayerActivity, R.string.gsy_chapters_empty, Toast.LENGTH_SHORT).show()
+      } else {
+        presentChapters(chapters)
+      }
+    }
+  }
+
+  /** 章节面板本体。当前章打勾（高亮 + ✓），点任意一项立即跳过去。 */
+  private fun presentChapters(chapters: List<GsyChapter>) {
+    val current = currentPositionMs()
+    val currentIndex = chapters.indexOfCurrent(current)
+    val labels =
+      chapters
+        .mapIndexed { i, chapter ->
+          val prefix = if (i == currentIndex) "${getString(R.string.gsy_chapters_now)}  " else ""
+          val time = formatOffset(chapter.startMs)
+          val title = chapter.title.ifBlank { getString(R.string.gsy_chapters_untitled, i + 1) }
+          "$prefix$time  $title"
+        }
+        .toTypedArray()
+
+    android.app.AlertDialog
+      .Builder(this)
+      .setTitle(R.string.gsy_chapters_title)
+      .setItems(labels) { _, which ->
+        val chapter = chapters.getOrNull(which) ?: return@setItems
+        val target = player ?: return@setItems
+        runCatching { target.seekTo(chapter.startMs) }
+          .onFailure { Toast.makeText(this, R.string.gsy_chapters_seek_failed, Toast.LENGTH_SHORT).show() }
+        Toast.makeText(this, R.string.gsy_chapters_jumped, Toast.LENGTH_SHORT).show()
+      }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
+  /**
+   * 当前播放头位置（毫秒）。
+   *
+   * GSY 的 `curPlayerManager` 在起播前 / 释放后可能是 null 或已 detach，
+   * 所以全链路都包在 `runCatching` 里 —— 拿不到就当 0（表现为「没有高亮当前章」，
+   * 而不是崩）。
+   */
+  private fun currentPositionMs(): Long =
+    runCatching { GSYVideoManager.instance().curPlayerManager?.currentPosition ?: 0L }
+      .getOrDefault(0L)
+
+  /**
+   * 当前这一项对应的 Emby 服务器。
+   *
+   * [EmbyRepository] 持有「当前登录的服务器」，播放页不自己存一份 ——
+   * 用户可能在另一个页面换了服务器，这里跟着走才是对的。
+   * `awaitCurrentServer()` 会在首次读取时挂起直到拿到服务器，所以包在 IO 协程里。
+   */
+  private suspend fun currentEmbyServer() =
+    withContext(Dispatchers.IO) {
+      embyRepository.awaitCurrentServer()
+      embyRepository.currentServer.value
+    }
+
+  // ────────────────────────────────────────────────────────────────────────
   // 字幕
   // ────────────────────────────────────────────────────────────────────────
 
   /**
    * 字幕菜单。
    *
-   * 只做「外挂字幕」（.srt / .vtt）—— GSY 的嵌入式字幕（内核把文本回吐给
-   * `setSubtitleTextFromPlayer`）在 IJK / Exo2 里都没有实现，官方字幕子系统
-   * (`GSYSubtitleController`) 本身也只吃外挂源。
+   * 两类字幕分开管，别混：
+   *   - **外挂字幕**（.srt / .vtt）—— 走 GSY 字幕子系统（`GSYSubtitleController` 只吃外挂源）；
+   *   - **内嵌字幕轨**（mkv / mp4 里自带的那些）—— 走 [showSubtitleTrackDialog]。
+   *
+   * 原先只有前者，所以「mkv 有内嵌中字但没有外挂文件」这种片子在 GSY 页没法切字幕。
    */
   private fun showSubtitleMenu() {
     val has = subtitleSource != null
     val items = mutableListOf<String>()
     items += getString(R.string.gsy_subtitle_pick)
+    // 内嵌字幕轨：始终给入口（有没有轨由 showTrackDialog 自己提示，不预先探测）
+    items += getString(R.string.gsy_subtitle_track_title)
+    // 字幕样式：始终给入口（清单 #19 新增）。GSY 的样式只对外挂字幕生效，
+    // 但入口保留 —— 用户可以在还没挂字幕时先把字号/颜色调好。
+    items += getString(R.string.gsy_subtitle_style)
     if (has) {
       items += getString(R.string.gsy_subtitle_delay)
       items += getString(R.string.gsy_subtitle_off)
@@ -978,12 +1180,258 @@ class GsyPlayerActivity : ComponentActivity() {
       .setItems(items.toTypedArray()) { _, which ->
         when (which) {
           0 -> pickSubtitleFile.launch(arrayOf("*/*"))
-          1 -> if (has) showSubtitleDelayDialog()
+          1 -> showSubtitleTrackDialog()
+          2 -> showSubtitleStyleDialog()
+          3 -> if (has) showSubtitleDelayDialog()
           else -> clearSubtitle()
         }
       }
       .show()
   }
+
+  /**
+   * 字幕样式面板（清单 #19：GSY 补上「字幕样式」这一项）。
+   *
+   * ## 和 mpv 侧那个三卡片面板的差别
+   *
+   * mpv 侧是完整的 Compose 面板（`SubtitleSettingsPanel`：字体排版 / 三色 / 杂项三张卡），
+   * 因为 mpv 能改**四十多个 option**。GSY 侧能改的只有 `GSYSubtitleStyle` 里那几项
+   * （字号、文字色、背景色、阴影、边距、对齐），所以这里用 AlertDialog 而不是再写一套
+   * Compose 面板 —— 6 个选项铺一张卡片是浪费，铺一个列表更合适，也和本页其他对话框一致。
+   *
+   * ## 改完立刻生效，不必重启
+   *
+   * `GSYVideoControlView.setSubtitleStyle()` 一路传到 `GSYSubtitleView.applyStyle()`，
+   * 后者直接调 `setTextColor` / `setTextSize` / `setShadowLayer` —— 已经在显示的字幕会重绘。
+   * 但**竖屏实例和全屏克隆实例都要刷**（和 [applySubtitleToAll] 同一个理由）。
+   *
+   * ## 存的是 mpv 侧的原始刻度
+   *
+   * 所有改动都写回 [SubtitlesPreferences]（`sub_font_size` / `sub_color_text` …），
+   * 不新增任何 GSY 专属偏好键 —— 换回 mpv 内核时同一套设置继续生效，
+   * 这才是「双内核共用一套 UI」的意义。反过来 mpv 调的字号，GSY 也认。
+   * 换算规则全在 [GsySubtitleStyleMapper] 里，两个内核的差异也写在那儿。
+   *
+   * ## 做不到的项显式列出来
+   *
+   * 用户开了 ASS 覆盖 / 指定了字体 / 开了粗斜体，GSY 这边统统做不到
+   * （`GSYSubtitleStyle` 没有字体入口，也压根不认 ASS）。
+   * 这里用 [GsySubtitleStyleMapper.unsupportedByGsy] 查出来列在标题里 ——
+   * 让用户知道「不是坏了，是这个内核做不到」，比默默不生效好。
+   */
+  private fun showSubtitleStyleDialog() {
+    val unsupported = GsySubtitleStyleMapper.unsupportedByGsy(subtitlesPreferences)
+    val title =
+      if (unsupported.isEmpty()) {
+        getString(R.string.gsy_subtitle_style)
+      } else {
+        getString(R.string.gsy_subtitle_style_with_unsupported, unsupported.joinToString("、"))
+      }
+
+    val items =
+      arrayOf(
+        getString(
+          R.string.gsy_subtitle_style_size,
+          GsySubtitleStyleMapper.scaledFontSizeSp(subtitlesPreferences.fontSize.get()).toInt(),
+        ),
+        getString(
+          R.string.gsy_subtitle_style_shadow,
+          GsySubtitleStyleMapper.shadowRadius(subtitlesPreferences.borderSize.get()).toInt(),
+        ),
+        getString(R.string.gsy_subtitle_style_color),
+        getString(R.string.gsy_subtitle_style_border_color),
+        getString(
+          R.string.gsy_subtitle_style_align,
+          alignmentLabel(subtitlesPreferences.justification.get()),
+        ),
+        getString(R.string.gsy_subtitle_style_reset),
+      )
+
+    android.app.AlertDialog
+      .Builder(this)
+      .setTitle(title)
+      .setItems(items) { _, which ->
+        when (which) {
+          0 -> showFontSizeDialog()
+          1 -> showShadowSizeDialog()
+          2 -> pickSubtitleColor(isBorder = false)
+          3 -> pickSubtitleColor(isBorder = true)
+          4 -> showAlignmentDialog()
+          5 -> resetSubtitleStyle()
+        }
+      }
+      .show()
+  }
+
+  /**
+   * 把当前偏好刷进**所有**播放器实例（竖屏 + 全屏克隆）。
+   *
+   * `density` 从这里取而不是在 mapper 内部取，是为了让 [GsySubtitleStyleMapper] 保持成
+   * 纯函数 —— 间距换算恰恰是最需要被单测断言的部分，不能依赖 Android 静态状态。
+   */
+  private fun applySubtitleStyle() {
+    applySubtitleStyleTo(player)
+    fullscreenPlayer?.let { if (it !== player) applySubtitleStyleTo(it) }
+  }
+
+  /** 刷单个实例。[GsySubtitleView.applyStyle] 会立即重绘，不用重新起播。 */
+  private fun applySubtitleStyleTo(target: CineIsleGsyPlayer?) {
+    if (target == null) return
+    runCatching {
+      target.setSubtitleStyle(
+        GsySubtitleStyleMapper.styleFrom(resources.displayMetrics.density, subtitlesPreferences),
+      )
+    }
+  }
+
+  /**
+   * 字号：带当前值的单选。
+   *
+   * 不用滑杆 —— AlertDialog 里现成搭不出滑杆，而字号本来就只有 [FONT_SIZE_STEPS] 几档，
+   * 单选列表一次看全所有档位，比拖滑杆更准。
+   *
+   * 存回的是 **mpv 侧的原始刻度**（`sub_font_size` 的值域 0~200），
+   * 显示时才用 [GsySubtitleStyleMapper.scaledFontSizeSp] 换算成 sp。
+   */
+  private fun showFontSizeDialog() {
+    val current = subtitlesPreferences.fontSize.get()
+    val checked = FONT_SIZE_STEPS.indexOfFirst { it >= current }.let { if (it < 0) FONT_SIZE_STEPS.lastIndex else it }
+
+    android.app.AlertDialog
+      .Builder(this)
+      .setTitle(R.string.gsy_subtitle_style_size_pick)
+      .setSingleChoiceItems(
+        FONT_SIZE_STEPS
+          .map { getString(R.string.gsy_subtitle_style_size, GsySubtitleStyleMapper.scaledFontSizeSp(it).toInt()) }
+          .toTypedArray(),
+        checked,
+      ) { dialog, which ->
+        subtitlesPreferences.fontSize.set(FONT_SIZE_STEPS[which])
+        applySubtitleStyle()
+        dialog.dismiss()
+      }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
+  /**
+   * 阴影粗细。
+   *
+   * 存的是 `sub_border_size`（mpv 侧叫「描边大小」，范围 0~25），
+   * GSY 没有描边只有阴影，所以这个值被当作阴影半径用 —— 映射理由写在
+   * [GsySubtitleStyleMapper.shadowRadius] 的 KDoc 里。
+   */
+  private fun showShadowSizeDialog() {
+    val current = subtitlesPreferences.borderSize.get()
+    val checked = SHADOW_SIZE_STEPS.indexOfFirst { it >= current }.let { if (it < 0) SHADOW_SIZE_STEPS.lastIndex else it }
+
+    android.app.AlertDialog
+      .Builder(this)
+      .setTitle(R.string.gsy_subtitle_style_shadow_pick)
+      .setSingleChoiceItems(
+        SHADOW_SIZE_STEPS
+          .map { getString(R.string.gsy_subtitle_style_shadow, GsySubtitleStyleMapper.shadowRadius(it).toInt()) }
+          .toTypedArray(),
+        checked,
+      ) { dialog, which ->
+        subtitlesPreferences.borderSize.set(SHADOW_SIZE_STEPS[which])
+        applySubtitleStyle()
+        dialog.dismiss()
+      }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
+  /**
+   * 对齐。
+   *
+   * ⚠️ 这里**只给三个选项、不给 `Auto`**：`Auto` 在 GSY 下会被映射成居中
+   * （见 [GsySubtitleStyleMapper.gravity]），给一个「选了看不出区别」的选项是骗人。
+   * 想回到默认值走面板最后那项「重置」。
+   */
+  private fun showAlignmentDialog() {
+    val options = ALIGNMENT_OPTIONS
+    val current = subtitlesPreferences.justification.get()
+    val checked = options.indexOf(current).let { if (it < 0) 1 else it }
+
+    android.app.AlertDialog
+      .Builder(this)
+      .setTitle(R.string.gsy_subtitle_style_align_pick)
+      .setSingleChoiceItems(options.map { alignmentLabel(it) }.toTypedArray(), checked) { dialog, which ->
+        subtitlesPreferences.justification.set(options[which])
+        applySubtitleStyle()
+        dialog.dismiss()
+      }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
+  /**
+   * 取色。
+   *
+   * ⚠️ 这里用**预置色板单选**而不是项目里那个 `SubtitlesColorPicker`（RGBA 四条滑杆）：
+   * 那个是 `@Composable`，塞不进 `AlertDialog`（除非另开一个 `Dialog` + `setContent`，
+   * 那就为一个取色器多铺一层 Compose 容器，不值）。色板覆盖了字幕绝大多数实际需求，
+   * 真要细调的用户去 mpv 侧那个三色面板 —— 两个内核共用同一份偏好，调了互相认。
+   *
+   * @param isBorder true 改描边色（GSY 侧当阴影色用），false 改文字色。
+   */
+  private fun pickSubtitleColor(isBorder: Boolean) {
+    val preference = if (isBorder) subtitlesPreferences.borderColor else subtitlesPreferences.textColor
+    val current = preference.get()
+    val palette = SUBTITLE_COLOR_PALETTE
+    val labels = palette.map { colorHexLabel(it) }.toTypedArray()
+    // 当前颜色不在色板里就落在第一项，不预选一个「看起来像但其实不是」的颜色
+    val checked = palette.indexOf(current).let { if (it < 0) 0 else it }
+
+    android.app.AlertDialog
+      .Builder(this)
+      .setTitle(if (isBorder) R.string.gsy_subtitle_style_border_color else R.string.gsy_subtitle_style_color)
+      .setSingleChoiceItems(labels, checked) { dialog, which ->
+        preference.set(palette[which])
+        applySubtitleStyle()
+        dialog.dismiss()
+      }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
+  /** 颜色的十六进制标签（`#RRGGBB`，不含 alpha —— 字幕色板都是不透明的） */
+  private fun colorHexLabel(color: Int): String =
+    String.format(Locale.US, "#%06X", 0xFFFFFF and color)
+
+  /**
+   * 重置字幕样式。
+   *
+   * 只重置**样式类**的项，**不动**外挂字幕轨、字幕延迟、音轨这些 ——
+   * 「重置样式」不该把用户挑好的字幕文件也清掉。
+   *
+   * 用 [Preference.delete] 而不是 `set(默认值)`：删掉键之后 [Preference.get] 会回落到
+   * `defaultValue()`，这样默认值只写在 [SubtitlesPreferences] 一处，
+   * 以后调默认值不用记得回来同步这个列表。
+   */
+  private fun resetSubtitleStyle() {
+    subtitlesPreferences.fontSize.delete()
+    subtitlesPreferences.textColor.delete()
+    subtitlesPreferences.backgroundColor.delete()
+    subtitlesPreferences.borderColor.delete()
+    subtitlesPreferences.borderSize.delete()
+    subtitlesPreferences.shadowOffset.delete()
+    subtitlesPreferences.justification.delete()
+    subtitlesPreferences.subPos.delete()
+    applySubtitleStyle()
+    Toast.makeText(this, R.string.gsy_subtitle_style_reset_done, Toast.LENGTH_SHORT).show()
+  }
+
+  private fun alignmentLabel(value: SubtitleJustification): String =
+    getString(
+      when (value) {
+        SubtitleJustification.Left -> R.string.gsy_subtitle_style_align_left
+        SubtitleJustification.Center -> R.string.gsy_subtitle_style_align_center
+        SubtitleJustification.Right -> R.string.gsy_subtitle_style_align_right
+        SubtitleJustification.Auto -> R.string.gsy_subtitle_style_align_auto
+      },
+    )
 
   /** 字幕延迟微调（官方 `setSubtitleOffsetMs`，正数 = 字幕往后推） */
   private fun showSubtitleDelayDialog() {
@@ -1133,53 +1581,111 @@ class GsyPlayerActivity : ComponentActivity() {
   // ────────────────────────────────────────────────────────────────────────
 
   /**
-   * 音轨选择。
-   *
-   * GSY 的**通用**播放接口（[com.shuyu.gsyvideoplayer.player.IPlayerManager]）里没有轨道相关
-   * 方法，只有 IJK 的 [IjkPlayerManager] 自己多提供了 `getTrackInfo()/selectTrack()/deselectTrack()`
-   * —— 所以这项能力**只在 IJK 内核下可用**，换成 System / Exo 会明确提示。
-   *
-   * 轨道下标就是 `getTrackInfo()` 数组的下标（IJK 的 `selectTrack(int)` 收的就是全局轨道索引）。
+   * 音轨选择（薄壳，实现见 [showTrackDialog] —— 音轨 / 字幕轨共用一套）。
    */
   private fun showAudioTrackDialog() {
+    showTrackDialog(
+      trackType = ITrackInfo.MEDIA_TRACK_TYPE_AUDIO,
+      kindRes = R.string.gsy_track_kind_audio,
+      titleRes = R.string.gsy_audio_title,
+    )
+  }
+
+  /**
+   * 字幕轨选择（**内嵌**轨）。
+   *
+   * ⚠️ 与「外挂字幕」是**两回事**，别混：
+   *   - 外挂字幕 = [showSubtitleMenu] 里挂的独立 .srt / .vtt，走 GSY 字幕子系统；
+   *   - 字幕轨   = 容器（mkv / mp4）里内嵌的那几条字幕，本项管的是这个。
+   *
+   * 很多 mkv 有内嵌中文轨却一个外挂文件都没有，而 GSY 页此前**完全没有这个入口**
+   *（只有音轨对话框），想切内嵌字幕只能换 mpv 内核 —— 明确的功能缺口，本次补上。
+   */
+  private fun showSubtitleTrackDialog() {
+    showTrackDialog(
+      trackType = ITrackInfo.MEDIA_TRACK_TYPE_SUBTITLE,
+      kindRes = R.string.gsy_track_kind_subtitle,
+      titleRes = R.string.gsy_subtitle_track_title,
+    )
+  }
+
+  /**
+   * 轨道选择对话框（音轨 / 字幕轨共用）。
+   *
+   * GSY 的**通用**播放接口（`com.shuyu.gsyvideoplayer.player.IPlayerManager`）里没有轨道方法，
+   * 只有 IJK 的 [IjkPlayerManager] 自己多提供了 `trackInfo` / `selectTrack()` /
+   * `getSelectedTrack()` / `deselectTrack()` —— 所以这项能力**只在 IJK 内核下可用**，
+   * 换 System / Exo 会明确提示（不做静默失败：用户按了按钮没反应是最糟的）。
+   *
+   * 轨道下标就是 `trackInfo` 数组的下标（IJK 的 `selectTrack(int)` 收的就是全局轨道索引）。
+   *
+   * 字幕轨列表最前面额外插一个「关闭」项：内嵌字幕可以整体关掉。
+   * 音轨不给这一项 —— 关掉声音没有意义。
+   *
+   * @param trackType [ITrackInfo.MEDIA_TRACK_TYPE_AUDIO] 或 [ITrackInfo.MEDIA_TRACK_TYPE_SUBTITLE]
+   * @param kindRes 「音轨 / 字幕轨」这个词，用于不支持 / 为空时的提示语
+   * @param titleRes 对话框标题
+   */
+  private fun showTrackDialog(trackType: Int, kindRes: Int, titleRes: Int) {
     val manager = GSYVideoManager.instance().curPlayerManager
     val ijk = manager as? IjkPlayerManager
     if (ijk == null) {
       Toast
         .makeText(
           this,
-          getString(R.string.gsy_audio_unsupported, prefs.kernel.get().name),
+          getString(R.string.gsy_track_unsupported, getString(kindRes), prefs.kernel.get().name),
           Toast.LENGTH_LONG,
-        ).show()
+        )
+        .show()
       return
     }
 
     val infos: Array<IjkTrackInfo> = runCatching { ijk.trackInfo }.getOrNull() ?: emptyArray()
     val tracks =
       infos.mapIndexedNotNull { index, info ->
-        if (info.trackType == ITrackInfo.MEDIA_TRACK_TYPE_AUDIO) index to info else null
+        if (info.trackType == trackType) index to info else null
       }
 
     if (tracks.isEmpty()) {
-      Toast.makeText(this, R.string.gsy_audio_empty, Toast.LENGTH_SHORT).show()
+      Toast
+        .makeText(this, getString(R.string.gsy_track_empty, getString(kindRes)), Toast.LENGTH_SHORT)
+        .show()
       return
     }
 
-    val selected = runCatching { ijk.getSelectedTrack(ITrackInfo.MEDIA_TRACK_TYPE_AUDIO) }.getOrDefault(-1)
+    val selected = runCatching { ijk.getSelectedTrack(trackType) }.getOrDefault(-1)
+    val kindLabel = getString(kindRes)
+    val closable = trackType == ITrackInfo.MEDIA_TRACK_TYPE_SUBTITLE
+    // 字幕轨在列表最前面插一个「关闭」；两种列表的下标含义不同，用 trackIndexAt 收口
     val labels =
-      tracks
-        .map { (index, info) ->
-          val language = info.language?.takeIf { it.isNotBlank() && it != "und" }
-          val detail = language ?: info.infoInline.orEmpty().take(40)
-          "音轨 ${tracks.indexOfFirst { it.first == index } + 1} · $detail"
+      buildList {
+          if (closable) add(getString(R.string.gsy_track_off))
+          tracks.forEachIndexed { n, (_, info) ->
+            val language = info.language?.takeIf { it.isNotBlank() && it != "und" }
+            val detail = language ?: info.infoInline.orEmpty().take(40)
+            add("$kindLabel ${n + 1} · $detail")
+          }
         }
         .toTypedArray()
+    val trackIndexAt: (Int) -> Int = { which -> if (closable && which == 0) -1 else tracks[which - 1].first }
+    val checkedAt =
+      when {
+        selected < 0 && closable -> 0
+        selected < 0 -> -1
+        else -> tracks.indexOfFirst { it.first == selected }.let { if (it < 0) -1 else it + 1 }
+      }
 
     android.app.AlertDialog
       .Builder(this)
-      .setTitle(R.string.gsy_audio_title)
-      .setSingleChoiceItems(labels, tracks.indexOfFirst { it.first == selected }) { dialog, which ->
-        runCatching { ijk.selectTrack(tracks[which].first) }
+      .setTitle(titleRes)
+      .setSingleChoiceItems(labels, checkedAt) { dialog, which ->
+        val idx = trackIndexAt(which)
+        if (idx < 0) {
+          // 「关闭」：先把当前选中的那条 deselect 掉，内嵌字幕即不再显示
+          if (selected >= 0) runCatching { ijk.deselectTrack(selected) }
+        } else {
+          runCatching { ijk.selectTrack(idx) }
+        }
         dialog.dismiss()
       }
       .show()
@@ -1208,6 +1714,73 @@ class GsyPlayerActivity : ComponentActivity() {
     }
   }
 
+  // ──────────────────────────────── 标记为不喜欢 ────────────────────────────────
+
+  /**
+   * 订阅「不喜欢」的反馈提示。
+   *
+   * 选中态**不用这里推** —— 那颗键是 ComposeView，每个实例各自订阅
+   * `DislikePlayerActions.isMarked`，竖屏实例与全屏克隆实例天然同步
+   * （详见 `CineIsleGsyPlayer.DislikeButtonContent`）。
+   */
+  private fun observeDislikeState() {
+    // 轻提示单独一个协程：提示是「发一次就清」的，用 collectLatest 更合适 ——
+    // 快速连点时后一条会顶掉前一条，而不是排着队挨个弹。
+    lifecycleScope.launch {
+      DislikePlayerActions.toast.collectLatest { message ->
+        if (message == null) return@collectLatest
+        Toast.makeText(this@GsyPlayerActivity, message, Toast.LENGTH_SHORT).show()
+        DislikePlayerActions.consumeToast()
+      }
+    }
+  }
+
+  /** 单击「不喜欢」：切换标记并给轻提示。 */
+  private fun onDislikeToggle() {
+    DislikePlayerActions.toggle()
+  }
+
+  /**
+   * 长按「不喜欢」：填备注。
+   *
+   * 用 `AlertDialog` + `EditText` 而不是 Compose：这一页整体是纯 View 体系
+   * （`setContentView`，见 [showChaptersDialog] 的说明），为这一个输入框再铺一层
+   * ComposeView 覆盖层不值得 —— 页面上其他所有弹窗也都是 AlertDialog，保持一致。
+   *
+   * 确认按钮文案随当前状态变：已标记时是「保存」，未标记时是「保存并标记」
+   * （保存备注本身就算标记，见 [DislikePlayerActions.saveRemark]）。
+   */
+  private fun showDislikeRemarkDialog() {
+    if (DislikePlayerActions.currentKey.value == null) {
+      Toast.makeText(this, R.string.gsy_dislike_unavailable, Toast.LENGTH_SHORT).show()
+      return
+    }
+    val input = EditText(this).apply {
+      setHint(R.string.gsy_dislike_reason_hint)
+      setText(DislikePlayerActions.currentReason())
+      setSelection(text.length)
+      setSingleLine(false)
+      maxLines = 3
+    }
+    val marked = DislikePlayerActions.isMarked.value
+    val padding = (20 * resources.displayMetrics.density).toInt()
+    val container =
+      FrameLayout(this).apply {
+        setPadding(padding, padding / 2, padding, 0)
+        addView(input)
+      }
+
+    android.app.AlertDialog
+      .Builder(this)
+      .setTitle(R.string.gsy_dislike_reason_title)
+      .setView(container)
+      .setPositiveButton(
+        if (marked) R.string.gsy_dislike_reason_save else R.string.gsy_dislike_reason_save_and_mark,
+      ) { _, _ -> DislikePlayerActions.saveRemark(input.text.toString()) }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
   /**
    * 投屏面板。
    *
@@ -1223,7 +1796,13 @@ class GsyPlayerActivity : ComponentActivity() {
       return
     }
 
-    if (GSYVideoManager.instance().isPlaying) GSYVideoManager.instance().pause()
+    // ⚠️ 暂停 / 恢复必须**成对走 View 层**（`onVideoPause` / `onVideoResume`）。
+    //  之前是底层 `GSYVideoManager.instance().pause()` 配 View 层 `onVideoResume()`，
+    //  两套混用会把 GSY 的状态机搞乱：`mCurrentState` 与内核实际状态不一致，
+    //  于是关掉面板后播放 / 暂停键点了都没反应（用户实测：「暂停不了也恢复不了」）。
+    //  记下「是我们暂停的」：关面板时只恢复我们自己按下去的这一次。
+    pausedForCastSheet = GSYVideoManager.instance().isPlaying
+    if (pausedForCastSheet) activePlayer?.onVideoPause()
     dlnaManager.pendingPayload = CastPayload(uri, videoTitle)
 
     val root = findViewById<ViewGroup>(android.R.id.content) ?: return
@@ -1244,17 +1823,52 @@ class GsyPlayerActivity : ComponentActivity() {
     )
   }
 
-  /** 面板本体：DlnaSheet 自己会在关闭时通知 manager，我们只管把覆盖层摘掉 */
+  /**
+   * 面板本体：DlnaSheet 自己会在关闭时通知 manager，我们只管把覆盖层摘掉。
+   *
+   * ⚠️ `showSheet` 这一层**不能省**。
+   *  `DlnaSheet` 里的 `ModalBottomSheet` 是渲染到**独立窗口**（Popup / Dialog）的，
+   *  不是画在我们这层 ComposeView 里。如果只 `removeView` 把 ComposeView 摘掉，
+   *  那个独立窗口并不会跟着消失 —— 它全屏且 focusable，
+   *  会**继续吞掉所有触摸事件和返回键**；
+   *  表现就是「抽屉看着关了，但播放器点哪都没反应、返回键也退不出去」，也就是卡死。
+   *
+   *  所以顺序必须是：先让 sheet 从 composition 里退出（它自己 dismiss 掉那个窗口），
+   *  再摘 ComposeView。
+   */
   @Composable
   private fun CastOverlayContent() {
-    MpvexTheme { DlnaSheet(onDismissRequest = { hideCastSheet() }) }
+    var showSheet by remember { mutableStateOf(true) }
+    MpvexTheme {
+      if (showSheet) {
+        DlnaSheet(
+          onDismissRequest = {
+            showSheet = false
+            hideCastSheet()
+          },
+        )
+      }
+    }
   }
 
   private fun hideCastSheet() {
-    castOverlay?.let { overlay ->
+    val overlay = castOverlay ?: return
+    // 先摘引用：即便后面的 post 没跑成，返回键兜底也不会再指向一个已经废掉的覆盖层
+    castOverlay = null
+
+    // 关掉面板就把「为投屏暂停」的播放恢复回去 ——
+    // 不恢复的话画面是静止的，用户看到的就是「关了抽屉，播放器卡住了」。
+    if (pausedForCastSheet) {
+      pausedForCastSheet = false
+      runCatching { activePlayer?.onVideoResume() }
+    }
+
+    overlay.post {
+      // dispose 是最后的保险：它会强制结束 composition 并 dismiss 掉所有残存的
+      // Popup / Dialog 窗口，避免「摘了 View 但窗口还在」把整个页面锁住。
+      overlay.disposeComposition()
       (overlay.parent as? ViewGroup)?.removeView(overlay)
     }
-    castOverlay = null
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -1419,6 +2033,11 @@ class GsyPlayerActivity : ComponentActivity() {
 
   override fun onDestroy() {
     super.onDestroy()
+    // 退出时**同步**清掉投屏覆盖层：`onDestroy` 之后 post 出去的活儿已经没有意义了，
+    // 而 composition 不 dispose 的话，ModalBottomSheet 那个独立窗口会一直挂在窗口管理器上。
+    // 同时把「为投屏暂停」标记清掉 —— 页面都要没了，不该再去恢复播放。
+    pausedForCastSheet = false
+    castOverlay?.disposeComposition()
     hideCastSheet()
     netSpeedHandler.removeCallbacks(netSpeedTicker)
     pipHelper?.release()
@@ -1428,6 +2047,8 @@ class GsyPlayerActivity : ComponentActivity() {
     GSYVideoManager.releaseAllVideos()
     // 收藏态是进程内单例，退出播放页要交还，否则会带到下一个播放页
     EmbyPlayerActions.release()
+    // 同理：「不喜欢」的当前条目也必须复位，否则下次进页面会先闪一下上一条的状态
+    DislikePlayerActions.clear()
     player = null
     fullscreenPlayer = null
   }
@@ -1620,6 +2241,53 @@ class GsyPlayerActivity : ComponentActivity() {
 
     /** 字幕延迟一次调整的步长 */
     private const val SUBTITLE_STEP_MS = 500L
+
+    /**
+     * 字幕字号档位（**mpv 侧原始刻度**，值域 0~200，默认 55）。
+     *
+     * 存的是这一侧的值而不是换算后的 sp —— 换算只在显示时做（[GsySubtitleStyleMapper.scaledFontSizeSp]），
+     * 这样同一份偏好在 mpv 侧也是对的，用户切内核看到的字号一致。
+     *
+     * 档位取 12 / 20 / 30 / 40 / 55 / 70 / 100：低档给「手机小屏 + 字幕多」的场景，
+     * 高档给「投屏 / 大屏 + 字幕少」的场景，两头都要能到。
+     */
+    private val FONT_SIZE_STEPS = listOf(12, 20, 30, 40, 55, 70, 100)
+
+    /**
+     * 字幕阴影档位（存 `sub_border_size`，mpv 侧叫「描边大小」，值域 0~25，默认 3）。
+     *
+     * GSY 没有描边只有阴影，所以这个值当阴影半径用（见 [GsySubtitleStyleMapper.shadowRadius]）。
+     * 0 = 不要阴影（不是「零半径的阴影」，那仍然会画一层模糊），
+     * 所以 0 单独一档、其余按 2 递增。
+     */
+    private val SHADOW_SIZE_STEPS = listOf(0, 2, 3, 5, 8, 12)
+
+    /**
+     * 字幕色板（`argb`）。
+     *
+     * 全不透明 —— 字幕文字色做半透明只会让字变灰、看着像发虚，没别的用处。
+     * 前两个（白 / 黑）覆盖绝大多数场景，其余用来适配不同背景亮度。
+     */
+    private val SUBTITLE_COLOR_PALETTE =
+      intArrayOf(
+        0xFFFFFFFF.toInt(), // 白
+        0xFF000000.toInt(), // 黑
+        0xFFFFE03B.toInt(), // 黄
+        0xFF4FC3F7.toInt(), // 天蓝
+        0xFF81C784.toInt(), // 绿
+        0xFFFF8A80.toInt(), // 浅红
+        0xFFE0E0E0.toInt(), // 浅灰
+      )
+
+    /**
+     * 字幕对齐的三个选项。
+     *
+     * ⚠️ 刻意**不含** [SubtitleJustification.Auto]：GSY 下 `Auto` 会被映射成居中
+     * （[GsySubtitleStyleMapper.gravity]），给一个「选了看不出区别」的选项是骗人。
+     * 想回默认走「重置」。
+     */
+    private val ALIGNMENT_OPTIONS =
+      listOf(SubtitleJustification.Left, SubtitleJustification.Center, SubtitleJustification.Right)
 
     /** 探测字幕编码时最多读多少字节 */
     private const val CHARSET_PROBE_BYTES = 64 * 1024

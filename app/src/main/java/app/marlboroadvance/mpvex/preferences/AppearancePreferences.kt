@@ -35,10 +35,21 @@ class AppearancePreferences(
       "BACK_ARROW,VIDEO_TITLE",
     )
 
+  /**
+   * 横屏顶栏右侧。
+   *
+   * 末位的 `DISLIKE` 是「标记为不喜欢」的出厂位置（见
+   * [app.marlboroadvance.mpvex.ui.preferences.DislikeLayoutSync.DEFAULT_CLUSTER]）。
+   *
+   * ⚠️ **改这个默认值只对全新用户生效** —— 老用户本地已经存过值了（这正是
+   * `bottom_left_controls` / `portrait_bottom_controls` 要带 v2/v3 的原因）。
+   * 老用户靠 `App.onCreate` 里的一次性播种补上。两道都留着是因为：播种跑在后台线程，
+   * 理论上存在「播放器先起来、播种还没落地」的空档，默认值能保证那个空档里按钮也在。
+   */
   val topRightControls =
     preferenceStore.getString(
       "top_right_controls",
-      "CURRENT_CHAPTER,EMBY_FAVORITE,CAST,MORE_OPTIONS",
+      "CURRENT_CHAPTER,EMBY_FAVORITE,CAST,MORE_OPTIONS,DISLIKE",
     )
 
   /**
@@ -88,7 +99,7 @@ class AppearancePreferences(
   val portraitBottomControls =
     preferenceStore.getString(
       "portrait_bottom_controls_v3",
-      "PREVIOUS,NEXT,EMBY_FAVORITE,REPEAT_MODE,LOCK_CONTROLS," +
+      "PREVIOUS,NEXT,EMBY_FAVORITE,DISLIKE,REPEAT_MODE,LOCK_CONTROLS," +
         "PICTURE_IN_PICTURE,SCREEN_ROTATION,CAST,MORE_OPTIONS",
     )
 

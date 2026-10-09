@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -62,7 +63,10 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -90,6 +94,18 @@ private enum class FavoriteTab(val label: String) {
   ACTOR("演员"),
 }
 
+/** 收藏影片一页拉多少条（清单 1.1：原来是固定 200 条一次性拉完） */
+private const val MOVIE_PAGE_SIZE = 100
+
+/**
+ * 搜索时最多自动往后补拉几页。
+ *
+ * 本地过滤只能看见已加载的页，不补拉就会「搜不到后面才出现的片名」；
+ * 但收藏几千部时全翻完又太费流量，所以设个上限（10 页 ≈ 1000 项），
+ * 剩下的仍然可以正常滚动到底加载。
+ */
+private const val SEARCH_AUTOFILL_MAX_PAGES = 10
+
 /**
  * Emby 收藏页：展示服务器上标记为收藏的媒体与演员。
  *
@@ -116,6 +132,13 @@ fun EmbyFavoritesScreen() {
   // 当前选中的类型：初始值从偏好里恢复（默认「影片」）。
   // **必须落盘**：从收藏页点进演员作品页再返回时整屏会重建，
   // 只放 remember 的话 tab 就被打回「影片」，用户还得再点一次。
+  //
+  // ⚠️ 这里用「偏好落盘」而不是 `rememberSaveable`，因为它要跨的场景更远：
+  // 落盘防的是**冷启动 / 杀进程后重进**（用户明天再打开还要看到自己选的「演员」tab），
+  // 而 `rememberSaveable` 只防**旋转**（同一次 alive 期内）。两者互补，不是替代关系 ——
+  // 真要防旋转还得再加一层 saveable，但那就成了双写同一个状态，
+  // 出现「偏好与 saveable 不一致」时反而更难排查。现状（只落盘）是可接受的：
+  // 旋转丢失 tab 的代价，远小于杀进程丢失。
   val browserPreferences = koinInject<BrowserPreferences>()
   var tab by remember {
     mutableStateOf(
@@ -124,22 +147,35 @@ fun EmbyFavoritesScreen() {
     )
   }
 
-  // ── 两个 tab 各自的列表 + 缓存 ──
-  // 缓存命中时切 tab 不重新发请求；手动刷新时用 forceRefresh 绕过缓存。
+  // ── 两个 tab 各自的数据 ──
+  // 影片 tab 走 [PagedList]（分页，状态本身可观察，UI 直接读 moviePage.items）；
+  // 演员 tab 一次性拉全量（收藏演员通常只有几十个），保持原来的 list 缓存。
   // 缓存按 server.id 区分：切服务器后旧数据不会串台。
-  val movieItems = remember { mutableStateListOf<EmbyItem>() }
   val actorItems = remember { mutableStateListOf<EmbyItem>() }
-  val movieCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
   val actorCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
+  /** 影片 tab 的分页缓存：serverId → 已加载到的页数（0 = 没加载过） */
+  val movieCache = remember { mutableStateOf<Pair<Long, Int>?>(null) }
   var isLoading by remember { mutableStateOf(true) }
   var error by remember { mutableStateOf<String?>(null) }
 
+  /**
+   * 收藏影片的分页状态（对应清单 1.1）。
+   *
+   * 原来是 `loadFavorites(current, 0, 200)` 一次拉 200 条塞进内存，
+   * 收藏过千部的库会明显卡顿，且**剩下的永远看不到**。
+   * 现在按 [MOVIE_PAGE_SIZE] 分页、滚到底自动续拉。
+   */
+  val moviePage = remember { PagedList<EmbyItem>(MOVIE_PAGE_SIZE, keyOf = { it.Id ?: it.Name ?: "" }) }
+
   /** 展示列表 = 当前 tab 对应的那一份 */
-  val items = if (tab == FavoriteTab.MOVIE) movieItems else actorItems
+  val items: List<EmbyItem> = if (tab == FavoriteTab.MOVIE) moviePage.items else actorItems
 
   // ── 搜索 / 排序 ──
-  // 收藏页一次性拉全量（200 条）到内存，所以过滤与排序都在本地做：即时、不发请求。
-  var searchQuery by remember { mutableStateOf("") }
+  // 过滤与排序都在**已加载的页**上做：即时、不发请求。
+  // ⚠️ 分页后本地搜索只能搜到「已经翻到的那些」—— 所以下面 [searchQuery] 变化时
+  // 会自动往后补拉（有上限，见 SEARCH_AUTOFILL_MAX_PAGES），否则用户搜一个只存在于
+  // 第 5 页的片名会得到「无匹配」，比原来全量时代更让人困惑。
+  var searchQuery by rememberSaveable { mutableStateOf("") }
   var sort by remember {
     mutableStateOf(
       FavoriteSort.entries.firstOrNull { it.name == browserPreferences.embyFavoritesSort.get() }
@@ -154,8 +190,22 @@ fun EmbyFavoritesScreen() {
 
   // ── 多选模式（批量操作）──
   // 长按任意卡片进入；选中集合存条目 Id；退出时清空。
-  var selectionMode by remember { mutableStateOf(false) }
-  val selectedIds = remember { mutableStateListOf<String>() }
+  // ⚠️ selectionMode 与 selectedIds **必须一起改成 saveable**：
+  // 只改开关不改集合的话，旋转后会停在「已进入多选但一条没选」的自相矛盾状态，
+  // 底部批量按钮亮着却点什么都没反应，比直接退出多选更让人懵。
+  var selectionMode by rememberSaveable { mutableStateOf(false) }
+  // SnapshotStateList 不能直接交给 rememberSaveable（它没有默认 Saver），
+  // 用 listSaver 包一层：存成 List<String>，恢复时重建 snapshot list。
+  val selectedIds = rememberSaveable(
+    saver = listSaver<SnapshotStateList<String>, String>(
+      save = { it.toList() },
+      restore = { restored ->
+        val list = mutableStateListOf<String>()
+        list.addAll(restored)
+        list
+      },
+    ),
+  ) { mutableStateListOf<String>() }
   // 批量动作完成后的结果提示 + **一次性撤销**入口：Snackbar 上的「撤销」把刚做的动作
   // 用反向动作跑一遍（取消收藏 → 收藏回去、标为未看 → 标为已看…）。只保留最近一次。
   val snackbarHostState = remember { SnackbarHostState() }
@@ -203,23 +253,54 @@ fun EmbyFavoritesScreen() {
     if (id in selectedIds) selectedIds.remove(id) else selectedIds.add(id)
   }
 
+  /**
+   * 收藏影片的分页加载器（首屏 / 续拉共用，区别只在起始下标）。
+   *
+   * 写成显式 `suspend (Int, Int) -> PagedResult<EmbyItem>?` 而不是靠推导 ——
+   * 推导出来的类型里 `loadFavorites` 不带 suspend，编译器会拒这个调用。
+   */
+  fun moviePageLoader(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer):
+    suspend (Int, Int) -> PagedResult<EmbyItem>? = { start, limit ->
+    val page = viewModel.loadFavorites(current, start, limit)
+    // 网格 key = Id ?: Name：服务端把同一条目返回两次时（SmartStrm 实测有此问题），
+    // 重复 key 会直接撞崩 LazyVerticalGrid，这里按同一口径去重。
+    PagedResult(
+      items = page.items.distinctBy { it.Id ?: it.Name ?: "" },
+      totalCount = page.totalCount,
+      pageSize = limit,
+    )
+  }
+
   suspend fun loadMovies(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer, force: Boolean) {
+    // 缓存命中：只在这个服务器已经拉过至少一页时才跳过请求（切 tab 回来不再发一次）
     val cached = movieCache.value
-    if (!force && cached != null && cached.first == current.id) {
-      movieItems.clear()
-      movieItems.addAll(cached.second)
+    if (!force && cached != null && cached.first == current.id && moviePage.items.isNotEmpty()) {
       return
     }
-    runCatching { viewModel.loadFavorites(current, 0, 200) }
-      .onSuccess { page ->
-        // 网格 key = Id ?: Name：服务端把同一条目返回两次时（SmartStrm 实测有此问题），
-        // 重复 key 会直接撞崩 LazyVerticalGrid，这里按同一口径去重
-        val deduped = page.items.distinctBy { it.Id ?: it.Name ?: "" }
-        movieCache.value = current.id to deduped
-        movieItems.clear()
-        movieItems.addAll(deduped)
-      }
+    runCatching { moviePage.reload(moviePageLoader(current)) }
       .onFailure { error = it.message ?: "加载收藏失败" }
+    if (moviePage.error != null) {
+      error = moviePage.error
+      movieCache.value = null
+      return
+    }
+    error = null
+    movieCache.value = current.id to 1
+  }
+
+  /**
+   * 滚到底：续拉下一页收藏影片。
+   *
+   * 顺带把续拉结果并进 [movieCache] 的页数，改搜索条件时据此判断「还要不要继续往后翻」。
+   */
+  suspend fun loadMoreMovies(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer) {
+    if (!moviePage.hasMore) return
+    val before = moviePage.items.size
+    runCatching { moviePage.loadMore(moviePageLoader(current)) }
+      .onFailure { error = it.message ?: "加载更多失败" }
+    if (moviePage.items.size > before) {
+      movieCache.value = current.id to ((movieCache.value?.second ?: 0) + 1)
+    }
   }
 
   suspend fun loadActors(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer, force: Boolean) {
@@ -349,6 +430,33 @@ fun EmbyFavoritesScreen() {
   // 下拉刷新：绕过本页缓存与 ViewModel 缓存强制重拉当前 tab
   val isRefreshing = remember { mutableStateOf(false) }
   val gridState = rememberLazyGridState()
+
+  // ── 触底自动续拉（清单 1.1）──
+  // 距末尾还剩 PagedList.PREFETCH_DISTANCE 格就预取下一页：数据到得比用户滚到得快，
+  // 感知不到等待。actor tab 不分页（一次拉完），所以只在 MOVIE tab 生效。
+  val reachBottomServer = server
+  val gridSource = gridState.pagingSource()
+  moviePage.AutoLoadMore(
+    source = gridSource,
+    enabled = server != null && tab == FavoriteTab.MOVIE,
+    loader = { s, l -> moviePageLoader(server!!)(s, l) },
+  )
+
+  // ── 搜索时自动补拉后面的页 ──
+  // 本地过滤只能看见已加载的页；不补拉的话「第 5 页才有的片名」永远搜不出来。
+  // 每敲一个字最多补 [SEARCH_AUTOFILL_MAX_PAGES] 页，避免收藏几千部时把流量跑满。
+  LaunchedEffect(searchQuery, tab, reachBottomServer?.id) {
+    val target = reachBottomServer ?: return@LaunchedEffect
+    if (tab != FavoriteTab.MOVIE || searchQuery.isBlank()) return@LaunchedEffect
+    var guard = 0
+    while (moviePage.hasMore && guard < SEARCH_AUTOFILL_MAX_PAGES) {
+      val before = moviePage.items.size
+      loadMoreMovies(target)
+      // 一页都没新增 = 服务端开始重复返回同一批，再拉也是白拉
+      if (moviePage.items.size == before) break
+      guard++
+    }
+  }
 
   // Scaffold + TopAppBar：自动为状态栏留出安全区域，避免网格压在状态栏下
   Scaffold(
@@ -492,6 +600,18 @@ fun EmbyFavoritesScreen() {
               onLongClick = { toggleSelection(item.Id) },
               style = EmbyCardStyle.POSTER,
               fillWidth = true,
+            )
+          }
+          // 底部状态行：续拉中 / 出错可重试 / 已到底
+          // span = GridItemSpan(maxLineSpan) 让它横跨整行（否则只占一格宽度）
+          item(span = { GridItemSpan(maxLineSpan) }) {
+            EmbyPagingFooter(
+              appending = moviePage.appending,
+              hasMore = moviePage.hasMore,
+              error = moviePage.error,
+              loadedCount = moviePage.items.size,
+              endText = moviePage.total?.let { "已显示全部 ${moviePage.items.size} / $it 项" },
+              onRetry = { scope.launch { server?.let { loadMoreMovies(it) } } },
             )
           }
         }
@@ -730,8 +850,9 @@ private enum class FavoriteSort(
 /**
  * 收藏页顶部的「搜索框 + 排序」一行。
  *
- * 搜索是即时的本地过滤（收藏页本来就一次拉全量），不做防抖也不需要防抖 ——
- * 不打服务器，敲一个字就重算一次毫无成本。
+ * 搜索是即时的本地过滤（只作用在已加载的页上），不做防抖也不需要防抖 ——
+ * 不打服务器，敲一个字就重算一次毫无成本。已加载页不够时由外层的
+ * `searchQuery` 副作用自动往后补拉，保证「搜得到全库」。
  */
 @Composable
 private fun FavoriteSearchSortRow(

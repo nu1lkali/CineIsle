@@ -54,6 +54,7 @@ import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -106,11 +107,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import app.marlboroadvance.mpvex.domain.dislike.DislikeKey
+import app.marlboroadvance.mpvex.domain.dislike.DislikeRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyDownloadStatus
 import app.marlboroadvance.mpvex.domain.emby.EmbyEnqueueResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyMediaStream
 import app.marlboroadvance.mpvex.domain.emby.EmbyPerson
+import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyStudio
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
@@ -191,6 +195,33 @@ data class EmbyDetailScreen(
     // 收藏请求进行中：挡住连点。否则「点了取消、请求还没回来又点一下」会拿旧状态
     // 再算一次方向，把刚取消的又收藏回去 —— 看起来就像「只能点亮、取消不了」。
     var favoriteBusy by remember { mutableStateOf(false) }
+    // 点播放 → 播放器真正起来之间有一段**实在的等待**：
+    // 要解析直链、探测 ISO、拼 intent、再拉起 Activity，冷启动时尤其明显。
+    // 这段空窗期什么都不显示的话，用户会以为「点了没反应」而反复点。
+    // ⇒ 置 true 后立刻把播放键换成转圈 + 禁用，Activity 一起来就由页面被覆盖自然结束。
+    var playLaunching by remember { mutableStateOf(false) }
+
+    // ── 「标记为不喜欢」──
+    // 状态直接读仓库的内存快照（O(1)、零 IO），并订阅全量流 ⇒
+    // 在播放器里标了 / 取消了，回到本页菜单项的文案与图标自动跟着变，
+    // 不需要任何"通知详情页刷新"的代码。
+    val dislikeRepository = koinInject<DislikeRepository>()
+    val browserPreferencesForDislike = koinInject<BrowserPreferences>()
+    // 提前取出图片 URL 生成器：koinInject 只能在组合函数体里调，
+    // 而真正用它的地方在 onToggleDislike 回调（此时已出组合作用域）。
+    val embyRepositoryForDislike = koinInject<EmbyRepository>()
+    // 用 currentServer（StateFlow）而不是 currentServerOrAwait()（suspend）：
+    // 这里是组合函数体，不能调挂起函数；而且服务器恢复本来是异步的，
+    // 订阅 StateFlow 天然覆盖「先 null 后有值」这一路。
+    val dislikeServer by viewModel.currentServer.collectAsState()
+    val dislikeKey = remember(itemId, dislikeServer?.id) {
+      dislikeServer?.id?.let { DislikeKey(it, itemId) }
+    }
+    val dislikeMarks by dislikeRepository.all.collectAsState()
+    val isDisliked = dislikeKey != null &&
+      dislikeMarks.any { it.key == dislikeKey && it.active }
+    val showDislikeInMenu by browserPreferencesForDislike.dislikeShowInDetailMenu
+      .collectAsState()
 
     suspend fun load() {
       // 冷启动时当前服务器可能还没恢复，这里等一下，避免静默不加载
@@ -264,8 +295,22 @@ data class EmbyDetailScreen(
                 viewModel.resolveEngineOverride(reverse)?.let {
                   Toast.makeText(context, "使用 ${it.label} 内核播放", Toast.LENGTH_SHORT).show()
                 }
-                scope.launch { viewModel.play(currentServer, current, resume, reverse) }
+                // 已经点过一次就别再放一次（连点会起两个播放页）
+                if (!playLaunching) {
+                  playLaunching = true
+                  scope.launch {
+                    try {
+                      viewModel.play(currentServer, current, resume, reverse)
+                    } finally {
+                      // ⚠️ 只在**没成功拉起播放器**时复位（比如解析失败 / 抛异常），
+                      //  成功拉起时本页已经不显示了，复位也会随重组被丢掉；
+                      //  但若这里无条件复位，慢路径下会让转圈提前消失、用户又能连点。
+                      playLaunching = false
+                    }
+                  }
+                }
               },
+              playLaunching = playLaunching,
               onToggleFavorite = {
                 if (!favoriteBusy) {
                   val wasFavorite = current.UserData?.IsFavorite == true
@@ -461,6 +506,30 @@ data class EmbyDetailScreen(
               },
               moreMenuExpanded = showMoreMenu,
               onMoreMenuChange = { showMoreMenu = it },
+              isDisliked = isDisliked,
+              showDislikeInMenu = showDislikeInMenu && dislikeKey != null,
+              onToggleDislike = {
+                val key = dislikeKey
+                if (key != null) {
+                  val target = item
+                  if (isDisliked) {
+                    dislikeRepository.unmark(key)
+                    Toast.makeText(context, "已取消标记", Toast.LENGTH_SHORT).show()
+                  } else {
+                    dislikeRepository.mark(
+                      key = key,
+                      title = target?.Name.orEmpty(),
+                      reason = null,
+                      // ImageTags 是 Map（见 EmbyModels），不是对象 ——
+                      // 写 .Primary 会被解析成别的成员，报 "Unresolved reference 'Primary'"。
+                      imageUrl = target?.ImageTags?.get("Primary")?.let { tag ->
+                        dislikeServer?.let { s -> embyRepositoryForDislike.imageUrl(s, itemId, tag = tag) }
+                      },
+                    )
+                    Toast.makeText(context, "已标记为不喜欢", Toast.LENGTH_SHORT).show()
+                  }
+                }
+              },
               viewModel = viewModel,
               // 点推荐卡片：同一位演员 / 导演的另一部片子，直接再开一层详情页
               onRecommendClick = { id, name ->
@@ -810,8 +879,16 @@ private fun DetailBody(
   downloadFailed: Boolean,
   moreMenuExpanded: Boolean,
   onMoreMenuChange: (Boolean) -> Unit,
-  /** 「推荐」区要按人员 Id 反查作品，所以需要 ViewModel */
+  /** 当前条目是否已标记为「不喜欢」—— 决定菜单项文案与图标 */
+  isDisliked: Boolean,
+  /** 点击「标记为不喜欢 / 取消标记」 */
+  onToggleDislike: () -> Unit,
+  /** 设置页「详情页菜单项」开关。为 false 时整个菜单项不渲染。 */
+  showDislikeInMenu: Boolean,
+  /** 推荐」区要按人员 Id 反查作品，所以需要 ViewModel */
   viewModel: EmbyViewModel,
+  /** 是否正在拉起播放器：播放键转圈 + 禁点（转给 [PlaySection]）。 */
+  playLaunching: Boolean = false,
   /** 点推荐卡片：打开对应媒体的详情页（itemId / 标题） */
   onRecommendClick: (String, String) -> Unit,
 ) {
@@ -854,6 +931,7 @@ private fun DetailBody(
           downloadStatus = downloadStatus,
           downloadProgress = downloadProgress,
           downloadFailed = downloadFailed,
+          playLaunching = playLaunching,
         )
       }
 
@@ -1108,6 +1186,22 @@ private fun DetailBody(
                 onTogglePlayed(!isPlayed)
               },
             )
+            // 「标记为不喜欢」：单击循环切换（已标记时文案变「取消标记为不喜欢」），
+            // 不在这里弹备注框 —— 详情页不拦播放，且备注入口在播放器里长按即可。
+            // ⚠️ **不要给它加 leadingIcon**：本菜单其余 6 项全是纯文字，
+            //   只有这一项带图标会显得突兀、不像同一个菜单里的东西。
+            //   选中/取消态由**文案本身**表达（「标记为」→「取消标记为」）。
+            if (showDislikeInMenu) {
+              DropdownMenuItem(
+                text = {
+                  Text(if (isDisliked) "取消标记为不喜欢" else "标记为不喜欢")
+                },
+                onClick = {
+                  onMoreMenuChange(false)
+                  onToggleDislike()
+                },
+              )
+            }
             // 直连播不动时才需要它：本机解不了的老编码（AVI/Xvid、WMV…）、远程 strm 源。
             // 放菜单里而不是动作行 —— 它是「备用方案」，不该和播放键抢位置。
             DropdownMenuItem(
@@ -1366,6 +1460,8 @@ private fun PlaySection(
   /** 下载填充进度 0..1；null = 没有下载任务（不画填充） */
   downloadProgress: Float?,
   downloadFailed: Boolean,
+  /** 是否正在拉起播放器：播放键转圈 + 禁点。 */
+  playLaunching: Boolean = false,
 ) {
   val positionTicks = item.UserData?.PlaybackPositionTicks ?: 0L
   val runTimeTicks = item.RunTimeTicks ?: 0L
@@ -1400,6 +1496,9 @@ private fun PlaySection(
         label = if (hasResume) "继续播放 · ${formatClock(resumeSeconds)}" else "播放",
         onClick = { onPlay(if (hasResume) resumeSeconds else 0, false) },
         onLongClick = { onPlay(if (hasResume) resumeSeconds else 0, true) },
+        // 拉起播放器期间：转圈 + 禁点。
+        // 单看"转圈"还不够 —— 不挡掉点击的话，用户等得不耐烦会再点，起两个播放页。
+        loading = playLaunching,
         modifier = Modifier
           .weight(1f)
           .height(56.dp),
@@ -1555,6 +1654,13 @@ private fun PlayButton(
   label: String,
   onClick: () -> Unit,
   onLongClick: () -> Unit,
+  /**
+   * 拉起播放器期间为 true：图标换成转圈、并**禁掉点击**。
+   *
+   * 禁点比转圈更重要 —— 只转圈不挡，用户等得不耐烦会再点一次，
+   * 结果是起了两个播放页（而且后一个会把前一个顶掉，播放进度也乱）。
+   */
+  loading: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   Box(
@@ -1562,27 +1668,48 @@ private fun PlayButton(
       modifier
         .clip(RoundedCornerShape(20.dp))
         .background(MaterialTheme.colorScheme.primary)
-        .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        .combinedClickable(
+          enabled = !loading,
+          onClick = onClick,
+          onLongClick = onLongClick,
+        ),
     contentAlignment = Alignment.Center,
   ) {
     Row(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.Center,
     ) {
-      Icon(
-        imageVector = Icons.Default.PlayArrow,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.onPrimary,
-      )
-      Spacer(modifier = Modifier.width(8.dp))
-      Text(
-        text = label,
-        color = MaterialTheme.colorScheme.onPrimary,
-        style = MaterialTheme.typography.labelLarge,
-        // 动作键多了一个之后播放按钮更窄，「继续播放 · 1:23:45」得能优雅收尾
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
+      if (loading) {
+        // 尺寸与下面那个 PlayArrow 图标一致，切换时不会让整行跳一下
+        CircularProgressIndicator(
+          color = MaterialTheme.colorScheme.onPrimary,
+          strokeWidth = 2.dp,
+          modifier = Modifier.size(20.dp),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+          text = "正在打开播放器…",
+          color = MaterialTheme.colorScheme.onPrimary,
+          style = MaterialTheme.typography.labelLarge,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      } else {
+        Icon(
+          imageVector = Icons.Default.PlayArrow,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.onPrimary,
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+          text = label,
+          color = MaterialTheme.colorScheme.onPrimary,
+          style = MaterialTheme.typography.labelLarge,
+          // 动作键多了一个之后播放按钮更窄，「继续播放 · 1:23:45」得能优雅收尾
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
     }
   }
 }

@@ -26,6 +26,9 @@ class App : Application() {
   private val metadataCache: VideoMetadataCacheRepository by inject()
   private val embyServerRepository: app.marlboroadvance.mpvex.database.repository.EmbyServerRepository by inject()
   private val networkRepository: app.marlboroadvance.mpvex.repository.NetworkRepository by inject()
+  private val dislikeRepository: app.marlboroadvance.mpvex.domain.dislike.DislikeRepository by inject()
+  private val browserPreferences: app.marlboroadvance.mpvex.preferences.BrowserPreferences by inject()
+  private val appearancePreferences: app.marlboroadvance.mpvex.preferences.AppearancePreferences by inject()
 
   companion object {
     private var instance: App? = null
@@ -138,6 +141,19 @@ class App : Application() {
       }
     }
 
+    // 「不喜欢」标记的内存快照：启动时读一次库。
+    // 这是它**唯一**的读库时机 —— 之后所有查询都走内存（O(1)），
+    // 所以播放器切视频时不会因为查状态而掉帧。
+    // 失败必须吞掉：这是个锦上添花的功能，为它让整个 App 起不来是本末倒置。
+    applicationScope.launch {
+      runCatching { dislikeRepository.load() }
+        .onFailure { trace("dislike load failed: ${it.message}") }
+      // 出厂播种：把「不喜欢」按钮写进播放器控件布局（**只做一次**，见方法注释）。
+      // 必须排在 load() 之后是刻意的：两者都碰同一批偏好/库，串起来跑省得并发。
+      runCatching { seedDislikeButtonIntoPlayerLayout() }
+        .onFailure { trace("dislike layout seed failed: ${it.stackTraceToString()}") }
+    }
+
     // Trigger media scan on app launch to detect new videos
     applicationScope.launch {
       runCatching {
@@ -145,6 +161,48 @@ class App : Application() {
       }
     }
     trace("App.onCreate done")
+  }
+
+  /**
+   * 出厂播种：把「标记为不喜欢」按钮加进播放器控件布局。
+   *
+   * ## 为什么必须有这一步
+   *
+   * mpv 播放页的按钮**不是硬编码的**，它是把控件簇的 CSV（如 `top_right_controls`）
+   * 解析成按钮列表后渲染的（见 `PlayerControlsShared`）。而「播放器按钮」开关的语义是
+   * 「关 ⇒ 从布局里清掉；开 ⇒ 只置开关、不主动加回」—— 这个语义成立的前提是
+   * **出厂时按钮已经在布局里**。
+   *
+   * 第一版漏了播种，结果：开关默认「开」、设置页显示「已开启」，
+   * 但 mpv 播放器里**到处都找不到入口**，看上去像开关坏了。
+   *
+   * ## 为什么只播一次
+   *
+   * 用户有权把按钮从所有控件簇里删掉（那就是他的布局决定）。每次启动都塞回去
+   * 等于反复撤销用户的操作，所以播完置 `dislike_layout_seeded`，之后永不再动。
+   *
+   * ## 为什么不能只改偏好默认值
+   *
+   * 控件簇的 CSV 一旦被读过就写进了本地存储，改 `getString` 的默认值对**已安装用户
+   * 完全无效**（`AppearancePreferences` 里 v2/v3 换 key 的注释就是这个教训）。
+   * 默认值那道保险只覆盖全新用户，老用户靠这里。
+   */
+  private fun seedDislikeButtonIntoPlayerLayout() {
+    // ⚠️ 版本**必须随 [DislikeLayoutSync.SEED_CLUSTERS] 一起涨**：
+    //  只改簇列表不改版本号的话，已经播过旧版本的用户会被跳过，新加的簇永远补不上。
+    val targetVersion = 2
+    if (browserPreferences.dislikeLayoutSeedVersion.get() >= targetVersion) return
+
+    val sync = app.marlboroadvance.mpvex.ui.preferences.DislikeLayoutSync
+    val prefs = sync.clusterPrefs(appearancePreferences)
+    val plan = sync.planSeed(current = sync.readClusters(prefs))
+    if (plan.writes.isNotEmpty()) {
+      sync.writeClusters(prefs, plan.writes)
+      trace("dislike layout seeded to v$targetVersion: ${plan.writes}")
+    }
+    // 不管这次有没有真的写入都要落版本号：
+    // 已经齐了的就别再算一遍，缺的这次补完，下次也不必再算。
+    browserPreferences.dislikeLayoutSeedVersion.set(targetVersion)
   }
 
   /**

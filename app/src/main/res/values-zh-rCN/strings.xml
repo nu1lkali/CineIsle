@@ -135,6 +135,8 @@
   <string name="pref_player_gestures_horizontal_swipe_to_seek_summary">在屏幕上左右滑动以前进或后退</string>
   <string name="pref_player_gestures_horizontal_swipe_sensitivity">横向滑动灵敏度</string>
   <string name="pref_player_gestures_horizontal_swipe_sensitivity_summary">调整每次滑动覆盖的距离</string>
+  <string name="pref_player_haptic_feedback">震动反馈</string>
+  <string name="pref_player_haptic_feedback_summary">滑动快进与调节倍速时轻微震动提示</string>
   <string name="pref_player_gestures_hold_for_multiple_speed">长按多倍速</string>
   <string name="pref_player_controls">控件</string>
   <string name="pref_player_controls_allow_gestures_in_panels">面板内允许手势</string>
@@ -405,6 +407,12 @@
   <string name="notification_channel_description">媒体播放控制</string>
   <string name="notification_playing">正在播放</string>
   <string name="pref_player_use_precise_seeking">使用精确跳转</string>
+  <string name="pref_player_disk_cache">边看边缓存到本地</string>
+  <string name="pref_player_disk_cache_summary">看过的网络流留在本地，重看同一部不用重新下载</string>
+  <string name="pref_player_disk_cache_size">缓存上限</string>
+  <string name="pref_player_disk_cache_size_summary">单条影片</string>
+  <string name="pref_player_clear_disk_cache">清除播放缓存</string>
+  <string name="pref_player_clear_disk_cache_summary">删除已缓存的网络流数据，不影响已下载到本地的文件</string>
   <!-- 文件夹偏好 -->
   <string name="pref_folders_title">文件夹</string>
   <string name="pref_folders_summary">管理文件夹黑名单</string>
@@ -586,6 +594,42 @@
   <string name="gsy_audio_title">音轨</string>
   <string name="gsy_audio_unsupported">切换音轨需要 IJK 内核（当前：%1$s）</string>
   <string name="gsy_audio_empty">没有找到可选音轨</string>
+
+  <string name="gsy_track_unsupported">切换%1$s需要 IJK 内核（当前：%2$s）</string>
+  <string name="gsy_track_empty">没有找到可选%1$s</string>
+  <string name="gsy_track_off">关闭</string>
+  <string name="gsy_subtitle_track_title">字幕轨</string>
+  <string name="gsy_track_kind_audio">音轨</string>
+  <string name="gsy_track_kind_subtitle">字幕轨</string>
+
+  <!-- 字幕样式（清单 #19）。全部与 mpv 侧共用同一份设置，切换内核后依然生效。 -->
+  <string name="gsy_control_chapters">章节</string>
+  <string name="gsy_subtitle_style">字幕样式</string>
+  <string name="gsy_subtitle_style_with_unsupported">字幕样式\n本内核不支持：%1$s</string>
+  <string name="gsy_subtitle_style_size">字号：%1$d</string>
+  <string name="gsy_subtitle_style_size_pick">字幕字号</string>
+  <string name="gsy_subtitle_style_shadow">描边：%1$d</string>
+  <string name="gsy_subtitle_style_shadow_pick">描边粗细</string>
+  <string name="gsy_subtitle_style_color">文字颜色</string>
+  <string name="gsy_subtitle_style_border_color">描边颜色</string>
+  <string name="gsy_subtitle_style_align">对齐：%1$s</string>
+  <string name="gsy_subtitle_style_align_pick">字幕对齐</string>
+  <string name="gsy_subtitle_style_align_left">左对齐</string>
+  <string name="gsy_subtitle_style_align_center">居中</string>
+  <string name="gsy_subtitle_style_align_right">右对齐</string>
+  <string name="gsy_subtitle_style_align_auto">自动</string>
+  <string name="gsy_subtitle_style_reset">重置样式</string>
+  <string name="gsy_subtitle_style_reset_done">字幕样式已重置</string>
+
+  <!-- 章节（清单 #19）。数据来自 Emby，GSY 内核本身没有章节能力。 -->
+  <string name="gsy_chapters_title">章节</string>
+  <string name="gsy_chapters_loading">正在加载章节…</string>
+  <string name="gsy_chapters_empty">这个视频没有章节</string>
+  <string name="gsy_chapters_local_no_server">章节来自媒体库，本地文件没有</string>
+  <string name="gsy_chapters_untitled">第 %1$d 章</string>
+  <string name="gsy_chapters_now">▶</string>
+  <string name="gsy_chapters_jumped">已跳转到章节</string>
+  <string name="gsy_chapters_seek_failed">跳转到该章节失败</string>
 
   <string name="gsy_pip_unsupported">当前设备不支持画中画</string>
   <string name="gsy_pip_play">播放</string>
@@ -828,4 +872,19 @@
   <string name="btn_label_emby_favorite">Emby 收藏</string>
   <string name="btn_label_cast">投屏</string>
   <string name="btn_label_none">无</string>
+
+  <!-- ===== 「标记为不喜欢」=====
+       ⚠️ 中文系统取的是本文件（values-zh-rCN），不是 values/。
+       新增文案必须**两个文件都写**，只写 values/ 会让中文用户看到英文。 -->
+  <string name="gsy_control_dislike">标记为不喜欢</string>
+  <string name="gsy_control_dislike_on">已标记为不喜欢</string>
+  <string name="gsy_dislike_reason_title">为什么不喜欢它？</string>
+  <string name="gsy_dislike_reason_hint">写一句原因（可不填）</string>
+  <string name="gsy_dislike_unavailable">这一条无法标记</string>
+  <string name="gsy_dislike_reason_save">保存</string>
+  <string name="gsy_dislike_reason_save_and_mark">保存并标记</string>
+
+  <string name="pref_dislike_title">不喜欢视频管理</string>
+  <string name="pref_dislike_summary">设置「不喜欢」按钮在哪些地方显示，并管理已标记的列表</string>
+  <string name="btn_label_dislike">不喜欢</string>
 </resources>

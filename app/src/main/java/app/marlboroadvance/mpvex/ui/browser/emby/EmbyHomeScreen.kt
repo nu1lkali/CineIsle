@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
@@ -19,8 +20,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
@@ -45,6 +50,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,6 +73,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMaintainButton
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyPosterCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchTabRow
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySectionHeader
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonHome
@@ -74,6 +81,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyWideCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyItemActionsDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
 import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
+import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarRecommendationViewModel
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -101,11 +109,41 @@ fun EmbyHomeScreen(
   onOpenDetail: (EmbyItem) -> Unit,
   onManageServers: () -> Unit,
   onOpenSettings: () -> Unit,
+  /**
+   * 打开 Emby 服务端播放列表（清单 #12）。
+   *
+   * 单独一个回调而不是让首页自己 push：导航栈由 [MainScreen] 持有，
+   * 首页拿不到 —— 和 onManageServers / onOpenSettings 是同一套做法。
+   */
+  onOpenPlaylists: () -> Unit = {},
+  /**
+   * 打开「猜你喜欢 / 即混」独立页（清单 #14）。
+   *
+   * 同样只传回调不自己 push：导航栈在 [MainScreen] 手里。
+   */
+  onOpenDiscover: () -> Unit = {},
+  /**
+   * 打开「合集」管理页（清单 #15）。
+   *
+   * 与播放列表分开一个入口：合集是「同一部作品的不同版本」，
+   * 播放列表是「任意片单」，两者语义不同，混在一个列表里用户会认错。
+   */
+  onOpenCollections: () -> Unit = {},
 ) {
   val context = LocalContext.current
   val viewModel: EmbyViewModel = viewModel(
     factory = EmbyViewModel.factory(context.applicationContext as android.app.Application),
   )
+
+  // 「随便看看」区块用的推荐 ViewModel（清单 #14 的一部分）。
+  // 首页只取**即混**这一块 —— 它不需要用户先选种子（没有种子时退化成随机一批），
+  // 相似推荐和续播仍然留在独立页：前者要挑种子，后者首页已经有「继续观看」了。
+  val mixViewModel: SimilarRecommendationViewModel = viewModel(
+    factory = SimilarRecommendationViewModel.factory(
+      context.applicationContext as android.app.Application,
+    ),
+  )
+  val mixItems by mixViewModel.mix.collectAsState()
 
   val server by viewModel.currentServer.collectAsState()
   val libraries by viewModel.libraries.collectAsState()
@@ -116,6 +154,8 @@ fun EmbyHomeScreen(
   val servers by viewModel.servers.collectAsState()
 
   var serverMenuExpanded by remember { mutableStateOf(false) }
+  // 顶栏「更多」菜单（播放列表 / 猜你喜欢 / 合集）
+  var moreMenuExpanded by remember { mutableStateOf(false) }
 
   // ── 下拉刷新 ──
   // 首页是「媒体库 + 继续观看 + 最新加入」三块的组合，服务端上新了片子不会自己冒出来，
@@ -140,6 +180,12 @@ fun EmbyHomeScreen(
   // 当 remember 的键，切服务器会重新取到那个服务器自己的偏好。
   val browserPreferences = koinInject<BrowserPreferences>()
   val serverId = server?.id ?: 0L
+
+  // 「随便看看」区块的显示开关与条数。默认值见 BrowserPreferences。
+  // 关掉时下面那次推荐请求也一起停（LaunchedEffect 的 key 里带了 showHomeMix）。
+  val showHomeMix by browserPreferences.embyHomeShowMix.collectAsState()
+  val homeMixCount by browserPreferences.embyHomeMixCount.collectAsState()
+
   val pinsPreference = remember(serverId) { browserPreferences.embyLibraryPins(serverId) }
   val numbersPreference = remember(serverId) { browserPreferences.embyLibraryNumbers(serverId) }
   val pinsRaw by pinsPreference.collectAsState()
@@ -163,14 +209,39 @@ fun EmbyHomeScreen(
     }
   }
 
+  // 拉「随便看看」那一批。
+  // 只跟服务器 id 走：下拉刷新不再重复拉这一批（首页本来就有三个区块在刷），
+  // 想换内容点区块标题上的「换一批」即可。
+  //
+  // ⚠️ `showHomeMix` 进 key：用户在设置里关掉这个开关后，这里要**立刻停掉请求**，
+  // 不是「下次进首页才生效」。所以开关是 LaunchedEffect 的 key 之一，
+  // 关掉时 effect 重跑并在第一行就 return。
+  LaunchedEffect(serverId, showHomeMix) {
+    if (!showHomeMix) return@LaunchedEffect
+    val current = server ?: return@LaunchedEffect
+    if (serverId == 0L) return@LaunchedEffect
+    mixViewModel.loadMix(current, seed = null, limit = homeMixCount)
+  }
+
   // ── 全库搜索 ──
   // 不带 ParentId，Emby 会跨所有媒体库检索，所以这里搜的是「全部媒体」而不是某个库。
   var searchActive by remember { mutableStateOf(false) }
   var searchQuery by remember { mutableStateOf("") }
   var searchResults by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
   var isSearching by remember { mutableStateOf(false) }
+  /**
+   * 结果是否被 [EmbyViewModel.GLOBAL_SEARCH_LIMIT] 截断（清单 1.1）。
+   * 全库搜索是「人物 + 媒体」两条流拼的，混合列表没法真分页，
+   * 所以只能靠明确提示让用户知道还有更多、可以收窄条件。
+   */
+  var searchTruncated by remember { mutableStateOf(false) }
   // 类型筛选：空集合 = 「全部」= 不加类型限制
   var searchFilters by remember { mutableStateOf(emptySet<EmbySearchFilter>()) }
+  // 结果分类页签（清单 4.1）。**纯客户端切片**，与上面的 searchFilters 不同：
+  // 它决定「已拿到的结果里先看哪一堆」，切一下不发请求（详见 EmbySearchTab 的 KDoc）。
+  // 用 rememberSaveable：旋转屏幕时结果集靠 ViewModel 保住，页签也得跟着保住，
+  // 否则转个屏就退回「全部」，用户会以为搜索结果被重置了。
+  var searchTab by rememberSaveable { mutableStateOf(EmbySearchTab.ALL) }
 
   // 搜索历史：与媒体库内搜索共用同一张表，在哪儿搜过的词换个地方也能点到
   val searchHistoryRepository = koinInject<SearchHistoryRepository>()
@@ -186,7 +257,11 @@ fun EmbyHomeScreen(
     searchActive = false
     searchQuery = ""
     searchResults = emptyList()
+    searchTruncated = false
     isSearching = false
+    // 页签也要复位：下次进搜索时用户要的默认视图就是「全部」，
+    // 留着上一次的「电影」页签会让第一条结果直接消失，看着像搜索坏了。
+    searchTab = EmbySearchTab.ALL
     keyboardController?.hide()
   }
 
@@ -350,6 +425,7 @@ fun EmbyHomeScreen(
           if (!searchActive) {
             searchQuery = ""
             searchResults = emptyList()
+            searchTruncated = false
             isSearching = false
           }
         }) {
@@ -402,11 +478,54 @@ fun EmbyHomeScreen(
             )
           }
         }
-        // 下载管理：有任务在跑时角标显示数量
+        // 下载管理：有任务在跑时角标显示数量。
+        // 高频（用户在下载页和首页之间来回切），所以留在顶栏不进「更多」。
         EmbyDownloadEntryButton()
-        // Emby 维护：用官方 Emby 图标（品牌绿），与下方齿轮明确区分
+        // Emby 维护：用官方 Emby 图标（品牌绿），与下方齿轮明确区分。
+        // 同理常驻顶栏 —— 服务器掉线、认证过期、任务异常都得从这里处理。
         EmbyMaintainButton(onClick = onManageServers)
-        // 设置：统一进 App 设置页（播放器 / 外观 / 解码等偏好都在这里）
+        // ── 更多（清单：顶栏精简）────────────────────────────────────
+        // 之前这里平铺了 6 个功能按钮（下载 / 离线 / 播放列表 / 猜你喜欢 / 合集 / Emby 维护），
+        // 挤到连「设置」都差点被顶出可视区域。低频的收成一个 ⋮ 菜单，
+        // 高频的（下载 / 维护 / 搜索 / 服务器 / 设置）仍然常驻。
+        Box {
+          IconButton(onClick = { moreMenuExpanded = true }) {
+            Icon(Icons.Default.MoreVert, contentDescription = "更多功能")
+          }
+          DropdownMenu(
+            expanded = moreMenuExpanded,
+            onDismissRequest = { moreMenuExpanded = false },
+          ) {
+            DropdownMenuItem(
+              text = { Text("播放列表") },
+              leadingIcon = {
+                Icon(Icons.AutoMirrored.Filled.PlaylistPlay, contentDescription = null)
+              },
+              onClick = {
+                moreMenuExpanded = false
+                onOpenPlaylists()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("猜你喜欢 / 连播") },
+              leadingIcon = { Icon(Icons.Default.AutoAwesome, contentDescription = null) },
+              onClick = {
+                moreMenuExpanded = false
+                onOpenDiscover()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("合集") },
+              leadingIcon = { Icon(Icons.Default.Album, contentDescription = null) },
+              onClick = {
+                moreMenuExpanded = false
+                onOpenCollections()
+              },
+            )
+          }
+        }
+        // 设置：放在最后且永不折叠 —— 用户要的就是「设置按钮别再被挤没」。
+        // 播放器 / 外观 / 解码等偏好都在这里。
         IconButton(onClick = onOpenSettings) {
           Icon(Icons.Default.Settings, contentDescription = "设置")
         }
@@ -450,10 +569,16 @@ fun EmbyHomeScreen(
     LaunchedEffect(searchQuery, searchActive, searchFilters) {
       if (!searchActive || searchQuery.isBlank()) {
         searchResults = emptyList()
+        searchTruncated = false
         isSearching = false
         return@LaunchedEffect
       }
       isSearching = true
+      // 换词 / 改筛选 ⇒ 回到「全部」页签。这不是「顺手」而是必需的：
+      // 新结果集里很可能没有上一轮选中的那个类型（比如上轮选「电影」、这轮只搜到剧集），
+      // 页签不会自己消失（见 EmbySearchTab.shouldShowBadge 会保留选中项），
+      // 于是用户会停在一个永远空白的页签上，看起来像搜索坏了。
+      searchTab = EmbySearchTab.ALL
       kotlinx.coroutines.delay(400)
       val current = server
       if (current == null) {
@@ -461,17 +586,27 @@ fun EmbyHomeScreen(
         return@LaunchedEffect
       }
       val finishedQuery = searchQuery
-      searchResults = viewModel.searchGlobal(
+      val result = viewModel.searchGlobal(
         server = current,
         term = finishedQuery,
         itemTypes = EmbySearchFilter.toItemTypes(searchFilters),
       )
+      searchResults = result.items
+      searchTruncated = result.truncated
       // 有结果才记历史：一个字都没命中的多半是打字打岔了，记下来只会污染列表
-      if (searchResults.isNotEmpty()) {
+      if (result.items.isNotEmpty()) {
         searchHistoryRepository.record(finishedQuery)
       }
       isSearching = false
     }
+
+    // 页签切片结果。remember 包住是因为 grid 会把整个列表传进 items()，
+    // 每帧重新 filter 一遍 120 条是白给的开销。key 带上 searchTab —— 切页签必须重算。
+    val visibleSearchResults = remember(searchResults, searchTab) {
+      EmbySearchTab.itemsFor(searchResults, searchTab)
+    }
+    // 角标统计只依赖原始结果，跟当前选中哪个页签无关
+    val searchTabCounts = remember(searchResults) { EmbySearchTab.countByTab(searchResults) }
 
     when {
       // 全库搜索：结果替换首页内容
@@ -497,25 +632,64 @@ fun EmbyHomeScreen(
             )
           }
         } else {
-          androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-            columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(minSize = 104.dp),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-          ) {
-            items(
-              items = searchResults,
-              key = { it.Id ?: it.Name ?: "" },
-            ) { item ->
-              EmbyPosterCard(
-                title = item.Name ?: "",
-                subtitle = item.ProductionYear?.toString(),
-                imageUrl = server?.let { s -> viewModel.imageUrl(s, item, "Primary", 300) },
-                progress = null,
-                isFavorite = item.UserData?.IsFavorite == true,
-                onClick = { onOpenDetail(item) },
-              )
+          Column(modifier = Modifier.fillMaxSize()) {
+            // 分类页签（清单 4.1）。放在结果网格**上面**而不是吸顶：搜索结果通常一屏到两屏就到底，
+            // 真滚很久的场合下面还有上一排筛选 chip 顶着，页签不会被顶出视野。
+            EmbySearchTabRow(
+              counts = searchTabCounts,
+              total = searchResults.size,
+              selected = searchTab,
+              onSelectedChange = { searchTab = it },
+            )
+            if (visibleSearchResults.isEmpty()) {
+              // 正常走不到这里（切页签时 0 条的页签不给选，换词时页签会复位到「全部」），
+              // 留着是防「结果集变了但选中态没跟上」时给用户一句人话，而不是一片空白。
+              Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                  text = "「${searchTab.label}」下没有匹配的结果",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+            } else {
+              androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(minSize = 104.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+              ) {
+                items(
+                  items = visibleSearchResults,
+                  key = { it.Id ?: it.Name ?: "" },
+                ) { item ->
+                  EmbyPosterCard(
+                    title = item.Name ?: "",
+                    subtitle = item.ProductionYear?.toString(),
+                    imageUrl = server?.let { s -> viewModel.imageUrl(s, item, "Primary", 300) },
+                    progress = null,
+                    isFavorite = item.UserData?.IsFavorite == true,
+                    onClick = { onOpenDetail(item) },
+                  )
+                }
+                // 结果被上限截断时明确告知（清单 1.1）：全库搜索是「人物 + 媒体」两条流
+                // 拼的，混合列表没法真正分页，所以这里靠提示让用户自己收窄条件。
+                // 只在「全部」页签下提示 —— 截断是**整体**现象，
+                // 停在「电影」页签时报「只显示前 N 条」会让人误以为电影只有 N 部。
+                if (searchTruncated && searchTab == EmbySearchTab.ALL) {
+                  item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    Text(
+                      text = "只显示前 ${searchResults.size} 条，试试更精确的关键词或勾选类型筛选",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 20.dp),
+                      textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                  }
+                }
+              }
             }
           }
         }
@@ -625,6 +799,46 @@ fun EmbyHomeScreen(
                       progress = playbackProgress(item),
                       isFavorite = item.UserData?.IsFavorite == true,
                       // 单击进入详情页，播放由详情页发起
+                      onClick = { onOpenDetail(item) },
+                    )
+                  }
+                }
+              }
+            }
+
+            // 「随便看看」：即混的一批，不占独立页也能有点击。
+            // 放在「最新加入」下面 —— 那块是「刚出的新片」，这块是「点开就有惊喜」，
+            // 语义不重复。整块只给一行横滑，点卡片进详情，点标题右侧按钮换一批。
+            //
+            // `showHomeMix &&` 是设置里那个开关：关掉时整块消失（请求也已经停了）。
+            if (showHomeMix && mixItems.isNotEmpty()) {
+              item {
+                EmbySectionHeader(
+                  title = "随便看看",
+                  action = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                      TextButton(onClick = {
+                        val current = server ?: return@TextButton
+                        // 换一批沿用当前条数设置，不然用户设了 12 条、
+                        // 点一下「换一批」突然变成 100 条，视觉上像是坏了
+                        mixViewModel.loadMix(current, seed = null, limit = homeMixCount)
+                      }) { Text("换一批") }
+                      TextButton(onClick = onOpenDiscover) { Text("更多") }
+                    }
+                  },
+                )
+                LazyRow(
+                  contentPadding = PaddingValues(horizontal = 16.dp),
+                  horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                  items(mixItems, key = { it.Id ?: it.hashCode().toString() }) { item ->
+                    EmbyPosterCard(
+                      title = viewModel.displayTitle(item),
+                      subtitle = item.ProductionYear?.toString() ?: item.Type,
+                      imageUrl = viewModel.imageUrl(server!!, item, "Primary", 480),
+                      fallbackImageUrl = viewModel.imageUrl(server!!, item, "Thumb", 480),
+                      progress = playbackProgress(item),
+                      isFavorite = item.UserData?.IsFavorite == true,
                       onClick = { onOpenDetail(item) },
                     )
                   }

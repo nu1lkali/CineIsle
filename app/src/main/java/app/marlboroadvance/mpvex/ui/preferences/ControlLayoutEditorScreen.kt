@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerButton
 import app.marlboroadvance.mpvex.preferences.allPlayerButtons
 import app.marlboroadvance.mpvex.preferences.preference.Preference
@@ -67,6 +68,16 @@ data class ControlLayoutEditorScreen(
   override fun Content() {
     val backstack = LocalBackStack.current
     val preferences = koinInject<AppearancePreferences>()
+    // 「不喜欢」按钮的开关与本编辑器联动（见 onDispose 里的注释）
+    val browserPreferences = koinInject<BrowserPreferences>()
+
+    // 本区域对应的偏好 key。关开关时要按 key 定位去清除，加回时也要写回原处。
+    val regionPreferenceKey = when (region) {
+      ControlRegion.TOP_RIGHT -> "top_right_controls"
+      ControlRegion.BOTTOM_RIGHT -> "bottom_right_controls_v2"
+      ControlRegion.BOTTOM_LEFT -> "bottom_left_controls"
+      ControlRegion.PORTRAIT_BOTTOM -> "portrait_bottom_controls_v3"
+    }
 
     // Get all 4 preferences as a List
     val prefs =
@@ -140,11 +151,22 @@ data class ControlLayoutEditorScreen(
       )
     }
 
-    DisposableEffect(Unit) {
-      onDispose {
-        prefToEdit.set(selectedButtons.joinToString(","))
+DisposableEffect(Unit) {
+        onDispose {
+          val csv = selectedButtons.joinToString(",")
+          prefToEdit.set(csv)
+          // 「不喜欢」按钮有两条互不知情的入口（这里的布局编辑器 / 设置里的显示开关），
+          // 用户在这里放了一个却在别处被关掉，就会看到"保存了但按钮不出现"，
+          // 以为没保存成功。所以**只要布局里有它，就自动把显示开关打开** ——
+          // 这样"开关"永远是布局的镜像，用户不需要知道有两套机制。
+          // 顺带记住它现在在哪个簇：设置里关掉开关时要知道去哪儿清，
+          // 重新打开时也要加回原处而不是猜一个（见 DislikeLayoutSync）。
+          if (selectedButtons.contains(PlayerButton.DISLIKE)) {
+            browserPreferences.dislikeShowInPlayerControls.set(true)
+            browserPreferences.dislikeLayoutCluster.set(regionPreferenceKey)
+          }
+        }
       }
-    }
 
     val title =
       remember(region) {
