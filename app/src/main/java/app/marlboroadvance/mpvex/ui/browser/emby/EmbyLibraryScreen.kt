@@ -227,6 +227,9 @@ data class EmbyLibraryScreen(
     val savedViewMode by browserPreferences.embyLibraryViewMode.collectAsState()
     val viewMode = remember(savedViewMode) { EmbyLibraryViewMode.fromKey(savedViewMode) }
     val gridColumns by browserPreferences.embyLibraryGridColumns.collectAsState()
+    // 卡片标题行数（1 或 2，默认 1）。长片名一行放不下会被省略号截掉，调 2 行能看全，
+    // 代价是卡片变高、一屏少看几条。
+    val titleLines by browserPreferences.embyLibraryTitleLines.collectAsState()
     // 卡片右上角心形快捷收藏开关（默认开）。关掉后退回只读角标。
     val quickFavoriteEnabled by browserPreferences.embyQuickFavorite.collectAsState()
     // 搜索联想词列表是否收起（默认展开）。联想只是参考，用户收起后一直记着。
@@ -1582,6 +1585,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                menuAnchor = offset
          },
           onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
+          titleMaxLines = titleLines,
         )
     }
   }
@@ -1600,6 +1604,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                         menuAnchor = offset
                       },
                       onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
+                      titleMaxLines = titleLines,
                     )
                   }
                 }
@@ -2056,6 +2061,46 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                 }
               }
             }
+
+            // 标题行数：只对网格 / 年份时间轴生效。紧凑列表本来就是「一屏扫尽量多条」，
+            // 把标题撑成两行会砸掉它的定位，所以整块收掉。
+            if (viewMode != EmbyLibraryViewMode.COMPACT) {
+              Spacer(modifier = Modifier.height(12.dp))
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                  text = "标题行数",
+                  style = MaterialTheme.typography.titleSmall,
+                  modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                  onClick = {
+                    browserPreferences.embyLibraryTitleLines
+                      .set((titleLines - 1).coerceAtLeast(1))
+                  },
+                  enabled = titleLines > 1,
+                ) {
+                  Icon(Icons.Default.Remove, contentDescription = "减少标题行数")
+                }
+                Text(
+                  text = titleLines.coerceIn(1, 2).toString(),
+                  style = MaterialTheme.typography.titleMedium,
+                )
+                IconButton(
+                  onClick = {
+                    browserPreferences.embyLibraryTitleLines
+                      .set((titleLines + 1).coerceAtMost(2))
+                  },
+                  enabled = titleLines < 2,
+                ) {
+                  Icon(Icons.Default.Add, contentDescription = "增加标题行数")
+                }
+              }
+              Text(
+                text = "片名过长时多显示一行，卡片会相应变高",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+              )
+            }
           }
         },
         confirmButton = {
@@ -2154,6 +2199,7 @@ private fun EmbyLibraryMediaCell(
   onClick: () -> Unit,
   onLongClick: ((androidx.compose.ui.geometry.Offset) -> Unit)?,
   onToggleFavorite: (() -> Unit)?,
+  titleMaxLines: Int = 1,
 ) {
   val itemId = item.Id
   // 文件夹 / 合集这类容器条目自身没有封面图，改用内部视频的缩略图拼宫格
@@ -2187,6 +2233,7 @@ private fun EmbyLibraryMediaCell(
     fillWidth = cardStyle == EmbyCardStyle.POSTER,
     onLongClick = onLongClick,
     onToggleFavorite = onToggleFavorite,
+    titleMaxLines = titleMaxLines,
   )
 }
 

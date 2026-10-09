@@ -189,6 +189,18 @@ class BrowserPreferences(
   val embyLibraryGridColumns = preferenceStore.getInt("emby_library_grid_columns", 3)
 
   /**
+   * 媒体库卡片**标题最多显示几行**（1 或 2，默认 1）。
+   *
+   * 有些片子名字很长（尤其带季集号、压制组后缀的），一行放不下就被省略号截掉，
+   * 只认得前半截。调成 2 行能看全，代价是卡片整体变高、一屏能看到的条目变少 ——
+   * 所以默认保持 1 行，谁需要谁自己开。
+   *
+   * 只对网格 / 年份时间轴里的卡片生效：紧凑列表本来就是「一屏扫尽量多条」，
+   * 那里把标题撑成两行只会砸掉它的定位。
+   */
+  val embyLibraryTitleLines = preferenceStore.getInt("emby_library_title_lines", 1)
+
+  /**
    * 「下载完成后清除服务端播放进度」开关。
    *
    * 打开后，一条媒体下载完成时会顺手把 Emby 服务器上这条的**播放位置**清零 ——

@@ -359,6 +359,14 @@ fun EmbyMediaCard(
    * 不需要快捷开关，避免每张卡右上角都挂个可点按钮。
    */
   onToggleFavorite: (() -> Unit)? = null,
+  /**
+   * 标题最多显示几行（默认 1，可设 2）。
+   *
+   * 片名很长时一行会被省略号截掉，只认得前半截；给 2 行能看全。
+   * 视图设置里的「标题行数」把它透传进来，其余调用点（首页横滑、详情页推荐…）
+   * 保持默认 1 行不变。
+   */
+  titleMaxLines: Int = 1,
 ) {
   Column(modifier = if (fillWidth) modifier.fillMaxWidth() else modifier.width(style.width)) {
     Card(
@@ -506,7 +514,7 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
       Text(
         text = title,
         style = MaterialTheme.typography.bodyMedium,
-        maxLines = 1,
+        maxLines = titleMaxLines.coerceIn(1, 2),
         overflow = TextOverflow.Ellipsis,
       )
       if (!subtitle.isNullOrBlank()) {
