@@ -6,7 +6,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.PhotoLibrary
-import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -227,13 +226,6 @@ object PlayerPreferencesScreen : Screen {
                     text = "内核 / 渲染方式 / 显示比例 / 手势 / 全屏与旋转，以及「长按用哪个内核播放」——" +
                       "全部在 GSY 播放器自己的设置页里，与 mpv 的配置互不影响",
                     color = MaterialTheme.colorScheme.outline,
-                  )
-                },
-                icon = {
-                  Icon(
-                    Icons.Outlined.PlayCircle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
                   )
                 },
                 onClick = { backstack.add(GsyPreferencesScreen) },
