@@ -93,6 +93,21 @@ class BrowserPreferences(
     preferenceStore.getString("emby_library_filter_$libraryId", "")
 
   /**
+   * 这台服务器**支不支持**用 `GenreIds` / `TagIds` 按 Id 筛类型 / 标签。
+   *
+   * 三态（空串 = 还不知道）：
+   *  - `""` 未知 → 先按支持试一次；
+   *  - `"1"` 支持 → 之后一直走服务端筛（正常分页，不扫全库）；
+   *  - `"0"` 不支持 → 之后直接走客户端本地筛，不再白试。
+   *
+   * 为什么要记：按名字的 `Genres` / `Tags` 参数在部分服务端会踩到坏列直接 500，
+   * 但**按 Id 的 `GenreIds` / `TagIds` 一般没事**（网页端就是这么筛的）。
+   * 万一某台服务器连 Id 也不认，试一次失败后记住，后续不再每次白跑一趟。
+   */
+  fun embyGenreIdFilterSupport(serverId: Long): Preference<String> =
+    preferenceStore.getString("emby_genreid_filter_support_$serverId", "")
+
+  /**
    * 每个媒体库各自记住的**分类**（全部 / 继续播放 / 合集 / 收藏 / 文件夹，存枚举名）。
    *
    * 空串 = 没选过 → 用「全部」。key 带 libraryId，跨库互不干扰。

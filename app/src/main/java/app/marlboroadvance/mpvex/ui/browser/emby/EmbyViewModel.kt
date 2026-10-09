@@ -279,6 +279,9 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     minCommunityRating: Float? = null,
     /** 标签筛选，多选取并集 */
     tags: List<String>? = null,
+    /** 类型 / 标签的 Id 筛选（逗号分隔）：优先于按名字的 [genres] / [tags] */
+    genreIds: List<String>? = null,
+    tagIds: List<String>? = null,
     /** 官方分级筛选，多选取并集 */
     officialRatings: List<String>? = null,
     /** true 只返回收藏，false 只返回未收藏，null 不限 */
@@ -315,6 +318,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       years = years,
       minCommunityRating = minCommunityRating,
       tags = tags,
+      genreIds = genreIds,
+      tagIds = tagIds,
       officialRatings = officialRatings,
       isFavorite = isFavorite,
       mediaTypes = mediaTypes,

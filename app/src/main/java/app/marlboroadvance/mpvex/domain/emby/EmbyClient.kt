@@ -351,6 +351,20 @@ object EmbyClient {
     minCommunityRating: Float? = null,
     /** 按标签筛选；多选时 Emby 取并集，查询串用 | 分隔 */
     tags: List<String>? = null,
+    /**
+     * 按「类型 Id / 标签 Id」筛选（逗号分隔）。
+     *
+     * ⭐ 优先用这两个，而不是按名字的 [genres] / [tags]：
+     * Emby 官方自 2019 年起就推荐用 Id（[官方说明](https://emby.media/community/topic/74602-tagitems-filtering-by-tags/)：
+     * 「All list api's now have a TagIds filter… You can still filter using the tag name
+     * with the Tags param, but this should only be used in situations where you do not have the id」）。
+     *
+     * 按名字那条路径会去查 `MediaItems.Genres` 列，某些服务端的 `library.db` 缺这一列
+     * （跨版本升级/降级留下的坏 schema），一查就抛 SQLiteException 返回 500；
+     * 按 Id 走的是关联表，与网页端筛选同路，不会踩到这个坑。
+     */
+    genreIds: List<String>? = null,
+    tagIds: List<String>? = null,
     /** 按官方分级筛选；参数名是复数 OfficialRatings，查询串用 | 分隔 */
     officialRatings: List<String>? = null,
     /**
@@ -397,6 +411,9 @@ object EmbyClient {
     excludeItemTypes?.takeIf { it.isNotEmpty() }?.let { q["ExcludeItemTypes"] = it.joinToString(",") }
     genres?.takeIf { it.isNotEmpty() }?.let { q["Genres"] = it.joinToString("|") }
     tags?.takeIf { it.isNotEmpty() }?.let { q["Tags"] = it.joinToString("|") }
+    // 按 Id 筛（优先）：官方推荐、且不碰会 500 的 Genres 列。逗号分隔。
+    genreIds?.takeIf { it.isNotEmpty() }?.let { q["GenreIds"] = it.joinToString(",") }
+    tagIds?.takeIf { it.isNotEmpty() }?.let { q["TagIds"] = it.joinToString(",") }
     officialRatings?.takeIf { it.isNotEmpty() }?.let { q["OfficialRatings"] = it.joinToString("|") }
     // 已看状态与视频规格都是独立布尔参数，服务端只认 true / false，不传才是「不限」
     isPlayed?.let { q["IsPlayed"] = it.toString() }
@@ -822,10 +839,16 @@ object EmbyClient {
    * 而且分页时漏掉的项根本看不见。任一端点失败就退化成空列表，
    * 面板里对应的分组会自动隐藏（年份另有兜底，见 [fallbackYears]）。
    */
-  fun getFilterOptions(server: EmbyServer, parentId: String? = null): EmbyFilterOptions =
-    EmbyFilterOptions(
-      genres = getGenres(server, parentId),
-      tags = nameList(server, "/Tags", parentId),
+  fun getFilterOptions(server: EmbyServer, parentId: String? = null): EmbyFilterOptions {
+    // /Genres、/Tags 的返回体里 Items[] 同时带 Id 和 Name，一次请求拿两样
+    // （名字给 UI，Id 给「按 Id 筛」的 GenreIds / TagIds 用）。
+    val genreItems = idNameList(server, "/Genres", parentId)
+    val tagItems = idNameList(server, "/Tags", parentId)
+    return EmbyFilterOptions(
+      genres = genreItems.map { it.name },
+      tags = tagItems.map { it.name },
+      genreItems = genreItems,
+      tagItems = tagItems,
       years = nameList(server, "/Years", parentId)
         .mapNotNull { it.toIntOrNull() }
         .sortedDescending()
@@ -834,6 +857,7 @@ object EmbyClient {
       persons = getPersons(server, parentId),
       studios = getStudios(server, parentId),
     )
+  }
 
   /** /Years 端点不可用时兜底：给一份从今年往前推的年份表，保证年份筛选不会空着 */
   private fun fallbackYears(): List<Int> {

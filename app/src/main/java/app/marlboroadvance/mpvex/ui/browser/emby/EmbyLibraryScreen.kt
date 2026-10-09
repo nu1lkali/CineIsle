@@ -46,7 +46,9 @@ import androidx.compose.material.icons.filled.ShuffleOn
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -109,6 +111,7 @@ import app.marlboroadvance.mpvex.database.repository.SearchHistoryRepository
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleFilter
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleHit
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleMarks
+import app.marlboroadvance.mpvex.domain.emby.EmbyApiException
 import app.marlboroadvance.mpvex.domain.emby.EmbyFilterOptions
 import app.marlboroadvance.mpvex.domain.emby.EmbyLibraryFilterState
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
@@ -309,6 +312,21 @@ data class EmbyLibraryScreen(
     var favoriteOnly by remember(libraryId) { mutableStateOf(savedFilter.favoriteOnly) }
     // 该库实际出现过的可选项，进页面时拉一次
     var filterOptions by remember { mutableStateOf(EmbyFilterOptions()) }
+
+    // ── 筛选抽屉的「草稿」状态 ──
+    // 用户要求：抽屉里怎么勾都不立刻生效，「确定」才应用（现在是一加类目就重筛一次）。
+    // 做法是抽屉内所有控件都操作这一组草稿，点确定时一次性灌回上面的正式状态并落盘重载。
+    // 用 showFilterDialog 作 key：每次打开都从当前正式状态重新快照，取消/关掉即丢弃草稿。
+    var draftGenres by remember(showFilterDialog) { mutableStateOf(selectedGenres) }
+    var draftTags by remember(showFilterDialog) { mutableStateOf(selectedTags) }
+    var draftYears by remember(showFilterDialog) { mutableStateOf(selectedYears) }
+    var draftRatings by remember(showFilterDialog) { mutableStateOf(selectedRatings) }
+    var draftPlayed by remember(showFilterDialog) { mutableStateOf(playedFilter) }
+    var draftSubtitles by remember(showFilterDialog) { mutableStateOf(subtitlesFilter) }
+    var draftChinese by remember(showFilterDialog) { mutableStateOf(chineseSubsOnly) }
+    var draftMinRating by remember(showFilterDialog) { mutableStateOf(minRating) }
+    var draftFavorite by remember(showFilterDialog) { mutableStateOf(favoriteOnly) }
+
     val hasActiveFilter =
       selectedGenres.isNotEmpty() || selectedTags.isNotEmpty() ||
         selectedYears.isNotEmpty() || selectedRatings.isNotEmpty() ||
@@ -461,6 +479,40 @@ data class EmbyLibraryScreen(
     }
 
     /**
+     * 「类型 / 标签」是否命中当前筛选（维度内并集、维度间交集）。
+     *
+     * 这两维刻意不走服务端参数 —— `/Items?Genres=` / `?Tags=` 在部分 Emby 上会
+     * 抛 SQLiteException（500）。改为拉回来本地按 Genres / Tags 判，结果一致且稳。
+     * 字段已在 `ITEM_FIELDS` 里，不额外增加请求。
+     */
+    fun matchesGenreTagFilter(item: EmbyItem): Boolean =
+      matchesSelectedNames(selectedGenres, item.Genres) &&
+        matchesSelectedNames(selectedTags, item.Tags)
+
+    /**
+     * 把选中的类型 / 标签**名字**映射成服务端要的 **Id**（`GenreIds` / `TagIds`）。
+     *
+     * 按名字筛（`Genres=` / `Tags=`）会在部分服务端踩到坏列直接 500；
+     * 按 Id 筛才是网页端的做法、也不会炸（见 `EmbyClient.getItems` 的 genreIds 说明）。
+     * 名字→Id 的对照表来自 `/Genres`、`/Tags` 端点（[EmbyFilterOptions.genreItems]）。
+     * 名字在表里查不到（换了库 / 选项变了）就跳过那一个 —— 宁可筛少，不要发个错 Id 查空。
+     */
+    fun genreIdsOf(names: Set<String>): List<String> =
+      names.mapNotNull { n -> filterOptions.genreItems.firstOrNull { it.name == n }?.id }
+
+    fun tagIdsOf(names: Set<String>): List<String> =
+      names.mapNotNull { n -> filterOptions.tagItems.firstOrNull { it.name == n }?.id }
+
+    /**
+     * 这台服务器用 `GenreIds` / `TagIds` 筛可不可用。
+     *
+     * 未知时先按「可用」试一次（绝大多数 Emby 都支持）；试出 5xx 就记成不可用，
+     * 之后直接走客户端本地筛，不会再每次白跑一趟失败请求。
+     */
+    fun supportsGenreIdFilter(serverId: Long): Boolean =
+      browserPreferences.embyGenreIdFilterSupport(serverId).get() != "0"
+
+    /**
      * 「中文字幕」的全量扫描。
      *
      * 为什么不能沿用「拉一页筛一页」：Emby 的 /Items 一页只给 PAGE_SIZE 条，
@@ -485,8 +537,9 @@ data class EmbyLibraryScreen(
           sortBy = sortBy,
           sortOrder = sortOrder,
           recursive = recursive,
-          genres = selectedGenres.toList().takeIf { it.isNotEmpty() },
-          tags = selectedTags.toList().takeIf { it.isNotEmpty() },
+          // 类型 / 标签刻意**不传给服务端**：这两个「按名字筛」的参数会让部分 Emby
+          // 服务端的 /Items 直接抛 SQLiteException（500），且不同版本表现不一。
+          // 改为拉回来之后在客户端按 item.Genres / item.Tags 过滤，结果一致但不再炸。
           years = selectedYears.toList().takeIf { it.isNotEmpty() },
           officialRatings = selectedRatings.toList().takeIf { it.isNotEmpty() },
           minCommunityRating = minRating,
@@ -499,12 +552,21 @@ data class EmbyLibraryScreen(
           studioIds = selectedStudioIds.toList().takeIf { it.isNotEmpty() },
         ),
       ) { chunk ->
-        // 回调在 IO 线程：正则过滤是纯 CPU 活，放这里不会占 UI 线程
-        val matched = ChineseSubtitleFilter.filter(chunk.items)
+        // 回调在 IO 线程：这几步都是纯 CPU 活，放这里不会占 UI 线程
+        // 先按类型 / 标签过滤掉不匹配的（服务端那两个参数不能用，见上面的说明）；
+        // 中文字幕只在开关打开时才参与 —— 否则会把「只按类型/标签筛」的条目误杀。
+        val byGenreTag = chunk.items.filter { matchesGenreTagFilter(it) }
+        val matched: List<Pair<EmbyItem, ChineseSubtitleHit?>> = if (chineseSubsOnly) {
+          ChineseSubtitleFilter.filter(byGenreTag)
+        } else {
+          byGenreTag.map { it to null }
+        }
         val fresh = matched.filter { (item, _) -> item.Id?.let { seen.add(it) } == true }
         withContext(Dispatchers.Main) {
           items = items + fresh.map { it.first }
-          chineseHits = chineseHits + fresh.associate { it.first.Id.orEmpty() to it.second }
+          chineseHits = chineseHits + fresh
+            .filter { (_, hit) -> hit != null }
+            .associate { (item, hit) -> item.Id.orEmpty() to hit!! }
           scanScanned = chunk.scanned
           if (chunk.total > 0) totalCount = chunk.total
           cacheItems()
@@ -519,10 +581,19 @@ data class EmbyLibraryScreen(
     }
 
     /** 启动（或重启）一次扫描。旧的扫描先取消，免得两个扫描同时写同一份状态 */
-    fun startScan(current: EmbyServer) {
+    fun startScan(current: EmbyServer, reset: Boolean = true) {
       scanJob.value?.cancel()
       error = null
       isScanning = true
+      // 换了筛选条件就是另一批结果：先把旧的清掉，否则新结果会追加在旧结果后面。
+      // reset=false（续拉）时不动，保留已有结果。
+      if (reset) {
+        items = emptyList()
+        chineseHits = emptyMap()
+        scanScanned = 0
+        totalCount = 0
+        isLoading = true
+      }
       scanJob.value = scope.launch {
         try {
           runScan(current)
@@ -546,9 +617,16 @@ data class EmbyLibraryScreen(
       // 冷启动时当前服务器可能还没恢复，这里等一下，避免静默不加载
       val current = viewModel.currentServerOrAwait() ?: return
       val gen = ++loadGeneration
-      // 「中文字幕」是客户端按路径判定的，服务端没有对应参数 —— 只能扫全库
-      if (chineseSubsOnly && searchQuery.isBlank()) {
-        startScan(current)
+      val hasGenreTagFilter = selectedGenres.isNotEmpty() || selectedTags.isNotEmpty()
+      // 需要「逐页拉全 + 客户端过滤」的两种情况：
+      //  · 中文字幕：按路径判定，服务端根本没有这个筛选参数；
+      //  · 类型 / 标签：本该由服务端的 GenreIds / TagIds 筛（网页端就是这么做的），
+      //    但万一那台服务器连 Id 也不认，就退化成客户端本地筛。
+      // 两者都得把整个结果集拉完才准，所以统一走扫描那条路。
+      val needClientFilter = chineseSubsOnly ||
+        (hasGenreTagFilter && !supportsGenreIdFilter(current.id))
+      if (searchQuery.isBlank() && needClientFilter) {
+        startScan(current, reset = reset)
         return
       }
       if (reset) isLoading = true
@@ -566,8 +644,13 @@ data class EmbyLibraryScreen(
             limit = PAGE_SIZE,
             recursive = recursive,
             excludeItemTypes = effectiveExclude,
-            genres = selectedGenres.toList().takeIf { it.isNotEmpty() },
-            tags = selectedTags.toList().takeIf { it.isNotEmpty() },
+            // 类型 / 标签一律用 **Id** 筛（GenreIds / TagIds）—— 这是网页端的做法，
+            // 也避开了「按名字筛」在部分服务端踩坏列抛 500 的坑。
+            // 名字版的 genres / tags 恒不传（要按名字筛就得走上面的客户端扫描）
+            genres = null,
+            tags = null,
+            genreIds = genreIdsOf(selectedGenres).takeIf { it.isNotEmpty() },
+            tagIds = tagIdsOf(selectedTags).takeIf { it.isNotEmpty() },
             years = selectedYears.toList().takeIf { it.isNotEmpty() },
             officialRatings = selectedRatings.toList().takeIf { it.isNotEmpty() },
             minCommunityRating = minRating,
@@ -596,7 +679,11 @@ data class EmbyLibraryScreen(
           EmbyItemsPage(
             // 排序放到后台线程做：几百上千条的比较是纯 CPU 活，不该占主线程。
             // 排完连同渲染一起交给 UI —— 中间没有「先出一版乱序的再跳一遍」的过程。
-            withContext(Dispatchers.Default) { applyClientSort(result, sortBy, sortOrder) },
+            // 类型 / 标签同样在客户端筛（搜索接口没有 GenreIds / TagIds）。
+            withContext(Dispatchers.Default) {
+              val kept = result.filter { matchesGenreTagFilter(it) }
+              applyClientSort(kept, sortBy, sortOrder)
+            },
             result.size,
           )
         }
@@ -638,10 +725,22 @@ data class EmbyLibraryScreen(
         if (searchQuery.isNotBlank() && reset) {
           gridState.scrollToItem(0)
         }
-      }.onFailure {
+      }.onFailure { e ->
         // 过期的失败同样丢弃：别用旧请求的错误盖掉新请求的结果
         if (gen != loadGeneration) return@onFailure
-        error = it.message ?: "加载失败"
+        // ⭐ 降级：服务端用 GenreIds / TagIds 筛若返回 5xx（某些服务端的库表结构有残缺），
+        // 说明这台服务器连按 Id 筛也走不通 —— 记住它，并**立刻**改用客户端本地筛重试一次。
+        // 之所以不等下次：偏好变更不触发重组，这里必须自己重跑，用户才不用手动再点一次。
+        val serverError = (e as? EmbyApiException)?.code?.let { it >= 500 } == true
+        val usedIdFilter = hasGenreTagFilter &&
+          (genreIdsOf(selectedGenres).isNotEmpty() || tagIdsOf(selectedTags).isNotEmpty())
+        if (serverError && usedIdFilter) {
+          browserPreferences.embyGenreIdFilterSupport(current.id).set("0")
+          isLoading = false
+          load(reset = true)
+          return@onFailure
+        }
+        error = e.message ?: "加载失败"
       }
       // 过期请求不碰 isLoading：收尾交给当前那次加载
       if (gen == loadGeneration) isLoading = false
@@ -723,8 +822,13 @@ data class EmbyLibraryScreen(
         return@LaunchedEffect
       }
       val entry = EmbyLibraryCache.get(cacheKey)
-      // 扫描没跑完的缓存（items 只含前半截命中）不能当完整结果复用，重扫
-      val stale = chineseSubsOnly && entry != null && !entry.complete
+      // 扫描没跑完的缓存（items 只含前半截命中）不能当完整结果复用，重扫。
+      // 走扫描的条件与 load() 里**严格一致**：中文字幕，或「类型/标签筛选 + 这台服务器不支持 Id 筛」。
+      val hasGenreTagFilter = selectedGenres.isNotEmpty() || selectedTags.isNotEmpty()
+      val serverSnapshot = server
+      val needsScan = chineseSubsOnly ||
+        (hasGenreTagFilter && serverSnapshot != null && !supportsGenreIdFilter(serverSnapshot.id))
+      val stale = needsScan && entry != null && !entry.complete
       if (entry == null || entry.items.isEmpty() || stale) load(reset = true)
     }
 
@@ -750,8 +854,13 @@ data class EmbyLibraryScreen(
       snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
         .collect { lastVisible ->
           // 客户端筛选走全量扫描，没有「下一页」可翻；扫描中也不要再触发普通分页。
+          // 判定与 load() 严格一致：中文字幕，或「类型/标签 + 服务器不支持 Id 筛」。
           // 演员列表同理：/Persons 一次性给全，不可能有下一页
-          val canLoadMore = !isLoading && !isScanning && !chineseSubsOnly && !isActorListMode &&
+          val hasGenreTagFilter = selectedGenres.isNotEmpty() || selectedTags.isNotEmpty()
+          val serverSnapshot = server
+          val scanningFilter = chineseSubsOnly ||
+            (hasGenreTagFilter && serverSnapshot != null && !supportsGenreIdFilter(serverSnapshot.id))
+          val canLoadMore = !isLoading && !isScanning && !scanningFilter && !isActorListMode &&
             items.size < totalCount && lastVisible != null
           if (canLoadMore && lastVisible >= items.size - 6) {
             load(reset = false)
@@ -962,8 +1071,9 @@ data class EmbyLibraryScreen(
         // 随机只落在能播的条目上，所以这里固定按视频形态 + 非容器来取
         mediaTypes = effectiveMediaTypes ?: listOf("Video"),
         isFolder = false,
-        genres = selectedGenres.toList().takeIf { it.isNotEmpty() },
-        tags = selectedTags.toList().takeIf { it.isNotEmpty() },
+        // genres / tags 不传服务端（会 500），下面拿回来按 Genres / Tags 本地过滤。
+        genres = null,
+        tags = null,
         years = selectedYears.toList().takeIf { it.isNotEmpty() },
         officialRatings = selectedRatings.toList().takeIf { it.isNotEmpty() },
         minCommunityRating = minRating,
@@ -974,7 +1084,7 @@ data class EmbyLibraryScreen(
         is3D = threeDFilter,
         hasSubtitles = subtitlesFilter,
         studioIds = selectedStudioIds.toList().takeIf { it.isNotEmpty() },
-      ).items
+      ).items.filter { matchesGenreTagFilter(it) }
     }
 
     /** 随机播放的统一入口：取一批、没取到就明确提示（以前是静默无反应） */
@@ -1735,22 +1845,25 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               style = MaterialTheme.typography.titleMedium,
               modifier = Modifier.weight(1f),
             )
-            // 恢复默认：清空全部条件并落盘，面板保持打开，列表立刻回到全量
+            // 恢复默认：清空全部草稿条件。注意**只改草稿**，要点「确定」才真的应用，
+            // 这样用户在抽屉里点错了还能用「取消」整体撤销。
+            // 演员 / 工作室 / 清晰度 / 3D 这几个维度 UI 入口已撤，但老偏好里可能还留着值，
+            // 不一并清掉的话「恢复默认」之后列表仍被它们过滤着（用户会以为没恢复干净）。
             TextButton(onClick = {
-              selectedGenres = emptySet()
-              selectedTags = emptySet()
-              selectedYears = emptySet()
-              selectedRatings = emptySet()
-              minRating = null
-              favoriteOnly = false
+              draftGenres = emptySet()
+              draftTags = emptySet()
+              draftYears = emptySet()
+              draftRatings = emptySet()
+              draftMinRating = null
+              draftFavorite = false
+              draftPlayed = null
+              draftSubtitles = null
+              draftChinese = false
+              // 无草稿的隐藏维度直接清正式值（它们不参与抽屉的编辑/取消语义）
               selectedPersonIds = emptySet()
               selectedStudioIds = emptySet()
-              playedFilter = null
               hdFilter = null
               threeDFilter = null
-              subtitlesFilter = null
-              chineseSubsOnly = false
-              persistFilter()
             }) {
               Text("恢复默认")
             }
@@ -1760,87 +1873,82 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
           FilterCategoryRow(
             label = "类型",
             allOptions = filterOptions.genres,
-            selected = selectedGenres,
-            onConfirm = { picked -> selectedGenres = picked; persistFilter() },
-            onRemove = { name -> selectedGenres = selectedGenres - name; persistFilter() },
+            selected = draftGenres,
+            onConfirm = { picked -> draftGenres = picked },
+            onRemove = { name -> draftGenres = draftGenres - name },
           )
           // 标签：多选
           FilterCategoryRow(
             label = "标签",
             allOptions = filterOptions.tags,
-            selected = selectedTags,
-            onConfirm = { picked -> selectedTags = picked; persistFilter() },
-            onRemove = { name -> selectedTags = selectedTags - name; persistFilter() },
+            selected = draftTags,
+            onConfirm = { picked -> draftTags = picked },
+            onRemove = { name -> draftTags = draftTags - name },
           )
           // 年份：多选（对外是字符串，切回 Int 再存）
           FilterCategoryRow(
             label = "年份",
             allOptions = filterOptions.years.map { it.toString() },
-            selected = selectedYears.map { it.toString() }.toSet(),
+            selected = draftYears.map { it.toString() }.toSet(),
             onConfirm = { picked ->
-              selectedYears = picked.mapNotNull { it.toIntOrNull() }.toSet()
-              persistFilter()
+              draftYears = picked.mapNotNull { it.toIntOrNull() }.toSet()
             },
             onRemove = { v ->
-              v.toIntOrNull()?.let { selectedYears = selectedYears - it }
-              persistFilter()
+              v.toIntOrNull()?.let { draftYears = draftYears - it }
             },
           )
           // 官方分级：多选
           FilterCategoryRow(
             label = "官方分级",
             allOptions = filterOptions.officialRatings,
-            selected = selectedRatings,
-            onConfirm = { picked -> selectedRatings = picked; persistFilter() },
-            onRemove = { name -> selectedRatings = selectedRatings - name; persistFilter() },
+            selected = draftRatings,
+            onConfirm = { picked -> draftRatings = picked },
+            onRemove = { name -> draftRatings = draftRatings - name },
           )
           // 评分：单选语义，但沿用「加号 + 对话框」；确定后同样以圆角标签展示
           FilterCategoryRow(
             label = "评分",
             allOptions = RATING_OPTIONS.map { it.first }.filter { it != "不限" },
-            selected = RATING_OPTIONS.firstOrNull { it.second == minRating }?.let { setOf(it.first) }
-              ?: emptySet(),
+            selected = RATING_OPTIONS.firstOrNull { it.second == draftMinRating }
+              ?.let { setOf(it.first) } ?: emptySet(),
             onConfirm = { picked ->
               // 单选：取最后一个（对话框内是单选行为，picked 至多一个）
-              minRating = picked.lastOrNull()?.let { v ->
+              draftMinRating = picked.lastOrNull()?.let { v ->
                 RATING_OPTIONS.firstOrNull { it.first == v }?.second
               }
-              persistFilter()
             },
-            onRemove = { minRating = null; persistFilter() },
+            onRemove = { draftMinRating = null },
           )
 
           // 播放状态：单选，再点一次已选的那项就取消（保留下拉收缩框）
           FilterDropdown(
             label = "播放状态",
             options = listOf("已看", "未看"),
-            selectedNames = when (playedFilter) {
+            selectedNames = when (draftPlayed) {
               true -> setOf("已看")
               false -> setOf("未看")
               null -> emptySet()
             },
             onToggle = { v ->
               val target = v == "已看"
-              playedFilter = if (playedFilter == target) null else target
-              persistFilter()
+              draftPlayed = if (draftPlayed == target) null else target
             },
-            onClear = { playedFilter = null; persistFilter() },
+            onClear = { draftPlayed = null },
           )
           // 字幕：单选（保留下拉收缩框）
           FilterDropdown(
             label = "字幕",
             options = listOf("有字幕", "无字幕"),
-            selectedNames = when (subtitlesFilter) {
+            selectedNames = when (draftSubtitles) {
               true -> setOf("有字幕")
               false -> setOf("无字幕")
               null -> emptySet()
             },
             onToggle = { v ->
               val target = v == "有字幕"
-              subtitlesFilter = if (subtitlesFilter == target) null else target
-              persistFilter()
+              draftSubtitles = if (draftSubtitles == target) null else target
             },
-            onClear = { subtitlesFilter = null; persistFilter() },
+            onClear = { draftSubtitles = null },
           )
 
           // 中文字幕：按路径标记做客户端匹配（Emby 服务端没有这类筛选）。
@@ -1863,11 +1971,8 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               )
             }
             Switch(
-              checked = chineseSubsOnly,
-              onCheckedChange = {
-                chineseSubsOnly = it
-                persistFilter()
-              },
+              checked = draftChinese,
+              onCheckedChange = { draftChinese = it },
             )
           }
           Row(
@@ -1897,12 +2002,59 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               modifier = Modifier.weight(1f),
             )
             Switch(
-              checked = favoriteOnly,
-              onCheckedChange = {
-                favoriteOnly = it
-                persistFilter()
-              },
+              checked = draftFavorite,
+              onCheckedChange = { draftFavorite = it },
             )
+          }
+
+          // ── 底部动作条：草稿在这里一次性提交 ──
+          // 用户要求「改完点确定才筛」，所以抽屉里任何勾选都不立刻生效。
+          // 「确定」把草稿灌回正式状态 + 落盘 + 重载（条件没变就不重拉）；
+          // 「取消」直接关抽屉，草稿随下次打开时的重新快照丢弃。
+          Spacer(modifier = Modifier.height(4.dp))
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            OutlinedButton(
+              onClick = { showFilterDialog = false },
+              modifier = Modifier.weight(1f),
+            ) {
+              Text("取消")
+            }
+            Button(
+              onClick = {
+                val genres = draftGenres
+                val tags = draftTags
+                val years = draftYears
+                val ratings = draftRatings
+                val played = draftPlayed
+                val subs = draftSubtitles
+                val chinese = draftChinese
+                val minR = draftMinRating
+                val fav = draftFavorite
+                val changed = genres != selectedGenres || tags != selectedTags ||
+                  years != selectedYears || ratings != selectedRatings ||
+                  played != playedFilter || subs != subtitlesFilter ||
+                  chinese != chineseSubsOnly || minR != minRating || fav != favoriteOnly
+                selectedGenres = genres
+                selectedTags = tags
+                selectedYears = years
+                selectedRatings = ratings
+                playedFilter = played
+                subtitlesFilter = subs
+                chineseSubsOnly = chinese
+                minRating = minR
+                favoriteOnly = fav
+                persistFilter()
+                showFilterDialog = false
+                // 条件真的变了才重新加载；否则只是关了抽屉，不白跑一次请求
+                if (changed) scope.launch { load(reset = true) }
+              },
+              modifier = Modifier.weight(1f),
+            ) {
+              Text("确定")
+            }
           }
         }
       }
@@ -3087,6 +3239,18 @@ private fun applyClientSort(
   val ordered = items.sortedWith(comparator)
   return if (sortOrder == "Descending") ordered.reversed() else ordered
 }
+
+/**
+ * 单个条目是否满足「类型 / 标签」这一维的筛选。
+ *
+ * [selected] 为空 = 这一维不限；否则只要 [values]（条目的 Genres 或 Tags）
+ * 里任意一项命中就算通过（同一维多选取并集，与 Emby 语义一致）。
+ *
+ * 之所以是「按名字本地筛」而不是交给服务端，见 `EmbyLibraryScreen` 里
+ * `load()` / `runScan()` 的说明：`/Items?Genres=` / `?Tags=` 在部分服务端会 500。
+ */
+private fun matchesSelectedNames(selected: Set<String>, values: List<String>?): Boolean =
+  selected.isEmpty() || values.orEmpty().any { it in selected }
 
 /**
  * 随机播放一次取多少条 —— 读设置项并做护栏。

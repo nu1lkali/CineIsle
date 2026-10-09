@@ -24,6 +24,9 @@ data class EmbyScanQuery(
   val recursive: Boolean = true,
   val genres: List<String>? = null,
   val tags: List<String>? = null,
+  /** 类型 / 标签 Id（逗号分隔），优先于按名字的 [genres] / [tags] */
+  val genreIds: List<String>? = null,
+  val tagIds: List<String>? = null,
   val years: List<Int>? = null,
   val officialRatings: List<String>? = null,
   val minCommunityRating: Float? = null,

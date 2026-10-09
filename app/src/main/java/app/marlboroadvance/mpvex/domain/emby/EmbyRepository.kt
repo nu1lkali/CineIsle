@@ -241,6 +241,10 @@ class EmbyRepository(
     minCommunityRating: Float? = null,
     /** 标签筛选，多选取并集 */
     tags: List<String>? = null,
+    /** 类型 Id 筛选（逗号分隔），优先于按名字的 [genres] */
+    genreIds: List<String>? = null,
+    /** 标签 Id 筛选（逗号分隔），优先于按名字的 [tags] */
+    tagIds: List<String>? = null,
     /** 官方分级筛选，多选取并集 */
     officialRatings: List<String>? = null,
     /** true / false 分别限定只要收藏 / 只要未收藏；null 表示不限 */
@@ -284,6 +288,8 @@ class EmbyRepository(
       years = years,
       minCommunityRating = minCommunityRating,
       tags = tags,
+      genreIds = genreIds,
+      tagIds = tagIds,
       officialRatings = officialRatings,
       isFavorite = isFavorite,
       mediaTypes = mediaTypes,
@@ -334,6 +340,8 @@ class EmbyRepository(
         filters = query.filters,
         includeItemTypes = query.includeItemTypes,
         genres = query.genres,
+        genreIds = query.genreIds,
+        tagIds = query.tagIds,
         startIndex = startIndex,
         limit = limit,
         recursive = query.recursive,

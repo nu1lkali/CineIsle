@@ -170,6 +170,16 @@ data class EmbyBatchResult(
 data class EmbyFilterOptions(
   val genres: List<String> = emptyList(),
   val tags: List<String> = emptyList(),
+  /**
+   * 类型 / 标签的「Id + 名字」版本，与 [genres] / [tags] 一一对应。
+   *
+   * 为什么两套都留：**名字给人看**（UI 标签），**Id 才是发给服务端的**。
+   * Emby 官方已明确推荐用 `GenreIds` / `TagIds` 按 Id 筛（按名字的 `Genres` / `Tags`
+   * 是旧路径，在部分服务端会踩到坏列直接 500）。两个列表的名字顺序一致，
+   * 名字 → Id 的映射由调用方按 name 查。
+   */
+  val genreItems: List<EmbyIdName> = emptyList(),
+  val tagItems: List<EmbyIdName> = emptyList(),
   /** 发行年份，新的在前 */
   val years: List<Int> = emptyList(),
   val officialRatings: List<String> = emptyList(),
