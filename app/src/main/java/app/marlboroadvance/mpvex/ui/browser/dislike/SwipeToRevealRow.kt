@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -111,29 +110,34 @@ fun SwipeToRevealRow(
   //    · 卡片内容 ≈ 缩略图 56 + 上下 padding 10×2 → 76dp
   //  于是滑开时按钮比卡片矮 ~20dp，怎么调按钮的尺寸都没用。
   //
-  //  `height(IntrinsicSize.Min)` 的作用是先让**内容层**报出自己的固有高度、
-  //  把它变成 Row 的确定高度，于是 `maxHeight` 有界 ⇒ 右侧动作区/按钮的
+  //  ⚠️ 外层**必须是 Box，不能是 Row**。
+  //   动作区要"垫在卡片下面、靠右"，靠的是 Box 的**叠放**能力（`align`）；
+  //   换成 Row 就变成两个**并排**的子项 ⇒ 动作区常驻在卡片左边、把卡片挤窄，
+  //   而且没有任何遮挡（看起来"滑不掉"）。滑动手势只改 offset，是**叠加层**的事，
+  //   天生要求 Box 这种 z 轴叠放。
+  //
+  //  `height(IntrinsicSize.Min)` 在 Box 上同样有效：它的固有最小高度 =
+  //  所有子项固有高度的**最大值**。这里只有内容层贡献固有高度
+  //  （动作区是 `fillMaxHeight`，跟随父级、不贡献），所以
+  //  Box 的高 = 卡片内容的高 ⇒ `maxHeight` 有界 ⇒ 动作区/按钮的
   //  `fillMaxHeight()` 才真正生效，两边自然等高（且行高仍随两行备注等长高）。
-  Row(
-    modifier = modifier.fillMaxWidth().height(IntrinsicSize.Min),
-  ) {
-    // 底层：动作按钮，铺在右侧。
+  Box(modifier = modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+    // 底层：动作按钮，铺在右侧（被上面的卡片盖住，滑开才露出）
     // ⚠️ 圆角必须与上面那张 Card 一致（12.dp）：卡片是圆角、底下露出的是直角色块，
     //   滑开那一刻会明显"对不齐"，看着像两个拼起来的东西。
     Box(
       modifier = Modifier
-        .align(Alignment.CenterVertically)
+        .align(Alignment.CenterEnd)
         .fillMaxHeight()
         .clip(RoundedCornerShape(ROW_CORNER_DP.dp)),
     ) { actions() }
 
     // 上层：内容，跟手横移。
-    // ⚠️ 这一层是**撑开行高的那一层**（固有高度从它来），所以它自己不能再依赖
-    //   父级高度 —— 用 weight(1f) 占满剩余宽度即可，高度交给内容决定。
+    // 这一层盖在动作区之上（写在后面 ⇒ z 序更高），滑开才会露出底下的按钮。
     Box(
       modifier =
         Modifier
-          .weight(1f)
+          .fillMaxWidth()
           .offset { IntOffset(offsetX.value.roundToInt(), 0) }
           .pointerInput(Unit) {
             detectHorizontalDragGestures(
