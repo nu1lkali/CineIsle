@@ -3,6 +3,7 @@ import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import `is`.xyz.mpv.MPVLib
 import android.text.format.DateUtils
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.Camera
 import androidx.compose.material.icons.outlined.Crop
 import androidx.compose.material.icons.outlined.Gif
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.SkipNext
@@ -74,6 +76,7 @@ import app.marlboroadvance.mpvex.preferences.DecoderPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.components.PlayerSheet
+import app.marlboroadvance.mpvex.ui.player.PlayerActivity
 import app.marlboroadvance.mpvex.ui.player.Sheets
 import app.marlboroadvance.mpvex.ui.player.engine.EngineFeature
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
@@ -120,6 +123,19 @@ val scope = rememberCoroutineScope()
 
   // 当前内核做不到的入口直接不显示（而不是置灰后点了没反应）
   val engineKind = PlayerLib.kind
+
+  // ── 「媒体信息」所需的 Emby 上下文 ──
+  // 直接从宿主 Activity 读，而不是让 PlayerSheets / PlayerControls 一路传下来：
+  // 加四个参数只会让那条本来就很长的参数表再涨一截，而这个入口只在这里用。
+  // 取不到（本地文件 / 网盘播放）时**整个入口不显示** ——
+  // 留一个点了只能弹「不是 Emby 条目」的按钮毫无意义。
+  val hostActivity = LocalActivity.current as? PlayerActivity
+  val embyServerId = hostActivity?.currentEmbyServerId()
+  val embyItemId = hostActivity?.currentEmbyItemId()
+  val embyMediaSourceId = hostActivity?.currentEmbyMediaSourceId()
+  val embyVersionName = hostActivity?.currentMediaSourceName()
+  val hasEmbyContext = embyServerId != null && !embyItemId.isNullOrBlank()
+  var showMediaInfo by remember { mutableStateOf(false) }
 
   PlayerSheet(
     onDismissRequest,
@@ -263,6 +279,15 @@ val scope = rememberCoroutineScope()
         horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
         verticalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
       ) {
+        // 「媒体信息」只在 Emby 播放时出现：版本号 + 容器 / 分辨率 / 码率 / 轨道
+        // 都在弹窗里一次看全（顶栏不再拼版本名，见 PlayerMediaInfoDialog 的注释）。
+        if (hasEmbyContext) {
+          QuickActionItem(
+            icon = Icons.Outlined.Info,
+            label = "媒体信息",
+            onClick = { showMediaInfo = true },
+          )
+        }
         QuickActionItem(
           icon = Icons.Outlined.Speed,
           label = stringResource(R.string.player_control_playback_speed),
@@ -449,6 +474,19 @@ val scope = rememberCoroutineScope()
             )
           }
         }
+      }
+
+      // ── 媒体信息弹窗 ──
+      // 挂在「更多」面板内部（而不是切走面板再弹）：Dialog 走独立窗口，盖在面板之上，
+      // 关掉弹窗后「更多」还在原地，用户不必再点一次「更多」。
+      if (showMediaInfo) {
+        PlayerMediaInfoDialog(
+          serverId = embyServerId,
+          itemId = embyItemId,
+          mediaSourceId = embyMediaSourceId,
+          versionName = embyVersionName,
+          onDismissRequest = { showMediaInfo = false },
+        )
       }
     }
   }

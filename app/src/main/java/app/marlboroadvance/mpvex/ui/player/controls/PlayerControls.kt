@@ -494,11 +494,11 @@ fun PlayerControls(
             val raw =
               rawMediaTitle?.takeIf { it.isNotBlank() }
                 ?: activity.getTitleForControls()
-            val base = app.marlboroadvance.mpvex.ui.player.redactUrlSecrets(raw).orEmpty()
-            // 多版本媒体：把「正在播的是哪个版本」追加在片名后面（如「片名 · 1080P HEVC」）。
-            // currentMediaSourceName() 内部读 activity.playlistIndex（Compose 状态）
-            // ⇒ 连播切集后这里会自动重算，不会挂着上一集的版本名。
-            activity.currentMediaSourceName()?.let { "$base · $it" } ?: base
+            // ⚠️ 多版本媒体的**版本名不再拼进顶栏**：片名本身可能已经很长，版本名（如
+            //   「4K · HEVC · 65.2 GB」）再追加一截会把整条标题撑到换行/截断，反而更难看。
+            //   版本信息改由「更多 → 媒体信息」弹窗承载（见 PlayerMediaInfoDialog），
+            //   那里能一次看完版本 + 容器 / 分辨率 / 码率 / 轨道等全部信息。
+            app.marlboroadvance.mpvex.ui.player.redactUrlSecrets(raw).orEmpty()
           }
         }
 

@@ -2031,11 +2031,45 @@ private fun cancelAutoplayCountdown() {
   /**
    * 当前这一条对应的「多版本名」（如 "1080P HEVC"）；不是多版本条目就返回 null。
    *
-   * 播放页顶栏把它追加在片名后面：「片名 · 1080P HEVC」。
-   * 读 [playlistIndex]（Compose 状态）⇒ 切集后顶栏会自动跟着换。
+   * 供「更多 → 媒体信息」弹窗显示「现在播的是哪个版本」—— 不再拼进顶栏片名
+   * （片名 + 版本名一长，标题栏会更挤）。
+   * 读 [playlistIndex]（Compose 状态）⇒ 切集后会自动跟着换。
    */
   fun currentMediaSourceName(): String? =
     playlistMediaSourceNames.getOrNull(playlistIndex)?.takeIf { it.isNotBlank() }
+
+  /**
+   * 当前播放条目的 Emby 服务器 Id；不是 Emby 播放（本地文件 / 网盘）返回 null。
+   */
+  fun currentEmbyServerId(): Long? =
+    intent
+      .getLongExtra(
+        app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_SERVER_ID,
+        -1L,
+      )
+      .takeIf { it > 0 }
+
+  /**
+   * 当前播放条目的 Emby ItemId；不是 Emby 播放 / 解析不出来返回 null。
+   *
+   * ⚠️ ItemId 从 **mpv 当前的 `path`** 反查，不用 `playlistIndex` 索引 intent 里的
+   * `emby_item_ids` —— 用户拖动过播放队列、或随机播放后，下标就与 intent 的原始
+   * 顺序错位了（同一个坑见 [currentEmbyVersionProgressKey]）。
+   */
+  fun currentEmbyItemId(): String? =
+    app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
+      .parseItemIdFromPath(PlayerLib.getPropertyString("path"))
+
+  /**
+   * 当前播放条目**实际在播的那个版本**的媒体源 Id；单版本 / 非 Emby 返回 null。
+   *
+   * 查的是 [embyMediaSourceByItemId]（ItemId → MediaSourceId 的 Map），
+   * 与队列顺序无关 ⇒ 换位、删除、随机播放都不需要同步。
+   */
+  fun currentEmbyMediaSourceId(): String? =
+    currentEmbyItemId()
+      ?.let { embyMediaSourceByItemId[it] }
+      ?.takeIf { it.isNotBlank() }
 
   /**
    * 从 intent 里取出「ItemId → 媒体源 Id」映射（多版本条目才有值）。
