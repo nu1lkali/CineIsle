@@ -9,25 +9,27 @@
 </p>
 
 <p align="center">
-  <a href="https://developer.android.com"><img alt="Platform" src="https://img.shields.io/badge/Platform-Android-3DDC84?logo=android&logoColor=white" /></a>
-  <a href="https://kotlinlang.org"><img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.3.20-7F52FF?logo=kotlin&logoColor=white" /></a>
-  <a href="https://developer.android.com/jetpack/compose"><img alt="Compose" src="https://img.shields.io/badge/Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white" /></a>
-  <a href="https://developer.android.com"><img alt="minSdk" src="https://img.shields.io/badge/minSdk-26-FF6F00" /></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-blue" /></a>
+  <a href="https://developer.android.com"><img src=".github/badges/platform-android.svg" alt="Platform: Android" /></a>
+  <a href="https://developer.android.com"><img src=".github/badges/minsdk-26.svg" alt="minSdk: 26" /></a>
+  <a href="https://kotlinlang.org"><img src=".github/badges/kotlin-2.3.20.svg" alt="Kotlin: 2.3.20" /></a>
+  <a href="https://developer.android.com/jetpack/compose"><img src=".github/badges/compose-material3.svg" alt="Compose: Material 3" /></a>
+  <a href="LICENSE"><img src=".github/badges/license-apache2.svg" alt="License: Apache-2.0" /></a>
 </p>
 
 <p align="center">
-  <code>app.cineisle.player</code> · 当前版本 <code>v1.2.1</code> · 构建变体 <code>standard</code> · 双播放内核 <code>mpv</code> / <code>GSYVideoPlayer</code>
+  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.2.1.svg" alt="Release: v1.2.1" /></a>
+  <img src=".github/badges/flavor-standard.svg" alt="Flavor: standard" />
+  <img src=".github/badges/package-cineisle.svg" alt="Package: app.cineisle.player" />
+  <img src=".github/badges/kernel-mpv-gsy.svg" alt="Kernel: mpv + GSYVideoPlayer" />
 </p>
 
----
-
-## 目录
-
-| | | |
-| :-- | :-- | :-- |
-| [项目背景](#项目背景) | [技术栈](#技术栈) | [模块](#模块) |
-| [功能](#功能) | [致谢](#致谢) | |
+<p align="center">
+  <a href="#项目背景">项目背景</a> ·
+  <a href="#技术栈">技术栈</a> ·
+  <a href="#模块">模块</a> ·
+  <a href="#功能">功能</a> ·
+  <a href="#致谢">致谢</a>
+</p>
 
 ---
 
