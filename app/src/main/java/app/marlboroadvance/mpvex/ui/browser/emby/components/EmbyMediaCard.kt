@@ -51,6 +51,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Emby 海报卡片（2:3 竖版），用于电影、剧集、媒体库封面。
@@ -530,11 +538,29 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
   }
 }
 
+/** 宫格单格的解码宽度上限。预热与显示共用同一个值 —— 两处不一致会解码两遍、还白占内存 */
+private const val MOSAIC_TILE_MAX_WIDTH = 720
+
+/** 预热新封面最多等多久：某张图卡住也不能让「换封面」永远不发生 */
+private const val MOSAIC_PREWARM_TIMEOUT_MS = 1_500L
+
+/** 新旧封面之间的淡入时长 */
+private const val MOSAIC_SWAP_FADE_MS = 260
+
 /**
  * 文件夹多宫格封面。
  *
  * Emby 的文件夹条目没有自己的封面图，这里用文件夹内前几项子媒体的缩略图拼成宫格，
  * 一眼能看出里面装的是什么，比一个纯灰色文件夹占位图标有用得多。
+ *
+ * ⭐ 换图（下拉刷新会换一批随机封面）时**不硬切**，按三步走：
+ *  1. **先把新一批的图解码好**并放进内存缓存（命中缓存几乎瞬时，新图才需要下载）；
+ *  2. 再把新一批从上一批**淡入**上来 —— 旧图全程原样压在下面，所以中间不会露出卡片底色，
+ *     也不会出现「变暗一下」的中间态；
+ *  3. 预热最长只等 [MOSAIC_PREWARM_TIMEOUT_MS]，超时就先换上去，剩下没就绪的图自己补。
+ *
+ * 不做这三步的话，新一批到达的瞬间 4 格会一起变脸、且每格各自从占位底色重新加载
+ * ⇒ 看着就是一闪一闪的（用户反馈「直接替换 看起来会一卡一卡的」）。
  *
  * - 1 张：直接铺满（不硬凑宫格）
  * - 2 张：左右并排
@@ -543,7 +569,66 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
  */
 @Composable
 private fun FolderMosaicCover(urls: List<String>) {
+  val target = urls.take(4)
+  // 上层正在显示的一批 / 正在退场（留在下层）的一批；只有换图期间两层会同时绘制
+  var shown by remember { mutableStateOf(target) }
+  var outgoing by remember { mutableStateOf<List<String>?>(null) }
+  val fade = remember { Animatable(1f) }
+
+  LaunchedEffect(target) {
+    // 首次进入（含列表滚动复用）：直接显示，不必预热 —— 这时的 tile 本来就要自己去取，
+    // 再预热一遍会变成同一个地址发两次请求。
+    if (target == shown) return@LaunchedEffect
+    // ① 预热：把新一批都解到内存缓存里（新图此刻才下载；已缓存则几乎瞬时）
+    withTimeoutOrNull(MOSAIC_PREWARM_TIMEOUT_MS) {
+      coroutineScope {
+        target.forEach { url -> launch { prewarmMosaicTile(url) } }
+      }
+    }
+    // ② 淡入替换：旧图留在下层不许动，新图从透明渐到不透明
+    outgoing = shown
+    shown = target
+    fade.snapTo(0f)
+    fade.animateTo(1f, tween(MOSAIC_SWAP_FADE_MS))
+    outgoing = null
+  }
+
+  Box(modifier = Modifier.fillMaxSize()) {
+    // 下层：退场中的旧封面（保持不透明，避免淡入过程中露出卡片底色）
+    outgoing?.let { MosaicTiles(it) }
+    // 上层：当前封面，换图时整体淡入
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .graphicsLayer { alpha = fade.value },
+    ) {
+      MosaicTiles(shown)
+    }
+  }
+}
+
+/**
+ * 预热单格：只为把图塞进 [EmbyImageLoader] 的内存缓存，返回值不要。
+ *
+ * ⚠️ 取消必须原样抛出（不许被 `runCatching` 吞掉）：换代 / 离开页面时这个协程会被取消，
+ * 吞掉取消会让后面的「换图」步骤在已取消的协程里继续跑，画面与状态就对不上了。
+ */
+private suspend fun prewarmMosaicTile(url: String) {
+  try {
+    EmbyImageLoader.load(url, MOSAIC_TILE_MAX_WIDTH)
+  } catch (e: CancellationException) {
+    throw e
+  } catch (_: Exception) {
+    // 预热失败无所谓：真正渲染时 EmbyImage 会再取一次
+  }
+}
+
+/** 宫格本体：按张数决定排版。 */
+@Composable
+private fun MosaicTiles(urls: List<String>) {
   val tiles = urls.take(4)
+  // 兜底：空列表时什么都不画（直接索引会越界）
+  if (tiles.isEmpty()) return
   when (tiles.size) {
     1 -> MosaicTile(tiles[0], Modifier.fillMaxSize())
 
@@ -588,6 +673,8 @@ private fun MosaicTile(
         contentDescription = null,
         modifier = Modifier.fillMaxSize(),
         contentScale = ContentScale.Crop,
+        // 与预热用同一个宽度：内存缓存按 URL 存（不分尺寸），不一致就会解码两遍
+        maxWidth = MOSAIC_TILE_MAX_WIDTH,
       )
     }
   }

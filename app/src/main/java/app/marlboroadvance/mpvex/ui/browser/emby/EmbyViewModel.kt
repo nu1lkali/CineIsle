@@ -1950,6 +1950,108 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
   }
 
   /**
+   * 一次取回「当前这一屏所有文件夹」的宫格封面，按文件夹 Id 分组。
+   *
+   * ⭐ 存在的理由 —— 给服务端减压：容器条目（Folder / BoxSet / CollectionFolder）自身没有封面，
+   * 只能拿内部子项的缩略图拼宫格。原先是**每个文件夹各发一次** /Items（见 [loadFolderCoverUrls]），
+   * 一个「合集」列表摆 30 个合集就是 30 次请求。这里改成对当前父节点做 Recursive 查询、
+   * 拿子项的 `ParentId` 当分组键 —— 一屏的封面共用这几次请求，请求数从 O(文件夹数) 降到 O(1~3)。
+   *
+   * 三处刻意的收窄（都是为了减压）：
+   * 1. `Fields` 只留 `ParentId,ImageTags` —— 默认那份 `Fields` 带
+   *    `MediaSources` / `Overview` / `People`，一页几百条的响应体能大十几倍，而拼封面一个都用不上。
+   * 2. **多次取样**（每次 [FOLDER_COVER_BATCH_PAGE_SIZE] 条，最多 [FOLDER_COVER_BATCH_MAX_PAGES] 次），
+   *    并且「每个文件夹都凑够 4 张」时立即收工 —— 子项在整棵子树里按名称全局排序时，
+   *    一次取样不够会让排在后面的文件夹一条都摸不到。
+   * 3. 两种取样口径（[random]）：
+   *    - 顺序（`false`）：`SortBy=SortName` 翻页，结果稳定、靠翻页让每个文件夹都分得到；
+   *    - 随机（`true`）：每次都让服务端 `SortBy=Random` **重抽一整批**（`StartIndex` 固定 0），
+   *      所以每次取样拿到的都是**不同的一批条目** —— 这正是「下拉刷新能换一批封面」的关键。
+   *      ⚠️ 随机模式千万别改成「按名称翻页 + 客户端洗牌」：那样每次拿到的是**同一批**条目，
+   *      洗牌只换位置不换内容，用户看到的就是「没换图」（踩过这个坑）。
+   *
+   * ⚠️⚠️ 返回的 map **只含「凑满 `perFolder` 张」的文件夹**。不足的一律交白卷，由调用方退回
+   * 单文件夹请求去补齐 —— 这一条是**正确性要求**，不是优化：半成品（1~2 张）一旦交出去，
+   * 卡片看到「已经有封面」就不再兜底，于是明明能凑四个的文件夹只显示 1~2 个宫格。
+   * ⚠️ 与 [loadFolderCoverUrls] 一样会跳过没封面的条目、一路往后凑，所以「前几个没图就整张空白」
+   * 不会发生。
+   *
+   * @param parentId 当前浏览的父节点（媒体库 / 文件夹），即列表接口用的那个 parent
+   * @param folderIds 需要拼封面的文件夹 Id（调用方已按「容器 && 无 Primary 图」筛过）
+   * @param random true＝每个文件夹从候选里**洗牌**取几张（每切一次取样都不同）；
+   *   false＝按名称顺序取前几张。两种都只交出凑满的文件夹。
+   * @param perFolder 每个文件夹要凑几张，宫格用 4 张
+   */
+  suspend fun loadFolderCoverBatch(
+    server: EmbyServer,
+    parentId: String,
+    folderIds: List<String>,
+    random: Boolean = false,
+    perFolder: Int = 4,
+  ): Map<String, List<String>> = runCatching {
+    if (folderIds.isEmpty()) return@runCatching emptyMap()
+    val wanted = folderIds.toHashSet()
+    // 每个文件夹最多留几张候选：只要 4 张，但随机模式要多留一点才有洗牌的余地。
+    val poolSize = if (random) perFolder * FOLDER_COVER_BATCH_POOL_FACTOR else perFolder
+    val pools = LinkedHashMap<String, ArrayList<String>>()
+    // 同一个文件夹内按子项 Id 去重（服务端对 Recursive 查询偶尔会重复返回同一条）
+    val seen = HashMap<String, HashSet<String>>()
+    var startIndex = 0
+    var attempt = 0
+    while (attempt < FOLDER_COVER_BATCH_MAX_PAGES) {
+      attempt++
+      val res = repository.getItems(
+        server = server,
+        parentId = parentId,
+        // 随机模式让服务端重抽（每次一批新样本 ⇒ 刷新真的换图）；顺序模式按名称翻页（稳定、覆盖全）。
+        sortBy = if (random) "Random" else "SortName",
+        sortOrder = if (random) null else "Ascending",
+        includeItemTypes = listOf("Movie", "Episode", "Video", "MusicVideo"),
+        isFolder = false,
+        // ⚠️ 随机排序下 StartIndex 没有意义（每次返回的都是新的一批），固定 0 让服务端一次次重抽。
+        startIndex = if (random) 0 else startIndex,
+        limit = FOLDER_COVER_BATCH_PAGE_SIZE,
+        recursive = true,
+        fields = FOLDER_COVER_FIELDS,
+      )
+      val items = res.Items
+      if (items.isEmpty()) break
+      for (child in items) {
+        val pid = child.ParentId ?: continue
+        if (pid !in wanted) continue
+        val pool = pools.getOrPut(pid) { ArrayList(poolSize) }
+        if (pool.size >= poolSize) continue
+        val id = child.Id ?: continue
+        if (!seen.getOrPut(pid) { HashSet() }.add(id)) continue
+        val url = folderCoverUrlFor(server, child, id) ?: continue
+        pool.add(url)
+      }
+      if (!random) startIndex += items.size
+      // 一个都没落进任何目标文件夹：说明这批条目根本不在这些文件夹下（典型是「合集」——
+      // 它只是虚拟分组，片子的 ParentId 指向各自的媒体库，不指向合集），再取也是白取。
+      if (pools.isEmpty()) break
+      // 每个文件夹都凑够 4 张了就收工，别把整库翻完
+      if (pools.count { it.value.size >= perFolder } == wanted.size) break
+      // 服务端返回的条数少于请求条数 ⇒ 子树里就这么多、已经取全了，两种模式都该收工
+      if (items.size < FOLDER_COVER_BATCH_PAGE_SIZE) break
+    }
+    // ⚠️⚠️ 只交出**凑满 perFolder 张**的文件夹，不足的宁可交白卷，让卡片走单文件夹兜底去补齐。
+    //   以前把「这一批只扫到 1~2 张」的半成品也交出去，卡片看见 `cached != null` 就不再兜底，
+    //   于是明明能凑四个的文件夹只显示 1~2 个宫格（用户反馈的 bug）。
+    //   —— 交白卷的代价只是那一个文件夹多一次单文件夹请求，总次数仍远低于「每个文件夹各一次」。
+    pools
+      .filterValues { it.size >= perFolder }
+      .mapValues { (_, pool) ->
+        if (random) pool.shuffled().take(perFolder) else pool.take(perFolder)
+      }
+  }.getOrElse { e ->
+    // ⚠️ 取消必须原样抛出，不能当成「没有封面」：调用方（卡片）拿到空列表会写进缓存，
+    // 而「换代被取消」的旧请求正好会在刷新瞬间把封面覆盖成空 —— 就是用户看到的白闪。
+    if (e is kotlin.coroutines.cancellation.CancellationException) throw e
+    emptyMap()
+  }
+
+  /**
    * 取文件夹内若干子项的封面图 URL，用于给「文件夹」条目拼多宫格封面。
    *
    * Emby 的 Folder / CollectionFolder / UserView 这类容器条目自身没有 Primary 图，
@@ -2003,14 +2105,8 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
         if (urls.size >= count) break
         val id = child.Id ?: continue
         if (!seen.add(id)) continue
-        val thumb = child.ImageTags["Thumb"]
-        val primary = child.ImageTags["Primary"]
-        val url = when {
-          thumb != null -> repository.imageUrl(server, id, "Thumb", thumb, maxWidth = 320)
-          primary != null -> repository.imageUrl(server, id, "Primary", primary, maxWidth = 320)
-          else -> null
-        }
-        if (url != null) urls.add(url)
+        val url = folderCoverUrlFor(server, child, id) ?: continue
+        urls.add(url)
       }
       if (random) {
         // 这一批随机样本一张新图都没带来：要么文件夹里带图的本来就没几张，
@@ -2023,7 +2119,33 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       if (items.size < FOLDER_COVER_PAGE_SIZE) break
     }
     urls
-  }.getOrDefault(emptyList())
+  }.getOrElse { e ->
+    // ⚠️ 取消原样抛出：这一条**极重要** —— 调用方拿到空列表会写进缓存，
+    // 于是「下拉刷新时被取消的旧请求」会在新封面还没到之前先把封面覆盖成空（白闪）。
+    if (e is kotlin.coroutines.cancellation.CancellationException) throw e
+    emptyList()
+  }
+
+  /**
+   * 单个子项能用作宫格封面的图片地址：**优先 Thumb**（横版缩略图，宫格排布更协调），
+   * 没有 Thumb 才退回 Primary；两者都没有返回 null（调用方负责跳过它、继续往后凑）。
+   *
+   * 抽出来是因为有两条取封面的路径（批量 [loadFolderCoverBatch] 与单文件夹 [loadFolderCoverUrls]），
+   * 「Thumb 优于 Primary」这条偏好只能有一处，否则两边迟早选出不一样的脸。
+   */
+  private fun folderCoverUrlFor(
+    server: EmbyServer,
+    child: EmbyItem,
+    id: String,
+  ): String? {
+    val thumb = child.ImageTags["Thumb"]
+    val primary = child.ImageTags["Primary"]
+    return when {
+      thumb != null -> repository.imageUrl(server, id, "Thumb", thumb, maxWidth = 320)
+      primary != null -> repository.imageUrl(server, id, "Primary", primary, maxWidth = 320)
+      else -> null
+    }
+  }
 
   fun clearError() {
     _error.value = null
@@ -2065,6 +2187,39 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
 
     /** 随机模式最多重抽几次：随机样本有波动，一两次抽不到 4 张有封面的就再抽一批。 */
     private const val FOLDER_COVER_RANDOM_ATTEMPTS = 3
+
+    /**
+     * 批量取封面时每次取多少条。
+     *
+     * 之所以要**取多次**而不是「一次取够」：
+     * 顺序模式下子项在整棵子树里按名称全局排序，一次取不够时排在后面的文件夹一条都摸不到；
+     * 随机模式下每次都换一批样本，多取几次才能把每个文件夹都覆盖到。
+     */
+    private const val FOLDER_COVER_BATCH_PAGE_SIZE = 200
+
+    /**
+     * 批量取封面最多取样几次（顺序模式＝翻页，随机模式＝重抽）。
+     *
+     * 上限 `200 × 3 = 600` 条，兜住超大媒体库，同时不至于把库整个翻一遍。
+     */
+    private const val FOLDER_COVER_BATCH_MAX_PAGES = 3
+
+    /**
+     * 随机模式下每个文件夹多留几倍候选，供最后洗牌用。
+     *
+     * 与「凑满 4 张」无关 —— 4 张只是最终要的张数，多留几张才有随机可选的余地。
+     */
+    private const val FOLDER_COVER_BATCH_POOL_FACTOR = 3
+
+    /**
+     * 批量取封面时索要的字段 —— 只要「分组键 + 图片标记」。
+     *
+     * 这个参数的**唯一作用是把默认的大字段顶掉**：默认那份 `Fields` 带
+     * `MediaSources` / `Overview` / `People` / `Path` 等，一页几百条时响应体会大出一个数量级，
+     * 而拼一张宫格封面一个都用不上。`ImageTags` / `ParentId` 本身在基础 DTO 里就有，
+     * 列出来只是为了让「分组靠 ParentId、取图靠 ImageTags」在请求里一眼可见。
+     */
+    private const val FOLDER_COVER_FIELDS = "ParentId,ImageTags"
 
     /**
      * 全库搜索一次取多少条（清单 1.1 的例外，理由见 [searchGlobal] 的 KDoc）。

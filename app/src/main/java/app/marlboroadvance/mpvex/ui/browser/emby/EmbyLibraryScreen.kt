@@ -1482,10 +1482,87 @@ data class EmbyLibraryScreen(
 
       // ── 4. 媒体网格 ──
       // 用下拉刷新包裹：返回页面不会自动刷新，只有用户主动下拉才重新拉取
+      //
+      // ── 文件夹宫格封面：一次批量取，别让每个文件夹各发一次请求 ──
+      // 容器条目自身没有封面，只能拿内部子项的缩略图拼。为了给服务端减压，这里对**当前父节点**
+      // 发**一次** Recursive 查询、按子项 ParentId 分组（见 `EmbyViewModel.loadFolderCoverBatch`），
+      // 一次覆盖这一屏所有文件夹。请求数从「每个文件夹一次」降到「每屏一次」。
+      // 批量没覆盖到的（子项都没图、或排在扫描窗口之外）才由卡片自己补一次单文件夹请求
+      // —— 见 `EmbyLibraryMediaCell` 里的 `folderCoverBatchReady` 守卫。
+      val mosaicFolderIds = remember(displayItems, folderRandomCover) {
+        displayItems.asSequence()
+          .filter { isFolderLike(it) && it.ImageTags["Primary"] == null }
+          .mapNotNull { it.Id }
+          .distinct()
+          .toList()
+      }
+      // 「批量已经覆盖到哪一版文件夹集合」—— 用**签名比对**而不是布尔标志：
+      // 布尔标志在「列表刚加载出来」那一帧会被卡片读到旧的 true，卡片就抢在批量之前
+      // 自己把请求发了，于是变成「批量 + 每个文件夹」双份请求，比不批量还费。
+      // 「封面代数」：下拉刷新时靠它换代，而不是靠清缓存。必须同时进三处 ——
+      // ① 进签名（mosaicSignature）：批量重新跑，`folderCoverBatchReady` 在批量出结果前短暂回落，
+      //    卡片不会抢在批量之前自己发一遍请求；
+      // ② 让卡片的重取 key 变化：走**单文件夹兜底**的那些文件夹（批量覆盖不到的，比如合集）
+      //    也会跟着重取 —— 少了这一条，只有批量覆盖到的那批会换图，兜底那批永远不变
+      //    （用户反馈的「下拉刷新换图失效」）。
+      // ③ 传给 `EmbyFolderCoverCache`：同一代里已有值就不再取、换代后才允许再取
+      //    ⇒ 刷新**不需要清缓存**，旧封面原地留着显示，等新封面回来再替换
+      //    （用户反馈的「空占位有点丑」）。
+      // 初值取自缓存而不是写死 0：页面重建时若从 0 数起，会和缓存里条目的代数对不上，
+      // 变成每次进页面都白重取一遍、进程内缓存白做。
+      var folderCoverGen by remember { mutableStateOf(EmbyFolderCoverCache.currentGeneration()) }
+      val mosaicSignature = remember(libraryId, mosaicFolderIds, folderRandomCover, server?.id, folderCoverGen) {
+        "$libraryId|$folderRandomCover|${server?.id}|$folderCoverGen|" + mosaicFolderIds.joinToString(",")
+      }
+      var batchCoveredSignature by remember { mutableStateOf<String?>(null) }
+      val folderCoverBatchReady = batchCoveredSignature == mosaicSignature
+      LaunchedEffect(mosaicSignature) {
+        val srv = server
+        if (srv == null || mosaicFolderIds.isEmpty()) {
+          batchCoveredSignature = mosaicSignature
+          return@LaunchedEffect
+        }
+        // 快照当前代数：写入时要带上它，这样「迟到的上一代结果」不会盖掉新代。
+        val gen = folderCoverGen
+        try {
+          viewModel
+            .loadFolderCoverBatch(
+              server = srv,
+              parentId = libraryId,
+              folderIds = mosaicFolderIds,
+              random = folderRandomCover,
+            )
+            .forEach { (folderId, urls) ->
+              val key = folderCoverKey(folderId, folderRandomCover)
+              EmbyFolderCoverCache.put(key, urls, gen)
+              folderCovers[key] = urls
+            }
+        } finally {
+          // ⚠️ 请求失败也必须放行：否则所有文件夹的封面都卡在「等批量」上，谁也不去取，整屏空白。
+          batchCoveredSignature = mosaicSignature
+        }
+      }
+
       PullRefreshGridBox(
         isRefreshing = isRefreshing,
-        // 演员分类下拉刷新要重拉演员，而不是去重拉媒体
-        onRefresh = { if (isActorListMode) loadActors() else load(reset = true) },
+        // 演员分类下拉刷新要重拉演员，而不是去重拉媒体。
+        // 媒体：顺带把这一屏的文件夹封面**换代**重取（批量覆盖到的与走兜底的都会换，见上）。
+        onRefresh = {
+          if (isActorListMode) {
+            loadActors()
+          } else {
+            // ⭐ 只换代，**不清缓存、也不清 `folderCovers`** —— 缓存里的旧封面正是刷新期间要继续
+            //   显示的东西；清掉就会露出一片空占位（用户反馈「空占位有点丑」）。
+            //   老条目原地留着显示，新封面取回后按同键覆盖（宫格那边再淡入替换）。
+            // ⚠️ 固定模式（关了「合成随机封面图」）结果是确定的，重取只会拿到同一批
+            //   ⇒ 没必要换代，省掉一整轮请求。
+            if (folderRandomCover) {
+              EmbyFolderCoverCache.bumpGeneration()
+              folderCoverGen = EmbyFolderCoverCache.currentGeneration()
+            }
+            load(reset = true)
+          }
+        },
         gridState = gridState,
         modifier = Modifier.weight(1f).fillMaxWidth(),
       ) {
@@ -1696,6 +1773,8 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
       cardStyle = cardStyle,
           folderCovers = folderCovers,
           folderRandomCover = folderRandomCover,
+          folderCoverBatchReady = folderCoverBatchReady,
+          folderCoverGen = folderCoverGen,
    onClick = { openItem(item, backStack, s, context) },
     onLongClick = { offset ->
   actionTarget = item
@@ -1716,6 +1795,8 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                       cardStyle = cardStyle,
                       folderCovers = folderCovers,
                       folderRandomCover = folderRandomCover,
+                      folderCoverBatchReady = folderCoverBatchReady,
+                      folderCoverGen = folderCoverGen,
                       onClick = { openItem(item, backStack, s, context) },
                       onLongClick = { offset ->
                         actionTarget = item
@@ -2238,6 +2319,15 @@ private fun EmbyLibraryMediaCell(
   folderCovers: MutableMap<String, List<String>>,
   /** 文件夹宫格封面是否随机合成：影响取图顺序，也参与缓存键 */
   folderRandomCover: Boolean,
+  /** 这一屏的「批量取封面」是否已经出结果；false 时先别自己发请求，免得和批量重复拉一遍 */
+  folderCoverBatchReady: Boolean,
+  /**
+   * 「封面代数」：下拉刷新时 +1，进 [LaunchedEffect] 的 key。
+   *
+   * 它保证**走单文件夹兜底**的那些文件夹（批量覆盖不到的，比如合集）也跟着重取 ——
+   * 否则刷新只有批量覆盖到的那批会换图，兜底那批永远不变（用户反馈的「刷新换图失效」）。
+   */
+  folderCoverGen: Int,
   onClick: () -> Unit,
   onLongClick: ((androidx.compose.ui.geometry.Offset) -> Unit)?,
   onToggleFavorite: (() -> Unit)?,
@@ -2248,16 +2338,20 @@ private fun EmbyLibraryMediaCell(
   val needsMosaic = isFolderLike(item) && item.ImageTags["Primary"] == null
   val folderCover: List<String>? = if (needsMosaic && itemId != null) {
     // 缓存键带上「随机 / 固定」：来回切开关时两种结果各存一份，不会互相串图。
-    val coverKey = "$itemId|$folderRandomCover"
-    val cached = folderCovers[coverKey]
-    LaunchedEffect(coverKey, server.id) {
-      if (cached == null && EmbyFolderCoverCache.beginLoad(coverKey)) {
-        val urls = viewModel.loadFolderCoverUrls(server, itemId, 4, random = folderRandomCover)
-        EmbyFolderCoverCache.put(coverKey, urls)
-        folderCovers[coverKey] = urls
+    val coverKey = folderCoverKey(itemId, folderRandomCover)
+    LaunchedEffect(coverKey, server.id, folderCoverBatchReady, folderCoverGen) {
+      // 「要不要取」交给缓存按**代数**判断：同代里已有值 ⇒ beginLoad 返回 false
+      //（滚动、重组的重复进入都不会重复请求）；换代后（下拉刷新）⇒ 返回 true，
+      // 于是连**批量没覆盖到**的那批也会重取。
+      // 批量那一步同理：`folderCoverBatchReady` 为 false 时先等它，免得「批量 + 逐个」双份请求。
+      // ⚠️ 这里**不再**判断 `cached == null`：刷新时旧封面就在缓存里、而那正是要继续显示的一张，
+      //    若因「已经有了」跳过重取，刷新换图就永远不会发生。
+      if (folderCoverBatchReady && EmbyFolderCoverCache.beginLoad(coverKey, folderCoverGen)) {
+        loadAndStoreFolderCover(viewModel, server, itemId, folderRandomCover, folderCoverGen, folderCovers)
       }
     }
-    cached
+    // 显示这份映射里的当前值：刷新时是旧封面（不清），新封面回来按同键覆盖后自动换新。
+    folderCovers[coverKey]
   } else {
     null
   }
@@ -3290,6 +3384,48 @@ private fun isFolderLike(item: EmbyItem): Boolean =
 private fun isScannableFolder(item: EmbyItem): Boolean = item.Type in FOLDER_TYPES
 
 /**
+ * 文件夹宫格封面的缓存键：**文件夹 Id + 取样模式**。
+ *
+ * ⚠️ 键的拼法只留这一处 —— 卡片的读取、下拉刷新的重取、[EmbyFolderCoverCache] 的存取
+ * 全都调它。分两处手写迟早会对不上（对不上就是「切开关后看到串掉的旧图」）。
+ */
+private fun folderCoverKey(
+  folderId: String,
+  random: Boolean,
+): String = "$folderId|$random"
+
+/**
+ * 取一次文件夹宫格封面，并**同时**写进进程内缓存与当前页面这份内存映射。
+ *
+ * 两条路径都走它：卡片首次出现时的 `LaunchedEffect`、以及下拉刷新时的重取。
+ * 抽成一个函数是因为「写进哪儿」必须一致 —— 只写内存映射不写缓存，
+ * 离开页面再回来就又是旧的；只写缓存不写映射，当前这一屏不会变。
+ *
+ * ⚠️ 被取消（换代 / 离开页面）时**不能写入**：这时上层拿到的会是空列表（取封面那条
+ * `runCatching` 语义），一写就把缓存里的旧封面覆盖成空 ⇒ 刷新瞬间反而变空白。
+ * 所以这里捕获取消、摘掉「在飞」标记后原样抛出。
+ */
+private suspend fun loadAndStoreFolderCover(
+  viewModel: EmbyViewModel,
+  server: EmbyServer,
+  folderId: String,
+  random: Boolean,
+  generation: Int,
+  into: MutableMap<String, List<String>>,
+) {
+  val key = folderCoverKey(folderId, random)
+  val urls =
+    try {
+      viewModel.loadFolderCoverUrls(server, folderId, count = 4, random = random)
+    } catch (e: CancellationException) {
+      EmbyFolderCoverCache.abort(key)
+      throw e
+    }
+  EmbyFolderCoverCache.put(key, urls, generation)
+  into[key] = urls
+}
+
+/**
  * 文件夹宫格封面的进程内缓存（键是「文件夹 Id + 取样模式」的组合串）。
  *
  * 一个文件夹的封面要额外发一次 /Items 查询才能拿到子项缩略图，比较贵；
@@ -3298,20 +3434,63 @@ private fun isScannableFolder(item: EmbyItem): Boolean = item.Type in FOLDER_TYP
  *
  * ⚠️ 键里带「随机 / 固定」模式：随机封面的结果每次都可能不同，
  * 若只按文件夹 Id 存，用户在设置里来回切开关就会看到串掉的旧图。
+ *
+ * ⭐ 「换代」而不是「清空」：缓存里的旧封面是**下拉刷新期间要继续显示**的东西
+ * （清空就会露出一片空占位，用户反馈「空占位有点丑」）。所以刷新只把 [generation] +1，
+ * 老条目原地留着显示，重取回来再把同键的值换掉 —— 视觉上是「换脸」，不是「先变空再出现」。
  */
 private object EmbyFolderCoverCache {
   private const val MAX_ENTRIES = 200
 
-  private val entries = LinkedHashMap<String, List<String>>()
+  /** 一条封面：图片地址 + 它属于哪一代（见 [generation]） */
+  private class Cover(
+    val urls: List<String>,
+    val generation: Int,
+  )
+
+  private val entries = LinkedHashMap<String, Cover>()
+
+  /** 正在飞的键（同一键同一时间只允许一个请求） */
   private val loading = HashSet<String>()
 
-  @Synchronized
-  fun snapshot(): Map<String, List<String>> = LinkedHashMap(entries)
+  /**
+   * 「封面代数」：下拉刷新时 +1。
+   *
+   * 放在这里（而不是页面里）是因为**它必须跨页面存活** —— 页面重建时若从 0 重新数起，
+   * 就会和缓存里条目的代数对不上，于是每次进页面都白重取一遍，进程内缓存白做。
+   */
+  @Volatile
+  private var generation = 0
 
-  /** 返回 true 表示这次由调用方发起加载（同一文件夹不会被并发重复请求） */
+  fun currentGeneration(): Int = generation
+
+  /** 下拉刷新时调用；之后所有文件夹（含走单文件夹兜底那批）都会在重取完成后换图。 */
   @Synchronized
-  fun beginLoad(folderId: String): Boolean {
-    if (entries.containsKey(folderId) || loading.contains(folderId)) return false
+  fun bumpGeneration() {
+    generation++
+  }
+
+  @Synchronized
+  fun snapshot(): Map<String, List<String>> {
+    val out = LinkedHashMap<String, List<String>>(entries.size)
+    entries.forEach { (key, cover) -> out[key] = cover.urls }
+    return out
+  }
+
+  /**
+   * 返回 true 表示这次由调用方发起加载。
+   *
+   * @param gen 调用方当前的封面代数（[currentGeneration]）。同一代里已经有值 ⇒ 不再取；
+   *   换代后 ⇒ 允许再取一次。这就是「刷新时保留旧图、后台换新图」的开关。
+   */
+  @Synchronized
+  fun beginLoad(
+    folderId: String,
+    gen: Int,
+  ): Boolean {
+    if (loading.contains(folderId)) return false
+    val cover = entries[folderId]
+    if (cover != null && cover.generation == gen) return false
     loading.add(folderId)
     return true
   }
@@ -3320,14 +3499,29 @@ private object EmbyFolderCoverCache {
   fun put(
     folderId: String,
     urls: List<String>,
+    gen: Int,
   ) {
     loading.remove(folderId)
+    // 迟到的上一代结果不要盖掉新代（换代瞬间两代请求可能同时在飞）
+    val existing = entries[folderId]
+    if (existing != null && existing.generation > gen) return
     entries.remove(folderId)
-    entries[folderId] = urls
+    entries[folderId] = Cover(urls, gen)
     while (entries.size > MAX_ENTRIES) {
       val oldest = entries.keys.firstOrNull() ?: break
       entries.remove(oldest)
     }
+  }
+
+  /**
+   * 请求作废（失败 / 被取消）：只摘掉「在飞」标记，**不写值**。
+   *
+   * ⚠️ 不清这个标记的话，换代时被取消的那次请求会把键永久钉在 `loading` 里，
+   * 之后 [beginLoad] 恒返回 false ⇒ 那个文件夹再也换不了图。
+   */
+  @Synchronized
+  fun abort(folderId: String) {
+    loading.remove(folderId)
   }
 }
 

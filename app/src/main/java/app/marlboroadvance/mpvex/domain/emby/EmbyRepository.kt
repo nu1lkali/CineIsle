@@ -271,6 +271,15 @@ class EmbyRepository(
     hasSubtitles: Boolean? = null,
     /** 工作室 Id 列表，多选取并集 */
     studioIds: List<String>? = null,
+    /**
+     * 覆盖默认的 [EmbyClient.ITEM_FIELDS]。
+     *
+     * 只在「大页数 + 只要几个字段」的场景用得上，典型是拼文件夹宫格封面：
+     * 一页几百条，却只要 `ParentId` 与 `ImageTags`，带上默认的
+     * `MediaSources` / `Overview` / `People` 会让响应体大出一个数量级。
+     * 其余调用点保持默认值，行为不变。
+     */
+    fields: String = EmbyClient.ITEM_FIELDS,
   ): EmbyItemsResult = withContext(Dispatchers.IO) {
     EmbyClient.getItems(
       server,
@@ -300,6 +309,7 @@ class EmbyRepository(
       is3D = is3D,
       hasSubtitles = hasSubtitles,
       studioIds = studioIds,
+      fields = fields,
     )
   }
 
