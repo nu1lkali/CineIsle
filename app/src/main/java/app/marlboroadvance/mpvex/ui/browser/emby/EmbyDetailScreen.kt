@@ -45,6 +45,8 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -72,13 +74,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,12 +91,9 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -100,6 +101,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
@@ -252,6 +254,22 @@ data class EmbyDetailScreen(
       onDispose { detailLifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // ── 折叠头部的状态（提到这里是因为「下拉刷新」要用到它）──
+    //
+    // ⭐ 提到 EmbyDetailScreen 这一层、而不是留在 DetailBody 里，是因为下拉刷新挂在
+    // DetailBody **外面**（PullRefreshBox 包着它），而「封面收着的时候禁止下拉刷新」
+    // 这个判断需要读到折叠进度。详见下面 PullRefreshBox 处的注释。
+    val listState = rememberLazyListState()
+    // 详情页推荐区开关：关闭后「推荐」与「同类型推荐」两块整块不渲染，也不发那几次请求。
+    val showRecommendations by
+      koinInject<BrowserPreferences>().embyShowRecommendations.collectAsState()
+    // 折叠状态：**只是列表滚动位置的函数**（没有任何自定义手势 / 动画状态）。
+    val collapse = rememberHeaderCollapse(
+      listState = listState,
+      maxHeight = BACKDROP_HEADER_MAX_HEIGHT_DP,
+      toolbarHeight = TOOLBAR_HEIGHT_DP,
+    )
+
     Box(modifier = Modifier.fillMaxSize()) {
       when {
         isLoading && item == null -> EmbySkeletonDetail()
@@ -274,16 +292,26 @@ data class EmbyDetailScreen(
           // ── 下拉刷新 ──
           // 详情页的数据（进度、已看状态、演员、推荐）都是进页面那一次拉回来的，
           // 从播放器返回时虽然有 800ms 延迟的自动刷新，但用户手动拉一下仍然是最直接的重取方式。
-          // 手势与折叠头部天然分工：头部还没展开完时下拉先展开头部（内层 NestedScrollConnection
-          // 会把这段位移吃掉），只有头部已经完全展开、列表又停在顶部时，位移才会漏到下拉刷新上。
+          //
+          // 新版折叠头部已经**不再消费任何手势**（封面高度只是列表滚动位置的函数），
+          // 所以这里只要老老实实把 listState 传进去 + 加一道「封面已完全展开」的闸门，
+          // 两者就不会再抢手势：
+          //  - `listState` ⇒ PullRefreshBox 只在列表贴顶时才接管下拉；
+          //  - `enabled = collapse.isExpanded` ⇒ 封面还没完全放回来时，下拉继续归列表
+          //    （那段下拉本来就是「把封面滚回来」用的）。
           PullRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { load() },
+            enabled = collapse.isExpanded,
+            listState = listState,
             modifier = Modifier.fillMaxSize(),
           ) {
             DetailBody(
               item = current,
               server = currentServer,
+              listState = listState,
+              collapse = collapse,
+              showRecommendations = showRecommendations,
               // 剧照当封面区的整张背景图用，所以要按屏幕级别的宽度取（1080 足够铺满常见机型）：
               // 之前取 128px 是为了「放大即虚化」的糊底效果，用户不喜欢 —— 现在直接看清晰大图。
               // EmbyImageLoader 的 maxWidth 只做客户端降采样、不会改写 URL，
@@ -843,6 +871,14 @@ data class EmbyDetailScreen(
 private fun DetailBody(
   item: EmbyItem,
   server: EmbyServer?,
+  /**
+   * 列表状态 + 折叠状态。由 [EmbyDetailScreen] 持有并传进来 ——
+   * 因为「下拉刷新」挂在 Body 外面，需要在那边读到折叠进度（见 `PullRefreshBox` 调用处）。
+   */
+  listState: androidx.compose.foundation.lazy.LazyListState,
+  collapse: HeaderCollapse,
+  /** 详情页推荐区开关。由 [EmbyDetailScreen] 读出后传进来。 */
+  showRecommendations: Boolean,
   backdropUrl: String?,
   posterUrl: String?,
   /** resumeSeconds = 续播秒数（0 = 从头）；reverseEngine = 用与默认相反的内核（长按） */
@@ -892,33 +928,37 @@ private fun DetailBody(
   /** 点推荐卡片：打开对应媒体的详情页（itemId / 标题） */
   onRecommendClick: (String, String) -> Unit,
 ) {
-  // 详情页推荐区开关：关闭后「推荐」与「同类型推荐」两块整块不渲染，也不发那几次请求。
-  val showRecommendations by
-    koinInject<BrowserPreferences>().embyShowRecommendations.collectAsState()
-
-  val listState = rememberLazyListState()
   val isFavorite = item.UserData?.IsFavorite == true
   val isPlayed = item.UserData?.Played == true
 
-  // ── 折叠头部的状态 ──
-  // 等价于 XML 的 AppBarLayout + CollapsingToolbarLayout：头部大图随内容滚动逐步收起，
-  // 工具栏保持不动（pin），收起一定程度后标题淡入工具栏。详见 [rememberCollapseState]。
-  val collapse = rememberCollapseState(listState = listState)
-  // collapse.collapsedPx 是 state，每帧变化都会触发这里的重组，所以直接用它算高度即可
-  val collapsedPx = collapse.collapsedPx
-  val headerHeightDp = with(LocalDensity.current) {
-    (BACKDROP_HEADER_MAX_HEIGHT_DP.toPx() - collapsedPx).coerceAtLeast(TOOLBAR_HEIGHT_DP.toPx()).toDp()
-  }
+  // ── 折叠头部：高度**完全由列表滚动位置推导**，没有任何自定义手势 / 嵌套滚动 ──
+  //
+  // 此前这里同时挂着两套纵向滚动的消费者（自定义 NestedScrollConnection + 下拉刷新），
+  // 两者抢同一个手势，就是「卡手 / 时灵时不灵」的根源。现在整块删掉，只留一条规则：
+  //     封面有多高 = 列表滚了多少（见 [rememberHeaderCollapse]）
+  // 手势只有 LazyColumn 一个消费者；下拉刷新只在列表贴顶时接住溢出量 —— 结构上不可能再打架。
+  //
+  // ⭐ 因为播放区一直贴着封面底边一起上移，封面收完的那一刻播放区正好停在工具栏下方，
+  //    所以天然就是「滑到播放按钮就折叠」，不需要任何触发距离常量。
+  val density = LocalDensity.current
+  val headerHeightDp = with(density) { collapse.headerHeightPx.toDp() }
+  val headerMaxHeightPx = with(density) { BACKDROP_HEADER_MAX_HEIGHT_DP.toPx() }
 
-  Box(modifier = Modifier.fillMaxSize().nestedScroll(collapse.connection)) {
+  Box(modifier = Modifier.fillMaxSize()) {
     LazyColumn(
       state = listState,
       modifier = Modifier.fillMaxSize(),
-      // 顶部的空档留给封面 + 工具栏：折叠时跟着一起变矮，视觉上就是「内容把封面顶上去」。
-      // 这一步和 [NestedScrollConnection] 的消费是配套的 —— 滑动先把这段距离吃掉，
-      // 列表本身在这一段里并不滚动，所以不会出现「封面收一半、列表也滚一半」的重影。
-      contentPadding = PaddingValues(top = headerHeightDp, bottom = 96.dp),
+      contentPadding = PaddingValues(bottom = 96.dp),
     ) {
+      // 第 0 项是「封面占位稿」：高度 = 封面最大高度，本身不可见（被上层的封面盖住）。
+      //
+      // ⚠️ 用**真实 item** 而不是 `contentPadding.top`，是为了避开一个语义坑：
+      // `firstVisibleItemIndex` / `firstVisibleItemScrollOffset` 与
+      // `visibleItemsInfo` 的 offset 对 contentPadding 的处理并不一致（前者「不含内容内边距」），
+      // 拿它推折叠量会在某些情况下差一个 padding 的高度。改用真实 item 后，
+      // 它的 offset 就是「相对视口的真实 y」，从 0 一路减到 −最大高度，毫无歧义。
+      item { Spacer(modifier = Modifier.height(BACKDROP_HEADER_MAX_HEIGHT_DP)) }
+
       // ── 播放 / 下载 / 投屏（删除在右上角「更多」菜单里）──
       item {
         PlaySection(
@@ -968,17 +1008,7 @@ private fun DetailBody(
 
       // ── 简介 ──
       item.Overview?.takeIf { it.isNotBlank() }?.let { overview ->
-        item {
-          Column(modifier = Modifier.padding(16.dp)) {
-            Text("简介", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-              text = overview,
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-        }
+        item { OverviewSection(overview) }
       }
 
       // ── 演职员 ──
@@ -1094,13 +1124,16 @@ private fun DetailBody(
     // ── 封面区（浮在下层内容之上，随滚动折叠）──
     // 它不放在 LazyColumn 里当 item，是因为要能做视差位移、且高度随滚动变化；
     // 对应 XML 里 AppBarLayout 套 ImageView(layout_collapseMode="parallax") + Toolbar(pin)。
+    // 高度来自 [collapse]，而 [collapse] 只是列表滚动位置的函数 —— 这里只负责画。
     Box(
       modifier = Modifier
         .fillMaxWidth()
         .height(headerHeightDp)
         .align(Alignment.TopCenter)
         .graphicsLayer {
-          // 收到最后阶段整体淡出，避免和 toolBar 的文字挤在一起
+          // 收到最后阶段整体淡出，避免和 toolBar 的文字挤在一起。
+          // ⚠️ 用**线性**的 collapse.progress 而不是缓动后的值 —— 淡出是「退场」，
+          // 缓动会让它拖到最后一刻才消失，那时标题已经压上来了。
           alpha = (1f - collapse.progress * 1.6f).coerceIn(0f, 1f)
         },
     ) {
@@ -1108,14 +1141,23 @@ private fun DetailBody(
         item = item,
         backdropUrl = backdropUrl,
         posterUrl = posterUrl,
-        parallaxPx = collapsedPx,
+        // 视差位移按**缓动后**的刻度走，跟容器的收缩节奏一致
+        parallaxPx = collapse.collapsedPx * easeInQuad(collapse.progress),
+        // 底图按头部宽度反向缩放：容器变矮多少，图就放大多少，
+        // 保证它在折叠过程中**始终维持 CenterCrop**，不会被压扁变形。
+        // 高度只剩 56dp 时 widthScale ≈ 5.7，但那时整块 alpha 已经归零，不会看到过放大的画面。
+        widthScale = if (collapse.headerHeightPx > 0f) {
+          headerMaxHeightPx / collapse.headerHeightPx
+        } else {
+          1f
+        },
       )
     }
 
     // ── 顶部浮层操作栏 ──
     // 展开时透明 + 白图标（压在封面上），折叠后过渡到实体的工具栏底色 + 常规前景色，
     // 并把标题淡入进来 —— 对应 XML 里 `layout_collapseMode="pin"` 那条 Toolbar。
-    val barProgress = collapse.progress
+    val barProgress = easeInQuad(collapse.progress)
     val barBg = lerp(
       Color.Transparent,
       MaterialTheme.colorScheme.surface,
@@ -1292,6 +1334,15 @@ private fun BackdropHeader(
   backdropUrl: String?,
   posterUrl: String?,
   parallaxPx: Float,
+  /**
+   * 底图的横向放大倍率。
+   *
+   * 容器高度随折叠变小，若底图仍铺满容器就会被**纵向压扁** —— 人物越来越矮胖，
+   * 慢滚时一帧帧变形，这是「压迫感」的主要来源。
+   * 按 `展开高度 / 当前高度` 反向放大横向，底图就始终维持原比例（CenterCrop），
+   * 表现成「缓慢推近」而不是「被压扁」。
+   */
+  widthScale: Float = 1f,
 ) {
   Box(
     modifier = Modifier
@@ -1310,6 +1361,10 @@ private fun BackdropHeader(
           .fillMaxSize()
           .graphicsLayer {
             translationY = parallaxPx * 0.5f
+            // 横向放大「N 倍再缩回去」：pivot 取中上（0.5, 0）——
+            // 竖屏裁切时标题本来就压在底部、人物多在中上部，锚在这里裁掉的最少。
+            scaleX = widthScale
+            transformOrigin = TransformOrigin(0.5f, 0f)
           },
         contentScale = ContentScale.Crop,
         // 0 = 不降采样：URL 已经跟服务器要了 1080，客户端再降一次只会白白变糊
@@ -2012,10 +2067,13 @@ private fun formatFileSize(bytes: Long): String {
 // ══════════════════════════════════════════════════════════════════════════
 
 /**
- * 头部大图完全展开时的高度。
+ * 头部大图展开时的高度（静止时封面的高度）。
  *
- * 取 240dp~320dp 区间的上限：这块是「整张剧照铺满」的观感来源，高度不够图会被压扁成一条；
- * 顶部 56dp 留给工具栏，其余全是图，标题叠在底部。
+ * 它同时是：① 封面能撑到的最大高度；② 列表第 0 项「封面占位稿」的高度。
+ * 折叠时封面按滚动量线性缩矮，收到 [TOOLBAR_HEIGHT_DP] 为止。
+ *
+ * ⭐ 想改「折叠触发点」就调这个值：调高 = 封面撑得更久、要滚更多才收完（触发点更靠后）；
+ * 调低 = 收得更早更快。**不需要另外维护任何「触发距离」常量** —— 折叠点由几何关系决定。
  */
 private val BACKDROP_HEADER_MAX_HEIGHT_DP = 320.dp
 
@@ -2023,73 +2081,161 @@ private val BACKDROP_HEADER_MAX_HEIGHT_DP = 320.dp
 private val TOOLBAR_HEIGHT_DP = 56.dp
 
 // ══════════════════════════════════════════════════════════════════════════
-// 折叠头部：Compose 版的 CollapsingToolbarLayout
+// 折叠头部：把「滚动位置」变成「封面高度」
+//
+// 这是整个折叠头部**唯一的状态来源**。设计上刻意不引入任何自定义手势：
+// 列表滚动是唯一的输入，封面高度是它的纯函数。
 // ══════════════════════════════════════════════════════════════════════════
 
 /**
- * 折叠状态。
+ * 折叠头部的当前形态（由 [rememberHeaderCollapse] 每帧算出）。
  *
- * - `collapsedPx`：已经收掉的像素数（0 = 完全展开，[rangePx] = 完全折叠）
- * - [rangePx]：可折叠行程 = 展开高度 − 工具栏高度
- * - [progress]：0~1，用于驱动工具栏底色与过渡
- *
- * Compose 没有 `AppBarLayout`，所以要自己用 [NestedScrollConnection] 抢滚动量。
- * （`TopAppBarDefaults.exitUntilCollapsedScrollBehavior` 只管 Toolbar 自身那条，
- * 管不到内容区顶部那整块封面的视差位移。）
+ * - `collapsedPx`：已经收掉的像素数（0 = 完全展开）
+ * - `maxCollapsePx`：可收掉的总量 = 最大高度 − 工具栏高度
+ * - `headerHeightPx`：当前封面高度（工具栏高度 .. 最大高度）
  */
-private class CollapseState(
-  private val listState: androidx.compose.foundation.lazy.LazyListState,
+@Immutable
+private class HeaderCollapse(
+  val collapsedPx: Float,
+  val maxCollapsePx: Float,
+  val headerHeightPx: Float,
 ) {
-  var collapsedPx by mutableFloatStateOf(0f)
-  var rangePx by mutableFloatStateOf(0f)
-
+  /** 0（完全展开）~ 1（完全收起）。驱动淡出、视差、顶栏过渡。 */
   val progress: Float
-    get() = if (rangePx <= 0f) 0f else (collapsedPx / rangePx).coerceIn(0f, 1f)
+    get() = if (maxCollapsePx <= 0f) 0f else (collapsedPx / maxCollapsePx).coerceIn(0f, 1f)
 
-  /**
-   * 抢滚动量的连接：挂在最外层容器上，内容滚动会先经过这里。
-   *
-   * [listState] 只用来判断「列表是否已经贴顶」——决定下拉时该展开封面还是滚列表。
-   */
-  val connection = object : NestedScrollConnection {
-    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-      val range = rangePx
-      if (range <= 0f) return Offset.Zero
-      val dy = available.y
-      return when {
-        // 手指向上（内容上移）：先把展开的那段封面收回去
-        dy < 0f -> {
-          val consume = (-dy).coerceAtMost(range - collapsedPx)
-          collapsedPx += consume
-          Offset(0f, -consume)
-        }
+  /** 封面是否已经完全展开。下拉刷新只在此时接管下拉手势。 */
+  val isExpanded: Boolean
+    get() = collapsedPx <= 0.5f
+}
 
-        // 手指向下（内容下移）：只有列表已经贴到顶部时才反向放出封面，
-        // 否则一次下拉会同时「展开封面 + 滚动列表」，看着很怪
-        dy > 0f &&
-          listState.firstVisibleItemIndex == 0 &&
-          listState.firstVisibleItemScrollOffset == 0 -> {
-          val consume = dy.coerceAtMost(collapsedPx)
-          collapsedPx -= consume
-          Offset(0f, consume)
-        }
+/**
+ * 由列表滚动位置推导封面形态。
+ *
+ * **原理**：列表第 0 项是一个「封面占位稿」（高度 = [maxHeight]），封面盖在它上面。
+ * 占位稿的 y 从 0 一路减到 `−maxHeight`，取它的负值就是「已经滚了多远」，也就是封面该收多少。
+ * 因为播放区紧跟着占位稿，所以**内容顶部永远贴着封面底边一起上移**：
+ *  - 滚到「播放区到达工具栏下方」时封面正好收完（`collapsedPx == maxHeight − toolbarHeight`）；
+ *  - 再往下滚，封面固定为工具栏高度，内容从它下面滑过。
+ *
+ * 于是「滑到播放按钮就折叠」是几何上自然成立的，不需要任何触发距离常量；
+ * 也不需要在滚动时抢手势 —— 只有列表一个消费者，就没有手势冲突。
+ *
+ * ⚠️ 这里刻意读 `visibleItemsInfo` 里**真实 item** 的 `offset`，而不是
+ * `firstVisibleItemScrollOffset`：后者与 contentPadding 的关系有歧义
+ * （官方文档：`firstVisibleItemIndex` 不含内容内边距区），拿它推折叠量会差一截。
+ * `visibleItemsInfo[i].offset` 是相对视口的真实布局位置，没有这个问题。
+ */
+@Composable
+private fun rememberHeaderCollapse(
+  listState: androidx.compose.foundation.lazy.LazyListState,
+  maxHeight: Dp,
+  toolbarHeight: Dp,
+): HeaderCollapse {
+  val density = LocalDensity.current
+  val maxPx = with(density) { maxHeight.toPx() }
+  val toolbarPx = with(density) { toolbarHeight.toPx() }
 
-        else -> Offset.Zero
+  val collapsedPx by
+    remember(listState, maxPx) {
+      derivedStateOf {
+        // 占位稿已经滚出第一屏 ⇒ 封面收到最扁
+        if (listState.firstVisibleItemIndex > 0) return@derivedStateOf maxPx
+        val spacerY = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == 0 }?.offset
+          // 首帧还没量出来：先当完全展开，避免封面闪一下
+          ?: return@derivedStateOf 0f
+        (-spacerY).toFloat().coerceIn(0f, maxPx)
+      }
+    }
+
+  return HeaderCollapse(
+    collapsedPx = collapsedPx,
+    maxCollapsePx = (maxPx - toolbarPx).coerceAtLeast(0f),
+    headerHeightPx = (maxPx - collapsedPx).coerceAtLeast(toolbarPx),
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════// 折叠动效参数
+//
+// 折叠**位置**由滚动驱动（见 [rememberHeaderCollapse]）—— 这里只放「外观怎么变」的参数：
+// 封面反压扁（底图横向反向放大、维持 CenterCrop 的「缓慢推近」）+ 缓动曲线。
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 折叠进度的缓动曲线：先慢后快。
+ *
+ * 匀速的「刻度感」本身就显廉价、也显压迫；`t²` 让画面一开始很从容、
+ * 接近收起时才加速，收尾干脆。开方（`sqrt`）则是反效果 —— 一上来就窜，更压迫。
+ */
+private fun easeInQuad(t: Float): Float = t * t
+
+// ══════════════════════════════════════════════════════════════════════════
+// 简介（可展开 / 收起）
+// ══════════════════════════════════════════════════════════════════════════
+
+/** 收起时简介最多显示几行。5 行 ≈ 手机上 150~180 个字，太短了会「还没看出讲什么就被截掉」。 */
+private const val OVERVIEW_COLLAPSED_LINES = 5
+
+/**
+ * 简介区。
+ *
+ * 长简介默认只显示 [OVERVIEW_COLLAPSED_LINES] 行 + 省略号，正文下方给一个
+ * 「展开 / 收起」的文字按钮（带箭头图标，点标题或箭头整行都能点）。
+ *
+ * ⚠️ **按钮只在「真的被截断」时才显示**：判断依据是 `onTextLayout` 回调里的
+ * `hasVisualOverflow`（布局器事后给出的真实结论），而不是「字数超过 N 个」这种估算。
+ * 估算在中文 / 英文 / 不同字号 / 不同屏宽下必然误判 —— 短简介会无端多出一个点了没反应的
+ * 「展开」，长简介又可能该给按钮却没给。见记忆 `ui-patterns.md`「文本截断」条。
+ *
+ * 展开状态用 `rememberSaveable`，转屏 / 返回再进不丢。
+ */
+@Composable
+private fun OverviewSection(overview: String) {
+  // key 带上正文：同一屏里条目被换掉（推荐区点进另一部片）时要重新收起 + 重新判定截断
+  var expanded by rememberSaveable(overview) { mutableStateOf(false) }
+  var overflowed by remember(overview) { mutableStateOf(false) }
+
+  Column(modifier = Modifier.padding(16.dp)) {
+    Text("简介", style = MaterialTheme.typography.titleMedium)
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+      text = overview,
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      // 展开后不限行数，让简介自然撑开
+      maxLines = if (expanded) Int.MAX_VALUE else OVERVIEW_COLLAPSED_LINES,
+      overflow = TextOverflow.Ellipsis,
+      onTextLayout = { result ->
+        // 展开态下 onTextLayout 报的是「没截断」，别用它把 overflowed 抹掉 ——
+        // 否则一展开按钮就消失、再也没法收起。
+        if (!expanded) overflowed = result.hasVisualOverflow
+      },
+    )
+    if (overflowed) {
+      Spacer(modifier = Modifier.height(2.dp))
+      // 靠左、贴着正文起始边：简介正文本来就从这里开始，按钮跟它对齐读起来才是一体的。
+      // 居中反而像一枚独立控件，且整行铺开会白占一行宽度。
+      Row(
+        modifier = Modifier
+          .clip(RoundedCornerShape(8.dp))
+          .clickable { expanded = !expanded }
+          .padding(vertical = 6.dp, horizontal = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = if (expanded) "收起" else "展开",
+          style = MaterialTheme.typography.labelLarge,
+          color = MaterialTheme.colorScheme.primary,
+        )
+        Icon(
+          imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(18.dp),
+        )
       }
     }
   }
-}
-
-@Composable
-private fun rememberCollapseState(
-  listState: androidx.compose.foundation.lazy.LazyListState,
-): CollapseState {
-  val state = remember(listState) { CollapseState(listState) }
-  val density = LocalDensity.current
-  LaunchedEffect(density, state) {
-    state.rangePx = with(density) { (BACKDROP_HEADER_MAX_HEIGHT_DP - TOOLBAR_HEIGHT_DP).toPx() }
-  }
-  return state
 }
 
 // ══════════════════════════════════════════════════════════════════════════
