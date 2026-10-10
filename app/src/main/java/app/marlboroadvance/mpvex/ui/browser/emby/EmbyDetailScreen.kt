@@ -123,7 +123,9 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyStudio
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
+import app.marlboroadvance.mpvex.domain.emby.EmbyVersionProgress
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
+import app.marlboroadvance.mpvex.domain.playbackstate.repository.PlaybackStateRepository
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
@@ -209,6 +211,31 @@ data class EmbyDetailScreen(
     // null = 还没选，等价于「服务端默认版本」（= MediaSources 的第一条）。
     // 按 itemId 记忆：同一条目在页面存活期间保留选择，换条目则重置。
     var selectedMediaSourceId by remember(itemId) { mutableStateOf<String?>(null) }
+
+    // ── 多版本媒体：当前版本自己的续播进度（本地）──
+    //
+    // Emby 服务端的 `UserData.PlaybackPositionTicks` 是**按条目**存的 —— 4K / 1080P /
+    // 导演剪辑版共用一个续播点，服务端层面无解。所以多版本条目按版本各记各的本地进度
+    // （播放页退出时按版本写入，键见 [EmbyVersionProgress]），这里读出来覆盖服务端进度。
+    //
+    // null = 不覆盖（单版本条目 / 本地还没按版本记过进度 ⇒ 沿用服务端进度）。
+    var versionResumeSeconds by remember(itemId) { mutableStateOf<Long?>(null) }
+    val playbackStateRepository = koinInject<PlaybackStateRepository>()
+    LaunchedEffect(itemId, selectedMediaSourceId, item, server?.id) {
+      val current = item
+      val currentServer = server
+      versionResumeSeconds =
+        if (current == null || currentServer == null) {
+          null
+        } else {
+          loadVersionResumeSeconds(
+            repository = playbackStateRepository,
+            serverId = currentServer.id,
+            item = current,
+            selectedMediaSourceId = selectedMediaSourceId,
+          )
+        }
+    }
 
     // ── 「标记为不喜欢」──
     // 状态直接读仓库的内存快照（O(1)、零 IO），并订阅全量流 ⇒
@@ -351,6 +378,7 @@ data class EmbyDetailScreen(
               playLaunching = playLaunching,
               selectedMediaSourceId = selectedMediaSourceId,
               onSelectMediaSource = { selectedMediaSourceId = it },
+              versionResumeSeconds = versionResumeSeconds,
               onToggleFavorite = {
                 if (!favoriteBusy) {
                   val wasFavorite = current.UserData?.IsFavorite == true
@@ -513,8 +541,9 @@ data class EmbyDetailScreen(
               // 服务器转码：要先向服务器问一次播放方案（有网络往返），
               // 所以立刻回一个提示，免得点完一两秒里毫无动静、让人以为没反应
               onPlayTranscoded = {
-                val resumeSeconds =
-                  EmbyTicks.ticksToSeconds(current.UserData?.PlaybackPositionTicks ?: 0L)
+                // 与播放键同一套续播口径：多版本条目优先用「该版本自己的」本地进度
+                val resumeSeconds = versionResumeSeconds
+                  ?: EmbyTicks.ticksToSeconds(current.UserData?.PlaybackPositionTicks ?: 0L)
                 Toast.makeText(context, "正在请求服务器转码…", Toast.LENGTH_SHORT).show()
                 scope.launch {
                   viewModel.playTranscoded(currentServer, current, resumeSeconds, mediaSourceId = playSourceId)
@@ -538,10 +567,10 @@ data class EmbyDetailScreen(
                   EmbyPersonScreen(personId = pid, personName = pname, personImageTag = tag),
                 )
               },
-              // 点类型 / 标签 chip：进「按该类型 / 标签找片」的结果页
-              onMetaClick = { keyword, isGenre ->
+              // 点类型 / 标签 / 工作室 chip：进「按该维度找片」的结果页
+              onMetaClick = { keyword, kind, filterId ->
                 backStack.add(
-                  EmbyTagItemsScreen(keyword = keyword, kind = if (isGenre) "genre" else "tag"),
+                  EmbyTagItemsScreen(keyword = keyword, kind = kind, filterId = filterId),
                 )
               },
               moreMenuExpanded = showMoreMenu,
@@ -925,8 +954,13 @@ private fun DetailBody(
   onRefreshMetadata: () -> Unit,
   /** 点演职员头像：进「演员作品」页（personId / 名字 / 头像 tag） */
   onPersonClick: (personId: String, personName: String, imageTag: String?) -> Unit,
-  /** 点类型 / 标签 chip：进「按该类型 / 标签找片」页（keyword / 是否类型） */
-  onMetaClick: (keyword: String, isGenre: Boolean) -> Unit,
+  /**
+   * 点类型 / 标签 / 工作室 chip：进「按该维度找片」的结果页。
+   * @param keyword 显示名（就是 chip 上的字）
+   * @param kind "genre" / "tag" / "studio"
+   * @param filterId 过滤用的 Id（工作室需要；类型 / 标签传空串，按名字过滤）
+   */
+  onMetaClick: (keyword: String, kind: String, filterId: String) -> Unit,
   /** 点简介 chip：跳演员作品页等 —— 这里只用到打开详情页 */
   downloadLabel: String?,
   /** 当前下载任务状态；null = 没有任务。用来决定按钮是「下载 / 暂停 / 继续 / 已完成」 */
@@ -950,11 +984,21 @@ private fun DetailBody(
   selectedMediaSourceId: String? = null,
   /** 多版本媒体：用户在下拉框里选了某个版本。 */
   onSelectMediaSource: (String) -> Unit = {},
+  /**
+   * 多版本媒体：当前版本的**本地**续播秒数（null = 按服务端进度）。
+   *
+   * 服务端进度按条目存、各版本共享，所以多版本条目要按版本各算各的（见 [loadVersionResumeSeconds]）。
+   * 转给 [PlaySection] 决定「继续播放 · hh:mm:ss / 已观看 x%」显示的是哪个进度。
+   */
+  versionResumeSeconds: Long? = null,
   /** 点推荐卡片：打开对应媒体的详情页（itemId / 标题） */
   onRecommendClick: (String, String) -> Unit,
 ) {
   val isFavorite = item.UserData?.IsFavorite == true
   val isPlayed = item.UserData?.Played == true
+  // 多版本媒体：真正生效的版本 Id（单版本媒体为 null）。下面「媒体信息」也要按它取源，
+  // 否则容器 / 文件大小 / 码率 / 音视频轨道会一直显示第一个版本，与选中的版本对不上。
+  val effectiveSourceId = effectiveMediaSourceId(item, selectedMediaSourceId)
 
   // ── 折叠头部：高度**完全由列表滚动位置推导**，没有任何自定义手势 / 嵌套滚动 ──
   //
@@ -999,36 +1043,42 @@ private fun DetailBody(
           playLaunching = playLaunching,
           selectedMediaSourceId = selectedMediaSourceId,
           onSelectMediaSource = onSelectMediaSource,
+          versionResumeSeconds = versionResumeSeconds,
         )
       }
 
-      // ── 类型 / 标签 chip ──
-      // 点一下进「按该类型 / 标签找片」的结果页，和点演职员头像进作品页是同一套交互。
-      // 类型在前、标签在后，同排横向滚动；两者都是 Emby /Items 支持的过滤维度。
-      val genreList = item.Genres
+      // ── 类型 / 标签 / 工作室 ──
+      // 三组都是「点一下进按该维度找片的结果页」的 chip，共用 [MetaChipRow] 排版：
+      // 左边一个分组名，右边横向滚动的一排 chip（分组名固定宽度 ⇒ 三组的 chip 起始边对齐）。
+      //
+      // 类型 / 标签按**名字**过滤（Emby 的 Genres / Tags 参数，实测可用）；
+      // 工作室优先按 **Id** 过滤（`StudioIds`）—— 条目自带的 Studios 就是 NameGuidPair，
+      // 拿得到 Id 就按 Id 走；万一只回了名字，结果页会自动退回按名字的 `Studios` 参数。
+      val genreList = item.Genres.filter { it.isNotBlank() }
       val tagList = item.Tags.filter { it.isNotBlank() }
-      if (genreList.isNotEmpty() || tagList.isNotEmpty()) {
+      val studioList = item.Studios.orEmpty().filter { !it.Name.isNullOrBlank() }
+      if (genreList.isNotEmpty() || tagList.isNotEmpty() || studioList.isNotEmpty()) {
         item {
-          Row(
-            modifier = Modifier
-              .padding(horizontal = 16.dp, vertical = 8.dp)
-              .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            genreList.forEach { genre ->
-              SuggestionChip(
-                onClick = { onMetaClick(genre, true) },
-                label = { Text(genre) },
-                colors = SuggestionChipDefaults.suggestionChipColors(),
-              )
-            }
-            tagList.forEach { tag ->
-              SuggestionChip(
-                onClick = { onMetaClick(tag, false) },
-                label = { Text(tag) },
-                colors = SuggestionChipDefaults.suggestionChipColors(),
-              )
-            }
+          Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            MetaChipRow(
+              label = "类型",
+              chips = genreList,
+              onClick = { onMetaClick(it, "genre", "") },
+            )
+            MetaChipRow(
+              label = "标签",
+              chips = tagList,
+              onClick = { onMetaClick(it, "tag", "") },
+            )
+            MetaChipRow(
+              label = "工作室",
+              chips = studioList.mapNotNull { it.Name },
+              onClick = { name ->
+                // chips 是按名字渲染的，回查 Id 交给 onMetaClick
+                val id = studioList.firstOrNull { it.Name == name }?.Id.orEmpty()
+                onMetaClick(name, "studio", id)
+              },
+            )
           }
         }
       }
@@ -1144,7 +1194,7 @@ private fun DetailBody(
 
       // ── 媒体信息（含完整视频 / 音频编码信息）──
       item {
-        MediaInfoSection(item = item)
+        MediaInfoSection(item = item, selectedMediaSourceId = effectiveSourceId)
       }
     }
 
@@ -1548,8 +1598,18 @@ private fun PlaySection(
   selectedMediaSourceId: String? = null,
   /** 多版本媒体：用户切换了版本。 */
   onSelectMediaSource: (String) -> Unit = {},
+  /**
+   * 多版本媒体：当前版本的本地续播秒数（null = 用服务端进度）。
+   *
+   * Emby 的 `UserData.PlaybackPositionTicks` 按**条目**存、各版本共享，
+   * 所以多版本条目必须让「当前版本自己的进度」盖过它 —— 否则切成 1080P 会从
+   * 4K 看到的位置继续。null（单版本条目）时行为与改动前完全一致。
+   */
+  versionResumeSeconds: Long? = null,
 ) {
-  val positionTicks = item.UserData?.PlaybackPositionTicks ?: 0L
+  val serverPositionTicks = item.UserData?.PlaybackPositionTicks ?: 0L
+  val positionTicks =
+    versionResumeSeconds?.let { EmbyTicks.secondsToTicks(it) } ?: serverPositionTicks
   val runTimeTicks = item.RunTimeTicks ?: 0L
   // 多版本媒体：MediaSources 就是各版本；只有一个（或 Id 缺失）时不算多版本。
   val mediaSources = item.MediaSources.orEmpty().filter { !it.Id.isNullOrBlank() }
@@ -1587,6 +1647,14 @@ private fun PlaySection(
         // 拉起播放器期间：转圈 + 禁点。
         // 单看"转圈"还不够 —— 不挡掉点击的话，用户等得不耐烦会再点，起两个播放页。
         loading = playLaunching,
+        // 有续播进度时，按钮里垫一块「已看多少」的填充带（画法与右边下载按钮一致）。
+        // 出现条件与按钮文案严格对齐（都用 hasResume）—— 看到填充 ⟺ 看到「继续播放」，
+        // 这样不会出现「按钮写着 播放、里面却填了一半」这种自相矛盾的画面。
+        progressFraction = if (hasResume && runTimeTicks > 0) {
+          (positionTicks.toFloat() / runTimeTicks.toFloat()).coerceIn(0f, 1f)
+        } else {
+          null
+        },
         modifier = Modifier
           .weight(1f)
           .height(56.dp),
@@ -1756,6 +1824,81 @@ private fun effectiveMediaSourceId(item: EmbyItem?, selected: String?): String? 
 }
 
 /**
+ * 多版本条目「当前选中版本」的本地续播秒数；返回 null 表示不要覆盖服务端进度。
+ *
+ * 规则（三个分支，逐一对应下面三种真实情形）：
+ *  1. 这个版本本地有记录 → 用它（**各版本互不干扰**，这就是本功能的全部意义）；
+ *  2. 没记录，但**该条目下任一版本**有记录 → 这条版本本地确实没播过 ⇒ 0（从头）；
+ *  3. 该条目一条本地记录都没有 → 退回服务端进度（可能是在别的 Emby 客户端看的，
+ *     那套进度我们这边无从得知，只能照用）。
+ *
+ * 单版本条目直接返回 null —— 走服务端进度，行为与改动前完全一致。
+ */
+private suspend fun loadVersionResumeSeconds(
+  repository: PlaybackStateRepository,
+  serverId: Long,
+  item: EmbyItem,
+  selectedMediaSourceId: String?,
+): Long? {
+  if (serverId <= 0) return null
+  val itemId = item.Id ?: return null
+  val sourceId = effectiveMediaSourceId(item, selectedMediaSourceId) ?: return null
+
+  repository.getVideoDataByTitle(EmbyVersionProgress.key(serverId, itemId, sourceId))?.let {
+    return it.lastPosition.toLong()
+  }
+  val anyVersion =
+    repository.getVideoDataByTitlePrefix(EmbyVersionProgress.itemPrefix(serverId, itemId))
+  return if (anyVersion != null) 0L else null
+}
+
+/**
+ * 详情页的一行「分组元数据」：左边分组名，右边一排可点的 chip，超出屏宽横向滚动。
+ *
+ * ⚠️ 分组名用**固定宽度**（[META_LABEL_WIDTH]）而不是自适应：三行名字字数不同
+ * （类型 / 标签 / 工作室），不固定的话每行 chip 的起始边都不一样，整块看着就是歪的。
+ *
+ * [chips] 为空时整行不渲染 —— 免得出现「只有分组名、右边空着」的噪音行。
+ */
+@Composable
+private fun MetaChipRow(
+  label: String,
+  chips: List<String>,
+  onClick: (String) -> Unit,
+) {
+  if (chips.isEmpty()) return
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.titleSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 1,
+      modifier = Modifier.width(META_LABEL_WIDTH),
+    )
+    Row(
+      modifier = Modifier.horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      chips.forEach { value ->
+        SuggestionChip(
+          onClick = { onClick(value) },
+          label = { Text(value) },
+          colors = SuggestionChipDefaults.suggestionChipColors(),
+        )
+      }
+    }
+  }
+}
+
+/** 分组名的固定宽度：容得下最长的一个（「工作室」三个字，titleSmall 下约 42dp）。 */
+private val META_LABEL_WIDTH = 64.dp
+
+/**
  * 多版本媒体的版本下拉框：当前版本胶囊 + 下拉菜单。
  *
  * 与收藏页的类型切换器同一套写法（小 Surface + DropdownMenu）—— Compose 下 M3
@@ -1868,6 +2011,14 @@ private fun PlayButton(
    * 结果是起了两个播放页（而且后一个会把前一个顶掉，播放进度也乱）。
    */
   loading: Boolean = false,
+  /**
+   * 已观看进度（0..1）；null = 不画。
+   *
+   * 画法**照抄同一行的下载按钮**：自下而上垫一块色带，fraction=1 时正好铺满整枚按钮。
+   * 两者用同一套「填充 = 进度」的语言，用户不需要再学一遍。
+   * 填充层声明在内容层**之前** ⇒ 永远垫在图标 / 文字底下，不会糊住字。
+   */
+  progressFraction: Float? = null,
   modifier: Modifier = Modifier,
 ) {
   Box(
@@ -1882,6 +2033,23 @@ private fun PlayButton(
         ),
     contentAlignment = Alignment.Center,
   ) {
+    val animatedPlayFill by animateFloatAsState(
+      targetValue = progressFraction ?: 0f,
+      animationSpec = tween(durationMillis = 300),
+      label = "playProgressFill",
+    )
+    if (!loading && progressFraction != null && animatedPlayFill > 0f) {
+      Box(
+        modifier =
+          Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .fillMaxHeight(animatedPlayFill.coerceIn(0f, 1f))
+            // 底色本身就是 primary，所以这里反过来用 **onPrimary 的浅色叠加**：
+            // 下载按钮是「primary 叠在浅底上」，这里是「浅色叠在 primary 上」，同一个思路。
+            .background(MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.22f)),
+      )
+    }
     Row(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.Center,
@@ -1961,8 +2129,12 @@ private sealed interface MediaInfoEntry {
 }
 
 @Composable
-private fun MediaInfoSection(item: EmbyItem) {
-  val entries = remember(item) { buildInfoEntries(item) }
+private fun MediaInfoSection(
+  item: EmbyItem,
+  /** 当前选中的版本 Id；多版本媒体下「容器 / 文件大小 / 码率 / 音视频轨道」都跟着它走 */
+  selectedMediaSourceId: String? = null,
+) {
+  val entries = remember(item, selectedMediaSourceId) { buildInfoEntries(item, selectedMediaSourceId) }
 
   Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2038,7 +2210,10 @@ private fun MediaInfoSection(item: EmbyItem) {
  * 顺序：基本信息（含添加时间 / 文件路径）→ 每个视频轨道 → 每个音频轨道 → 字幕轨道。
  * 值为空的项直接跳过，不会出现「未知 / N/A」这种噪音行。
  */
-private fun buildInfoEntries(item: EmbyItem): List<MediaInfoEntry> {
+private fun buildInfoEntries(
+  item: EmbyItem,
+  selectedMediaSourceId: String? = null,
+): List<MediaInfoEntry> {
   val out = mutableListOf<MediaInfoEntry>()
 
   fun add(label: String, value: String?) {
@@ -2050,8 +2225,18 @@ private fun buildInfoEntries(item: EmbyItem): List<MediaInfoEntry> {
   }
 
   // ── 基本信息 ──
-  val source = item.MediaSources?.firstOrNull()
+  // 多版本媒体：取「当前选中版本」对应的源，而不是永远拿第一条。
+  // 版本名 / 容器 / 文件大小 / 总码率 / 音视频轨道都随切换而变；选中 Id 失效时回退第一条，
+  // 与播放侧 effectiveMediaSourceId 的兜底规则保持一致。
+  val allSources = item.MediaSources.orEmpty()
+  val source =
+    effectiveMediaSourceId(item, selectedMediaSourceId)
+      ?.let { id -> allSources.firstOrNull { it.Id == id } }
+      ?: allSources.firstOrNull()
 
+  if (allSources.count { !it.Id.isNullOrBlank() } > 1 && source != null) {
+    add("版本", mediaSourceLabel(source))
+  }
   add("添加时间", formatIsoDate(item.DateCreated))
   add("首播日期", formatIsoDate(item.PremiereDate))
   add("时长", item.RunTimeTicks?.takeIf { it > 0 }?.let { formatDurationFull(it) })

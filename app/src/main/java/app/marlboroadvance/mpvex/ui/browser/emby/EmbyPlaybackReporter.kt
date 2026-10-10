@@ -209,12 +209,21 @@ object EmbyPlaybackReporter {
    * 播放地址形如 `/emby/Videos/{itemId}/stream?static=true&api_key=...`
    */
   private fun readCurrentItemId(): String? {
-    val path = PlayerLib.getPropertyString("path") ?: return null
-    val match = ITEM_ID_REGEX.find(path) ?: return null
-    val id = match.groupValues.getOrNull(1) ?: return null
     // 只认可本次播放列表里的 ID，避免 mpv 自动连播到无关文件时误报
-    return id.takeIf { itemIds.contains(it) }
+    return parseItemIdFromPath(PlayerLib.getPropertyString("path"))
+      ?.takeIf { itemIds.contains(it) }
   }
+
+  /**
+   * 从 mpv 当前播放路径里解析 Emby 媒体 ID；不是 Emby 流（或没解析出）返回 null。
+   *
+   * `public` 是给播放页用的：它要按「正在播的这一条」构造按版本的进度键，
+   * 而**不能用 `playlistIndex` 去索引 intent 里的 itemIds** —— 用户拖动过播放队列后
+   * 下标就与 intent 的原始顺序错位了。从路径反查 Id 与队列顺序无关，天然免疫这种错位。
+   */
+  fun parseItemIdFromPath(path: String?): String? =
+    path?.let { ITEM_ID_REGEX.find(it)?.groupValues?.getOrNull(1) }
+      ?.takeIf { it.isNotBlank() }
 
   private val ITEM_ID_REGEX = Regex("/Videos/([^/?]+)/stream")
 
@@ -232,6 +241,15 @@ object EmbyPlaybackReporter {
    * 时挑错就搜到别的版本的字幕，所以必须由启动侧显式传。
    */
   const val EXTRA_MEDIA_SOURCE_ID = "emby_media_source_id"
+
+  /**
+   * 与 [EXTRA_ITEM_IDS] **同序同长**的多版本名列表（取不到的用空串占位）。
+   *
+   * 播放页顶栏会在片名后面追加当前这一条的版本名（如「片名 · 1080P HEVC」）——
+   * 用户在多版本条目里选了哪个版本，播起来得能看见，否则「切了版本」没有任何反馈。
+   * 用列表而不是单值，理由同 [EXTRA_MEDIA_SOURCE_ID]：连播切集后版本会变。
+   */
+  const val EXTRA_MEDIA_SOURCE_NAMES = "emby_media_source_names"
 
   /**
    * 挂在 PlayerActivity 上的生命周期观察者。
@@ -263,6 +281,11 @@ internal fun Intent.putEmbyPlaybackExtras(
   server: EmbyServer,
   itemIds: List<String>,
   mediaSourceIds: List<String> = emptyList(),
+  /**
+   * 与 [itemIds] **同序同长**的版本显示名（空串 = 这一条没有多版本 / 没选版本）。
+   * 播放页顶栏据此在片名后追加「· <版本名>」。
+   */
+  mediaSourceNames: List<String> = emptyList(),
 ) {
   putExtra(EmbyPlaybackReporter.EXTRA_SERVER_ID, server.id)
   putStringArrayListExtra(EmbyPlaybackReporter.EXTRA_ITEM_IDS, ArrayList(itemIds))
@@ -270,6 +293,12 @@ internal fun Intent.putEmbyPlaybackExtras(
     putStringArrayListExtra(
       EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID,
       ArrayList(mediaSourceIds),
+    )
+  }
+  if (mediaSourceNames.isNotEmpty()) {
+    putStringArrayListExtra(
+      EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_NAMES,
+      ArrayList(mediaSourceNames),
     )
   }
 }

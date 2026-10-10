@@ -46,21 +46,25 @@ import kotlinx.serialization.Serializable
 private const val TAG_PAGE_SIZE = 100
 
 /**
- * 「按类型 / 标签找片」结果页。
+ * 「按类型 / 标签 / 工作室找片」结果页。
  *
- * 详情页顶部的类型 chip（以及标签 chip）点一下进来：
- * 和点头像进「演员作品页」是同一套交互 —— 只是过滤维度从 PersonIds 换成 Genres / Tags。
+ * 详情页的类型 / 标签 / 工作室 chip 点一下进来：
+ * 和点头像进「演员作品页」是同一套交互 —— 只是过滤维度不同
+ * （类型 → Genres、标签 → Tags、工作室 → StudioIds）。
  *
  * 走 Emby 的 /Items 过滤（不传 ParentId，跨全部媒体库），只保留可播放类型，
  * 结果按名称升序，点卡片照常进详情页。
  *
- * @param keyword 类型名或标签名（就是 chip 上的文字）
- * @param kind    "genre" = 类型，其它值按标签处理
+ * @param keyword  显示用的名字（类型名 / 标签名 / 工作室名，就是 chip 上的文字）
+ * @param kind     "genre" = 类型，"studio" = 工作室，其它值按标签处理
+ * @param filterId 过滤用的 Id。目前只有工作室用得上（Emby 的工作室过滤首选 `StudioIds`）；
+ *   留空时退回用 [keyword] 按名字过滤（Emby 的 `Studios` 参数），两条路都是官方支持的。
  */
 @Serializable
 data class EmbyTagItemsScreen(
   val keyword: String,
   val kind: String = "genre",
+  val filterId: String = "",
 ) : Screen {
   @OptIn(ExperimentalMaterial3Api::class)
   @Composable
@@ -73,8 +77,11 @@ data class EmbyTagItemsScreen(
     val server by viewModel.currentServer.collectAsState()
     val scope = rememberCoroutineScope()
 
-    val isGenre = kind == "genre"
-    val kindLabel = if (isGenre) "类型" else "标签"
+    val kindLabel = when (kind) {
+      "genre" -> "类型"
+      "studio" -> "工作室"
+      else -> "标签"
+    }
 
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -84,13 +91,24 @@ data class EmbyTagItemsScreen(
     val gridState = rememberLazyGridState()
     val gridSource = gridState.pagingSource()
 
-    /** 本页的加载器：类型与标签只差一个 ViewModel 方法 */
+    /** 本页的加载器：三个维度只差一个 ViewModel 方法 */
     val loader: suspend (Int, Int) -> PagedResult<EmbyItem> = pageLoader@{ start, limit ->
       val target = server ?: return@pageLoader PagedResult(emptyList(), null, limit)
-      val result = if (isGenre) {
-        viewModel.loadGenreItems(server = target, genre = keyword, startIndex = start, limit = limit)
-      } else {
-        viewModel.loadTagItems(server = target, tag = keyword, startIndex = start, limit = limit)
+      val result = when (kind) {
+        "genre" ->
+          viewModel.loadGenreItems(server = target, genre = keyword, startIndex = start, limit = limit)
+
+        "studio" ->
+          viewModel.loadStudioItems(
+            server = target,
+            studioId = filterId,
+            studioName = keyword,
+            startIndex = start,
+            limit = limit,
+          )
+
+        else ->
+          viewModel.loadTagItems(server = target, tag = keyword, startIndex = start, limit = limit)
       }
       PagedResult(
         // 网格 key = Id ?: Name：按同一口径去重，防止服务端重复条目把网格撞崩
@@ -111,7 +129,7 @@ data class EmbyTagItemsScreen(
       else if (page.items.isEmpty()) error = "没有找到该${kindLabel}下的媒体"
     }
 
-    LaunchedEffect(keyword, kind, server) { load() }
+    LaunchedEffect(keyword, kind, filterId, server) { load() }
 
     // 触底自动续拉
     page.AutoLoadMore(source = gridSource, enabled = server != null, loader = loader)

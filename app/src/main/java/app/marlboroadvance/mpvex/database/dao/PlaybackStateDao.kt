@@ -13,6 +13,16 @@ interface PlaybackStateDao {
   @Query("SELECT * FROM PlaybackStateEntity WHERE mediaTitle = :mediaTitle LIMIT 1")
   suspend fun getVideoDataByTitle(mediaTitle: String): PlaybackStateEntity?
 
+  /**
+   * 按前缀取一条 —— 只服务于「多版本媒体按版本记的进度」。
+   *
+   * 详情页要判断某个条目是否**已经有任一版本**的本地进度记录（有 ⇒ 没播过的版本显示 0；
+   * 没有 ⇒ 退回服务端进度）。前缀形状见 [app.marlboroadvance.mpvex.domain.emby.EmbyVersionProgress]，
+   * 其中不含 `%` / `_`，所以直接拼 `%` 不会有通配符歧义。
+   */
+  @Query("SELECT * FROM PlaybackStateEntity WHERE mediaTitle LIKE :prefix || '%' LIMIT 1")
+  suspend fun getFirstByTitlePrefix(prefix: String): PlaybackStateEntity?
+
   @Query("DELETE FROM PlaybackStateEntity")
   suspend fun clearAllPlaybackStates()
 

@@ -243,6 +243,23 @@ open class PlayerActivity :
   private var singleSeriesKey: String? = null
 
   /**
+   * 与 [playlist] 同序的「多版本名」（空串 = 这一条没有多版本 / 没选版本）。
+   *
+   * 只在 Emby 多版本条目上才有值（用户在下拉框里选了哪个版本），顶栏会把它追加在片名后面。
+   * 与 `playlistTitles` / `playlistSeriesKeys` 一样是**平行数组** —— 队列换位 / 删除时必须同步。
+   */
+  private var playlistMediaSourceNames: List<String> = emptyList()
+
+  /**
+   * Emby **ItemId → 用户为该条选定的媒体源 Id**（多版本条目才有；单版本 / 非 Emby 为空表）。
+   *
+   * 为什么是 Map 而不是又一个平行数组：它的读取方是 [saveVideoPlaybackState]，
+   * 靠「从 mpv 路径反查出的 ItemId」来查（队列换位后下标会与 intent 的原始顺序错位，
+   * 用下标索引必错）。Map 按 Id 查，与队列顺序完全无关，换位 / 删除都不需要同步。
+   */
+  private var embyMediaSourceByItemId: Map<String, String> = emptyMap()
+
+  /**
    * 视频预加载：对下一集的流地址做 HTTP Range 预取的协程。
    *
    * 目标是在当前视频起播 [PlayerPreferences.PRELOAD_TRIGGER_SECONDS] 秒后，
@@ -512,6 +529,11 @@ open class PlayerActivity :
     // 「记住每部剧的播放设置」的键，与 playlist 下标一一对应
     playlistSeriesKeys = intent.getStringArrayListExtra("playlist_series_keys") ?: emptyList()
     singleSeriesKey = intent.getStringExtra("emby_series_key")
+    // Emby 多版本名（与 playlist 下标一一对应，空串占位）——顶栏用它显示「正在播的是哪个版本」
+    playlistMediaSourceNames =
+      intent.getStringArrayListExtra("emby_media_source_names") ?: emptyList()
+    // Emby 多版本：ItemId → 选定的媒体源 Id（按版本记进度的键靠它拼，见 EmbyVersionProgress）
+    embyMediaSourceByItemId = buildEmbyMediaSourceMap(intent)
     viewModel.seriesKey = currentSeriesKey()
 
     // If playlist is empty but playlist_id is provided, load asynchronously from database
@@ -1547,6 +1569,11 @@ open class PlayerActivity :
       k.add(to, k.removeAt(from))
       playlistSeriesKeys = k
     }
+    if (playlistMediaSourceNames.size == movedItems.size) {
+      val n = playlistMediaSourceNames.toMutableList()
+      n.add(to, n.removeAt(from))
+      playlistMediaSourceNames = n
+    }
 
     playlistIndex = remap(playlistIndex)
     // 随机播放序列存的是下标，换位后必须按同一映射重算，否则「下一条」会重复或跳条
@@ -1578,6 +1605,9 @@ open class PlayerActivity :
     }
     if (playlistSeriesKeys.size == items.size + 1) {
       playlistSeriesKeys = playlistSeriesKeys.toMutableList().also { it.removeAt(index) }
+    }
+    if (playlistMediaSourceNames.size == items.size + 1) {
+      playlistMediaSourceNames = playlistMediaSourceNames.toMutableList().also { it.removeAt(index) }
     }
     if (shuffledIndices.isNotEmpty()) {
       // 被删的下标从随机序列里摘掉，其后所有下标整体前移一位
@@ -1997,6 +2027,63 @@ private fun cancelAutoplayCountdown() {
    */
   private fun currentSeriesKey(): String? =
     playlistSeriesKeys.getOrNull(playlistIndex) ?: singleSeriesKey
+
+  /**
+   * 当前这一条对应的「多版本名」（如 "1080P HEVC"）；不是多版本条目就返回 null。
+   *
+   * 播放页顶栏把它追加在片名后面：「片名 · 1080P HEVC」。
+   * 读 [playlistIndex]（Compose 状态）⇒ 切集后顶栏会自动跟着换。
+   */
+  fun currentMediaSourceName(): String? =
+    playlistMediaSourceNames.getOrNull(playlistIndex)?.takeIf { it.isNotBlank() }
+
+  /**
+   * 从 intent 里取出「ItemId → 媒体源 Id」映射（多版本条目才有值）。
+   *
+   * intent 里 `emby_item_ids` 与 `emby_media_source_id` 是**同序同长**的两串，
+   * 这里把它们 zip 成 Map；空串（该条没有多版本）直接丢掉，不入表。
+   */
+  private fun buildEmbyMediaSourceMap(intent: Intent): Map<String, String> {
+    val ids =
+      intent.getStringArrayListExtra(
+        app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_ITEM_IDS,
+      ).orEmpty()
+    val sources =
+      intent.getStringArrayListExtra(
+        app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID,
+      ).orEmpty()
+    if (ids.isEmpty() || sources.isEmpty()) return emptyMap()
+    return buildMap<String, String> {
+      ids.forEachIndexed { index, id ->
+        val source = sources.getOrNull(index)?.takeIf { it.isNotBlank() } ?: return@forEachIndexed
+        if (id.isNotBlank()) put(id, source)
+      }
+    }
+  }
+
+  /**
+   * 当前播放条目的「按版本进度键」；非 Emby / 单版本 / 该条没选版本时返回 null。
+   *
+   * 键形状与详情页算的完全一致（同一份 [EmbyVersionProgress]），两个页面各算各的、
+   * 不需要互通。详见该对象的注释：Emby 服务端的进度是按条目共享的，多版本条目只能本地分开记。
+   *
+   * ⚠️ ItemId 从 **mpv 当前路径**反查，不用 `playlistIndex` 索引 intent：
+   * 用户拖动过播放队列后下标就与 intent 的原始顺序错位了。
+   */
+  private fun currentEmbyVersionProgressKey(): String? {
+    val serverId =
+      intent.getLongExtra(
+        app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_SERVER_ID,
+        -1L,
+      )
+    if (serverId <= 0) return null
+    val itemId =
+      app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
+        .parseItemIdFromPath(PlayerLib.getPropertyString("path"))
+        ?: return null
+    val sourceId = embyMediaSourceByItemId[itemId]?.takeIf { it.isNotBlank() } ?: return null
+    return app.marlboroadvance.mpvex.domain.emby.EmbyVersionProgress.key(serverId, itemId, sourceId)
+  }
 
   /**
    * 切集后把记忆键同步给 ViewModel —— 用户在这一集里改的速度 / 音轨要记到「这一部剧」名下。
@@ -2705,6 +2792,10 @@ private fun cancelAutoplayCountdown() {
     val externalSubs = viewModel.externalSubtitles.joinToString("|")
     val watchedThreshold = browserPreferences.watchedThreshold.get()
     val saveOnQuit = playerPreferences.savePositionOnQuit.get()
+    // 多版本媒体：这一条属于哪个「版本」？键由 (服务器, 条目, 媒体源) 拼出，详情页用同一个键读数。
+    // ⚠️ 必须在**主线程、mpv 还活着**的时候读（要读 mpv 当前路径），与上面那批属性一起取。
+    // 只有「记住播放位置」开着才写：按版本进度是本地续播的一部分，开关关掉就该整体不生效。
+    val embyVersionKey = if (saveOnQuit) currentEmbyVersionProgressKey() else null
 
     val saveBlock: suspend () -> Unit = {
       runCatching {
@@ -2738,7 +2829,7 @@ private fun cancelAutoplayCountdown() {
           isCurrentlyWatched || isFinished || wasWatchedThisSession || (oldState?.hasBeenWatched == true)
         }
 
-        playbackStateRepository.upsert(
+        val entity =
           PlaybackStateEntity(
             mediaTitle = mediaIdentifier,
             lastPosition = lastPosition,
@@ -2753,8 +2844,12 @@ private fun cancelAutoplayCountdown() {
             timeRemaining = timeRemaining,
             externalSubtitles = externalSubs,
             hasBeenWatched = hasBeenWatched,
-          ),
-        )
+          )
+        playbackStateRepository.upsert(entity)
+        // 多版本媒体：再按「版本」记一份。
+        // Emby 服务端的进度是按**条目**存的 —— 4K 与 1080P 共用一个续播点，服务端层面无解。
+        // 所以在本地多记一条（键见 EmbyVersionProgress），详情页就能让每个版本各算各的进度。
+        embyVersionKey?.let { playbackStateRepository.upsert(entity.copy(mediaTitle = it)) }
         Log.d(TAG, "Playback state saved successfully: pos=$lastPosition, duration=$duration, remaining=$timeRemaining, watched=$hasBeenWatched")
       }.onFailure { e ->
         Log.e(TAG, "Error saving playback state", e)
@@ -3197,6 +3292,11 @@ private fun cancelAutoplayCountdown() {
       // 记忆键同理：换了队列就换键，否则会把上一部剧的速度套到新剧上
       playlistSeriesKeys = intent.getStringArrayListExtra("playlist_series_keys") ?: emptyList()
       singleSeriesKey = intent.getStringExtra("emby_series_key")
+      // 多版本名同理：换了队列就换，否则会显示上一批的版本名
+      playlistMediaSourceNames =
+        intent.getStringArrayListExtra("emby_media_source_names") ?: emptyList()
+      // 多版本源映射同理：换了队列就重建
+      embyMediaSourceByItemId = buildEmbyMediaSourceMap(intent)
       viewModel.seriesKey = currentSeriesKey()
       // 换了播放队列，允许对新的下一集重新预加载
       preloadRequestedForIndex = -1

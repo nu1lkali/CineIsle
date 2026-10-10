@@ -489,12 +489,16 @@ fun PlayerControls(
         val rawMediaTitle by PlayerLib.propString["media-title"].collectAsState()
         val mediaTitle by remember(rawMediaTitle, activity) {
           derivedStateOf {
-            // mpv 鎷夸笉鍒扮墖鍚嶆椂浼氭妸鏁存潯鎾斁鐩撮摼褰?media-title 鍥炰紶锛圗mby 鐨勯摼閲屽甫
-            // api_key锛夛紝椤舵爮涓嶈兘鐓у師鏍锋樉绀?鈥斺€?鍙**鏄剧ず**鐨勯偅浠芥墦鐮侊紝鎾斁鐢ㄧ殑鍦板潃涓嶅彈褰卞搷銆?
+            // mpv 拿不到片名时会把整条播放直链当 media-title 回传（Emby 的链里带 api_key），
+            // 顶栏不能原样显示 —— 只对**显示**的那份打码，播放用的地址不受影响。
             val raw =
               rawMediaTitle?.takeIf { it.isNotBlank() }
                 ?: activity.getTitleForControls()
-            app.marlboroadvance.mpvex.ui.player.redactUrlSecrets(raw).orEmpty()
+            val base = app.marlboroadvance.mpvex.ui.player.redactUrlSecrets(raw).orEmpty()
+            // 多版本媒体：把「正在播的是哪个版本」追加在片名后面（如「片名 · 1080P HEVC」）。
+            // currentMediaSourceName() 内部读 activity.playlistIndex（Compose 状态）
+            // ⇒ 连播切集后这里会自动重算，不会挂着上一集的版本名。
+            activity.currentMediaSourceName()?.let { "$base · $it" } ?: base
           }
         }
 

@@ -826,6 +826,11 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
      * null = 不指定，由服务端挑默认版本（单版本媒体照旧走这条路）。
      */
     mediaSourceId: String? = null,
+    /**
+     * [mediaSourceId] 对应的**显示名**（与详情页下拉框里显示的一模一样）。
+     * 由 UI 传进来而不是在这里重算 —— 保证「选的」和「播的时候顶栏显示的」是同一个标签。
+     */
+    mediaSourceLabel: String? = null,
   ) {
     val itemId = item.Id ?: return
     val engine = resolveEngine(reverseEngine)
@@ -855,6 +860,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         engine = engine,
         directUrls = directUrls,
         firstMediaSourceId = mediaSourceId,
+        firstMediaSourceName = mediaSourceLabel,
       )
     } else {
       // 单片播放。
@@ -891,6 +897,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         engine = engine,
         overrideUrl = isoUrl ?: direct,
         mediaSourceId = mediaSourceId,
+        mediaSourceLabel = mediaSourceLabel,
       )
     }
 
@@ -929,6 +936,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     reverseEngine: Boolean = false,
     /** 多版本媒体要转码的那个版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
     mediaSourceId: String? = null,
+    /** 多版本媒体：版本显示名（播放页顶栏会追加在片名后面） */
+    mediaSourceLabel: String? = null,
   ): Result<Unit> {
     val itemId = item.Id ?: return Result.failure(IllegalArgumentException("缺少媒体 Id"))
     return runCatching {
@@ -946,6 +955,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         engine = resolveEngine(reverseEngine),
         overrideUrl = url,
         mediaSourceId = mediaSourceId,
+        mediaSourceLabel = mediaSourceLabel,
       )
     }
   }
@@ -1184,6 +1194,8 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     overrideUrl: String? = null,
     /** 多版本媒体：本次播放的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
     mediaSourceId: String? = null,
+    /** 多版本媒体：本次播放的版本显示名（播放页顶栏会追加在片名后面） */
+    mediaSourceLabel: String? = null,
   ) {
     val itemId = item.Id ?: return
     val url = overrideUrl
@@ -1202,11 +1214,14 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
         // 的位置套回 time-pos，「从头播放」就变成了「继续播放」。
         putExtra("play_from_start", true)
       }
-      // 供播放页把进度回传给 Emby 服务器；带上版本 Id，播放页的在线字幕搜索才找对版本
+      // 供播放页把进度回传给 Emby 服务器；带上版本 Id / 版本名 ——
+      // 前者让在线字幕搜索找对版本，后者让播放页顶栏显示「正在播的是哪个版本」
       putEmbyPlaybackExtras(
         server = server,
         itemIds = listOf(itemId),
         mediaSourceIds = mediaSourceId?.let { listOf(it) } ?: emptyList(),
+        mediaSourceNames = mediaSourceLabel?.takeIf { it.isNotBlank() }?.let { listOf(it) }
+          ?: emptyList(),
       )
       // 「记忆播放设置」的键：剧集用所属剧的 Id（整季共用一份速度 / 音轨），
       // 电影没有 SeriesId，就用它自己的 Id。
@@ -1274,6 +1289,8 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
      * 只作用于首条，后面自动连播的条目各自用默认版本 —— 用户只为当前这条选了版本。
      */
     firstMediaSourceId: String? = null,
+    /** [firstMediaSourceId] 对应的显示名；播放页顶栏据此显示「正在播的是哪个版本」。 */
+    firstMediaSourceName: String? = null,
   ) {
     val uris = ArrayList<android.net.Uri>()
     val ids = ArrayList<String>()
@@ -1286,6 +1303,9 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     // 与上面四条同序的媒体源 Id，供播放页的「在线字幕搜索」用。
     // 取不到就填空串占位 —— 播放页会跳过空串（那时在线搜索按钮自动禁用）。
     val mediaSourceIds = ArrayList<String>()
+    // 与上面同序的版本显示名，供播放页顶栏显示「正在播的是哪个版本」。
+    // 只有「用户点播的那一条」才会有值（用户只为这一条选了版本），其余一律空串占位。
+    val mediaSourceNames = ArrayList<String>()
     val firstNameId = items.firstOrNull()?.Id
     items.forEach { item ->
       val id = item.Id ?: return@forEach
@@ -1305,6 +1325,9 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       titles.add(displayTitle(item))
       seriesKeys.add(item.SeriesId ?: id)
       mediaSourceIds.add(sourceId ?: "")
+      mediaSourceNames.add(
+        if (id == firstNameId) firstMediaSourceName.orEmpty() else "",
+      )
     }
     if (uris.isEmpty()) return
 
@@ -1332,7 +1355,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       putStringArrayListExtra("playlist_series_keys", seriesKeys)
       putExtra("playlist_index", 0)
       // 播放列表的 ID 顺序与 uris 一致，切集时据此把"正在播放"同步给服务器
-      putEmbyPlaybackExtras(server, ids, mediaSourceIds)
+      putEmbyPlaybackExtras(server, ids, mediaSourceIds, mediaSourceNames)
       putEngine(engine)
       // 列表里只要有用预解析直链换掉的条目，就得同步请求头（理由见 [putStreamHeaders]）
       if (directUrls.isNotEmpty()) putStreamHeaders(server)
@@ -1992,11 +2015,46 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     limit: Int = 120,
   ): EmbyItemsPage = loadItemsByFacet(server, tags = listOf(tag), startIndex = startIndex, limit = limit)
 
-  /** [loadGenreItems] / [loadTagItems] 的公共实现：只差 Genres / Tags 两个参数。 */
+  /**
+   * 按「工作室」查作品。
+   *
+   * ⚠️ **优先用 Id**（`StudioIds`）：Emby 的 `BaseItemsRequest` 里它是官方过滤参数，
+   * 且条目自带的 `Studios` 就是 `NameGuidPair`（有 Id），拿得到就不必按名字碰运气。
+   * 只有 Id 缺失（少数服务端可能只回名字）时才退回按名字的 `Studios` 参数 ——
+   * 它同样是官方参数（和 `Genres` / `Tags` 一样用 `|` 分隔），是个正经兜底。
+   *
+   * 两者都空时直接返回空页：传空值给服务端等于「不过滤」，结果页会列出一整库的片子，
+   * 比空列表更误导用户。
+   */
+  suspend fun loadStudioItems(
+    server: EmbyServer,
+    studioId: String,
+    studioName: String = "",
+    startIndex: Int = 0,
+    limit: Int = 120,
+  ): EmbyItemsPage {
+    val id = studioId.takeIf { it.isNotBlank() }
+    val name = studioName.takeIf { it.isNotBlank() }
+    if (id == null && name == null) return EmbyItemsPage(emptyList(), 0)
+    return loadItemsByFacet(
+      server = server,
+      studioIds = id?.let { listOf(it) },
+      studios = if (id == null) name?.let { listOf(it) } else null,
+      startIndex = startIndex,
+      limit = limit,
+    )
+  }
+
+  /**
+   * [loadGenreItems] / [loadTagItems] / [loadStudioItems] 的公共实现：
+   * 只差 Genres / Tags / StudioIds / Studios 这几个过滤参数。
+   */
   private suspend fun loadItemsByFacet(
     server: EmbyServer,
     genres: List<String>? = null,
     tags: List<String>? = null,
+    studioIds: List<String>? = null,
+    studios: List<String>? = null,
     startIndex: Int = 0,
     limit: Int = 120,
   ): EmbyItemsPage = withContext(Dispatchers.IO) {
@@ -2005,6 +2063,8 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
         server = server,
         genres = genres,
         tags = tags,
+        studioIds = studioIds,
+        studios = studios,
         includeItemTypes = listOf("Movie", "Series", "Episode", "Video", "MusicVideo"),
         sortBy = "SortName",
         sortOrder = "Ascending",
@@ -2019,7 +2079,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       onFailure = { e ->
         android.util.Log.w(
           "EmbyViewModel",
-          "按 Genres/Tags 取作品失败 genres=$genres tags=$tags",
+          "按 Genres/Tags/Studios 取作品失败 genres=$genres tags=$tags studioIds=$studioIds studios=$studios",
           e,
         )
         EmbyItemsPage(emptyList(), 0)

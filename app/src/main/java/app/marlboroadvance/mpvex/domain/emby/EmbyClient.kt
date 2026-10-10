@@ -391,6 +391,13 @@ object EmbyClient {
     /** 工作室（出品方）Id 列表，多选取并集 */
     studioIds: List<String>? = null,
     /**
+     * 工作室**名字**列表（`|` 分隔），多选取并集。
+     *
+     * 只在拿不到工作室 Id 时用 —— Id 那条（[studioIds]）更准。Emby 的 REST 文档里
+     * `Studios` 与 `StudioIds` 都是官方过滤参数，所以这是个正经的兜底，不是硬凑。
+     */
+    studios: List<String>? = null,
+    /**
      * 覆盖默认的 [ITEM_FIELDS]。
      *
      * 统计类请求（如数每个演员有多少部作品）只需要 `People`，用这个参数把
@@ -421,6 +428,7 @@ object EmbyClient {
     is3D?.let { q["Is3D"] = it.toString() }
     hasSubtitles?.let { q["HasSubtitles"] = it.toString() }
     studioIds?.takeIf { it.isNotEmpty() }?.let { q["StudioIds"] = it.joinToString(",") }
+    studios?.takeIf { it.isNotEmpty() }?.let { q["Studios"] = it.joinToString("|") }
     personIds?.takeIf { it.isNotEmpty() }?.let { q["PersonIds"] = it.joinToString(",") }
     years?.takeIf { it.isNotEmpty() }?.let { q["Years"] = it.joinToString(",") }
     // Genres / Tags / OfficialRatings 都是「|」分隔，只有 Years 是「,」分隔
