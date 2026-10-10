@@ -321,6 +321,13 @@ data class EmbyDetailScreen(
           // 多版本媒体：真正要播放的版本 Id。只有存在多个版本时才非空 ——
           // 单版本媒体一律 null，播放链路与改动前完全一致。
           val playSourceId = effectiveMediaSourceId(current, selectedMediaSourceId)
+          // 版本显示名（与下拉框里显示的**一模一样**）——播放页顶栏据此显示「正在播的是哪个版本」。
+          // 单版本条目为 null：那时片名后面不该多出一截。
+          // ⚠️ 这个名字必须由 UI 传下去，不能让播放页自己重算：两边算出不同标签就会出现
+          //   「下拉里写着 1080P、播放页顶栏写着别的」。
+          val playSourceLabel = playSourceId
+            ?.let { id -> current.MediaSources.orEmpty().firstOrNull { it.Id == id } }
+            ?.let { mediaSourceLabel(it) }
           // 该条目当前的下载任务（没有就是 null）：按钮的文字、进度、图标都由它决定
           val currentDownload = current.Id?.let { id ->
             downloadTasks.firstOrNull { it.itemId == id }
@@ -365,7 +372,14 @@ data class EmbyDetailScreen(
                   playLaunching = true
                   scope.launch {
                     try {
-                      viewModel.play(currentServer, current, resume, reverse, playSourceId)
+                      viewModel.play(
+                        currentServer,
+                        current,
+                        resume,
+                        reverse,
+                        playSourceId,
+                        mediaSourceLabel = playSourceLabel,
+                      )
                     } finally {
                       // ⚠️ 只在**没成功拉起播放器**时复位（比如解析失败 / 抛异常），
                       //  成功拉起时本页已经不显示了，复位也会随重组被丢掉；
@@ -2014,8 +2028,8 @@ private fun PlayButton(
   /**
    * 已观看进度（0..1）；null = 不画。
    *
-   * 画法**照抄同一行的下载按钮**：自下而上垫一块色带，fraction=1 时正好铺满整枚按钮。
-   * 两者用同一套「填充 = 进度」的语言，用户不需要再学一遍。
+   * **自左向右**垫一块色带（进度条形态），fraction=1 时正好铺满整枚按钮 ——
+   * 播放进度是「一条时间轴」，横向走更符合直觉。
    * 填充层声明在内容层**之前** ⇒ 永远垫在图标 / 文字底下，不会糊住字。
    */
   progressFraction: Float? = null,
@@ -2042,9 +2056,9 @@ private fun PlayButton(
       Box(
         modifier =
           Modifier
-            .align(Alignment.BottomCenter)
-            .fillMaxWidth()
-            .fillMaxHeight(animatedPlayFill.coerceIn(0f, 1f))
+            .align(Alignment.CenterStart)
+            .fillMaxHeight()
+            .fillMaxWidth(animatedPlayFill.coerceIn(0f, 1f))
             // 底色本身就是 primary，所以这里反过来用 **onPrimary 的浅色叠加**：
             // 下载按钮是「primary 叠在浅底上」，这里是「浅色叠在 primary 上」，同一个思路。
             .background(MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.22f)),
@@ -2247,7 +2261,10 @@ private fun buildInfoEntries(
   add("容器", source?.Container?.uppercase())
   add("文件大小", source?.Size?.takeIf { it > 0 }?.let { formatFileSize(it) })
   add("总码率", source?.Bitrate?.takeIf { it > 0 }?.let { formatBitrate(it) })
-  add("文件路径", item.Path)
+  // ⚠️ 文件路径是**每个版本各自**的属性（EmbyMediaSource.Path）：
+  // 默认版本的 Path 恰好等于 item.Path，所以之前拿 item.Path 时「换到另一个版本仍是原路径」。
+  // 多版本切换后要显示当前选中版本的盘路径，回退才用条目级 item.Path。
+  add("文件路径", source?.Path ?: item.Path)
   if (out.isEmpty()) {
     add("名称", item.Name)
   }
