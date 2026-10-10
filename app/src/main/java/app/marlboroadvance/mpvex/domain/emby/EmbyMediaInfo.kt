@@ -60,7 +60,10 @@ fun buildEmbyMediaInfoEntries(
   if (allSources.count { !it.Id.isNullOrBlank() } > 1 && source != null) {
     add("版本", embyMediaSourceLabel(source))
   }
-  add("添加时间", formatIsoDate(item.DateCreated))
+  // ⚠️ 「添加时间」取**当前选中版本**的入库时间，而不是条目级的 item.DateCreated：
+  // 给老条目补一个新版本（比如今天新压的 4K）时，条目的 DateCreated 还是几年前 ——
+  // 显示它会让人以为「我这个版本明明今天才入库」。老服务端不给版本级字段时回退条目级。
+  add("添加时间", formatIsoDate(source?.DateCreated) ?: formatIsoDate(item.DateCreated))
   add("首播日期", formatIsoDate(item.PremiereDate))
   add("时长", item.RunTimeTicks?.takeIf { it > 0 }?.let { formatEmbyDurationFull(it) })
   add("年份", item.ProductionYear?.toString())

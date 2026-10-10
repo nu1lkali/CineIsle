@@ -251,6 +251,17 @@ open class PlayerActivity :
   private var playlistMediaSourceNames: List<String> = emptyList()
 
   /**
+   * 与 [playlist] 同序的 Emby **ItemId**（非 Emby 播放为空表）。
+   *
+   * 为什么既留「路径反查」（[currentEmbyItemId]）又要这个平行数组：
+   * 开了「预解析直链」后 mpv 的 `path` 是 302 之后的真实地址（网盘域名 / ISO 本地代理），
+   * 里面根本没有 `/Videos/{id}/stream` 可反查 —— 那时只能按下标取。
+   * 与 `playlistTitles` / `playlistMediaSourceNames` 一样是**平行数组**，
+   * 队列换位 / 删除时必须同步（见 `movePlaylistItem` / `removePlaylistItem`）。
+   */
+  private var playlistItemIds: List<String> = emptyList()
+
+  /**
    * Emby **ItemId → 用户为该条选定的媒体源 Id**（多版本条目才有；单版本 / 非 Emby 为空表）。
    *
    * 为什么是 Map 而不是又一个平行数组：它的读取方是 [saveVideoPlaybackState]，
@@ -532,6 +543,11 @@ open class PlayerActivity :
     // Emby 多版本名（与 playlist 下标一一对应，空串占位）——顶栏用它显示「正在播的是哪个版本」
     playlistMediaSourceNames =
       intent.getStringArrayListExtra("emby_media_source_names") ?: emptyList()
+    // Emby ItemId（与 playlist 同序）—— 路径反查不到时靠它按当前下标取
+    playlistItemIds =
+      intent.getStringArrayListExtra(
+        app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_ITEM_IDS,
+      ) ?: emptyList()
     // Emby 多版本：ItemId → 选定的媒体源 Id（按版本记进度的键靠它拼，见 EmbyVersionProgress）
     embyMediaSourceByItemId = buildEmbyMediaSourceMap(intent)
     viewModel.seriesKey = currentSeriesKey()
@@ -1574,6 +1590,11 @@ open class PlayerActivity :
       n.add(to, n.removeAt(from))
       playlistMediaSourceNames = n
     }
+    if (playlistItemIds.size == movedItems.size) {
+      val i = playlistItemIds.toMutableList()
+      i.add(to, i.removeAt(from))
+      playlistItemIds = i
+    }
 
     playlistIndex = remap(playlistIndex)
     // 随机播放序列存的是下标，换位后必须按同一映射重算，否则「下一条」会重复或跳条
@@ -1608,6 +1629,9 @@ open class PlayerActivity :
     }
     if (playlistMediaSourceNames.size == items.size + 1) {
       playlistMediaSourceNames = playlistMediaSourceNames.toMutableList().also { it.removeAt(index) }
+    }
+    if (playlistItemIds.size == items.size + 1) {
+      playlistItemIds = playlistItemIds.toMutableList().also { it.removeAt(index) }
     }
     if (shuffledIndices.isNotEmpty()) {
       // 被删的下标从随机序列里摘掉，其后所有下标整体前移一位
@@ -2056,9 +2080,19 @@ private fun cancelAutoplayCountdown() {
    * `emby_item_ids` —— 用户拖动过播放队列、或随机播放后，下标就与 intent 的原始
    * 顺序错位了（同一个坑见 [currentEmbyVersionProgressKey]）。
    */
-  fun currentEmbyItemId(): String? =
+  fun currentEmbyItemId(): String? {
+    // ① 首选：从 mpv 的 `path` 反查 —— 与队列顺序完全无关（换位 / 随机播放都不会错）
     app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
       .parseItemIdFromPath(PlayerLib.getPropertyString("path"))
+      ?.let { return it }
+    // ② 兜底：按当前下标取平行数组。
+    //    什么时候会走到这里：开了「预解析直链」时 path 已经是 302 之后的真实地址
+    //    （网盘域名 / 别的主机），里面根本没有 `/Videos/{id}/stream` 可反查；
+    //    ISO 走本地 Range 代理时 path 是 127.0.0.1 的地址，同样反查不到。
+    //    平行数组在换位 / 删除时同步维护（见 movePlaylistItem / removePlaylistItem），
+    //    所以这条路径依然对得上当前这一条。
+    return playlistItemIds.getOrNull(playlistIndex)?.takeIf { it.isNotBlank() }
+  }
 
   /**
    * 当前播放条目**实际在播的那个版本**的媒体源 Id；单版本 / 非 Emby 返回 null。
@@ -3329,6 +3363,11 @@ private fun cancelAutoplayCountdown() {
       // 多版本名同理：换了队列就换，否则会显示上一批的版本名
       playlistMediaSourceNames =
         intent.getStringArrayListExtra("emby_media_source_names") ?: emptyList()
+      // ItemId 列表同理：换了队列就换，否则会拿到上一批条目的媒体信息
+      playlistItemIds =
+        intent.getStringArrayListExtra(
+          app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_ITEM_IDS,
+        ) ?: emptyList()
       // 多版本源映射同理：换了队列就重建
       embyMediaSourceByItemId = buildEmbyMediaSourceMap(intent)
       viewModel.seriesKey = currentSeriesKey()

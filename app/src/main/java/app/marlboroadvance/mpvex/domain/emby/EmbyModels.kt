@@ -392,6 +392,15 @@ data class EmbyMediaSource(
   val Name: String? = null,
   val Container: String? = null,
   val Path: String? = null,
+  /**
+   * **这个版本**入库的时间（ISO-8601）。
+   *
+   * ⚠️ 与条目级 `EmbyItem.DateCreated` 不是一回事：条目是「这部片子第一次进库」的时间，
+   * 而这里每个版本各自一份。给一个老条目补一个新版本（今天新压的 4K）时，
+   * 条目的 DateCreated 还是几年前 —— 显示它会让人以为「我这个版本明明今天才入库」。
+   * 老服务端可能不给这个字段 ⇒ 为空时调用方要回退到条目级。
+   */
+  val DateCreated: String? = null,
   val RunTimeTicks: Long? = null,
   val Size: Long? = null,
   val Bitrate: Long? = null,
