@@ -36,6 +36,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -114,6 +115,7 @@ import app.marlboroadvance.mpvex.domain.dislike.DislikeRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyDownloadStatus
 import app.marlboroadvance.mpvex.domain.emby.EmbyEnqueueResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
+import app.marlboroadvance.mpvex.domain.emby.EmbyMediaSource
 import app.marlboroadvance.mpvex.domain.emby.EmbyMediaStream
 import app.marlboroadvance.mpvex.domain.emby.EmbyPerson
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
@@ -203,6 +205,11 @@ data class EmbyDetailScreen(
     // ⇒ 置 true 后立刻把播放键换成转圈 + 禁用，Activity 一起来就由页面被覆盖自然结束。
     var playLaunching by remember { mutableStateOf(false) }
 
+    // ── 多版本媒体：当前选中的版本 ──
+    // null = 还没选，等价于「服务端默认版本」（= MediaSources 的第一条）。
+    // 按 itemId 记忆：同一条目在页面存活期间保留选择，换条目则重置。
+    var selectedMediaSourceId by remember(itemId) { mutableStateOf<String?>(null) }
+
     // ── 「标记为不喜欢」──
     // 状态直接读仓库的内存快照（O(1)、零 IO），并订阅全量流 ⇒
     // 在播放器里标了 / 取消了，回到本页菜单项的文案与图标自动跟着变，
@@ -284,6 +291,9 @@ data class EmbyDetailScreen(
         else -> {
           val current = item ?: return@Box
           val currentServer = server ?: return@Box
+          // 多版本媒体：真正要播放的版本 Id。只有存在多个版本时才非空 ——
+          // 单版本媒体一律 null，播放链路与改动前完全一致。
+          val playSourceId = effectiveMediaSourceId(current, selectedMediaSourceId)
           // 该条目当前的下载任务（没有就是 null）：按钮的文字、进度、图标都由它决定
           val currentDownload = current.Id?.let { id ->
             downloadTasks.firstOrNull { it.itemId == id }
@@ -328,7 +338,7 @@ data class EmbyDetailScreen(
                   playLaunching = true
                   scope.launch {
                     try {
-                      viewModel.play(currentServer, current, resume, reverse)
+                      viewModel.play(currentServer, current, resume, reverse, playSourceId)
                     } finally {
                       // ⚠️ 只在**没成功拉起播放器**时复位（比如解析失败 / 抛异常），
                       //  成功拉起时本页已经不显示了，复位也会随重组被丢掉；
@@ -339,6 +349,8 @@ data class EmbyDetailScreen(
                 }
               },
               playLaunching = playLaunching,
+              selectedMediaSourceId = selectedMediaSourceId,
+              onSelectMediaSource = { selectedMediaSourceId = it },
               onToggleFavorite = {
                 if (!favoriteBusy) {
                   val wasFavorite = current.UserData?.IsFavorite == true
@@ -475,7 +487,7 @@ data class EmbyDetailScreen(
               onCast = {
                 val id = current.Id
                 if (id != null) {
-                  val url = viewModel.getStreamUrl(currentServer, id, true)
+                  val url = viewModel.getStreamUrl(currentServer, id, true, playSourceId)
                   dlnaManager.pendingPayload =
                     CastPayload(Uri.parse(url), viewModel.displayTitle(current))
                   castSheetShown = true
@@ -485,7 +497,7 @@ data class EmbyDetailScreen(
               // （为什么不用系统选择器，见 ExternalPlayerPickerDialog 的注释）。
               // 一个都没枚举到时把原因说出来，否则点了没反应会让人以为是按钮坏了
               onPlayExternal = {
-                viewModel.listExternalPlayers(currentServer, current)
+                viewModel.listExternalPlayers(currentServer, current, playSourceId)
                   .onSuccess { list ->
                     externalLastKey = viewModel.lastExternalPlayerKey()
                     externalPlayers = list
@@ -505,7 +517,7 @@ data class EmbyDetailScreen(
                   EmbyTicks.ticksToSeconds(current.UserData?.PlaybackPositionTicks ?: 0L)
                 Toast.makeText(context, "正在请求服务器转码…", Toast.LENGTH_SHORT).show()
                 scope.launch {
-                  viewModel.playTranscoded(currentServer, current, resumeSeconds)
+                  viewModel.playTranscoded(currentServer, current, resumeSeconds, mediaSourceId = playSourceId)
                     .onFailure { e ->
                       Toast.makeText(
                         context,
@@ -583,7 +595,12 @@ data class EmbyDetailScreen(
         onPick = { player ->
           externalPlayers = null
           if (playerTarget != null && serverTarget != null) {
-            viewModel.playWithExternalPlayer(serverTarget, playerTarget, player)
+            viewModel.playWithExternalPlayer(
+              serverTarget,
+              playerTarget,
+              player,
+              effectiveMediaSourceId(playerTarget, selectedMediaSourceId),
+            )
               .onFailure { e ->
                 Toast.makeText(context, e.message ?: "打开外部播放器失败", Toast.LENGTH_LONG).show()
               }
@@ -592,7 +609,11 @@ data class EmbyDetailScreen(
         onSystemChooser = {
           externalPlayers = null
           if (playerTarget != null && serverTarget != null) {
-            viewModel.playWithExternalPlayerChooser(serverTarget, playerTarget)
+            viewModel.playWithExternalPlayerChooser(
+              serverTarget,
+              playerTarget,
+              effectiveMediaSourceId(playerTarget, selectedMediaSourceId),
+            )
               .onFailure { e ->
                 Toast.makeText(context, e.message ?: "打开外部播放器失败", Toast.LENGTH_LONG).show()
               }
@@ -925,6 +946,10 @@ private fun DetailBody(
   viewModel: EmbyViewModel,
   /** 是否正在拉起播放器：播放键转圈 + 禁点（转给 [PlaySection]）。 */
   playLaunching: Boolean = false,
+  /** 多版本媒体：当前选中的版本 Id（null = 默认版本）。转给 [PlaySection] 画下拉框。 */
+  selectedMediaSourceId: String? = null,
+  /** 多版本媒体：用户在下拉框里选了某个版本。 */
+  onSelectMediaSource: (String) -> Unit = {},
   /** 点推荐卡片：打开对应媒体的详情页（itemId / 标题） */
   onRecommendClick: (String, String) -> Unit,
 ) {
@@ -972,6 +997,8 @@ private fun DetailBody(
           downloadProgress = downloadProgress,
           downloadFailed = downloadFailed,
           playLaunching = playLaunching,
+          selectedMediaSourceId = selectedMediaSourceId,
+          onSelectMediaSource = onSelectMediaSource,
         )
       }
 
@@ -1517,9 +1544,15 @@ private fun PlaySection(
   downloadFailed: Boolean,
   /** 是否正在拉起播放器：播放键转圈 + 禁点。 */
   playLaunching: Boolean = false,
+  /** 多版本媒体：当前选中的版本 Id（null = 默认版本）。 */
+  selectedMediaSourceId: String? = null,
+  /** 多版本媒体：用户切换了版本。 */
+  onSelectMediaSource: (String) -> Unit = {},
 ) {
   val positionTicks = item.UserData?.PlaybackPositionTicks ?: 0L
   val runTimeTicks = item.RunTimeTicks ?: 0L
+  // 多版本媒体：MediaSources 就是各版本；只有一个（或 Id 缺失）时不算多版本。
+  val mediaSources = item.MediaSources.orEmpty().filter { !it.Id.isNullOrBlank() }
   val resumeSeconds = EmbyTicks.ticksToSeconds(positionTicks)
   val remainingTicks = (runTimeTicks - positionTicks).coerceAtLeast(0L)
   val hasResume = resumeSeconds > 10 && runTimeTicks > 0 &&
@@ -1673,6 +1706,18 @@ private fun PlaySection(
       }
     }
 
+    // ── 多版本媒体：版本下拉框 ──
+    // Emby 把同一个片子的多个版本（4K / 1080P / 不同压制组…）放在 MediaSources 里，
+    // 这里给一个与网页端一致的版本切换入口：选中的版本会用于播放 / 转码 / 投屏 / 外部播放器。
+    // 只有真的存在多个版本时才渲染 —— 单版本媒体（绝大多数）界面上完全看不出变化。
+    if (mediaSources.size > 1) {
+      MediaSourceSelector(
+        sources = mediaSources,
+        selectedId = selectedMediaSourceId,
+        onSelect = onSelectMediaSource,
+      )
+    }
+
     // 进度：已观看百分比 + 剩余时长 + 总时长，三个数一起给，避免只看到一个百分比
     if (runTimeTicks > 0) {
       Text(
@@ -1695,6 +1740,113 @@ private fun PlaySection(
       }
     }
   }
+}
+
+/**
+ * 多版本媒体：算出「这次实际要用的版本 Id」。
+ *
+ * 只有确实存在多个版本时才返回非空 —— 单版本媒体返回 null，播放 URL 里就不会带
+ * `MediaSourceId`，行为与改动前完全一致。选中的 Id 失效时（刷新后源被换掉）
+ * 回退到默认版本（第一条源，与 Emby 服务端的默认一致）。
+ */
+private fun effectiveMediaSourceId(item: EmbyItem?, selected: String?): String? {
+  val sources = item?.MediaSources.orEmpty().filter { !it.Id.isNullOrBlank() }
+  if (sources.size <= 1) return null
+  return sources.firstOrNull { it.Id == selected }?.Id ?: sources.first().Id
+}
+
+/**
+ * 多版本媒体的版本下拉框：当前版本胶囊 + 下拉菜单。
+ *
+ * 与收藏页的类型切换器同一套写法（小 Surface + DropdownMenu）—— Compose 下 M3
+ * 没有现成的 Spinner，ExposedDropdownMenuBox 的展开态在可滚动列表里点击判定容易出问题；
+ * 这个小组合最稳，观感也与项目里其它下拉一致。
+ */
+@Composable
+private fun MediaSourceSelector(
+  sources: List<EmbyMediaSource>,
+  selectedId: String?,
+  onSelect: (String) -> Unit,
+) {
+  var expanded by remember { mutableStateOf(false) }
+  val current = sources.firstOrNull { it.Id == selectedId } ?: sources.first()
+
+  Box {
+    Surface(
+      onClick = { expanded = true },
+      shape = MaterialTheme.shapes.small,
+      color = MaterialTheme.colorScheme.secondaryContainer,
+      contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+      ) {
+        Text(
+          text = "版本：${mediaSourceLabel(current)}",
+          style = MaterialTheme.typography.labelLarge,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Icon(
+          imageVector = Icons.Default.ArrowDropDown,
+          contentDescription = "切换版本",
+        )
+      }
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+      sources.forEach { source ->
+        val id = source.Id ?: return@forEach
+        DropdownMenuItem(
+          text = {
+            Text(
+              text = mediaSourceLabel(source),
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          },
+          leadingIcon = {
+            // 选中项打勾；未选中放一个同宽占位，两行文字左对齐
+            if (id == current.Id) {
+              Icon(Icons.Default.Check, contentDescription = null)
+            } else {
+              Spacer(modifier = Modifier.width(24.dp))
+            }
+          },
+          onClick = {
+            expanded = false
+            onSelect(id)
+          },
+        )
+      }
+    }
+  }
+}
+
+/**
+ * 版本的显示名。
+ *
+ * 优先用服务端给的 [EmbyMediaSource.Name]（Emby 网页端显示的就是它，通常形如
+ * "1080P HEVC"）；没有名字时用「分辨率 · 编码 · 文件大小」拼一个能区分的事实描述，
+ * 再不济退回容器名。**绝不返回空串** —— 下拉框里出现空白项比看到「版本」更糟。
+ */
+private fun mediaSourceLabel(source: EmbyMediaSource): String {
+  source.Name?.takeIf { it.isNotBlank() }?.let { return it }
+  val video = source.MediaStreams?.firstOrNull { it.Type == "Video" }
+  val parts = mutableListOf<String>()
+  video?.Height?.takeIf { it > 0 }?.let { h ->
+    parts += when {
+      h >= 2000 -> "4K"
+      h >= 1000 -> "1080P"
+      h >= 700 -> "720P"
+      h >= 500 -> "576P"
+      else -> "${h}P"
+    }
+  }
+  video?.Codec?.takeIf { it.isNotBlank() }?.let { parts += it.uppercase() }
+  source.Size?.takeIf { it > 0 }?.let { parts += formatFileSize(it) }
+  if (parts.isEmpty()) source.Container?.uppercase()?.let { parts += it }
+  return parts.joinToString(" · ").ifBlank { "版本" }
 }
 
 /**

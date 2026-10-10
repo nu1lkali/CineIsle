@@ -795,8 +795,11 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     server: EmbyServer,
     itemId: String,
     static: Boolean = true,
+    /** 多版本媒体要指定的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
+    mediaSourceId: String? = null,
   ): String? = withContext(Dispatchers.IO) {
-    runCatching { EmbyClient.resolveStreamUrl(server, itemId, static) }.getOrNull()
+    runCatching { EmbyClient.resolveStreamUrl(server, itemId, static, mediaSourceId = mediaSourceId) }
+      .getOrNull()
   }
 
   /** 是否开启「预解析直链」（设置项）。播放路径据此决定要不要多走一次解析。 */
@@ -818,6 +821,11 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     item: EmbyItem,
     resumeSeconds: Long = 0,
     reverseEngine: Boolean = false,
+    /**
+     * 多版本媒体要播放的那个版本（`item.MediaSources[i].Id`）。
+     * null = 不指定，由服务端挑默认版本（单版本媒体照旧走这条路）。
+     */
+    mediaSourceId: String? = null,
   ) {
     val itemId = item.Id ?: return
     val engine = resolveEngine(reverseEngine)
@@ -832,11 +840,22 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     if (playlist.size > 1) {
       // 「预解析直链」开关打开时，先逐条把 302 背后的真实地址取出来（见 resolveIfEnabled）。
       // 解析失败/未发生跳转返回 null，播放列表里对应位置回退到原始地址。
+      // ⚠️ 版本选择只作用于「用户当前点播的这一集」：后面自动连播的集仍是各自的默认版本。
       val directUrls = playlist
         .mapNotNull { it.Id }
-        .mapNotNull { id -> resolveIfEnabled(server, id)?.let { id to it } }
+        .mapNotNull { id ->
+          val sourceForThisItem = if (id == itemId) mediaSourceId else null
+          resolveIfEnabled(server, id, sourceForThisItem)?.let { id to it }
+        }
         .toMap()
-      launchPlaylist(server, playlist, resumeSeconds, engine = engine, directUrls = directUrls)
+      launchPlaylist(
+        server = server,
+        items = playlist,
+        resumeSeconds = resumeSeconds,
+        engine = engine,
+        directUrls = directUrls,
+        firstMediaSourceId = mediaSourceId,
+      )
     } else {
       // 单片播放。
       //
@@ -844,18 +863,24 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       // 「预解析直链」是个无关的优化开关（默认关，见 BrowserPreferences），
       // 挂在它底下等于「用户没开这个开关就永远用不到 ISO 播放」。
       // 而 ISO 探测自己是会判断的：花 2KB 读一下 PVD，不是 ISO 就立刻返回。
-      val direct = resolveIfEnabled(server, itemId)
+      val direct = resolveIfEnabled(server, itemId, mediaSourceId)
       // 独立再解析一次给 ISO 探测用（上面那次可能因为开关关着而没解）。
-      val isoSource = direct ?: resolveDirectUrl(server, itemId)
+      val isoSource = direct ?: resolveDirectUrl(server, itemId, mediaSourceId = mediaSourceId)
+      // ISO 容器要用**选中版本**的容器名，否则多版本下（4K 是 ISO、1080P 是 mkv）
+      // 会拿错容器的预筛结论，把真 ISO 拦在探测之前。
+      val selectedContainer = item.MediaSources
+        ?.firstOrNull { it.Id == mediaSourceId }
+        ?.Container
+        ?: item.MediaSources?.firstOrNull()?.Container
       val isoUrl =
         isoSource?.let {
           prepareRemoteIso(
             directUrl = it,
-            container = item.MediaSources?.firstOrNull()?.Container,
+            container = selectedContainer,
             renewDirect = {
               // 直链中途过期 → 重新走一次 302 解析换新的。
               // ⚠️ 与探测必须同一套 UA，resolveDirectUrl 内部已经保证了。
-              resolveDirectUrl(server, itemId)
+              resolveDirectUrl(server, itemId, mediaSourceId = mediaSourceId)
             },
           )
         }
@@ -865,6 +890,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         resumeSeconds = resumeSeconds,
         engine = engine,
         overrideUrl = isoUrl ?: direct,
+        mediaSourceId = mediaSourceId,
       )
     }
 
@@ -875,6 +901,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
           server = server,
           itemId = itemId,
           positionTicks = EmbyTicks.secondsToTicks(resumeSeconds),
+          mediaSourceId = mediaSourceId,
         )
       }
     }
@@ -900,6 +927,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     item: EmbyItem,
     resumeSeconds: Long = 0,
     reverseEngine: Boolean = false,
+    /** 多版本媒体要转码的那个版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
+    mediaSourceId: String? = null,
   ): Result<Unit> {
     val itemId = item.Id ?: return Result.failure(IllegalArgumentException("缺少媒体 Id"))
     return runCatching {
@@ -908,6 +937,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
           server = server,
           itemId = itemId,
           startTimeTicks = EmbyTicks.secondsToTicks(resumeSeconds),
+          mediaSourceId = mediaSourceId,
         )
       launchSingle(
         server = server,
@@ -915,6 +945,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         resumeSeconds = resumeSeconds,
         engine = resolveEngine(reverseEngine),
         overrideUrl = url,
+        mediaSourceId = mediaSourceId,
       )
     }
   }
@@ -925,14 +956,19 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * 枚举规则见 [queryExternalPlayers] —— 关键在于**不能只查一次带 URI 的 intent**，
    * 否则只声明了 `file` / `content` 的播放器会因为 scheme 对不上而全部消失。
    */
-  fun listExternalPlayers(server: EmbyServer, item: EmbyItem): Result<List<ExternalPlayerOption>> {
+  fun listExternalPlayers(
+    server: EmbyServer,
+    item: EmbyItem,
+    /** 多版本媒体要交给外部播放器的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
+    mediaSourceId: String? = null,
+  ): Result<List<ExternalPlayerOption>> {
     val itemId = item.Id
       ?: return Result.failure(IllegalStateException("这个条目没有可播放的媒体 Id"))
     val app = getApplication<Application>()
     val players =
       queryExternalPlayers(
         context = app,
-        uri = externalStreamUri(server, itemId),
+        uri = externalStreamUri(server, itemId, mediaSourceId),
         selfPackageName = app.packageName,
       )
     return if (players.isEmpty()) {
@@ -959,13 +995,15 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     server: EmbyServer,
     item: EmbyItem,
     player: ExternalPlayerOption,
+    /** 多版本媒体要交给外部播放器的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
+    mediaSourceId: String? = null,
   ): Result<Unit> {
     val itemId = item.Id
       ?: return Result.failure(IllegalStateException("这个条目没有可播放的媒体 Id"))
     val app = getApplication<Application>()
     val intent =
       externalPlayerLaunchIntent(
-        uri = externalStreamUri(server, itemId),
+        uri = externalStreamUri(server, itemId, mediaSourceId),
         option = player,
         title = displayTitle(item),
       )
@@ -980,14 +1018,19 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * 兜底：交给系统自己的选择器。候选同样是剔除自家之后的那批，
    * 所以系统选择器里也不会冒出影屿自己。
    */
-  fun playWithExternalPlayerChooser(server: EmbyServer, item: EmbyItem): Result<Unit> {
+  fun playWithExternalPlayerChooser(
+    server: EmbyServer,
+    item: EmbyItem,
+    /** 多版本媒体要交给外部播放器的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
+    mediaSourceId: String? = null,
+  ): Result<Unit> {
     val itemId = item.Id
       ?: return Result.failure(IllegalStateException("这个条目没有可播放的媒体 Id"))
     val app = getApplication<Application>()
     val chooser =
       externalPlayerChooserIntent(
         context = app,
-        uri = externalStreamUri(server, itemId),
+        uri = externalStreamUri(server, itemId, mediaSourceId),
         selfPackageName = app.packageName,
         title = displayTitle(item),
       )
@@ -1001,8 +1044,12 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * `static=true` = 服务器原样吐原文件，一个字节都不改 —— 外部播放器自带解码器，
    * 用不着服务器帮它转码。
    */
-  private fun externalStreamUri(server: EmbyServer, itemId: String): Uri =
-    Uri.parse(repository.videoStreamUrl(server, itemId, static = true))
+  private fun externalStreamUri(
+    server: EmbyServer,
+    itemId: String,
+    mediaSourceId: String? = null,
+  ): Uri =
+    Uri.parse(repository.videoStreamUrl(server, itemId, static = true, mediaSourceId = mediaSourceId))
 
   /**
    * 取同季剧集中「当前集及其之后」的列表；失败时只返回当前集。
@@ -1135,9 +1182,12 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
      * · **本地 ISO Range 代理地址**（远程 ISO 原盘，见 [prepareRemoteIso]）。
      */
     overrideUrl: String? = null,
+    /** 多版本媒体：本次播放的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
+    mediaSourceId: String? = null,
   ) {
     val itemId = item.Id ?: return
-    val url = overrideUrl ?: repository.videoStreamUrl(server, itemId, static = true)
+    val url = overrideUrl
+      ?: repository.videoStreamUrl(server, itemId, static = true, mediaSourceId = mediaSourceId)
     val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
       setClass(getApplication(), PlayerActivity::class.java)
       putExtra("internal_launch", true)
@@ -1152,8 +1202,12 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
         // 的位置套回 time-pos，「从头播放」就变成了「继续播放」。
         putExtra("play_from_start", true)
       }
-      // 供播放页把进度回传给 Emby 服务器
-      putEmbyPlaybackExtras(server, listOf(itemId))
+      // 供播放页把进度回传给 Emby 服务器；带上版本 Id，播放页的在线字幕搜索才找对版本
+      putEmbyPlaybackExtras(
+        server = server,
+        itemIds = listOf(itemId),
+        mediaSourceIds = mediaSourceId?.let { listOf(it) } ?: emptyList(),
+      )
       // 「记忆播放设置」的键：剧集用所属剧的 Id（整季共用一份速度 / 音轨），
       // 电影没有 SeriesId，就用它自己的 Id。
       putExtra("emby_series_key", item.SeriesId ?: itemId)
@@ -1187,8 +1241,13 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
    * 「预解析开关打开」时才去解析直链；关闭 → 直接返回 null（用原始流地址，零额外开销）。
    * 解析不出真实跳转地址时也返回 null，调用方一律回退原始地址。
    */
-  private suspend fun resolveIfEnabled(server: EmbyServer, itemId: String): String? =
-    if (shouldResolveDirectLink()) resolveDirectUrl(server, itemId) else null
+  private suspend fun resolveIfEnabled(
+    server: EmbyServer,
+    itemId: String,
+    mediaSourceId: String? = null,
+  ): String? =
+    if (shouldResolveDirectLink()) resolveDirectUrl(server, itemId, mediaSourceId = mediaSourceId)
+    else null
 
   /** 播放一组媒体（剧集连播 / 随机播放） */
   fun launchPlaylist(
@@ -1210,6 +1269,11 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
      * 只有开启「预解析直链」且该条确实发生 302 跳转时才会有内容。
      */
     directUrls: Map<String, String> = emptyMap(),
+    /**
+     * 多版本媒体：**首条**（即用户在详情页点播的那一条）要用的版本 Id。
+     * 只作用于首条，后面自动连播的条目各自用默认版本 —— 用户只为当前这条选了版本。
+     */
+    firstMediaSourceId: String? = null,
   ) {
     val uris = ArrayList<android.net.Uri>()
     val ids = ArrayList<String>()
@@ -1222,17 +1286,25 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     // 与上面四条同序的媒体源 Id，供播放页的「在线字幕搜索」用。
     // 取不到就填空串占位 —— 播放页会跳过空串（那时在线搜索按钮自动禁用）。
     val mediaSourceIds = ArrayList<String>()
+    val firstNameId = items.firstOrNull()?.Id
     items.forEach { item ->
       val id = item.Id ?: return@forEach
+      // 首条若选了版本就用它；其余条目一律用各自的默认源（第一条源）
+      val sourceId = if (id == firstNameId && firstMediaSourceId != null) {
+        firstMediaSourceId
+      } else {
+        item.MediaSources?.firstOrNull()?.Id
+      }
       uris.add(
         android.net.Uri.parse(
-          directUrls[id] ?: repository.videoStreamUrl(server, id, static = true),
+          directUrls[id]
+            ?: repository.videoStreamUrl(server, id, static = true, mediaSourceId = sourceId),
         ),
       )
       ids.add(id)
       titles.add(displayTitle(item))
       seriesKeys.add(item.SeriesId ?: id)
-      mediaSourceIds.add(item.MediaSources?.firstOrNull()?.Id ?: "")
+      mediaSourceIds.add(sourceId ?: "")
     }
     if (uris.isEmpty()) return
 
@@ -1282,8 +1354,14 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
   }
 
   /** 构造播放地址（用于播放列表等只需要 URL 的场景） */
-  fun getStreamUrl(server: EmbyServer, itemId: String, static: Boolean = true): String =
-    repository.videoStreamUrl(server, itemId, static)
+  fun getStreamUrl(
+    server: EmbyServer,
+    itemId: String,
+    static: Boolean = true,
+    /** 多版本媒体要指定的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
+    mediaSourceId: String? = null,
+  ): String =
+    repository.videoStreamUrl(server, itemId, static, mediaSourceId = mediaSourceId)
 
   fun imageUrl(server: EmbyServer, item: EmbyItem, imageType: String = "Primary", maxWidth: Int = 480): String? {
     val id = item.Id ?: return null

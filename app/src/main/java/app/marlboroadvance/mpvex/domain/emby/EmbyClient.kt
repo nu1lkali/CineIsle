@@ -1430,8 +1430,13 @@ object EmbyClient {
     itemId: String,
     static: Boolean = true,
     attempts: Int = 2,
+    /**
+     * 多版本媒体要指定的版本（`MediaSources[i].Id`）。null = 不指定，由服务端挑默认版本。
+     * 探测直链与真正拉流必须是同一个版本，否则「解析出来的是 4K、播的却是 1080P」。
+     */
+    mediaSourceId: String? = null,
   ): String? {
-    val original = videoStreamUrl(server, itemId, static = static)
+    val original = videoStreamUrl(server, itemId, static = static, mediaSourceId = mediaSourceId)
     repeat(attempts.coerceAtLeast(1)) {
       val direct = runCatching {
         val req = Request.Builder()
@@ -1806,11 +1811,14 @@ object EmbyClient {
     audioStreamIndex: Int? = null,
     subtitleStreamIndex: Int? = null,
     playMethod: String = "DirectStream",
+    /** 多版本媒体：本次播放的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
+    mediaSourceId: String? = null,
   ): String {
     val obj = buildMap {
       put("ItemId", itemId)
       put("PositionTicks", positionTicks)
       put("PlayMethod", playMethod)
+      mediaSourceId?.let { put("MediaSourceId", it) }
       audioStreamIndex?.let { put("AudioStreamIndex", it) }
       subtitleStreamIndex?.let { put("SubtitleStreamIndex", it) }
       put("CanSeek", true)
@@ -1963,6 +1971,11 @@ object EmbyClient {
     maxHeight: Int = TRANSCODE_MAX_HEIGHT,
     videoBitrate: Int = TRANSCODE_VIDEO_BITRATE,
     audioBitrate: Int = TRANSCODE_AUDIO_BITRATE,
+    /**
+     * 多版本媒体要转码的那个版本（`MediaSources[i].Id`）。null = 由服务端挑默认版本。
+     * 不指定的话，服务器会转码它自己认定的默认源 —— 用户在详情页选了 4K 却拿到 1080P 的转码。
+     */
+    mediaSourceId: String? = null,
   ): String {
     // ── 1. 向服务器要一份「只转码」的播放方案 ──
     val payload =
@@ -1976,6 +1989,8 @@ object EmbyClient {
           "AllowVideoStreamCopy" to false,
           "AllowAudioStreamCopy" to false,
           "MaxStreamingBitrate" to (videoBitrate + audioBitrate),
+          // 指定版本：服务器据此返回对应 MediaSource 的转码方案
+          "MediaSourceId" to mediaSourceId,
         ),
       ).toString()
 
@@ -1986,7 +2001,9 @@ object EmbyClient {
           .build(),
       )
 
-    val source = info.MediaSources?.firstOrNull()
+    // 优先取用户选中的那个版本；服务端没按 MediaSourceId 过滤时退回首条
+    val source = (mediaSourceId?.let { id -> info.MediaSources?.firstOrNull { it.Id == id } }
+      ?: info.MediaSources?.firstOrNull())
       ?: throw EmbyApiException(0, info.ErrorCode ?: "服务器没有返回可播放的媒体源（可能转码被禁用）")
 
     // ── 2a. 服务器自己给的转码地址优先（参数齐全、已含 api_key）──

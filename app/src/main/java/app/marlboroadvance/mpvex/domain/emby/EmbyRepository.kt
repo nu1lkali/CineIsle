@@ -738,8 +738,10 @@ class EmbyRepository(
     server: EmbyServer,
     itemId: String,
     positionTicks: Long = 0,
+    /** 多版本媒体：告诉服务器「正在播的是哪一个版本」，服务器控制台的「正在播放」才准 */
+    mediaSourceId: String? = null,
   ): String = withContext(Dispatchers.IO) {
-    EmbyClient.reportPlaybackStart(server, itemId, positionTicks)
+    EmbyClient.reportPlaybackStart(server, itemId, positionTicks, mediaSourceId = mediaSourceId)
   }
 
   suspend fun reportPlaybackProgress(
@@ -854,7 +856,9 @@ class EmbyRepository(
     server: EmbyServer,
     itemId: String,
     startTimeTicks: Long = 0L,
-  ): String = EmbyClient.transcodeStreamUrl(server, itemId, startTimeTicks)
+    /** 多版本媒体要转码的那个版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
+    mediaSourceId: String? = null,
+  ): String = EmbyClient.transcodeStreamUrl(server, itemId, startTimeTicks, mediaSourceId = mediaSourceId)
 
   /** 离线下载原始文件的 URL（支持 Range，可断点续传）。 */
   fun itemDownloadUrl(server: EmbyServer, itemId: String): String =
