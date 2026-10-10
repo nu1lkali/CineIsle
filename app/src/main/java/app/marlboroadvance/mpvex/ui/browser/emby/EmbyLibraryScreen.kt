@@ -241,6 +241,8 @@ data class EmbyLibraryScreen(
     val quickFavoriteEnabled by browserPreferences.embyQuickFavorite.collectAsState()
     // 搜索联想词列表是否收起（默认展开）。联想只是参考，用户收起后一直记着。
     val suggestCollapsed by browserPreferences.embySearchSuggestCollapsed.collectAsState()
+    // 文件夹宫格封面是否随机合成（默认开）。改它会换一套缓存键，来回切不会串图。
+    val folderRandomCover by browserPreferences.embyFolderRandomCover.collectAsState()
     // 联想词的「自动收起」标记：不是用户手动收的，而是程序按下面的判据自己收的。
     // 单独一个状态而不是直接写偏好 —— 自动行为不该污染用户的手动选择。
     var suggestAutoCollapsed by remember { mutableStateOf(false) }
@@ -1693,6 +1695,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
       viewModel = viewModel,
       cardStyle = cardStyle,
           folderCovers = folderCovers,
+          folderRandomCover = folderRandomCover,
    onClick = { openItem(item, backStack, s, context) },
     onLongClick = { offset ->
   actionTarget = item
@@ -1712,6 +1715,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                       viewModel = viewModel,
                       cardStyle = cardStyle,
                       folderCovers = folderCovers,
+                      folderRandomCover = folderRandomCover,
                       onClick = { openItem(item, backStack, s, context) },
                       onLongClick = { offset ->
                         actionTarget = item
@@ -2232,6 +2236,8 @@ private fun EmbyLibraryMediaCell(
   viewModel: EmbyViewModel,
   cardStyle: EmbyCardStyle,
   folderCovers: MutableMap<String, List<String>>,
+  /** 文件夹宫格封面是否随机合成：影响取图顺序，也参与缓存键 */
+  folderRandomCover: Boolean,
   onClick: () -> Unit,
   onLongClick: ((androidx.compose.ui.geometry.Offset) -> Unit)?,
   onToggleFavorite: (() -> Unit)?,
@@ -2239,14 +2245,16 @@ private fun EmbyLibraryMediaCell(
 ) {
   val itemId = item.Id
   // 文件夹 / 合集这类容器条目自身没有封面图，改用内部视频的缩略图拼宫格
-  val needsMosaic = itemId != null && isFolderLike(item) && item.ImageTags["Primary"] == null
+  val needsMosaic = isFolderLike(item) && item.ImageTags["Primary"] == null
   val folderCover: List<String>? = if (needsMosaic && itemId != null) {
-    val cached = folderCovers[itemId]
-    LaunchedEffect(itemId, server.id) {
-      if (cached == null && EmbyFolderCoverCache.beginLoad(itemId)) {
-        val urls = viewModel.loadFolderCoverUrls(server, itemId, 4)
-        EmbyFolderCoverCache.put(itemId, urls)
-        folderCovers[itemId] = urls
+    // 缓存键带上「随机 / 固定」：来回切开关时两种结果各存一份，不会互相串图。
+    val coverKey = "$itemId|$folderRandomCover"
+    val cached = folderCovers[coverKey]
+    LaunchedEffect(coverKey, server.id) {
+      if (cached == null && EmbyFolderCoverCache.beginLoad(coverKey)) {
+        val urls = viewModel.loadFolderCoverUrls(server, itemId, 4, random = folderRandomCover)
+        EmbyFolderCoverCache.put(coverKey, urls)
+        folderCovers[coverKey] = urls
       }
     }
     cached
@@ -3282,11 +3290,14 @@ private fun isFolderLike(item: EmbyItem): Boolean =
 private fun isScannableFolder(item: EmbyItem): Boolean = item.Type in FOLDER_TYPES
 
 /**
- * 文件夹宫格封面的进程内缓存（按文件夹 Id 存取）。
+ * 文件夹宫格封面的进程内缓存（键是「文件夹 Id + 取样模式」的组合串）。
  *
  * 一个文件夹的封面要额外发一次 /Items 查询才能拿到子项缩略图，比较贵；
  * 缓存后滚动列表、切分类、从子页面返回都不必重复请求。
  * 取不到的（空文件夹）会缓存成空列表，避免反复重试把服务器打满。
+ *
+ * ⚠️ 键里带「随机 / 固定」模式：随机封面的结果每次都可能不同，
+ * 若只按文件夹 Id 存，用户在设置里来回切开关就会看到串掉的旧图。
  */
 private object EmbyFolderCoverCache {
   private const val MAX_ENTRIES = 200

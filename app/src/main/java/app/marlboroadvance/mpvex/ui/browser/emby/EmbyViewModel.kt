@@ -1954,38 +1954,75 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
    *
    * Emby 的 Folder / CollectionFolder / UserView 这类容器条目自身没有 Primary 图，
    * 直接请求图片接口会 404（也就是用户看到的「文件夹拿不到封面」）。
-   * 这里改为查一次文件夹内部的前 N 个可播放子项，取它们的缩略图交给客户端拼宫格。
+   * 这里改为查文件夹内部的**可播放子项**，取它们的缩略图交给客户端拼宫格。
    *
    * 优先 Thumb（横版缩略图，宫格排布更协调），没有则退回 Primary。
-   * 取不到（空文件夹 / 网络失败）时返回空列表，卡片会退回默认占位图标。
+   *
+   * ⚠️ 关键在于**凑足**：以前只取排序后的前 `count` 个，谁没封面就被滤掉 ——
+   * 于是「前四个恰好都没封面」时整个文件夹退回占位图标（用户反馈的空白问题），
+   * 而且第 5 个之后哪怕有图也永远看不到。现在改成：从更大的候选池里**跳过没封面的**，
+   * 一路往后凑，直到凑满 `count` 张或把文件夹翻完为止。
    *
    * @param count 最多取几张，宫格用 4 张
+   * @param random true＝随机取样（排序交给服务端的 Random，多次换样本）；false＝按名称顺序固定取前几张。
+   *   两种模式都会跳过无封面条目，只是取样顺序不同。
    */
   suspend fun loadFolderCoverUrls(
     server: EmbyServer,
     folderId: String,
     count: Int = 4,
+    random: Boolean = false,
   ): List<String> = runCatching {
-    val page = repository.getItems(
-      server = server,
-      parentId = folderId,
-      sortBy = "SortName",
-      sortOrder = "Ascending",
-      includeItemTypes = listOf("Movie", "Episode", "Video", "MusicVideo"),
-      startIndex = 0,
-      limit = count,
-      recursive = true,
-    )
-    page.Items.mapNotNull { child ->
-      val id = child.Id ?: return@mapNotNull null
-      val thumb = child.ImageTags["Thumb"]
-      val primary = child.ImageTags["Primary"]
-      when {
-        thumb != null -> repository.imageUrl(server, id, "Thumb", thumb, maxWidth = 320)
-        primary != null -> repository.imageUrl(server, id, "Primary", primary, maxWidth = 320)
-        else -> null
+    val urls = ArrayList<String>(count)
+    // 跨页去重：随机模式靠它避免同一张图重复入选；顺序模式靠它扛服务端可能返回的重复项。
+    val seen = HashSet<String>()
+    // 已消费的**服务端**条目数（不是 [urls] 的大小 —— 去掉无封面的条目后两者不相等）。
+    var consumed = 0
+    var attempt = 0
+    val maxAttempt = if (random) FOLDER_COVER_RANDOM_ATTEMPTS else FOLDER_COVER_MAX_PAGES
+    while (urls.size < count && attempt < maxAttempt) {
+      attempt++
+      val page = repository.getItems(
+        server = server,
+        parentId = folderId,
+        // 随机模式让服务端打乱；顺序模式按名称，结果稳定可预期。
+        sortBy = if (random) "Random" else "SortName",
+        sortOrder = if (random) null else "Ascending",
+        includeItemTypes = listOf("Movie", "Episode", "Video", "MusicVideo"),
+        // 容器（Folder / Series / Season / BoxSet）不能播放、也不该占宫格位置，挡掉。
+        isFolder = false,
+        // 随机模式每次都是新样本，从头取；顺序模式从上次消费处接着翻。
+        startIndex = if (random) 0 else consumed,
+        limit = if (random) FOLDER_COVER_RANDOM_POOL else FOLDER_COVER_PAGE_SIZE,
+        recursive = true,
+      )
+      val items = page.Items
+      if (items.isEmpty()) break
+      val before = urls.size
+      for (child in items) {
+        if (urls.size >= count) break
+        val id = child.Id ?: continue
+        if (!seen.add(id)) continue
+        val thumb = child.ImageTags["Thumb"]
+        val primary = child.ImageTags["Primary"]
+        val url = when {
+          thumb != null -> repository.imageUrl(server, id, "Thumb", thumb, maxWidth = 320)
+          primary != null -> repository.imageUrl(server, id, "Primary", primary, maxWidth = 320)
+          else -> null
+        }
+        if (url != null) urls.add(url)
       }
+      if (random) {
+        // 这一批随机样本一张新图都没带来：要么文件夹里带图的本来就没几张，
+        // 要么服务端忽略了 Random（每次都回同一批）。继续重抽也是白费请求，直接收工。
+        if (urls.size == before) break
+        continue
+      }
+      consumed += items.size
+      // 服务端可能截断 Limit；拿「返回条数 < 请求条数」当「已到末页」的信号。
+      if (items.size < FOLDER_COVER_PAGE_SIZE) break
     }
+    urls
   }.getOrDefault(emptyList())
 
   fun clearError() {
@@ -2011,6 +2048,23 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
      * 一季 50 集已覆盖绝大多数剧；长剧（一季 100+ 集，多见于动画）会分页续拉。
      */
     const val EPISODE_PAGE_SIZE = 100
+
+    /**
+     * 文件夹宫格封面：顺序模式下每页翻多少条。
+     *
+     * 比只需要 4 张的缺口大得多，是为了**跳过没封面的条目**后还有余量能凑满 ——
+     * 一页 100 条足够覆盖绝大多数文件夹；极少数超大文件夹由 [FOLDER_COVER_MAX_PAGES] 兜底。
+     */
+    private const val FOLDER_COVER_PAGE_SIZE = 100
+
+    /** 顺序模式最多翻几页（100 × 3 = 300 条扫描上限），防止超大文件夹把设备拖住。 */
+    private const val FOLDER_COVER_MAX_PAGES = 3
+
+    /** 随机模式每次抽样的池子大小：抽一批再从里头挑有封面的。 */
+    private const val FOLDER_COVER_RANDOM_POOL = 48
+
+    /** 随机模式最多重抽几次：随机样本有波动，一两次抽不到 4 张有封面的就再抽一批。 */
+    private const val FOLDER_COVER_RANDOM_ATTEMPTS = 3
 
     /**
      * 全库搜索一次取多少条（清单 1.1 的例外，理由见 [searchGlobal] 的 KDoc）。

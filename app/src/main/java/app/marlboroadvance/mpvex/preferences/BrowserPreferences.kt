@@ -216,6 +216,19 @@ class BrowserPreferences(
   val embyLibraryTitleLines = preferenceStore.getInt("emby_library_title_lines", 1)
 
   /**
+   * 文件夹 / 合集卡片的多宫格封面是否**随机合成**（默认开）。
+   *
+   * 容器条目（Folder / BoxSet / CollectionFolder）自身没有封面，客户端会拉内部若干个
+   * 视频的缩略图拼成 1/2/3/4 宫格充当封面。开＝每次从文件夹内部**随机**取样若干视频合成，
+   * 关＝按名称顺序固定取前几个。两种模式都会**跳过没封面的条目**、一直往后凑，直到凑满
+   * 四张或扫完为止 —— 所以「前几个没封面就整张空白」不会发生。
+   *
+   * 默认**开**：随机取样能把文件夹里更多片子露出来，观感比固定前四张活泼。
+   * （随机只影响取样，登录后的顺序、缓存键都按模式区分，来回切不会串图。）
+   */
+  val embyFolderRandomCover = preferenceStore.getBoolean("emby_folder_random_cover", true)
+
+  /**
    * 「下载完成后清除服务端播放进度」开关。
    *
    * 打开后，一条媒体下载完成时会顺手把 Emby 服务器上这条的**播放位置**清零 ——

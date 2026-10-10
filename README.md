@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.2.1.svg" alt="Release: v1.2.1" /></a>
+  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.2.2.svg" alt="Release: v1.2.2" /></a>
   <img src=".github/badges/flavor-standard.svg" alt="Flavor: standard" />
   <img src=".github/badges/package-cineisle.svg" alt="Package: app.cineisle.player" />
   <img src=".github/badges/kernel-mpv-gsy.svg" alt="Kernel: mpv + GSYVideoPlayer" />
@@ -31,7 +31,12 @@
   <a href="#致谢">致谢</a>
 </p>
 
----
+<hr />
+
+<p align="center">
+  🎬 直链播放不转码 · 📥 离线下载断点续传 · 🖥️ mpv / GSY 双内核 ·
+  📀 远程 ISO 原盘 · 🧑‍🤝‍🧑 演职员合并 · 📺 DLNA 投屏
+</p>
 
 ## 项目背景
 
@@ -49,7 +54,7 @@
 
 ## 技术栈
 
-| 领域 | 选型 |
+| 🧰 领域 | 🔧 选型 |
 | :-- | :-- |
 | **语言 / UI** | Kotlin · Jetpack Compose（Material 3 Expressive）· 单 Activity + Navigation 3 |
 | **架构** | 分层（`domain` 领域 / `ui` 界面 / `database` 持久化 / `preferences` 设置）· Koin 依赖注入 · 协程 + Flow |
@@ -66,7 +71,7 @@
 
 ## 模块
 
-| 模块 | 职责 |
+| 📦 模块 | 🧭 职责 |
 | :-- | :-- |
 | `domain/emby` | Emby 客户端核心：手写 OkHttp3 + kotlinx.serialization，覆盖条目 / 媒体库 / 搜索 / 播放列表 / 会话 / 演职员等端点，含分页游标、直链预解析、筛选与排序 |
 | `domain/iso` | 远程 ISO 原盘播放：ISO9660 解析、蓝光 `mpls` 解析、段映射、HTTP Range 读取与本地代理 |
@@ -90,9 +95,9 @@
 
 ## 功能
 
-### Emby 客户端（本项目从零实现）
+### 🖥️ Emby 客户端（本项目从零实现）
 
-| 功能区 | 要点 |
+| ⚙️ 功能区 | 📌 要点 |
 | :-- | :-- |
 | **服务器与账号** | 多服务器添加 / 编辑 / 删除 / 切换；用户名 + 密码登录；配置存 Room，Token 失效自动重登 |
 | **首页** | 媒体库入口卡片、继续观看（带进度）、最新加入、随便看看（可整块关掉）、全局搜索（400ms 防抖 + 类型筛选 + 历史 + 联想建议） |
@@ -103,9 +108,9 @@
 | **播放与进度同步** | 直链播放 `stream?static=true` 不转码；剧集连播；进度回传 `/Sessions/Playing[/Progress\|/Stopped]`，多端互通 |
 | **离线下载** | `Range` 断点续传；Android 10+ 经 `MediaStore` 写公共 `Download/CineIsle`（免存储权限）；最多同时下 2 个，任务持久化 |
 
-### 播放内核与扩展能力
+### 🚀 播放内核与扩展能力
 
-| 能力 | 要点 |
+| ⚡ 能力 | 📌 要点 |
 | :-- | :-- |
 | **双播放内核** | 默认 mpv，另备 GSYVideoPlayer（IJK / System / ExoPlayer）。设置里选默认内核；播放页一键互切；长按播放键用另一内核起播；GSY 有独立设置页 |
 | **视界流** | 竖屏上下滑连播。相邻条目各自预起实例并提前缓冲；左边缘竖滑调亮度、右边缘竖滑调音量、横拖调进度；截图存相册，出错可重试 |
@@ -123,7 +128,7 @@
 
 ## 致谢
 
-| 项目 | 用途 |
+| 🙏 项目 | 💡 用途 |
 | :-- | :-- |
 | [mpvEx](https://github.com/marlboro-advance/mpvEx) | 直接的上游 |
 | [mpv-android](https://github.com/mpv-android) | mpv 绑定与 libmpv 集成（主播放内核） |

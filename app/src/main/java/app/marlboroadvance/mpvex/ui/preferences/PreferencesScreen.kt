@@ -583,6 +583,7 @@ object PreferencesScreen : Screen {
             val browserPreferences = koinInject<BrowserPreferences>()
             val cardCorner by browserPreferences.embyCardCorner.collectAsState()
             val showCardBadges by browserPreferences.embyShowCardBadges.collectAsState()
+            val folderRandomCover by browserPreferences.embyFolderRandomCover.collectAsState()
             PreferenceCard {
               SliderPreference(
                 value = cardCorner.toFloat(),
@@ -608,6 +609,25 @@ object PreferencesScreen : Screen {
                 summary = {
                   Text(
                     text = "在封面上显示播放进度条 / 作品数等角标；关闭后卡片更干净",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              // 文件夹 / 合集卡片没有自己的封面，客户端会拉内部视频的图拼宫格。
+              // 开＝随机取样（每次可能不一样）；关＝按名称固定取前几张。
+              // 两种模式都会跳过没封面的条目、一直往后凑满四张，所以不会整张空白。
+              SwitchPreference(
+                value = folderRandomCover,
+                onValueChange = { browserPreferences.embyFolderRandomCover.set(it) },
+                title = { Text(text = "合成随机封面图") },
+                summary = {
+                  Text(
+                    text = "文件夹 / 合集卡片用内部视频的封面拼多宫格；打开后随机取样，" +
+                      "每次看到的封面可能不同。关闭则按名称固定取前几个。" +
+                      "没有封面的条目会自动跳过并往后补，直到凑满四张。",
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },

@@ -40,8 +40,8 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
-    versionCode = 29
-    versionName = "1.2.1"
+    versionCode = 30
+    versionName = "1.2.2"
 
     vectorDrawables {
       useSupportLibrary = true
