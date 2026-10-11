@@ -41,7 +41,7 @@ android {
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
     // versionName 本轮保持 1.2.5（同一版的收尾修复），只涨 versionCode 以便覆盖安装
-    versionCode = 39
+    versionCode = 40
     versionName = "1.2.5"
 
     vectorDrawables {

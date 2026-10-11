@@ -869,7 +869,20 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       // 「预解析直链」是个无关的优化开关（默认关，见 BrowserPreferences），
       // 挂在它底下等于「用户没开这个开关就永远用不到 ISO 播放」。
       // 而 ISO 探测自己是会判断的：花 2KB 读一下 PVD，不是 ISO 就立刻返回。
-      val direct = resolveIfEnabled(server, itemId, mediaSourceId)
+      // ── 多版本：先向服务器要「这个版本」的播放地址 ──
+      // ⚠️ 不能只自己拼 `/Videos/{id}/stream?MediaSourceId=…`：官方文档把
+      //   `PlaySessionId` 与 `MediaSourceId` 一起列为该端点的**必需参数**，
+      //   少了前者服务器会无视我们选的版本、直接吐默认版本 —— 现象就是
+      //   「选了不带字幕的 B、播出来还是带字幕的 A」，关掉 302 预解析也一样。
+      //   单版本媒体（mediaSourceId == null）完全不走这条路，行为与改动前一致。
+      val versionUrl = if (mediaSourceId != null) {
+        withContext(Dispatchers.IO) {
+          runCatching { repository.directStreamUrl(server, itemId, mediaSourceId) }.getOrNull()
+        }
+      } else {
+        null
+      }
+      val direct = versionUrl ?: resolveIfEnabled(server, itemId, mediaSourceId)
       // 独立再解析一次给 ISO 探测用（上面那次可能因为开关关着而没解）。
       val isoSource = direct ?: resolveDirectUrl(server, itemId, mediaSourceId = mediaSourceId)
       // ISO 容器要用**选中版本**的容器名，否则多版本下（4K 是 ISO、1080P 是 mkv）

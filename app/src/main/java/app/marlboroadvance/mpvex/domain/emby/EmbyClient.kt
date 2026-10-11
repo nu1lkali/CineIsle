@@ -1944,6 +1944,82 @@ object EmbyClient {
   }
 
   /**
+   * 多版本媒体：向服务器要**指定版本**的直连播放地址。
+   *
+   * ## 为什么不能只自己拼 `/Videos/{id}/stream?MediaSourceId=…`
+   *
+   * Emby 官方文档把 `MediaSourceId` 与 **`PlaySessionId`** 一起列为 `/Videos/{Id}/stream`
+   * 的**必需参数**（`PlaySessionId` from the PlaybackInfo response）。我们以前只带
+   * `MediaSourceId` 就去请求 —— 服务器会无视它、直接吐默认版本，现象正是
+   * 「下拉里选了不带字幕的 B，播出来的还是带字幕的 A」，而且关掉直链预解析也一样
+   * （说明不是 302 那一步的问题，是最初这条流地址就没带对身份）。
+   *
+   * 所以这里先 `POST /Items/{id}/PlaybackInfo`（声明只要直连 / 直串流），让服务器把
+   * 该版本的地址拼好给我们（`DirectStreamUrl`）；服务器没给就自己拼，
+   * 但这一次**一定带上 `PlaySessionId`**。
+   *
+   * @return 该版本的播放地址；任何一步拿不到都返回 null —— 调用方回退到原有拼法，
+   *   解析失败绝不挡住播放。
+   */
+  suspend fun directStreamUrlForSource(
+    server: EmbyServer,
+    itemId: String,
+    /** 要播放的版本（`MediaSources[i].Id`） */
+    mediaSourceId: String,
+  ): String? {
+    val payload =
+      jsonObjectOf(
+        mapOf(
+          "UserId" to server.userId.takeIf { it.isNotEmpty() },
+          // 只要直连 / 直串流：这条路不希望服务器动数据（要转码另有 [transcodeStreamUrl]）
+          "EnableDirectPlay" to true,
+          "EnableDirectStream" to true,
+          "EnableTranscoding" to false,
+          "AutoOpenLiveStream" to false,
+          "IsPlayback" to false,
+          // 指定版本：服务器据此返回对应 MediaSource（含它自己的 DirectStreamUrl）
+          "MediaSourceId" to mediaSourceId,
+        ),
+      ).toString()
+
+    val info = runCatching {
+      execJson<PlaybackInfoResult>(
+        authedRequest(server, "/Items/$itemId/PlaybackInfo")
+          .post(payload.toRequestBody(jsonMedia))
+          .build(),
+      )
+    }.getOrNull() ?: return null
+
+    // ⚠️ 服务端没按 MediaSourceId 给回我们要的那个版本 ⇒ 宁可返回 null 让调用方走原路径。
+    // 退回首条会把「默认版本」当成「用户选的版本」播出去 —— 那正是要修的这个 bug，
+    // 只是换个地方再犯一次。
+    val source = info.MediaSources?.firstOrNull { it.Id == mediaSourceId } ?: return null
+
+    source.DirectStreamUrl?.takeIf { it.isNotBlank() }?.let {
+      return ensureApiKey(absolutize(server, it), server)
+    }
+
+    // 服务器没给直连地址：自己拼，这次带上 PlaySessionId（官方文档的必需参数）
+    val q = LinkedHashMap<String, String?>()
+    q["Static"] = "true"
+    q["MediaSourceId"] = source.Id ?: mediaSourceId
+    info.PlaySessionId?.let { q["PlaySessionId"] = it }
+    q["DeviceId"] = androidDeviceId(server.id.toString())
+    if (server.apiToken.isNotEmpty()) q["api_key"] = server.apiToken
+    val qs = q.entries.joinToString("&") { (k, v) ->
+      "$k=${java.net.URLEncoder.encode(v ?: "", "UTF-8")}"
+    }
+    return "${server.hostUrl}/emby/Videos/$itemId/stream?$qs"
+  }
+
+  /** 服务器给的 `DirectStreamUrl` 未必带 `api_key`（取决于 `AddApiKeyToDirectStreamUrl`），补上更稳。 */
+  private fun ensureApiKey(url: String, server: EmbyServer): String {
+    if (server.apiToken.isEmpty()) return url
+    if (url.contains("api_key=")) return url
+    return url + (if (url.contains("?")) "&" else "?") + "api_key=${server.apiToken}"
+  }
+
+  /**
    * 「让**服务器转码**」后的播放地址 —— 本机解不了的文件走这条路。
    *
    * ## 为什么需要它

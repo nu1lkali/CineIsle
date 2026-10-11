@@ -28,7 +28,7 @@ sealed interface MediaInfoEntry {
 /**
  * 把 Emby 返回的字段整理成「分区 + 键值行」。
  *
- * 顺序：基本信息（含添加时间 / 文件路径）→ 每个视频轨道 → 每个音频轨道 → 字幕轨道。
+ * 顺序：基本信息（含首次入库 / 文件路径）→ 每个视频轨道 → 每个音频轨道 → 字幕轨道。
  * 值为空的项直接跳过，不会出现「未知 / N/A」这种噪音行。
  *
  * @param selectedMediaSourceId 多版本媒体里**当前选中的版本**；null = 用默认版本（第一条源）。
@@ -60,10 +60,11 @@ fun buildEmbyMediaInfoEntries(
   if (allSources.count { !it.Id.isNullOrBlank() } > 1 && source != null) {
     add("版本", embyMediaSourceLabel(source))
   }
-  // ⚠️ 「添加时间」取**当前选中版本**的入库时间，而不是条目级的 item.DateCreated：
-  // 给老条目补一个新版本（比如今天新压的 4K）时，条目的 DateCreated 还是几年前 ——
-  // 显示它会让人以为「我这个版本明明今天才入库」。老服务端不给版本级字段时回退条目级。
-  add("添加时间", formatIsoDate(source?.DateCreated) ?: formatIsoDate(item.DateCreated))
+  // ⚠️ 这里只能给**条目级**的首次入库时间：Emby 的 `MediaSourceInfo` 里根本没有日期字段
+  // （官方文档的属性清单、本项目 `embyclient-reference` 生成的 MediaSourceInfo 都没有
+  // `DateCreated` / `DateModified`）—— **服务端不提供「每个版本各自的入库时间」**。
+  // 所以给老条目补一个新版本后这里仍是老日期；措辞用「首次入库」，别让人当成当前版本的时间。
+  add("首次入库", formatIsoDate(item.DateCreated))
   add("首播日期", formatIsoDate(item.PremiereDate))
   add("时长", item.RunTimeTicks?.takeIf { it > 0 }?.let { formatEmbyDurationFull(it) })
   add("年份", item.ProductionYear?.toString())

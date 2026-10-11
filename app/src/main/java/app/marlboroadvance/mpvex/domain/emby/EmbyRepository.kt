@@ -860,6 +860,21 @@ class EmbyRepository(
     mediaSourceId: String? = null,
   ): String = EmbyClient.transcodeStreamUrl(server, itemId, startTimeTicks, mediaSourceId = mediaSourceId)
 
+  /**
+   * 多版本媒体：**指定版本**的直连播放地址（先问一次 `PlaybackInfo`）。
+   *
+   * 为什么不能直接用 [videoStreamUrl]：官方文档把 `PlaySessionId` 与 `MediaSourceId`
+   * 一起列为 `/Videos/{Id}/stream` 的必需参数，缺了前者服务器会无视我们选的版本。
+   * 详见 [EmbyClient.directStreamUrlForSource]。
+   *
+   * @return 该版本的地址；拿不到返回 null，调用方回退到 [videoStreamUrl]。
+   */
+  suspend fun directStreamUrl(
+    server: EmbyServer,
+    itemId: String,
+    mediaSourceId: String,
+  ): String? = EmbyClient.directStreamUrlForSource(server, itemId, mediaSourceId)
+
   /** 离线下载原始文件的 URL（支持 Range，可断点续传）。 */
   fun itemDownloadUrl(server: EmbyServer, itemId: String): String =
     EmbyClient.itemDownloadUrl(server, itemId)
