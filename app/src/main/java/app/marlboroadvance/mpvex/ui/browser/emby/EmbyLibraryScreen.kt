@@ -1293,8 +1293,14 @@ data class EmbyLibraryScreen(
           },
           style = MaterialTheme.typography.bodyMedium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
+          // ⚠️ 这行文案的长度会随筛选状态大幅变化（「1234 项」→「命中 328 项 · 已扫 1234 / 1234」）。
+          // 不约束宽度的话它先按内容宽测量，把右边那排工具按钮整排顶出屏幕 ——
+          // 现象就是「开了中文字幕筛选、扫完工具栏只剩几个按钮」：其余按钮不是不显示，是被挤出去了。
+          // weight(1f, fill = false)：先量按钮、剩下的空间才归这行字，字放不下就截断成省略号。
+          modifier = Modifier.weight(1f, fill = false),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
         )
-        Spacer(modifier = Modifier.weight(1f))
 
         if (!hideToolbarButtons) {
           IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = false) }) {

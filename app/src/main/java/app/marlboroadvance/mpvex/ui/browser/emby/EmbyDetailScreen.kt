@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -1925,29 +1926,47 @@ private fun MediaSourceSelector(
     ) {
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        // 版本名不可控（有的压制组会把整串信息塞进 Name），不封顶的话一个超长名字
+        // 能把整行撑到换行、把下面一排按钮挤变形。
+        // weight(1f, fill = false) 让中间的标题吃掉剩余空间 ⇒ 箭头稳定停在最右边，
+        // 不再随版本名长短左右晃。
+        modifier = Modifier
+          .widthIn(min = 140.dp, max = 240.dp)
+          .padding(start = 10.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
       ) {
         Text(
           text = "版本：${embyMediaSourceLabel(current)}",
           style = MaterialTheme.typography.labelLarge,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
+          // 吃掉整行剩余宽度（fill 默认 true）⇒ 箭头被顶到最右端，不随版本名长短左右晃。
+          modifier = Modifier.weight(1f),
         )
+        Spacer(modifier = Modifier.width(4.dp))
         Icon(
           imageVector = Icons.Default.ArrowDropDown,
           contentDescription = "切换版本",
+          modifier = Modifier.size(20.dp),
         )
       }
     }
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+    DropdownMenu(
+      expanded = expanded,
+      onDismissRequest = { expanded = false },
+      // 菜单默认跟着锚点（那个小 Surface）的宽度走 —— 版本名一长就整条被省略号截掉，
+      // 用户根本分不清两个版本哪个是哪个。这里单独给一个更宽的区间，
+      // 配合下面「最多 3 行」让长名字**换行显示完整**，而不是截成一条看不懂的半句。
+      modifier = Modifier.widthIn(min = 200.dp, max = 320.dp),
+    ) {
       sources.forEach { source ->
         val id = source.Id ?: return@forEach
         DropdownMenuItem(
           text = {
             Text(
               text = embyMediaSourceLabel(source),
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
+              // 不截断：宁可换行把名字显示全。3 行是上限，再多菜单会高得离谱。
+              maxLines = 3,
+              style = MaterialTheme.typography.bodyMedium,
             )
           },
           leadingIcon = {
