@@ -7,12 +7,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -43,6 +45,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.presentation.Screen
@@ -59,6 +62,16 @@ import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.ProvidePreferenceLocals
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import org.koin.compose.koinInject
+
+/**
+ * 加载动画网格的列数。
+ *
+ * 4 列是这个宽度下「一屏看全」的上限：每格 64dp + 12dp 间距 ⇒
+ * 4×64 + 3×12 = 292dp，常见机型（≥320dp 宽）都放得下；
+ * 再多 5 列（5×64+4×12=368dp）就会在窄屏 / 大字号下被 FlowRow 自动换行，
+ * 反而变成参差不齐的两排。
+ */
+private const val LOADING_ANIM_COLUMNS = 4
 
 /**
  * 外观深度定制：桌面图标 + 加载动画。
@@ -235,18 +248,28 @@ object AppearanceDeepCustomScreen : Screen {
  * ⚠️ 预览必须**真图标**（`mipmap/ic_launcher_xxx`），不能用 painterResource 拼近似 ——
  * 拼出来的和桌面上的不一样，用户选了才发现难看。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun IconRow(
   current: AppIconManager.Style,
   onPick: (AppIconManager.Style) -> Unit,
 ) {
   val context = LocalContext.current
-  LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-    items(AppIconManager.Style.entries.size) { index ->
-      val style = AppIconManager.Style.entries[index]
+  // 同样是网格而不是一行：5 个图标一行拉完，一屏只露 4 个，
+  // 用户横向滑才发现还有 ⇒ 会以为「只有 4 个图标可选」（和加载动画同一个坑）。
+  FlowRow(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+    maxItemsInEachRow = LOADING_ANIM_COLUMNS,
+  ) {
+    // 普通 for 循环：`items(...)` 是 LazyListScope 的扩展，FlowRow 里没有。
+    for (style in AppIconManager.Style.entries) {
       Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
+          // 固定宽度，否则「默认」和「深海」两种标签长度会让格子参差。
+          .width(76.dp)
           .clip(RoundedCornerShape(16.dp))
           .clickable { onPick(style) }
           .padding(6.dp),
@@ -286,18 +309,50 @@ private fun IconRow(
   }
 }
 
-/** 加载动画选择行：每项**当场播放**自己的动画，而不是只给名字。 */
+/**
+ * 加载动画选择区：**网格**，不是横向滑动的一行。
+ *
+ * ## 为什么不用 LazyRow
+ *
+ * 原来是一行 `LazyRow`，一屏只放得下 4 个 —— 用户看到「吃豆人 / 三环 / 小蜜蜂 / 小恐龙」
+ * 之后，得**横向滑动才知道后面还有**，于是反馈「怎么只有 4 个」。
+ * 选项一多，横向滑动就是最容易被忽略的交互（用户不知道右边还有东西）。
+ *
+ * ⇒ 改成网格：一屏铺开，**有多少一眼看全**，不用猜。
+ *
+ * ## 为什么用 FlowRow 而不是 LazyVerticalGrid
+ *
+ * 本函数被放在外层 `LazyColumn` 的 `item {}` 里 ⇒ 高度无界。
+ * `LazyVerticalGrid` 在无界高度约束下会直接抛异常，必须外层再套一层固定高度容器才行，
+ * 反而更绕。`FlowRow` 非惰性、没有高度约束问题，正是这种「网格化的短列表」该用的。
+ *
+ * ⚠️ 代价：所有预览动画会**同时**跑（FlowRow 不惰性）。
+ *   这里能接受，因为预览只有 44dp、且 JSON 都是解析一次后缓存
+ *   （`rememberLottieComposition` 按 key 缓存），十几个小动画不至于掉帧。
+ *   真要上百项时才需要换成惰性网格。
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LoadingAnimationRow(
   current: LoadingAnimation,
   onPick: (LoadingAnimation) -> Unit,
 ) {
-  LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-    items(LoadingAnimation.entries.size) { index ->
-      val anim = LoadingAnimation.entries[index]
+  FlowRow(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+    maxItemsInEachRow = LOADING_ANIM_COLUMNS,
+  ) {
+    // ⚠️ 这里用**普通 for 循环**而不是 `items(count)`：
+    //   `items(...)` 是 `LazyListScope` 的扩展，FlowRow 的作用域里没有 ⇒ 会报 Unresolved。
+    //   FlowRow 本来就要求子项是直接 emit 的（它自己排版），普通循环才是正确用法。
+    for (anim in LoadingAnimation.entries) {
       Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
+          // ⚠️ 必须给固定宽度：FlowRow 是按**内容**排布的，标签「呼吸（自研）」比「三环」宽得多，
+          //   不锁宽的话每格宽度都不同 ⇒ 网格看起来是歪的（而且会挤掉一列）。
+          .width(76.dp)
           .clip(RoundedCornerShape(16.dp))
           .clickable { onPick(anim) }
           .padding(6.dp),
@@ -335,6 +390,7 @@ private fun LoadingAnimationRow(
           style = MaterialTheme.typography.bodySmall,
           textAlign = TextAlign.Center,
           maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
           color = if (anim == current) MaterialTheme.colorScheme.primary
           else MaterialTheme.colorScheme.onSurfaceVariant,
         )

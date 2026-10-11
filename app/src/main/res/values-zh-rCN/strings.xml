@@ -960,12 +960,18 @@
   <string name="app_icon_amber">琥珀</string>
   <string name="loading_anim_system">系统指示器</string>
   <string name="loading_anim_system_short">默认</string>
-  <string name="loading_anim_yamby1">波纹一</string>
-  <string name="loading_anim_yamby2">波纹二</string>
-  <string name="loading_anim_yamby3">波纹三</string>
-  <string name="loading_anim_yamby4">波纹四</string>
-  <string name="loading_anim_yamby5">波纹五</string>
-  <string name="loading_anim_yamby6">波纹六</string>
+  <string name="loading_anim_yamby1">吃豆人</string>
+  <string name="loading_anim_yamby2">三环</string>
+  <string name="loading_anim_yamby3">小蜜蜂</string>
+  <string name="loading_anim_yamby4">小恐龙</string>
+  <string name="loading_anim_yamby5">描边圆环</string>
+  <string name="loading_anim_yamby6">生长方块</string>
+  <string name="loading_anim_yamby7">渐变气泡</string>
   <string name="loading_anim_cine_breath">呼吸（自研）</string>
   <string name="loading_anim_cine_rings">双环（自研）</string>
+  <string name="loading_anim_cine_pulse_dots">跳动三点（自研）</string>
+  <string name="loading_anim_cine_ripple">同心波纹（自研）</string>
+  <string name="loading_anim_cine_spin_arcs">双弧旋转（自研）</string>
+  <string name="loading_anim_cine_bars">均衡器（自研）</string>
+  <string name="loading_anim_cine_halo">光晕呼吸（自研）</string>
 </resources>

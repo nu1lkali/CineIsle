@@ -960,12 +960,18 @@
   <string name="app_icon_amber">Amber</string>
   <string name="loading_anim_system">System spinner</string>
   <string name="loading_anim_system_short">Default</string>
-  <string name="loading_anim_yamby1">Wave 1</string>
-  <string name="loading_anim_yamby2">Wave 2</string>
-  <string name="loading_anim_yamby3">Wave 3</string>
-  <string name="loading_anim_yamby4">Wave 4</string>
-  <string name="loading_anim_yamby5">Wave 5</string>
-  <string name="loading_anim_yamby6">Wave 6</string>
+  <string name="loading_anim_yamby1">Pac-Man</string>
+  <string name="loading_anim_yamby2">Three rings</string>
+  <string name="loading_anim_yamby3">Little bee</string>
+  <string name="loading_anim_yamby4">Little dino</string>
+  <string name="loading_anim_yamby5">Stroke ring</string>
+  <string name="loading_anim_yamby6">Growing boxes</string>
+  <string name="loading_anim_yamby7">Gradient bubbles</string>
   <string name="loading_anim_cine_breath">Breath (built-in)</string>
   <string name="loading_anim_cine_rings">Rings (built-in)</string>
+  <string name="loading_anim_cine_pulse_dots">Pulsing dots (built-in)</string>
+  <string name="loading_anim_cine_ripple">Ripple (built-in)</string>
+  <string name="loading_anim_cine_spin_arcs">Spinning arcs (built-in)</string>
+  <string name="loading_anim_cine_bars">Equalizer (built-in)</string>
+  <string name="loading_anim_cine_halo">Halo (built-in)</string>
 </resources>

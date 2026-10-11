@@ -40,10 +40,10 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
-    // versionName 涨到 1.2.7：本轮新增了 mpv HDR 开关（解码器设置页），
-    // 并把「加载动画」从只接 6 处补到 15 处 —— 属新功能，不算同版本内的修正。
-    versionCode = 47
-    versionName = "1.2.7"
+    // versionName 涨到 1.2.8：本轮把加载动画从 9 个选项扩到 15 个（搬入 yamby_loading2
+    // + 自研 5 个），并把图标/动画两个选择区从横向滑动改成网格（一屏只看得到 4 个）。
+    versionCode = 48
+    versionName = "1.2.8"
 
     vectorDrawables {
       useSupportLibrary = true
