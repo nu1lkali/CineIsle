@@ -359,7 +359,14 @@ data class EmbyLibraryScreen(
     // 列表缓存 key：库 + 分类 + 排序 + 搜索词。
     // 从详情页 / 播放器返回时这个 key 不变，于是直接命中缓存、不再发请求；
     // 只有用户下拉刷新或改了筛选条件才会真正重新拉取。
-    val cacheKey = "$libraryId|${category.name}|$sortBy|$sortOrder|$searchQuery|" +
+    // ⭐ 中文字幕模式下**不要**把搜索词算进 key。
+    //
+    // 中文字幕是按路径在客户端判的，扫描已经把整个库翻完，得到的就是完整的命中集。
+    // 此时搜索只该在这份本地数据上做名字匹配（见下面的 localSearch），不该再问服务端。
+    // 而一旦把搜索词算进 key，一敲字就换一个新桶，扫完那份数据在重组时就被丢掉了 ——
+    // 只剩「再向服务端要一小截」这条路，于是出现「筛选里有、搜索却搜不到」。
+    val cacheKey = "$libraryId|${category.name}|$sortBy|$sortOrder|" +
+      "${if (chineseSubsOnly) "" else searchQuery}|" +
       "g=${selectedGenres.sorted().joinToString(",")}|" +
       "t=${selectedTags.sorted().joinToString(",")}|" +
       "y=${selectedYears.sorted().joinToString(",")}|" +
@@ -377,11 +384,20 @@ data class EmbyLibraryScreen(
 
     // 搜索路径不从这里起值：搜索的「退出再进」由上面的快照（词+结果+滚动位置）回放，
     // 不读 cacheKey 缓存 —— 历史竞态写进缓存的脏条目（如全库媒体）不会闪出来。
+    //
+    // ⭐ 中文字幕是例外：它的 key 里没有搜索词，cachedEntry 就是「扫完那份命中集」，
+    // 搜索要在这份上继续筛，所以这里必须照常起值（见下面的 localSearch）。
     val cachedItems =
-      if (searchQuery.isBlank()) cachedEntry?.items ?: emptyList() else emptyList()
+      if (searchQuery.isBlank() || chineseSubsOnly) {
+        cachedEntry?.items ?: emptyList()
+      } else {
+        emptyList()
+      }
     var items by remember(cacheKey) { mutableStateOf(cachedItems) }
     var totalCount by remember(cacheKey) {
-      mutableIntStateOf(if (searchQuery.isBlank()) cachedEntry?.totalCount ?: 0 else 0)
+      mutableIntStateOf(
+        if (searchQuery.isBlank() || chineseSubsOnly) cachedEntry?.totalCount ?: 0 else 0
+      )
     }
     // ── 「演员」分类的独立数据 ──
     // 不走上面媒体那套分页 / 缓存 / 中文字幕扫描：/Persons 一次性把演员给全，
@@ -392,14 +408,27 @@ data class EmbyLibraryScreen(
     var actorError by remember(cacheKey) { mutableStateOf<String?>(null) }
     var isLoading by remember(cacheKey) {
       mutableStateOf(
-        if (searchQuery.isBlank()) cachedEntry == null || cachedEntry.items.isEmpty() else true,
+        if (searchQuery.isBlank() || chineseSubsOnly) {
+          // 中文字幕模式下仍在用扫完那份：有数据就不该再转圈
+          cachedEntry == null || cachedEntry.items.isEmpty()
+        } else {
+          true
+        },
       )
     }
     var error by remember(cacheKey) { mutableStateOf<String?>(null) }
     val isRefreshing = remember { mutableStateOf(false) }
     // itemId → 命中的「中文字幕」标记：列表卡片直接显示是哪条标记命中的
     var chineseHits by remember(cacheKey) {
-      mutableStateOf(if (searchQuery.isBlank()) cachedEntry?.hits ?: emptyMap() else emptyMap())
+      // 中文字幕模式下搜索也沿用扫完那份的命中记录：
+      // 否则卡片上「命中了哪个标记」的角标会在搜索时整片消失。
+      mutableStateOf(
+        if (searchQuery.isBlank() || chineseSubsOnly) {
+          cachedEntry?.hits ?: emptyMap()
+        } else {
+          emptyMap()
+        }
+      )
     }
     // 客户端筛选必须扫全库，这两个状态让 UI 能显示「已扫多少 / 命中多少」
     var scanScanned by remember(cacheKey) {
@@ -527,15 +556,27 @@ data class EmbyLibraryScreen(
       // 已经有结果的 Id 集合：扫描期间库变了可能导致某条被重复返回，按 Id 去重
       val seen = HashSet<String>()
       items.forEach { item -> item.Id?.let { seen.add(it) } }
+      val searching = searchQuery.isNotBlank()
       val scanned = viewModel.scanItems(
         server = current,
         query = EmbyScanQuery(
-          parentId = libraryId,
-          includeItemTypes = effectiveTypes,
-          excludeItemTypes = effectiveExclude,
-          mediaTypes = effectiveMediaTypes,
-          isFolder = effectiveIsFolder,
-          filters = effectiveFilters,
+          // 搜索时保持原来的**全服**范围（不传 ParentId），不悄悄缩到当前库
+          parentId = if (searching) null else libraryId,
+          // 类型同理沿用搜索那套（用户在搜索筛选里勾的），不套库视图的 effectiveTypes
+          includeItemTypes = if (searching) {
+            EmbySearchFilter.toItemTypes(searchFilters)
+          } else {
+            effectiveTypes
+          },
+          excludeItemTypes = if (searching) null else effectiveExclude,
+          // 搜索时不再按「媒体形态 / 是不是容器」在**请求层**收窄：
+          // 原来的搜索分支也没收窄（容器与否是拉回来之后在本地判的）。
+          mediaTypes = if (searching) null else effectiveMediaTypes,
+          isFolder = if (searching) null else effectiveIsFolder,
+          filters = if (searching) null else effectiveFilters,
+          // ⭐ 搜索词交给服务端：扫的是「命中那批」而不是整库，
+          // 但扫描照样一页一页翻到底 —— 这才是「筛选有、搜索也有」的关键。
+          searchTerm = searchQuery.takeIf { it.isNotBlank() },
           sortBy = sortBy,
           sortOrder = sortOrder,
           recursive = recursive,
@@ -627,7 +668,21 @@ data class EmbyLibraryScreen(
       // 两者都得把整个结果集拉完才准，所以统一走扫描那条路。
       val needClientFilter = chineseSubsOnly ||
         (hasGenreTagFilter && !supportsGenreIdFilter(current.id))
-      if (searchQuery.isBlank() && needClientFilter) {
+      // ⭐ 这里**不再**要求 `searchQuery.isBlank()`。
+      //
+      // 以前搜索走的是下面那条「一次性取回、不翻页」的分支（limit = PAGE_SIZE），
+      // 于是客户端筛选（中文字幕 / 类型标签）只能在一个**被截断的样本**里筛 ——
+      // 表现就是用户报的「筛选列表里有、在筛选基础上搜索却搜不到」。
+      // 两条路看到的不是同一批数据，筛选翻完了整个库，搜索只看了第一页。
+      //
+      // 现在搜索也走扫描：`EmbyScanQuery` 带上 SearchTerm，服务端只返回命中那批，
+      // 扫描再一页一页把它翻到底，口径与纯筛选**完全一致** —— 筛得到的，搜就一定搜得到。
+      // ⭐ 中文字幕 + 搜索：命中集已经在本地扫完了（扫描翻完整个库 + 按路径筛过）。
+      //   搜索只该在这份数据上做本地名字匹配（见下面的 localSearch）——
+      //   **不要**再发请求、也不要重扫：那只会拿回一个被截断的样本，
+      //   于是又回到「筛选里有、搜索却搜不到」。零请求，敲一个字就地筛。
+      if (chineseSubsOnly && searchQuery.isNotBlank()) return
+      if (needClientFilter) {
         startScan(current, reset = reset)
         return
       }
@@ -878,6 +933,10 @@ data class EmbyLibraryScreen(
     // 详情页删除后同步：EmbyLibraryCache.lastRemovedItemId 是快照状态，
     // 列表组合还活着时也能立即触发重组，把已删除的条目从渲染里剔除
     val lastRemovedItemId = EmbyLibraryCache.lastRemovedItemId
+    // 「中文字幕 + 有搜索词」= 本地二次筛选模式：
+    // 命中集已经扫完在本地，搜索只是它的子集筛选，全程零请求
+    // （配套的三处：cacheKey 不含搜索词、load() 早退、下面这条名字过滤）
+    val localSearch = chineseSubsOnly && searchQuery.isNotBlank()
     val visibleItems =
       (if (lastRemovedItemId != null) items.filterNot { it.Id == lastRemovedItemId } else items)
         // 顺手剔掉服务端混进来的幽灵条目（详见 isGhostItem）：它与官方客户端的条目数对不上，
@@ -889,6 +948,13 @@ data class EmbyLibraryScreen(
         // 把 LazyVerticalGrid 撞崩（IllegalArgumentException: Key was already used）。
         // 按同一口径去重：既修崩溃，「命中 N 项」的计数也变准了。
         .distinctBy { it.Id ?: it.Name ?: "" }
+        // ── 中文字幕模式下，搜索就是这一层：在扫完的命中集上按名字包含匹配 ──
+        // 这份数据已经是「整个库翻完 + 按路径判过中文字幕」的完整结果，
+        // 搜索只是取它的子集 —— 不联网、不重扫，所以「筛得到的就一定搜得到」。
+        // 非中文字幕模式（localSearch = false）这一层恒真，行为与从前完全一致。
+        .filter { item ->
+          !localSearch || item.Name?.contains(searchQuery.trim(), ignoreCase = true) == true
+        }
         // 本地再按同一口径剔一遍。
         //
         // 为什么不能只靠服务端：MediaTypes / ExcludeItemTypes / IsFolder 这些参数
@@ -1281,13 +1347,11 @@ data class EmbyLibraryScreen(
             isScanning -> "扫描中… 已扫 $scanScanned" +
               (if (totalCount > 0) " / $totalCount" else "") +
               " · 命中 ${visibleItems.size}"
-            chineseSubsOnly -> buildString {
-              append("命中 ${visibleItems.size} 项")
-              if (scanScanned > 0) {
-                append(" · 已扫 $scanScanned")
-                if (totalCount > 0) append(" / $totalCount")
-              }
-            }
+            // ⚠️ 扫完**不再重复「已扫 X / Y」**：那时它恒等于 Y/Y，是纯噪音，
+            // 却把文案撑到会被省略号截断 —— 命中数到四位数、五位数时尤其明显
+            // （「命中 813 项 · 已扫 12345 / 12345」一行根本放不下，看到的是「命中 813…」）。
+            // 命中数是这时候唯一要紧的数，让它短到任何数量级都一行放得下。
+            chineseSubsOnly -> "命中 ${visibleItems.size} 项"
             totalCount > 0 -> "$totalCount 项"
             else -> ""
           },
@@ -1296,8 +1360,11 @@ data class EmbyLibraryScreen(
           // ⚠️ 这行文案的长度会随筛选状态大幅变化（「1234 项」→「命中 328 项 · 已扫 1234 / 1234」）。
           // 不约束宽度的话它先按内容宽测量，把右边那排工具按钮整排顶出屏幕 ——
           // 现象就是「开了中文字幕筛选、扫完工具栏只剩几个按钮」：其余按钮不是不显示，是被挤出去了。
-          // weight(1f, fill = false)：先量按钮、剩下的空间才归这行字，字放不下就截断成省略号。
-          modifier = Modifier.weight(1f, fill = false),
+          // weight(1f)：先量按钮、剩下的空间**全归**这行字。
+          // ⚠️ fill 必须留默认 true —— 用 fill=false 的话这行字只占内容宽，
+          // 按钮会紧贴文字排、**不再靠右**，右边留一大块空白（这就是删掉 Spacer 后的回归）。
+          // 撑满才能保证按钮永远贴在最右端；字放不下就截断成省略号，按钮一个都不会少。
+          modifier = Modifier.weight(1f),
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
@@ -1667,7 +1734,7 @@ data class EmbyLibraryScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
               ) {
-                CircularProgressIndicator()
+                app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator()
                 Text(
                   text = "正在扫描媒体库… 已扫 $scanScanned" +
                     (if (totalCount > 0) " / $totalCount" else ""),

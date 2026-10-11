@@ -186,6 +186,17 @@ class BrowserPreferences(
   val embyResolveDirectLink = preferenceStore.getBoolean("emby_resolve_direct_link", false)
 
   /**
+   * 多版本媒体的**优先选择规则**（存 [MediaSourcePreference.key]，不是枚举名）。
+   *
+   * 存 key 而不是枚举名：枚举重命名 / 增删会让 `valueOf` 抛异常或误匹配，
+   * key 是稳定契约（见 `MediaSourcePreference` 的注释）。
+   *
+   * 默认 `DEFAULT` = 不自动选、跟随服务器 —— 与加这个功能之前行为完全一致，
+   * 老用户升级后不会看到任何变化。
+   */
+  val embyMediaSourcePreference = preferenceStore.getString("emby_media_source_preference", "default")
+
+  /**
    * 媒体库内的**视图模式**（[EmbyLibraryViewMode] 的枚举名，空串 = 网格）。
    *
    * 三种：网格（海报 / 背景图 / 横幅三选一）、紧凑列表（一行一条，信息密度最高）、

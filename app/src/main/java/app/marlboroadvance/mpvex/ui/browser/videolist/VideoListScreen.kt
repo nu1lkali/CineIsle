@@ -623,10 +623,7 @@ private fun VideoListContent(
           .padding(bottom = 80.dp), // Account for bottom navigation bar
         contentAlignment = Alignment.Center,
       ) {
-        CircularProgressIndicator(
-          modifier = Modifier.size(48.dp),
-          color = MaterialTheme.colorScheme.primary,
-        )
+        app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
       }
     }
 

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面图标切换用的背景色 / 前景。
+
+  ⚠️ 为什么必须有 4 套独立资源：桌面 launcher 图标只能来自 APK 内的资源，
+  从网络下载的图**不能**当 launcher icon（PackageManager 不接受运行时替换的 icon）。
+  所以「换图标」只能靠 activity-alias + 每套一套 adaptive icon，见 AppIconManager。
+-->
+<resources>
+  <!-- 默认（原有）：沿用 ic_launcher_background，资源本身在别处定义 -->
+  <color name="app_icon_deepsea_background">#0B1F3A</color>
+  <color name="app_icon_midnight_background">#121212</color>
+  <color name="app_icon_minimal_background">#FAFAFA</color>
+  <color name="app_icon_amber_background">#FF9E4A</color>
+</resources>

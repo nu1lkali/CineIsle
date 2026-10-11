@@ -1,6 +1,9 @@
 package app.marlboroadvance.mpvex.ui.preferences
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -26,14 +29,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
+import app.marlboroadvance.mpvex.preferences.SEEK_STEP_RANGE
+import app.marlboroadvance.mpvex.preferences.coerceSeekStepSeconds
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.ui.player.MpvDiskCache
 import app.marlboroadvance.mpvex.ui.player.PlayerOrientation
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.toFixed
+import app.marlboroadvance.mpvex.ui.preferences.components.TickedSlider
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -449,6 +456,75 @@ object PlayerPreferencesScreen : Screen {
                 },
                 onSliderValueChange = { preferences.customSkipDuration.set(it.roundToInt()) },
                 sliderValue = customSkipDuration.toFloat(),
+              )
+
+              PreferenceDivider()
+
+              // ⭐ 快进/快退时长：带刻度的滑块（见 TickedSlider）。
+              // 用自绘滑块而不是 SliderPreference，是因为 Material 那个没有刻度 ——
+              // 1~300 秒这个跨度，用户需要一眼看出自己大概在哪个量级。
+              val seekForward by preferences.seekForwardSeconds.collectAsState()
+              val seekBackward by preferences.seekBackwardSeconds.collectAsState()
+              Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                TickedSlider(
+                  value = coerceSeekStepSeconds(seekForward),
+                  onValueChange = { preferences.seekForwardSeconds.set(it) },
+                  valueRange = SEEK_STEP_RANGE,
+                  title = stringResource(R.string.pref_seek_step_title),
+                  supportingText =
+                    stringResource(R.string.pref_seek_forward_title) +
+                      " · " +
+                      stringResource(R.string.pref_seek_seconds, seekForward),
+                  valueLabel = stringResource(R.string.pref_seek_seconds, seekForward),
+                  ticks = listOf(1, 10, 30, 60, 120, 300),
+                  tickLabels = listOf(1, 10, 30, 60, 120, 300),
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                TickedSlider(
+                  value = coerceSeekStepSeconds(seekBackward),
+                  onValueChange = { preferences.seekBackwardSeconds.set(it) },
+                  valueRange = SEEK_STEP_RANGE,
+                  supportingText =
+                    stringResource(R.string.pref_seek_backward_title) +
+                      " · " +
+                      stringResource(R.string.pref_seek_seconds, seekBackward),
+                  valueLabel = stringResource(R.string.pref_seek_seconds, seekBackward),
+                  ticks = listOf(1, 10, 30, 60, 120, 300),
+                  tickLabels = listOf(1, 10, 30, 60, 120, 300),
+                )
+              }
+
+              PreferenceDivider()
+
+              // 控制栏信息：时钟 / 电量两个独立开关。
+              val showClock by preferences.showPlayerClock.collectAsState()
+              SwitchPreference(
+                value = showClock,
+                onValueChange = preferences.showPlayerClock::set,
+                title = { Text(stringResource(R.string.pref_show_player_clock_title)) },
+                summary = {
+                  Text(
+                    stringResource(R.string.pref_show_player_clock_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              val showBattery by preferences.showPlayerBattery.collectAsState()
+              SwitchPreference(
+                value = showBattery,
+                onValueChange = preferences.showPlayerBattery::set,
+                title = { Text(stringResource(R.string.pref_show_player_battery_title)) },
+                summary = {
+                  Text(
+                    stringResource(R.string.pref_show_player_battery_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
               )
             }
           }

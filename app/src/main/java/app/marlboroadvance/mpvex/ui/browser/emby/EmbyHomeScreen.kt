@@ -59,6 +59,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.database.repository.SearchHistoryRepository
@@ -129,6 +130,14 @@ fun EmbyHomeScreen(
    * 播放列表是「任意片单」，两者语义不同，混在一个列表里用户会认错。
    */
   onOpenCollections: () -> Unit = {},
+  /**
+   * 打开「直播电视」频道列表页。
+   *
+   * 频道来自 Emby 的 `/LiveTv/Channels`，只有列表 + 点播播放，
+   * 不做 EPG / 录制（服务端没配 LiveTv 时会返回空列表，页面给空态文案）。
+   * 同样只传回调、不自己 push：导航栈在 [MainScreen] 手里。
+   */
+  onOpenLiveTv: () -> Unit = {},
 ) {
   val context = LocalContext.current
   val viewModel: EmbyViewModel = viewModel(
@@ -151,10 +160,8 @@ fun EmbyHomeScreen(
   val latestItems by viewModel.latestItems.collectAsState()
   val isLoading by viewModel.isLoading.collectAsState()
   val error by viewModel.error.collectAsState()
-  val servers by viewModel.servers.collectAsState()
 
-  var serverMenuExpanded by remember { mutableStateOf(false) }
-  // 顶栏「更多」菜单（播放列表 / 猜你喜欢 / 合集）
+  // 顶栏「更多」菜单（直播电视 / 播放列表 / 猜你喜欢 / 合集）
   var moreMenuExpanded by remember { mutableStateOf(false) }
 
   // ── 下拉刷新 ──
@@ -406,12 +413,18 @@ fun EmbyHomeScreen(
           Text(
             text = server?.name ?: "Emby",
             style = MaterialTheme.typography.titleLarge,
+            // ⚠️ 服务器名是用户自己起的，长度不可控（默认还带「未登录」第二行）。
+            //   TopAppBar 的 actions 会挤占标题宽度，名字长就该**省略**而不是
+            //   硬撑把顶栏撑开 —— 单行 + Ellipsis 才不会把按钮挤出可视区。
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
           if (server != null && server?.isLoggedIn != true) {
             Text(
               text = "未登录",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.error,
+              maxLines = 1,
             )
           }
         }
@@ -434,50 +447,10 @@ fun EmbyHomeScreen(
             contentDescription = if (searchActive) "退出搜索" else "搜索全部媒体库",
           )
         }
-        Box {
-          IconButton(onClick = { serverMenuExpanded = true }) {
-            Icon(Icons.Default.Dns, contentDescription = "切换服务器")
-          }
-          DropdownMenu(
-            expanded = serverMenuExpanded,
-            onDismissRequest = { serverMenuExpanded = false },
-          ) {
-            if (servers.isEmpty()) {
-              DropdownMenuItem(
-                text = { Text("暂无服务器") },
-                onClick = { serverMenuExpanded = false },
-              )
-            }
-            servers.forEach { s ->
-              DropdownMenuItem(
-                text = {
-                  Text(
-                    text = buildString {
-                      append(s.name)
-                      if (s.id == server?.id) append(" ✓")
-                    },
-                    color = if (s.id == server?.id) {
-                      MaterialTheme.colorScheme.primary
-                    } else {
-                      MaterialTheme.colorScheme.onSurface
-                    },
-                  )
-                },
-                onClick = {
-                  serverMenuExpanded = false
-                  viewModel.switchServer(s)
-                },
-              )
-            }
-            DropdownMenuItem(
-              text = { Text("管理服务器…") },
-              onClick = {
-                serverMenuExpanded = false
-                onManageServers()
-              },
-            )
-          }
-        }
+        // ⚠️ **这里原来还有一个 `Icons.Default.Dns`「切换服务器」按钮，已删**。
+        //   切服务器在服务器管理页里本来就能做，而顶栏每个图标都在挤压标题里的
+        //   **服务器名称**（用户反馈「服务器名称都放不下了」）⇒ 不如把这个位置还给标题。
+        //   需要切换时：Emby 维护 → 服务器管理。
         // 下载管理：有任务在跑时角标显示数量。
         // 高频（用户在下载页和首页之间来回切），所以留在顶栏不进「更多」。
         EmbyDownloadEntryButton()
@@ -488,6 +461,11 @@ fun EmbyHomeScreen(
         // 之前这里平铺了 6 个功能按钮（下载 / 离线 / 播放列表 / 猜你喜欢 / 合集 / Emby 维护），
         // 挤到连「设置」都差点被顶出可视区域。低频的收成一个 ⋮ 菜单，
         // 高频的（下载 / 维护 / 搜索 / 服务器 / 设置）仍然常驻。
+        //
+        // ⚠️ **顶栏已经 5 个 actions（搜索 / 下载 / Emby 维护 / ⋮ / 设置），
+        //   不要再往里加**：每个图标都在挤压标题里的**服务器名称**，
+        //   名字稍长就显示不全（用户反馈「服务器名称都放不下了」）。
+        //   低频功能一律进这个 ⋮ 菜单，或另找内容区的位置。
         Box {
           IconButton(onClick = { moreMenuExpanded = true }) {
             Icon(Icons.Default.MoreVert, contentDescription = "更多功能")
@@ -496,6 +474,16 @@ fun EmbyHomeScreen(
             expanded = moreMenuExpanded,
             onDismissRequest = { moreMenuExpanded = false },
           ) {
+            // 直播电视排**第一位**：它是最找不到的功能（频道不出现在 /Items，
+            // 媒体库横向卡片扫不到），而下面几个用户一眼能看到。
+            DropdownMenuItem(
+              text = { Text("直播电视") },
+              leadingIcon = { Icon(Icons.Default.Tv, contentDescription = null) },
+              onClick = {
+                moreMenuExpanded = false
+                onOpenLiveTv()
+              },
+            )
             DropdownMenuItem(
               text = { Text("播放列表") },
               leadingIcon = {
@@ -522,7 +510,7 @@ fun EmbyHomeScreen(
                 onOpenCollections()
               },
             )
-          }
+            }
         }
         // 设置：放在最后且永不折叠 —— 用户要的就是「设置按钮别再被挤没」。
         // 播放器 / 外观 / 解码等偏好都在这里。

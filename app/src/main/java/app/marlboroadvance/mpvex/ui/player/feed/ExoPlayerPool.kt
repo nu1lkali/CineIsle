@@ -14,7 +14,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -73,6 +75,19 @@ internal class ExoPlayerPool(
    * 加载态的结束判据必须是这一个：早任何一步，用户看到的都是「转圈消失 → 黑屏 → 画面浮现」。
    */
   private val onFrameVisible: (index: Int) -> Unit,
+  /**
+   * 拉流时附带的默认请求头（`User-Agent` / `Referer` 等）。
+   *
+   * ⭐ **这不是可选项，缺了就会导致 strm 播不了**（现象是「服务器拒绝了」）：
+   * strm 条目的真实媒体在网盘 CDN 上（115 / 阿里云盘之类），这类直链的签名
+   * **把 UA 和 Referer 一起算进去**。主播放器（mpv）一直显式带着
+   * `EmbyClient.STREAM_USER_AGENT` + 服务器 origin 作 Referer，所以那边能播；
+   * 视界流早先用裸 `MediaItem.fromUri(url)`，ExoPlayer 用自己的默认 UA 去拉，
+   * 签名对不上 ⇒ CDN 直接 403。
+   *
+   * 两边的 UA **必须一致**：预解析直链用 A、真正拉流用 B，A≠B 一样会被拒。
+   */
+  private val defaultHttpHeaders: Map<String, String> = emptyMap(),
 ) {
 
   /** index → 实例。只包含当前窗口（±1）内的条目 */
@@ -178,8 +193,26 @@ internal class ExoPlayerPool(
     return player
   }
 
-  private fun build(url: String): ExoPlayer =
-    ExoPlayer.Builder(context)
+  private fun build(url: String): ExoPlayer {
+    val builder = ExoPlayer.Builder(context)
+    // ⭐ 请求头必须挂在这里（DefaultHttpDataSource），而不是 `MediaItem` 的
+    // `MediaItem.LocalConfiguration`—— 那些 header 只对**本地文件**的
+    // `setDataSource(path, headers)` 有意义，http(s) 走的是 DataSource 层，
+    // 挂错地方等于没挂（这坑很容易踩，因为两个 API 长得极像）。
+    if (defaultHttpHeaders.isNotEmpty()) {
+      val httpFactory =
+        DefaultHttpDataSource.Factory()
+          .setDefaultRequestProperties(defaultHttpHeaders)
+          // strm 的真实地址常在**另一个主机**上（Emby → 网盘 CDN）。
+          // 默认配置只在同协议内跟跨主机跳转，跨协议（http↔https）直接放弃，
+          // 对这种链路会直接失败 ⇒ 显式打开。
+          .setAllowCrossProtocolRedirects(true)
+          // 连接超时别太长：视界流要快速失败并切走，卡住比报错更伤体验。
+          .setConnectTimeoutMs(15_000)
+          .setReadTimeoutMs(30_000)
+      builder.setMediaSourceFactory(DefaultMediaSourceFactory(context).setDataSourceFactory(httpFactory))
+    }
+    return builder
       .setAudioAttributes(
         AudioAttributes.Builder()
           .setUsage(C.USAGE_MEDIA)
@@ -197,6 +230,7 @@ internal class ExoPlayerPool(
         playWhenReady = false
         prepare()
       }
+  }
 
   private fun listenerFor(index: Int) = object : Player.Listener {
     /**

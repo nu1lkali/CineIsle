@@ -41,6 +41,18 @@ data class EmbyScanQuery(
   val is3D: Boolean? = null,
   val hasSubtitles: Boolean? = null,
   val studioIds: List<String>? = null,
+  /**
+   * 搜索词（Emby 的 `SearchTerm`）。
+   *
+   * 为什么扫描也要能带搜索词：客户端筛选（按路径判断的「中文字幕」等）必须把
+   * **整个结果集**翻完才准。以前「搜索」走的是另一条只取第一页的分支
+   * （`viewModel.search`，`limit = PAGE_SIZE` 且不翻页），于是出现
+   * 「筛选列表里有、搜索却搜不到」—— 两条路看到的样本根本不是同一批。
+   *
+   * 带上 SearchTerm 之后，扫描翻的就是「搜索命中的那批」，而且照样一页一页翻到底，
+   * 口径与纯筛选完全一致：筛得到的，搜就一定搜得到。
+   */
+  val searchTerm: String? = null,
 )
 
 /** 扫描进度分片：每拉完一页回调一次，UI 可以边扫边显示，不用等整库拉完 */

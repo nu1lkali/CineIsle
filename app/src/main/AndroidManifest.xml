@@ -104,6 +104,74 @@
             </intent-filter>
         </activity>
 
+        <!--
+          桌面图标切换用的 activity-alias（外观 → 桌面图标）。
+
+          ⚠️ Android 的桌面图标只能是 APK 内的静态资源，不能从网络下载 ——
+            所以「换图标」只有这一条路：为每套图标开一个 alias，运行时用
+            PackageManager.setComponentEnabledSetting 启用其中一个、禁用其余。
+            见 ui/preferences/AppIconManager.kt。
+
+          ⚠️ 每个 alias 都必须自带一份 MAIN/LAUNCHER filter，缺了就不出现在桌面。
+          ⚠️ android:targetActivity 指向 MainActivity，进程与单例行为完全不变，
+            所以切换不���「另一个 App」，只是换了个壳。
+        -->
+        <activity-alias
+            android:name=".MainActivityAliasDeepSea"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_deepsea"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_deepsea"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".MainActivityAliasMidnight"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_midnight"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_midnight"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".MainActivityAliasMinimal"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_minimal"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_minimal"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".MainActivityAliasAmber"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_amber"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_amber"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
         <activity
             android:name=".ui.player.PlayerActivity"
             android:autoRemoveFromRecents="true"

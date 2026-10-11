@@ -347,6 +347,8 @@ class EmbyRepository(
         parentId = query.parentId,
         sortBy = query.sortBy,
         sortOrder = query.sortOrder,
+        // 「搜索 + 客户端筛选」时把搜索词交给服务端，扫的就是命中那批，但照样翻到底
+        searchTerm = query.searchTerm,
         filters = query.filters,
         includeItemTypes = query.includeItemTypes,
         genres = query.genres,
@@ -774,6 +776,16 @@ class EmbyRepository(
   ): EmbyItemsResult = withContext(Dispatchers.IO) {
     EmbyClient.searchItems(server, term, includeItemTypes, limit, sortBy, sortOrder)
   }
+
+  /**
+   * 直播电视频道列表（`/LiveTv/Channels`）。
+   *
+   * 与 [searchItems] 一样走 IO 线程；服务端没启用直播电视时返回空列表。
+   */
+  suspend fun getLiveTvChannels(server: EmbyServer): List<EmbyItem> =
+    withContext(Dispatchers.IO) {
+      EmbyClient.getLiveTvChannels(server)
+    }
 
   /**
    * 搜演员（走 `/Persons`）。

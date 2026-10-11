@@ -34,6 +34,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -51,11 +52,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.Replay10
-import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -120,6 +120,7 @@ import app.marlboroadvance.mpvex.ui.player.controls.components.ControlsButton
 import app.marlboroadvance.mpvex.ui.player.controls.components.MultipleSpeedPlayerUpdate
 import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassBorder
 import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassFill
+import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerStatusIndicators
 import app.marlboroadvance.mpvex.ui.player.controls.components.SeekPlayerUpdate
 import app.marlboroadvance.mpvex.ui.player.controls.components.SeekbarWithTimers
 import app.marlboroadvance.mpvex.ui.player.controls.components.SlideToUnlock
@@ -207,6 +208,15 @@ private fun CenterSeekButton(
 ) {
   val hideBackground by koinInject<AppearancePreferences>()
     .hidePlayerButtonsBackground.collectAsState()
+  // 步长跟着偏好走 ⇒ 改完设置立刻反映在按钮上，无需重启播放器。
+  // collectAsState 而不是 .get()：后者在 Composable 里读一次就不变了（红线 14）。
+  // 前进/后退是两个独立值（跳片头要 10s、跳过场可能要 30s，合成一个两边都别扭）。
+  val playerPrefs = koinInject<PlayerPreferences>()
+  val stepSeconds by
+    remember(forward) {
+      if (forward) playerPrefs.seekForwardSeconds else playerPrefs.seekBackwardSeconds
+    }
+      .collectAsState()
   val buttonShadow =
     Brush.radialGradient(
       0.0f to Color.Black.copy(alpha = 0.3f),
@@ -243,16 +253,36 @@ private fun CenterSeekButton(
         null
       },
   ) {
-    Icon(
-      imageVector = if (forward) Icons.Default.Forward10 else Icons.Default.Replay10,
-      contentDescription = stringResource(
-        if (forward) R.string.player_control_forward_10s else R.string.player_control_rewind_10s,
-      ),
-      tint = controlColor,
-      modifier = Modifier
-        .fillMaxSize()
-        .padding(MaterialTheme.spacing.smaller),
-    )
+    // ⭐ 时长可变（前进/后退还不一样）⇒ 不能用 Icons 的 Forward10/Replay30
+    // 这类**固定档位**图标 —— 那套图标只覆盖 10/30/45/60，用户调到别的秒数就没有对应图标。
+    //
+    // ⚠️ **不要叠在一起**：早前是 `Box(Alignment.Center)` 里 Icon(fillMaxSize) + Text
+    //   居中重合，结果数字正好压在双箭头的两个三角之间，糊成一团（用户反馈「数字压在
+    //   箭头上了」）。
+    // ⇒ 改成**上下排布**：箭头像小尺寸的标题图标在上、秒数在下。
+    //   箭头保持全不透明（它现在是方向主体，不再是「半透明背景」）；
+    //   秒数用 labelSmall 避免 3 位数时撑破 44dp。
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
+      Icon(
+        imageVector = if (forward) Icons.Default.FastForward else Icons.Default.FastRewind,
+        contentDescription =
+          stringResource(
+            if (forward) R.string.player_control_forward_10s else R.string.player_control_rewind_10s,
+            stepSeconds,
+          ),
+        tint = controlColor,
+        modifier = Modifier.size(18.dp),
+      )
+      Text(
+        text = stepSeconds.toString(),
+        color = controlColor,
+        style = MaterialTheme.typography.labelSmall,
+        maxLines = 1,
+      )
+    }
   }
 }
 
@@ -277,6 +307,12 @@ fun PlayerControls(
   val audioPreferences = koinInject<AudioPreferences>()
   val showSystemStatusBar by playerPreferences.showSystemStatusBar.collectAsState()
   val showSystemNavigationBar by playerPreferences.showSystemNavigationBar.collectAsState()
+  // 控制条 << / >> 的步长（秒，forward 与 backward 是两个独立偏好）。
+  val seekForwardSeconds by playerPreferences.seekForwardSeconds.collectAsState()
+  val seekBackwardSeconds by playerPreferences.seekBackwardSeconds.collectAsState()
+  // 控制条上的系统时钟 / 电量（两个独立开关，默认都关）。
+  val showPlayerClock by playerPreferences.showPlayerClock.collectAsState()
+  val showPlayerBattery by playerPreferences.showPlayerBattery.collectAsState()
   val interactionSource = remember { MutableInteractionSource() }
   val controlsShown by viewModel.controlsShown.collectAsState()
   val areControlsLocked by viewModel.areControlsLocked.collectAsState()
@@ -470,6 +506,14 @@ fun PlayerControls(
         val (bottomRightControls, bottomLeftControls) = createRefs()
         val playerPauseButton = createRef()
         val seekbar = createRef()
+        // 系统时钟 + 电量：独立约束块。
+        // ⚠️ **锚点必须跟着朝向变**（这条吃过亏）：
+        // 之前两种朝向都锚 `bottom→seekbar.top`，而那一行在两种朝向下都已被占 ——
+        //   · 竖屏：portraitBottomTitle 也锚 seekbar.top 且横向占满 ⇒ 压在标题上；
+        //   · 横屏：bottomRightControls（含翻转按钮）同样锚 seekbar.top ⇒ 压在一起。
+        // ⇒ 现在分别锚到**那一行控件的上方**：竖屏锚按钮簇上方、横屏锚右下簇上方，
+        //   那一带本来就是留白，不与任何控件冲突。
+        val statusIndicators = createRef()
         // 绔栧睆锛氭爣棰樻斁鍦ㄨ繘搴︽潯涓婃柟锛屽崟鐙竴鏉＄害鏉燂紙妯睆涓嶄娇鐢級
         val portraitBottomTitle = createRef()
         val (playerUpdates) = createRefs()
@@ -817,7 +861,9 @@ fun PlayerControls(
 
           when {
             pausedForCache == true && showLoadingCircle -> {
-              LoadingIndicator(
+              // 走统一入口 ⇒ 「外观 → 加载动画」的选择对缓冲指示也生效。
+              // ⚠️ 96dp 与原来的 LoadingIndicator 同尺寸，切换时画面不会跳。
+              app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
                 modifier = Modifier.size(96.dp),
               )
             }
@@ -837,7 +883,7 @@ fun PlayerControls(
                 ) {
                   CenterSeekButton(forward = false) {
                     resetControlsTimestamp = System.currentTimeMillis()
-                    viewModel.seekBy(-10)
+                    viewModel.seekBy(-seekBackwardSeconds)
                   }
 
                   Surface(
@@ -995,7 +1041,7 @@ fun PlayerControls(
 
                   CenterSeekButton(forward = true) {
                     resetControlsTimestamp = System.currentTimeMillis()
-                    viewModel.seekBy(10)
+                    viewModel.seekBy(seekForwardSeconds)
                   }
                 }
               } else {
@@ -1005,7 +1051,7 @@ fun PlayerControls(
                 ) {
                   CenterSeekButton(forward = false) {
                     resetControlsTimestamp = System.currentTimeMillis()
-                    viewModel.seekBy(-10)
+                    viewModel.seekBy(-seekBackwardSeconds)
                   }
 
                   Surface(
@@ -1053,7 +1099,7 @@ fun PlayerControls(
 
                   CenterSeekButton(forward = true) {
                     resetControlsTimestamp = System.currentTimeMillis()
-                    viewModel.seekBy(10)
+                    viewModel.seekBy(seekForwardSeconds)
                   }
                 }
               }
@@ -1291,6 +1337,49 @@ fun PlayerControls(
             activity = activity,
             onDislikeRemarkRequest = onDislikeRemarkRequest,
           )
+        }
+
+        // ⭐ 系统时钟 / 电量：**按朝向锚到按钮簇上方**、右对齐。
+        // 为什么是这个位置：
+        // - 进度条那一行在竖屏是媒体标题（占满宽）、在横屏是含翻转按钮的右下簇，
+        //   早前硬锚 `seekbar.top` 就会和它们重叠（用户反馈「叠在标题/翻转按钮下面」）。
+        // - 按钮簇**上方**那一带两种朝向都是留白，且属于「控件区」而不是画面主体 ——
+        //   白字 + 阴影都成立，且不会被字幕区抢走。
+        // 两个开关都关时**整块不创建**（不进 composition），避免无谓的重排。
+        if (showPlayerClock || showPlayerBattery) {
+          AnimatedVisibility(
+            visible = controlsShown && !areControlsLocked,
+            enter = fadeIn(playerControlsEnterAnimationSpec()),
+            exit = fadeOut(playerControlsExitAnimationSpec()),
+            modifier =
+              Modifier
+                .then(
+                  if (showSystemNavigationBar) {
+                    val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
+                    Modifier.padding(
+                      end = navBarPadding.calculateRightPadding(LocalLayoutDirection.current)
+                    )
+                  } else {
+                    Modifier
+                  }
+                )
+                .constrainAs(statusIndicators) {
+                  // ⚠️ 竖屏锚 bottomLeftControls（按钮簇）、横屏锚 bottomRightControls
+                  //   （含翻转按钮）。两者都是「该朝向真正贴着进度条的那一簇」，
+                  //   所以锚它们的上沿才能保证状态栏落在控件区内的留白里。
+                  if (isPortrait) {
+                    bottom.linkTo(bottomLeftControls.top, spacing.small)
+                  } else {
+                    bottom.linkTo(bottomRightControls.top, spacing.small)
+                  }
+                  end.linkTo(parent.end, spacing.large)
+                },
+          ) {
+            PlayerStatusIndicators(
+              showClock = showPlayerClock,
+              showBattery = showPlayerBattery,
+            )
+          }
         }
 
         if (isPortrait) {

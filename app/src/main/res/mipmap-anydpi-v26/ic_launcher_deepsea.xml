@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 桌面图标切换：深海蓝（默认深色主题） -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/app_icon_deepsea_background"/>
+    <foreground android:drawable="@drawable/ic_launcher_deepsea_foreground"/>
+</adaptive-icon>

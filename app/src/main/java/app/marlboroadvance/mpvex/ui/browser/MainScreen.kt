@@ -314,6 +314,10 @@ private fun EmbyHomeRoute() {
     onOpenCollections = {
       backStack.add(app.marlboroadvance.mpvex.ui.browser.emby.collection.EmbyCollectionScreen)
     },
+    // 「直播电视」频道列表（/LiveTv/Channels；只有列表 + 播放，无 EPG/录制）
+    onOpenLiveTv = {
+      backStack.add(app.marlboroadvance.mpvex.ui.browser.emby.EmbyLiveTvScreen)
+    },
   )
 }
 

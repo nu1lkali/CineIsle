@@ -113,6 +113,8 @@ enum class Sheets {
   Cast,
   /** 录制 GIF 片段（3~10 秒） */
   GifRecord,
+  /** 弹幕：开关 / 搜番 / 字号速度透明度 / 屏蔽词 */
+  Danmaku,
 }
 
 enum class Panels {

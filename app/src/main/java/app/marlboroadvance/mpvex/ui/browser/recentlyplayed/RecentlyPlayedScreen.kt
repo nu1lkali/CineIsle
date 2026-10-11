@@ -307,10 +307,7 @@ object RecentlyPlayedScreen : Screen {
               .padding(padding),
             contentAlignment = Alignment.Center,
           ) {
-            CircularProgressIndicator(
-              modifier = Modifier.size(48.dp),
-              color = MaterialTheme.colorScheme.primary,
-            )
+            app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
           }
         }
 

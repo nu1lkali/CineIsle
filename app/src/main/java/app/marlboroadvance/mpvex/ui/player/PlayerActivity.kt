@@ -9,6 +9,7 @@ import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -50,6 +51,7 @@ import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import app.marlboroadvance.mpvex.ui.player.controls.PlayerControls
+import app.marlboroadvance.mpvex.ui.player.danmaku.DanmakuRenderParams
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import app.marlboroadvance.mpvex.utils.history.RecentlyPlayedOps
 import app.marlboroadvance.mpvex.utils.media.HttpUtils
@@ -167,6 +169,9 @@ open class PlayerActivity :
    */
   private val fileManager: FileManager by inject()
 
+  /** 弹幕偏好（开关 / 字号 / 速度 / 透明度 / 密度 / 屏蔽词 / 弹幕源）。 */
+  private val danmakuPreferences: app.marlboroadvance.mpvex.preferences.DanmakuPreferences by inject()
+
   /**
    * Track selector for automatic audio/subtitle selection
    */
@@ -193,6 +198,23 @@ open class PlayerActivity :
    * For network streams, this includes a hash of the URI to ensure uniqueness.
    */
   private var mediaIdentifier = ""
+
+  /**
+   * 弹幕状态（加载 / 匹配 / 过滤）。
+   *
+   * 只在 mpv 内核的播放页存在；GSY 播放页与视界流不接（弹幕要跟随 mpv 的
+   * `time-pos`，换内核要重新对接一遍）。
+   * 字段用 `by lazy` + nullable：弹幕默认是关的，不该在 onCreate 里就建协程作用域。
+   */
+  private var danmakuState: app.marlboroadvance.mpvex.ui.player.danmaku.PlayerDanmakuState? = null
+
+  /**
+   * 弹幕状态访问器（给 MoreSheet / PlayerSheets 用）。
+   *
+   * 沿用 MoreSheet 里已有的做法：那几处已经在直接从宿主 Activity 取 Emby 上下文
+   * （`currentEmbyItemId()` 等），弹幕也照抄这一套，不再给那条已经很长的参数表加参数。
+   */
+  internal fun danmakuState(): app.marlboroadvance.mpvex.ui.player.danmaku.PlayerDanmakuState? = danmakuState
 
   /**
    * 「从头播放」一次性标记。
@@ -427,6 +449,12 @@ open class PlayerActivity :
     if (redirectToPreferredEngine()) return
 
     setContentView(binding.root)
+
+    // 弹幕状态：默认关，所以**按需**创建（不建就不会有任何网络请求）。
+    danmakuState = app.marlboroadvance.mpvex.ui.player.danmaku.PlayerDanmakuState(
+      preferences = danmakuPreferences,
+      scope = lifecycleScope,
+    )
 
     // ── 播放内核选择 ──
     // intent 里带 "engine" 的长按反选优先，否则用设置里的默认内核。
@@ -783,6 +811,39 @@ open class PlayerActivity :
                 bottom = if (LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE) 92.dp else 120.dp,
               ),
           )
+          // 弹幕：叠在画面之上、控制条之下。
+          // ⚠️ 声明位置在 PlayerControls **之后** = 绘制在它上面一层，
+          // 所以控制条弹出时仍然压在弹幕之上（弹幕不该盖住按钮）。
+          // ⚠️ 整个弹幕叠层**不能**包在 controlsShown 里 —— 控件隐藏时弹幕仍要继续走。
+          danmakuState?.let { state ->
+            // ⚠️ 这里必须用 **Compose 自带的 `collectAsState()`**（无参、
+            //   返回非空 `State<T>`），**不是** `PlayerViewModel.kt:2200` 那个
+            //   同名的自定义扩展 —— 后者签名是 `Flow<T>.collectAsState(scope, initial)`
+            //   要求显式传 scope，且返回 `T?`，用它会一路报
+            //   「No value passed for parameter 'scope'」+ 一串可空类型错误。
+            //   同名不同签名是这类批量报错的根源，看到「No value for scope」先查这里。
+            val dmComments by state.comments.collectAsState(emptyList())
+            val dmKey by state.episodeKey.collectAsState("")
+            val dmPrefs by state.renderParams.collectAsState(DanmakuRenderParams())
+            // 进度与播放态在这里现取：弹幕叠层自己订阅即可，
+            // 不必让外层 Box 为此多收两个流。
+            val dmPos by viewModel.precisePosition.collectAsState(0f)
+            val dmPaused by PlayerLib.propBoolean["pause"].collectAsState()
+            if (dmPrefs.enabled && dmComments.isNotEmpty()) {
+              app.marlboroadvance.mpvex.ui.player.danmaku.DanmakuOverlay(
+                episodeKey = dmKey,
+                positionSec = dmPos,
+                playing = dmPaused != true,
+                comments = dmComments,
+                alphaPercent = dmPrefs.alphaPercent,
+                fontScale = dmPrefs.fontScale,
+                speedScale = dmPrefs.speedScale,
+                areaRatio = dmPrefs.areaRatio,
+                maxOnScreen = dmPrefs.maxOnScreen,
+                modifier = Modifier.fillMaxSize(),
+              )
+            }
+          }
         }
       }
     }
@@ -833,6 +894,10 @@ open class PlayerActivity :
 
     // 页面都没了就别再倒计时切集了
     cancelAutoplayCountdown()
+
+    // 弹幕：取消在途的匹配请求（绘制线程由 DanmakuOverlay 的 DisposableEffect 负责 release）。
+    danmakuState?.dispose()
+    danmakuState = null
 
     runCatching {
       // OPTIMIZATION: Prevent any further UI updates or callbacks
@@ -4048,6 +4113,10 @@ private fun cancelAutoplayCountdown() {
     fileName = getPlaylistTitleAt(index) ?: getFileNameFromUri(uri)
     // Generate new media identifier for playback state
     mediaIdentifier = getMediaIdentifierFromUri(uri, fileName)
+
+    // 弹幕：换集 = 重新匹配。内部会先取消上一次加载，
+    // 否则上一集的慢响应会回来覆盖这一集（竞态）。
+    danmakuState?.onEpisodeChanged(currentSeriesKey(), fileName, index)
 
     // Set HTTP headers (including referer) for network streams
     setHttpHeadersForUri(uri)

@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.player.controls
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.LocalActivity
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -362,6 +363,36 @@ fun PlayerSheets(
         onCancel = viewModel::cancelGifRecording,
         onDismissRequest = onDismissRequest,
       )
+    }
+
+    Sheets.Danmaku -> {
+      // 弹幕状态挂在宿主 Activity 上（只有 mpv 播放页有），拿不到就整个面板不显示。
+      val host = LocalActivity.current as? app.marlboroadvance.mpvex.ui.player.PlayerActivity
+      val danmakuState = host?.danmakuState()
+      if (danmakuState != null) {
+        val sheetState by danmakuState.sheet.composeCollectAsState()
+        app.marlboroadvance.mpvex.ui.player.danmaku.DanmakuSheet(
+          state = sheetState,
+          onEnabledChange = danmakuState::setEnabled,
+          onHostChange = danmakuState::setHost,
+          onAppIdChange = danmakuState::setAppId,
+          onAppSecretChange = danmakuState::setAppSecret,
+          onAutoMatchChange = danmakuState::setAutoMatch,
+          onFontScaleChange = danmakuState::setFontScale,
+          onSpeedScaleChange = danmakuState::setSpeedScale,
+          onAlphaChange = danmakuState::setAlpha,
+          onAreaChange = danmakuState::setArea,
+          onDensityChange = danmakuState::setDensity,
+          onBlockWordsChange = danmakuState::setBlockWords,
+          onSearch = danmakuState::search,
+          onPickAnime = { anime ->
+            // ⚠️ 手动选番时按**当前播放的集号**取那一集，
+            // 不能拿搜索结果的第一集 —— 用户搜的是系列，要看的是当前这集。
+            danmakuState.pick(anime, host.playlistIndex)
+          },
+          onDismissRequest = onDismissRequest,
+        )
+      }
     }
   }
 }

@@ -148,13 +148,29 @@ fun buildEmbyMediaInfoEntries(
  * 多版本媒体：算出「这次实际要用的版本 Id」。
  *
  * 只有确实存在多个版本时才返回非空 —— 单版本媒体返回 null，播放 URL 里就不会带
- * `MediaSourceId`，行为与改动前完全一致。选中的 Id 失效时（刷新后源被换掉）
- * 回退到默认版本（第一条源，与 Emby 服务端的默认一致）。
+ * `MediaSourceId`，行为与改动前完全一致。
+ *
+ * ## 优先级：**用户手动选 > 设置里的规则 > 服务端默认**
+ *
+ * · 用户在下拉框里选过（[selected] 非空且能对上）⇒ 永远尊重用户，不看规则。
+ *   这是最重要的一条：规则是「省去每次都去点下拉框」，不是「推翻用户的选择」。
+ * · 没选过 ⇒ 按 [preference] 规则自动挑（见 [selectPreferredMediaSourceId]）。
+ *   规则判不出来（DEFAULT / 字段全缺）时回退首条源，与 Emby 服务端的默认一致。
+ *
+ * ⚠️ 选中的 Id 失效时（刷新后源被换掉）同样回退 —— 但要**重新过一次规则**，
+ * 否则会出现「规则说选 4K，结果拿到的是失效 id 对应的兜底首条」。
  */
-fun effectiveEmbyMediaSourceId(item: EmbyItem?, selected: String?): String? {
+fun effectiveEmbyMediaSourceId(
+  item: EmbyItem?,
+  selected: String?,
+  preference: MediaSourcePreference = MediaSourcePreference.DEFAULT,
+): String? {
   val sources = item?.MediaSources.orEmpty().filter { !it.Id.isNullOrBlank() }
   if (sources.size <= 1) return null
-  return sources.firstOrNull { it.Id == selected }?.Id ?: sources.first().Id
+  // 1. 用户显式选过的版本优先。
+  sources.firstOrNull { it.Id == selected }?.let { return it.Id }
+  // 2. 没选过 ⇒ 按规则自动挑。
+  return selectPreferredMediaSourceId(sources, preference) ?: sources.first().Id
 }
 
 /**

@@ -7,6 +7,28 @@ import app.marlboroadvance.mpvex.ui.player.PlayerOrientation
 import app.marlboroadvance.mpvex.ui.player.RepeatMode
 import app.marlboroadvance.mpvex.ui.player.VideoAspect
 
+/** 前进 / 后退步长的默认秒数（沿用改这个功能之前的行为，不让老用户看到变化）。 */
+const val SEEK_STEP_DEFAULT_SECONDS = 10
+
+/** 步长下限：1 秒。再小的话连点几下才动一下，手感反而变差。 */
+const val SEEK_STEP_MIN_SECONDS = 1
+
+/** 步长上限：300 秒（5 分钟）。超过这个量级它就不是「细调」而是「跳章」了。 */
+const val SEEK_STEP_MAX_SECONDS = 300
+
+/** 快进/快退步长的取值范围，供滑块用。 */
+val SEEK_STEP_RANGE = SEEK_STEP_MIN_SECONDS..SEEK_STEP_MAX_SECONDS
+
+/**
+ * 把任意输入夹进 [SEEK_STEP_MIN_SECONDS] ~ [SEEK_STEP_MAX_SECONDS]。
+ *
+ * 必要性：偏好可能来自①用户手改 xml、②旧版本遗留的超大值、
+ * ③滑块与 [SEEK_STEP_MIN_SECONDS] 边界不同步。**不夹紧会算出 0 秒**
+ * （按了没反应，正是红线里「静默 return 是产品 bug」那一类）。
+ */
+fun coerceSeekStepSeconds(value: Int): Int =
+  value.coerceIn(SEEK_STEP_MIN_SECONDS, SEEK_STEP_MAX_SECONDS)
+
 class PlayerPreferences(
   preferenceStore: PreferenceStore,
 ) {
@@ -74,6 +96,39 @@ class PlayerPreferences(
   val useWavySeekbar = preferenceStore.getBoolean("use_wavy_seekbar", true)
 
   val customSkipDuration = preferenceStore.getInt("custom_skip_duration", 90)
+
+  /**
+   * 播放页控制条上「快进 / 快退」按钮单次跳动的秒数，默认各 **10**。
+   *
+   * ⚠️ 与 [customSkipDuration] 是**两个不同的功能**，别混：
+   * - `customSkipDuration`（默认 90s）：剧集开头/结尾自动跳过片头片尾的那个长跳。
+   * - 本项：控制条中间两个小圆钮「<< / >>」的步长。
+   *
+   * **前进与后退是两个独立值**，而不是共用一个 —— 两者的实际用途不同：
+   * 「跳片头」用 10 秒后跳刚刚好，而「跳过一段无聊的过场」可能要 30 秒；
+   * 反过来也有「想细看前一帧」的时刻。合成一个值会把两种需求都别扭。
+   *
+   * 取值范围见 [SEEK_STEP_RANGE]，读取时务必过一遍 [coerceSeekStepSeconds]：
+   * 偏好文件可能被手改、也可能来自旧版本，不夹紧会算出 0 秒（点了没反应）。
+   */
+  val seekForwardSeconds =
+    preferenceStore.getInt("seek_forward_seconds", SEEK_STEP_DEFAULT_SECONDS)
+
+  /** 快退步长（秒）。与 [seekForwardSeconds] 分开存，理由见那里。 */
+  val seekBackwardSeconds =
+    preferenceStore.getInt("seek_backward_seconds", SEEK_STEP_DEFAULT_SECONDS)
+
+  /**
+   * 控制条是否显示**系统时钟**（默认关）。
+   *
+   * 全屏看片时手机屏幕常年被盖住，能瞥一眼时间/电量比掏手机强。
+   */
+  val showPlayerClock = preferenceStore.getBoolean("show_player_clock", false)
+
+  /**
+   * 控制条是否显示**电量百分比**（默认关）。
+   */
+  val showPlayerBattery = preferenceStore.getBoolean("show_player_battery", false)
 
   /**
    * GIF 录制的输出宽度（px，等比缩放）。

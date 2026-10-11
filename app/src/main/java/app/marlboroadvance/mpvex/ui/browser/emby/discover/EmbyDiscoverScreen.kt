@@ -202,7 +202,7 @@ object EmbyDiscoverScreen : Screen {
               modifier = Modifier.fillMaxWidth().padding(24.dp),
               contentAlignment = Alignment.Center,
             ) {
-              CircularProgressIndicator()
+              app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator()
             }
           }
         }

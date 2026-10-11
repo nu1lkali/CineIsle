@@ -16,6 +16,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ViewQuilt
 import androidx.compose.material.icons.outlined.Audiotrack
+// ⚠️ material icons 的 `Icons.Outlined.X` 是**顶层扩展属性**，不是成员 ——
+// 每个用到的图标都必须单独 `import androidx.compose.material.icons.outlined.X`，
+// 漏了就是「Unresolved reference 'X'」（图标在库里明明存在）。
+import androidx.compose.material.icons.outlined.AutoAwesomeMotion
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Gesture
@@ -52,10 +56,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
+import app.marlboroadvance.mpvex.domain.emby.MediaSourcePreference
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
@@ -66,6 +72,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import me.zhanghai.compose.preference.ListPreference
 import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.ProvidePreferenceLocals
 import me.zhanghai.compose.preference.SliderPreference
@@ -165,7 +172,31 @@ object PreferencesScreen : Screen {
                 },
                 onClick = { backstack.add(AppearancePreferencesScreen) },
               )
-              
+
+              PreferenceDivider()
+
+              // 外观深度定制（桌面图标 / 加载动画）—— 单独一页：
+              // 这一页全都会**立刻看到画面变化**，混在长列表里对不上「改了什么」。
+              Preference(
+
+                title = { Text(text = stringResource(id = R.string.appearance_deep_title)) },
+                summary = {
+                  Text(
+                    text = stringResource(id = R.string.appearance_icon_title) + " · " +
+                      stringResource(id = R.string.appearance_loading_anim_title),
+                    color = MaterialTheme.colorScheme.outline
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.AutoAwesomeMotion,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                  )
+                },
+                onClick = { backstack.add(AppearanceDeepCustomScreen) },
+              )
+
               PreferenceDivider()
               
               Preference(
@@ -575,6 +606,31 @@ object PreferencesScreen : Screen {
                   )
                 },
               )
+
+              PreferenceDivider()
+
+              // ── 多版本优先选择 ────────────────────────────────────────
+              //
+              // 同一影片有多个版本（4K/1080P/不同码率）时，播放前自动按这条规则挑，
+              // 省掉每次都去点版本下拉框。
+              // ⭐ 优先级是「用户手动选 > 本规则」：在详情页下拉里选过的版本永远优先，
+              //   规则只在没选过时接管。
+              // ⚠️ 用 DropDown 而非单选按钮组：条目有 7 个，单选组会把这个分区撑得很长。
+              val sourcePrefKey by browserPreferences.embyMediaSourcePreference.collectAsState()
+              val sourcePref = MediaSourcePreference.fromKey(sourcePrefKey)
+              ListPreference(
+                value = sourcePref,
+                onValueChange = { browserPreferences.embyMediaSourcePreference.set(it.key) },
+                values = MediaSourcePreference.entries,
+                valueToText = { AnnotatedString(mediaSourcePreferenceLabel(it)) },
+                title = { Text(text = stringResource(R.string.pref_media_source_pref_title)) },
+                summary = {
+                  Text(
+                    text = mediaSourcePreferenceLabel(sourcePref),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
             }
           }
 
@@ -866,3 +922,31 @@ private fun RandomPlayCountDialog(
     },
   )
 }
+
+/**
+ * [MediaSourcePreference] 的显示文案。
+ *
+ * 单独抽出来是因为同一段文案出现在两处（下拉当前值 + 下拉展开后的每一条），
+ * 各写一遍就会漂移。
+ *
+ * ⚠️ 用 `when` 而不是 `when` + else 兜底丢 default：
+ * 将来加了一个枚举值却忘了这里，编译期就报错（穷尽匹配），
+ * 比运行时显示成空白好。
+ */
+@Composable
+private fun mediaSourcePreferenceLabel(preference: MediaSourcePreference): String =
+  when (preference) {
+    MediaSourcePreference.DEFAULT -> stringResource(R.string.media_source_pref_default)
+    MediaSourcePreference.HIGHEST_RESOLUTION ->
+      stringResource(R.string.media_source_pref_highest_resolution)
+    MediaSourcePreference.LOWEST_RESOLUTION ->
+      stringResource(R.string.media_source_pref_lowest_resolution)
+    MediaSourcePreference.HIGHEST_BITRATE ->
+      stringResource(R.string.media_source_pref_highest_bitrate)
+    MediaSourcePreference.LOWEST_BITRATE ->
+      stringResource(R.string.media_source_pref_lowest_bitrate)
+    MediaSourcePreference.SMALLEST_SIZE ->
+      stringResource(R.string.media_source_pref_smallest_size)
+    MediaSourcePreference.BEST_QUALITY_PER_SIZE ->
+      stringResource(R.string.media_source_pref_best_quality_per_size)
+  }

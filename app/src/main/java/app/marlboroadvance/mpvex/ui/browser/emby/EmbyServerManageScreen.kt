@@ -55,6 +55,8 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyBrandGreen
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyLogo
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -291,7 +293,25 @@ private fun ServerEditDialog(
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text(title) },
+    title = {
+      // 标题旁带 Emby 标志：这个弹窗是「连一个 Emby 服务」的入口，
+      // 光看文字分不清是加 Emby 还是加别的源。
+      // ⚠️ 图标给固定 size + 不参与文字基线对齐，否则中文标题会被顶歪。
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        // 用 components/EmbyLogo.kt 里的官方矢量（Simple Icons 路径）+ 品牌绿，
+        // 与首页 Emby 维护入口同一个 EmbyLogo，两处视觉必须一致。
+        Icon(
+          imageVector = EmbyLogo,
+          contentDescription = null,
+          tint = EmbyBrandGreen,
+          modifier = Modifier.size(20.dp),
+        )
+        Text(title)
+      }
+    },
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(

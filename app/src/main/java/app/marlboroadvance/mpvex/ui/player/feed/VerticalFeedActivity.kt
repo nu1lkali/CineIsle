@@ -8,6 +8,7 @@ import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.media.AudioManager
 import android.media.MediaScannerConnection
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -47,6 +48,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.Player
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.dislike.DislikeRepository
+import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import kotlinx.coroutines.Job
@@ -167,6 +169,10 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
       onFrameVisible = { index ->
         if (index == viewModel.index) viewModel.applySnapshot(pool.snapshotOf(index))
       },
+      // ⭐ strm 能播的关键（见 ExoPlayerPool.defaultHttpHeaders 的说明）：
+      // UA 必须与主播放器（mpv）以及直链预解析探测用的是**同一个常量**，
+      // 否则网盘直链的签名校验对不上，服务器直接 403（现象：「strm 提示服务器拒绝」）。
+      defaultHttpHeaders = feedStreamHeaders(items),
     )
     brightnessValue = readSystemBrightness()
     volumeValue = readSystemVolume()
@@ -678,6 +684,40 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     private const val EXTRA_ITEMS = "feed_items"
     private const val EXTRA_LIBRARY_ID = "feed_library_id"
     private const val EXTRA_FAVORITES_ONLY = "feed_favorites_only"
+
+    /**
+     * 视界流拉流用的默认请求头。
+     *
+     * ## 为什么要 Referer 指向 **Emby 服务器**而不是直链自己
+     *
+     * strm 的真实媒体在网盘 CDN 上。网盘的防盗链普遍要求「Referer 是某个已知站点」，
+     * 而**自引用的 Referer（直链自己的域名）常被直接判为非法** ——
+     * 现象就是用户看到的「服务器拒绝了」。主播放器（mpv）早就是这么做的
+     * （`EmbyViewModel.putStreamHeaders`），这里跟它保持一致。
+     *
+     * ## 为什么从 [items] 的 URL 反推 origin，而不是注入服务器对象
+     *
+     * 池是在 `onCreate` 里**同步**构造的，而拿当前服务器要走
+     * `embyRepository.awaitCurrentServer()`（suspend）。而视界流的 URL 本身就是
+     * `{host}/emby/Videos/{id}/stream?...`（见 `EmbyClient.videoStreamUrl`），
+     * **origin 就在字符串里** —— 直接解析即可，不必为了取一个前缀把构造改成异步。
+     *
+     * ⚠️ 只取**第一条能解析出 origin 的** URL：同一批队列来自同一个服务器，
+     * 而加载更多追加的条目也是同库（同 server），所以一条足够。
+     * 全都解析不出来时退化为「只带 UA」—— 至少比什么都不带强。
+     */
+    private fun feedStreamHeaders(items: List<FeedItem>): Map<String, String> {
+      val headers = LinkedHashMap<String, String>()
+      headers["User-Agent"] = EmbyClient.STREAM_USER_AGENT
+      items.asSequence()
+        .mapNotNull { runCatching { Uri.parse(it.url) }.getOrNull() }
+        .firstOrNull { it.scheme != null && it.host != null }
+        ?.let { u ->
+          val port = if (u.port != -1) ":${u.port}" else ""
+          headers["Referer"] = "${u.scheme}://${u.host}$port"
+        }
+      return headers
+    }
 
     /**
      * 启动视界流。

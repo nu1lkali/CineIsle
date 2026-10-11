@@ -5,6 +5,7 @@ import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
+import app.marlboroadvance.mpvex.preferences.DanmakuPreferences
 import app.marlboroadvance.mpvex.preferences.DecoderPreferences
 import app.marlboroadvance.mpvex.preferences.FoldersPreferences
 import app.marlboroadvance.mpvex.preferences.GesturePreferences
@@ -33,5 +34,6 @@ val PreferencesModule =
     single { BrowserPreferences(get(), androidContext()) }
     singleOf(::FoldersPreferences)
     singleOf(::GsyPreferences)
+    singleOf(::DanmakuPreferences)
     singleOf(::SettingsManager)
   }

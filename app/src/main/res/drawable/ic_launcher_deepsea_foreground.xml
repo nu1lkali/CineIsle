@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面图标「深海」：深蓝底 + 青色播放三角。
+
+  为什么这些图标要自己画矢量而不是用位图：
+  - adaptive icon 的前景/单色层必须是矢量才能跟随系统主题（Android 13+ 的取色图标）；
+  - 一套矢量放大不糊，APK 只多几 KB（位图要五套密度）。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+  <group
+      android:scaleX="0.62"
+      android:scaleY="0.62"
+      android:translateX="20.5"
+      android:translateY="20.5">
+    <!-- 岛弧：影屿的「屿」，一道弧 + 一条地平线 -->
+    <path
+        android:pathData="M18,74 C30,60 42,52 54,52 C66,52 78,60 90,74 L90,80 C78,66 66,58 54,58 C42,58 30,66 18,80 Z"
+        android:fillColor="#FF7FE3D0"/>
+    <path
+        android:pathData="M18,82 L90,82 L90,86 L18,86 Z"
+        android:fillColor="#FF4FC3B0"/>
+    <!-- 播放三角 -->
+    <path
+        android:pathData="M46,26 L74,44 L46,62 Z"
+        android:fillColor="#FFFFFFFF"/>
+  </group>
+</vector>

@@ -47,6 +47,12 @@ val EmbyLogo: ImageVector by lazy {
  *
  * 用 Emby 官方图标 + 品牌绿，和通用的齿轮（设置）在视觉上明确区分开，
  * 用户不会再点错 —— 齿轮进设置，Emby 图标进服务器维护。
+ *
+ * ⚠️ **顶栏不再有独立的「切换服务器」按钮**（原来是一个 `Icons.Default.Dns`）：
+ * 切服务器本来就在服务器管理页里能做，顶栏为此单独占一个图标位不值 ——
+ *   而那个位置很贵：actions 一多，标题里的**服务器名称**就被挤没了
+ *   （用户反馈「服务器名称都放不下了」）。
+ * ⇒ 需要切换时进「Emby 维护」→ 服务器管理。
  */
 @Composable
 fun EmbyMaintainButton(onClick: () -> Unit) {

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 桌面图标「极简」：纯白底 + 单色岛弧（Android 13+ 取色图标下最干净）。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+  <group
+      android:scaleX="0.62"
+      android:scaleY="0.62"
+      android:translateX="20.5"
+      android:translateY="20.5">
+    <path
+        android:pathData="M18,74 C30,60 42,52 54,52 C66,52 78,60 90,74 L90,80 C78,66 66,58 54,58 C42,58 30,66 18,80 Z"
+        android:fillColor="#FF3A3A3A"/>
+    <path
+        android:pathData="M18,82 L90,82 L90,86 L18,86 Z"
+        android:fillColor="#FF1F1F1F"/>
+    <path
+        android:pathData="M46,26 L74,44 L46,62 Z"
+        android:fillColor="#FF1F1F1F"/>
+  </group>
+</vector>

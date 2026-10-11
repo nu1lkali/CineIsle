@@ -347,6 +347,15 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     onChunk: suspend (EmbyScanChunk) -> Unit,
   ): Int = repository.scanItems(server, query, onChunk = onChunk)
 
+  /**
+   * 直播电视频道列表（`/LiveTv/Channels`）。
+   *
+   * 频道条目的 `Type` 是 `TvChannel`，可以直接喂给 [play] 起播。
+   * 服务端没启用直播电视时返回空列表 —— 那是「没有这个功能」，不是错误。
+   */
+  suspend fun loadLiveTvChannels(server: EmbyServer): List<EmbyItem> =
+    withContext(Dispatchers.IO) { repository.getLiveTvChannels(server) }
+
   /** 取某媒体库的筛选可选项（类型 / 标签 / 年份 / 分级），供筛选面板使用。 */
   suspend fun loadFilterOptions(
     server: EmbyServer,

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.AspectRatio
 import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.Camera
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Crop
 import androidx.compose.material.icons.outlined.Gif
 import androidx.compose.material.icons.outlined.Info
@@ -136,6 +137,10 @@ val scope = rememberCoroutineScope()
   val embyVersionName = hostActivity?.currentMediaSourceName()
   val hasEmbyContext = embyServerId != null && !embyItemId.isNullOrBlank()
   var showMediaInfo by remember { mutableStateOf(false) }
+
+  // 弹幕入口：只在弹幕状态存在时显示（GSY 播放页 / 视界流不接弹幕）。
+  // 同样从宿主读，不用再加一个层层传递的参数。
+  val danmakuAvailable = hostActivity?.danmakuState() != null
 
   PlayerSheet(
     onDismissRequest,
@@ -342,6 +347,18 @@ val scope = rememberCoroutineScope()
           label = stringResource(R.string.pref_audio),
           onClick = { onShowSheet(Sheets.AudioTracks) },
         )
+        // 弹幕：面板里开关 / 搜番 / 字号速度透明度 / 屏蔽词都在一起，
+        // 所以这里给的是一个「总入口」而不是一堆散在控件条上的按钮。
+        // ⚠️ 图标必须与下面那一行「字幕」**区分开**：早前两边都用
+        //   `Icons.Outlined.Subtitles` 且紧挨着，用户反馈「找不到弹幕入口」——
+        //   弹幕默认关闭，选中态又没有视觉标记，两个一模一样的格子只能靠猜。
+        if (danmakuAvailable) {
+          QuickActionItem(
+            icon = Icons.Outlined.ChatBubbleOutline,
+            label = stringResource(R.string.danmaku_title),
+            onClick = { onShowSheet(Sheets.Danmaku) },
+          )
+        }
         QuickActionItem(
           icon = Icons.Outlined.Subtitles,
           label = stringResource(R.string.pref_subtitles),

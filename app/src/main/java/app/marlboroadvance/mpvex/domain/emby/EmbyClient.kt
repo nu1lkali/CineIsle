@@ -474,6 +474,24 @@ object EmbyClient {
     nameList(server, "/Genres", parentId)
 
   /**
+   * 直播电视频道列表（`/LiveTv/Channels`）。
+   *
+   * 返回体的 `Items[]` 结构与 `/Items` 一致（同一个 `EmbyItemsResult`），
+   * 频道条目的 `Type` 是 `TvChannel`，封面照旧从 `ImageTags["Primary"]` 取。
+   *
+   * ⚠️ 失败返回空列表（与 [nameList] 同款处理）：服务端没开直播电视时这个端点会 404 / 500，
+   * 那属于「这台服务器没有这个功能」，不该让页面报错。
+   */
+  fun getLiveTvChannels(server: EmbyServer): List<EmbyItem> =
+    runCatching {
+      val q = LinkedHashMap<String, String?>()
+      q["UserId"] = server.userId
+      getJson<EmbyItemsResult>(server, "/LiveTv/Channels", q).Items
+    }.onFailure {
+      EmbyLog.warn("getLiveTvChannels 失败：${it.message} —— 该服务器可能未启用直播电视", it)
+    }.getOrDefault(emptyList())
+
+  /**
    * 取「Id + 名字」的聚合端点（/Persons、/Studios）。
    *
    * 和 [nameList] 的区别是这里要留下 Id —— 演员同名很常见，只有 Id 能唯一确定一个人。

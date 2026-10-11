@@ -29,6 +29,16 @@ class AppearancePreferences(
   val unplayedOldVideoDays = preferenceStore.getInt("unplayed_old_video_days", 7)
   val seekbarStyle = preferenceStore.getEnum("seekbar_style", SeekbarStyle.Thick)
 
+  /**
+   * 加载动画（见 `ui/theme/LoadingAnimation.kt`）。
+   *
+   * ⚠️ 存的是枚举的 `storageKey` 字符串，不是 `name` —— 与别处 `getEnum`（用 name）不同，
+   *    所以这里手动读写，**发布后不可改这些 key 字符串**。
+   * 默认 `system`（不启用 Lottie）：列表里每屏可能有几十个占位，
+   * 全都跑 Lottie 会明显掉帧，所以动画默认只作用于「整屏加载」这类一次性场景。
+   */
+  val loadingAnimation = preferenceStore.getString("loading_animation", "system")
+
   val topLeftControls =
     preferenceStore.getString(
       "top_left_controls",

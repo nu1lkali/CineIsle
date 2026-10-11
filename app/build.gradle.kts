@@ -40,9 +40,11 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
-    // versionName 本轮保持 1.2.5（同一版的收尾修复），只涨 versionCode 以便覆盖安装
-    versionCode = 41
-    versionName = "1.2.5"
+    // versionName 仍是 1.2.6：v44 出包后用户实测反馈了四个问题，本轮是它们的修复
+    // （桌面图标切换失效、加载动画是死设置、快进退数字压箭头、状态栏位置重叠），
+    // 属同一次发版内的修正，不单独涨 minor。
+    versionCode = 46
+    versionName = "1.2.6"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -50,6 +52,16 @@ android {
 
     buildConfigField("String", "GIT_SHA", "\"${getCommitSha()}\"")
     buildConfigField("int", "GIT_COUNT", getCommitCount())
+
+    // ── dandanplay 开放平台凭证（可选，**刻意不硬编码**）──
+    // 为什么走 local.properties 而不是写死：
+    //   官方文档明确不建议在客户端硬编码 AppSecret（源码一开源就等于公开）。
+    //   所以这里是「构建期从本机文件读 → 注入 BuildConfig → 运行期由用户可覆盖」。
+    //   local.properties 已被 .gitignore 忽略，仓库里永远不会出现密钥。
+    // 没配 local.properties 也能编：两个字段为空串 ⇒ 运行时不下发签名头，
+    // 弹幕只对「自建服务端 / 未开认证的兼容服务端」可用（这本身就是一条有效路径）。
+    buildConfigField("String", "DANDAN_APP_ID", "\"${localDanmakuAppId}\"")
+    buildConfigField("String", "DANDAN_APP_SECRET", "\"${localDanmakuAppSecret}\"")
   }
 
   flavorDimensions += "distribution"
@@ -339,6 +351,14 @@ dependencies {
   implementation(libs.kotlinx.immutable.collections)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.okhttp)
+
+  // 弹幕：只取 View + 数据模型，解析走我们自己的 parser（见 domain/danmaku/）。
+  // 这个 AAR 里没有 .so，纯 Java，所以不需要 ndkbitmap-* 的分 ABI 依赖。
+  implementation(libs.dfm)
+
+  // Lottie：加载动画可换（外观 → 加载动画）。搬的是 Yamby 内置的那 12 个 json（res/raw/yamby_*.json）
+  // + 自研的两套，用 lottie-compose 在 Compose 里渲染。
+  implementation(libs.lottie.compose)
   // DLNA 投屏：UPnPCast 源码内置在 app/src/main/java/com/yinnho/upnpcast/ 下（同 embyclient 的做法），
   // 版本为上游 master / v1.3.0。
   // 为什么不用 Maven Central 的 com.yinnho.upnpcast:upnpcast:1.1.2：
@@ -455,6 +475,33 @@ fun getCommitCount(): String = runGit("rev-list", "--count", "HEAD") ?: "0"
 
 /** 短提交号（写进 BuildConfig.GIT_SHA）；拿不到就退回 unknown */
 fun getCommitSha(): String = runGit("rev-parse", "--short", "HEAD") ?: "unknown"
+
+/**
+ * 从本机 `local.properties` 读一个键；读不到返回空串。
+ *
+ * ⚠️ 只在**值看起来合法**时才返回 —— 它要进 `buildConfigField` 的字符串字面量，
+ * 一个没转义的 `"` 或 `\` 会让生成的 BuildConfig.java 语法错误，
+ * 而报错信息指向 BuildConfig、完全不提local.properties，极难定位。
+ */
+fun localSecret(key: String): String {
+  val file = rootProject.file("local.properties")
+  if (!file.exists()) return ""
+  return try {
+    val line = file.readLines()
+      .map { it.trim() }
+      .firstOrNull { it.startsWith("$key=") }
+      ?.substringAfter('=')
+      ?.trim()
+      .orEmpty()
+    // 只放行字母数字与下划线：AppId/AppSecret 本来就只由这些字符组成。
+    if (line.isNotEmpty() && line.all { it.isLetterOrDigit() || it == '_' }) line else ""
+  } catch (e: Exception) {
+    ""
+  }
+}
+
+val localDanmakuAppId: String = localSecret("dandan.appId")
+val localDanmakuAppSecret: String = localSecret("dandan.appSecret")
 
 /**
  * 用 providers.exec 而不是 ProcessBuilder 起 git。

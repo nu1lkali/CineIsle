@@ -126,6 +126,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.domain.emby.EmbyVersionProgress
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.MediaInfoEntry
+import app.marlboroadvance.mpvex.domain.emby.MediaSourcePreference
 import app.marlboroadvance.mpvex.domain.emby.buildEmbyMediaInfoEntries
 import app.marlboroadvance.mpvex.domain.emby.effectiveEmbyMediaSourceId
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceLabel
@@ -224,6 +225,16 @@ data class EmbyDetailScreen(
     // null = 不覆盖（单版本条目 / 本地还没按版本记过进度 ⇒ 沿用服务端进度）。
     var versionResumeSeconds by remember(itemId) { mutableStateOf<Long?>(null) }
     val playbackStateRepository = koinInject<PlaybackStateRepository>()
+    // 「多版本优先选择」规则：用户在播放入口（含外部播放器、含按版本存续播进度）
+    // 没手动选版本时据此自动挑。用 .get() 而不是 collectAsState 是**刻意的**：
+    // 这是一次性取值（点播放的那一刻决定用哪个版本），不需要在改设置时让整页重组。
+    // ⚠️ 位置很要紧：下面的 LaunchedEffect 与后面的播放/媒体信息都要用它，
+    // Kotlin 属性按源码顺序初始化（红线 17），定义晚了这里会拿到 null。
+    val browserPrefsForSource = koinInject<BrowserPreferences>()
+    val autoSourcePreference =
+      remember(browserPrefsForSource.embyMediaSourcePreference.get()) {
+        MediaSourcePreference.fromKey(browserPrefsForSource.embyMediaSourcePreference.get())
+      }
     LaunchedEffect(itemId, selectedMediaSourceId, item, server?.id) {
       val current = item
       val currentServer = server
@@ -236,6 +247,7 @@ data class EmbyDetailScreen(
             serverId = currentServer.id,
             item = current,
             selectedMediaSourceId = selectedMediaSourceId,
+            preference = autoSourcePreference,
           )
         }
     }
@@ -323,7 +335,9 @@ data class EmbyDetailScreen(
           val currentServer = server ?: return@Box
           // 多版本媒体：真正要播放的版本 Id。只有存在多个版本时才非空 ——
           // 单版本媒体一律 null，播放链路与改动前完全一致。
-          val playSourceId = effectiveEmbyMediaSourceId(current, selectedMediaSourceId)
+          // 用户没在下拉框里选过时，按设置里的「多版本优先选择」规则自动挑。
+          val playSourceId =
+            effectiveEmbyMediaSourceId(current, selectedMediaSourceId, autoSourcePreference)
           // 版本显示名（与下拉框里显示的**一模一样**）——播放页顶栏据此显示「正在播的是哪个版本」。
           // 单版本条目为 null：那时片名后面不该多出一截。
           // ⚠️ 这个名字必须由 UI 传下去，不能让播放页自己重算：两边算出不同标签就会出现
@@ -645,7 +659,11 @@ data class EmbyDetailScreen(
               serverTarget,
               playerTarget,
               player,
-              effectiveEmbyMediaSourceId(playerTarget, selectedMediaSourceId),
+              effectiveEmbyMediaSourceId(
+                playerTarget,
+                selectedMediaSourceId,
+                autoSourcePreference,
+              ),
             )
               .onFailure { e ->
                 Toast.makeText(context, e.message ?: "打开外部播放器失败", Toast.LENGTH_LONG).show()
@@ -658,7 +676,11 @@ data class EmbyDetailScreen(
             viewModel.playWithExternalPlayerChooser(
               serverTarget,
               playerTarget,
-              effectiveEmbyMediaSourceId(playerTarget, selectedMediaSourceId),
+              effectiveEmbyMediaSourceId(
+                playerTarget,
+                selectedMediaSourceId,
+                autoSourcePreference,
+              ),
             )
               .onFailure { e ->
                 Toast.makeText(context, e.message ?: "打开外部播放器失败", Toast.LENGTH_LONG).show()
@@ -1015,7 +1037,15 @@ private fun DetailBody(
   val isPlayed = item.UserData?.Played == true
   // 多版本媒体：真正生效的版本 Id（单版本媒体为 null）。下面「媒体信息」也要按它取源，
   // 否则容器 / 文件大小 / 码率 / 音视频轨道会一直显示第一个版本，与选中的版本对不上。
-  val effectiveSourceId = effectiveEmbyMediaSourceId(item, selectedMediaSourceId)
+  // ⚠️ 必须与播放侧用**同一条规则**（autoSourcePreference 同一个值），
+  // 否则会出现「顶栏写着一个版本、媒体信息里写着另一个」。
+  val browserPrefsForSource = koinInject<BrowserPreferences>()
+  val effectiveSourceId =
+    effectiveEmbyMediaSourceId(
+      item,
+      selectedMediaSourceId,
+      MediaSourcePreference.fromKey(browserPrefsForSource.embyMediaSourcePreference.get()),
+    )
 
   // ── 折叠头部：高度**完全由列表滚动位置推导**，没有任何自定义手势 / 嵌套滚动 ──
   //
@@ -1842,10 +1872,13 @@ private suspend fun loadVersionResumeSeconds(
   serverId: Long,
   item: EmbyItem,
   selectedMediaSourceId: String?,
+  /** 设置里的「多版本优先选择」规则；必须与播放侧同一个值，否则读错版本的进度 */
+  preference: MediaSourcePreference,
 ): Long? {
   if (serverId <= 0) return null
   val itemId = item.Id ?: return null
-  val sourceId = effectiveEmbyMediaSourceId(item, selectedMediaSourceId) ?: return null
+  val sourceId =
+    effectiveEmbyMediaSourceId(item, selectedMediaSourceId, preference) ?: return null
 
   repository.getVideoDataByTitle(EmbyVersionProgress.key(serverId, itemId, sourceId))?.let {
     return it.lastPosition.toLong()
