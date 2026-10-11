@@ -40,11 +40,10 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
-    // versionName 仍是 1.2.6：v44 出包后用户实测反馈了四个问题，本轮是它们的修复
-    // （桌面图标切换失效、加载动画是死设置、快进退数字压箭头、状态栏位置重叠），
-    // 属同一次发版内的修正，不单独涨 minor。
-    versionCode = 46
-    versionName = "1.2.6"
+    // versionName 涨到 1.2.7：本轮新增了 mpv HDR 开关（解码器设置页），
+    // 并把「加载动画」从只接 6 处补到 15 处 —— 属新功能，不算同版本内的修正。
+    versionCode = 47
+    versionName = "1.2.7"
 
     vectorDrawables {
       useSupportLibrary = true
