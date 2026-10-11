@@ -2083,6 +2083,8 @@ private fun PlayButton(
     ) {
       if (loading) {
         // 尺寸与下面那个 PlayArrow 图标一致，切换时不会让整行跳一下
+        // ⚠️ 20dp 属于「内联微指示器」，按 AppLoadingIndicator 的接入标准保留转圈
+        //（Lottie 压到这个尺寸只会糊成一团色块）。
         CircularProgressIndicator(
           color = MaterialTheme.colorScheme.onPrimary,
           strokeWidth = 2.dp,

@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.HeartBroken
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.HeartBroken
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -297,10 +296,10 @@ internal fun FeedScreen(
         exit = fadeOut(tween(260)),
         modifier = Modifier.align(Alignment.Center),
       ) {
-        CircularProgressIndicator(
+        // 压在画面上，所以固定用白色半透明（主题色在视频上基本看不见）。
+        app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
           modifier = Modifier.size(44.dp),
-          color = Color.White.copy(alpha = 0.75f),
-          strokeWidth = 3.dp,
+          tint = Color.White.copy(alpha = 0.75f),
         )
       }
 

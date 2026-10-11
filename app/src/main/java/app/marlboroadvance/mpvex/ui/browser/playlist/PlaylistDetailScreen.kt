@@ -32,7 +32,6 @@ import androidx.compose.material.icons.outlined.PlaylistAdd
 import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -571,10 +570,7 @@ private fun PlaylistVideoListContent(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
       ) {
-        CircularProgressIndicator(
-          modifier = Modifier.size(48.dp),
-          color = MaterialTheme.colorScheme.primary,
-        )
+        app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
       }
     }
 

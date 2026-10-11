@@ -172,6 +172,9 @@
   <string name="pref_decoder_try_hw_dec_title">Try hardware decoding</string>
   <string name="pref_decoder_gpu_next_title">Use gpu-next</string>
   <string name="pref_decoder_gpu_next_summary">A new rendering backend</string>
+  <string name="pref_decoder_hdr_title">HDR output</string>
+  <string name="pref_decoder_hdr_summary">Switch the screen into HDR mode when playing HDR video. Turn off if HDR video looks too dark or washed out. Applies after re-entering the player.</string>
+  <string name="pref_decoder_hdr_needs_gpu_next">Requires gpu-next to be enabled first</string>
   <string name="pref_decoder_gpu_next_enable_title">Enable gpu-next?</string>
   <string name="pref_decoder_gpu_next_warning">Enabling gpu-next may cause purple screen issues during playback on some devices.</string>
   <string name="pref_decoder_gpu_next_purple_screen_fix">If you experience purple screens, try to disable opengl-pbo in Advanced settings (mpv.conf):</string>

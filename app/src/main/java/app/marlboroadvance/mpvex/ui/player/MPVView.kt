@@ -122,8 +122,17 @@ class MPVView(
     // 2) target-colorspace-hint：HDR / DV 内容时让 libplacebo 按片源提示把显示切进
     //    HDR 色彩空间（Android 9+ 支持），避免 HDR 片被压到 SDR 亮度区间灰成一片。
     //    仅 gpu-next 有效；老设备不支持时 mpv 会忽略该提示，无副作用。
+    //
+    // ⚠️ 这里**必须显式写 yes / no 两支**，不能只在开启时设一次：
+    //   `setOptionString` 只对 mpv 内部的当前实例生效，而本项目每次进入播放页
+    //   都新建 MPVView，理论上不会串味 —— 但用户中途改设置再进播放器时，
+    //   「没写」与「写了 no」在 mpv 内部走的分支完全不同（前者落回默认值，
+    //   mpv 6.x 的 target-colorspace-hint 默认是 no，两者恰好一致）。
+    //   写成显式二值可以让意图不依赖上游默认值，将来 mpv 改默认也不会连带改变行为。
+    //   另见 DecoderPreferences.hdrEnabled：它与 gpuNext 解耦，正是为了这个开关。
+    val hdrOn = decoderPreferences.hdrEnabled.get()
     if (decoderPreferences.gpuNext.get()) {
-      MPVLib.setOptionString("target-colorspace-hint", "yes")
+      MPVLib.setOptionString("target-colorspace-hint", if (hdrOn) "yes" else "no")
     }
     
     // Set GPU API context (Vulkan or OpenGL)

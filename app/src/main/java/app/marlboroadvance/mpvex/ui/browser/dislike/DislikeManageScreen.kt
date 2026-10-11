@@ -28,7 +28,6 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -377,7 +376,7 @@ fun DislikeManageContent(onBack: () -> Unit) {
               modifier = Modifier.padding(24.dp),
               horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-              CircularProgressIndicator()
+              app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator()
               Spacer(Modifier.height(16.dp))
               Text("正在删除 $done/$total", style = MaterialTheme.typography.titleMedium)
               Text(

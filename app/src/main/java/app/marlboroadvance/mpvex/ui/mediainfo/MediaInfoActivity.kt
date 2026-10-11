@@ -32,7 +32,6 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
@@ -289,11 +288,7 @@ class MediaInfoActivity : ComponentActivity() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(20.dp),
       ) {
-        CircularProgressIndicator(
-          color = MaterialTheme.colorScheme.primary,
-          strokeWidth = 4.dp,
-          modifier = Modifier.size(48.dp),
-        )
+        app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
         Text(
           text = stringResource(R.string.i18n_mediainfo_analyzing),
           style = MaterialTheme.typography.bodyLarge,

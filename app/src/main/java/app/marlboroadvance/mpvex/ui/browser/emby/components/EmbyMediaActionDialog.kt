@@ -692,7 +692,7 @@ fun EmbyEditImagesDialog(
   ) {
     if (loading) {
       Box(modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator()
+        app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator()
       }
     } else {
       // 分组标题（参考图里网格上方那行「图片」）
@@ -907,7 +907,7 @@ fun EmbyRemoteImagePickerDialog(
     val list = candidates
     if (list == null) {
       Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator()
+        app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator()
       }
     } else if (list.isEmpty()) {
       Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
@@ -1155,7 +1155,7 @@ fun EmbyIdentifyDialog(
           modifier = Modifier.matchParentSize(),
           contentAlignment = Alignment.Center,
         ) {
-          CircularProgressIndicator()
+          app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator()
         }
       }
       }

@@ -36,7 +36,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Title
 import androidx.compose.material.icons.filled.ViewModule
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FloatingActionButtonMenu
@@ -521,7 +520,7 @@ object FolderListScreen : Screen {
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                   ) {
-                    CircularProgressIndicator()
+                    app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator()
                   }
                 } else if (searchResults.isEmpty()) {
                   // No results

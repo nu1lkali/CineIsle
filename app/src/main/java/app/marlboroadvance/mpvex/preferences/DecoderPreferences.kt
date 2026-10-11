@@ -22,6 +22,28 @@ class DecoderPreferences(
   val useVulkan = preferenceStore.getBoolean("use_vulkan", false)
   val useYUV420P = preferenceStore.getBoolean("use_yuv420p", false)
 
+  /**
+   * HDR 输出（`target-colorspace-hint`）。
+   *
+   * ## 为什么要独立于 [gpuNext]
+   *
+   * 原先这个行为是**隐式绑在 gpuNext 上的**：只要 gpu-next 开着就自动
+   * `target-colorspace-hint=yes`，用户没有任何开关能关掉它（见 `MPVView.initOptions`）。
+   * 但它和渲染器其实是**两件事**：
+   *  · 渲染器（gpu-next / gpu）决定「能不能正确解码并映射 HDR 片源」；
+   *  · colorspace hint 决定「**要不要**把屏幕切进 HDR 亮度区间」。
+   *
+   * 二者拆开才说得通：
+   *  · **默认开启**（沿用原行为，老用户观感不变）；
+   *  · 不支持 HDR 的屏幕 —— 开了也无害，Android 会忽略这个 hint；
+   *  · 但**部分设备/系统版本上这个 hint 会让画面明显偏暗或发灰**
+   *    （屏幕本身没到 HDR 亮度却按 HDR 路径输出），这时就需要能手动关掉。
+   *
+   * ⚠️ 只在 gpu-next 下有意义：旧版 gpu 没有这条通路，设了也无效。
+   *   见 `MPVView.initOptions` 里对 gpu-next / libplacebo 的说明。
+   */
+  val hdrEnabled = preferenceStore.getBoolean("hdr_enabled", true)
+
   val debanding = preferenceStore.getEnum("debanding", Debanding.None)
   val debandIterations = preferenceStore.getInt("deband_iterations", 1)
   val debandThreshold = preferenceStore.getInt("deband_threshold", 48)

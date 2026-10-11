@@ -196,6 +196,31 @@ object DecoderPreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              // HDR 输出：与 gpu-next 解耦的独立开关。
+              // 关掉 gpu-next 时本项无意义（只有 libplacebo 有这条通路），
+              // 所以直接 disable —— 摆在那儿却怎么点都不生效是最糟的（红线 29）。
+              val hdrEnabled by preferences.hdrEnabled.collectAsState()
+              SwitchPreference(
+                value = hdrEnabled,
+                onValueChange = { preferences.hdrEnabled.set(it) },
+                enabled = gpuNext,
+                title = { Text(stringResource(R.string.pref_decoder_hdr_title)) },
+                summary = {
+                  Text(
+                    if (gpuNext) {
+                      stringResource(R.string.pref_decoder_hdr_summary)
+                    } else {
+                      // 与上面 Vulkan「不支持」时用 error 色的做法一致：说清为什么不能开。
+                      stringResource(R.string.pref_decoder_hdr_needs_gpu_next)
+                    },
+                    color = if (gpuNext) MaterialTheme.colorScheme.outline
+                           else MaterialTheme.colorScheme.error,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
               // val useVulkan by preferences.useVulkan.collectAsState() // Moved up for gpuNext logic
               SwitchPreference(
                 value = useVulkan,

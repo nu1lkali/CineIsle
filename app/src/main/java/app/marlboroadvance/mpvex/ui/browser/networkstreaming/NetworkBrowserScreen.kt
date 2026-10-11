@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -167,10 +166,7 @@ private fun NetworkBrowserContent(
           .padding(bottom = 80.dp), // Account for bottom navigation bar
         contentAlignment = Alignment.Center,
       ) {
-        CircularProgressIndicator(
-          modifier = Modifier.size(48.dp),
-          color = MaterialTheme.colorScheme.primary,
-        )
+        app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
       }
     }
 

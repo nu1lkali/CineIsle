@@ -40,7 +40,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Title
 import androidx.compose.material.icons.filled.ViewModule
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FloatingActionButtonMenu
 import androidx.compose.material3.FloatingActionButtonMenuItem
@@ -1069,10 +1068,7 @@ private fun FileSystemBrowserContent(
           .padding(bottom = 80.dp), // Account for bottom navigation bar
         contentAlignment = Alignment.Center,
       ) {
-        CircularProgressIndicator(
-          modifier = Modifier.size(48.dp),
-          color = MaterialTheme.colorScheme.primary,
-        )
+        app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
       }
     }
 
@@ -1285,10 +1281,7 @@ private fun FileSystemSearchContent(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
           ) {
-            CircularProgressIndicator(
-              modifier = Modifier.size(48.dp),
-              color = MaterialTheme.colorScheme.primary,
-            )
+            app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
             Text(
               text = if (isAtRoot) "Searching all storage volumes..." else "Searching...",
               style = MaterialTheme.typography.bodyMedium,
