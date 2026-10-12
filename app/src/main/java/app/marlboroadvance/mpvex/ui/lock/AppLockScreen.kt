@@ -457,7 +457,10 @@ fun AppLockManageDialog(
   val isPattern = method == AppLockMethod.PATTERN
   AlertDialog(
     onDismissRequest = onDismiss,
-    properties = DialogProperties(dismissOnClickOutside = false),
+    // 允许点弹窗外部任意空白处关闭（dismiss = 放弃/取消，所有流程都能安全中断：
+    // 关锁/改凭证后面还有一道验证，点空白只是退出，不会误执行任何动作）。
+    // 只靠系统返回手势是最难发现的一种关法 —— 用户找不到出口就会以为卡死。
+    properties = DialogProperties(dismissOnClickOutside = true),
     title = { Text(text = stringResource(R.string.app_lock_title)) },
     text = {
       Column {
@@ -515,7 +518,10 @@ fun UnlockMethodDialog(
 ) {
   BasicAlertDialog(
     onDismissRequest = onDismiss,
-    properties = DialogProperties(dismissOnClickOutside = false),
+    // 允许点弹窗外部任意空白处关闭（dismiss = 放弃/取消，所有流程都能安全中断：
+    // 关锁/改凭证后面还有一道验证，点空白只是退出，不会误执行任何动作）。
+    // 只靠系统返回手势是最难发现的一种关法 —— 用户找不到出口就会以为卡死。
+    properties = DialogProperties(dismissOnClickOutside = true),
   ) {
     Surface(
       shape = MaterialTheme.shapes.extraLarge,
@@ -747,7 +753,10 @@ private fun PinDialogScaffold(
 ) {
   BasicAlertDialog(
     onDismissRequest = onCancel,
-    properties = DialogProperties(dismissOnClickOutside = false),
+    // 允许点弹窗外部任意空白处关闭（dismiss = 放弃/取消，所有流程都能安全中断：
+    // 关锁/改凭证后面还有一道验证，点空白只是退出，不会误执行任何动作）。
+    // 只靠系统返回手势是最难发现的一种关法 —— 用户找不到出口就会以为卡死。
+    properties = DialogProperties(dismissOnClickOutside = true),
   ) {
     Surface(
       shape = MaterialTheme.shapes.extraLarge,
@@ -830,7 +839,10 @@ private fun PatternDialogScaffold(
 ) {
   BasicAlertDialog(
     onDismissRequest = onCancel,
-    properties = DialogProperties(dismissOnClickOutside = false),
+    // 允许点弹窗外部任意空白处关闭（dismiss = 放弃/取消，所有流程都能安全中断：
+    // 关锁/改凭证后面还有一道验证，点空白只是退出，不会误执行任何动作）。
+    // 只靠系统返回手势是最难发现的一种关法 —— 用户找不到出口就会以为卡死。
+    properties = DialogProperties(dismissOnClickOutside = true),
   ) {
     Surface(
       shape = MaterialTheme.shapes.extraLarge,
