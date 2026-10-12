@@ -862,6 +862,19 @@
   <string name="i18n_ack_network_summary">网络存储与本地服务 —— SMB、WebDAV、FTP、内嵌 HTTP 服务。</string>
   <string name="i18n_preload_next_video">视频预加载</string>
   <string name="i18n_preload_next_video_summary">当前视频播放 2 秒后，后台预取下一个视频开头一段数据，切换更流畅</string>
+  <string name="pref_remember_subtitle_track_title">记住每部剧选择的字幕轨</string>
+  <string name="pref_remember_subtitle_track_summary_on">按「语言+编码」匹配，下一集自动选中同一条字幕轨</string>
+  <string name="pref_remember_subtitle_track_summary_off">每集都按默认语言规则选字幕</string>
+  <string name="pref_remember_global_speed_title">全局倍速记忆</string>
+  <string name="pref_remember_global_speed_summary_on">下一次播放沿用上次调过的倍速（每部剧的记忆优先）</string>
+  <string name="pref_remember_global_speed_summary_off">每次播放都用默认倍速</string>
+  <string name="pref_auto_skip_intro_title">自动跳过片头</string>
+  <string name="pref_auto_skip_intro_summary_on">有服务端片头标记时按标记跳；没有就按固定时长，起播后自动跳过开头一段</string>
+  <string name="pref_auto_skip_intro_summary_off">播放头在片头区间时显示可点的「跳过片头」</string>
+  <string name="pref_auto_skip_outro_title">自动跳过片尾</string>
+  <string name="pref_auto_skip_outro_summary_on">有服务端片尾标记时按标记跳；没有就按固定时长跳到结尾（相当于触发连播）</string>
+  <string name="pref_auto_skip_outro_summary_off">播放头在片尾区间时显示可点的「跳过片尾」</string>
+  <string name="pref_gsy_dual_track_summary">倍速、字幕排版、手势、滤镜这些项在两个内核下各有一套：本页管 GSY，「播放与控件 → 播放器」管 mpv，改一边不会影响另一边。少数项是两边共用的：自动连播下一集（一个开关同时管两个内核）。播放记忆（倍速 / 音轨 / 字幕轨 / 片头片尾跳过）目前只对 mpv 播放页生效。</string>
   <string name="i18n_seekbar_standard">标准</string>
   <string name="i18n_seekbar_wavy">波浪</string>
   <string name="i18n_seekbar_thick">粗条</string>
@@ -945,6 +958,36 @@
   <string name="danmaku_app_secret">应用密钥</string>
   <string name="danmaku_credential_hint">留空则不使用弹弹play官方数据（适用于自建弹幕服务）。填写后需在开放平台提交应用并审核通过。</string>
 
+  <!-- 应用锁（b7） -->
+  <string name="app_lock_title">应用锁</string>
+  <string name="app_lock_summary_off">未开启</string>
+  <string name="app_lock_summary_on">已开启</string>
+  <string name="app_lock_unlock_title">输入 PIN 码解锁</string>
+  <string name="app_lock_cooldown">尝试次数过多，请 %1$d 秒后再试</string>
+  <string name="app_lock_wrong_pin">PIN 码不正确</string>
+  <string name="app_lock_key_delete">删除</string>
+  <string name="app_lock_pin_setup_title">设置 PIN 码</string>
+  <string name="app_lock_pin_confirm_title">确认 PIN 码</string>
+  <string name="app_lock_pin_setup_hint">输入 4~6 位数字作为 PIN 码</string>
+  <string name="app_lock_pin_confirm_hint">再输入一遍以确认</string>
+  <string name="app_lock_pin_mismatch">两次输入不一致，请重新设置</string>
+  <string name="app_lock_pin_too_short">PIN 码至少需要 4 位</string>
+  <string name="app_lock_verify_title">验证 PIN 码</string>
+  <string name="app_lock_change_verify_hint">请输入当前 PIN 码以继续</string>
+  <string name="app_lock_manage_message">应用锁已开启。可以修改 PIN 码，或验证当前 PIN 码后关闭。</string>
+  <string name="app_lock_change_pin">修改 PIN 码</string>
+  <string name="app_lock_disable">关闭应用锁</string>
+
+  <!-- 直播电视节目单（a2 + c1） -->
+  <string name="livetv_now_playing">正在播出：%s</string>
+  <string name="livetv_channel_number">频道 %s</string>
+  <string name="livetv_program_guide">节目单</string>
+  <string name="livetv_watch_live">观看直播</string>
+  <string name="livetv_no_programs">暂无节目单数据</string>
+  <string name="livetv_live_now">正在播出</string>
+  <string name="livetv_today">今天</string>
+  <string name="livetv_tomorrow">明天</string>
+
   <!-- 外观深度定制 -->
   <string name="appearance_deep_title">外观定制</string>
   <string name="appearance_icon_title">桌面图标</string>
@@ -953,6 +996,8 @@
   <string name="appearance_icon_failed">切换失败：安装包里缺少 %s</string>
   <string name="appearance_loading_anim_title">加载动画</string>
   <string name="appearance_loading_anim_summary">整屏加载时显示的动画</string>
+  <string name="appearance_loading_anim_size_title">大小</string>
+  <string name="appearance_loading_anim_size_summary">拖动缩放所有加载动画（列表、播放器、弹窗统一生效）</string>
   <string name="app_icon_default">默认</string>
   <string name="app_icon_deepsea">深海</string>
   <string name="app_icon_midnight">暗夜</string>

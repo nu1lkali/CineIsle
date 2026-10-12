@@ -182,6 +182,9 @@ open class PlayerActivity :
   /** 弹幕偏好（开关 / 字号 / 速度 / 透明度 / 密度 / 屏蔽词 / 弹幕源）。 */
   private val danmakuPreferences: app.marlboroadvance.mpvex.preferences.DanmakuPreferences by inject()
 
+  /** Emby 仓库（片头片尾分段的精准数据源；非 Emby 播放用不到） */
+  private val embyRepository: app.marlboroadvance.mpvex.domain.emby.EmbyRepository by inject()
+
   /**
    * Track selector for automatic audio/subtitle selection
    */
@@ -839,6 +842,29 @@ open class PlayerActivity :
                 bottom = if (LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE) 92.dp else 120.dp,
               ),
           )
+          // 「跳过片头 / 跳过片尾」小胶囊（b2+a1 手动模式）：右下角，
+          // 刻意比连播倒计时卡(136)再高一截 —— 片尾区间里两者可能同时可见
+          // （兜底片尾默认 90s，倒计时默认只有几秒），叠在一起会互相盖住。
+          SkipSegmentChip(
+            viewModel = viewModel,
+            onSkip = {
+              when (viewModel.skipSegmentLabel.value) {
+                "跳过片头" -> introRangeMs?.let { range ->
+                  runCatching { PlayerLib.command("seek", (range.second / 1000.0).toString(), "absolute") }
+                }
+                "跳过片尾" -> {
+                  val duration = PlayerLib.getPropertyDouble("duration")
+                  if (duration != null && duration > 0) {
+                    runCatching { PlayerLib.command("seek", (duration - 0.2).toString(), "absolute") }
+                  }
+                }
+              }
+              viewModel.skipSegmentLabel.value = null
+            },
+            modifier = Modifier
+              .align(Alignment.BottomEnd)
+              .padding(end = 16.dp, bottom = 184.dp),
+          )
           // 弹幕：叠在画面之上、控制条之下。
           // ⚠️ 声明位置在 PlayerControls **之后** = 绘制在它上面一层，
           // 所以控制条弹出时仍然压在弹幕之上（弹幕不该盖住按钮）。
@@ -922,6 +948,9 @@ open class PlayerActivity :
 
     // 页面都没了就别再倒计时切集了
     cancelAutoplayCountdown()
+
+    // 片头片尾盯梢一起停（不取消的话切到后台它还每隔 0.5 秒读一次 mpv 属性）
+    cancelSkipSegmentWatcher()
 
     // 弹幕：取消在途的匹配请求（绘制线程由 DanmakuOverlay 的 DisposableEffect 负责 release）。
     danmakuState?.dispose()
@@ -2033,6 +2062,121 @@ open class PlayerActivity :
    */
   private var autoplayCancelled = false
 
+  // ==================== 片头片尾跳过（b2+a1） ====================
+
+  /**
+   * 片头 / 片尾盯梢协程：拉精准分段 + 每 0.5 秒看一次播放头在哪。
+   * 切集（重新起一轮）/ 退出时 cancel。
+   */
+  private var skipSegmentJob: kotlinx.coroutines.Job? = null
+
+  /** 片头区间（毫秒，闭开区间 start..<end）；null = 这一段没有数据 */
+  private var introRangeMs: Pair<Long, Long>? = null
+
+  /** 片尾区间（毫秒）；null = 这一段没有数据 */
+  private var outroRangeMs: Pair<Long, Long>? = null
+
+  /** 本集是否已经自动跳过片头 / 片尾过一次（跳完置 true，用户往回拖也不会再跳） */
+  private var introSkipped = false
+  private var outroSkipped = false
+
+  /**
+   * 每集开播时起一轮「片头片尾」处理。
+   *
+   * 两步：
+   * 1. **拉精准数据**：Emby 4.7+ 的 `/Users/{UserId}/Items/{Id}/Intros`。
+   *    拿不到（非 Emby 播放 / 服务端没扫描 / 网络断）就退到固定时长兜底，
+   *    见 [PlayerPreferences.autoSkipIntro] 的 KDoc。
+   * 2. **轮询**：0.5 秒精度（同连播盯梢，不观察 time-pos —— 每帧回调的 JNI
+   *    开销在这里不值）。自动跳开关开着 ⇒ 播放头进入区间且没暂停就跳到段尾；
+   *    开关关着 ⇒ 把「跳过片头 / 跳过片尾」小胶囊的文案写进
+   *    [PlayerViewModel.skipSegmentLabel]，等用户自己点（手动精准跳）。
+   *
+   * 注意**两个开关都关着盯梢照样跑**：手动胶囊只需要精准数据，不需要开关。
+   * 代价是每集一次小 GET（纯本地播放没有这个请求）。
+   */
+  private fun startSkipSegmentWatcher() {
+    skipSegmentJob?.cancel()
+    viewModel.skipSegmentLabel.value = null
+    introRangeMs = null
+    outroRangeMs = null
+    introSkipped = false
+    outroSkipped = false
+
+    val autoIntro = playerPreferences.autoSkipIntro.get()
+    val autoOutro = playerPreferences.autoSkipOutro.get()
+    val fixedMs = playerPreferences.customSkipDuration.get().coerceAtLeast(1) * 1000L
+
+    skipSegmentJob =
+      lifecycleScope.launch {
+        // 1) 精准分段（失败 / 没有都算正常，静默退兜底）
+        val serverId = currentEmbyServerId()
+        val itemId = currentEmbyItemId()
+        if (serverId != null && !itemId.isNullOrBlank()) {
+          val server = runCatching { embyRepository.getServer(serverId) }.getOrNull()
+          if (server != null) {
+            val result = runCatching { embyRepository.getItemIntros(server, itemId) }.getOrNull()
+            result?.Segments?.forEach { seg ->
+              if (!seg.isValid) return@forEach
+              when (seg.Type?.lowercase()) {
+                "intro" -> introRangeMs = seg.startMs to seg.endMs
+                "outro" -> outroRangeMs = seg.startMs to seg.endMs
+              }
+            }
+          }
+        }
+
+        // 2) 轮询播放头
+        while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+          kotlinx.coroutines.delay(500)
+          if (isFinishing) break
+          val durationMs = ((PlayerLib.getPropertyDouble("duration") ?: 0.0) * 1000).toLong()
+          if (durationMs <= 0) continue
+          val posMs = ((PlayerLib.getPropertyDouble("time-pos") ?: continue) * 1000).toLong()
+          val paused = PlayerLib.getPropertyBoolean("pause") ?: false
+
+          // 没有精准数据时按固定时长兜底（**只在自动跳开着时兜底** ——
+          // 关着时只认精准数据，否则每集开头都挂个「跳过片头」纯属打扰，
+          // 控制条上本来就有固定时长的快进钮）。
+          // 短片（总长 ≤ 2×兜底值）不兜底：几分钟的片子不可能有 90 秒片头。
+          val fixedIntroUsable = durationMs > fixedMs * 2
+          val intro = introRangeMs ?: if (autoIntro && fixedIntroUsable) 0L to fixedMs else null
+          val outro = outroRangeMs ?: if (autoOutro && fixedIntroUsable) (durationMs - fixedMs) to durationMs else null
+
+          // 手动胶囊：开关关着、播放头在区间里 ⇒ 给个可点的提示
+          val label =
+            when {
+              !autoIntro && intro != null && posMs in intro.first until intro.second -> "跳过片头"
+              !autoOutro && outro != null && posMs >= outro.first && posMs < outro.second -> "跳过片尾"
+              else -> null
+            }
+          viewModel.skipSegmentLabel.value = label
+
+          // 自动跳：只跳一次、且不趁用户暂停时跳
+          if (!paused && !introSkipped && autoIntro && intro != null && posMs in intro.first until intro.second) {
+            introSkipped = true
+            viewModel.skipSegmentLabel.value = null
+            runCatching { PlayerLib.command("seek", (intro.second / 1000.0).toString(), "absolute") }
+          }
+          if (!paused && !outroSkipped && autoOutro && outro != null && posMs >= outro.first && posMs < outro.second) {
+            outroSkipped = true
+            viewModel.skipSegmentLabel.value = null
+            // 跳到结尾前 0.2 秒： seek 到报告的 duration 有时差一点点到不了 EOF
+            runCatching {
+              PlayerLib.command("seek", ((durationMs - 200) / 1000.0).toString(), "absolute")
+            }
+          }
+        }
+      }
+  }
+
+  /** 切集 / 退出时停掉片头片尾盯梢（不 cancel 的话旧条目的分段会一直生效） */
+  private fun cancelSkipSegmentWatcher() {
+    skipSegmentJob?.cancel()
+    skipSegmentJob = null
+    viewModel.skipSegmentLabel.value = null
+  }
+
   /**
    * 每集开播时起一个轻量轮询：**快播完的那几秒**把倒计时卡片推到屏幕上。
    *
@@ -2262,6 +2406,14 @@ private fun cancelAutoplayCountdown() {
   private fun applyRememberedPlaybackSettings() {
     val key = currentSeriesKey()
     viewModel.seriesKey = key
+    // b4 全局倍速记忆作为**兜底**：先套全局上次倍速，再让每剧记忆覆盖。
+    // 顺序不能反 —— 每剧记忆优先级更高（同剧切集沿用本剧调过的速度）。
+    if (playerPreferences.rememberGlobalSpeed.get()) {
+      val last = playerPreferences.lastPlaybackSpeed.get()
+      if (last > 0f) {
+        runCatching { PlayerLib.setPropertyDouble("speed", last.toDouble()) }
+      }
+    }
     if (key.isNullOrBlank()) return
     if (playerPreferences.rememberSpeedPerSeries.get()) {
       val speed = PlaybackMemory.speedFor(playerPreferences, key)
@@ -2275,6 +2427,15 @@ private fun cancelAutoplayCountdown() {
         val trackId = PlaybackMemory.findAudioTrackId(fingerprint)
         if (trackId != null && trackId > 0) {
           runCatching { PlayerLib.setPropertyInt("aid", trackId) }
+        }
+      }
+    }
+    if (playerPreferences.rememberSubtitleTrackPerSeries.get()) {
+      val fingerprint = PlaybackMemory.subtitleFingerprintFor(playerPreferences, key)
+      if (!fingerprint.isNullOrBlank()) {
+        val trackId = PlaybackMemory.findSubtitleTrackId(fingerprint)
+        if (trackId != null && trackId > 0) {
+          runCatching { PlayerLib.setPropertyInt("sid", trackId) }
         }
       }
     }
@@ -2523,6 +2684,9 @@ private fun cancelAutoplayCountdown() {
       // 起一个盯梢协程：片尾倒数阶段把「下一集」卡片推出来
       autoplayCancelled = false
       withContext(Dispatchers.Main) { startAutoplayCountdownWatcher() }
+
+      // 起片头片尾盯梢（b2+a1）：拉精准分段 + 自动跳 / 手动胶囊
+      withContext(Dispatchers.Main) { startSkipSegmentWatcher() }
 
       // Apply default zoom only if there's no saved state
       if (!hasState) {
@@ -3733,6 +3897,22 @@ private fun cancelAutoplayCountdown() {
         return true
       }
 
+      KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+        // 偏好见 设置 → 手势 → 媒体键（mediaPlayGesture）
+        viewModel.handleMediaPlayPause()
+        return true
+      }
+
+      KeyEvent.KEYCODE_MEDIA_NEXT -> {
+        viewModel.handleMediaNext()
+        return true
+      }
+
+      KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+        viewModel.handleMediaPrevious()
+        return true
+      }
+
       else -> {
         // input.conf 按键映射是 mpv 专属；Exo 下没有这个体系
         if (engineKind == EngineKind.MPV) event?.let { player.onKey(it) }
@@ -4878,10 +5058,12 @@ private fun PlayerFirstFrameLoading(
     exit = fadeOut(tween(260)),
     modifier = modifier,
   ) {
-    // 96dp 与缓冲转圈（PlayerControls.kt:866）同尺寸 ⇒ 首帧层与缓冲层接力时画面不跳。
+    // 96dp 是**基准**尺寸（还会乘用户设的缩放系数，默认 1.1×）—— 与缓冲转圈
+    // （PlayerControls.kt:866）同基准 ⇒ 首帧层与缓冲层接力时画面不跳。
+    // ⚠️ 用 size 参数而不是 Modifier.size，否则「加载动画大小」缩放对它不生效。
     // 压在画面上，所以固定白色半透明（主题色在视频上基本看不见）。
     app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
-      modifier = Modifier.size(96.dp),
+      size = 96.dp,
       tint = Color.White.copy(alpha = 0.85f),
     )
   }

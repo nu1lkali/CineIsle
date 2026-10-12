@@ -62,6 +62,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.java.KoinJavaComponent.inject
+import java.time.Instant
+import java.time.format.DateTimeFormatter
 
 /** 全库搜索没选任何筛选时的默认类型集：只保留可播放的视频本体 */
 private const val PERSON_TYPE = "Person"
@@ -355,6 +357,29 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    */
   suspend fun loadLiveTvChannels(server: EmbyServer): List<EmbyItem> =
     withContext(Dispatchers.IO) { repository.getLiveTvChannels(server) }
+
+  /**
+   * 直播电视节目单（a2 + c1）。
+   *
+   * @param channelId 非 null = 单个频道的时间轴（频道详情页）；
+   *                  null = 所有频道在窗口内的节目（频道网格的「正在播出」一次拿全）
+   * @param hoursAhead 从「现在」起往后数多少小时
+   *
+   * 时间窗在这里算（ISO 8601 UTC），调用方不用碰日期格式。
+   */
+  suspend fun loadLiveTvPrograms(
+    server: EmbyServer,
+    channelId: String? = null,
+    hoursAhead: Int = 3,
+  ): List<EmbyItem> = withContext(Dispatchers.IO) {
+    val now = Instant.now()
+    repository.getLiveTvPrograms(
+      server = server,
+      channelId = channelId,
+      startTime = DateTimeFormatter.ISO_INSTANT.format(now),
+      endTime = DateTimeFormatter.ISO_INSTANT.format(now.plusSeconds(hoursAhead.toLong() * 3600)),
+    )
+  }
 
   /** 取某媒体库的筛选可选项（类型 / 标签 / 年份 / 分级），供筛选面板使用。 */
   suspend fun loadFilterOptions(
@@ -725,10 +750,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * 这里刻意不做「内部 launch 后不管」：那样调用方无从得知成败，
    * 用户点了右上角的勾却没有任何反馈，服务端失败时也看不出来。
    */
-  /** 标记已看 / 未看。同 [toggleFavorite]：以服务器回传的 UserData 为准。 */
+  /** 标记已看 / 未看。同 [toggleFavorite]：以服务器回传的 UserData 为准。
+   *
+   * a8：走 [EmbyRepository.setPlayedWithClearPosition] —— 「已看 + 清进度」
+   * 一个请求写完（旧路径只翻 Played 位，会在服务端留下陈旧的续播点）。
+   * 该路径内部对不认 UserData 直写端点的服务端有 PlayedItems 兜底。 */
   suspend fun setPlayed(server: EmbyServer, itemId: String, played: Boolean): Result<Unit> {
     val result = runCatching {
-      val data = repository.setPlayed(server, itemId, played)
+      val data = repository.setPlayedWithClearPosition(server, itemId, played)
       // 只有服务器明确回「状态和我要的不一样」才算失败；拿不到 UserData 时不下失败结论
       if (data?.Played == !played) throw IllegalStateException("服务器未接受这次修改")
     }

@@ -141,8 +141,11 @@ class EmbyRepository(
   // ─── 登录 ───
 
   /**
-   * 用 [host]/[port]/[useHttps]/[username]/[password] 登录，拿到 token 后写入新服务器记录。
-   * 返回新服务器（含 id + apiToken + userId）。
+   * 用 [host]/[port]/[useHttps]/[username]/[password] 登录，写入服务器记录。
+   * 返回保存后的服务器（含 id + apiToken + userId）。
+   *
+   * a7：同主机 + 同用户重复登录 = **更新原记录**（凭据刷新，不产生重复行）；
+   * 同主机 + **不同用户** = 新插一行，即「同一服务器多用户」的存在形态。
    *
    * 失败会抛 [EmbyApiException]。
    */
@@ -171,25 +174,58 @@ class EmbyRepository(
     // 顺便拿服务器名/版本
     val info = runCatching { EmbyClient.getPublicSystemInfo(probe) }.getOrNull()
 
-    // 入库前先看一眼：这是不是第一台服务器（之前一台都没有）
-    val wasFirstServer = runCatching { serverRepo.getAll().isEmpty() }.getOrDefault(false)
+    // a7 多用户数据模型：**同一台服务器（host+port+https）下不同用户各占一行**，
+    // 各自带自己的 token / UserData 口径（播放进度、收藏、不喜欢标记全部分开）；
+    // 而**同一个用户**重复登录则更新原行，不新插 —— 不然每重登一次
+    // 管理页就多出一条一模一样的记录，用户根本分不清点哪个。
+    val existing =
+      runCatching { serverRepo.getAll() }.getOrDefault(emptyList()).firstOrNull {
+        it.host == probe.host &&
+          it.port == probe.port &&
+          it.useHttps == probe.useHttps &&
+          it.userId == userId
+      }
+    if (existing != null) {
+      val refreshed =
+        existing.copy(
+          name = name,
+          username = username,
+          password = password,
+          userId = userId,
+          apiToken = token,
+          serverName = info?.ServerName ?: existing.serverName,
+          version = info?.Version ?: existing.version,
+          lastConnected = System.currentTimeMillis(),
+        )
+      serverRepo.update(refreshed)
+      val saved = serverRepo.getById(existing.id) ?: refreshed
+      // 正在用的正是这一台：token 换了必须立刻生效，否则后续请求还带着旧 token（401）
+      if (_currentServer.value?.id == existing.id) setCurrentServer(saved)
+      // ⚠️ 这里是 withContext 的 lambda（非 inline），不能 `return saved` ——
+      // 非局部返回会被编译器拒（RETURN_NOT_ALLOWED）。用 if/else 两分支
+      // 各自以表达式收尾，语义与「提前 return」完全一致。
+      saved
+    } else {
+      // 入库前先看一眼：这是不是第一台服务器（之前一台都没有）
+      val wasFirstServer = runCatching { serverRepo.getAll().isEmpty() }.getOrDefault(false)
 
-    // 入库（带凭据）
-    val id = serverRepo.add(
-      probe.copy(
-        userId = userId,
-        apiToken = token,
-        serverName = info?.ServerName ?: name,
-        version = info?.Version ?: "",
-      ),
-    )
-    // 入库时 createdAt 等被 Room 填，重新查一次返回完整对象
-    val saved = serverRepo.getById(id) ?: throw EmbyApiException(500, "无法读取新添加的服务器记录")
+      // 入库（带凭据）
+      val id = serverRepo.add(
+        probe.copy(
+          userId = userId,
+          apiToken = token,
+          serverName = info?.ServerName ?: name,
+          version = info?.Version ?: "",
+        ),
+      )
+      // 入库时 createdAt 等被 Room 填，重新查一次返回完整对象
+      val saved = serverRepo.getById(id) ?: throw EmbyApiException(500, "无法读取新添加的服务器记录")
 
-    // 第一台服务器直接设为当前：没有历史选择可恢复，不设的话添加完
-    // 还得手动再点一下才能进库浏览
-    if (wasFirstServer) setCurrentServer(saved)
-    saved
+      // 第一台服务器直接设为当前：没有历史选择可恢复，不设的话添加完
+      // 还得手动再点一下才能进库浏览
+      if (wasFirstServer) setCurrentServer(saved)
+      saved
+    }
   }
 
   /**
@@ -569,6 +605,21 @@ class EmbyRepository(
         .getOrDefault(emptyList())
     }
 
+  /**
+   * 拉条目的片头 / 片尾分段（a1 精准跳过片头片尾）。
+   *
+   * 拿不到就返回 null **而不是抛异常**：服务端没扫描片头标记（空 Segments）、
+   * 端点不存在（旧版服务端）、网络断，都是正常情况，播放页按「没有精准数据、
+   * 退固定时长兜底」处理即可。
+   */
+  suspend fun getItemIntros(
+    server: EmbyServer,
+    itemId: String,
+  ): EmbyIntrosResult? =
+    withContext(Dispatchers.IO) {
+      runCatching { EmbyClient.getItemIntros(server, itemId) }.getOrNull()
+    }
+
   // ─── 播放列表（Emby 服务端）───
   //
   // ⚠️ 与本地播放列表（Room `PlaylistRepository`）是两套完全独立的东西，
@@ -734,6 +785,20 @@ class EmbyRepository(
     EmbyClient.setPlayed(server, itemId, played)
   }
 
+  /**
+   * a8：标记已看 / 未看 **并同时清掉播放进度**，一个请求写完（见 [EmbyClient.setPlayedWithClearPosition]）。
+   *
+   * 这是「标记已看 / 未看」UI 动作的**主路径**： Emby Web 的同一动作本来就是
+   * 两个字段一起写的，旧路径只翻 Played 位、留下陈旧的续播点。
+   */
+  suspend fun setPlayedWithClearPosition(
+    server: EmbyServer,
+    itemId: String,
+    played: Boolean,
+  ): EmbyUserData? = withContext(Dispatchers.IO) {
+    EmbyClient.setPlayedWithClearPosition(server, itemId, played)
+  }
+
   // ─── 播放进度上报 ───
 
   suspend fun reportPlaybackStart(
@@ -786,6 +851,23 @@ class EmbyRepository(
     withContext(Dispatchers.IO) {
       EmbyClient.getLiveTvChannels(server)
     }
+
+  /**
+   * 直播电视节目单（`/LiveTv/Programs`，a2 + c1）。
+   *
+   * [channelId] 为 null 时拿「所有频道」在窗口内的节目（频道网格的正在播出）；
+   * 非 null 时拿单个频道的时间轴。时间参数是 ISO 8601 UTC 字符串。
+   * 服务端没有 EPG 数据源时返回空列表。
+   */
+  suspend fun getLiveTvPrograms(
+    server: EmbyServer,
+    channelId: String? = null,
+    startTime: String,
+    endTime: String,
+    limit: Int = 500,
+  ): List<EmbyItem> = withContext(Dispatchers.IO) {
+    EmbyClient.getLiveTvPrograms(server, channelId, startTime, endTime, limit)
+  }
 
   /**
    * 搜演员（走 `/Persons`）。

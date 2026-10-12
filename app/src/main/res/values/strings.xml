@@ -877,6 +877,19 @@
   <string name="i18n_ack_network_summary">Network storage and serving — SMB, WebDAV, FTP and an embedded HTTP server.</string>
   <string name="i18n_preload_next_video">Preload next video</string>
   <string name="i18n_preload_next_video_summary">2s into playback, fetch the beginning of the next video in the background for smoother switching</string>
+  <string name="pref_remember_subtitle_track_title">Remember subtitle track per series</string>
+  <string name="pref_remember_subtitle_track_summary_on">Matched by language + codec; the next episode auto-selects the same subtitle track</string>
+  <string name="pref_remember_subtitle_track_summary_off">Every episode picks subtitles by the default language rules</string>
+  <string name="pref_remember_global_speed_title">Remember playback speed globally</string>
+  <string name="pref_remember_global_speed_summary_on">Next playback starts at the last speed you used (per-series memory still takes priority)</string>
+  <string name="pref_remember_global_speed_summary_off">Every playback starts at the default speed</string>
+  <string name="pref_auto_skip_intro_title">Auto-skip intro</string>
+  <string name="pref_auto_skip_intro_summary_on">Uses server intro markers when available, otherwise skips the first fixed duration after playback starts</string>
+  <string name="pref_auto_skip_intro_summary_off">Show a tappable "Skip intro" pill while inside the intro</string>
+  <string name="pref_auto_skip_outro_title">Auto-skip outro</string>
+  <string name="pref_auto_skip_outro_summary_on">Uses server outro markers when available, otherwise skips the last fixed duration (ends the episode)</string>
+  <string name="pref_auto_skip_outro_summary_off">Show a tappable "Skip outro" pill while inside the outro</string>
+  <string name="pref_gsy_dual_track_summary">Speed, subtitle styling, gestures and filters each have their own copy per kernel: this page configures GSY, "Playback &amp; controls → Player" configures mpv — changing one never affects the other. A few items are genuinely shared: auto-play next episode (one switch for both kernels). Playback memory (speed / audio track / subtitle track / intro-outro skip) currently applies to the mpv player page only.</string>
   <string name="i18n_seekbar_standard">Standard</string>
   <string name="i18n_seekbar_wavy">Wavy</string>
   <string name="i18n_seekbar_thick">Thick</string>
@@ -945,6 +958,36 @@
   <string name="danmaku_app_secret">App secret</string>
   <string name="danmaku_credential_hint">Leave empty to skip the official source (works with self-hosted servers). When filled in, the app must be submitted for review on the open platform.</string>
 
+  <!-- 应用锁（b7） -->
+  <string name="app_lock_title">App lock</string>
+  <string name="app_lock_summary_off">Off</string>
+  <string name="app_lock_summary_on">On</string>
+  <string name="app_lock_unlock_title">Enter your PIN to unlock</string>
+  <string name="app_lock_cooldown">Too many attempts. Try again in %1$d s</string>
+  <string name="app_lock_wrong_pin">Incorrect PIN</string>
+  <string name="app_lock_key_delete">Delete</string>
+  <string name="app_lock_pin_setup_title">Set PIN</string>
+  <string name="app_lock_pin_confirm_title">Confirm PIN</string>
+  <string name="app_lock_pin_setup_hint">Enter 4–6 digits as your PIN</string>
+  <string name="app_lock_pin_confirm_hint">Enter the same PIN again</string>
+  <string name="app_lock_pin_mismatch">PINs don\'t match. Start over</string>
+  <string name="app_lock_pin_too_short">PIN must be at least 4 digits</string>
+  <string name="app_lock_verify_title">Verify PIN</string>
+  <string name="app_lock_change_verify_hint">Enter your current PIN to continue</string>
+  <string name="app_lock_manage_message">App lock is on. You can change the PIN, or verify the current PIN to turn it off.</string>
+  <string name="app_lock_change_pin">Change PIN</string>
+  <string name="app_lock_disable">Turn off app lock</string>
+
+  <!-- 直播电视节目单（a2 + c1） -->
+  <string name="livetv_now_playing">On now: %s</string>
+  <string name="livetv_channel_number">CH %s</string>
+  <string name="livetv_program_guide">Program guide</string>
+  <string name="livetv_watch_live">Watch live</string>
+  <string name="livetv_no_programs">No program guide data</string>
+  <string name="livetv_live_now">ON NOW</string>
+  <string name="livetv_today">Today</string>
+  <string name="livetv_tomorrow">Tomorrow</string>
+
   <!-- 外观深度定制 -->
   <string name="appearance_deep_title">Customize</string>
   <string name="appearance_icon_title">App icon</string>
@@ -953,6 +996,8 @@
   <string name="appearance_icon_failed">Couldn\'t switch: %s missing from the installed app</string>
   <string name="appearance_loading_anim_title">Loading animation</string>
   <string name="appearance_loading_anim_summary">Shown while a full screen is loading</string>
+  <string name="appearance_loading_anim_size_title">Size</string>
+  <string name="appearance_loading_anim_size_summary">Drag to scale every loading animation: lists, player and dialogs</string>
   <string name="app_icon_default">Default</string>
   <string name="app_icon_deepsea">Deep sea</string>
   <string name="app_icon_midnight">Midnight</string>

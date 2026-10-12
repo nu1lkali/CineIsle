@@ -221,6 +221,78 @@ object PlayerPreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              val rememberSubtitleTrack by preferences.rememberSubtitleTrackPerSeries.collectAsState()
+              SwitchPreference(
+                value = rememberSubtitleTrack,
+                onValueChange = preferences.rememberSubtitleTrackPerSeries::set,
+                title = { Text(text = stringResource(R.string.pref_remember_subtitle_track_title)) },
+                summary = {
+                  Text(
+                    text = stringResource(
+                      if (rememberSubtitleTrack) R.string.pref_remember_subtitle_track_summary_on
+                      else R.string.pref_remember_subtitle_track_summary_off,
+                    ),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              val rememberGlobalSpeed by preferences.rememberGlobalSpeed.collectAsState()
+              SwitchPreference(
+                value = rememberGlobalSpeed,
+                onValueChange = preferences.rememberGlobalSpeed::set,
+                title = { Text(text = stringResource(R.string.pref_remember_global_speed_title)) },
+                summary = {
+                  Text(
+                    text = stringResource(
+                      if (rememberGlobalSpeed) R.string.pref_remember_global_speed_summary_on
+                      else R.string.pref_remember_global_speed_summary_off,
+                    ),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              val autoSkipIntro by preferences.autoSkipIntro.collectAsState()
+              SwitchPreference(
+                value = autoSkipIntro,
+                onValueChange = preferences.autoSkipIntro::set,
+                title = { Text(text = stringResource(R.string.pref_auto_skip_intro_title)) },
+                summary = {
+                  Text(
+                    text = stringResource(
+                      if (autoSkipIntro) R.string.pref_auto_skip_intro_summary_on
+                      else R.string.pref_auto_skip_intro_summary_off,
+                    ),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              val autoSkipOutro by preferences.autoSkipOutro.collectAsState()
+              SwitchPreference(
+                value = autoSkipOutro,
+                onValueChange = preferences.autoSkipOutro::set,
+                title = { Text(text = stringResource(R.string.pref_auto_skip_outro_title)) },
+                summary = {
+                  Text(
+                    text = stringResource(
+                      if (autoSkipOutro) R.string.pref_auto_skip_outro_summary_on
+                      else R.string.pref_auto_skip_outro_summary_off,
+                    ),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
               // ── 播放内核 / GSY 全部配置 ──
               // 这一整块（默认内核、长按反选、GSY 的解码内核、渲染方式、显示比例、手势…）
               // 已经整块搬到「设置 → GSY 播放器」（GsyPreferencesScreen）。

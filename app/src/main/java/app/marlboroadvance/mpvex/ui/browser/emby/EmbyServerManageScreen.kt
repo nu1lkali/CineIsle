@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -79,6 +80,8 @@ object EmbyServerManageScreen : Screen {
 
     var editing by remember { mutableStateOf<EmbyServer?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+    // a7：在这台服务器上再登一个用户（地址预填锁定，只换账号密码）
+    var addUserOn by remember { mutableStateOf<EmbyServer?>(null) }
     var pendingDelete by remember { mutableStateOf<EmbyServer?>(null) }
 
     Scaffold(
@@ -122,6 +125,7 @@ object EmbyServerManageScreen : Screen {
               onSelect = { viewModel.switchServer(server) },
               onEdit = { editing = server },
               onDelete = { pendingDelete = server },
+              onAddUser = { addUserOn = server },
             )
           }
         }
@@ -147,6 +151,18 @@ object EmbyServerManageScreen : Screen {
             ),
           )
         },
+        requireLogin = true,
+      )
+    }
+
+    // a7：同一服务器再登一个用户。地址三件套预填并锁死，只填新账号密码。
+    addUserOn?.let { server ->
+      ServerEditDialog(
+        title = "添加用户",
+        initial = null,
+        sameServerAs = server,
+        onDismiss = { addUserOn = null },
+        onConfirm = { _, _, _, _, _, _ -> },
         requireLogin = true,
       )
     }
@@ -194,6 +210,7 @@ private fun ServerCard(
   onSelect: () -> Unit,
   onEdit: () -> Unit,
   onDelete: () -> Unit,
+  onAddUser: () -> Unit,
 ) {
   Card(
     onClick = onSelect,
@@ -250,8 +267,21 @@ private fun ServerCard(
             MaterialTheme.colorScheme.error
           },
         )
+        // a7：账号名单独一行 —— 同一台服务器下多个用户各占一张卡，
+        // 没有这一行时两张卡只差一个 Id，用户根本分不清该点哪张。
+        if (server.isLoggedIn && server.username.isNotBlank()) {
+          Text(
+            text = "账号 ${server.username}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
       }
 
+      // a7：在这台服务器上再登一个用户（地址已填过，不用重打）
+      IconButton(onClick = onAddUser) {
+        Icon(Icons.Default.PersonAdd, contentDescription = "在这台服务器上添加另一个用户")
+      }
       IconButton(onClick = onEdit) {
         Icon(Icons.Default.Edit, contentDescription = "编辑")
       }
@@ -266,6 +296,8 @@ private fun ServerCard(
  * 服务器编辑对话框。
  *
  * @param requireLogin true 时会先用账号密码登录验证，成功后才保存（添加场景）
+ * @param sameServerAs 非空 = 「在这台服务器上添加另一个用户」（a7）：
+ *   地址三件套按它预填并锁死，只留账号密码给用户填。
  */
 @Composable
 private fun ServerEditDialog(
@@ -274,6 +306,7 @@ private fun ServerEditDialog(
   requireLogin: Boolean,
   onDismiss: () -> Unit,
   onConfirm: (name: String, host: String, port: Int, useHttps: Boolean, username: String, password: String) -> Unit,
+  sameServerAs: EmbyServer? = null,
 ) {
   val context = LocalContext.current
   val viewModel: EmbyViewModel = viewModel(
@@ -281,13 +314,16 @@ private fun ServerEditDialog(
   )
   val scope = rememberCoroutineScope()
 
-  var name by remember { mutableStateOf(initial?.name ?: "") }
+  // 添加用户模式：地址取自 sameServerAs，名称沿用它的名字，账号密码留空
+  val addressSource = sameServerAs ?: initial
+  val lockAddress = sameServerAs != null
+  var name by remember { mutableStateOf(addressSource?.name ?: "") }
   // 地址与端口拆成两个输入框：地址只填主机（IP / 域名），端口单独填
-  var host by remember { mutableStateOf(initial?.host ?: "") }
-  var port by remember { mutableStateOf((initial?.port ?: DEFAULT_HTTP_PORT).toString()) }
+  var host by remember { mutableStateOf(addressSource?.host ?: "") }
+  var port by remember { mutableStateOf((addressSource?.port ?: DEFAULT_HTTP_PORT).toString()) }
   var username by remember { mutableStateOf(initial?.username ?: "") }
   var password by remember { mutableStateOf(initial?.password ?: "") }
-  var useHttps by remember { mutableStateOf(initial?.useHttps ?: false) }
+  var useHttps by remember { mutableStateOf(addressSource?.useHttps ?: false) }
   var isConnecting by remember { mutableStateOf(false) }
   var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -342,6 +378,7 @@ private fun ServerEditDialog(
             label = { Text("服务器地址") },
             placeholder = { Text("192.168.1.10") },
             singleLine = true,
+            enabled = !lockAddress,
             modifier = Modifier.weight(1f),
           )
           OutlinedTextField(
@@ -350,12 +387,18 @@ private fun ServerEditDialog(
             label = { Text("端口") },
             placeholder = { Text((if (useHttps) HTTPS_PORT else DEFAULT_HTTP_PORT).toString()) },
             singleLine = true,
+            enabled = !lockAddress,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.weight(0.5f),
           )
         }
         Text(
-          text = "地址只填 IP 或域名；端口默认 8096，勾选 HTTPS 后默认 443",
+          text = if (lockAddress) {
+            "地址已按所选服务器填好并锁定，只需填写这个用户的账号密码；" +
+              "两个用户的播放进度、收藏、标记互不相通"
+          } else {
+            "地址只填 IP 或域名；端口默认 8096，勾选 HTTPS 后默认 443"
+          },
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -375,6 +418,7 @@ private fun ServerEditDialog(
         Row(verticalAlignment = Alignment.CenterVertically) {
           Checkbox(
             checked = useHttps,
+            enabled = !lockAddress,
             onCheckedChange = { checked ->
               useHttps = checked
               // 端口跟着「默认值」走：只在另一个协议的默认端口上切换，

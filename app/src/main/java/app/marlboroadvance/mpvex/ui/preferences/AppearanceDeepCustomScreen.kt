@@ -9,8 +9,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,13 +21,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -49,16 +52,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.presentation.Screen
+import app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator
 import app.marlboroadvance.mpvex.ui.theme.LoadingAnimation
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import com.airbnb.lottie.compose.LottieAnimation
 import com.airbnb.lottie.compose.LottieCompositionSpec
 import com.airbnb.lottie.compose.LottieConstants
 import com.airbnb.lottie.compose.rememberLottieComposition
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.ProvidePreferenceLocals
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import org.koin.compose.koinInject
@@ -104,9 +108,9 @@ object AppearanceDeepCustomScreen : Screen {
     // 「Unresolved reference 'collectAsState'」（参数不匹配时编译器找不到重载）。
     val loadingAnim by appearancePrefs.loadingAnimation.collectAsState()
 
-    // 弹幕总开关也放在这一页（见下方说明）。
-    val danmakuPrefs = koinInject<app.marlboroadvance.mpvex.preferences.DanmakuPreferences>()
-    val danmakuEnabled by danmakuPrefs.enabled.collectAsState()
+    // 加载动画大小（缩放系数，1.0 = 各调用点写死的基准尺寸）。
+    // 与上面同一个坑：必须用无参的 Preference.collectAsState()，拖滑块才实时生效。
+    val loadingSizeScale by appearancePrefs.loadingAnimationScale.collectAsState()
 
     Scaffold(
       snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -202,38 +206,10 @@ object AppearanceDeepCustomScreen : Screen {
               onPick = { anim -> appearancePrefs.loadingAnimation.set(anim.storageKey) },
             )
           }
-
-          // ── 弹幕 ──────────────────────────────────────────────
-          // 为什么在这里给一个入口：弹幕的全部设置（开关 / 源地址 / AppId / Secret /
-          // 自动匹配）原本**只在 mpv 播放页的「更多 ⋮」里**才够得着，而它默认是关的
-          // ⇒ 用户在设置里找不到、也不知道去哪开，表现就是「找不到弹幕功能」。
-          // 这里只放**一个入口**进独立页（见 [DanmakuSettingsScreen]），
-          // 全部参数都在那一页改，不必先进播放器。
           item {
-            PreferenceSectionHeader(
-              title = stringResource(R.string.danmaku_title),
-              modifier = Modifier.padding(top = 12.dp),
-            )
-          }
-          item {
-            Preference(
-              title = { Text(text = stringResource(R.string.danmaku_settings_title)) },
-              summary = {
-                Text(
-                  // 当前开关状态直接写进摘要 ⇒ 一眼能看出开没开，不必点进去。
-                  text = stringResource(R.string.danmaku_settings_summary) +
-                    if (danmakuEnabled) "（已开启）" else "（未开启）",
-                  color = MaterialTheme.colorScheme.outline,
-                )
-              },
-              icon = {
-                Icon(
-                  Icons.Outlined.ChatBubbleOutline,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                )
-              },
-              onClick = { backstack.add(DanmakuSettingsScreen) },
+            LoadingAnimationSizeRow(
+              scale = loadingSizeScale,
+              onScaleChange = { appearancePrefs.loadingAnimationScale.set(it) },
             )
           }
         }
@@ -393,6 +369,66 @@ private fun LoadingAnimationRow(
           overflow = TextOverflow.Ellipsis,
           color = if (anim == current) MaterialTheme.colorScheme.primary
           else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * 加载动画大小：滑块 + **实时预览**。
+ *
+ * 预览框里渲染的就是统一入口 [AppLoadingIndicator] 本身 —— 它会读用户选的动画
+ * 和这里的缩放系数 ⇒ 所见即所得；另画一个近似预览必然「预览与实物不符」。
+ *
+ * ⚠️ 预览基准 48dp、框 96dp：2.0× 时刚好 96dp 不出框；列表里那些整页加载态
+ *   正是 48dp 基准，预览大小与真实观感一致（播放器画面层是 96dp 基准，
+ *   同比例放大，不会超出屏幕）。
+ */
+@Composable
+private fun LoadingAnimationSizeRow(
+  scale: Float,
+  onScaleChange: (Float) -> Unit,
+) {
+  Column(modifier = Modifier.fillMaxWidth()) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Text(
+        text = stringResource(R.string.appearance_loading_anim_size_title),
+        style = MaterialTheme.typography.bodyLarge,
+      )
+      Spacer(modifier = Modifier.weight(1f))
+      Text(
+        text = "${(scale * 100).roundToInt()}%",
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+      )
+    }
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Box(
+        modifier = Modifier
+          .size(96.dp)
+          .clip(RoundedCornerShape(16.dp))
+          .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center,
+      ) {
+        AppLoadingIndicator(size = 48.dp)
+      }
+      Spacer(modifier = Modifier.width(12.dp))
+      Column(modifier = Modifier.weight(1f)) {
+        Slider(
+          value = scale,
+          onValueChange = onScaleChange,
+          // 松手时吸附到 10% 整数档：拖动过程是连续的，不吸附的话存下来会是
+          // 87.3% 这种没法复述的值，想调回刚才那样时对不上。
+          onValueChangeFinished = { onScaleChange((scale * 10f).roundToInt() / 10f) },
+          valueRange = 0.5f..2.0f,
+          steps = 14,
+        )
+        Text(
+          text = stringResource(R.string.appearance_loading_anim_size_summary),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       }
     }

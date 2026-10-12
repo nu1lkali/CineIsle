@@ -39,6 +39,22 @@ class AppearancePreferences(
    */
   val loadingAnimation = preferenceStore.getString("loading_animation", "system")
 
+  /**
+   * 加载动画的显示大小（缩放系数，1.0 = 各调用点写死的基准尺寸）。
+   *
+   * 默认 **1.1**：用户原话「loading 动画还能稍微大一些」，但具体多大因人而异
+   * （有人嫌列表里 48dp 够用，有人要看视频缓冲时更醒目的）⇒ 给一个略大的默认值，
+   * 再放开到 0.5×~2.0× 让用户自己缩放。
+   *
+   * ⚠️ 存的是 Float 系数而不是 dp 绝对值：调用点的基准尺寸本就不同
+   *    （列表整页 48dp、播放器画面层 96dp、行内 40dp），乘同一个系数才能
+   *    「哪都变大、比例不变」；存绝对值就得给每个场景各配一个偏好。
+   * ⚠️ 消费方是 `AppLoadingIndicator`（ui/theme/AppLoadingIndicator.kt）——
+   *    它乘在 `size` 参数上，所以**调用方传了带尺寸的 modifier 时不吃缩放**
+   *    （那种场景尺寸由布局决定，组件不该二次约束）。
+   */
+  val loadingAnimationScale = preferenceStore.getFloat("loading_animation_scale", 1.1f)
+
   val topLeftControls =
     preferenceStore.getString(
       "top_left_controls",

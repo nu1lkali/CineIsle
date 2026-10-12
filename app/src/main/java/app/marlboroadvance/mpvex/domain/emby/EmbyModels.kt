@@ -326,6 +326,25 @@ data class EmbyItem(
    * 只在播放列表接口的返回里有；其它接口的条目上它恒为 null，此时继续用 [Id]。
    */
   val MediaItemId: String? = null,
+  /**
+   * 直播电视频道号（`BaseItemDto.ChannelNumber`，**是字符串**：常见 "12"，
+   * 也有带小数分的 "12.1"）。只有 TvChannel 类型的条目有，其余恒为 null。
+   *
+   * c1：频道网格左下角的小角标就是它（以前 [EmbyItem] 没这个字段，
+   * `EmbyLiveTvScreen` 里只能干放着台标）。
+   */
+  val ChannelNumber: String? = null,
+  /**
+   * 节目单条目的开播时间（ISO 8601 UTC，如 `2026-10-10T20:00:00Z`）。
+   *
+   * 只有 Program 类型的条目有（`BaseItemDto.StartDate`）。「正在播出」的判据就是
+   * 当前时刻夹在 [StartDate] 与 [EndDate] 之间。
+   */
+  val StartDate: String? = null,
+  /** 节目单条目的结束时间（ISO 8601 UTC，`BaseItemDto.EndDate`）。 */
+  val EndDate: String? = null,
+  /** 该节目是否正在直播（`BaseItemDto.IsLive`；重播/录播为 false）。 */
+  val IsLive: Boolean? = null,
 )
 
 /**
@@ -373,6 +392,46 @@ data class EmbyChapter(
    */
   val startPositionMs: Long get() = StartPositionTicks / 10_000L
 }
+
+/**
+ * 一段媒体分段（片头 / 片尾 / 前情提要 / 预告 / 广告）。
+ *
+ * Emby 4.7+ 原生 Intro Skip 与 TheIntroDB 等插件都走这套数据：
+ * `GET /Users/{UserId}/Items/{Id}/Intros` 返回 [EmbyIntrosResult]。
+ *
+ * ⚠️ 本项目是 **Emby 客户端**，端点是 `/Users/{UserId}/Items/{Id}/Intros`；
+ * Jellyfin 那套 `/MediaSegments/{Id}` 不要照搬（见 feature-analysis 不做清单）。
+ */
+@Serializable
+data class EmbyMediaSegment(
+  /** 分段类型：`Intro` / `Outro` / `Recap` / `Preview` / `Commercial`（大小写随服务端） */
+  @SerialName("Type") val Type: String? = null,
+  /** 起点，**单位是 100 纳秒**（同 [EmbyChapter.StartPositionTicks]） */
+  @SerialName("StartTicks") val StartTicks: Long = 0,
+  /** 终点，同上 */
+  @SerialName("EndTicks") val EndTicks: Long = 0,
+) {
+  /** 起点毫秒 */
+  val startMs: Long get() = StartTicks / 10_000L
+
+  /** 终点毫秒 */
+  val endMs: Long get() = EndTicks / 10_000L
+
+  /** 终点必须严格大于起点，否则这段数据是坏的（服务端偶尔会给 0 长度段） */
+  val isValid: Boolean get() = endMs > startMs
+}
+
+/**
+ * `/Users/{UserId}/Items/{Id}/Intros` 的响应体。
+ *
+ * 服务端没跑过片头标记扫描任务时返回空 [Segments]（**不是 404**），
+ * 所以正常路径下不会抛异常；调用方按「没有精准数据」处理即可。
+ */
+@Serializable
+data class EmbyIntrosResult(
+  @SerialName("ItemId") val ItemId: String? = null,
+  @SerialName("Segments") val Segments: List<EmbyMediaSegment> = emptyList(),
+)
 
 @Serializable
 data class EmbyUserData(

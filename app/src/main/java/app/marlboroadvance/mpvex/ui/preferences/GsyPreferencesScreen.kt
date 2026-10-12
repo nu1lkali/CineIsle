@@ -91,6 +91,19 @@ object GsyPreferencesScreen : Screen {
               .padding(padding),
         ) {
           // ────────────────────────────────────────────────────────
+          // c4：双轨制的说明放在**最顶部**——用户困惑的正是「同样的语义
+          // 为什么要调两遍」，进页面第一眼就该看到答案，而不是翻到底部。
+          item {
+            FooterPreference(
+              summary = {
+                Text(
+                  text = stringResource(R.string.pref_gsy_dual_track_summary),
+                  color = MaterialTheme.colorScheme.outline,
+                )
+              },
+            )
+          }
+
           item { PreferenceSectionHeader(title = "入口与内核") }
 
           item {

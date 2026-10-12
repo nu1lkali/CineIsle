@@ -492,6 +492,45 @@ object EmbyClient {
     }.getOrDefault(emptyList())
 
   /**
+   * 直播电视节目单（`GET /LiveTv/Programs`，a2 + c1）。
+   *
+   * 两种用法：
+   *  · 不带 [channelId]：返回**所有频道**在 [startTime]~[endTime] 窗口内的节目。
+   *    频道网格的「正在播出」走这条 —— 一次请求覆盖全部频道，
+   *    ⚠️ 不要按频道逐个拉（N 个频道 = N 个请求，进页面先卡一波）。
+   *  · 带 [channelId]：只返回该频道的节目（频道详情页的时间轴列表走这条）。
+   *
+   * 时间参数用 ISO 8601 UTC 字符串（ServiceStack 的日期绑定 ISO / ticks 都吃，
+   * ISO 是 Web 端引导区的用法）。节目**不依赖服务端排序** —— 客户端按
+   * [EmbyItem.StartDate] 自己排，这个端点对排序不做保证。
+   *
+   * ⚠️ 失败返回空列表：服务端没开直播电视 / 没接 EPG 数据源时这个端点会
+   * 404 / 500 / 空数据，都属于「没有节目单」，页面按空态显示，不该报错。
+   *
+   * 节目→频道的归属看节目的 `ParentId`（= 频道 Id），不需要额外字段。
+   */
+  fun getLiveTvPrograms(
+    server: EmbyServer,
+    channelId: String? = null,
+    startTime: String,
+    endTime: String,
+    limit: Int = 500,
+  ): List<EmbyItem> =
+    runCatching {
+      val q = LinkedHashMap<String, String?>()
+      q["UserId"] = server.userId
+      channelId?.let { q["ChannelId"] = it }
+      q["StartTime"] = startTime
+      q["EndTime"] = endTime
+      q["Limit"] = limit.toString()
+      // Overview 是节目简介，Emby 对该端点默认不回，得显式要
+      q["Fields"] = "Overview"
+      getJson<EmbyItemsResult>(server, "/LiveTv/Programs", q).Items
+    }.onFailure {
+      EmbyLog.warn("getLiveTvPrograms 失败：${it.message} —— 该服务器可能没有节目单数据", it)
+    }.getOrDefault(emptyList())
+
+  /**
    * 取「Id + 名字」的聚合端点（/Persons、/Studios）。
    *
    * 和 [nameList] 的区别是这里要留下 Id —— 演员同名很常见，只有 Id 能唯一确定一个人。
@@ -945,6 +984,20 @@ object EmbyClient {
     getJson(server, "/Items/$itemId/Chapters")
 
   /**
+   * 拉取条目的片头 / 片尾分段（Emby 4.7+ 原生 Intro Skip）。
+   *
+   * 对应端点：`GET /Users/{UserId}/Items/{Id}/Intros`。
+   *
+   * ⚠️ 两个「拿不到」要分清：
+   * - 服务端没扫描过片头标记 ⇒ 返回**空 Segments**（正常，不是错误）；
+   * - 服务端版本 < 4.7 / 端点不存在 ⇒ 抛异常，由仓库层兜成空结果。
+   *
+   * 调用方（播放页）拿空结果时退到「固定时长兜底」，见 `PlayerPreferences.autoSkipIntro`。
+   */
+  fun getItemIntros(server: EmbyServer, itemId: String): EmbyIntrosResult =
+    getJson(server, "/Users/${server.userId}/Items/$itemId/Intros")
+
+  /**
    * 关键词搜索。
    *
    * @param includeItemTypes 限定类型，传 null 表示不限（Emby 默认只搜部分类型，
@@ -1204,6 +1257,42 @@ object EmbyClient {
   /** 标记已看 / 未看。返回服务器回传的 UserData（含 Played）。 */
   fun setPlayed(server: EmbyServer, itemId: String, played: Boolean): EmbyUserData? =
     toggleUserState(server, "/Users/${server.userId}/PlayedItems/$itemId", played)
+
+  /**
+   * a8：**一次写多项** UserData —— 标记已看 / 未看的同时把播放进度归零。
+   *
+   * `POST /Users/{uid}/Items/{id}/UserData` 是 Emby 的「用户数据直写」端点，
+   * body 是部分更新语义（同 [clearPlaybackPosition] 已经验证过的用法），
+   * 所以「已看 + 进度」两项可以合成**一个**请求发出去。
+   *
+   * 为什么值得单开一个方法：旧路径 `PlayedItems` 只翻 Played 一个位，
+   * 看完 42 分钟标记已看后，服务端仍挂着 `PlaybackPositionTicks=42min`
+   * —— 部分兼容服务端的「继续观看」因此不清不爽，Emby Web 的同一动作
+   * 本来就是两个字段一起写的。
+   *
+   * 兜底：端点不存在 / 老服务端不认这个路由时，退回 [setPlayed] 的
+   * `PlayedItems` 单字段写法（只是不清进度，动作本身仍然生效）。
+   * 回执解析不出（空 body / 拼接 JSON）时返回 null —— 调用方按
+   * 「无法确认」处理，不下失败结论（同 [toggleUserState] 的口径）。
+   */
+  fun setPlayedWithClearPosition(
+    server: EmbyServer,
+    itemId: String,
+    played: Boolean,
+  ): EmbyUserData? {
+    val path = "/Users/${server.userId}/Items/$itemId/UserData"
+    val body = """{"Played":$played,"PlaybackPositionTicks":0}"""
+    val response =
+      runCatching {
+        execString(
+          authedRequest(server, path, mapOf("X-Emby-Token" to server.apiToken.takeIf { it.isNotEmpty() }))
+            .header("Accept", "application/json")
+            .post(body.toRequestBody(jsonMedia))
+            .build(),
+        )
+      }.getOrNull() ?: return setPlayed(server, itemId, played)
+    return parseUserData(response)
+  }
 
   /**
    * 收藏 / 已播放这类「开关型」接口的统一发送。

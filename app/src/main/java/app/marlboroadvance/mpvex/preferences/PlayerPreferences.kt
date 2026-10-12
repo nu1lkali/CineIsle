@@ -98,6 +98,28 @@ class PlayerPreferences(
   val customSkipDuration = preferenceStore.getInt("custom_skip_duration", 90)
 
   /**
+   * 自动跳过**片头**（b2+a1）。
+   *
+   * 数据来源两路，按精度取：
+   * 1. **精准**：服务端 4.7+ 的 `/Users/{UserId}/Items/{Id}/Intros` 返回的 Intro 段
+   *    （需服务端跑过片头标记扫描任务）；
+   * 2. **兜底**：没有精准数据时，按 [customSkipDuration] 认为「开头这么久都是片头」，
+   *    起播后自动跳到那个时刻。兜底只在视频总长 > 2×[customSkipDuration] 时生效
+   *    （几分钟的短片不可能有 90 秒片头，不设这道坎会误跳）。
+   *
+   * 默认**关闭** —— 自动跳进度属于侵入性行为（有人就是要看片头），交给用户自己开。
+   * 关掉时播放头进入片头区间会显示一个可点的「跳过片头」小胶囊（手动精准跳）。
+   */
+  val autoSkipIntro = preferenceStore.getBoolean("auto_skip_intro", false)
+
+  /**
+   * 自动跳过**片尾**（b2+a1），数据来源与默认关闭的理由同 [autoSkipIntro]。
+   *
+   * 片尾自动跳 = 跳到视频结尾（触发连播的下一集 / 停在末帧）。
+   */
+  val autoSkipOutro = preferenceStore.getBoolean("auto_skip_outro", false)
+
+  /**
    * 播放页控制条上「快进 / 快退」按钮单次跳动的秒数，默认各 **10**。
    *
    * ⚠️ 与 [customSkipDuration] 是**两个不同的功能**，别混：
@@ -252,6 +274,39 @@ class PlayerPreferences(
    * 只在 [rememberAudioTrackPerSeries] 打开时写入。
    */
   val rememberedAudioTracks = preferenceStore.getString("remembered_audio_tracks", "{}")
+
+  /**
+   * 记住每部剧选择的字幕轨。
+   *
+   * 与音轨同理，用「语言+编码」指纹匹配而不是 mpv 的 track id；
+   * 匹配不到就什么都不做，交给 TrackSelector 的默认语言逻辑。
+   * 默认关闭，理由同 [rememberSpeedPerSeries]。
+   */
+  val rememberSubtitleTrackPerSeries =
+    preferenceStore.getBoolean("remember_subtitle_track_per_series", false)
+
+  /**
+   * 记住的字幕轨指纹：SeriesKey → 指纹串（JSON）。
+   * 只在 [rememberSubtitleTrackPerSeries] 打开时写入。
+   */
+  val rememberedSubtitleTracks = preferenceStore.getString("remembered_subtitle_tracks", "{}")
+
+  /**
+   * 全局倍速记忆：下一次播放沿用上一次用过的倍速（跨剧、跨应用重启）。
+   *
+   * 与 [rememberSpeedPerSeries] 的分工：
+   * - 本项是「全局默认」，打开后每次开新播放都先用这个倍速；
+   * - [rememberSpeedPerSeries] 优先级更高，同一部剧内盖过本项。
+   *
+   * 默认**关闭** —— 会自动改播放速度属于侵入性行为，由用户自己决定。
+   */
+  val rememberGlobalSpeed = preferenceStore.getBoolean("remember_global_speed", false)
+
+  /**
+   * 上一次用过的倍速；0 表示还没记过。
+   * 只在 [rememberGlobalSpeed] 打开时写入。
+   */
+  val lastPlaybackSpeed = preferenceStore.getFloat("last_playback_speed", 0f)
 
   /**
    * 视频预加载。

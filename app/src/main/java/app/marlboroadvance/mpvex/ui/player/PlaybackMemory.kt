@@ -105,6 +105,71 @@ object PlaybackMemory {
     return null
   }
 
+  // ==================== 字幕轨 ====================
+
+  /** 取某个剧记住的字幕轨指纹；没记过 / 没开开关 / 没有 key 都返回 null */
+  fun subtitleFingerprintFor(
+    prefs: PlayerPreferences,
+    key: String?,
+  ): String? {
+    if (key.isNullOrBlank()) return null
+    return readMap<String>(prefs.rememberedSubtitleTracks.get())[key]
+  }
+
+  /**
+   * 记住某个剧当前选中的字幕轨。开关关闭时直接忽略。
+   *
+   * 与音轨一样只记**选中**那一刻的轨（用户在字幕面板里点中的那条），
+   * 取消选中不写盘 —— 否则「关掉字幕」会把上一集的记忆也抹掉。
+   */
+  fun saveSubtitleTrack(
+    prefs: PlayerPreferences,
+    key: String?,
+    track: TrackNode,
+  ) {
+    if (key.isNullOrBlank()) return
+    if (!prefs.rememberSubtitleTrackPerSeries.get()) return
+    val fingerprint = subtitleFingerprintOf(track)
+    if (fingerprint.isBlank()) return
+    val map = readMap<String>(prefs.rememberedSubtitleTracks.get()).toMutableMap()
+    map[key] = fingerprint
+    runCatching { prefs.rememberedSubtitleTracks.set(json.encodeToString(map)) }
+      .onFailure { Log.w(TAG, "save subtitle track failed", it) }
+  }
+
+  /**
+   * 字幕轨指纹：**语言 + 编码**，例如 `chi|ass`。
+   *
+   * 不用 title / 文件名：内封字幕的 title 常随压制组变化，外挂字幕的
+   * 文件名更是每季一套，按这些记基本匹配不回来；语言+编码在同一部剧里
+   * 足够稳定（同一发行源的每条字幕轨都是同一套参数）。
+   */
+  private fun subtitleFingerprintOf(track: TrackNode): String =
+    listOf(
+      track.lang?.lowercase() ?: "",
+      track.codec?.lowercase() ?: "",
+    ).joinToString("|")
+
+  /**
+   * 在当前文件里找与指纹匹配的字幕轨，返回它的 mpv track id；找不到返回 null。
+   *
+   * 同 [findAudioTrackId]：直接读 MPV 的 track-list，不等 ViewModel 的 StateFlow。
+   */
+  fun findSubtitleTrackId(fingerprint: String): Int? {
+    if (fingerprint.isBlank()) return null
+    val count = PlayerLib.getPropertyInt("track-list/count") ?: 0
+    for (i in 0 until count) {
+      if (PlayerLib.getPropertyString("track-list/$i/type") != "sub") continue
+      val lang = PlayerLib.getPropertyString("track-list/$i/lang") ?: ""
+      val codec = PlayerLib.getPropertyString("track-list/$i/codec") ?: ""
+      val current = listOf(lang.lowercase(), codec.lowercase()).joinToString("|")
+      if (current == fingerprint) {
+        return PlayerLib.getPropertyInt("track-list/$i/id")
+      }
+    }
+    return null
+  }
+
   // ==================== 内部 ====================
 
   private inline fun <reified T> readMap(raw: String): Map<String, T> =

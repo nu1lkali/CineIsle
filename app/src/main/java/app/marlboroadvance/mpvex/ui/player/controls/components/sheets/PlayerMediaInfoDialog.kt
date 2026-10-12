@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Error
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -61,8 +62,14 @@ import org.koin.compose.koinInject
  * 沿用项目里自定义 Dialog 的一套（与休眠计时器 [TimePickerDialog] 同形）：
  * `Dialog(usePlatformDefaultWidth = false)` + `Surface(extraLarge / surfaceContainerHigh)`，
  * 而不是 `AlertDialog` —— 后者宽度、内边距、形状都被平台钉死，长表格里标签列
- * 会被压到换行。头部是「圆形底图标 + 标题 + 版本徽章」：徽章就是把在播的版本名
- * 提到最显眼的位置，同时表格里那条「版本」行会被过滤掉，同一信息不出现两遍。
+ * 会被压到换行。
+ *
+ * 视觉上分三层，颜色从重到轻：
+ *  1. **头部**：圆形底图标 + 标题（surfaceContainerHigh 上的唯一强调色块）；
+ *  2. **版本横幅**：`primaryContainer` 实色底 + 电影图标，把「现在播的是哪一版」
+ *     提到最显眼的位置 —— 表格里那条「版本」行随之过滤掉，同一信息不出现两遍；
+ *  3. **信息表**：不再套内层卡片（灰底卡片叠在灰底弹窗上只会发闷），
+ *     改用「分区标题 + 细分隔线 + 两列对齐行」，长路径按需换行。
  *
  * ## 数据来源
  *
@@ -72,7 +79,7 @@ import org.koin.compose.koinInject
  * @param serverId 当前播放条目的 Emby 服务器 Id；null = 非 Emby 播放
  * @param itemId 当前播放条目的 ItemId；null = 非 Emby 播放
  * @param mediaSourceId 当前实际在播的版本；null = 单版本
- * @param versionName 版本显示名；拉取失败时至少还能看到它（头部徽章）
+ * @param versionName 版本显示名；拉取失败时至少还能看到它（头部横幅）
  */
 @Composable
 fun PlayerMediaInfoDialog(
@@ -125,7 +132,7 @@ fun PlayerMediaInfoDialog(
           .padding(MaterialTheme.spacing.medium),
     ) {
       // ⚠️ 滚动挂在外层 Column（与 TimePickerDialog 同一套路）：弹窗整体不超屏。
-      //    只让表格自己滚是不行的 —— 头部 + 徽章 + 操作区是固定的，
+      //    只让表格自己滚是不行的 —— 头部 + 横幅 + 操作区是固定的，
       //    高峰值加起来 ≈700dp，小屏/横屏会把底部的「关闭」挤出屏幕。
       Column(
         modifier =
@@ -133,7 +140,7 @@ fun PlayerMediaInfoDialog(
             .verticalScroll(rememberScrollState())
             .padding(24.dp),
       ) {
-        // ── 头部：圆形底图标 + 标题 + 版本徽章 ──
+        // ── 头部：圆形底图标 + 标题 ──
         Row(verticalAlignment = Alignment.CenterVertically) {
           Box(
             modifier =
@@ -158,16 +165,16 @@ fun PlayerMediaInfoDialog(
           )
         }
 
-        // 版本徽章：把「现在播的是哪一版」提到最显眼处。
+        // 版本横幅：把「现在播的是哪一版」提到最显眼处。
         // ⚠️ 表格里那条「版本」行随后要过滤掉（见 MediaInfoTable 的 hideVersionRow）——
         //    同一个信息在头部和表里各出现一遍只会让人觉得是 bug。
         val showVersionBadge = !versionName.isNullOrBlank()
         if (showVersionBadge) {
-          Spacer(modifier = Modifier.height(10.dp))
-          VersionBadge(versionName)
+          Spacer(modifier = Modifier.height(14.dp))
+          VersionBanner(versionName)
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         // ── 内容：读取中 / 失败 / 表格 ──
         when (val current = state) {
@@ -203,21 +210,38 @@ private sealed interface MediaInfoState {
   data class Failed(val message: String) : MediaInfoState
 }
 
-/** 头部版本徽章：浅底圆角 chip，文字用 onSurface（失败态下它是唯一的版本信息，要醒目） */
+/**
+ * 版本横幅：`primaryContainer` 实色底 + 电影图标。
+ *
+ * 为什么用实色而不是灰底 chip：这是整个弹窗的**主信息**（用户点开多半就是
+ * 为了确认「我现在播的是哪一版」），灰底在一篇灰的弹窗里根本不显眼；
+ * primaryContainer 是头部图标同色系，视觉上自成一组。
+ */
 @Composable
-private fun VersionBadge(versionName: String) {
+private fun VersionBanner(versionName: String) {
   Surface(
-    shape = RoundedCornerShape(8.dp),
-    color = MaterialTheme.colorScheme.surfaceContainerLow,
+    shape = RoundedCornerShape(16.dp),
+    color = MaterialTheme.colorScheme.primaryContainer,
     modifier = Modifier.fillMaxWidth(),
   ) {
-    Text(
-      text = versionName,
-      style = MaterialTheme.typography.labelLarge,
-      color = MaterialTheme.colorScheme.onSurface,
-      maxLines = 2,
-      modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-    )
+    Row(
+      modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector = Icons.Outlined.Movie,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+        modifier = Modifier.size(18.dp),
+      )
+      Spacer(modifier = Modifier.width(10.dp))
+      Text(
+        text = versionName,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
+        maxLines = 2,
+      )
+    }
   }
 }
 
@@ -242,7 +266,7 @@ private fun LoadingContent() {
   }
 }
 
-/** 读取失败：错误图标 + 原因（版本信息在头部徽章，这里不重复） */
+/** 读取失败：错误图标 + 原因（版本信息在头部横幅，这里不重复） */
 @Composable
 private fun FailedContent(message: String) {
   Row(
@@ -288,7 +312,7 @@ private fun EmptyContent() {
 /**
  * 与详情页「媒体信息」分区同一套排版：左边固定宽度的字段名，右边值。
  *
- * @param hideVersionRow true = 头部徽章已经在放版本名，表里那条「版本」行过滤掉，
+ * @param hideVersionRow true = 头部横幅已经在放版本名，表里那条「版本」行过滤掉，
  *   同一信息不出现两遍（buildEmbyMediaInfoEntries 只在多版本时才产出该行）。
  */
 @Composable
@@ -308,51 +332,46 @@ private fun MediaInfoTable(
   Column(modifier = Modifier.fillMaxWidth()) {
     // 文件路径 / 版本名这类值长按可复制 —— 报故障、对版本时用得上的小口子
     SelectionContainer {
-      Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Column(modifier = Modifier.padding(vertical = 8.dp)) {
-          visibleEntries.forEachIndexed { index, entry ->
-            when (entry) {
-              is MediaInfoEntry.Section -> {
-                // 分区之间一条细分隔线：轨道一多，没有线就是一片糊
-                if (index > 0) {
-                  HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant,
-                  )
-                }
-                Text(
-                  text = entry.title,
-                  style = MaterialTheme.typography.labelLarge,
-                  color = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 2.dp),
+      Column {
+        visibleEntries.forEachIndexed { index, entry ->
+          when (entry) {
+            is MediaInfoEntry.Section -> {
+              // 分区之间一条细分隔线：轨道一多，没有线就是一片糊。
+              // 首个小节（通常是「文件」）前面不画 —— 弹窗顶部已经有横幅隔开了。
+              if (index > 0) {
+                HorizontalDivider(
+                  modifier = Modifier.padding(vertical = 6.dp),
+                  color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                 )
               }
+              Text(
+                text = entry.title,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
+              )
+            }
 
-              is MediaInfoEntry.Row -> {
-                Row(
-                  modifier =
-                    Modifier
-                      .fillMaxWidth()
-                      .padding(horizontal = 16.dp, vertical = 6.dp),
-                  verticalAlignment = Alignment.Top,
-                ) {
-                  Text(
-                    text = entry.label,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(76.dp),
-                  )
-                  Text(
-                    text = entry.value,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                  )
-                }
+            is MediaInfoEntry.Row -> {
+              Row(
+                modifier =
+                  Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 5.dp),
+                verticalAlignment = Alignment.Top,
+              ) {
+                Text(
+                  text = entry.label,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.width(80.dp),
+                )
+                Text(
+                  text = entry.value,
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  modifier = Modifier.weight(1f),
+                )
               }
             }
           }

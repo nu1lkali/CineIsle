@@ -977,8 +977,10 @@ data class EmbyDetailScreen(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
       ) {
+        // ⚠️ 用 size 参数（基准 96dp，还会乘用户设的缩放系数）而不是
+        //   Modifier.size —— 后者不走「加载动画大小」缩放。
         app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
-          modifier = Modifier.size(96.dp),
+          size = 96.dp,
         )
       }
     }

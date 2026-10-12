@@ -49,8 +49,9 @@ import app.marlboroadvance.mpvex.preferences.preference.collectAsState
  *
  * @param tint 着色。给 null 时 Lottie 保持原色；转圈分支会回落到主题 primary。
  *   播放器画面上的加载层要传白色（压在画面上，主题色会看不见）。
- * @param size 仅在调用方**没给** [modifier] 时生效 —— 调用方已经写了
- *   `Modifier.size(96.dp)`（播放器缓冲那个）时不该被默认值二次约束。
+ * @param size 基准尺寸（会被「外观 → 加载动画 → 大小」的缩放系数乘一下），
+ *   仅在调用方**没给** [modifier] 时生效 —— 调用方已经写了
+ *   `Modifier.size(96.dp)`（播放器画面层那几个）时不该被默认值二次约束。
  */
 @Composable
 fun AppLoadingIndicator(
@@ -59,7 +60,8 @@ fun AppLoadingIndicator(
   tint: Color? = null,
 ) {
   val anim = rememberLoadingAnimation()
-  val sized = if (modifier == Modifier) Modifier.size(size) else modifier
+  val scale = rememberLoadingAnimationScale()
+  val sized = if (modifier == Modifier) Modifier.size(size * scale) else modifier
 
   if (!anim.hasLottie) {
     CircularProgressIndicator(
@@ -116,4 +118,19 @@ fun rememberLoadingAnimation(): LoadingAnimation {
   val prefs = koinInject<AppearancePreferences>()
   val key by prefs.loadingAnimation.collectAsState()
   return LoadingAnimation.fromKey(key)
+}
+
+/**
+ * 取加载动画的缩放系数（随设置变化重组）。
+ *
+ * 与 [rememberLoadingAnimation] 同一个坑：必须用无参的
+ * [Preference.collectAsState]，否则拖完滑块画面不变。
+ *
+ * @return 0.5f ~ 2.0f；1f = 调用点写的基准尺寸
+ */
+@Composable
+fun rememberLoadingAnimationScale(): Float {
+  val prefs = koinInject<AppearancePreferences>()
+  val scale by prefs.loadingAnimationScale.collectAsState()
+  return scale
 }

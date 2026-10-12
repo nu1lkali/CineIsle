@@ -40,11 +40,11 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
-    // versionName 涨到 1.2.9：本轮给 mpv 播放器加「出画面前的加载动画」过渡层
-    // （PLAYBACK_RESTART 判据 + 淡出），详情页点播放改为整页居中大加载动画，
-    // 视界流加载层 44dp→96dp，并统一整页加载态尺寸（LiveTV/FolderList/Library→48dp）。
-    versionCode = 49
-    versionName = "1.2.9"
+    // versionName 涨到 1.3.0：本轮 12 功能批次发布 —— 片头片尾精准/兜底跳过、
+    // LiveTV 增强、多用户切换、UserData 批量直写、媒体键接线、字幕轨/倍速记忆、
+    // GSY 弹幕对齐（b6）、儿童锁/应用锁（b7）等。
+    versionCode = 50
+    versionName = "1.3.0"
 
     vectorDrawables {
       useSupportLibrary = true

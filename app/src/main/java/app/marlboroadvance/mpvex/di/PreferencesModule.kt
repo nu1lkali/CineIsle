@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.di
 import app.marlboroadvance.mpvex.database.MpvExDatabase
 import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
+import app.marlboroadvance.mpvex.preferences.AppLockPreferences
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.DanmakuPreferences
@@ -35,5 +36,6 @@ val PreferencesModule =
     singleOf(::FoldersPreferences)
     singleOf(::GsyPreferences)
     singleOf(::DanmakuPreferences)
+    singleOf(::AppLockPreferences)
     singleOf(::SettingsManager)
   }

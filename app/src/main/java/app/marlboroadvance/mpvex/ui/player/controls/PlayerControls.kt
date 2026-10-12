@@ -862,9 +862,11 @@ fun PlayerControls(
           when {
             pausedForCache == true && showLoadingCircle -> {
               // 走统一入口 ⇒ 「外观 → 加载动画」的选择对缓冲指示也生效。
-              // ⚠️ 96dp 与原来的 LoadingIndicator 同尺寸，切换时画面不会跳。
+              // ⚠️ 96dp 是**基准**尺寸（还会乘用户设的缩放系数，默认 1.1×）；
+              //    用 size 参数而不是 Modifier.size，否则缩放对它不生效。
+              //    与原来的 LoadingIndicator 同尺寸，切换时画面不会跳。
               app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
-                modifier = Modifier.size(96.dp),
+                size = 96.dp,
               )
             }
 
@@ -1624,7 +1626,16 @@ fun PlayerControls(
       sheetShown = sheetShown,
       subtitles = subtitles.toImmutableList(),
       onAddSubtitle = viewModel::addSubtitle,
-      onToggleSubtitle = viewModel::toggleSubtitle,
+      onToggleSubtitle = { id ->
+        viewModel.toggleSubtitle(id)
+        // 记住这条字幕轨（只在选中那一刻记；取消选中不写盘，
+        // 否则「这集不想看字幕」会把上一集的记忆也抹掉）
+        if (viewModel.isSubtitleSelected(id)) {
+          subtitles.toImmutableList().find { it.id == id }?.let {
+            PlaybackMemory.saveSubtitleTrack(playerPreferences, viewModel.seriesKey, it)
+          }
+        }
+      },
       isSubtitleSelected = viewModel::isSubtitleSelected,
       onRemoveSubtitle = viewModel::removeSubtitle,
       audioTracks = audioTracks.toImmutableList(),
@@ -1651,6 +1662,10 @@ fun PlayerControls(
         PlayerLib.setPropertyFloat("speed", it.toFixed(2))
         // 璁颁綇杩欎釜鍊嶉€燂紝鍚屽墽涓嬩竴闆嗘部鐢紱寮€鍏冲叧闂椂鍐呴儴鐩存帴蹇界暐
         PlaybackMemory.saveSpeed(playerPreferences, viewModel.seriesKey, it.toFixed(2))
+        // b4 global speed memory: cross-episode, cross-restart. Ignored internally when off.
+        if (playerPreferences.rememberGlobalSpeed.get()) {
+          playerPreferences.lastPlaybackSpeed.set(it.toFixed(2))
+        }
       },
       onMakeDefaultSpeed = { playerPreferences.defaultSpeed.set(it.toFixed(2)) },
       onAddSpeedPreset = { playerPreferences.speedPresets += it.toFixed(2).toString() },

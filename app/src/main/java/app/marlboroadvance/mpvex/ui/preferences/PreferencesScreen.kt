@@ -20,10 +20,12 @@ import androidx.compose.material.icons.outlined.Audiotrack
 // 每个用到的图标都必须单独 `import androidx.compose.material.icons.outlined.X`，
 // 漏了就是「Unresolved reference 'X'」（图标在库里明明存在）。
 import androidx.compose.material.icons.outlined.AutoAwesomeMotion
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Gesture
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.People
@@ -62,13 +64,19 @@ import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.MediaSourcePreference
+import app.marlboroadvance.mpvex.preferences.AppLockPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
+import app.marlboroadvance.mpvex.preferences.DanmakuPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.PersonMergeScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarAlgorithm
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
+import app.marlboroadvance.mpvex.ui.lock.AppLockManageDialog
+import app.marlboroadvance.mpvex.ui.lock.PinChangeDialog
+import app.marlboroadvance.mpvex.ui.lock.PinSetupDialog
+import app.marlboroadvance.mpvex.ui.lock.PinVerifyDialog
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -265,6 +273,34 @@ object PreferencesScreen : Screen {
                   ) 
                 },
                 onClick = { backstack.add(GesturePreferencesScreen) },
+              )
+
+              PreferenceDivider()
+
+              // 弹幕独立设置页（开关 / 弹幕源 / 凭证 / 自动匹配）。
+              // ⚠️ 原来这个入口挂在外观定制页里，但弹幕跟外观无关 ——
+              //    用户原话「把弹幕单独挪到设置页面，不要放在外观定制里面」。
+              //    它默认是关的，所以摘要里直接带开关状态：不显示状态的话，
+              //    用户永远不知道有这东西、更不知道去哪开。
+              val danmakuPrefs = koinInject<DanmakuPreferences>()
+              val danmakuEnabled by danmakuPrefs.enabled.collectAsState()
+              Preference(
+                title = { Text(text = stringResource(id = R.string.danmaku_title)) },
+                summary = {
+                  Text(
+                    text = stringResource(id = R.string.danmaku_settings_summary) +
+                      if (danmakuEnabled) "（已开启）" else "（未开启）",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.ChatBubbleOutline,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = { backstack.add(DanmakuSettingsScreen) },
               )
 
               PreferenceDivider()
@@ -812,7 +848,83 @@ object PreferencesScreen : Screen {
           item {
             PreferenceSectionHeader(title = "高级与关于")
           }
-          
+
+          // 应用锁（b7）：未开启 → 设置 PIN（两步流，两遍一致才落盘）；
+          // 已开启 → 管理入口（改 PIN / 验证当前 PIN 后关锁）。
+          item {
+            val appLockPreferences = koinInject<AppLockPreferences>()
+            val appLockEnabled by appLockPreferences.enabled.collectAsState()
+            var showPinSetup by remember { mutableStateOf(false) }
+            var showPinManage by remember { mutableStateOf(false) }
+            var showPinChange by remember { mutableStateOf(false) }
+            var showDisableVerify by remember { mutableStateOf(false) }
+
+            PreferenceCard {
+              Preference(
+
+                title = { Text(text = stringResource(R.string.app_lock_title)) },
+                summary = {
+                  Text(
+                    text = stringResource(
+                      if (appLockEnabled) R.string.app_lock_summary_on
+                      else R.string.app_lock_summary_off,
+                    ),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.Lock,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = {
+                  if (appLockEnabled) showPinManage = true else showPinSetup = true
+                },
+              )
+            }
+
+            if (showPinSetup) {
+              PinSetupDialog(
+                onDismiss = { showPinSetup = false },
+                onSet = { pin ->
+                  appLockPreferences.setPin(pin)
+                  appLockPreferences.enabled.set(true)
+                },
+              )
+            }
+            if (showPinManage) {
+              AppLockManageDialog(
+                onChangePin = {
+                  showPinManage = false
+                  showPinChange = true
+                },
+                onDisable = {
+                  showPinManage = false
+                  showDisableVerify = true
+                },
+                onDismiss = { showPinManage = false },
+              )
+            }
+            if (showPinChange) {
+              PinChangeDialog(
+                onDismiss = { showPinChange = false },
+                onVerify = appLockPreferences::verifyPin,
+                onSet = appLockPreferences::setPin,
+              )
+            }
+            if (showDisableVerify) {
+              PinVerifyDialog(
+                title = stringResource(R.string.app_lock_verify_title),
+                message = stringResource(R.string.app_lock_change_verify_hint),
+                onDismiss = { showDisableVerify = false },
+                onVerify = appLockPreferences::verifyPin,
+                onVerified = { appLockPreferences.disable() },
+              )
+            }
+          }
+
           item {
             PreferenceCard {
               Preference(

@@ -62,6 +62,7 @@ import app.marlboroadvance.mpvex.repository.NetworkRepository
 import app.marlboroadvance.mpvex.utils.update.UpdateDialog
 import app.marlboroadvance.mpvex.utils.update.UpdateViewModel
 import app.marlboroadvance.mpvex.ui.browser.MainScreen
+import app.marlboroadvance.mpvex.ui.lock.AppLockGate
 import app.marlboroadvance.mpvex.ui.theme.DarkMode
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
@@ -125,11 +126,15 @@ class MainActivity : ComponentActivity() {
           // 淡出后直接是可用界面，避免「先白屏、再跳一下」的观感。
           var showSplash by remember { mutableStateOf(true) }
 
-          Box(modifier = Modifier.fillMaxSize()) {
-            Navigator()
+          // 应用锁（b7）：锁着时 Navigator 和启动页整块不组合，只显示解锁页；
+          // 未设 PIN 或没开锁时等于不存在，内容原样渲染。
+          AppLockGate {
+            Box(modifier = Modifier.fillMaxSize()) {
+              Navigator()
 
-            if (showSplash) {
-              AppSplashScreen(onFinished = { showSplash = false })
+              if (showSplash) {
+                AppSplashScreen(onFinished = { showSplash = false })
+              }
             }
           }
         }

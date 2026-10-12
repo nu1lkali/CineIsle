@@ -110,6 +110,15 @@ class PlayerViewModel(
 
   /** 倒计时卡片里显示的下一集标题（取不到就是 null，卡片只显示秒数） */
   val autoplayNextTitle = MutableStateFlow<String?>(null)
+
+  /**
+   * 「跳过片头 / 跳过片尾」小胶囊的文案；null = 不显示。
+   *
+   * 由播放页的片头片尾盯梢协程写入：自动跳过关着、而播放头又落在
+   * 片头 / 片尾区间里时给出一个可点的提示（点它 = 跳到段尾）。
+   * 自动跳过开着时这里恒为 null（不需要用户动手）。
+   */
+  val skipSegmentLabel = MutableStateFlow<String?>(null)
   private val playbackStateDao: app.marlboroadvance.mpvex.database.dao.PlaybackStateDao by inject()
 
   // Playlist items for the playlist sheet
@@ -1206,6 +1215,47 @@ class PlayerViewModel(
       SingleActionGesture.PlayPause -> pauseUnpause()
       SingleActionGesture.Custom -> viewModelScope.launch(Dispatchers.IO) {
         PlayerLib.command("keypress", CustomKeyCodes.DoubleTapRight.keyCode)
+      }
+      SingleActionGesture.None -> {}
+    }
+  }
+
+  // ==================== 媒体键（硬件按键 / 耳机线控 / 车机） ====================
+
+  /**
+   * 上一曲键（MEDIA_PREVIOUS）。
+   *
+   * 这三个偏好项（[GesturePreferences.mediaPreviousGesture] 等）以前只在设置页有 UI、
+   * 没有任何代码读取 —— 这里补上接线，映射规则与双击手势完全一致：
+   * Seek = 后退 / 前进、PlayPause = 播放暂停、Custom = 透传给 input.conf 自定义键、None = 不响应。
+   */
+  fun handleMediaPrevious() {
+    when (gesturePreferences.mediaPreviousGesture.get()) {
+      SingleActionGesture.Seek -> leftSeek()
+      SingleActionGesture.PlayPause -> pauseUnpause()
+      SingleActionGesture.Custom -> viewModelScope.launch(Dispatchers.IO) {
+        PlayerLib.command("keypress", CustomKeyCodes.MediaPrevious.keyCode)
+      }
+      SingleActionGesture.None -> {}
+    }
+  }
+
+  fun handleMediaPlayPause() {
+    when (gesturePreferences.mediaPlayGesture.get()) {
+      SingleActionGesture.PlayPause -> pauseUnpause()
+      SingleActionGesture.Custom -> viewModelScope.launch(Dispatchers.IO) {
+        PlayerLib.command("keypress", CustomKeyCodes.MediaPlay.keyCode)
+      }
+      SingleActionGesture.Seek, SingleActionGesture.None -> {}
+    }
+  }
+
+  fun handleMediaNext() {
+    when (gesturePreferences.mediaNextGesture.get()) {
+      SingleActionGesture.Seek -> rightSeek()
+      SingleActionGesture.PlayPause -> pauseUnpause()
+      SingleActionGesture.Custom -> viewModelScope.launch(Dispatchers.IO) {
+        PlayerLib.command("keypress", CustomKeyCodes.MediaNext.keyCode)
       }
       SingleActionGesture.None -> {}
     }
