@@ -224,6 +224,38 @@ class PlayerViewModel(
   private val _controlsShown = MutableStateFlow(false)
   val controlsShown: StateFlow<Boolean> = _controlsShown.asStateFlow()
 
+  /**
+   * 首帧**已经真正画到屏幕上了**吗 —— 「出画面前」的加载层靠它收起。
+   *
+   * ## 为什么不用现成的 `isReady`
+   *
+   * `PlayerActivity.isReady` 只在 `FILE_LOADED` 时置真、且**换片时不会复位**
+   * （只在 `onDestroy` 里清零）⇒ 拿来当加载判据，第二集开始时加载层就不会再出现了。
+   *
+   * ## 为什么不用 `vo-configured`
+   *
+   * mpv 文档对它的定义是「VO 是否已配置好，通常对应视频窗口是否可见」——
+   * 但它在 `vo_reconfig2()` 返回时就为 yes，**早于第一帧 `flip_page`**。
+   * 拿它当判据 = 加载动画先消失、再黑一下、画面才浮现，**比不显示更难看**。
+   *
+   * ⇒ 用 `MPV_EVENT_PLAYBACK_RESTART`：mpv 的日志顺序是
+   *   `first video frame after restart shown` → `playback-restart`，
+   *   也就是首帧上屏之后才发。这与视界流那条的教训一致
+   *   （见 `FeedViewModel.buffered` 的注释：判据早一步就会「转圈消失→黑屏→画面」）。
+   */
+  private val _firstFrameRendered = MutableStateFlow(false)
+  val firstFrameRendered: StateFlow<Boolean> = _firstFrameRendered.asStateFlow()
+
+  /** 换片 / 重新加载时把「首帧已出」打回 false，让加载层重新出现。 */
+  fun onLoadingNewFile() {
+    _firstFrameRendered.value = false
+  }
+
+  /** mpv 报 `PLAYBACK_RESTART`（首帧已上屏）时调用。 */
+  fun onFirstFrameRendered() {
+    _firstFrameRendered.value = true
+  }
+
   private val _seekBarShown = MutableStateFlow(false)
   val seekBarShown: StateFlow<Boolean> = _seekBarShown.asStateFlow()
 

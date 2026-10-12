@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -99,7 +100,12 @@ object EmbyLiveTvScreen : Screen {
       ) {
         when {
           loading -> app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
-            modifier = Modifier.align(Alignment.Center),
+            // ⚠️ 尺寸必须写进 modifier：AppLoadingIndicator 的 `size` 参数只在
+            //   **完全没传 modifier** 时生效。原来这里只传了 align ——
+            //   Lottie 分支会按 composition 固有像素渲染（yamby 那批 500×500px
+            //   ≈ 170dp，直接变成巨物；自研的 200×200px ≈ 67dp，也不统一）。
+            //   48dp 与其他整页加载态（视频列表 / 最近播放 / 文件浏览…）一致。
+            modifier = Modifier.size(48.dp).align(Alignment.Center),
           )
           channels.isNotEmpty() -> LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 110.dp),

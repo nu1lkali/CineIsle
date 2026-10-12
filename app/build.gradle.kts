@@ -40,10 +40,11 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
-    // versionName 涨到 1.2.8：本轮把加载动画从 9 个选项扩到 15 个（搬入 yamby_loading2
-    // + 自研 5 个），并把图标/动画两个选择区从横向滑动改成网格（一屏只看得到 4 个）。
-    versionCode = 48
-    versionName = "1.2.8"
+    // versionName 涨到 1.2.9：本轮给 mpv 播放器加「出画面前的加载动画」过渡层
+    // （PLAYBACK_RESTART 判据 + 淡出），详情页点播放改为整页居中大加载动画，
+    // 视界流加载层 44dp→96dp，并统一整页加载态尺寸（LiveTV/FolderList/Library→48dp）。
+    versionCode = 49
+    versionName = "1.2.9"
 
     vectorDrawables {
       useSupportLibrary = true

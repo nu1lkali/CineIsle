@@ -9,6 +9,7 @@ import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,12 +31,20 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import org.koin.compose.koinInject
 import kotlin.math.ceil
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
@@ -50,6 +59,7 @@ import app.marlboroadvance.mpvex.preferences.AudioPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.player.controls.PlayerControls
 import app.marlboroadvance.mpvex.ui.player.danmaku.DanmakuRenderParams
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
@@ -778,6 +788,24 @@ open class PlayerActivity :
             },
             modifier = Modifier,
           )
+          // ── 「出画面前」的加载层 ────────────────────────────────
+          // 从进入播放器到首帧真正上屏（MPV_EVENT_PLAYBACK_RESTART）之间，
+          // 视频 Surface 是**纯黑**的 —— 原来这里什么都没有，只有一片黑。
+          //
+          // ⚠️ 关键：它**必须挂在 PlayerControls 之外**。
+          //   `PlayerControls` 内部的缓冲转圈被包在
+          //   `AnimatedVisibility(visible = controlsShown)` 里（PlayerControls.kt:845），
+          //   而 `controlsShown` 的**初值就是 false**（PlayerViewModel.kt:224）
+          //   ⇒ 首帧前控件是收着的，那个转圈根本不显示。
+          //   放在这里才不受控件显隐影响。
+          //
+          // 复用播放器的「显示缓冲转圈」开关（`show_loading_circle`）：
+          // 语义一致（都是「正在等画面」），而且设置页已经有这一项，不新增开关。
+          PlayerFirstFrameLoading(
+            viewModel = viewModel,
+            modifier = Modifier.align(Alignment.Center),
+          )
+
           // 下一集连播倒计时：贴在底部、抬高一截避开控制栏。
           // 只有倒计时 > 0 时卡片才出现（AnimatedVisibility 内部判断）。
           AutoplayCountdownCard(
@@ -2397,6 +2425,10 @@ private fun cancelAutoplayCountdown() {
       MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
         handleFileLoaded()
         isReady = true
+        // 文件刚起来、画面还什么都没有 ⇒ 重新显示加载层。
+        // ⚠️ 必须在每次 loadfile 后复位：`isReady` 换片时不会清零，
+        //    拿它当加载判据会导致「只有第一集有加载动画」。
+        viewModel.onLoadingNewFile()
       }
 
       MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
@@ -2404,6 +2436,9 @@ private fun cancelAutoplayCountdown() {
         if (!isReady) {
           isReady = true
         }
+        // 首帧已经上屏 ⇒ 撤掉「出画面前」的加载层。
+        // 判据为什么用这个事件而不是 vo-configured，见 PlayerViewModel.firstFrameRendered 的注释。
+        viewModel.onFirstFrameRendered()
         updateRecentlyPlayedDurationIfAvailable()
       }
     }
@@ -3477,6 +3512,11 @@ private fun cancelAutoplayCountdown() {
     setHttpHeadersFromExtras(intent.extras)
 
     // Load the new file
+    // ⚠️ 复位必须**同步**做在 loadfile 之前：下面那次 loadfile 跑在 Dispatchers.Default，
+    //   放到协程里会有「协程先把新文件load完、复位才执行」的竞态
+    //   ⇒ 加载层刚要撤又被复位成显示，画面已经出来了还在转圈。
+    //   （FILE_LOADED 事件里那次复位是兜底，两者都要有。）
+    viewModel.onLoadingNewFile()
     getPlayableUriForEngine(intent)?.let { uri ->
       // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
       lifecycleScope.launch(Dispatchers.Default) {
@@ -4154,6 +4194,9 @@ private fun cancelAutoplayCountdown() {
     }
 
     // Load the new video
+    // ⚠️ 复位必须**同步**做在 loadfile 之前 —— 下面的协程跑在 Dispatchers.Default，
+    //   复位放进协程会有竞态（见 onNewIntent 里同一处的注释）。
+    viewModel.onLoadingNewFile()
     // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
     lifecycleScope.launch(Dispatchers.Default) {
       PlayerLib.command("loadfile", playableUri)
@@ -4666,7 +4709,6 @@ private fun cancelAutoplayCountdown() {
    */
   fun isCurrentPlaylistM3U(): Boolean = isM3uPlaylist
 
-
   companion object {
     /**
      * Intent action used to return playback result data to the calling activity.
@@ -4778,5 +4820,69 @@ private fun cancelAutoplayCountdown() {
      * General tag for logging from PlayerActivity.
      */
     const val TAG = "mpvex"
+  }
+}
+
+/**
+ * 「出画面前」的加载层：从进入播放器到首帧真正上屏之间显示加载动画。
+ *
+ * 之前这段只有一片黑（视频 Surface 已创建但还没有内容），用户分不清是在加载还是卡死了。
+ *
+ * ## 判据为什么是 `MPV_EVENT_PLAYBACK_RESTART` 而不是 mpv 的 `vo-configured`
+ *
+ * mpv 文档对 `vo-configured` 的定义是「VO 是否已配置好，通常对应视频窗口是否可见」，
+ * 听起来正好合适 —— 但它在 `vo_reconfig2()` 返回时就为 yes，**早于第一帧 `flip_page`**。
+ * 拿它当判据 = 加载动画先消失、再黑一下、画面才浮现，**比不显示更难看**。
+ * `PLAYBACK_RESTART` 在日志顺序上排在 `first video frame after restart shown` 之后。
+ *
+ * 这与视界流那条踩过的坑是同一个（见 `FeedViewModel.buffered` 的注释：
+ * 判据早一步就会「转圈消失 → 黑屏 → 画面浮现」）。
+ *
+ * ## 为什么淡出而不是硬切
+ *
+ * 硬切的话，哪怕只差一两个 vsync 也会被看成「闪了一下」。
+ * 淡出期间画面从动画背后浮上来，观感上就是无缝衔接。
+ *
+ * ⚠️ 必须是**顶层函数**（放在类的右花括号之外），不是类的方法 ——
+ *   写在 `companion object` 里的话，普通 `private fun` 拿不到 `@Composable` 的
+ *   调用环境，编译会报一串「@Composable invocations can only happen from…」。
+ */
+@OptIn(ExperimentalAnimationApi::class)
+@Composable
+private fun PlayerFirstFrameLoading(
+  viewModel: PlayerViewModel,
+  modifier: Modifier = Modifier,
+) {
+  // ⚠️ 不能从 ViewModel 拿偏好：`PlayerViewModel.playerPreferences` 是 **private**
+  //   （PlayerViewModel.kt:87）。这里自己注入一份 —— 偏好是 Koin 单例，读的是同一个值
+  //   （PlayerControls.kt:858 也是就地注入后读的）。
+  val playerPrefs = koinInject<PlayerPreferences>()
+  // ⚠️ 三个同名 `collectAsState`（红线 38）：
+  //   ① Compose 的 `StateFlow.collectAsState(initial)`（本文件顶部 import 的就是它，
+  //      上面 `firstFrameRendered` 用的这个）；
+  //   ② 本项目的 `Flow.collectAsState(scope, initial)`（返回 T?，PlayerViewModel.kt:2232）；
+  //   ③ 本项目的 `Preference<T>.collectAsState()`（**无参**扩展，
+  //      preferences/preference/Preference.kt:43）—— `showLoadingCircle` 是
+  //      `Preference<Boolean>`，要的是这个。
+  //    同文件 import 两个同名函数不冲突：靠接收者类型重载分辨
+  //    （MainActivity.kt:35+59 同时 import 了两个，同样用法）。
+  val showLoadingCircle by playerPrefs.showLoadingCircle.collectAsState()
+
+  val firstFrameRendered by viewModel.firstFrameRendered.collectAsState()
+
+  if (!showLoadingCircle) return
+
+  AnimatedVisibility(
+    visible = !firstFrameRendered,
+    enter = fadeIn(tween(120)),
+    exit = fadeOut(tween(260)),
+    modifier = modifier,
+  ) {
+    // 96dp 与缓冲转圈（PlayerControls.kt:866）同尺寸 ⇒ 首帧层与缓冲层接力时画面不跳。
+    // 压在画面上，所以固定白色半透明（主题色在视频上基本看不见）。
+    app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
+      modifier = Modifier.size(96.dp),
+      tint = Color.White.copy(alpha = 0.85f),
+    )
   }
 }

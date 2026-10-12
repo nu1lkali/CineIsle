@@ -297,8 +297,12 @@ internal fun FeedScreen(
         modifier = Modifier.align(Alignment.Center),
       ) {
         // 压在画面上，所以固定用白色半透明（主题色在视频上基本看不见）。
+        // ⚠️ 96dp 与播放器缓冲转圈（PlayerControls.kt:866）、mpv 首帧层
+        //   （PlayerActivity 的 PlayerFirstFrameLoading）同尺寸 —— 都是
+        //   「等视频画面上来」的语义，三种场合观感一致。
+        //   原来是 44dp，比旁边的暂停按钮（64dp）还小，用户反馈「太小」。
         app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
-          modifier = Modifier.size(44.dp),
+          modifier = Modifier.size(96.dp),
           tint = Color.White.copy(alpha = 0.75f),
         )
       }

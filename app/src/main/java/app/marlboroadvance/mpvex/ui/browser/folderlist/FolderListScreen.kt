@@ -520,7 +520,8 @@ object FolderListScreen : Screen {
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                   ) {
-                    app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator()
+                    // 48dp：整页加载态统一尺寸（原为默认 40dp）
+                    app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
                   }
                 } else if (searchResults.isEmpty()) {
                   // No results

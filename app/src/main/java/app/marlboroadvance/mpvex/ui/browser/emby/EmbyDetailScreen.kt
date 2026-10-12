@@ -58,7 +58,6 @@ import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -951,6 +950,37 @@ data class EmbyDetailScreen(
         },
         onCancel = { showDeleteConfirm = false },
       )
+    }
+
+    // ── 「正在打开播放器」整页加载层 ──────────────────────────────
+    // 详情页点播放 → 播放器真正起来之间有段网络 Prep（解析直链 / ISO 探测 /
+    // 建连播列表，慢的时候要好几秒）。原来只有播放按钮里一枚 20dp 小转圈，
+    // 用户视线不在按钮上就等于「点了没反应」。
+    //
+    // ⇒ 整页居中渲染大加载动画（走统一入口，「外观 → 加载动画」在这里也生效）；
+    //   按钮内的小转圈随之撤掉（见 PlayButton），免得两处同时转、互相抢注意力。
+    //
+    // ⚠️ 挂在**内容 Box 之后**（同一个 Content() 体层级）：后声明的子节点画在
+    //   上层，才盖得住页面内容。这层的对话框（castSheet / externalPlayers /
+    //   identify / refresh / editMeta / deleteConfirm）本来就是挂在这层的 ——
+    //   Dialog 是独立窗口，声明位置只影响组合顺序、不影响层级。
+    // ⚠️ 这里**拿不到 BoxScope**（不在内容 Box 的 lambda 里），用不了
+    //   `Modifier.align` ⇒ 自己套一个 `Box(contentAlignment = Center)`。
+    // ⚠️ 尺寸必须写进 modifier —— AppLoadingIndicator 的 `size` 参数只在
+    //   **完全没传 modifier** 时生效（`if (modifier == Modifier)`），传了
+    //   modifier 就得自带 size，否则 Lottie 分支会按 composition 固有像素渲染
+    //   （yamby 那批是 500×500px ≈ 170dp，直接变成巨物）。
+    // ⚠️ `playLaunching` 的复位在 onPlay 的 finally 里：解析失败才会留下来
+    //   （供用户重点一次），成功拉起时本页随即被播放页盖住。
+    if (playLaunching) {
+      Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+      ) {
+        app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
+          modifier = Modifier.size(96.dp),
+        )
+      }
     }
   }
 }
@@ -2082,15 +2112,12 @@ private fun PlayButton(
       horizontalArrangement = Arrangement.Center,
     ) {
       if (loading) {
-        // 尺寸与下面那个 PlayArrow 图标一致，切换时不会让整行跳一下
-        // ⚠️ 20dp 属于「内联微指示器」，按 AppLoadingIndicator 的接入标准保留转圈
-        //（Lottie 压到这个尺寸只会糊成一团色块）。
-        CircularProgressIndicator(
-          color = MaterialTheme.colorScheme.onPrimary,
-          strokeWidth = 2.dp,
-          modifier = Modifier.size(20.dp),
-        )
-        Spacer(modifier = Modifier.width(8.dp))
+        // ⚠️ 原来这里还有一枚 20dp 小转圈，已撤掉：等待期间主动效改成
+        //   **整页居中**的大加载动画（见 EmbyDetailScreen 根 Box 末尾的
+        //   `playLaunching` 覆盖层，走「外观 → 加载动画」统一入口）。
+        //   按钮这一小块只留文字说明状态 —— 两处同时转会互相抢注意力。
+        //   禁点仍然保留（combinedClickable 的 enabled = !loading）：
+        //   连点会起两个播放页，这个比转圈更重要。
         Text(
           text = "正在打开播放器…",
           color = MaterialTheme.colorScheme.onPrimary,

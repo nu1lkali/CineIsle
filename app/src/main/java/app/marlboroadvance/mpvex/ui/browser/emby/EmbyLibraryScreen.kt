@@ -1734,7 +1734,8 @@ data class EmbyLibraryScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
               ) {
-                app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator()
+                // 48dp：整页加载态统一尺寸（原为默认 40dp）
+                app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
                 Text(
                   text = "正在扫描媒体库… 已扫 $scanScanned" +
                     (if (totalCount > 0) " / $totalCount" else ""),

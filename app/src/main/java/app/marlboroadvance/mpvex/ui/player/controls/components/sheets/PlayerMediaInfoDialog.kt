@@ -1,16 +1,27 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Error
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -23,7 +34,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
+import app.marlboroadvance.mpvex.domain.emby.MediaInfoEntry
+import app.marlboroadvance.mpvex.domain.emby.buildEmbyMediaInfoEntries
+import app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator
+import app.marlboroadvance.mpvex.ui.theme.spacing
 import kotlinx.coroutines.CancellationException
 import org.koin.compose.koinInject
 
@@ -37,15 +56,23 @@ import org.koin.compose.koinInject
  * 所以顶栏只留片名，版本名连同容器 / 分辨率 / 码率 / 轨道等信息收进这个弹窗，
  * 一次能看全，也不用再为标题长度让步。
  *
+ * ## 版式
+ *
+ * 沿用项目里自定义 Dialog 的一套（与休眠计时器 [TimePickerDialog] 同形）：
+ * `Dialog(usePlatformDefaultWidth = false)` + `Surface(extraLarge / surfaceContainerHigh)`，
+ * 而不是 `AlertDialog` —— 后者宽度、内边距、形状都被平台钉死，长表格里标签列
+ * 会被压到换行。头部是「圆形底图标 + 标题 + 版本徽章」：徽章就是把在播的版本名
+ * 提到最显眼的位置，同时表格里那条「版本」行会被过滤掉，同一信息不出现两遍。
+ *
  * ## 数据来源
  *
- * 与详情页那一块「媒体信息」**完全同一份**（`buildEmbyMediaInfoEntries`），
+ * 与详情页那一块「媒体信息」**完全同一份**（[buildEmbyMediaInfoEntries]），
  * 不是另写一套 —— 否则同一个条目两个页面显示不一样，用户只会觉得其中一个在骗人。
  *
  * @param serverId 当前播放条目的 Emby 服务器 Id；null = 非 Emby 播放
  * @param itemId 当前播放条目的 ItemId；null = 非 Emby 播放
  * @param mediaSourceId 当前实际在播的版本；null = 单版本
- * @param versionName 版本显示名（多版本条目才有）；拉取失败时至少还能看到它
+ * @param versionName 版本显示名；拉取失败时至少还能看到它（头部徽章）
  */
 @Composable
 fun PlayerMediaInfoDialog(
@@ -55,7 +82,7 @@ fun PlayerMediaInfoDialog(
   versionName: String?,
   onDismissRequest: () -> Unit,
 ) {
-  val repository = koinInject<app.marlboroadvance.mpvex.domain.emby.EmbyRepository>()
+  val repository = koinInject<EmbyRepository>()
 
   var state by remember(serverId, itemId, mediaSourceId) {
     mutableStateOf<MediaInfoState>(MediaInfoState.Loading)
@@ -74,9 +101,7 @@ fun PlayerMediaInfoDialog(
     state =
       try {
         val item = repository.getItem(server, itemId)
-        MediaInfoState.Ready(
-          app.marlboroadvance.mpvex.domain.emby.buildEmbyMediaInfoEntries(item, mediaSourceId),
-        )
+        MediaInfoState.Ready(buildEmbyMediaInfoEntries(item, mediaSourceId))
       } catch (e: CancellationException) {
         // ⚠️ 取消必须原样抛出：吞掉它会把「弹窗被关掉」当成「读取失败」，
         // 而且破坏结构化并发（与项目里 runCatching 的那个坑同源）。
@@ -86,124 +111,248 @@ fun PlayerMediaInfoDialog(
       }
   }
 
-  AlertDialog(
+  Dialog(
     onDismissRequest = onDismissRequest,
-    title = { Text("媒体信息") },
-    text = {
-      when (val current = state) {
-        MediaInfoState.Loading -> {
+    properties = DialogProperties(usePlatformDefaultWidth = false),
+  ) {
+    Surface(
+      shape = MaterialTheme.shapes.extraLarge,
+      color = MaterialTheme.colorScheme.surfaceContainerHigh,
+      tonalElevation = 6.dp,
+      modifier =
+        Modifier
+          .width(360.dp)
+          .padding(MaterialTheme.spacing.medium),
+    ) {
+      // ⚠️ 滚动挂在外层 Column（与 TimePickerDialog 同一套路）：弹窗整体不超屏。
+      //    只让表格自己滚是不行的 —— 头部 + 徽章 + 操作区是固定的，
+      //    高峰值加起来 ≈700dp，小屏/横屏会把底部的「关闭」挤出屏幕。
+      Column(
+        modifier =
+          Modifier
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+      ) {
+        // ── 头部：圆形底图标 + 标题 + 版本徽章 ──
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Box(
+            modifier =
+              Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Outlined.Info,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onPrimaryContainer,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+          Spacer(modifier = Modifier.width(12.dp))
           Text(
-            text = "正在读取媒体信息…",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            text = "媒体信息",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface,
           )
         }
 
-        is MediaInfoState.Failed -> {
-          Column {
-            // 拉取失败也要把「在播哪个版本」给出来 —— 这是这个弹窗最主要的用途
-            if (!versionName.isNullOrBlank()) {
-              VersionOnlyRow(versionName)
-              Spacer(modifier = Modifier.height(8.dp))
-            }
-            Text(
-              text = current.message,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.error,
-            )
-          }
+        // 版本徽章：把「现在播的是哪一版」提到最显眼处。
+        // ⚠️ 表格里那条「版本」行随后要过滤掉（见 MediaInfoTable 的 hideVersionRow）——
+        //    同一个信息在头部和表里各出现一遍只会让人觉得是 bug。
+        val showVersionBadge = !versionName.isNullOrBlank()
+        if (showVersionBadge) {
+          Spacer(modifier = Modifier.height(10.dp))
+          VersionBadge(versionName)
         }
 
-        is MediaInfoState.Ready -> {
-          if (current.entries.isEmpty()) {
-            Text(
-              text = "服务器没有返回可用的媒体信息",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          } else {
-            MediaInfoTable(current.entries)
-          }
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ── 内容：读取中 / 失败 / 表格 ──
+        when (val current = state) {
+          MediaInfoState.Loading -> LoadingContent()
+
+          is MediaInfoState.Failed -> FailedContent(current.message)
+
+          is MediaInfoState.Ready ->
+            if (current.entries.isEmpty()) {
+              EmptyContent()
+            } else {
+              MediaInfoTable(entries = current.entries, hideVersionRow = showVersionBadge)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // ── 底部操作 ──
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.End,
+        ) {
+          TextButton(onClick = onDismissRequest) { Text("关闭") }
         }
       }
-    },
-    confirmButton = {
-      TextButton(onClick = onDismissRequest) { Text("关闭") }
-    },
-  )
+    }
+  }
 }
 
 private sealed interface MediaInfoState {
   data object Loading : MediaInfoState
-  data class Ready(val entries: List<app.marlboroadvance.mpvex.domain.emby.MediaInfoEntry>) : MediaInfoState
+  data class Ready(val entries: List<MediaInfoEntry>) : MediaInfoState
   data class Failed(val message: String) : MediaInfoState
 }
 
-/** 拉取失败时的兜底：至少显示「现在播的是哪个版本」 */
+/** 头部版本徽章：浅底圆角 chip，文字用 onSurface（失败态下它是唯一的版本信息，要醒目） */
 @Composable
-private fun VersionOnlyRow(versionName: String) {
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-    verticalAlignment = Alignment.Top,
+private fun VersionBadge(versionName: String) {
+  Surface(
+    shape = RoundedCornerShape(8.dp),
+    color = MaterialTheme.colorScheme.surfaceContainerLow,
+    modifier = Modifier.fillMaxWidth(),
   ) {
     Text(
-      text = "版本",
-      style = MaterialTheme.typography.bodySmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-      modifier = Modifier.width(76.dp),
-    )
-    Text(
       text = versionName,
-      style = MaterialTheme.typography.bodySmall,
+      style = MaterialTheme.typography.labelLarge,
       color = MaterialTheme.colorScheme.onSurface,
-      modifier = Modifier.weight(1f),
+      maxLines = 2,
+      modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
     )
   }
 }
 
-/** 与详情页「媒体信息」分区同一套排版：左边固定宽度的字段名，右边值 */
+/** 读取中：与全局统一的加载动画（用户可在设置里换 Lottie），不只是干等一句话 */
+@Composable
+private fun LoadingContent() {
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .heightIn(min = 180.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.Center,
+  ) {
+    AppLoadingIndicator(size = 48.dp)
+    Spacer(modifier = Modifier.height(14.dp))
+    Text(
+      text = "正在读取媒体信息…",
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+/** 读取失败：错误图标 + 原因（版本信息在头部徽章，这里不重复） */
+@Composable
+private fun FailedContent(message: String) {
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .heightIn(min = 120.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Icon(
+      imageVector = Icons.Outlined.Error,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.error,
+      modifier = Modifier.size(20.dp),
+    )
+    Spacer(modifier = Modifier.width(10.dp))
+    Text(
+      text = message,
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.error,
+    )
+  }
+}
+
+/** 服务器没返回任何字段时的占位 */
+@Composable
+private fun EmptyContent() {
+  Box(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .heightIn(min = 120.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Text(
+      text = "服务器没有返回可用的媒体信息",
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+/**
+ * 与详情页「媒体信息」分区同一套排版：左边固定宽度的字段名，右边值。
+ *
+ * @param hideVersionRow true = 头部徽章已经在放版本名，表里那条「版本」行过滤掉，
+ *   同一信息不出现两遍（buildEmbyMediaInfoEntries 只在多版本时才产出该行）。
+ */
 @Composable
 private fun MediaInfoTable(
-  entries: List<app.marlboroadvance.mpvex.domain.emby.MediaInfoEntry>,
+  entries: List<MediaInfoEntry>,
+  hideVersionRow: Boolean,
 ) {
-  Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-    Surface(
-      shape = RoundedCornerShape(12.dp),
-      color = MaterialTheme.colorScheme.surfaceContainerLow,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Column(modifier = Modifier.padding(vertical = 6.dp)) {
-        entries.forEach { entry ->
-          when (entry) {
-            is app.marlboroadvance.mpvex.domain.emby.MediaInfoEntry.Section -> {
-              Text(
-                text = entry.title,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 2.dp),
-              )
-            }
+  val visibleEntries =
+    remember(entries, hideVersionRow) {
+      if (hideVersionRow) {
+        entries.filterNot { it is MediaInfoEntry.Row && it.label == "版本" }
+      } else {
+        entries
+      }
+    }
 
-            is app.marlboroadvance.mpvex.domain.emby.MediaInfoEntry.Row -> {
-              Row(
-                modifier =
-                  Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.Top,
-              ) {
+  Column(modifier = Modifier.fillMaxWidth()) {
+    // 文件路径 / 版本名这类值长按可复制 —— 报故障、对版本时用得上的小口子
+    SelectionContainer {
+      Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column(modifier = Modifier.padding(vertical = 8.dp)) {
+          visibleEntries.forEachIndexed { index, entry ->
+            when (entry) {
+              is MediaInfoEntry.Section -> {
+                // 分区之间一条细分隔线：轨道一多，没有线就是一片糊
+                if (index > 0) {
+                  HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                  )
+                }
                 Text(
-                  text = entry.label,
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.width(76.dp),
+                  text = entry.title,
+                  style = MaterialTheme.typography.labelLarge,
+                  color = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 2.dp),
                 )
-                Text(
-                  text = entry.value,
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurface,
-                  modifier = Modifier.weight(1f),
-                )
+              }
+
+              is MediaInfoEntry.Row -> {
+                Row(
+                  modifier =
+                    Modifier
+                      .fillMaxWidth()
+                      .padding(horizontal = 16.dp, vertical = 6.dp),
+                  verticalAlignment = Alignment.Top,
+                ) {
+                  Text(
+                    text = entry.label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(76.dp),
+                  )
+                  Text(
+                    text = entry.value,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                  )
+                }
               }
             }
           }
