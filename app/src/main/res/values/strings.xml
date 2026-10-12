@@ -974,9 +974,28 @@
   <string name="app_lock_pin_too_short">PIN must be at least 4 digits</string>
   <string name="app_lock_verify_title">Verify PIN</string>
   <string name="app_lock_change_verify_hint">Enter your current PIN to continue</string>
-  <string name="app_lock_manage_message">App lock is on. You can change the PIN, or verify the current PIN to turn it off.</string>
+  <string name="app_lock_manage_message">App lock is on. Change the credential, toggle auto-unlock, or verify to turn it off.</string>
   <string name="app_lock_change_pin">Change PIN</string>
   <string name="app_lock_disable">Turn off app lock</string>
+  <string name="app_lock_method_title">Choose unlock method</string>
+  <string name="app_lock_method_pin">Numeric PIN</string>
+  <string name="app_lock_method_pin_desc">4–6 digits on a keypad</string>
+  <string name="app_lock_method_pattern">3×3 pattern</string>
+  <string name="app_lock_method_pattern_desc">Connect at least 4 dots on a 3×3 grid</string>
+  <string name="app_lock_pattern_unlock_title">Draw your pattern to unlock</string>
+  <string name="app_lock_pattern_setup_title">Draw a pattern</string>
+  <string name="app_lock_pattern_confirm_title">Draw it again</string>
+  <string name="app_lock_pattern_setup_hint">Connect at least 4 dots</string>
+  <string name="app_lock_pattern_confirm_hint">Draw the same pattern again</string>
+  <string name="app_lock_pattern_too_short">Connect at least 4 dots</string>
+  <string name="app_lock_pattern_mismatch">Patterns don\'t match. Start over</string>
+  <string name="app_lock_wrong_pattern">Incorrect pattern</string>
+  <string name="app_lock_change_pattern">Change pattern</string>
+  <string name="app_lock_auto_unlock_title">Auto-unlock when correct</string>
+  <string name="app_lock_auto_unlock_summary">Unlocks as soon as the PIN matches — no confirm key. Patterns always verify when you let go.</string>
+  <string name="app_lock_auto_unlock_hint">Auto-unlock is on — unlocks as soon as it matches</string>
+  <string name="app_lock_auto_unlock_badge">auto-unlock</string>
+  <string name="app_lock_summary_on_format">On · %1$s</string>
 
   <!-- 直播电视节目单（a2 + c1） -->
   <string name="livetv_now_playing">On now: %s</string>

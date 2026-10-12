@@ -40,11 +40,9 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
-    // versionName 涨到 1.3.0：本轮 12 功能批次发布 —— 片头片尾精准/兜底跳过、
-    // LiveTV 增强、多用户切换、UserData 批量直写、媒体键接线、字幕轨/倍速记忆、
-    // GSY 弹幕对齐（b6）、儿童锁/应用锁（b7）等。
-    versionCode = 50
-    versionName = "1.3.0"
+    // versionName 涨到 1.3.1：应用锁新增九宫格图案解锁（三方式任选 + 免按确定键的自动解锁开关）。
+    versionCode = 51
+    versionName = "1.3.1"
 
     vectorDrawables {
       useSupportLibrary = true

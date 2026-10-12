@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Gesture
+import androidx.compose.material.icons.outlined.Grid3x3
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Memory
@@ -64,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.MediaSourcePreference
+import app.marlboroadvance.mpvex.preferences.AppLockMethod
 import app.marlboroadvance.mpvex.preferences.AppLockPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.DanmakuPreferences
@@ -74,9 +76,13 @@ import app.marlboroadvance.mpvex.ui.browser.emby.PersonMergeScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarAlgorithm
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
 import app.marlboroadvance.mpvex.ui.lock.AppLockManageDialog
+import app.marlboroadvance.mpvex.ui.lock.PatternChangeDialog
+import app.marlboroadvance.mpvex.ui.lock.PatternSetupDialog
+import app.marlboroadvance.mpvex.ui.lock.PatternVerifyDialog
 import app.marlboroadvance.mpvex.ui.lock.PinChangeDialog
 import app.marlboroadvance.mpvex.ui.lock.PinSetupDialog
 import app.marlboroadvance.mpvex.ui.lock.PinVerifyDialog
+import app.marlboroadvance.mpvex.ui.lock.UnlockMethodDialog
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -849,42 +855,64 @@ object PreferencesScreen : Screen {
             PreferenceSectionHeader(title = "高级与关于")
           }
 
-          // 应用锁（b7）：未开启 → 设置 PIN（两步流，两遍一致才落盘）；
-          // 已开启 → 管理入口（改 PIN / 验证当前 PIN 后关锁）。
+          // 应用锁（b7）：未开启 → 先选方式（数字 PIN / 九宫格图案）再设凭证；
+          // 已开启 → 管理入口（改凭证 / 自动解锁开关 / 验证后关锁）。
           item {
             val appLockPreferences = koinInject<AppLockPreferences>()
             val appLockEnabled by appLockPreferences.enabled.collectAsState()
+            val appLockMethod by appLockPreferences.method.collectAsState()
+            val appLockAutoUnlock by appLockPreferences.autoUnlock.collectAsState()
+            var showMethodPicker by remember { mutableStateOf(false) }
             var showPinSetup by remember { mutableStateOf(false) }
-            var showPinManage by remember { mutableStateOf(false) }
-            var showPinChange by remember { mutableStateOf(false) }
+            var showPatternSetup by remember { mutableStateOf(false) }
+            var showManage by remember { mutableStateOf(false) }
+            var showChangeCredential by remember { mutableStateOf(false) }
             var showDisableVerify by remember { mutableStateOf(false) }
+
+            val isPattern = appLockMethod == AppLockMethod.PATTERN
+            val methodLabel = stringResource(
+              if (isPattern) R.string.app_lock_method_pattern else R.string.app_lock_method_pin,
+            )
+            val autoBadge = stringResource(R.string.app_lock_auto_unlock_badge)
 
             PreferenceCard {
               Preference(
-
                 title = { Text(text = stringResource(R.string.app_lock_title)) },
                 summary = {
-                  Text(
-                    text = stringResource(
-                      if (appLockEnabled) R.string.app_lock_summary_on
-                      else R.string.app_lock_summary_off,
-                    ),
-                    color = MaterialTheme.colorScheme.outline,
-                  )
+                  val text = if (appLockEnabled) {
+                    val base = stringResource(R.string.app_lock_summary_on_format, methodLabel)
+                    if (appLockAutoUnlock) "$base · $autoBadge" else base
+                  } else {
+                    stringResource(R.string.app_lock_summary_off)
+                  }
+                  Text(text = text, color = MaterialTheme.colorScheme.outline)
                 },
                 icon = {
                   Icon(
-                    Icons.Outlined.Lock,
+                    if (isPattern) Icons.Outlined.Grid3x3 else Icons.Outlined.Lock,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
                 onClick = {
-                  if (appLockEnabled) showPinManage = true else showPinSetup = true
+                  if (appLockEnabled) showManage = true else showMethodPicker = true
                 },
               )
             }
 
+            if (showMethodPicker) {
+              UnlockMethodDialog(
+                onPickPin = {
+                  showMethodPicker = false
+                  showPinSetup = true
+                },
+                onPickPattern = {
+                  showMethodPicker = false
+                  showPatternSetup = true
+                },
+                onDismiss = { showMethodPicker = false },
+              )
+            }
             if (showPinSetup) {
               PinSetupDialog(
                 onDismiss = { showPinSetup = false },
@@ -894,34 +922,64 @@ object PreferencesScreen : Screen {
                 },
               )
             }
-            if (showPinManage) {
+            if (showPatternSetup) {
+              PatternSetupDialog(
+                onDismiss = { showPatternSetup = false },
+                onSet = { pattern ->
+                  appLockPreferences.setPattern(pattern)
+                  appLockPreferences.enabled.set(true)
+                },
+              )
+            }
+            if (showManage) {
               AppLockManageDialog(
-                onChangePin = {
-                  showPinManage = false
-                  showPinChange = true
+                method = appLockMethod,
+                autoUnlock = appLockAutoUnlock,
+                onToggleAutoUnlock = { appLockPreferences.autoUnlock.set(it) },
+                onChangeCredential = {
+                  showManage = false
+                  showChangeCredential = true
                 },
                 onDisable = {
-                  showPinManage = false
+                  showManage = false
                   showDisableVerify = true
                 },
-                onDismiss = { showPinManage = false },
+                onDismiss = { showManage = false },
               )
             }
-            if (showPinChange) {
-              PinChangeDialog(
-                onDismiss = { showPinChange = false },
-                onVerify = appLockPreferences::verifyPin,
-                onSet = appLockPreferences::setPin,
-              )
+            if (showChangeCredential) {
+              if (isPattern) {
+                PatternChangeDialog(
+                  onDismiss = { showChangeCredential = false },
+                  onVerify = appLockPreferences::verifyPattern,
+                  onSet = appLockPreferences::setPattern,
+                )
+              } else {
+                PinChangeDialog(
+                  onDismiss = { showChangeCredential = false },
+                  onVerify = appLockPreferences::verifyPin,
+                  onSet = appLockPreferences::setPin,
+                )
+              }
             }
             if (showDisableVerify) {
-              PinVerifyDialog(
-                title = stringResource(R.string.app_lock_verify_title),
-                message = stringResource(R.string.app_lock_change_verify_hint),
-                onDismiss = { showDisableVerify = false },
-                onVerify = appLockPreferences::verifyPin,
-                onVerified = { appLockPreferences.disable() },
-              )
+              if (isPattern) {
+                PatternVerifyDialog(
+                  title = stringResource(R.string.app_lock_verify_title),
+                  message = stringResource(R.string.app_lock_change_verify_hint),
+                  onDismiss = { showDisableVerify = false },
+                  onVerify = appLockPreferences::verifyPattern,
+                  onVerified = { appLockPreferences.disable() },
+                )
+              } else {
+                PinVerifyDialog(
+                  title = stringResource(R.string.app_lock_verify_title),
+                  message = stringResource(R.string.app_lock_change_verify_hint),
+                  onDismiss = { showDisableVerify = false },
+                  onVerify = appLockPreferences::verifyPin,
+                  onVerified = { appLockPreferences.disable() },
+                )
+              }
             }
           }
 

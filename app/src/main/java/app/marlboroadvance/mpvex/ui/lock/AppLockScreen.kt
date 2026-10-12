@@ -18,9 +18,12 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Backspace
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Dialpad
+import androidx.compose.material.icons.outlined.Grid3x3
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.BasicAlertDialog
@@ -28,6 +31,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ripple
@@ -35,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +60,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.preferences.AppLockMethod
 import app.marlboroadvance.mpvex.preferences.AppLockPreferences
 import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
@@ -65,6 +71,9 @@ import org.koin.compose.koinInject
  * 用法：包住 MainActivity 的整个内容。锁着时 [content] **整块不组合** ——
  * 背后的 Navigator 一帧都不布局，解锁后才开始首帧，没有「背后先跑一遍」的浪费。
  *
+ * 解锁方式由偏好决定：[AppLockMethod.PIN] 用数字键盘，[AppLockMethod.PATTERN]
+ * 用九宫格图案 —— 具体输入控件在 [AppLockUnlockScreen] 里分叉。
+ *
  * ## 什么时候锁
  *
  *  · 冷启动：开锁的用户每次进程启动都锁（初始状态直接按偏好算）；
@@ -74,16 +83,16 @@ import org.koin.compose.koinInject
  *
  * ## 边界（有意为之）
  *
- * 只守 MainActivity。播放页（mpv / GSY）不在门禁里 —— 从通知 / 小窗回来不该被 PIN
- * 拦下，且儿童能碰到播放页的前提是已经过了这道门。真要连播放页一起锁，
+ * 只守 MainActivity。播放页（mpv / GSY）不在门禁里 —— 从通知 / 小窗回来不该被
+ * 凭证拦下，且儿童能碰到播放页的前提是已经过了这道门。真要连播放页一起锁，
  * 得给两个 PlayerActivity 各接一份，那是另一个量级的活。
  */
 @Composable
 fun AppLockGate(content: @Composable () -> Unit) {
   val prefs = koinInject<AppLockPreferences>()
-  // 初始状态按偏好算：开了锁 + 设过 PIN ⇒ 进程一启动就是锁着的
+  // 初始状态按偏好算：开了锁 + 当前方式已有凭证 ⇒ 进程一启动就是锁着的
   var locked by remember {
-    mutableStateOf(prefs.enabled.get() && prefs.pinHash.get().isNotEmpty())
+    mutableStateOf(prefs.enabled.get() && prefs.hasCredential())
   }
   var backgroundedAt by remember { mutableLongStateOf(0L) }
 
@@ -94,7 +103,7 @@ fun AppLockGate(content: @Composable () -> Unit) {
         Lifecycle.Event.ON_STOP -> backgroundedAt = System.currentTimeMillis()
         Lifecycle.Event.ON_START -> {
           val awayMs = System.currentTimeMillis() - backgroundedAt
-          val shouldLock = prefs.enabled.get() && prefs.pinHash.get().isNotEmpty()
+          val shouldLock = prefs.enabled.get() && prefs.hasCredential()
           if (shouldLock && awayMs > AppLockPreferences.RELOCK_GRACE_MS) {
             locked = true
           }
@@ -108,7 +117,10 @@ fun AppLockGate(content: @Composable () -> Unit) {
 
   if (locked) {
     AppLockUnlockScreen(
-      onVerify = prefs::verifyPin,
+      method = prefs.method.get(),
+      autoUnlock = prefs.autoUnlock.get(),
+      onVerifyPin = prefs::verifyPin,
+      onVerifyPattern = prefs::verifyPattern,
       onUnlocked = { locked = false },
     )
   } else {
@@ -117,22 +129,38 @@ fun AppLockGate(content: @Composable () -> Unit) {
 }
 
 /**
- * 全屏解锁页。
+ * 全屏解锁页（PIN / 图案共用外壳）。
  *
  * 连续输错 [AppLockPreferences.MAX_ATTEMPTS] 次进 30 秒冷却（带倒计时）——
- * PIN 只有 4~6 位，不设防就是穷举题。计数器只在内存里，进程重启即忘
- * （重启本身也是一次「重新锁上」）。
+ * PIN 只有 4~6 位、图案只有 9 个点，不设防就是穷举题。计数器只在内存里，
+ * 进程重启即忘（重启本身也是一次「重新锁上」）。
+ *
+ * [autoUnlock] 为真时：PIN 每输一位就试一次，**输对即解锁**（隐藏确定键）；
+ * 图案本来就是画完即验，所以这个开关只影响 PIN 的手感。
  */
 @Composable
 private fun AppLockUnlockScreen(
-  onVerify: (String) -> Boolean,
+  method: String,
+  autoUnlock: Boolean,
+  onVerifyPin: (String) -> Boolean,
+  onVerifyPattern: (List<Int>) -> Boolean,
   onUnlocked: () -> Unit,
 ) {
+  val isPattern = method == AppLockMethod.PATTERN
+
   var pin by remember { mutableStateOf("") }
   var wrong by remember { mutableStateOf(false) }
+  var hint by remember { mutableStateOf<String?>(null) }
   var attempts by remember { mutableIntStateOf(0) }
   var cooldownEndAt by remember { mutableLongStateOf(0L) }
   var cooldownRemain by remember { mutableIntStateOf(0) }
+
+  // 弹窗/分支回调里不能用 stringResource（非 Composable 上下文）—— 先取好文案
+  val cooldownText = stringResource(R.string.app_lock_cooldown, cooldownRemain)
+  val wrongPinText = stringResource(R.string.app_lock_wrong_pin)
+  val wrongPatternText = stringResource(R.string.app_lock_wrong_pattern)
+  val tooShortText = stringResource(R.string.app_lock_pattern_too_short)
+  val autoHintText = stringResource(R.string.app_lock_auto_unlock_hint)
 
   // 冷却倒计时：到点自动清零尝试次数
   LaunchedEffect(cooldownEndAt) {
@@ -149,22 +177,21 @@ private fun AppLockUnlockScreen(
     }
   }
 
-  // ⚠️ 本地函数读的是当前值（by remember 每次读取都走快照状态），
-  // 但不能对它们做 smart cast（红线 16）—— 先快照进局部 val 再判断。
-  fun submit() {
-    val entered = pin
-    val cooling = cooldownEndAt > System.currentTimeMillis()
-    if (entered.isEmpty() || cooling) return
-    if (onVerify(entered)) {
-      onUnlocked()
-    } else {
-      attempts += 1
-      wrong = true
-      pin = ""
-      if (attempts >= AppLockPreferences.MAX_ATTEMPTS) {
-        cooldownEndAt = System.currentTimeMillis() + AppLockPreferences.COOLDOWN_MS
-        wrong = false
-      }
+  // 图案错误红闪：~0.7s 后自动复位（复位瞬间控件会清掉红图）
+  LaunchedEffect(wrong) {
+    if (wrong && isPattern) {
+      delay(700)
+      wrong = false
+    }
+  }
+
+  fun fail() {
+    attempts += 1
+    wrong = true
+    pin = ""
+    if (attempts >= AppLockPreferences.MAX_ATTEMPTS) {
+      cooldownEndAt = System.currentTimeMillis() + AppLockPreferences.COOLDOWN_MS
+      wrong = false
     }
   }
 
@@ -199,39 +226,91 @@ private fun AppLockUnlockScreen(
       Spacer(Modifier.height(28.dp))
 
       Text(
-        text = stringResource(R.string.app_lock_unlock_title),
+        text = stringResource(
+          if (isPattern) R.string.app_lock_pattern_unlock_title else R.string.app_lock_unlock_title,
+        ),
         style = MaterialTheme.typography.titleMedium,
       )
 
       Spacer(Modifier.height(20.dp))
 
-      PinDots(length = pin.length)
+      if (isPattern) {
+        PatternLockView(
+          modifier = Modifier.fillMaxWidth(0.72f),
+          enabled = cooldownRemain == 0,
+          error = wrong,
+          onPattern = { pattern ->
+            if (cooldownRemain == 0) {
+              when {
+                // 太短要**明说**，且不算一次失败尝试（还没构成一个图案）
+                pattern.size < AppLockPreferences.MIN_PATTERN_DOTS -> {
+                  hint = tooShortText
+                  wrong = false
+                }
+                onVerifyPattern(pattern) -> onUnlocked()
+                else -> {
+                  hint = null
+                  fail()
+                }
+              }
+            }
+          },
+        )
+      } else {
+        PinDots(length = pin.length)
+      }
 
       Spacer(Modifier.height(12.dp))
 
+      val hintText = hint
       val message: String = when {
-        cooldownRemain > 0 -> stringResource(R.string.app_lock_cooldown, cooldownRemain)
-        wrong -> stringResource(R.string.app_lock_wrong_pin)
+        cooldownRemain > 0 -> cooldownText
+        wrong -> if (isPattern) wrongPatternText else wrongPinText
+        hintText != null -> hintText
+        autoUnlock && !isPattern -> autoHintText
         else -> ""
       }
       Text(
         text = message,
         style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.error,
+        color = if (cooldownRemain > 0 || wrong || hintText != null) {
+          MaterialTheme.colorScheme.error
+        } else {
+          MaterialTheme.colorScheme.onSurfaceVariant
+        },
         textAlign = TextAlign.Center,
       )
 
       Spacer(Modifier.height(16.dp))
 
-      PinPad(
-        enabled = cooldownRemain == 0,
-        onDigit = { digit ->
-          wrong = false
-          if (pin.length < AppLockPreferences.MAX_PIN_LENGTH) pin += digit
-        },
-        onDelete = { if (pin.isNotEmpty()) pin = pin.dropLast(1) },
-        onSubmit = { submit() },
-      )
+      if (!isPattern) {
+        PinPad(
+          enabled = cooldownRemain == 0,
+          showSubmit = !autoUnlock,
+          onDigit = { digit ->
+            wrong = false
+            hint = null
+            if (pin.length < AppLockPreferences.MAX_PIN_LENGTH) {
+              val next = pin + digit
+              pin = next
+              if (autoUnlock) {
+                when {
+                  onVerifyPin(next) -> onUnlocked()
+                  // 已到最长位数还没中 ⇒ 判定本次失败（给用户明确反馈，别干等着）
+                  next.length >= AppLockPreferences.MAX_PIN_LENGTH -> fail()
+                }
+              }
+            }
+          },
+          onDelete = { if (pin.isNotEmpty()) pin = pin.dropLast(1) },
+          onSubmit = {
+            val entered = pin
+            if (entered.isNotEmpty() && cooldownRemain == 0) {
+              if (onVerifyPin(entered)) onUnlocked() else fail()
+            }
+          },
+        )
+      }
     }
   }
 }
@@ -270,6 +349,10 @@ internal fun PinDots(length: Int) {
 /**
  * 数字键盘：1-9 + 底行（删除 / 0 / 确定）。
  *
+ * [showSubmit] 为假时收起「确定」键（自动解锁模式下每输一位就自动验，
+ * 那个键没有存在意义；留着反而让人以为必须点它）—— 位置留一个等大占位，
+ * 保持 0 与删除键的位置不变（键盘不长脚）。
+ *
  * 触摸区（80dp）比可见圆圈（68dp）大一圈 —— 纯观感不变、误触率降一截。
  */
 @Composable
@@ -279,6 +362,7 @@ internal fun PinPad(
   onDelete: () -> Unit,
   onSubmit: () -> Unit,
   modifier: Modifier = Modifier,
+  showSubmit: Boolean = true,
 ) {
   Column(
     modifier = modifier.fillMaxWidth(),
@@ -305,12 +389,16 @@ internal fun PinPad(
       PinKey(enabled = enabled, onClick = { onDigit('0') }) {
         Text(text = "0", fontSize = 26.sp, fontWeight = FontWeight.Medium)
       }
-      PinKey(enabled = enabled, onClick = onSubmit) {
-        Icon(
-          Icons.Outlined.Check,
-          contentDescription = stringResource(R.string.generic_confirm),
-          modifier = Modifier.size(26.dp),
-        )
+      if (showSubmit) {
+        PinKey(enabled = enabled, onClick = onSubmit) {
+          Icon(
+            Icons.Outlined.Check,
+            contentDescription = stringResource(R.string.generic_confirm),
+            modifier = Modifier.size(26.dp),
+          )
+        }
+      } else {
+        Spacer(Modifier.size(80.dp))
       }
     }
   }
@@ -351,26 +439,58 @@ private fun PinKey(
 // ────────────────────────────────────────────────────────────────────────
 
 /**
- * 应用锁「已开启」时的管理入口：改 PIN / 关锁。
+ * 应用锁「已开启」时的管理入口：改凭证 / 开关自动解锁 / 关锁。
  *
- * 这个弹窗本身不执行任何破坏性动作 —— 关锁后面还跟着一道
- * [PinVerifyDialog]（防止儿童自己进设置关掉），改 PIN 则是
- * [PinChangeDialog]（先验证旧的）。它只负责把用户领到对应流程。
+ * 这个弹窗本身不执行任何破坏性动作 —— 关锁后面还跟着一道验证弹窗
+ * （防止儿童自己进设置关掉），改凭证则是「先验证旧的」流程。
+ * 它只负责把用户领到对应流程，外加一个可以就地切的自动解锁开关。
  */
 @Composable
 fun AppLockManageDialog(
-  onChangePin: () -> Unit,
+  method: String,
+  autoUnlock: Boolean,
+  onToggleAutoUnlock: (Boolean) -> Unit,
   onDisable: () -> Unit,
+  onChangeCredential: () -> Unit,
   onDismiss: () -> Unit,
 ) {
+  val isPattern = method == AppLockMethod.PATTERN
   AlertDialog(
     onDismissRequest = onDismiss,
     properties = DialogProperties(dismissOnClickOutside = false),
     title = { Text(text = stringResource(R.string.app_lock_title)) },
-    text = { Text(text = stringResource(R.string.app_lock_manage_message)) },
+    text = {
+      Column {
+        Text(
+          text = stringResource(R.string.app_lock_manage_message),
+          style = MaterialTheme.typography.bodyMedium,
+          color = AlertDialogDefaults.textContentColor,
+        )
+        Spacer(Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = stringResource(R.string.app_lock_auto_unlock_title),
+              style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+              text = stringResource(R.string.app_lock_auto_unlock_summary),
+              style = MaterialTheme.typography.bodySmall,
+              color = AlertDialogDefaults.textContentColor,
+            )
+          }
+          Spacer(Modifier.width(12.dp))
+          Switch(checked = autoUnlock, onCheckedChange = onToggleAutoUnlock)
+        }
+      }
+    },
     confirmButton = {
-      TextButton(onClick = onChangePin) {
-        Text(text = stringResource(R.string.app_lock_change_pin))
+      TextButton(onClick = onChangeCredential) {
+        Text(
+          text = stringResource(
+            if (isPattern) R.string.app_lock_change_pattern else R.string.app_lock_change_pin,
+          ),
+        )
       }
     },
     dismissButton = {
@@ -379,6 +499,103 @@ fun AppLockManageDialog(
       }
     },
   )
+}
+
+/**
+ * 解锁方式选择（应用锁关闭时点入口出现）：数字 PIN / 九宫格图案。
+ *
+ * 只在「还没开锁」时走这一层 —— 已开锁想换方式，走「关闭 → 重新开启」，
+ * 少一条「切换后旧凭证怎么办」的模糊路径（安全相关的东西宁可多一步）。
+ */
+@Composable
+fun UnlockMethodDialog(
+  onPickPin: () -> Unit,
+  onPickPattern: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  BasicAlertDialog(
+    onDismissRequest = onDismiss,
+    properties = DialogProperties(dismissOnClickOutside = false),
+  ) {
+    Surface(
+      shape = MaterialTheme.shapes.extraLarge,
+      color = AlertDialogDefaults.containerColor,
+      tonalElevation = AlertDialogDefaults.TonalElevation,
+    ) {
+      Column(modifier = Modifier.padding(24.dp)) {
+        Text(
+          text = stringResource(R.string.app_lock_method_title),
+          style = MaterialTheme.typography.headlineSmall,
+          fontWeight = FontWeight.Bold,
+          color = AlertDialogDefaults.titleContentColor,
+        )
+        Spacer(Modifier.height(16.dp))
+        MethodRow(
+          icon = Icons.Outlined.Dialpad,
+          title = stringResource(R.string.app_lock_method_pin),
+          description = stringResource(R.string.app_lock_method_pin_desc),
+          onClick = onPickPin,
+        )
+        Spacer(Modifier.height(8.dp))
+        MethodRow(
+          icon = Icons.Outlined.Grid3x3,
+          title = stringResource(R.string.app_lock_method_pattern),
+          description = stringResource(R.string.app_lock_method_pattern_desc),
+          onClick = onPickPattern,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.End,
+        ) {
+          TextButton(onClick = onDismiss) {
+            Text(stringResource(R.string.generic_cancel))
+          }
+        }
+      }
+    }
+  }
+}
+
+/** 方式选择里的一行：图标 + 标题 + 说明，整行可点。 */
+@Composable
+private fun MethodRow(
+  icon: androidx.compose.ui.graphics.vector.ImageVector,
+  title: String,
+  description: String,
+  onClick: () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(12.dp),
+    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector = icon,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(28.dp),
+      )
+      Spacer(Modifier.width(16.dp))
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = title,
+          style = MaterialTheme.typography.bodyLarge,
+          fontWeight = FontWeight.Medium,
+        )
+        Text(
+          text = description,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+  }
 }
 
 /**
@@ -586,5 +803,221 @@ private fun PinDialogScaffold(
         }
       }
     }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// 九宫格图案的三个弹窗（设置 / 验证 / 修改）
+// ────────────────────────────────────────────────────────────────────────
+
+/**
+ * 图案弹窗骨架：标题 + 说明 +（错误）+ 九宫格 + 取消。
+ *
+ * 图案没有「确定」键 —— 松手那一刻就是提交（[onPattern]）。
+ * [resetKey] 变化时重建控件，把上一步画过的图案擦掉
+ * （设置流程第一步画完进第二步，不该还留着第一步的线）。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PatternDialogScaffold(
+  title: String,
+  message: String,
+  error: String?,
+  flash: Boolean,
+  resetKey: Any,
+  onPattern: (List<Int>) -> Unit,
+  onCancel: () -> Unit,
+) {
+  BasicAlertDialog(
+    onDismissRequest = onCancel,
+    properties = DialogProperties(dismissOnClickOutside = false),
+  ) {
+    Surface(
+      shape = MaterialTheme.shapes.extraLarge,
+      color = AlertDialogDefaults.containerColor,
+      tonalElevation = AlertDialogDefaults.TonalElevation,
+    ) {
+      Column(
+        modifier = Modifier.padding(horizontal = 24.dp, vertical = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+      ) {
+        Text(
+          text = title,
+          style = MaterialTheme.typography.headlineSmall,
+          fontWeight = FontWeight.Bold,
+          color = AlertDialogDefaults.titleContentColor,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+          text = message,
+          style = MaterialTheme.typography.bodyMedium,
+          color = AlertDialogDefaults.textContentColor,
+          textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(20.dp))
+        key(resetKey) {
+          PatternLockView(
+            modifier = Modifier.fillMaxWidth(0.8f),
+            error = flash,
+            onPattern = onPattern,
+          )
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(
+          text = error ?: "",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.error,
+          textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.End,
+        ) {
+          TextButton(onClick = onCancel) {
+            Text(stringResource(R.string.generic_cancel))
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 设置图案：画一遍 → 再画一遍确认，两遍一致才落盘。
+ *
+ * ⚠️ 与 PIN 一样，中途关掉视为放弃，不写「半个图案」。
+ */
+@Composable
+fun PatternSetupDialog(
+  onDismiss: () -> Unit,
+  onSet: (pattern: List<Int>) -> Unit,
+) {
+  var step by remember { mutableStateOf(1) }
+  var first by remember { mutableStateOf<List<Int>>(emptyList()) }
+  var error by remember { mutableStateOf<String?>(null) }
+  var flash by remember { mutableStateOf(false) }
+
+  val tooShortText = stringResource(R.string.app_lock_pattern_too_short)
+  val mismatchText = stringResource(R.string.app_lock_pattern_mismatch)
+
+  // 红闪 ~0.7s 后自动复位（复位那刻控件会清掉红图）
+  LaunchedEffect(flash) {
+    if (flash) {
+      delay(700)
+      flash = false
+    }
+  }
+
+  PatternDialogScaffold(
+    title = stringResource(
+      if (step == 1) R.string.app_lock_pattern_setup_title else R.string.app_lock_pattern_confirm_title,
+    ),
+    message = stringResource(
+      if (step == 1) R.string.app_lock_pattern_setup_hint else R.string.app_lock_pattern_confirm_hint,
+    ),
+    error = error,
+    flash = flash,
+    resetKey = step,
+    onPattern = { pattern ->
+      when {
+        pattern.size < AppLockPreferences.MIN_PATTERN_DOTS -> {
+          error = tooShortText
+          flash = true
+        }
+        step == 1 -> {
+          first = pattern
+          error = null
+          step = 2
+        }
+        pattern == first -> {
+          onSet(first)
+          onDismiss()
+        }
+        else -> {
+          error = mismatchText
+          flash = true
+          // 退回第一步重来，避免用户在第二步里干瞪眼
+          first = emptyList()
+          step = 1
+        }
+      }
+    },
+    onCancel = onDismiss,
+  )
+}
+
+/**
+ * 验证当前图案（关锁 / 改图案的前置步骤）。
+ *
+ * 与 [PinVerifyDialog] 一样：输错只在本弹窗里提示，不进全局冷却。
+ */
+@Composable
+fun PatternVerifyDialog(
+  title: String,
+  message: String,
+  onDismiss: () -> Unit,
+  onVerify: (List<Int>) -> Boolean,
+  onVerified: () -> Unit,
+) {
+  var error by remember { mutableStateOf<String?>(null) }
+  var flash by remember { mutableStateOf(false) }
+
+  val wrongText = stringResource(R.string.app_lock_wrong_pattern)
+  val tooShortText = stringResource(R.string.app_lock_pattern_too_short)
+
+  // 红闪 ~0.7s 后自动复位（复位那刻控件会清掉红图）—— 
+  // ⚠️ 这里**不能**用变化的 resetKey 重建控件：那会在红闪刚开始时就把图擦掉，看不见错误。
+  LaunchedEffect(flash) {
+    if (flash) {
+      delay(700)
+      flash = false
+    }
+  }
+
+  PatternDialogScaffold(
+    title = title,
+    message = message,
+    error = error,
+    flash = flash,
+    resetKey = Unit,
+    onPattern = { pattern ->
+      when {
+        pattern.size < AppLockPreferences.MIN_PATTERN_DOTS -> {
+          error = tooShortText
+          flash = true
+        }
+        onVerify(pattern) -> {
+          onVerified()
+          onDismiss()
+        }
+        else -> {
+          error = wrongText
+          flash = true
+        }
+      }
+    },
+    onCancel = onDismiss,
+  )
+}
+
+/** 改图案：先验证旧的，通过后直接进入「设置新图案」两步流。 */
+@Composable
+fun PatternChangeDialog(
+  onDismiss: () -> Unit,
+  onVerify: (List<Int>) -> Boolean,
+  onSet: (pattern: List<Int>) -> Unit,
+) {
+  var verified by remember { mutableStateOf(false) }
+  if (!verified) {
+    PatternVerifyDialog(
+      title = stringResource(R.string.app_lock_verify_title),
+      message = stringResource(R.string.app_lock_change_verify_hint),
+      onDismiss = onDismiss,
+      onVerify = onVerify,
+      onVerified = { verified = true },
+    )
+  } else {
+    PatternSetupDialog(onDismiss = onDismiss, onSet = onSet)
   }
 }

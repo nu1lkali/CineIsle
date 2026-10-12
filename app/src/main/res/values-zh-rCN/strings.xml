@@ -974,9 +974,28 @@
   <string name="app_lock_pin_too_short">PIN 码至少需要 4 位</string>
   <string name="app_lock_verify_title">验证 PIN 码</string>
   <string name="app_lock_change_verify_hint">请输入当前 PIN 码以继续</string>
-  <string name="app_lock_manage_message">应用锁已开启。可以修改 PIN 码，或验证当前 PIN 码后关闭。</string>
+  <string name="app_lock_manage_message">应用锁已开启。可以修改凭证、开关自动解锁，或验证后关闭。</string>
   <string name="app_lock_change_pin">修改 PIN 码</string>
   <string name="app_lock_disable">关闭应用锁</string>
+  <string name="app_lock_method_title">选择解锁方式</string>
+  <string name="app_lock_method_pin">数字 PIN</string>
+  <string name="app_lock_method_pin_desc">键盘输入 4~6 位数字</string>
+  <string name="app_lock_method_pattern">九宫格图案</string>
+  <string name="app_lock_method_pattern_desc">在 3×3 点阵上连接至少 4 个点</string>
+  <string name="app_lock_pattern_unlock_title">绘制图案解锁</string>
+  <string name="app_lock_pattern_setup_title">设置图案</string>
+  <string name="app_lock_pattern_confirm_title">再画一次</string>
+  <string name="app_lock_pattern_setup_hint">连接至少 4 个点</string>
+  <string name="app_lock_pattern_confirm_hint">再画一遍相同的图案</string>
+  <string name="app_lock_pattern_too_short">图案至少需要连接 4 个点</string>
+  <string name="app_lock_pattern_mismatch">两次图案不一致，请重新设置</string>
+  <string name="app_lock_wrong_pattern">图案不正确</string>
+  <string name="app_lock_change_pattern">修改图案</string>
+  <string name="app_lock_auto_unlock_title">密码正确自动解锁</string>
+  <string name="app_lock_auto_unlock_summary">PIN 输对即自动解锁，无需按确定键；图案松手即验证。</string>
+  <string name="app_lock_auto_unlock_hint">已开启自动解锁：输对即进</string>
+  <string name="app_lock_auto_unlock_badge">自动解锁</string>
+  <string name="app_lock_summary_on_format">已开启 · %1$s</string>
 
   <!-- 直播电视节目单（a2 + c1） -->
   <string name="livetv_now_playing">正在播出：%s</string>
