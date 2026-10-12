@@ -41,7 +41,8 @@ android {
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
     // versionName 涨到 1.3.1：应用锁新增九宫格图案解锁（三方式任选 + 免按确定键的自动解锁开关）。
-    versionCode = 51
+    // 52：修「看完视频从播放器返回被重新锁上」—— 重锁判定改用进程级生命周期（见 AppLockGate）。
+    versionCode = 52
     versionName = "1.3.1"
 
     vectorDrawables {
@@ -308,6 +309,9 @@ room {
 
 dependencies {
   implementation(libs.androidx.activity.compose)
+  // 应用锁判「是不是真的退出了 App」用 ProcessLifecycleOwner（进程级生命周期）——
+  // 它不在 activity-compose 的传递依赖里，必须显式声明；版本与 lifecycle-runtime 对齐（2.10.0）。
+  implementation("androidx.lifecycle:lifecycle-process:2.10.0")
   implementation(platform(libs.androidx.compose.bom))
   implementation(libs.androidx.ui)
   implementation(libs.androidx.ui.graphics)

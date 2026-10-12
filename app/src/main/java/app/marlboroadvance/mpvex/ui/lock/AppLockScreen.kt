@@ -58,7 +58,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AppLockMethod
 import app.marlboroadvance.mpvex.preferences.AppLockPreferences
@@ -77,15 +77,26 @@ import org.koin.compose.koinInject
  * ## 什么时候锁
  *
  *  · 冷启动：开锁的用户每次进程启动都锁（初始状态直接按偏好算）；
- *  · 退后台再回来：离开超过 [AppLockPreferences.RELOCK_GRACE_MS]（5 秒）才重新锁。
- *    5 秒是给「页内跳播放器 / 系统权限弹窗」这类**自己造成的短暂退后台**留的余量
- *    （那些场景回来不该重新解锁）；真正离开应用（回桌面、切别的 App）都远不止 5 秒。
+ *  · 真正离开应用再回来：离开超过 [AppLockPreferences.RELOCK_GRACE_MS]（5 秒）才重新锁。
+ *
+ * ## 为什么盯的是**进程**生命周期，不是当前 Activity 的
+ *
+ * 播放页（mpv / GSY / 视界流）是本 App 的**另一个 Activity**（`singleTask`，
+ * 独立任务栈）。从 MainActivity 打开它时，MainActivity 会走 `ON_STOP` ——
+ * 如果盯 Activity 的 `ON_STOP / ON_START`，「跳播放页」和「退到桌面」在事件层面
+ * 一模一样，只能靠离开时长区分，于是「看完视频回来」必然被重新锁上（太激进）。
+ *
+ * [ProcessLifecycleOwner] 的 `ON_STOP` 只在**本 App 所有 Activity 都不在前台**
+ * 时才派发（且自带 700ms 去抖），于是：跳自己家的播放页 ⇒ 进程始终在前台 ⇒
+ * 不触发重锁；回桌面 / 切别的 App ⇒ 正常触发。
  *
  * ## 边界（有意为之）
  *
- * 只守 MainActivity。播放页（mpv / GSY）不在门禁里 —— 从通知 / 小窗回来不该被
- * 凭证拦下，且儿童能碰到播放页的前提是已经过了这道门。真要连播放页一起锁，
- * 得给两个 PlayerActivity 各接一份，那是另一个量级的活。
+ * 只守 MainActivity。播放页本身不在门禁里 —— 儿童能碰到播放页的前提是已经过了这道门。
+ * 真要连播放页一起锁，得给两个 PlayerActivity 各接一份，那是另一个量级的活。
+ *
+ * ⚠️ 系统文件选择器（SAF）跑在**别的进程**里：从 MainActivity 拉起它同样算「离开应用」，
+ * 选完回来（超过 5 秒）仍会重锁 —— 这个口子没堵，需要的话得在发起处临时挂一个豁免标记。
  */
 @Composable
 fun AppLockGate(content: @Composable () -> Unit) {
@@ -94,25 +105,27 @@ fun AppLockGate(content: @Composable () -> Unit) {
   var locked by remember {
     mutableStateOf(prefs.enabled.get() && prefs.hasCredential())
   }
+  // 什么时候退的后台（0 = 本进程还没退过后台）；只在进程级 ON_STOP 里写
   var backgroundedAt by remember { mutableLongStateOf(0L) }
 
-  val lifecycleOwner = LocalLifecycleOwner.current
-  DisposableEffect(lifecycleOwner) {
+  val processLifecycle = ProcessLifecycleOwner.get().lifecycle
+  DisposableEffect(processLifecycle) {
     val observer = LifecycleEventObserver { _, event ->
       when (event) {
         Lifecycle.Event.ON_STOP -> backgroundedAt = System.currentTimeMillis()
         Lifecycle.Event.ON_START -> {
           val awayMs = System.currentTimeMillis() - backgroundedAt
           val shouldLock = prefs.enabled.get() && prefs.hasCredential()
-          if (shouldLock && awayMs > AppLockPreferences.RELOCK_GRACE_MS) {
+          // backgroundedAt > 0 才说明本进程真的退过后台 —— 进程启动时那次 ON_START 不算
+          if (shouldLock && backgroundedAt > 0L && awayMs > AppLockPreferences.RELOCK_GRACE_MS) {
             locked = true
           }
         }
         else -> Unit
       }
     }
-    lifecycleOwner.lifecycle.addObserver(observer)
-    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    processLifecycle.addObserver(observer)
+    onDispose { processLifecycle.removeObserver(observer) }
   }
 
   if (locked) {

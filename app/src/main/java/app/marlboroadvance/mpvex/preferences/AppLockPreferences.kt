@@ -112,10 +112,15 @@ class AppLockPreferences(preferenceStore: PreferenceStore) {
     const val COOLDOWN_MS = 30_000L
 
     /**
-     * 离开应用超过这个时长，回来就要重新解锁。
+     * **真正离开应用**（回桌面 / 切别的 App）超过这个时长，回来才重新解锁。
      *
-     * 5 秒是给「页内跳播放器 / 系统权限弹窗」这类**自己造成的短暂退后台**
-     * 留的余量（那些场景回来不该重新解锁）；真正「离开应用」都远不止 5 秒。
+     * ⚠️ 判「离开应用」走的是**进程级**生命周期（`ProcessLifecycleOwner`），
+     * 不是当前 Activity 的 —— 从 MainActivity 跳本 App 的播放页（mpv / GSY 都是
+     * `singleTask`、独立任务栈）会让 MainActivity 收到 `ON_STOP`；若按 Activity
+     * 生命周期判，就变成「看多久视频 = 锁多久」，回来必被锁（太激进）。
+     * 进程级 `ON_STOP` 只在**本 App 所有 Activity 都不在前台**时才派发，
+     * 所以「跳自己家的播放页再回来」根本走不到这个判断。
+     * 这 5 秒只是给「切出去瞄一眼通知再切回来」这类真正的短暂离开留的余量。
      */
     const val RELOCK_GRACE_MS = 5_000L
 
