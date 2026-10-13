@@ -38,6 +38,7 @@ import app.marlboroadvance.mpvex.domain.emby.UndoOutcome
 import app.marlboroadvance.mpvex.domain.emby.autoMergeableGroups
 import app.marlboroadvance.mpvex.domain.emby.PersonMergeRule
 import app.marlboroadvance.mpvex.domain.emby.clusterDuplicatePersons
+import app.marlboroadvance.mpvex.domain.emby.primaryImageRef
 import app.marlboroadvance.mpvex.domain.emby.toPersonRef
 import app.marlboroadvance.mpvex.domain.iso.RemoteIsoPlayback
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
@@ -1438,12 +1439,69 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     repository.videoStreamUrl(server, itemId, static, mediaSourceId = mediaSourceId)
 
   fun imageUrl(server: EmbyServer, item: EmbyItem, imageType: String = "Primary", maxWidth: Int = 480): String? {
+    // Primary 统一走 primaryImageRef()：相册 / 文件夹自身没有主图，真正带图的
+    // 是 PrimaryImageItemId 指向的条目（见 domain/emby/EmbyPrimaryImage.kt）。
+    if (imageType == "Primary") {
+      val ref = item.primaryImageRef() ?: return null
+      return repository.imageUrl(server, ref.itemId, imageType, ref.tag, maxWidth)
+    }
     val id = item.Id ?: return null
     val tag = when (imageType) {
       "Backdrop" -> item.BackdropImageTags.firstOrNull()
       else -> item.ImageTags[imageType]
     }
     return repository.imageUrl(server, id, imageType, tag, maxWidth)
+  }
+
+  // ── 照片（图集）──
+  //
+  // 全部是薄封装（UI 不直接摸 EmbyClient），IO 线程执行。
+  // 相册 / 照片两个查询的参数语义见 EmbyClient.getPhotoAlbums / getPhotos。
+
+  /**
+   * 照片显示图 URL。原格式返回（HEIC 由 EmbyImageLoader 客户端解码）；
+   * [format] = "jpg" 时让服务端转码，作为老系统 / AVIF 的兜底地址。
+   */
+  fun photoImageUrl(
+    server: EmbyServer,
+    item: EmbyItem,
+    maxWidth: Int = 720,
+    format: String? = null,
+  ): String? {
+    // 相册条目的预览图在 PrimaryImageItemId 上，按自身 Id 取必 404（见 EmbyPrimaryImage）
+    val ref = item.primaryImageRef() ?: return null
+    return EmbyClient.photoImageUrl(server, ref.itemId, ref.tag, maxWidth, format = format)
+  }
+
+  /** 照片原文件下载地址（「保存原图」用，不带缩放参数） */
+  fun photoDownloadUrl(server: EmbyServer, item: EmbyItem): String? {
+    val id = item.Id ?: return null
+    return EmbyClient.photoDownloadUrl(server, id)
+  }
+
+  /** 相册（PhotoAlbum）列表；recursive=false，相册层级不拉平 */
+  suspend fun loadPhotoAlbums(
+    server: EmbyServer,
+    parentId: String,
+    sortBy: String? = "SortName",
+    sortOrder: String? = "Ascending",
+    startIndex: Int = 0,
+    limit: Int = 100,
+  ): EmbyItemsResult = withContext(Dispatchers.IO) {
+    EmbyClient.getPhotoAlbums(server, parentId, startIndex, limit, sortBy, sortOrder)
+  }
+
+  /** 照片（Photo）列表；sortBy = "Random" 即随机一批（随机播放入口用） */
+  suspend fun loadPhotos(
+    server: EmbyServer,
+    parentId: String,
+    sortBy: String? = "SortName",
+    sortOrder: String? = "Ascending",
+    startIndex: Int = 0,
+    limit: Int = 100,
+    recursive: Boolean = true,
+  ): EmbyItemsResult = withContext(Dispatchers.IO) {
+    EmbyClient.getPhotos(server, parentId, startIndex, limit, sortBy, sortOrder, recursive)
   }
 
   /**

@@ -87,6 +87,21 @@ object EmbyClient {
     "Tags,SortName,ProductionLocations,Path,Size"
 
   /**
+   * 拉照片（Photo）列表时索要的扩展字段。
+   *
+   * 只用 OpenAPI 文档列出的合法 Fields 名（Overview/Genres/Taglines/SortName/
+   * ProductionLocations/Path）—— 服务端对不认识的字段名有可能直接 400，
+   * 不放没把握的值进去。
+   *
+   * ⚠️ **宽高 / MIME / EXIF（CameraMake 等）不在这个串里，也不该加**：
+   * OpenAPI 的 Fields 可选值清单里根本没有它们 —— 这些字段由服务端在库扫描时
+   * 从图片 EXIF 写进条目实体，对 Photo 条目**自动返回**，与 Fields 无关。
+   * 见 [app.marlboroadvance.mpvex.domain.emby.EmbyModels] 里 EmbyItem 的照片字段段。
+   */
+  internal const val PHOTO_FIELDS =
+    "Overview,Genres,Taglines,SortName,ProductionLocations,Path"
+
+  /**
    * 取「整份条目原文」时索要的字段（演职员合并回写用）。
    *
    * 要点是**必须包含 `People`**：不带的话返回体里没有 People，
@@ -444,6 +459,64 @@ object EmbyClient {
     q["ImageTypeLimit"] = "1"
     return getJson(server, "/Users/${server.userId}/Items", q)
   }
+
+  /**
+   * 照片库：相册（PhotoAlbum）列表。
+   *
+   * ⚠️ **recursive=false**：相册是照片库下的一级容器，递归会把库/专辑里的照片
+   * 一股脑倒出来，相册层级就没了。默认按名字升序（与 Emby 网页端一致）。
+   *
+   * 失败行为与 [getItems] 一致（抛给调用方），由 UI 决定怎么提示。
+   */
+  fun getPhotoAlbums(
+    server: EmbyServer,
+    parentId: String,
+    startIndex: Int = 0,
+    limit: Int = 100,
+    sortBy: String? = "SortName",
+    sortOrder: String? = "Ascending",
+  ): EmbyItemsResult = getItems(
+    server,
+    parentId = parentId,
+    sortBy = sortBy,
+    sortOrder = sortOrder,
+    includeItemTypes = listOf("PhotoAlbum"),
+    startIndex = startIndex,
+    limit = limit,
+    recursive = false,
+    fields = PHOTO_FIELDS,
+  )
+
+  /**
+   * 照片库：照片（Photo）列表。
+   *
+   * - [parentId] 传相册 Id 时取该相册内的照片；传库 Id 时递归拉平整个库
+   *   （混合库「仅照片」态走这条：不管服务端把照片放在哪个专辑里，全部倒出来）。
+   * - 排序传 `SortBy=Random` 即「随机一批照片」，供随机播放入口使用。
+   * - 不传 `MediaTypes=Photo`：照片条目靠 `IncludeItemTypes=Photo` 已经圈死，
+   *   再加 MediaTypes 属于重复过滤，且个别服务端对该参数的值域校验更严，
+   *   多传一个反而可能整页拉空。
+   */
+  fun getPhotos(
+    server: EmbyServer,
+    parentId: String,
+    startIndex: Int = 0,
+    limit: Int = 100,
+    sortBy: String? = "SortName",
+    sortOrder: String? = "Ascending",
+    recursive: Boolean = true,
+  ): EmbyItemsResult = getItems(
+    server,
+    parentId = parentId,
+    sortBy = sortBy,
+    sortOrder = sortOrder,
+    includeItemTypes = listOf("Photo"),
+    isFolder = false,
+    startIndex = startIndex,
+    limit = limit,
+    recursive = recursive,
+    fields = PHOTO_FIELDS,
+  )
 
   /**
    * 取「按名字聚合」端点 /Genres、/Tags、/OfficialRatings、/Years 返回的名称列表。
@@ -2022,6 +2095,60 @@ object EmbyClient {
       "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
     }
     return "${server.hostUrl}/emby/Items/$itemId/Images/$imageType?$qs"
+  }
+
+  /**
+   * 构造**照片**图片 URL（照片浏览器 / 照片卡片用）。
+   *
+   * 与 [imageUrl] 同一端点（`GET /Items/{itemId}/Images/Primary`），差别只有一个
+   * 可选的 [format] 参数：传 `"jpg"` 时服务端把原图**转码成 JPEG** 再返回
+   * （OpenAPI 原文：`Determines the output foramt of the image - original,gif,jpg,png`）。
+   * 这是 HEIC 的兜底通道 —— 设备解不了 HEIC 时，让服务端转码而不是本地解。
+   *
+   * 为什么不直接改 [imageUrl] 加参数：照片链路整体是新增功能（相册/浏览器/混合库
+   * 照片分支），单独一个函数能让视频侧调用点**一行都不用动**，回归风险为零。
+   *
+   * @param format 输出格式；null = 服务端按原图格式返回（默认）。HEIC 兜底传 `"jpg"`。
+   */
+  fun photoImageUrl(
+    server: EmbyServer,
+    itemId: String,
+    tag: String? = null,
+    maxWidth: Int = 1280,
+    maxHeight: Int? = null,
+    format: String? = null,
+  ): String {
+    val q = LinkedHashMap<String, String>()
+    if (tag != null) q["tag"] = tag
+    q["maxWidth"] = maxWidth.toString()
+    maxHeight?.let { q["maxHeight"] = it.toString() }
+    format?.let { q["Format"] = it }
+    q["quality"] = "90"
+    if (server.apiToken.isNotEmpty()) q["api_key"] = server.apiToken
+    val qs = q.entries.joinToString("&") { (k, v) ->
+      "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
+    }
+    return "${server.hostUrl}/emby/Items/$itemId/Images/Primary?$qs"
+  }
+
+  /**
+   * 构造照片**原图下载** URL（`GET /Items/{itemId}/Download`）。
+   *
+   * 用于「保存到相册」：用户要的是相机拍出来的那个文件（含 EXIF 的 HEIC/JPEG），
+   * 而不是服务端缩放/转码后的显示图。走 Download 端点拿到的就是磁盘原文件。
+   *
+   * 注意这个端点**不带任何缩放参数**，保存大图前应提示文件可能较大。
+   */
+  fun photoDownloadUrl(
+    server: EmbyServer,
+    itemId: String,
+  ): String {
+    val q = LinkedHashMap<String, String>()
+    if (server.apiToken.isNotEmpty()) q["api_key"] = server.apiToken
+    val qs = q.entries.joinToString("&") { (k, v) ->
+      "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
+    }
+    return "${server.hostUrl}/emby/Items/$itemId/Download?$qs"
   }
 
   /**

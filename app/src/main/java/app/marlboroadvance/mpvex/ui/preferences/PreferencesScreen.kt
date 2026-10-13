@@ -1,5 +1,8 @@
 package app.marlboroadvance.mpvex.ui.preferences
 
+import android.content.Intent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -69,12 +72,14 @@ import app.marlboroadvance.mpvex.preferences.AppLockMethod
 import app.marlboroadvance.mpvex.preferences.AppLockPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.DanmakuPreferences
+import app.marlboroadvance.mpvex.preferences.PhotoSlideshowInterval
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.PersonMergeScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarAlgorithm
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
+import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoSaver
 import app.marlboroadvance.mpvex.ui.lock.AppLockManageDialog
 import app.marlboroadvance.mpvex.ui.lock.PatternChangeDialog
 import app.marlboroadvance.mpvex.ui.lock.PatternSetupDialog
@@ -84,6 +89,7 @@ import app.marlboroadvance.mpvex.ui.lock.PinSetupDialog
 import app.marlboroadvance.mpvex.ui.lock.PinVerifyDialog
 import app.marlboroadvance.mpvex.ui.lock.UnlockMethodDialog
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.utils.media.OpenDocumentTreeContract
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import me.zhanghai.compose.preference.ListPreference
@@ -673,6 +679,112 @@ object PreferencesScreen : Screen {
                   )
                 },
               )
+
+              PreferenceDivider()
+
+              // ── 照片幻灯片间隔 ────────────────────────────────────────
+              //
+              // 照片浏览器（图集）里「幻灯片播放」的翻页间隔。三档固定值，
+              // 不用滑块：常用就 3 / 5 / 10 秒，拖出来的中间值没有意义。
+              val slideshowInterval by browserPreferences.photoSlideshowInterval.collectAsState()
+              ListPreference(
+                value = slideshowInterval,
+                onValueChange = { browserPreferences.photoSlideshowInterval.set(it) },
+                values = PhotoSlideshowInterval.entries,
+                valueToText = { AnnotatedString("${it.seconds} 秒") },
+                title = { Text(text = "照片幻灯片间隔") },
+                summary = {
+                  Text(
+                    text = "照片浏览器幻灯片播放时，每 ${slideshowInterval.seconds} 秒自动翻到下一张",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              // 进照片浏览器是否**直接开始**幻灯片。关 = 停在第一张自己滑 / 自己点播放键；
+              // 开 = 进去就按上面的间隔自动翻（适合当相框用）。默认关 ——
+              // 大多数人进浏览器是想先看这一张，自动翻会抢走控制权。
+              // 全局一份、不按库分：这是看照片的习惯，不是媒体库的属性。
+              val photoAutoSlideshow by browserPreferences.photoAutoSlideshow.collectAsState()
+              SwitchPreference(
+                value = photoAutoSlideshow,
+                onValueChange = { browserPreferences.photoAutoSlideshow.set(it) },
+                title = { Text(text = "进入照片浏览器自动播放幻灯片") },
+                summary = {
+                  Text(
+                    text = if (photoAutoSlideshow) {
+                      "打开照片即按间隔自动翻页，播放中可随时暂停"
+                    } else {
+                      "打开照片停在第一张，是否播放由你点播放键决定"
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              // ── 照片保存位置 ──────────────────────────────────────────
+              //
+              // 照片浏览器里「长按保存 / 另存为 JPEG」落到哪里。默认进系统相册的
+              // `Pictures/CineIsle`；想放自己的目录就点进来选一次。
+              //
+              // ⭐ 弹的是**系统自带的文件夹选择器**（SAF `ACTION_OPEN_DOCUMENT_TREE`），
+              //    不需要用户手输路径，也不用引第三方库（见 EmbyPhotoSaver.writeToTree）。
+              // ⚠️ 选完必须 `takePersistableUriPermission` —— 拿的是**持久**读/写授权，
+              //    不调的话重启后这个 URI 就失效，等于白选。
+              val context = LocalContext.current
+              val saveDirUri by browserPreferences.photoSaveDirUri.collectAsState()
+              val pickSaveDir =
+                rememberLauncherForActivityResult(OpenDocumentTreeContract()) { uri ->
+                  if (uri == null) return@rememberLauncherForActivityResult
+                  val flags =
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                  // 取持久授权失败（个别第三方 provider 不支持）也不拦着用 ——
+                  // 本次会话仍可写，只是重启后失效，用户重选一次即可。
+                  runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }
+                  browserPreferences.photoSaveDirUri.set(uri.toString())
+                  Toast.makeText(context, "已设为照片保存位置", Toast.LENGTH_SHORT).show()
+                }
+              Preference(
+                title = { Text(text = "照片保存位置") },
+                summary = {
+                  Text(
+                    text = EmbyPhotoSaver.displayLabel(saveDirUri)
+                      ?: "系统相册（Pictures/CineIsle）· 点击更改",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.Folder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = { pickSaveDir.launch(null) },
+              )
+
+              // 只有选过自定义目录才给「恢复默认」—— 默认状态下这一项没有意义，
+              // 常驻只会让人以为「默认」是个需要主动设置的东西。
+              if (saveDirUri.isNotBlank()) {
+                PreferenceDivider()
+                Preference(
+                  title = { Text(text = "恢复默认保存位置") },
+                  summary = {
+                    Text(
+                      text = "改回系统相册的 Pictures/CineIsle",
+                      color = MaterialTheme.colorScheme.outline,
+                    )
+                  },
+                  onClick = {
+                    browserPreferences.photoSaveDirUri.set("")
+                    Toast.makeText(context, "已恢复默认", Toast.LENGTH_SHORT).show()
+                  },
+                )
+              }
             }
           }
 

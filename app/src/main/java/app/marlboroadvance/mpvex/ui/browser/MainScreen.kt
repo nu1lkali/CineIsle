@@ -272,13 +272,26 @@ private fun EmbyHomeRoute() {
   val backStack = app.marlboroadvance.mpvex.ui.utils.LocalBackStack.current
   app.marlboroadvance.mpvex.ui.browser.emby.EmbyHomeScreen(
     onOpenLibrary = { library ->
-      backStack.add(
-        app.marlboroadvance.mpvex.ui.browser.emby.EmbyLibraryScreen(
-          libraryId = library.Id ?: return@EmbyHomeScreen,
-          title = library.Name ?: "",
-          collectionType = library.CollectionType,
-        ),
-      )
+      val libraryId = library.Id ?: return@EmbyHomeScreen
+      // 纯照片库（collectionType = photos）直接进照片网格页（相册宫格），
+      // 不进视频媒体库页 —— 那边的查询口径 / 工具行 / 卡片全是视频语义。
+      // 混合库仍进媒体库页，用「仅媒体 / 全部 / 仅照片」三态开关自己选。
+      if (library.CollectionType?.equals("photos", ignoreCase = true) == true) {
+        backStack.add(
+          app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoGridScreen(
+            libraryId = libraryId,
+            title = library.Name ?: "",
+          ),
+        )
+      } else {
+        backStack.add(
+          app.marlboroadvance.mpvex.ui.browser.emby.EmbyLibraryScreen(
+            libraryId = libraryId,
+            title = library.Name ?: "",
+            collectionType = library.CollectionType,
+          ),
+        )
+      }
     },
     onOpenDetail = { item ->
       val id = item.Id ?: return@EmbyHomeScreen

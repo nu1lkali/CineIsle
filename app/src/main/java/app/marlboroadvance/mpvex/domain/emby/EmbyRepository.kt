@@ -349,6 +349,67 @@ class EmbyRepository(
     )
   }
 
+  // ─── 照片（图集） ───
+
+  /**
+   * 相册列表：照片库根级（或任意文件夹下）的 PhotoAlbum。
+   *
+   * Emby 的照片库结构是「库 → 相册（文件夹）→ 照片」两层，所以进照片库先拉相册。
+   * `Recursive=false`：相册就一层，不需要往下递归（再往下是照片，由 [getPhotos] 拉）。
+   */
+  suspend fun getPhotoAlbums(
+    server: EmbyServer,
+    parentId: String,
+    startIndex: Int = 0,
+    limit: Int = 100,
+    sortBy: String? = null,
+    sortOrder: String? = null,
+  ): EmbyItemsResult = getItems(
+    server = server,
+    parentId = parentId,
+    sortBy = sortBy,
+    sortOrder = sortOrder,
+    includeItemTypes = listOf("PhotoAlbum"),
+    startIndex = startIndex,
+    limit = limit,
+    recursive = false,
+    isFolder = false,
+    fields = EmbyClient.PHOTO_FIELDS,
+  )
+
+  /**
+   * 照片列表：相册内的 Photo（[parentId] 传相册 Id），或整个照片库递归平铺的
+   * 全部照片（[parentId] 传库 Id + [recursive] = true，跳过相册层级）。
+   *
+   * `MediaTypes=Photo` 与 `IncludeItemTypes=Photo` 双写：前者按媒体形态、
+   * 后者按条目类型，是 Emby 官方「只要照片」的口径，混进来的视频/音频
+   * 两个关口都过不掉。
+   *
+   * ⚠️ 宽高 / EXIF **不靠 fields 索取**（见 [EmbyClient.PHOTO_FIELDS] 的说明），
+   * 服务端对 Photo 条目自动返回，这里传默认的相册 fields 串即可。
+   */
+  suspend fun getPhotos(
+    server: EmbyServer,
+    parentId: String,
+    recursive: Boolean = true,
+    startIndex: Int = 0,
+    limit: Int = 100,
+    sortBy: String? = null,
+    sortOrder: String? = null,
+  ): EmbyItemsResult = getItems(
+    server = server,
+    parentId = parentId,
+    sortBy = sortBy,
+    sortOrder = sortOrder,
+    includeItemTypes = listOf("Photo"),
+    mediaTypes = listOf("Photo"),
+    startIndex = startIndex,
+    limit = limit,
+    recursive = recursive,
+    isFolder = false,
+    fields = EmbyClient.PHOTO_FIELDS,
+  )
+
   /**
    * 全量扫描：把 [query] 命中的**整个**结果集逐页拉完。
    *

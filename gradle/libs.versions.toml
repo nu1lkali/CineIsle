@@ -40,6 +40,11 @@ truth = "1.4.5"
 dfm = "0.9.25"
 # Lottie（airbnb）：加载动画用。6.x 需要 compileSdk 34+ / minSdk 21+，本项目 37 / 26 都满足。
 lottie = "6.7.1"
+# Telephoto（saket）：Compose 图片缩放/平移手势（照片浏览器用）。
+# 只取核心 `zoomable` 模块（`Modifier.zoomable`）—— 项目的图片加载走自研
+# EmbyImageLoader（OkHttp + BitmapFactory），**不是** Coil/Glide，
+# 所以 zoomable-image/coil、zoomable-image/glide 那几个集成模块一概不需要。
+telephoto = "0.19.0"
 
 [libraries]
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
@@ -139,6 +144,10 @@ dfm = { module = "com.github.ctiao:dfm", version.ref = "dfm" }
 # ── Lottie 加载动画 ──
 lottie = { module = "com.airbnb.android:lottie", version.ref = "lottie" }
 lottie-compose = { module = "com.airbnb.android:lottie-compose", version.ref = "lottie" }
+
+# ── Telephoto：照片浏览器的缩放/平移手势 ──
+# Android artifact 带 `-android` 后缀（telephoto 是 KMP 项目，-android 是它的 Android 发布变体）。
+telephoto-zoomable = { module = "me.saket.telephoto:zoomable-android", version.ref = "telephoto" }
 
 [bundles]
 koin = ["koin-core", "koin-android", "koin-compose", "koin-viewmodel"]

@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
@@ -118,6 +119,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
+import app.marlboroadvance.mpvex.domain.emby.hasBorrowedPrimaryImage
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -137,6 +139,10 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonList
 import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
 import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
+import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoBrowserScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoCard
+import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoGridScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.photo.photoSubtitle
 import app.marlboroadvance.mpvex.ui.player.feed.FeedItem
 import app.marlboroadvance.mpvex.ui.player.feed.VerticalFeedActivity
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
@@ -262,6 +268,27 @@ data class EmbyLibraryScreen(
       } ?: EmbyCategory.ALL
     }
     var category by remember(libraryId) { mutableStateOf(savedCategory) }
+
+    // ── 混合库「照片模式」三态开关（仅媒体 / 全部 / 仅照片）──
+    // 只有混合库 / 家庭视频库 / 未知类型库才有意义：纯视频库切过去只会把列表剔空，
+    // 纯照片库本身就走照片网格页，这两类库都不会看到这一排。
+    // 下钻层级（季 / 集）与演员作品子页同样不显示 —— 那里已经是明确的一批内容。
+    val photoModeToggleVisible = includeItemTypes == null && personId == null &&
+      collectionType?.lowercase() in setOf(null, "mixed", "homevideos")
+    // 默认空串 = 仅媒体：与加这个开关之前的行为完全一致，老用户升级后零感知。
+    // 按库各自记住（键带 libraryId），从文件夹下钻返回时停在上次那一档。
+    var photoMode by remember(libraryId) {
+      mutableStateOf(browserPreferences.embyLibraryPhotoMode(libraryId).get())
+    }
+    // 「仅照片」档把整页换成照片视图（工具行 / 查询口径 / 卡片一起换）。
+    // 只在「全部」分类生效：切到收藏 / 文件夹等分类时那些分类有自己的语义
+    // （收藏的视频、文件夹列表），不该被照片口径改写，开关也随之隐藏。
+    val photoOnlyMode = photoMode == PHOTO_MODE_PHOTO &&
+      photoModeToggleVisible && category == EmbyCategory.ALL
+    // 三态里非「仅媒体」的两档才改写查询口径；两个 if 都不进时，
+    // 下面的 effective* 与加这个开关之前逐字节一致。
+    val photoModeActive = photoModeToggleVisible && category == EmbyCategory.ALL &&
+      photoMode != PHOTO_MODE_MEDIA
     // 「演员」分类 = 展示本库演员（头像网格 + 作品数角标）。
     // 进到某位演员的作品子页时 personId 非空，那时列表是媒体，不算演员模式
     val isActorListMode = category == EmbyCategory.ACTOR && personId == null
@@ -379,7 +406,11 @@ data class EmbyLibraryScreen(
       "cmarks=${chineseMarks.signature()}|" +
       "m=$minRating|fav=$favoriteOnly|" +
       // 搜索筛选也算条件：换类型的结果是另一批，不能复用同一桶缓存
-      "st=${searchFilters.map { it.name }.sorted().joinToString(",")}"
+      "st=${searchFilters.map { it.name }.sorted().joinToString(",")}|" +
+      // 照片模式三态（仅媒体 / 全部 / 仅照片）也算查询条件：切一档就是另一批内容，
+      // 必须各占一个缓存桶 —— 否则从「仅照片」切回「仅媒体」，看到的是照片列表的旧数据。
+      // 切档时 cacheKey 一变，列表自动按新口径重拉、滚动归位，无需手动 reload。
+      "pm=$photoMode"
     val cachedEntry = remember(cacheKey) { EmbyLibraryCache.get(cacheKey) }
 
     // 搜索路径不从这里起值：搜索的「退出再进」由上面的快照（词+结果+滚动位置）回放，
@@ -468,10 +499,17 @@ data class EmbyLibraryScreen(
     }
 
     // 季/集层级由 includeItemTypes 固定，优先于分类筛选
-    val effectiveTypes: List<String>? = includeItemTypes
-      ?: category.itemTypes
+    // 「仅照片」档：只要照片本体（相册是容器，被 IsFolder=false 挡掉）
+    // 「全部」档：不限条目类型 —— 视频照片都要，容器靠 IsFolder=false + 本地兜底剔
+    val effectiveTypes: List<String>? = when {
+      includeItemTypes != null -> includeItemTypes
+      photoModeActive && photoMode == PHOTO_MODE_PHOTO -> listOf("Photo")
+      photoModeActive -> null
+      category.itemTypes != null -> category.itemTypes
       // 「全部」按库类型限定条目类型；否则 Emby 会把季、集和文件夹一起返回，列表是混的
-      ?: if (category == EmbyCategory.ALL) allItemTypesFor(collectionType) else null
+      category == EmbyCategory.ALL -> allItemTypesFor(collectionType)
+      else -> null
+    }
     val effectiveFilters: List<String>? = if (includeItemTypes == null) category.filters else null
     val recursive: Boolean = category != EmbyCategory.FOLDER
     // Emby 的 Recursive 查询默认会把文件夹一并返回。
@@ -481,21 +519,36 @@ data class EmbyLibraryScreen(
     // 若也排除会把它剔空，所以只对非合集库生效。
     val excludeBoxSet = category == EmbyCategory.ALL &&
       collectionType?.lowercase() != "boxsets"
-    val effectiveExclude: List<String>? =
-      if (includeItemTypes == null && category != EmbyCategory.FOLDER) {
-        if (excludeBoxSet) FOLDER_TYPES + "BoxSet" else FOLDER_TYPES
-      } else null
+    // 照片两档的排除清单：容器 / 合集之外，相册、单曲、电子书也不是目标内容。
+    // 「全部」档服务端没传 MediaTypes，这几类会漏回来，本地过滤也有对应兜底。
+    val photoModeExclude =
+      FOLDER_TYPES + "BoxSet" + "PhotoAlbum" + "MusicTrack" + "AudioBook" + "Book"
+    val effectiveExclude: List<String>? = when {
+      includeItemTypes != null -> null
+      category == EmbyCategory.FOLDER -> null
+      photoModeActive -> photoModeExclude
+      excludeBoxSet -> FOLDER_TYPES + "BoxSet"
+      else -> FOLDER_TYPES
+    }
     // 只靠 ExcludeItemTypes 剔不干净：它按**类型名**筛，漏掉的类型（Season、MusicAlbum、
     // 以及库里混进的音频 / 图片 / 电子书）照样回来。这两个参数是官方的另外两道闸：
     // MediaTypes 按媒体形态筛（Video），IsFolder=false 把「本身不能播」的容器整体挡掉。
     // 「文件夹」「合集」分类要的就是容器，所以那两种分类不传。
-    val effectiveMediaTypes: List<String>? =
-      if (category == EmbyCategory.FOLDER || category == EmbyCategory.BOXSET) {
-        null
-      } else {
-        mediaTypesFor(collectionType, includeItemTypes)
-      }
-    val effectiveIsFolder: Boolean? = if (effectiveMediaTypes == null) null else false
+    val effectiveMediaTypes: List<String>? = when {
+      // 仅照片：按照片形态取
+      photoModeActive && photoMode == PHOTO_MODE_PHOTO -> listOf("Photo")
+      // 「全部」：视频照片两种形态都要，不能传 MediaTypes（传了就成了二选一）
+      photoModeActive -> null
+      category == EmbyCategory.FOLDER || category == EmbyCategory.BOXSET -> null
+      else -> mediaTypesFor(collectionType, includeItemTypes)
+    }
+    // 照片两档都显式要 IsFolder=false：「仅照片」挡掉相册；
+    // 「全部」挡掉季 / 相册 / 文件夹（Recursive 会把它们一并返回）。
+    val effectiveIsFolder: Boolean? = when {
+      photoModeActive -> false
+      effectiveMediaTypes == null -> null
+      else -> false
+    }
 
     fun cacheItems() {
       EmbyLibraryCache.putItems(
@@ -985,6 +1038,15 @@ data class EmbyLibraryScreen(
           if (mediaType != null && want != null && want.none { it.equals(mediaType, ignoreCase = true) }) {
             return@filter false
           }
+          // 「全部」照片档：服务端没传 MediaTypes（视频照片两种形态都要），
+          // 音频 / 电子书这类非目标形态会漏回来（effectiveExclude 已按类型名排掉大部分，
+          // 兼容层未必认），这里按媒体形态补最后一道。
+          if (photoModeActive && photoMode == PHOTO_MODE_ALL) {
+            val isPhoto = type.equals("Photo", ignoreCase = true)
+            val isVideoLike = mediaType?.equals("Video", ignoreCase = true) == true ||
+              PLAYABLE_TYPES.any { it.equals(type, ignoreCase = true) }
+            if (!isPhoto && !isVideoLike) return@filter false
+          }
           // 未知库（CollectionType 为空）拿不到类型白名单，此时只能靠 MediaType ——
           // 但 Genre / Tag / Studio 这类「非媒体实体」MediaType 也是空，上面漏得干干净净。
           // 实测这类库会返回一堆名为 `"frames":2670` 的 Genre 条目（NFO 里塞了 JSON），
@@ -1176,6 +1238,42 @@ data class EmbyLibraryScreen(
     }
 
     /**
+     * 「随机播放图片」：混合库「仅照片」档的随机入口。
+     *
+     * 与视频随机播放同构：递归取整个库的照片（相册层级拉平）、数量用同一个
+     * 「随机播放数量」设置、没取到就明确提示 —— 绝不静默无反应。
+     * 落点直接是全屏照片浏览器（不进视频播放器）。
+     */
+    fun startRandomPhotoPlayback() {
+      scope.launch {
+        val current = viewModel.currentServerOrAwait() ?: return@launch
+        val random = viewModel.loadPhotos(
+          server = current,
+          parentId = libraryId,
+          sortBy = "Random",
+          sortOrder = "Ascending",
+          startIndex = 0,
+          limit = browserPreferences.randomPlayCount.randomPlayLimit(),
+          recursive = true,
+        ).Items
+        if (random.isEmpty()) {
+          android.widget.Toast
+            .makeText(context, "当前范围内没有照片", android.widget.Toast.LENGTH_SHORT)
+            .show()
+          return@launch
+        }
+        backStack.add(
+          EmbyPhotoBrowserScreen(
+            initialPhotos = random,
+            initialIndex = 0,
+            parentId = libraryId,
+            title = title,
+          ),
+        )
+      }
+    }
+
+    /**
      * 「视界流」入口：从当前库随机抽一批，进仿抖音竖屏上下滑连播的页面。
      *
      * 随机取片和上面两个随机按钮走同一条路径（数量设置、容器类分类的兜底都共用），
@@ -1328,6 +1426,35 @@ data class EmbyLibraryScreen(
         )
       }
 
+      // ── 混合库「照片模式」三态开关（仅媒体 / 全部 / 仅照片）──
+      // 与分类行同一条视觉线：它选的就是「这一库要铺哪些内容」。
+      // 只对混合库 / 家庭视频库 / 未知类型库的「全部」分类出现；搜索时同样藏起来
+      // （搜索结果与这个开关无关）。纯视频库 / 纯照片库看不到这一排。
+      if (photoModeToggleVisible && category == EmbyCategory.ALL && !searchActive) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          PHOTO_MODE_LABELS.forEach { (mode, label) ->
+            FilterChip(
+              selected = photoMode == mode,
+              onClick = {
+                if (photoMode != mode) {
+                  photoMode = mode
+                  // 落盘 + 换缓存桶：cacheKey 一变，列表按新口径重拉、滚动归位、
+                  // 各档各占一桶缓存 —— 全交给既有的 cacheKey 机制，这里不手动 reload
+                  browserPreferences.embyLibraryPhotoMode(libraryId).set(mode)
+                }
+              },
+              label = { Text(label) },
+            )
+          }
+        }
+      }
+
       // ── 3. 工具行：数量 + 随机播放 + 视图 + 排序 ──
       // 演员列表与「某演员作品」子页都不可随机播放，也没有样式 / 排序 / 再筛选可言，
       // 这些按钮留着只会让人点了没反应 —— 收掉，只保留左边的数量
@@ -1370,35 +1497,46 @@ data class EmbyLibraryScreen(
         )
 
         if (!hideToolbarButtons) {
-          IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = false) }) {
-            Icon(Icons.Default.Shuffle, contentDescription = "随机播放")
+          if (photoOnlyMode) {
+            // 「仅照片」档：随机播放 / 收藏随机 / 视界流 / 筛选都是视频语义，
+            // 留着只会把人带进视频播放器 —— 收掉，只留一个「随机播放图片」
+            IconButton(onClick = { releaseInputFocus(); startRandomPhotoPlayback() }) {
+              Icon(Icons.Default.Image, contentDescription = "随机播放图片")
+            }
+          } else {
+            IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = false) }) {
+              Icon(Icons.Default.Shuffle, contentDescription = "随机播放")
+            }
+            // 同上，只是范围再限定「已收藏」：避免随机到没看过的
+            IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = true) }) {
+              // 区别于上面的「随机播放」：用它自己的 Emby 收藏随机图标，
+              // 原先用的 ShuffleOn 只比 Shuffle 多一条下划线，并排根本分不出来
+              Icon(EmbyFavoriteRandomIcon, contentDescription = "随机播放收藏")
+            }
+            // 视界流：随机一批进仿抖音竖屏上下滑连播页。
+            // 图标刻意不用「随机」语义 —— 前两个按钮已经把那层意思占满了，
+            // 第三个得靠形状本身说话，否则一排三个图标看着像三个一样的按钮。
+            IconButton(onClick = { releaseInputFocus(); startFeedPlayback(favoritesOnly = false) }) {
+              Icon(VideoFeedIcon, contentDescription = "视界流")
+            }
+            // 筛选：有生效条件时图标高亮，让人一眼看出列表不是全量
+            IconButton(onClick = { releaseInputFocus(); showFilterDialog = true }) {
+              Icon(
+                imageVector = Icons.Default.FilterAlt,
+                contentDescription = "筛选",
+                tint = if (hasActiveFilter) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.onSurface
+                },
+              )
+            }
           }
-          // 同上，只是范围再限定「已收藏」：避免随机到没看过的
-          IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = true) }) {
-            // 区别于上面的「随机播放」：用它自己的 Emby 收藏随机图标，
-            // 原先用的 ShuffleOn 只比 Shuffle 多一条下划线，并排根本分不出来
-            Icon(EmbyFavoriteRandomIcon, contentDescription = "随机播放收藏")
-          }
-          // 视界流：随机一批进仿抖音竖屏上下滑连播页。
-          // 图标刻意不用「随机」语义 —— 前两个按钮已经把那层意思占满了，
-          // 第三个得靠形状本身说话，否则一排三个图标看着像三个一样的按钮。
-          IconButton(onClick = { releaseInputFocus(); startFeedPlayback(favoritesOnly = false) }) {
-            Icon(VideoFeedIcon, contentDescription = "视界流")
-          }
-          // 筛选：有生效条件时图标高亮，让人一眼看出列表不是全量
-          IconButton(onClick = { releaseInputFocus(); showFilterDialog = true }) {
-            Icon(
-              imageVector = Icons.Default.FilterAlt,
-              contentDescription = "筛选",
-              tint = if (hasActiveFilter) {
-                MaterialTheme.colorScheme.primary
-              } else {
-                MaterialTheme.colorScheme.onSurface
-              },
-            )
-          }
-          IconButton(onClick = { releaseInputFocus(); showStyleDialog = true }) {
-            Icon(Icons.Default.GridView, contentDescription = "视图样式")
+          // 视图样式：照片没有海报 / 横版 / 紧凑之分（卡片是瀑布流高度），照片档收掉
+          if (!photoOnlyMode) {
+            IconButton(onClick = { releaseInputFocus(); showStyleDialog = true }) {
+              Icon(Icons.Default.GridView, contentDescription = "视图样式")
+            }
           }
           SortMenu(
             currentSort = sortBy,
@@ -1564,7 +1702,10 @@ data class EmbyLibraryScreen(
       // —— 见 `EmbyLibraryMediaCell` 里的 `folderCoverBatchReady` 守卫。
       val mosaicFolderIds = remember(displayItems, folderRandomCover) {
         displayItems.asSequence()
-          .filter { isFolderLike(it) && it.ImageTags["Primary"] == null }
+          // 有「借用预览图」（相册）的不进批量 —— 它不需要拼宫格（见 needsMosaic）
+          .filter {
+            isFolderLike(it) && it.ImageTags["Primary"] == null && !it.hasBorrowedPrimaryImage()
+          }
           .mapNotNull { it.Id }
           .distinct()
           .toList()
@@ -1765,7 +1906,13 @@ data class EmbyLibraryScreen(
           )
 
           items.isEmpty() && !isLoading -> EmbyEmptyState(
-            message = if (chineseSubsOnly) "没有匹配「中文字幕」标记的媒体" else "没有找到媒体",
+            message = when {
+              // 「仅照片」档的空库就是「没有照片」，别说成「没有找到媒体」——
+              // 那一档的列表本来就只该有照片
+              photoOnlyMode -> "此库没有照片"
+              chineseSubsOnly -> "没有匹配「中文字幕」标记的媒体"
+              else -> "没有找到媒体"
+            },
             buttonText = "刷新",
             onAction = { scope.launch { load(reset = true) } },
             modifier = Modifier.align(Alignment.Center),
@@ -1785,13 +1932,30 @@ data class EmbyLibraryScreen(
               ) {
                 items(displayItems, key = { it.Id ?: it.Name ?: "" }) { item ->
                   val s = server ?: return@items
+                  // 照片行：缩略图走照片端点，副标题换成相机 / 尺寸（年份对照片没意义）
+                  val isPhotoRow = item.Type == "Photo"
                   EmbyCompactRow(
                     title = viewModel.displayTitle(item),
-                    subtitle = itemSubtitle(item),
-                    imageUrl = viewModel.imageUrl(s, item, "Primary", 240),
+                    subtitle = if (isPhotoRow) photoSubtitle(item) else itemSubtitle(item),
+                    imageUrl = if (isPhotoRow) {
+                      viewModel.photoImageUrl(s, item, 240)
+                    } else {
+                      viewModel.imageUrl(s, item, "Primary", 240)
+                    },
                     progress = itemProgress(item),
                     isFavorite = item.UserData?.IsFavorite == true,
-                    onClick = { openItem(item, backStack, s, context) },
+                    onClick = {
+                      val photos = displayItems.filter { it.Type == "Photo" }
+                      openItem(
+                        item,
+                        backStack,
+                        s,
+                        context,
+                        photoQueue = photos,
+                        photoIndex = photos.indexOfFirst { it.Id == item.Id }.coerceAtLeast(0),
+                        photoParentId = libraryId,
+                      )
+                    },
                     onLongClick = { offset ->
                       actionTarget = item
                       menuAnchor = offset
@@ -1849,7 +2013,19 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
           folderRandomCover = folderRandomCover,
           folderCoverBatchReady = folderCoverBatchReady,
           folderCoverGen = folderCoverGen,
-   onClick = { openItem(item, backStack, s, context) },
+   onClick = {
+            // 混合库照片档：队列取当前列表里的照片快照（点击时才算，不随重组白算）
+            val photos = displayItems.filter { it.Type == "Photo" }
+            openItem(
+              item,
+              backStack,
+              s,
+              context,
+              photoQueue = photos,
+              photoIndex = photos.indexOfFirst { it.Id == item.Id }.coerceAtLeast(0),
+              photoParentId = libraryId,
+            )
+          },
     onLongClick = { offset ->
   actionTarget = item
                menuAnchor = offset
@@ -1871,7 +2047,19 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                       folderRandomCover = folderRandomCover,
                       folderCoverBatchReady = folderCoverBatchReady,
                       folderCoverGen = folderCoverGen,
-                      onClick = { openItem(item, backStack, s, context) },
+                      onClick = {
+                        // 混合库照片档：队列取当前列表里的照片快照（点击时才算，不随重组白算）
+                        val photos = displayItems.filter { it.Type == "Photo" }
+                        openItem(
+                          item,
+                          backStack,
+                          s,
+                          context,
+                          photoQueue = photos,
+                          photoIndex = photos.indexOfFirst { it.Id == item.Id }.coerceAtLeast(0),
+                          photoParentId = libraryId,
+                        )
+                      },
                       onLongClick = { offset ->
                         actionTarget = item
                         menuAnchor = offset
@@ -2407,9 +2595,26 @@ private fun EmbyLibraryMediaCell(
   onToggleFavorite: (() -> Unit)?,
   titleMaxLines: Int = 1,
 ) {
+  // 混合库照片档：照片与视频是两套卡片（无进度 / 无收藏角标 / 瀑布流高度 /
+  // 副标题是相机型号而不是年份），在这里就分道 —— 把照片塞进视频卡里，
+  // 版式和信息都是错的。照片模式下服务端只会回 Photo，所以这条分支对纯视频列表零影响。
+  if (item.Type == "Photo") {
+    EmbyPhotoCard(
+      item = item,
+      displayUrl = viewModel.photoImageUrl(server, item),
+      // 原格式（可能是 HEIC/AVIF）解不动时，退回服务端 format=jpg 转码
+      fallbackUrl = viewModel.photoImageUrl(server, item, format = "jpg"),
+      onClick = onClick,
+      modifier = Modifier.fillMaxWidth(),
+    )
+    return
+  }
   val itemId = item.Id
-  // 文件夹 / 合集这类容器条目自身没有封面图，改用内部视频的缩略图拼宫格
-  val needsMosaic = isFolderLike(item) && item.ImageTags["Primary"] == null
+  // 文件夹 / 合集这类容器条目自身没有封面图，改用内部视频的缩略图拼宫格。
+  // ⚠️ 但相册这类条目服务端**已经给了一张现成的预览图**（归属写在 PrimaryImageItemId 上，
+  //    Web 端显示的就是它）—— 这种情况不拼宫格，直接用那张图，省掉成倍的请求。
+  val needsMosaic = isFolderLike(item) && item.ImageTags["Primary"] == null &&
+    !item.hasBorrowedPrimaryImage()
   val folderCover: List<String>? = if (needsMosaic && itemId != null) {
     // 缓存键带上「随机 / 固定」：来回切开关时两种结果各存一份，不会互相串图。
     val coverKey = folderCoverKey(itemId, folderRandomCover)
@@ -2846,13 +3051,42 @@ private enum class EmbyCategory(
   RESUMABLE("继续播放", null, listOf("IsResumable")),
   BOXSET("合集", listOf("BoxSet"), null),
   FAVORITE("收藏", null, listOf("IsFavorite")),
-  FOLDER("文件夹", listOf("Folder", "CollectionFolder", "UserView"), null),
+  /**
+   * 文件夹。
+   *
+   * ⚠️ 必须带上 `PhotoAlbum`：Emby 把**相册**也当成一种容器条目（`Type=PhotoAlbum`），
+   * 而它不在 `Folder/CollectionFolder/UserView` 里。线上实测库 1133915（家庭视频）：
+   * 顶层 87 个「文件夹」= 84 个 PhotoAlbum + 3 个普通 Folder ——
+   * 不带 PhotoAlbum 时这一档只显示 3 项，与 Web 端（87）严重不符。
+   * 加进白名单后服务端返回 87，与 Web 一致（`IncludeItemTypes` 传的就是这四个）。
+   */
+  FOLDER("文件夹", listOf("Folder", "CollectionFolder", "UserView", "PhotoAlbum"), null),
   /**
    * 演员：不是媒体条目，是**本库出现过的演员**。
    * 走 /Persons 端点单独拉（见 loadActors），不进媒体那套分页 / 筛选 / 扫描。
    */
   ACTOR("演员", null, null),
 }
+
+/**
+ * 混合库「照片模式」三态的取值（存进偏好的字符串）。
+ *
+ * - [PHOTO_MODE_MEDIA] 仅媒体：默认，与加这个开关之前逐字节一致
+ * - [PHOTO_MODE_ALL] 全部：视频 + 照片一起铺
+ * - [PHOTO_MODE_PHOTO] 仅照片：只铺照片，整页换成照片视图
+ *
+ * ⚠️ 这三个字符串是**持久化键值**，不随界面文案改（文案见 [PHOTO_MODE_LABELS]）。
+ */
+private val PHOTO_MODE_MEDIA = ""
+private val PHOTO_MODE_ALL = "all"
+private val PHOTO_MODE_PHOTO = "photo"
+
+/** 三态开关的界面文案（顺序即显示顺序：仅媒体 / 全部 / 仅照片） */
+private val PHOTO_MODE_LABELS = listOf(
+  PHOTO_MODE_MEDIA to "仅媒体",
+  PHOTO_MODE_ALL to "全部",
+  PHOTO_MODE_PHOTO to "仅照片",
+)
 
 @Composable
 private fun CategoryChips(
@@ -2940,6 +3174,12 @@ private fun openItem(
   backStack: androidx.navigation3.runtime.NavBackStack<Screen>,
   server: EmbyServer,
   context: android.content.Context,
+  /** 混合库照片档：当前列表里的照片队列快照（点开哪张就从哪张播起） */
+  photoQueue: List<EmbyItem> = emptyList(),
+  /** 该照片在 [photoQueue] 里的下标 */
+  photoIndex: Int = 0,
+  /** 照片队列的父级 Id（库 Id）：浏览器翻到底时按它继续拉下一页 */
+  photoParentId: String = "",
 ) {
   val id = item.Id
   if (id.isNullOrBlank() || id.contains("://")) {
@@ -2965,6 +3205,19 @@ private fun openItem(
         ),
       )
 
+      // 相册：Emby 的「文件夹」分类里也会有它（照片库 / 家庭视频库），但装的是
+      // 照片不是视频 —— 必须进专用照片网格（瀑布流 + 排序 + 随机播放）。
+      // ⚠️ 不能走下面的 Folder 分支：那边进的是视频库页，默认「仅媒体」口径
+      //    （MediaTypes=Video + IsFolder=false）会把照片条目全滤掉，点开是空页。
+      "PhotoAlbum" -> backStack.add(
+        EmbyPhotoGridScreen(
+          libraryId = id,
+          title = item.Name ?: "",
+          initialAlbumId = id,
+          initialAlbumName = item.Name ?: "",
+        ),
+      )
+
       "CollectionFolder", "Folder", "UserView", "BoxSet" -> backStack.add(
         EmbyLibraryScreen(
           libraryId = id,
@@ -2979,6 +3232,17 @@ private fun openItem(
           personId = id,
           personName = item.Name ?: "",
           personImageTag = item.ImageTags["Primary"],
+        ),
+      )
+
+      // 混合库照片档：照片直接进全屏浏览器（不进视频详情页 —— 那边没有照片的展示逻辑）。
+      // 队列 = 当前列表里的照片快照，续页按 photoParentId 拉。
+      "Photo" -> backStack.add(
+        EmbyPhotoBrowserScreen(
+          initialPhotos = photoQueue,
+          initialIndex = photoIndex,
+          parentId = photoParentId,
+          title = item.Name ?: "",
         ),
       )
 
@@ -3604,7 +3868,7 @@ private object EmbyFolderCoverCache {
  *
  * Emby 的 Recursive 查询在不指定类型时会把季、集、文件夹一起返回，
  * 列表会变得很杂；官方客户端的做法就是按库类型取「顶层条目」。
- * 返回 null 表示不限制类型（未知/混合库）。
+ * 返回 null 表示不限制类型（未知 / 混合 / 家庭视频库）。
  */
 private fun allItemTypesFor(collectionType: String?): List<String>? =
   when (collectionType?.lowercase()) {
@@ -3613,7 +3877,11 @@ private fun allItemTypesFor(collectionType: String?): List<String>? =
     "music" -> listOf("MusicAlbum")
     "musicvideos" -> listOf("MusicVideo")
     "boxsets" -> listOf("BoxSet")
-    "homevideos" -> listOf("Video")
+    // 家庭视频库不能按条目类型卡：Emby 把这类库的内容存成 Movie / Episode
+    // （MediaType=Video），库里根本没有 Type=Video 的条目 —— 线上实测 12741 条里
+    // Video 类型为 0，传 IncludeItemTypes=Video 一条都取不到，就是「骨架屏转不停」。
+    // 「只要视频」交给 mediaTypesFor 的 MediaTypes=Video（同一库实测返回 10615 条）。
+    "homevideos" -> null
     "photos" -> listOf("PhotoAlbum")
     "books" -> listOf("Book")
     else -> null

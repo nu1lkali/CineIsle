@@ -345,6 +345,58 @@ data class EmbyItem(
   val EndDate: String? = null,
   /** 该节目是否正在直播（`BaseItemDto.IsLive`；重播/录播为 false）。 */
   val IsLive: Boolean? = null,
+  // ——— 照片（Photo）专属字段 ———
+  // 只在使用照片专用 fields 请求（见 EmbyClient.PHOTO_FIELDS）时才可能非空，
+  // 视频条目上恒为 null。全部加在末尾并给默认值，不影响既有按位置构造。
+
+  /** 图片像素宽（`BaseItemDto.Width`，服务端 EXIF 探测值）。 */
+  val Width: Int? = null,
+  /** 图片像素高（`BaseItemDto.Height`）。 */
+  val Height: Int? = null,
+  /** 文件 MIME 类型（`BaseItemDto.MimeType`，如 `image/jpeg` / `image/heic`）。 */
+  val MimeType: String? = null,
+  /** 相机厂商（`BaseItemDto.CameraMake`，EXIF）。 */
+  val CameraMake: String? = null,
+  /** 相机型号（`BaseItemDto.CameraModel`，EXIF）。 */
+  val CameraModel: String? = null,
+  /** 生成该文件的软件（`BaseItemDto.Software`，EXIF）。 */
+  val Software: String? = null,
+  /** 曝光时间，秒（`BaseItemDto.ExposureTime`，如 0.008 表示 1/125s）。 */
+  val ExposureTime: Double? = null,
+  /** 焦距，毫米（`BaseItemDto.FocalLength`）。 */
+  val FocalLength: Double? = null,
+  /**
+   * 图片方向（`BaseItemDto.ImageOrientation`，字符串枚举：
+   * `TopLeft`/`TopRight`/`BottomRight`/`BottomLeft`/`LeftTop`/`RightTop`/`RightBottom`/`LeftBottom`）。
+   * 用 String 而不是 enum 类：服务端可能返回清单外的新值，不能让它炸掉整条 JSON 解析。
+   */
+  val ImageOrientation: String? = null,
+  /** 光圈值 f 值（`BaseItemDto.Aperture`，如 2.8）。 */
+  val Aperture: Double? = null,
+  /** 快门速度（`BaseItemDto.ShutterSpeed`，如 125 表示 1/125s）。 */
+  val ShutterSpeed: Double? = null,
+  /** GPS 纬度（`BaseItemDto.Latitude`，十进制度）。 */
+  val Latitude: Double? = null,
+  /** GPS 经度（`BaseItemDto.Longitude`，十进制度）。 */
+  val Longitude: Double? = null,
+  /** GPS 海拔，米（`BaseItemDto.Altitude`）。 */
+  val Altitude: Double? = null,
+  /** ISO 感光度（`BaseItemDto.IsoSpeedRating`，如 400）。 */
+  val IsoSpeedRating: Int? = null,
+  // ——— 主图「借用」字段（容器条目） ———
+  // 普通条目（Movie/Series/Photo）的 Primary 图就在自己身上，tag 在 [ImageTags] 里。
+  // 但**容器条目**（相册 PhotoAlbum、部分 Folder）自身没有 Primary 图，服务端会把
+  // 「借来的」那张图的归属单独写在这两个字段上。实测：
+  //   GET /Items/{相册Id}/Images/Primary            -> 404 "does not have an image of type Primary"
+  //   GET /Items/{PrimaryImageItemId}/Images/Primary -> 200 image/jpeg
+  // 两个字段是 BaseItemDto 的顶层属性（不受 Fields 白名单限制），任何查询都会返回。
+  // 判定与取值统一走 `domain/emby/EmbyPrimaryImage.kt` 的 primaryImageRef()，
+  // 别在 UI 层各写一份（红线 58：同一份信息只允许一处实现）。
+
+  /** 服务端给主图分配的 tag（`BaseItemDto.PrimaryImageTag`）；与 [PrimaryImageItemId] 配套。 */
+  val PrimaryImageTag: String? = null,
+  /** 主图**实际所在条目**的 Id（`BaseItemDto.PrimaryImageItemId`）。 */
+  val PrimaryImageItemId: String? = null,
 )
 
 /**

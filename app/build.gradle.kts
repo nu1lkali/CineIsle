@@ -40,10 +40,11 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
-    // versionName 涨到 1.3.1：应用锁新增九宫格图案解锁（三方式任选 + 免按确定键的自动解锁开关）。
-    // 52：修「看完视频从播放器返回被重新锁上」—— 重锁判定改用进程级生命周期（见 AppLockGate）。
-    versionCode = 52
-    versionName = "1.3.1"
+    // versionName 涨到 1.4.0：图集 / 照片库全套 —— 照片网格页 + 全屏浏览器
+    // （双指缩放 / 幻灯片 / EXIF 信息 / 保存原图），混合媒体库「仅媒体 / 全部 / 仅照片」三态开关。
+    // 53：照片特性收口版（数据层 / HEIC / 网格页 / 浏览器 / 混合库开关，编译通过）。
+    versionCode = 54
+    versionName = "1.4.0"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -361,6 +362,9 @@ dependencies {
   // Lottie：加载动画可换（外观 → 加载动画）。搬的是 Yamby 内置的那 12 个 json（res/raw/yamby_*.json）
   // + 自研的两套，用 lottie-compose 在 Compose 里渲染。
   implementation(libs.lottie.compose)
+  // Telephoto：照片浏览器（图集）的捏合缩放 / 拖动平移 / 双击放大手势。
+  // 只依赖核心 zoomable 模块，图片本身仍由 EmbyImageLoader 加载后交给 Modifier.zoomable 包一层。
+  implementation(libs.telephoto.zoomable)
   // DLNA 投屏：UPnPCast 源码内置在 app/src/main/java/com/yinnho/upnpcast/ 下（同 embyclient 的做法），
   // 版本为上游 master / v1.3.0。
   // 为什么不用 Maven Central 的 com.yinnho.upnpcast:upnpcast:1.1.2：

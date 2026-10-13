@@ -120,6 +120,18 @@ class BrowserPreferences(
     preferenceStore.getString("emby_library_category_$libraryId", "")
 
   /**
+   * 混合库的**内容三态**（仅媒体 / 全部 / 仅照片，存 [EmbyPhotoMode] 的 key）。
+   *
+   * key 带 libraryId，按库各自记住。默认空串 = 仅媒体（与加这个开关之前
+   * 的行为完全一致，老用户升级后看不到任何变化）。
+   *
+   * ⚠️ 只有**混合库 / 家庭视频库 / 未知类型库**的「全部」分类才显示这个开关，
+   * 读取方（媒体库页）负责判断可用性；这里只负责存取。
+   */
+  fun embyLibraryPhotoMode(libraryId: String): Preference<String> =
+    preferenceStore.getString("emby_library_photo_mode_$libraryId", "")
+
+  /**
    * 首页「媒体库」卡片的**置顶列表**（逗号分隔的库 Id）。
    *
    * 顺序即优先级：第 0 个排最前 —— 也就是「最后置顶的排第一」，
@@ -381,6 +393,64 @@ class BrowserPreferences(
    */
   val embySimilarExcludePlayed = preferenceStore.getBoolean("emby_similar_exclude_played", true)
 
+  // ── 照片（图集）──
+
+  /**
+   * 照片浏览器「幻灯片播放」的翻页间隔，默认 [PhotoSlideshowInterval.FIVE_SECONDS]。
+   *
+   * **全局一份、不按库分**：这是「看照片的习惯」，不是某个媒体库的属性。
+   * 设置入口在「设置 → Emby 媒体库 → 幻灯片间隔」。
+   *
+   * 为什么是固定三档而不是滑块：幻灯片是「放手让照片自己走」的场景，
+   * 常用就 3 秒（快览）/ 5 秒（默认）/ 10 秒（细看），滑块拖出来的 4.7 秒
+   * 没有意义还容易误触。
+   */
+  val photoSlideshowInterval =
+    preferenceStore.getEnum("photo_slideshow_interval", PhotoSlideshowInterval.Default)
+
+  /**
+   * 照片网格**每行几个**（2~4，默认 3）。读取处一律 `coerceIn(2, 4)` ——
+   * 偏好文件可能被外部改坏，0 列会让瀑布流直接崩。
+   *
+   * 与 [embyLibraryGridColumns] 分开存：那是海报网格（视频），这是照片网格，
+   * 两者的合适密度不一样（照片更小更密），共用一个键会互相干扰。
+   */
+  val photoGridColumns = preferenceStore.getInt("photo_grid_columns", 3)
+
+  /**
+   * 照片网格的排序方式，取值与 Emby `/Items` 的 `SortBy` 一致：
+   * `SortName`（名称）/ `DateCreated`（拍摄时间）/ `Random`（随机）。
+   */
+  val photoSortBy = preferenceStore.getString("photo_sort_by", "SortName")
+
+  /**
+   * 照片网格排序方向。**空串 = 跟随该排序项的自然方向**（名称升序、时间降序），
+   * 与 [embyLibrarySortOrder] 同一套语义；用户点过升降序箭头后写死。
+   */
+  val photoSortOrder = preferenceStore.getString("photo_sort_order", "")
+
+  /**
+   * 打开照片浏览器时**自动开始幻灯片播放**，默认**关**。
+   *
+   * 关 = 进浏览器停在第一张，用户自己滑 / 自己点播放键；
+   * 开 = 进浏览器就按 [photoSlideshowInterval] 自动翻页，适合「当相框用」。
+   * 全局一份、不按库分 —— 这是看照片的习惯，不是媒体库的属性。
+   * 设置入口在「设置 → Emby 媒体库 → 幻灯片间隔」下方。
+   */
+  val photoAutoSlideshow = preferenceStore.getBoolean("photo_auto_slideshow", false)
+
+  /**
+   * 照片保存目录（SAF 树 URI 字符串）。**空字符串 = 系统相册**（`Pictures/CineIsle`）。
+   *
+   * 非空时是 `ACTION_OPEN_DOCUMENT_TREE` 返回的树 URI。设置入口在
+   * 「设置 → Emby 媒体库 → 照片保存位置」—— 点一下弹系统自带的文件夹选择器，
+   * **不需要用户手输路径**。选完必须 `takePersistableUriPermission`，
+   * 否则重启后这个 URI 就失效了（见 PreferencesScreen 里的 launcher）。
+   *
+   * ⚠️ 偏好键 `photo_save_dir_uri` 发布后不能改（改了等于重置所有用户的选择）。
+   */
+  val photoSaveDirUri = preferenceStore.getString("photo_save_dir_uri", "")
+
   // ── 显示偏好服务端同步（清单 #16）──
   //
   // 这三项是给 [app.marlboroadvance.mpvex.ui.browser.emby.displayprefs.EmbyDisplayPrefsSync]
@@ -559,4 +629,24 @@ enum class MediaLayoutMode {
       LIST -> "List"
       GRID -> "Grid"
     }
+}
+
+/**
+ * 照片浏览器幻灯片播放的翻页间隔。
+ *
+ * ⚠️ 存的是**枚举名**（`getEnum`），常量名发布后不能改 —— 改了老用户的偏好会失效。
+ */
+enum class PhotoSlideshowInterval(
+  /** 间隔秒数，直接给幻灯片协程用 */
+  val seconds: Int,
+) {
+  THREE_SECONDS(3),
+  FIVE_SECONDS(5),
+  TEN_SECONDS(10),
+  ;
+
+  companion object {
+    /** 默认 5 秒：快览不赶、细看不等 */
+    val Default = FIVE_SECONDS
+  }
 }

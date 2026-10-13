@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.3.1.svg" alt="Release: v1.3.1" /></a>
+  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.4.0.svg" alt="Release: v1.4.0" /></a>
   <img src=".github/badges/flavor-standard.svg" alt="Flavor: standard" />
   <img src=".github/badges/package-cineisle.svg" alt="Package: app.cineisle.player" />
   <img src=".github/badges/kernel-mpv-gsy.svg" alt="Kernel: mpv + GSYVideoPlayer" />
@@ -35,7 +35,7 @@
 
 <p align="center">
   🎬 直链播放不转码 · 📥 离线下载 · 🖥️ mpv / GSY 双内核 ·
-  📀 远程 ISO 原盘 · 🧑 演职员合并 · 📺 DLNA 投屏
+  📀 远程 ISO 原盘 · 🧑 演职员合并 · 📺 DLNA 投屏 · 🖼️ 图集与照片
 </p>
 
 ## 项目背景
@@ -102,6 +102,7 @@
 | **服务器与账号** | 多服务器添加 / 编辑 / 删除 / 切换；用户名 + 密码登录；配置存 Room，Token 失效自动重登 |
 | **首页** | 媒体库入口卡片、继续观看（带进度）、最新加入、随便看看（可整块关掉）、全局搜索（400ms 防抖 + 类型筛选 + 历史 + 联想建议） |
 | **媒体库浏览** | 分类（全部 / 继续播放 / 合集 / 收藏 / 文件夹 / 演员）、多种排序、三种卡片样式（海报 / 背景图 / 横幅）与 1~2 行标题、文件夹 2×2 宫格下钻、按当前屏幕结果随机播放、库内搜索；结果与滚动位置进程内缓存 |
+| **图集与照片** | 照片库独立入口（相册 → 照片瀑布流，保留原图比例）；混合媒体库可切「仅媒体 / 全部 / 仅照片」；全屏浏览器支持双指缩放、幻灯片播放（间隔与是否自播可设）、相机参数信息、保存原图 / 另存 JPEG，HEIC 可看可存 |
 | **筛选** | 类型 / 标签 / 年份 / 官方分级 / 评分 + 播放状态 / 字幕 / 只看收藏 / 中文字幕；面板内改动只是草稿，点「确定」才生效，条件按库各记一份 |
 | **片单与推荐** | 播放列表（新建 / 增删 / 拖动排序）、猜你喜欢 · 连播（服务端或本地算法）、合集 |
 | **详情页** | 可折叠的封面头部、简介展开 / 收起、演职员与同类型推荐、剧集按季集展开、媒体信息、收藏 / 已看 / 加入下载、更多菜单（刮削 / 刷新元数据 / 删除） |
