@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,9 +15,11 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -35,9 +38,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
+import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
+import org.koin.compose.koinInject
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
+import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -76,6 +83,13 @@ data class EmbyTagItemsScreen(
     )
     val server by viewModel.currentServer.collectAsState()
     val scope = rememberCoroutineScope()
+    // 随机播放数量上限读用户设置，与媒体库 / 演员页的随机按钮同一口径
+    val browserPreferences = koinInject<BrowserPreferences>()
+
+    // 顶栏收藏红心的状态来源：类型 / 工作室是带 UserData 的正式条目可被收藏，
+    // 标签没有独立 Id 不支持收藏（loadFacetItem 返回 null，红心据此隐藏）。
+    // 进页面查一次；收藏 / 取消收藏成功后本地翻转，不再回查服务器。
+    var facetItem by remember { mutableStateOf<EmbyItem?>(null) }
 
     val kindLabel = when (kind) {
       "genre" -> "类型"
@@ -129,7 +143,48 @@ data class EmbyTagItemsScreen(
       else if (page.items.isEmpty()) error = "没有找到该${kindLabel}下的媒体"
     }
 
+    /**
+     * 随机播放这个类型 / 标签 / 工作室下的作品：交给服务端按 `SortBy=Random` 从**整个范围**抽
+     * （不是只抽已加载的那一页），数量读用户设置，与媒体库 / 演员页的随机按钮同一口径。
+     * 复用本页三个 facet 加载方法的同一个过滤口径（类型按名、工作室按 Id 或名、标签按名），
+     * 只是排序换成随机。随机出的列表里可能混着看过的剧，所以每条都从头放（playFromStartAll = true）。
+     */
+    fun startRandomPlayback() {
+      scope.launch {
+        val current = viewModel.currentServerOrAwait() ?: return@launch
+        val limit = browserPreferences.randomPlayCount.get().coerceIn(1, 500)
+        val result = when (kind) {
+          "genre" ->
+            viewModel.loadGenreItems(server = current, genre = keyword, sortBy = "Random", limit = limit)
+
+          "studio" ->
+            viewModel.loadStudioItems(
+              server = current,
+              studioId = filterId,
+              studioName = keyword,
+              sortBy = "Random",
+              limit = limit,
+            )
+
+          else ->
+            viewModel.loadTagItems(server = current, tag = keyword, sortBy = "Random", limit = limit)
+        }
+        if (result.items.isEmpty()) {
+          Toast.makeText(context, "该${kindLabel}下没有可随机播放的内容", Toast.LENGTH_SHORT).show()
+          return@launch
+        }
+        viewModel.launchPlaylist(current, result.items, playFromStartAll = true)
+      }
+    }
+
     LaunchedEffect(keyword, kind, filterId, server) { load() }
+
+    // 收藏红心所需的条目：工作室用详情页传来的 Id，类型按名字反查，标签无 Id 故为 null。
+    // 标签（kind 既不是 genre 也不是 studio）下红心始终隐藏，与 Emby Web 不支持收藏标签一致。
+    LaunchedEffect(keyword, kind, filterId, server) {
+      val current = server ?: run { facetItem = null; return@LaunchedEffect }
+      facetItem = viewModel.loadFacetItem(current, kind, keyword, filterId)
+    }
 
     // 触底自动续拉
     page.AutoLoadMore(source = gridSource, enabled = server != null, loader = loader)
@@ -149,6 +204,64 @@ data class EmbyTagItemsScreen(
               imageVector = Icons.AutoMirrored.Filled.ArrowBack,
               contentDescription = "返回",
             )
+          }
+        },
+        actions = {
+          // ── 随机播放这个类型 / 标签 / 工作室下的作品（服务端按 Random 从整个范围抽）──
+          IconButton(
+            enabled = page.items.isNotEmpty(),
+            onClick = { startRandomPlayback() },
+          ) {
+            Icon(
+              imageVector = Icons.Default.Shuffle,
+              contentDescription = "随机播放",
+            )
+          }
+          // ── 顶栏收藏红心 ──
+          // 与演员作品页同一套交互：乐观更新红心 → 请求服务器 → 按结果修正并弹 Toast；
+          // 动效复用 FavoriteHeartIcon（弹跳 + 星光 + 红心渐变）。
+          // 仅当能解析出可收藏条目（类型 / 工作室）时显示；标签无 Id 自动隐藏红心。
+          val facetItemSnapshot = facetItem
+          if (facetItemSnapshot != null) {
+            val isFacetFavorite = facetItemSnapshot.UserData?.IsFavorite == true
+            IconButton(
+              enabled = true,
+              onClick = {
+                val current = facetItem ?: return@IconButton
+                val currentServer = server ?: return@IconButton
+                val wasFavorite = current.UserData?.IsFavorite == true
+                // 乐观更新：先把红心翻过来，动效才跟得上手指；失败再回滚
+                facetItem = current.copy(
+                  UserData = (current.UserData ?: EmbyUserData()).copy(IsFavorite = !wasFavorite),
+                )
+                scope.launch {
+                  val result = viewModel.toggleFavorite(currentServer, current)
+                  val nowFavorite = result.getOrNull()
+                  facetItem = current.copy(
+                    UserData = (current.UserData ?: EmbyUserData())
+                      .copy(IsFavorite = nowFavorite ?: wasFavorite),
+                  )
+                  Toast.makeText(
+                    context,
+                    when (nowFavorite) {
+                      true -> "已收藏「$keyword」"
+                      false -> "已取消收藏「$keyword」"
+                      null -> "收藏失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
+                    },
+                    Toast.LENGTH_SHORT,
+                  ).show()
+                }
+              },
+            ) {
+              // 与演员作品页同款：弹跳 + 星光 + 红心渐变（状态驱动，点击时先乐观更新）
+              // 尺寸对齐 24dp，避免「顶栏这颗比其它页面小一圈」的观感落差
+              FavoriteHeartIcon(
+                isFavorite = isFacetFavorite,
+                isToggling = false,
+                iconSize = 24.dp,
+                idleColor = LocalContentColor.current,
+              )
+            }
           }
         },
       )
