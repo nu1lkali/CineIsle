@@ -1185,6 +1185,50 @@ object EmbyClient {
   )
 
   /**
+   * 收藏的**类型**（Genre）列表（收藏页「类型」tab 用）。
+   *
+   * Genre 是带 UserData 的正式条目，可以被收藏 —— 所以与 [getFavoriteItems] 同一套口径，
+   * 让服务端直接按 `Filters=IsFavorite` 筛。
+   *
+   * ⚠️ **不传 MediaTypes**：类型没有媒体形态（不像影片是 Video），
+   * 硬塞一个 MediaTypes 会让部分服务端整页拉空。
+   *
+   * @param limit 类型数量通常几十个，默认给 200 一次拉完，不分页。
+   */
+  fun getFavoriteGenres(
+    server: EmbyServer,
+    startIndex: Int = 0,
+    limit: Int = 200,
+  ): EmbyItemsResult = getItems(
+    server,
+    sortBy = "SortName",
+    sortOrder = "Ascending",
+    filters = listOf("IsFavorite"),
+    includeItemTypes = listOf("Genre"),
+    startIndex = startIndex,
+    limit = limit,
+  )
+
+  /**
+   * 收藏的**工作室**（Studio）列表（收藏页「工作室」tab 用）。
+   *
+   * 口径与 [getFavoriteGenres] 完全一致，只把条目类型换成 Studio。
+   */
+  fun getFavoriteStudios(
+    server: EmbyServer,
+    startIndex: Int = 0,
+    limit: Int = 200,
+  ): EmbyItemsResult = getItems(
+    server,
+    sortBy = "SortName",
+    sortOrder = "Ascending",
+    filters = listOf("IsFavorite"),
+    includeItemTypes = listOf("Studio"),
+    startIndex = startIndex,
+    limit = limit,
+  )
+
+  /**
    * 随机播放：拿 [limit] 个随机项（按 Random 排序）。
    * 用户可在播放页点"随机播放"调用，把返回的 IDs 依次送给 PlayerActivity。
    */

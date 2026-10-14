@@ -467,6 +467,52 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     favoritePersonsCache = null
   }
 
+  /**
+   * 收藏的**类型**（Genre）列表（收藏页「类型」tab）。
+   *
+   * 口径与 [loadFavoritePersons] 一致：按服务器做进程内缓存 + 60 秒自动过期，
+   * 收藏页在几个 tab 之间来回切时不重复发请求。收藏状态变化时调
+   * [invalidateFavoriteFacetCache] 作废。
+   */
+  suspend fun loadFavoriteGenres(server: EmbyServer, forceRefresh: Boolean = false): List<EmbyItem> {
+    val cached = favoriteGenresCache
+    if (!forceRefresh && cached != null && cached.first == server.id &&
+      SystemClock.elapsedRealtime() - cached.second < FAVORITE_PERSONS_CACHE_TTL_MS
+    ) {
+      return cached.third
+    }
+    val list = withContext(Dispatchers.IO) {
+      runCatching { repository.getFavoriteGenres(server).Items }.getOrDefault(emptyList())
+    }
+    favoriteGenresCache = Triple(server.id, SystemClock.elapsedRealtime(), list)
+    return list
+  }
+
+  /** 收藏**工作室**（Studio）列表，口径同 [loadFavoriteGenres]。 */
+  suspend fun loadFavoriteStudios(server: EmbyServer, forceRefresh: Boolean = false): List<EmbyItem> {
+    val cached = favoriteStudiosCache
+    if (!forceRefresh && cached != null && cached.first == server.id &&
+      SystemClock.elapsedRealtime() - cached.second < FAVORITE_PERSONS_CACHE_TTL_MS
+    ) {
+      return cached.third
+    }
+    val list = withContext(Dispatchers.IO) {
+      runCatching { repository.getFavoriteStudios(server).Items }.getOrDefault(emptyList())
+    }
+    favoriteStudiosCache = Triple(server.id, SystemClock.elapsedRealtime(), list)
+    return list
+  }
+
+  /** 收藏类型 / 工作室列表的进程内缓存：serverId → (缓存时间, 名单) */
+  private var favoriteGenresCache: Triple<Long, Long, List<EmbyItem>>? = null
+  private var favoriteStudiosCache: Triple<Long, Long, List<EmbyItem>>? = null
+
+  /** 类型 / 工作室收藏状态变化时调用：把缓存作废，收藏页下次进来重新拉 */
+  fun invalidateFavoriteFacetCache() {
+    favoriteGenresCache = null
+    favoriteStudiosCache = null
+  }
+
   suspend fun loadHistory(
     server: EmbyServer,
     startIndex: Int = 0,

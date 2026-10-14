@@ -515,6 +515,18 @@ class EmbyRepository(
   suspend fun getFavoritePersons(server: EmbyServer): List<EmbyItem> =
     withContext(Dispatchers.IO) { EmbyClient.getFavoritePersons(server) }
 
+  /**
+   * 收藏的类型 / 工作室列表（收藏页「类型 / 工作室」tab）。
+   *
+   * 与 [getFavoritePersons] 不同，Genre / Studio 是 `/Users/{id}/Items` 能直接返回的
+   * 正式条目，所以走服务端 `Filters=IsFavorite` 筛选，不需要客户端再过滤。
+   */
+  suspend fun getFavoriteGenres(server: EmbyServer): EmbyItemsResult =
+    withContext(Dispatchers.IO) { EmbyClient.getFavoriteGenres(server) }
+
+  suspend fun getFavoriteStudios(server: EmbyServer): EmbyItemsResult =
+    withContext(Dispatchers.IO) { EmbyClient.getFavoriteStudios(server) }
+
   /** 按 Id 取单个人员（演员作品页收藏红心查当前状态用） */
   suspend fun getPersonById(server: EmbyServer, personId: String): EmbyItem? =
     withContext(Dispatchers.IO) { EmbyClient.getPersonById(server, personId) }

@@ -88,10 +88,25 @@ import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
-/** 收藏页的内容类型：影片 = 现有的收藏媒体；演员 = 收藏的演员（Person） */
+/**
+ * 收藏页的内容类型。
+ *
+ *  · 影片 = 收藏的媒体（Movie/Series/…，可播放）；
+ *  · 演员 = 收藏的演员（Person）；
+ *  · 类型 = 收藏的类型（Genre）；
+ *  · 工作室 = 收藏的工作室（Studio）。
+ *
+ * 后两者是「点进去看这个类型 / 工作室下有哪些作品」的入口，本身不可播放。
+ */
 private enum class FavoriteTab(val label: String) {
   MOVIE("影片"),
   ACTOR("演员"),
+  GENRE("类型"),
+  STUDIO("工作室"),
+  ;
+
+  /** 是否为「点进去看作品清单」的聚合 tab（演员 / 类型 / 工作室）。 */
+  val isAggregate: Boolean get() = this != MOVIE
 }
 
 /** 收藏影片一页拉多少条（清单 1.1：原来是固定 200 条一次性拉完） */
@@ -107,13 +122,14 @@ private const val MOVIE_PAGE_SIZE = 100
 private const val SEARCH_AUTOFILL_MAX_PAGES = 10
 
 /**
- * Emby 收藏页：展示服务器上标记为收藏的媒体与演员。
+ * Emby 收藏页：展示服务器上标记为收藏的媒体、演员、类型与工作室。
  *
- * 标题右侧有「影片 / 演员」下拉切换（默认影片）：
+ * 标题右侧有「影片 / 演员 / 类型 / 工作室」下拉切换（默认影片）：
  *  · 影片 → 单击进媒体详情页（原有逻辑）；
- *  · 演员 → 单击进该演员的作品清单页（EmbyPersonScreen）。
+ *  · 演员 → 单击进该演员的作品清单页（EmbyPersonScreen）；
+ *  · 类型 / 工作室 → 单击进该类型 / 工作室下的作品清单页（EmbyTagItemsScreen）。
  *
- * 两个 tab 的列表各自缓存一份，来回切换不重复发请求；
+ * 各 tab 的列表各自缓存一份，来回切换不重复发请求；
  * 顶栏刷新按钮只重拉当前 tab（并作废其缓存）。
  *
  * 交互与首页一致：**单击播放 / 看详情，长按查看详情**。
@@ -147,12 +163,16 @@ fun EmbyFavoritesScreen() {
     )
   }
 
-  // ── 两个 tab 各自的数据 ──
+  // ── 各 tab 各自的数据 ──
   // 影片 tab 走 [PagedList]（分页，状态本身可观察，UI 直接读 moviePage.items）；
-  // 演员 tab 一次性拉全量（收藏演员通常只有几十个），保持原来的 list 缓存。
+  // 演员 / 类型 / 工作室三个 tab 一次性拉全量（收藏数量都不大），沿用同一套 list 缓存。
   // 缓存按 server.id 区分：切服务器后旧数据不会串台。
   val actorItems = remember { mutableStateListOf<EmbyItem>() }
   val actorCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
+  val genreItems = remember { mutableStateListOf<EmbyItem>() }
+  val genreCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
+  val studioItems = remember { mutableStateListOf<EmbyItem>() }
+  val studioCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
   /** 影片 tab 的分页缓存：serverId → 已加载到的页数（0 = 没加载过） */
   val movieCache = remember { mutableStateOf<Pair<Long, Int>?>(null) }
   var isLoading by remember { mutableStateOf(true) }
@@ -168,7 +188,12 @@ fun EmbyFavoritesScreen() {
   val moviePage = remember { PagedList<EmbyItem>(MOVIE_PAGE_SIZE, keyOf = { it.Id ?: it.Name ?: "" }) }
 
   /** 展示列表 = 当前 tab 对应的那一份 */
-  val items: List<EmbyItem> = if (tab == FavoriteTab.MOVIE) moviePage.items else actorItems
+  val items: List<EmbyItem> = when (tab) {
+    FavoriteTab.MOVIE -> moviePage.items
+    FavoriteTab.ACTOR -> actorItems
+    FavoriteTab.GENRE -> genreItems
+    FavoriteTab.STUDIO -> studioItems
+  }
 
   // ── 搜索 / 排序 ──
   // 过滤与排序都在**已加载的页**上做：即时、不发请求。
@@ -303,23 +328,70 @@ fun EmbyFavoritesScreen() {
     }
   }
 
-  suspend fun loadActors(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer, force: Boolean) {
-    val cached = actorCache.value
+  /**
+   * 「一次性拉全量」类 tab（演员 / 类型 / 工作室）的通用加载器。
+   *
+   * 三者逻辑完全一致：命中本页缓存就直接摊平，否则请求一次、按 server.id 落缓存、
+   * 再灌进对应的列表。抽成一个局部函数，省得三份 copy 各自漂移。
+   *
+   * @param cache  该 tab 的页内缓存（serverId → 名单）
+   * @param target 该 tab 的展示列表（会被清空后重填）
+   * @param fetch  真正发请求的挂起函数（各 tab 各自的 ViewModel 方法）
+   */
+  suspend fun loadAll(
+    current: app.marlboroadvance.mpvex.domain.emby.EmbyServer,
+    force: Boolean,
+    cache: androidx.compose.runtime.MutableState<Pair<Long, List<EmbyItem>>?>,
+    target: SnapshotStateList<EmbyItem>,
+    failureMessage: String,
+    fetch: suspend () -> List<EmbyItem>,
+  ) {
+    val cached = cache.value
     if (!force && cached != null && cached.first == current.id) {
-      actorItems.clear()
-      actorItems.addAll(cached.second)
+      target.clear()
+      target.addAll(cached.second)
       return
     }
-    runCatching { viewModel.loadFavoritePersons(current, forceRefresh = force) }
+    runCatching { fetch() }
       .onSuccess { list ->
-        // 同上：按 key 口径去重防网格崩溃
+        // 按 key 口径去重防网格崩溃（部分服务端会把同一条目返回两次）
         val deduped = list.distinctBy { it.Id ?: it.Name ?: "" }
-        actorCache.value = current.id to deduped
-        actorItems.clear()
-        actorItems.addAll(deduped)
+        cache.value = current.id to deduped
+        target.clear()
+        target.addAll(deduped)
       }
-      .onFailure { error = it.message ?: "加载收藏演员失败" }
+      .onFailure { error = it.message ?: failureMessage }
   }
+
+  suspend fun loadActors(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer, force: Boolean) =
+    loadAll(
+      current = current,
+      force = force,
+      cache = actorCache,
+      target = actorItems,
+      failureMessage = "加载收藏演员失败",
+      fetch = { viewModel.loadFavoritePersons(current, forceRefresh = force) },
+    )
+
+  suspend fun loadGenres(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer, force: Boolean) =
+    loadAll(
+      current = current,
+      force = force,
+      cache = genreCache,
+      target = genreItems,
+      failureMessage = "加载收藏类型失败",
+      fetch = { viewModel.loadFavoriteGenres(current, forceRefresh = force) },
+    )
+
+  suspend fun loadStudios(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer, force: Boolean) =
+    loadAll(
+      current = current,
+      force = force,
+      cache = studioCache,
+      target = studioItems,
+      failureMessage = "加载收藏工作室失败",
+      fetch = { viewModel.loadFavoriteStudios(current, forceRefresh = force) },
+    )
 
   suspend fun load(force: Boolean) {
     // 冷启动时当前服务器可能还没恢复，这里等一下，避免误判成「没有服务器」而空白
@@ -329,7 +401,12 @@ fun EmbyFavoritesScreen() {
     }
     isLoading = true
     error = null
-    if (tab == FavoriteTab.MOVIE) loadMovies(current, force) else loadActors(current, force)
+    when (tab) {
+      FavoriteTab.MOVIE -> loadMovies(current, force)
+      FavoriteTab.ACTOR -> loadActors(current, force)
+      FavoriteTab.GENRE -> loadGenres(current, force)
+      FavoriteTab.STUDIO -> loadStudios(current, force)
+    }
     isLoading = false
   }
 
@@ -503,8 +580,9 @@ fun EmbyFavoritesScreen() {
     bottomBar = {
       if (selectionMode) {
         FavoritesBatchBar(
-          // 演员 tab 只有「取消收藏」有意义（有没有看过 / 时长这些是媒体条目的概念）
-          isActorTab = tab == FavoriteTab.ACTOR,
+          // 演员 / 类型 / 工作室 tab 只有「取消收藏」有意义
+          //（播放进度、下载是媒体条目的概念，对 Person / Genre / Studio 无意义）
+          nonMediaTab = tab.isAggregate,
           count = selectedIds.size,
           // 四个动作都只「记下意图」并弹确认框 —— 真正发请求在 executeBatch（防误触）
           onMarkPlayed = { pendingBatch = BatchAction.MARK_PLAYED },
@@ -556,7 +634,12 @@ fun EmbyFavoritesScreen() {
         )
 
         items.isEmpty() -> EmbyEmptyState(
-          message = if (tab == FavoriteTab.MOVIE) "还没有收藏任何媒体" else "还没有收藏任何演员",
+          message = when (tab) {
+            FavoriteTab.MOVIE -> "还没有收藏任何媒体"
+            FavoriteTab.ACTOR -> "还没有收藏任何演员"
+            FavoriteTab.GENRE -> "还没有收藏任何类型"
+            FavoriteTab.STUDIO -> "还没有收藏任何工作室"
+          },
           buttonText = "刷新",
           onAction = { scope.launch { load(force = true) } },
           modifier = Modifier.align(Alignment.Center),
@@ -617,7 +700,7 @@ fun EmbyFavoritesScreen() {
           }
         }
 
-        else -> LazyVerticalGrid(
+        tab == FavoriteTab.ACTOR -> LazyVerticalGrid(
           // 演员网格与媒体库「演员」分类同一套版式：一行三个海报卡 + 人形占位
           columns = GridCells.Fixed(3),
           state = gridState,
@@ -654,6 +737,50 @@ fun EmbyFavoritesScreen() {
               },
               // 长按 = 进入多选并选上这一条
               onLongClick = { toggleSelection(person.Id) },
+              style = EmbyCardStyle.POSTER,
+              fillWidth = true,
+            )
+          }
+        }
+
+        // 类型 / 工作室：点卡片进「该类型 / 工作室下的作品」清单页（与详情页 chip 同一路由）
+        else -> LazyVerticalGrid(
+          // 与影片 / 演员同一套版式：一行三个海报卡
+          columns = GridCells.Fixed(3),
+          state = gridState,
+          modifier = Modifier.fillMaxSize(),
+          contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+          items(visibleItems, key = { it.Id ?: it.Name ?: "" }) { facet ->
+            val currentServer = server ?: return@items
+            EmbyMediaCard(
+              title = facet.Name.orEmpty(),
+              subtitle = null,
+              // 类型 / 工作室通常没有 Primary 图，交给卡片默认兜底占位
+              imageUrl = viewModel.imageUrl(currentServer, facet, "Primary", 480),
+              progress = null,
+              isFavorite = true,
+              selected = facet.Id != null && facet.Id in selectedIds,
+              onClick = {
+                if (selectionMode) {
+                  toggleSelection(facet.Id)
+                  return@EmbyMediaCard
+                }
+                val name = facet.Name ?: return@EmbyMediaCard
+                // 进该类型 / 工作室的作品清单页（与详情页点 chip 同一条路由）。
+                // 工作室过滤走 Id（更准），类型只按名字过滤，所以 kind 不同、filterId 有别。
+                backStack.add(
+                  EmbyTagItemsScreen(
+                    keyword = name,
+                    kind = if (tab == FavoriteTab.STUDIO) "studio" else "genre",
+                    filterId = if (tab == FavoriteTab.STUDIO) facet.Id.orEmpty() else "",
+                  ),
+                )
+              },
+              // 长按 = 进入多选并选上这一条
+              onLongClick = { toggleSelection(facet.Id) },
               style = EmbyCardStyle.POSTER,
               fillWidth = true,
             )
@@ -707,7 +834,7 @@ fun EmbyFavoritesScreen() {
 /**
  * 收藏页顶部标题栏。
  *
- * 标题右侧新增「影片 / 演员」下拉切换：点击弹出两个选项，
+ * 标题右侧有「影片 / 演员 / 类型 / 工作室」下拉切换：点击弹出一列选项，
  * 选中项打勾。样式用 M3 的 Surface + DropdownMenu，与顶栏其它控件同一套观感。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -747,7 +874,7 @@ private fun EmbyFavoritesTopBar(
 }
 
 /**
- * 「影片 / 演员」类型切换器：当前值胶囊 + 下拉菜单。
+ * 收藏类型切换器（影片 / 演员 / 类型 / 工作室）：当前值胶囊 + 下拉菜单。
  *
  * 不用 Spinner：Compose 下 M3 没有直接对应的控件，ExposedDropdownMenuBox 的
  * 展开态与 TopAppBar 的标题区叠加时点击判定容易出问题；一个小 Surface + DropdownMenu
@@ -991,12 +1118,12 @@ private fun FavoritesSelectionTopBar(
  * 更好认，点击区也更大（原来文字按钮的可点范围只有文字本身那么宽，很容易点空）。
  *
  * 图标会歧义的顾虑用**文字兜底**：图标只当视觉锚点，下面一行始终写着动作名。
- * 演员 tab 只保留「取消收藏」—— 播放进度、下载是媒体条目的概念，对 Person 无意义；
- * 只剩一个动作时让它占满整行居中，不至于孤零零挤在左边。
+ * 非媒体 tab（演员 / 类型 / 工作室）只保留「取消收藏」—— 播放进度、下载是媒体条目的概念，
+ * 对 Person / Genre / Studio 无意义；只剩一个动作时让它占满整行居中，不至于孤零零挤在左边。
  */
 @Composable
 private fun FavoritesBatchBar(
-  isActorTab: Boolean,
+  nonMediaTab: Boolean,
   count: Int,
   onMarkPlayed: () -> Unit,
   onMarkUnplayed: () -> Unit,
@@ -1018,7 +1145,7 @@ private fun FavoritesBatchBar(
       horizontalArrangement = Arrangement.spacedBy(4.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      if (!isActorTab) {
+      if (!nonMediaTab) {
         BatchActionItem(
           modifier = Modifier.weight(1f),
           icon = Icons.Filled.CheckCircle,
@@ -1043,7 +1170,7 @@ private fun FavoritesBatchBar(
         danger = true,
         onClick = onUnfavorite,
       )
-      if (!isActorTab) {
+      if (!nonMediaTab) {
         BatchActionItem(
           modifier = Modifier.weight(1f),
           icon = Icons.Filled.Download,
