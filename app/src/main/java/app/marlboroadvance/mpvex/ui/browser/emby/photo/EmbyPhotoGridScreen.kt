@@ -154,6 +154,12 @@ data class EmbyPhotoGridScreen(
     //   key 不变 ⇒ 不会重拉 ⇒ 清了缓存也白清，看起来像点了没反应。
     var shuffleNonce by remember { mutableIntStateOf(0) }
 
+    // 归位标记：换排序（含「随机」重洗）后，等**新一批数据落位**再把网格滚回顶部。
+    // 为什么不能在换排序的 LaunchedEffect 里直接滚：[fetchPage] 是「发射后就返回」的
+    // （内部自己 `scope.launch`），那时新数据还没回来 —— 滚了会被 LazyGrid 的
+    // 「按 key 把原第一条重新定位到新位置」抵掉，画面照样停在列表中间。见其收尾处。
+    var pendingScrollTop by remember { mutableStateOf(false) }
+
     // 当前父节点：相册态 = 该相册 Id，库根态 = libraryId。
     // ⚠️ 必须写成函数而不是 `val … get()` —— Kotlin 不接受局部属性带自定义 getter
     // （编译报 "Unexpected tokens"，且会把 parentId 误判成无初始化量的 val）。
@@ -191,6 +197,8 @@ data class EmbyPhotoGridScreen(
           totalCount = cached.totalCount
           loading = false
           loadingMore = false
+          // 命中缓存说明顺序没换（只是重进同一副牌），不需要归位；顺手清掉残留标记
+          pendingScrollTop = false
           return
         }
       }
@@ -228,6 +236,11 @@ data class EmbyPhotoGridScreen(
             // 随机排序下续页拿到的同样是新洗的一批，追加进缓存即可 ——
             // 已经看过的那部分顺序不动，只是队尾多了一批（比「整副牌重洗」温和得多）
             if (random) PhotoRandomQueue.put(parentId(), items, totalCount)
+            // 换排序 / 重洗后的归位：新数据已经落位，此刻滚才真正生效（见 pendingScrollTop 说明）
+            if (reset && pendingScrollTop) {
+              pendingScrollTop = false
+              gridState.scrollToItem(0)
+            }
           }.onFailure { e ->
             if (reset) errorMessage = "加载照片失败：${e.message}"
           }
@@ -243,7 +256,25 @@ data class EmbyPhotoGridScreen(
     }
 
     // 换层级 / 换排序 ⇒ 重拉第一页
+    //
+    // ⭐ 换排序（或点「随机」再洗一次）之后回到顶部，首次进入除外：
+    //   「随机」整副牌重洗、其它排序整体换序后，条目顺序全变了，而 LazyGrid 会**按 key**
+    //   把「原来的第一条」重新定位到它在新顺序里的位置 ⇒ 画面停在列表中间（用户反馈
+    //   「切到随机后停在中间」）。
+    // ⚠️ 这里只**置标记**，真正的归位在 [fetchPage] 的新数据落位之后 ——
+    //   本 effect 调用的 fetchPage 是发射后就返回的，当场滚会被 key 重定位抵掉
+    //   （见上面 pendingScrollTop 的说明）。
+    // ⚠️ 用「排序组合是否真的变了」判据、而不是「是不是第一次跑」：
+    //   本 effect 的 key 里有 server?.id，冷启动时它会从 null 变成有值、effect 会再跑一次 ——
+    //   用「第一次」判据的话那次会被误判成「换了排序」而把恢复出来的位置顶掉。
+    //   换相册（album?.Id 变）时 lastSortKey 随之重新初始化，键相同 ⇒ 不置标记，新相册照样能恢复。
+    var lastSortKey by remember(album?.Id) { mutableStateOf("$sortBy|$sortOrder|$shuffleNonce") }
     LaunchedEffect(server?.id, album?.Id, sortBy, sortOrder, shuffleNonce) {
+      val key = "$sortBy|$sortOrder|$shuffleNonce"
+      if (key != lastSortKey) {
+        lastSortKey = key
+        pendingScrollTop = true
+      }
       fetchPage(reset = true)
     }
 

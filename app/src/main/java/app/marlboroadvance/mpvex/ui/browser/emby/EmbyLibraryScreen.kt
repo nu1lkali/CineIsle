@@ -703,6 +703,15 @@ data class EmbyLibraryScreen(
     // 姗姗返回，把搜索结果覆盖成浏览列表（用户实测「恢复搜索却显示所有媒体」就是它）。
     var loadGeneration by remember { mutableStateOf(0) }
 
+    // 归位标记：数据**落位之后**把网格滚回顶部。
+    //
+    // 为什么不能在触发处直接滚：那时新数据还没到，LazyGrid 会先按旧内容记下第一屏的 key，
+    // 等新数据落位后再把那条重新定位到它在新顺序里的位置 —— 当场归位会被抵掉。
+    // 真正生效的那次归位在 [load] 的 onSuccess（数据已落位）里做。
+    // 置它的地方：切分类 / 换排序（含随机）/ 改筛选 / 下拉刷新。
+    // 首次进入（要恢复上次浏览位置）与「退出搜索接回位置」两种情况**不会**置它。
+    var pendingScrollTop by remember { mutableStateOf(false) }
+
     suspend fun load(reset: Boolean) {
       // 冷启动时当前服务器可能还没恢复，这里等一下，避免静默不加载
       val current = viewModel.currentServerOrAwait() ?: return
@@ -821,12 +830,15 @@ data class EmbyLibraryScreen(
           totalCount = page.totalCount
         }
         cacheItems()
-        // 搜索的结果每批都是整批替换，排完序要停在第一条。
+        // 整批替换（reset）之后要停在第一条。
         //
-        // 这一步放在数据落位**之后**才可靠：排序变化那个 LaunchedEffect 是在请求发出之前跑的，
-        // 而搜索这条路要先过防抖、再走网络，等结果回来时那次归位早就被列表重建冲掉了 ——
-        // 表现就是「切完排序列表还停在原来的位置」。
-        if (searchQuery.isNotBlank() && reset) {
+        // 这一步放在数据落位**之后**才可靠：触发方的 LaunchedEffect 是在请求发出之前跑的，
+        // 那时新数据还没到，归位会被 LazyGrid 的「按 key 把原第一条重新定位」抵掉 ——
+        // 表现就是「切完排序 / 随机 / 下拉刷新后，列表停在中间」。
+        //  · pendingScrollTop：切分类 / 换排序（含随机）/ 改筛选（含类型标签多选）/ 下拉刷新；
+        //  · searchQuery 非空：搜索结果每批都是整批替换，同样要停第一条。
+        if (reset && (pendingScrollTop || searchQuery.isNotBlank())) {
+          pendingScrollTop = false
           gridState.scrollToItem(0)
         }
       }.onFailure { e ->
@@ -918,7 +930,17 @@ data class EmbyLibraryScreen(
           gridState.scrollToItem(restore?.scrollIndex ?: 0, restore?.scrollOffset ?: 0)
         }
         firstBrowseKeyRun -> firstBrowseKeyRun = false
-        else -> gridState.scrollToItem(0)
+        // 切分类 / 换排序（含「随机」）/ 改筛选（含类型标签的多选）：呈现的是新的一批内容，
+        // 必须归位到第一条。
+        // ⚠️ 这里只**置标记**，真正的归位放到 load() 数据落位之后做：
+        //   此刻新数据还没到，LazyGrid 会先按旧内容记下第一屏的 key，等新数据落位后
+        //   再把那条重新定位到它在新顺序里的位置 —— 当场归位会被它抵掉，
+        //   表现就是「切了排序/随机，画面停在列表中间」（随机排序整副牌重洗时最明显）。
+        //   立刻滚一次只为点击后即时反馈，落位后那次才是真正生效的那次。
+        else -> {
+          pendingScrollTop = true
+          gridState.scrollToItem(0)
+        }
       }
       // 「演员」分类：走独立的演员加载，跳过媒体那套分页 / 缓存 / 扫描
       if (isActorListMode) {
@@ -1744,9 +1766,20 @@ data class EmbyLibraryScreen(
         isRefreshing = isRefreshing,
         // 演员分类下拉刷新要重拉演员，而不是去重拉媒体。
         // 媒体：顺带把这一屏的文件夹封面**换代**重取（批量覆盖到的与走兜底的都会换，见上）。
+        // ⭐ 刷新后回到顶部（下拉刷新的标准语义）。
+        //
+        // 不显式归位的话，LazyGrid 会**按条目 key 锚定滚动位置**：一旦刷新后顺序变了，
+        // 框架会把「刷新前第一屏的那条」重新定位到它在新列表里现在所在的位置 ——
+        // 表现就是「下拉刷新后画面跳到列表中间」。
+        //  · 随机排序：服务端整副牌重洗，锚点条目被甩到中间，跳得最明显（用户反馈）；
+        //  · 混合库 / 家庭视频库：照片与视频混排，顺序也常变；
+        //  · 纯视频库：排序固定、刷新前后同一批同一序，锚点恰好还在原位，所以看不出问题。
+        // ⚠️ 媒体走 `pendingScrollTop`（由 load 在数据落位后归位）；演员列表不经过 load，
+        //   它是一次性拉全的，直接 await 后归位即可。
         onRefresh = {
           if (isActorListMode) {
             loadActors()
+            gridState.scrollToItem(0)
           } else {
             // ⭐ 只换代，**不清缓存、也不清 `folderCovers`** —— 缓存里的旧封面正是刷新期间要继续
             //   显示的东西；清掉就会露出一片空占位（用户反馈「空占位有点丑」）。
@@ -1757,6 +1790,7 @@ data class EmbyLibraryScreen(
               EmbyFolderCoverCache.bumpGeneration()
               folderCoverGen = EmbyFolderCoverCache.currentGeneration()
             }
+            pendingScrollTop = true
             load(reset = true)
           }
         },
