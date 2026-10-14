@@ -64,8 +64,12 @@ private const val TAG_PAGE_SIZE = 100
  *
  * @param keyword  显示用的名字（类型名 / 标签名 / 工作室名，就是 chip 上的文字）
  * @param kind     "genre" = 类型，"studio" = 工作室，其它值按标签处理
- * @param filterId 过滤用的 Id。目前只有工作室用得上（Emby 的工作室过滤首选 `StudioIds`）；
- *   留空时退回用 [keyword] 按名字过滤（Emby 的 `Studios` 参数），两条路都是官方支持的。
+ * @param filterId 条目 Id，本页有**两个用途**：
+ *   ① **清单筛选** —— 目前只有工作室用得上（Emby 的工作室过滤首选 `StudioIds`）；
+ *      留空时退回用 [keyword] 按名字过滤（Emby 的 `Studios` 参数），两条路都是官方支持的。
+ *      类型始终按名字筛（[keyword]），不看这个字段。
+ *   ② **顶栏收藏红心** —— 类型 / 工作室都用它去取「本条目当前收没收藏」；
+ *      留空时类型会按名字反查一次（详情页的类型 chip 只给名字），标签无 Id 故红心隐藏。
  */
 @Serializable
 data class EmbyTagItemsScreen(

@@ -1852,8 +1852,9 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
   /**
    * 加载「类型 / 标签 / 工作室」结果页顶栏收藏红心所需的条目。
    *
-   * 工作室用详情页传来的 Id（[filterId]）；类型按名字反查 Id —— Emby 的类型条目是带
-   * `UserData` 的正式条目，可被收藏，但详情页只给了名字，需要反查一次拿到 Id；
+   * 工作室用详情页传来的 Id（[filterId]）；类型优先用调用方给的 Id（收藏页的类型
+   * 条目本身就在手上），拿不到再按名字反查 —— Emby 的类型条目是带 `UserData`
+   * 的正式条目，可被收藏，但详情页的类型 chip 只给了名字，需要反查一次拿到 Id；
    * 标签没有独立条目 Id，**不支持收藏**，返回 null（UI 据此隐藏红心）。
    *
    * 拿到的是携带 `UserData` 的完整条目，红心的「是否已收藏」直接读 `UserData.IsFavorite`。
@@ -1866,27 +1867,22 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
   ): EmbyItem? = withContext(Dispatchers.IO) {
     val id = when (kind) {
       "studio" -> filterId.takeIf { it.isNotBlank() }
-      "genre" -> resolveGenreId(server, keyword)
+      "genre" -> filterId.takeIf { it.isNotBlank() } ?: resolveGenreId(server, keyword)
       else -> null
     } ?: return@withContext null
     runCatching { EmbyClient.getItem(server, id) }.getOrNull()
   }
 
-  /** 按名字反查类型（Genre）条目的 Id：Emby 的类型条目 `Name` 可被 SearchTerm 命中。 */
-  private suspend fun resolveGenreId(server: EmbyServer, name: String): String? {
-    if (name.isBlank()) return null
-    return runCatching {
-      EmbyClient.getItems(
-        server = server,
-        includeItemTypes = listOf("Genre"),
-        searchTerm = name,
-        recursive = false,
-        limit = 5,
-      ).Items
-    }.getOrNull()
-      ?.firstOrNull { it.Name.equals(name, ignoreCase = true) }
-      ?.Id
-  }
+  /**
+   * 按名字反查类型（Genre）条目的 Id：走官方 `/Genres` 聚合端点
+   * （见 [EmbyClient.getGenreIdByName]）。
+   *
+   * ⚠️ 历史实现是 `/Items?IncludeItemTypes=Genre&SearchTerm=<名字>&Recursive=false`。
+   * 不带 `ParentId` 时非递归查询只扫用户根，而用户根下只有媒体库视图、没有类型条目，
+   * 于是**永远返回空** —— 「进类型页看不到顶栏收藏红心」就是这么来的。
+   */
+  private suspend fun resolveGenreId(server: EmbyServer, name: String): String? =
+    if (name.isBlank()) null else EmbyClient.getGenreIdByName(server, name)
 
   // ══════════════════════════════════════════════════════════════════════
   // 演职员合并（Person 去重）

@@ -547,6 +547,51 @@ object EmbyClient {
     nameList(server, "/Genres", parentId)
 
   /**
+   * 按名字查「类型」（Genre）条目的 Id。
+   *
+   * 用途：类型结果页（`EmbyTagItemsScreen`）顶栏的收藏红心要拿这个 Id 再去
+   * [getItem] 取一条带 `UserData` 的完整条目，才知道「这个类型当前收没收藏」。
+   * 详情页的类型 chip 只给了**名字**（`EmbyItem.Genres` 是纯字符串列表），
+   * 所以必须有「名字 → Id」这条反查通道。
+   *
+   * 主路走官方 `/Genres` 聚合端点 —— 与筛选面板取「类型名 + Id」是同一个端点
+   * （见 [getFilterOptions]）。该端点的 `parentId` 是**可选**参数，不传即
+   * 「该用户可见的全部类型」（官方文档：Gets all genres from a given item,
+   * folder, **or the entire library**）。拿到全量后本地匹配：先精确（忽略大小写），
+   * 再退一步「包含」，兜住服务端类型名的全半角 / 空格差异。
+   *
+   * ⚠️ 不要退回 `/Items?IncludeItemTypes=Genre&SearchTerm=...` 且不带 `Recursive`：
+   * 没有 `ParentId` 时非递归查询只扫用户根（那里只有媒体库视图、没有类型条目），
+   * **必然返回空** —— 这正是「类型页右上角不显示收藏红心」的根因。
+   *
+   * 兜底：个别服务端的 `/Genres` 在缺 `ParentId` 时仍返回空，这时改走一次
+   * 递归的 `/Items`（`Recursive=true` 才会跨库扫到 `Genre` 条目，
+   * 与 [getFavoriteGenres] 同一口径）。
+   */
+  fun getGenreIdByName(server: EmbyServer, name: String): String? {
+    if (name.isBlank()) return null
+    // 主路：官方聚合端点
+    idNameList(server, "/Genres", parentId = null)
+      .let { candidates ->
+        candidates.firstOrNull { it.name.equals(name, ignoreCase = true) }
+          ?: candidates.firstOrNull { it.name.contains(name, ignoreCase = true) }
+      }
+      ?.let { return it.id }
+    // 兜底：递归 /Items 按名字搜一次类型条目
+    return runCatching {
+      getItems(
+        server = server,
+        includeItemTypes = listOf("Genre"),
+        searchTerm = name,
+        recursive = true,
+        limit = 64,
+      ).Items.firstOrNull { it.Name.equals(name, ignoreCase = true) }?.Id
+    }.onFailure {
+      EmbyLog.warn("getGenreIdByName(\"$name\") 兜底查询失败：${it.message}", it)
+    }.getOrNull()
+  }
+
+  /**
    * 直播电视频道列表（`/LiveTv/Channels`）。
    *
    * 返回体的 `Items[]` 结构与 `/Items` 一致（同一个 `EmbyItemsResult`），

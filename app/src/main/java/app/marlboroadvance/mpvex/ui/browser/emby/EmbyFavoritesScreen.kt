@@ -770,12 +770,14 @@ fun EmbyFavoritesScreen() {
                 }
                 val name = facet.Name ?: return@EmbyMediaCard
                 // 进该类型 / 工作室的作品清单页（与详情页点 chip 同一条路由）。
-                // 工作室过滤走 Id（更准），类型只按名字过滤，所以 kind 不同、filterId 有别。
+                // 类型 / 工作室都把**条目 Id** 带上：结果页顶栏的收藏红心要拿它去取
+                // 「本条目当前收没收藏」，有 Id 就不必再按名字反查一次
+                // （清单本身的筛选口径不变 —— 类型仍按名字筛，见 EmbyTagItemsScreen）。
                 backStack.add(
                   EmbyTagItemsScreen(
                     keyword = name,
                     kind = if (tab == FavoriteTab.STUDIO) "studio" else "genre",
-                    filterId = if (tab == FavoriteTab.STUDIO) facet.Id.orEmpty() else "",
+                    filterId = facet.Id.orEmpty(),
                   ),
                 )
               },
