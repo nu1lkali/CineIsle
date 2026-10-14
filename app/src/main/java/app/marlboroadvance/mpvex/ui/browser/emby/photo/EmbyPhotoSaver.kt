@@ -50,15 +50,17 @@ object EmbyPhotoSaver {
     context: Context,
     server: EmbyServer,
     item: EmbyItem,
-    /** 自定义保存目录（SAF 树 URI 字符串）；空 = 系统相册 Pictures/CineIsle */
+    /** 自定义保存目录（SAF 树 URI 字符串，老版本留下的）；空 = 看 [saveDirPath] */
     saveDirUri: String? = null,
+    /** 自定义保存目录（**绝对路径**，自研选择器的产物）；空 = 系统相册 Pictures/CineIsle */
+    saveDirPath: String? = null,
   ): Result =
     withContext(Dispatchers.IO) {
       val id = item.Id ?: return@withContext Result.Failure("照片信息不完整")
       val bytes = download(EmbyClient.photoDownloadUrl(server, id))
         ?: return@withContext Result.Failure("下载原图失败")
       val fileName = originalFileName(item, bytes)
-      writePhoto(context, fileName, mimeOf(fileName), bytes, saveDirUri)
+      writePhoto(context, fileName, mimeOf(fileName), bytes, saveDirUri, saveDirPath)
     }
 
   /**
@@ -77,6 +79,8 @@ object EmbyPhotoSaver {
     item: EmbyItem,
     saveDirUri: String? = null,
     rotationDegrees: Int = 0,
+    /** 自定义保存目录（**绝对路径**，自研选择器的产物）；空 = 系统相册 */
+    saveDirPath: String? = null,
   ): Result =
     withContext(Dispatchers.IO) {
       val id = item.Id ?: return@withContext Result.Failure("照片信息不完整")
@@ -90,7 +94,7 @@ object EmbyPhotoSaver {
           ?: return@withContext Result.Failure("本地转码 JPEG 失败")
       }
       val base = item.Name?.takeIf { it.isNotBlank() }?.substringBeforeLast('.') ?: "photo"
-      writePhoto(context, "$base.jpg", "image/jpeg", outBytes, saveDirUri)
+      writePhoto(context, "$base.jpg", "image/jpeg", outBytes, saveDirUri, saveDirPath)
     }
 
   // ── 下载 ──
@@ -111,9 +115,10 @@ object EmbyPhotoSaver {
   // ── 落盘 ──
 
   /**
-   * 按用户设置落盘：设了自定义目录就走 SAF 树，否则进系统相册。
+   * 按用户设置落盘，优先级：**绝对路径 > 老 SAF 树 URI > 系统相册**。
    *
-   * @param saveDirUri `ACTION_OPEN_DOCUMENT_TREE` 拿到的树 URI（字符串）。空 = 系统相册。
+   * @param saveDirPath 自研选择器选出的目录绝对路径。非空时优先走 [writeToPath]。
+   * @param saveDirUri `ACTION_OPEN_DOCUMENT_TREE` 拿到的树 URI（字符串，老版本遗留）。
    */
   private fun writePhoto(
     context: Context,
@@ -121,11 +126,50 @@ object EmbyPhotoSaver {
     mime: String,
     bytes: ByteArray,
     saveDirUri: String?,
+    saveDirPath: String?,
   ): Result =
-    if (!saveDirUri.isNullOrBlank()) {
-      writeToTree(context, Uri.parse(saveDirUri), fileName, mime, bytes)
-    } else {
-      writeToGallery(context, fileName, mime, bytes)
+    when {
+      !saveDirPath.isNullOrBlank() ->
+        writeToPath(saveDirPath, fileName, bytes)
+      !saveDirUri.isNullOrBlank() ->
+        writeToTree(context, Uri.parse(saveDirUri), fileName, mime, bytes)
+      else ->
+        writeToGallery(context, fileName, mime, bytes)
+    }
+
+  /**
+   * 写进**绝对路径目录**（自研选择器的产物）。
+   *
+   * 走 `java.io.File`，依赖「所有文件访问权限」（`MANAGE_EXTERNAL_STORAGE`）——
+   * 本 App 是本地播放器，这个权限本来就是主流程要用的。
+   *
+   * ⚠️ **没授权时不能静默失败**：`SecurityException` / `IOException` 会转成带原因的
+   * [Result.Failure]，文案里直接点出「没有所有文件访问权限」，让用户知道去哪开，
+   * 而不是「保存失败」四个字把人晾着。
+   *
+   * 同名文件**直接覆盖**：相册目录里同名是同一张图，追加 " (1)" 只会让目录越用越乱。
+   */
+  private fun writeToPath(
+    dirPath: String,
+    fileName: String,
+    bytes: ByteArray,
+  ): Result =
+    runCatching {
+      val dir = File(dirPath)
+      if (!dir.exists() && !dir.mkdirs() && !dir.exists()) {
+        return Result.Failure("无法创建目录：$dirPath")
+      }
+      val dest = File(dir, fileName)
+      dest.writeBytes(bytes)
+      Result.Success
+    }.getOrElse { e ->
+      Log.w(TAG, "写入自定义路径失败: ${e.message}")
+      val hint = if (e is SecurityException) {
+        "没有「所有文件访问权限」，请在系统设置里授予后再保存"
+      } else {
+        "保存到所选目录失败：${e.message}"
+      }
+      Result.Failure(hint)
     }
 
   /**
@@ -274,5 +318,23 @@ object EmbyPhotoSaver {
       val prefix = if (volume.equals("primary", ignoreCase = true)) "内部存储" else "存储卡"
       if (relative.isEmpty()) prefix else "$prefix/$relative"
     }.getOrNull()
+  }
+
+  /**
+   * 把自研选择器选出的**绝对路径**转成给人看的短标签。
+   *
+   * `/storage/emulated/0/DCIM/Camera` → `内部存储/DCIM/Camera`。
+   * 设置页那一行只有 ~40 个字的宽度，直接甩绝对路径会被截断成 `…/0/DCIM/Camera`，
+   * 前半截 `/storage/emulated` 对所有人都是废话，换掉它。
+   */
+  fun displayPathLabel(path: String?): String? {
+    if (path.isNullOrBlank()) return null
+    val p = path.trimEnd('/')
+    val internal = Environment.getExternalStorageDirectory().absolutePath.trimEnd('/')
+    return when {
+      p == internal -> "内部存储"
+      p.startsWith("$internal/") -> "内部存储/${p.removePrefix("$internal/")}"
+      else -> p
+    }
   }
 }

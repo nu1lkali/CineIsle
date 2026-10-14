@@ -40,11 +40,24 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
-    // versionName 涨到 1.4.0：图集 / 照片库全套 —— 照片网格页 + 全屏浏览器
-    // （双指缩放 / 幻灯片 / EXIF 信息 / 保存原图），混合媒体库「仅媒体 / 全部 / 仅照片」三态开关。
-    // 53：照片特性收口版（数据层 / HEIC / 网格页 / 浏览器 / 混合库开关，编译通过）。
-    versionCode = 54
-    versionName = "1.4.0"
+    // versionName 涨到 1.5.4：照片浏览器交互补齐 ——
+    //   ① 下拉关闭大图（未放大时竖向拖拽，跟手位移 + 缩小变暗，过阈值松手退出）；
+    //   ② Telephoto ZoomSpec 显式开橡皮筋回弹、最大倍率 2×→4×；
+    //   ③ 记住上次浏览位置（按相册 Id 记页码，网格页重新进入时定位回去）；
+    //   ④ 长按弹底部操作面板（保存原图 / 另存 JPEG / 收藏 / 旋转 / 信息），
+    //      旧版「长按直接弹保存对话框」收编进面板第一组，长按只剩一个出口；
+    //   ⑤ 底部缩略图胶片条（设置开关，默认关）；
+    //   ⑥ 幻灯片转场由硬切改「淡出→换页→淡入」（手动滑动仍是跟手滑动）；
+    //   ⑦ 「照片保存位置」下线系统 SAF 选择器，改弹 App 自研的 FolderPickerDialog。
+    // versionName 涨到 1.5.3：照片浏览器换 Coil 3 渲染（按显示尺寸采样 + 双层缓存），
+    // 预加载张数可在设置页配（1~3）；加载中给骨架屏 / 进度条，失败给占位图 + 重试；
+    // 点图片任意处进沉浸全屏（顶栏也有入口）；修幻灯片只翻一半、右下角加倒计时；
+    // 照片网格工具行改为占高度的「安全区」，上滑不再与卡片叠在一起；
+    // 全项目错误态上方加 Oops 动态指示牌动画。
+    // 1.5.2：照片网格页两个真机问题（工具行压住第一排卡片 / 相册态返回键被拦）。
+    // 1.5.1：混合库改「内容即所见」+ 子文件夹无限加载修复 + 照片卡统一等比。
+    versionCode = 59
+    versionName = "1.5.4"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -363,8 +376,15 @@ dependencies {
   // + 自研的两套，用 lottie-compose 在 Compose 里渲染。
   implementation(libs.lottie.compose)
   // Telephoto：照片浏览器（图集）的捏合缩放 / 拖动平移 / 双击放大手势。
-  // 只依赖核心 zoomable 模块，图片本身仍由 EmbyImageLoader 加载后交给 Modifier.zoomable 包一层。
+  // 只依赖核心 zoomable 模块 —— 手势与「图片怎么加载」是两件事，图片交给下面的 Coil。
   implementation(libs.telephoto.zoomable)
+  // Coil 3：照片链路（浏览器 + 照片网格卡）的图片渲染层。
+  // 字节仍然由项目自己的 EmbyImageLoader 取（节流 + 双鉴权 + 缩放失败退回原图），
+  // 交给 Coil 的是「解码 / 采样 / 缓存 / 取消」，
+  // 见 ui/browser/emby/photo/EmbyPhotoImageLoader.kt。
+  // ⚠️ 刻意**没有**引官方的 coil-network-okhttp：那套网络实现不知道 Emby 的鉴权，
+  //    引了还要跟我们自己的 Fetcher 抢 String 类型的请求。
+  implementation(libs.coil.compose)
   // DLNA 投屏：UPnPCast 源码内置在 app/src/main/java/com/yinnho/upnpcast/ 下（同 embyclient 的做法），
   // 版本为上游 master / v1.3.0。
   // 为什么不用 Maven Central 的 com.yinnho.upnpcast:upnpcast:1.1.2：

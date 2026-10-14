@@ -6,15 +6,17 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
-import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
-import androidx.compose.foundation.lazy.staggeredgrid.items
-import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.GridView
@@ -31,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -64,10 +67,16 @@ import org.koin.compose.koinInject
  *  1. **相册网格**：库根下的一级 PhotoAlbum 容器（recursive=false，不拉平）；
  *  2. **照片网格**：某个相册内的 Photo（点相册进入）。
  *
+ * 布局：工具行与图区是 **Column 上下两行**（工具行占自己的高度），
+ * 不是「工具行叠在图区之上」。⭐ 叠上去的写法必须靠内容自己留白让位，
+ * 而上滑时那点留白会跟着滚走，卡片就压到按钮底下了（真机反馈）；
+ * 上下两行是真正的「安全区」—— 图区从工具行**下方**开始，怎么滑都进不去。
+ *
  * 与视频媒体库页的刻意差异（需求锁定，见 photo.md 方案）：
  * - 工具行只有：数量 + **随机播放图片** + 列数 + 排序。
  *   没有视界流 / 随机播放(视频) / 随机播放收藏 / 筛选 —— 那些对照片没有意义。
- * - 瀑布流（StaggeredGrid）保留照片原始宽高比，不做 2:3 裁切。
+ * - 网格是**统一等比**的（每张卡同一尺寸、缩略图 Crop 填满），
+ *   不再是「高度随原图比例」的瀑布流 —— 后者横竖图并排大小差一倍，观感很乱。
  *
  * 分页：⚠️ StartIndex 用独立 [consumed] 计数，**永远不用 items.size**
  * （服务端单页可能重复，两者会不等 ⇒ 永远到不了底）。
@@ -106,6 +115,12 @@ data class EmbyPhotoGridScreen(
       )
     }
     val inAlbum = album != null
+    // 相册态是**怎么来的**：true = 用户在本页点相册点进去的；false = 构造时就带着
+    // initialAlbumId、一进来就是相册态（媒体库 → 文件夹分类 → 点某个相册）。
+    // ⚠️ 后者**没有可退的相册网格**：本页的 libraryId 就是那个相册自己的 Id，
+    //    退回去只会拉到一个空的相册网格（显示「此库没有照片」），用户还得再按一次
+    //    才真正出栈。所以返回键只在「本页点进去的」那种情况拦截（见下方 BackHandler）。
+    var enteredAlbumInPage by remember { mutableStateOf(false) }
 
     // 排序 / 列数：全局一份（照片网格一套设置走天下，不按库分）
     val sortBy by browserPreferences.photoSortBy.collectAsState()
@@ -117,13 +132,27 @@ data class EmbyPhotoGridScreen(
 
     var items by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
     var totalCount by remember { mutableIntStateOf(0) }
+    // ⚠️ 「该显示转圈」和「有没有请求在飞」是两件事，必须分开：
+    //  · loading 的初值只能是 true —— 首帧还没发请求，给 false 会先闪一下「此库没有照片」；
+    //  · 但它**不能**同时当并发闸门。曾经的写法是 `if (loading || loadingMore) return`，
+    //    于是第一次 fetchPage(reset = true) 被自己挡掉、loading 再也回不到 false
+    //    ⇒ 整页永远停在转圈（「点进相册/文件夹一直加载中」就是这个）。
     var loading by remember { mutableStateOf(true) }
     var loadingMore by remember { mutableStateOf(false) }
+    // 请求代际：每次 reset 拉取 ++。迟到的旧响应（用户已经换了相册 / 排序）整批丢弃，
+    // 否则它会盖到新内容上 —— 表现为「切了相册，看到的还是上一个相册的照片」。
+    var generation by remember { mutableIntStateOf(0) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var consumed by remember { mutableIntStateOf(0) }
     var showColumnsMenu by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
-    val gridState = rememberLazyStaggeredGridState()
+    val gridState = rememberLazyGridState()
+
+    // 「再洗一副牌」的计数器：点排序里的「随机」时 ++，把重拉的请求踢一脚。
+    // ⭐ 为什么需要它：换排序项 / 反转方向都会改 LaunchedEffect 的 key，从而重拉；
+    //   但「已经是 Random 了、用户还想再洗一次」时 sortBy 与 sortOrder 都没变，
+    //   key 不变 ⇒ 不会重拉 ⇒ 清了缓存也白清，看起来像点了没反应。
+    var shuffleNonce by remember { mutableIntStateOf(0) }
 
     // 当前父节点：相册态 = 该相册 Id，库根态 = libraryId。
     // ⚠️ 必须写成函数而不是 `val … get()` —— Kotlin 不接受局部属性带自定义 getter
@@ -134,50 +163,87 @@ data class EmbyPhotoGridScreen(
     /** 拉一页；[reset] = 清空重来（换层级 / 换排序），否则追加 */
     fun fetchPage(reset: Boolean) {
       val current = server ?: return
-      if (loading || loadingMore) return
+      // 续页同一时刻只允许一个：重复触发会把同一页拉两遍。
+      // ⚠️ 这里**只看 loadingMore**，绝不能用 loading 当闸门（见上面 loading 的说明）。
+      if (!reset && loadingMore) return
       val startIndex = if (reset) 0 else consumed
       if (!reset && startIndex >= totalCount) return
+      // 只有 reset 才推进代际：续页不该让在途的整批加载作废
+      val gen = if (reset) ++generation else generation
       if (reset) {
         loading = true
         errorMessage = null
       } else {
         loadingMore = true
       }
+
+      // ⭐ 随机排序：命中缓存就直接复用，不再问服务端。
+      //
+      // 服务端 `SortBy=Random` 是**每次请求重新洗牌**的 —— 只要本页重新拉一次
+      // （从大图返回、退回相册网格再进、甚至切走再回来），顺序就全变了，
+      // 用户刚看过的那张再也找不回来（真机反馈：「返回上一级就重新随机了」）。
+      // 所以第一批拉到之后就按相册缓存在进程内，重进直接复用同一副牌。
+      if (reset && sortBy == "Random") {
+        val cached = PhotoRandomQueue.get(parentId())
+        if (cached != null) {
+          items = cached.items
+          consumed = cached.items.size
+          totalCount = cached.totalCount
+          loading = false
+          loadingMore = false
+          return
+        }
+      }
+
       scope.launch {
-        val result = runCatching {
-          withContext(Dispatchers.IO) {
-            if (album == null) {
-              vm.loadPhotoAlbums(current, parentId(), sortBy, sortOrder, startIndex = startIndex)
-            } else {
-              vm.loadPhotos(current, parentId(), sortBy, sortOrder, startIndex = startIndex)
+        try {
+          val result = runCatching {
+            withContext(Dispatchers.IO) {
+              if (album == null) {
+                vm.loadPhotoAlbums(current, parentId(), sortBy, sortOrder, startIndex = startIndex)
+              } else {
+                vm.loadPhotos(current, parentId(), sortBy, sortOrder, startIndex = startIndex)
+              }
             }
           }
-        }
-        result.onSuccess { res ->
-          if (reset) {
-            items = res.Items
-            consumed = res.Items.size
-          } else {
-            // 翻页边界可能重复（同一 StartIndex 被服务端重算），按 Id 去重再追加
-            val seen = items.mapNotNull { it.Id }.toHashSet()
-            val fresh = res.Items.filter { it.Id == null || it.Id !in seen }
-            items = items + fresh
-            // ⚠️ consumed 按「服务端吐了多少」推进，不是按追加了多少 ——
-            //    否则去重掉的几条会让下一页 StartIndex 回退、同一页反复拉
-            consumed += res.Items.size
-            if (res.Items.isEmpty()) totalCount = consumed // 兜底：没数据就停，别死循环
+          // 代际已前进：这次结果属于上一个层级 / 排序，整批丢弃（收尾交给新那次）
+          if (gen != generation) return@launch
+          result.onSuccess { res ->
+            val random = sortBy == "Random"
+            if (reset) {
+              items = res.Items
+              consumed = res.Items.size
+              if (random) PhotoRandomQueue.put(parentId(), res.Items, res.TotalRecordCount)
+            } else {
+              // 翻页边界可能重复（同一 StartIndex 被服务端重算），按 Id 去重再追加
+              val seen = items.mapNotNull { it.Id }.toHashSet()
+              val fresh = res.Items.filter { it.Id == null || it.Id !in seen }
+              items = items + fresh
+              // ⚠️ consumed 按「服务端吐了多少」推进，不是按追加了多少 ——
+              //    否则去重掉的几条会让下一页 StartIndex 回退、同一页反复拉
+              consumed += res.Items.size
+              if (res.Items.isEmpty()) totalCount = consumed // 兜底：没数据就停，别死循环
+            }
+            totalCount = res.TotalRecordCount
+            // 随机排序下续页拿到的同样是新洗的一批，追加进缓存即可 ——
+            // 已经看过的那部分顺序不动，只是队尾多了一批（比「整副牌重洗」温和得多）
+            if (random) PhotoRandomQueue.put(parentId(), items, totalCount)
+          }.onFailure { e ->
+            if (reset) errorMessage = "加载照片失败：${e.message}"
           }
-          totalCount = res.TotalRecordCount
-        }.onFailure { e ->
-          if (reset) errorMessage = "加载照片失败：${e.message}"
+        } finally {
+          // 自己的标志自己收：过期的请求也要把「续页中」放开，
+          // 否则一次被接替的续页会让这一页此后再也不续页。
+          loadingMore = false
+          // loading 只由**当前这一代**收尾 —— 过期的别去动它，
+          // 那一代的请求还在飞，动了就会闪出空态。
+          if (gen == generation) loading = false
         }
-        loading = false
-        loadingMore = false
       }
     }
 
     // 换层级 / 换排序 ⇒ 重拉第一页
-    LaunchedEffect(server?.id, album?.Id, sortBy, sortOrder) {
+    LaunchedEffect(server?.id, album?.Id, sortBy, sortOrder, shuffleNonce) {
       fetchPage(reset = true)
     }
 
@@ -193,8 +259,61 @@ data class EmbyPhotoGridScreen(
       if (nearEnd) fetchPage(reset = false)
     }
 
-    // 相册态按返回键先退回相册网格，而不是直接退出整个照片页
-    BackHandler(enabled = inAlbum) { album = null }
+    // ── 记住上次浏览位置 ──
+    //
+    // 浏览器退出时会按 parentId 记下「看到第几张」，这里在**重新进入**相册时把网格
+    // 滚到那一张 —— 不然每次点进相册都从第 1 张开始，看到第 200 张退出去再进来就得
+    // 重新滑一遍。
+    //
+    // ⭐ 只做**一次**：续页会不断把 [items] 变长，而本 effect 的 key 里有 items.size，
+    // 没有 [restored] 闸门的话每续一页都会把用户重新拽回定位点（表现为「往下翻着翻着
+    // 自己跳回去了」）。
+    // ⭐ 也只在 idx > 0 时滚：上次就停在第 1 张还要滚一次纯属多余动画。
+    val parentKey = album?.Id ?: libraryId
+    val lastIndexPref = remember(parentKey) { browserPreferences.photoLastIndex(parentKey) }
+    val lastOffsetPref = remember(parentKey) { browserPreferences.photoLastOffset(parentKey) }
+    var restored by remember(parentKey) { mutableStateOf(false) }
+    LaunchedEffect(parentKey, items.size) {
+      if (restored || items.isEmpty()) return@LaunchedEffect
+      restored = true
+      val idx = lastIndexPref.get()
+      if (idx > 0) {
+        // 只定位到**已经加载出来的范围**内：页码超出已加载部分时不硬滚
+        // （要么抛异常，要么得为一次滚动连拉好几页、几十个请求换一次定位，不值）
+        runCatching {
+          gridState.scrollToItem(idx.coerceAtMost(items.size - 1), lastOffsetPref.get())
+        }
+      }
+    }
+
+    // ── 退出时记下滚动位置 ──
+    //
+    // 光记「打开过第几张」不够：很多时候用户只是在网格里一路滚着看、一张都没点开，
+    // 退出去再进来还是从第 1 张开始。所以这里把**网格自己的滚动位置**也存下来。
+    //
+    // ⭐ 与浏览器写的「当前第几张」谁生效：从大图返回后如果用户**没有再滚动**
+    //   （可见位置还停在打开照片时的那格），就保留浏览器写的那张 —— 那才是他最后看的；
+    //   一旦滚过，就以新的滚动位置为准。
+    var indexWhenOpened by remember { mutableStateOf<Int?>(null) }
+    DisposableEffect(parentKey) {
+      onDispose {
+        if (items.isEmpty()) return@onDispose
+        val firstVisible = gridState.firstVisibleItemIndex
+        val opened = indexWhenOpened
+        if (opened == null || firstVisible != opened) {
+          lastIndexPref.set(firstVisible)
+          lastOffsetPref.set(gridState.firstVisibleItemScrollOffset)
+        }
+      }
+    }
+
+    // 相册态按返回键先退回相册网格，而不是直接退出整个照片页。
+    // ⚠️ 但**只有**「在本页点相册点进去的」才该这样退：直接以 initialAlbumId 进来的
+    //    那一档要让它正常出栈，否则会退到以相册 Id 当父级的空网格（见 enteredAlbumInPage）。
+    BackHandler(enabled = inAlbum && enteredAlbumInPage) {
+      album = null
+      enteredAlbumInPage = false
+    }
 
     Scaffold(
       topBar = {
@@ -208,69 +327,18 @@ data class EmbyPhotoGridScreen(
         )
       },
     ) { innerPadding ->
-      Box(
+      Column(
         modifier = Modifier
           .fillMaxSize()
           .padding(innerPadding),
       ) {
-        when {
-          loading -> AppLoadingIndicator(
-            modifier = Modifier
-              .size(48.dp)
-              .align(Alignment.Center),
-          )
-
-          errorMessage != null -> Text(
-            text = errorMessage ?: "",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-              .align(Alignment.Center)
-              .padding(32.dp),
-          )
-
-          items.isEmpty() -> Text(
-            text = if (inAlbum) "此相册没有照片" else "此库没有照片",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-              .align(Alignment.Center)
-              .padding(32.dp),
-          )
-
-          else -> PhotoStaggeredGrid(
-            columnCount = columnCount,
-            gridState = gridState,
-            items = items,
-            inAlbum = inAlbum,
-            displayUrl = { item, maxWidth -> server?.let { vm.photoImageUrl(it, item, maxWidth) } },
-            fallbackUrl = { item, maxWidth ->
-              server?.let { vm.photoImageUrl(it, item, maxWidth, format = "jpg") }
-            },
-            onCardClick = { item ->
-              if (inAlbum) {
-                // 照片 → 全屏浏览器；队列 = 当前网格快照（含已续页拉到的部分）
-                val index = items.indexOfFirst { it.Id == item.Id }.coerceAtLeast(0)
-                backStack.add(
-                  EmbyPhotoBrowserScreen(
-                    initialPhotos = items,
-                    initialIndex = index,
-                    parentId = parentId(),
-                    title = album?.Name ?: title,
-                  ),
-                )
-              } else {
-                // 相册 → 进入该相册（本页内切态）
-                album = item
-              }
-            },
-          )
-        }
-
         // ── 工具行：数量 + 随机播放图片 + 列数 + 排序 ──
-        // 贴在图区之上（不占布局高度）：与视频库一致的做法。
+        // ⭐ 它是 Column 的**第一行，占自己的高度**，图区从它下面开始 ——
+        // 这样上滑时卡片不会压到按钮上（「安全区」的真做法）。
+        // 以前它是叠在图区之上的悬浮条，靠网格自己留白让位：留白会跟着滚走，
+        // 滚一段后卡片就跑到按钮底下了（真机反馈「卡片和工具栏叠在一起」）。
         // 数量文案 weight(1f) 吃掉剩余宽度，保证右边按钮永不被挤出屏幕
-        androidx.compose.foundation.layout.Row(
+        Row(
           modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
@@ -383,11 +451,21 @@ data class EmbyPhotoGridScreen(
                   },
                   onClick = {
                     if (value == sortBy) {
-                      browserPreferences.photoSortOrder.set(
-                        if (sortOrder == "Ascending") "Descending" else "Ascending",
-                      )
+                      if (value == "Random") {
+                        // 已经是随机了，再点一次 = **再洗一副牌**。
+                        // 「正序/倒序」对随机没有意义，所以这里不碰 sortOrder，
+                        // 改为清缓存 + 踢 shuffleNonce 触发重拉。
+                        PhotoRandomQueue.invalidate(parentId())
+                        shuffleNonce++
+                      } else {
+                        browserPreferences.photoSortOrder.set(
+                          if (sortOrder == "Ascending") "Descending" else "Ascending",
+                        )
+                      }
                     } else {
                       // 换排序项：方向清空，重新跟随自然方向
+                      // 切**进**随机也先清缓存 —— 上一次的随机序列不该留到这回
+                      if (value == "Random") PhotoRandomQueue.invalidate(parentId())
                       browserPreferences.photoSortBy.set(value)
                       browserPreferences.photoSortOrder.set("")
                     }
@@ -398,8 +476,101 @@ data class EmbyPhotoGridScreen(
             }
           }
         }
+
+        // ── 图区（工具行**下面**那一行）──
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+          when {
+            loading -> AppLoadingIndicator(
+              modifier = Modifier
+                .size(48.dp)
+                .align(Alignment.Center),
+            )
+
+            errorMessage != null -> Text(
+              text = errorMessage ?: "",
+              style = MaterialTheme.typography.bodyLarge,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier
+                .align(Alignment.Center)
+                .padding(32.dp),
+            )
+
+            items.isEmpty() -> Text(
+              text = if (inAlbum) "此相册没有照片" else "此库没有照片",
+              style = MaterialTheme.typography.bodyLarge,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier
+                .align(Alignment.Center)
+                .padding(32.dp),
+            )
+
+            else -> PhotoGrid(
+              columnCount = columnCount,
+              gridState = gridState,
+              items = items,
+              inAlbum = inAlbum,
+              displayUrl = { item, maxWidth -> server?.let { vm.photoImageUrl(it, item, maxWidth) } },
+              fallbackUrl = { item, maxWidth ->
+                server?.let { vm.photoImageUrl(it, item, maxWidth, format = "jpg") }
+              },
+              onCardClick = { item ->
+                if (inAlbum) {
+                  // 照片 → 全屏浏览器；队列 = 当前网格快照（含已续页拉到的部分）
+                  val index = items.indexOfFirst { it.Id == item.Id }.coerceAtLeast(0)
+                  // 记下「打开时的滚动位置」：退出相册时据此判断用户回来后有没有再滚动过
+                  indexWhenOpened = gridState.firstVisibleItemIndex
+                  backStack.add(
+                    EmbyPhotoBrowserScreen(
+                      initialPhotos = items,
+                      initialIndex = index,
+                      parentId = parentId(),
+                      title = album?.Name ?: title,
+                    ),
+                  )
+                } else {
+                  // 相册 → 进入该相册（本页内切态）
+                  // ⚠️ 记下「是本页点进去的」：只有这种情况返回键才先退回相册网格
+                  album = item
+                  enteredAlbumInPage = true
+                }
+              },
+            )
+          }
+        }
       }
     }
+  }
+}
+
+/**
+ * 「随机」排序下每批结果的进程内缓存：key = 相册 / 库 的 parentId。
+ *
+ * 存在的唯一理由：Emby 服务端 `SortBy=Random` **每次请求都重新洗牌**。
+ * 网格页一旦重新拉取（从大图返回、退回相册网格再进、误触返回），整屏顺序就变了，
+ * 用户刚看过的那张再也找不到。缓存之后，同一个相册在进程存活期间永远是同一副牌。
+ *
+ * 为什么不持久化到磁盘：
+ *  · 随机序列是「这一轮逛相册」的上下文，隔天再来本来就该是新的；
+ *  · 存下来还会让「换一台设备 / 服务端新增了照片」后的行为变得难以解释。
+ * 进程重启后重新随机，这是**符合预期**的（用户能理解「重开 App 换一批」）。
+ *
+ * ⚠️ 用 synchronizedMap：下拉续页在 IO 线程回调后回主线程写，而命中缓存的读发生在
+ *    组合里，两端不是同一线程。
+ */
+object PhotoRandomQueue {
+  class Entry(val items: List<EmbyItem>, val totalCount: Int)
+
+  private val cache = java.util.Collections.synchronizedMap(mutableMapOf<String, Entry>())
+
+  fun get(parentId: String): Entry? = cache[parentId]
+
+  fun put(parentId: String, items: List<EmbyItem>, totalCount: Int) {
+    cache[parentId] = Entry(items, totalCount)
+  }
+
+  /** 作废某个相册的随机序列（下次进入重新洗牌） */
+  fun invalidate(parentId: String) {
+    cache.remove(parentId)
   }
 }
 
@@ -411,26 +582,38 @@ private val PHOTO_SORT_OPTIONS = listOf(
 )
 
 /**
- * 瀑布流本体。抽出来只是为了让 [EmbyPhotoGridScreen.Content] 的 when 分支短一点。
+ * 照片网格本体。抽出来只是为了让 [EmbyPhotoGridScreen.Content] 的 when 分支短一点。
+ *
+ * ⚠️ 用**普通网格**而不是瀑布流：照片卡已经是统一等比（见 EmbyPhotoCard.aspectRatio），
+ * 瀑布流在这种等高卡片下只会让相邻列错位、底部参差 —— 正好是用户反馈的
+ * 「卡片大小不一」。等高卡片 + 普通网格才是齐整的那一种。
  *
  * @param displayUrl / fallbackUrl 按卡片需要的解码宽度现算（HEIC 兜底同参数）
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PhotoStaggeredGrid(
+private fun PhotoGrid(
   columnCount: Int,
-  gridState: androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState,
+  gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
   items: List<EmbyItem>,
   inAlbum: Boolean,
   displayUrl: (EmbyItem, Int) -> String?,
   fallbackUrl: (EmbyItem, Int) -> String?,
   onCardClick: (EmbyItem) -> Unit,
 ) {
-  LazyVerticalStaggeredGrid(
-    columns = StaggeredGridCells.Fixed(columnCount),
+  LazyVerticalGrid(
+    columns = GridCells.Fixed(columnCount),
     state = gridState,
-    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp),
-    verticalItemSpacing = 8.dp,
+    // ⭐ 顶部 12dp 就是普通留白 —— 工具行已经**占了自己的那一行**，
+    // 网格不用（也不能）再为它让位：contentPadding 会跟着内容滚走，
+    // 靠它让位等于没让（v1.5.2 的「卡片压在工具行底下」就是这么来的）。
+    contentPadding = PaddingValues(
+      start = 12.dp,
+      end = 12.dp,
+      top = 12.dp,
+      bottom = 12.dp,
+    ),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
     modifier = Modifier.fillMaxSize(),
   ) {

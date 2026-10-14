@@ -233,6 +233,7 @@ data class EmbyPlaylistDetailScreen(
             message = error ?: "读取失败",
             buttonText = "重试",
             onAction = { vm.loadEntries(current, playlistId) },
+            isError = true,
             modifier = Modifier.align(Alignment.Center),
           )
 

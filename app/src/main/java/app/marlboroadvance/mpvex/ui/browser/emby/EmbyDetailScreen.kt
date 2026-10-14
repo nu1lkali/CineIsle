@@ -326,6 +326,7 @@ data class EmbyDetailScreen(
           message = error ?: "加载失败",
           buttonText = "重试",
           onAction = { scope.launch { load() } },
+          isError = true,
           modifier = Modifier.align(Alignment.Center),
         )
 

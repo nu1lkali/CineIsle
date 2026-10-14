@@ -875,6 +875,8 @@
   <string name="i18n_ack_upnpcast_summary">DLNA casting — device discovery and playback control.</string>
   <string name="i18n_ack_aboutlibraries_summary">Generates the open-source license list on this screen.</string>
   <string name="i18n_ack_network_summary">Network storage and serving — SMB, WebDAV, FTP and an embedded HTTP server.</string>
+  <string name="i18n_ack_telephoto_summary">Pinch-to-zoom / pan / double-tap zoom gestures for the photo browser.</string>
+  <string name="i18n_ack_coil_summary">Image loading, sampling and caching layer for the photo browser and photo grid.</string>
   <string name="i18n_preload_next_video">Preload next video</string>
   <string name="i18n_preload_next_video_summary">2s into playback, fetch the beginning of the next video in the background for smoother switching</string>
   <string name="pref_remember_subtitle_track_title">Remember subtitle track per series</string>

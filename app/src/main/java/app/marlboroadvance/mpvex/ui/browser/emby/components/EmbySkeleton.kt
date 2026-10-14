@@ -477,5 +477,8 @@ class Shimmer(
  *
  * 等价于 `background(Brush)`，但那个 Brush 每帧都不一样。
  */
-private fun Modifier.shimmer(shimmer: Shimmer): Modifier =
+// ?? 刻意是 public：照片链路（ui/browser/emby/photo）的「加载中骨架屏」也要用这套扫光，
+// 那边不在同一个包里。跨包复用比在 photo 包里另写一份更好 —— 扫光参数只有一处定义，
+// 全 App 的骨架屏才是同一种质感（coding.md：别在各处复制同一件事的实现）。
+fun Modifier.shimmer(shimmer: Shimmer): Modifier =
   this.drawBehind { drawRect(shimmer.brushFor(size)) }

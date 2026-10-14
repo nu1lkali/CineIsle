@@ -80,6 +80,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.PersonMergeScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarAlgorithm
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
 import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoSaver
+import app.marlboroadvance.mpvex.ui.browser.dialogs.FolderPickerDialog
 import app.marlboroadvance.mpvex.ui.lock.AppLockManageDialog
 import app.marlboroadvance.mpvex.ui.lock.PatternChangeDialog
 import app.marlboroadvance.mpvex.ui.lock.PatternSetupDialog
@@ -682,6 +683,29 @@ object PreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              // ── 照片预加载张数 ────────────────────────────────────────
+              //
+              // 照片浏览器会提前把「当前这张前后各 N 张」拉进缓存，滑过去时不白屏。
+              // 固定 1/2/3 三档：再大就是拿流量和内存换几乎感知不到的流畅度
+              // （全屏图一张十几 MB，缓存封顶后多预取的会被后来者顶掉，等于白预取）。
+              val preloadCount by browserPreferences.photoPreloadCount.collectAsState()
+              ListPreference(
+                value = preloadCount.coerceIn(1, 3),
+                onValueChange = { browserPreferences.photoPreloadCount.set(it.coerceIn(1, 3)) },
+                values = listOf(1, 2, 3),
+                valueToText = { AnnotatedString("前后各 $it 张") },
+                title = { Text(text = "照片预加载张数") },
+                summary = {
+                  Text(
+                    text = "前后各预取 ${preloadCount.coerceIn(1, 3)} 张，翻页更快；" +
+                      "张数越多占的内存和流量越多，缓存满时会自动淘汰最旧的",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
               // ── 照片幻灯片间隔 ────────────────────────────────────────
               //
               // 照片浏览器（图集）里「幻灯片播放」的翻页间隔。三档固定值，
@@ -726,33 +750,50 @@ object PreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              // ── 底部胶片条 ────────────────────────────────────────────
+              //
+              // 照片浏览器底部那条缩略图。默认**关**：它要吃掉约 56dp 的画面高度，
+              // 而照片浏览器最值钱的就是画面面积；想要快速跳图的人自己打开。
+              val photoFilmstrip by browserPreferences.photoFilmstrip.collectAsState()
+              SwitchPreference(
+                value = photoFilmstrip,
+                onValueChange = { browserPreferences.photoFilmstrip.set(it) },
+                title = { Text(text = "照片浏览器显示底部缩略图") },
+                summary = {
+                  Text(
+                    text = if (photoFilmstrip) {
+                      "底部显示一排缩略图，点一下跳到那张（会占一点画面高度）"
+                    } else {
+                      "整屏只显示当前这张，画面最大"
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
               // ── 照片保存位置 ──────────────────────────────────────────
               //
-              // 照片浏览器里「长按保存 / 另存为 JPEG」落到哪里。默认进系统相册的
+              // 照片浏览器里「长按 → 保存原图 / 另存为 JPEG」落到哪里。默认进系统相册的
               // `Pictures/CineIsle`；想放自己的目录就点进来选一次。
               //
-              // ⭐ 弹的是**系统自带的文件夹选择器**（SAF `ACTION_OPEN_DOCUMENT_TREE`），
-              //    不需要用户手输路径，也不用引第三方库（见 EmbyPhotoSaver.writeToTree）。
-              // ⚠️ 选完必须 `takePersistableUriPermission` —— 拿的是**持久**读/写授权，
-              //    不调的话重启后这个 URI 就失效，等于白选。
+              // ⭐ v1.5.4 起弹的是 **App 自己的文件夹选择器**（FolderPickerDialog），
+              //    不再是系统的 SAF `ACTION_OPEN_DOCUMENT_TREE` —— 系统那张界面是
+              //    系统风格，跟本 App 的整体 UI 完全不搭。
+              //    自研选择器给的是**绝对路径**（`/storage/emulated/0/DCIM/xxx`），
+              //    落盘走 java.io.File（依赖「所有文件访问权限」，本 App 作为本地
+              //    播放器本来就要这个权限；没授权时保存会给出明确的失败原因）。
+              // ⚠️ 选完把老版本的 SAF URI 一起清空：两个位置并存时优先级会打架，
+              //    用户会困惑「我到底存到哪了」。
               val context = LocalContext.current
-              val saveDirUri by browserPreferences.photoSaveDirUri.collectAsState()
-              val pickSaveDir =
-                rememberLauncherForActivityResult(OpenDocumentTreeContract()) { uri ->
-                  if (uri == null) return@rememberLauncherForActivityResult
-                  val flags =
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                  // 取持久授权失败（个别第三方 provider 不支持）也不拦着用 ——
-                  // 本次会话仍可写，只是重启后失效，用户重选一次即可。
-                  runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }
-                  browserPreferences.photoSaveDirUri.set(uri.toString())
-                  Toast.makeText(context, "已设为照片保存位置", Toast.LENGTH_SHORT).show()
-                }
+              val saveDirPath by browserPreferences.photoSaveDirPath.collectAsState()
+              var showFolderPicker by remember { mutableStateOf(false) }
               Preference(
                 title = { Text(text = "照片保存位置") },
                 summary = {
                   Text(
-                    text = EmbyPhotoSaver.displayLabel(saveDirUri)
+                    text = EmbyPhotoSaver.displayPathLabel(saveDirPath)
                       ?: "系统相册（Pictures/CineIsle）· 点击更改",
                     color = MaterialTheme.colorScheme.outline,
                   )
@@ -764,12 +805,27 @@ object PreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                onClick = { pickSaveDir.launch(null) },
+                onClick = { showFolderPicker = true },
+              )
+
+              // 自研文件夹选择器：存储卷切换 / 返回上级 / 新建文件夹都在里面。
+              // ⚠️ currentPath 传空串 —— 它是「与当前路径相同就禁用确定」的判据
+              // （给移动/复制用的），选保存位置时没有「源目录」，不能让它生效。
+              FolderPickerDialog(
+                isOpen = showFolderPicker,
+                currentPath = "",
+                onDismiss = { showFolderPicker = false },
+                onFolderSelected = { path ->
+                  showFolderPicker = false
+                  browserPreferences.photoSaveDirPath.set(path)
+                  browserPreferences.photoSaveDirUri.set("")
+                  Toast.makeText(context, "已设为照片保存位置", Toast.LENGTH_SHORT).show()
+                },
               )
 
               // 只有选过自定义目录才给「恢复默认」—— 默认状态下这一项没有意义，
               // 常驻只会让人以为「默认」是个需要主动设置的东西。
-              if (saveDirUri.isNotBlank()) {
+              if (saveDirPath.isNotBlank()) {
                 PreferenceDivider()
                 Preference(
                   title = { Text(text = "恢复默认保存位置") },
@@ -780,6 +836,7 @@ object PreferencesScreen : Screen {
                     )
                   },
                   onClick = {
+                    browserPreferences.photoSaveDirPath.set("")
                     browserPreferences.photoSaveDirUri.set("")
                     Toast.makeText(context, "已恢复默认", Toast.LENGTH_SHORT).show()
                   },

@@ -184,8 +184,12 @@ object EmbyImageLoader {
    *
    * 等待者**不占**信号量（先在 [inFlight] 等，等不到才自己去下载）——
    * 否则「等下载的人占着坑、下载的人没坑可用」会死锁。
+   *
+   * ⚠️ 原来这里是 private。照片链路换成 Coil 之后（EmbyPhotoFetcher）也要走它：
+   * 节流、双鉴权、缩放失败退回原图这套逻辑**只该有一份实现**（红线 58），
+   * 所以对外开放而不是在照片那边另写一个下载。
    */
-  private suspend fun downloadBytes(url: String): ByteArray? {
+  suspend fun downloadBytes(url: String): ByteArray? {
     inFlight[url]?.let { return it.await() }
     val deferred = CompletableDeferred<ByteArray?>()
     val existing = inFlight.putIfAbsent(url, deferred)

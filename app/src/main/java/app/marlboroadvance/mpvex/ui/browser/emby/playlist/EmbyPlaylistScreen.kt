@@ -176,6 +176,7 @@ object EmbyPlaylistScreen : Screen {
               val s = server
               if (s != null) vm.loadPlaylists(s, force = true)
             },
+            isError = true,
             modifier = Modifier.align(Alignment.Center),
           )
 

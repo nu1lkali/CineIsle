@@ -440,16 +440,78 @@ class BrowserPreferences(
   val photoAutoSlideshow = preferenceStore.getBoolean("photo_auto_slideshow", false)
 
   /**
+   * 照片浏览器**前后各预加载几张**（1~3，默认 1）。
+   *
+   * 读取处一律 `coerceIn(1, 3)` —— 偏好文件可能被外部改坏，0 会让预取直接不生效、
+   * 999 会一次打出上百个请求。
+   *
+   * ⭐ **为什么不设更大**：预取的是全屏图（maxWidth=2048），一张十几 MB。
+   * Coil 的内存缓存按堆的 25% 封顶（见 EmbyPhotoImageLoader.MEMORY_PERCENT），
+   * 超了自动丢最旧的，所以调大不会撑爆进程，只会让**当前这张之外的图更容易被顶掉**，
+   * 等于「预取了个寂寞」还多花了流量。3 张已经是收益递减的拐点。
+   */
+  val photoPreloadCount = preferenceStore.getInt("photo_preload_count", 1)
+
+  /**
    * 照片保存目录（SAF 树 URI 字符串）。**空字符串 = 系统相册**（`Pictures/CineIsle`）。
    *
-   * 非空时是 `ACTION_OPEN_DOCUMENT_TREE` 返回的树 URI。设置入口在
-   * 「设置 → Emby 媒体库 → 照片保存位置」—— 点一下弹系统自带的文件夹选择器，
-   * **不需要用户手输路径**。选完必须 `takePersistableUriPermission`，
-   * 否则重启后这个 URI 就失效了（见 PreferencesScreen 里的 launcher）。
+   * ⚠️ **已下线（v1.5.4）**：设置页不再弹系统 SAF 选择器，改用自研的
+   * [photoSaveDirPath]。这一项只保留**读**——老用户以前选过的目录仍然继续生效，
+   * 不至于升级后保存位置被悄悄重置。新选择一律写 [photoSaveDirPath]。
    *
    * ⚠️ 偏好键 `photo_save_dir_uri` 发布后不能改（改了等于重置所有用户的选择）。
    */
   val photoSaveDirUri = preferenceStore.getString("photo_save_dir_uri", "")
+
+  /**
+   * 照片保存目录（**绝对路径**，自研文件夹选择器选出）。**空 = 系统相册**。
+   *
+   * v1.5.4 起「设置 → Emby 媒体库 → 照片保存位置」弹的是 App 自己的
+   * [app.marlboroadvance.mpvex.ui.browser.dialogs.FolderPickerDialog]，
+   * 拿到的是 `/storage/emulated/0/DCIM/xxx` 这样的真实路径，不再是
+   * `content://…` 树 URI —— 系统那个 SAF 选择器界面跟 App 的整体风格完全不搭。
+   *
+   * ⚠️ 写文件走 `java.io.File`，依赖**所有文件访问权限**（`MANAGE_EXTERNAL_STORAGE`，
+   * 本 App 作为本地播放器本来就要这个权限）。没授权时 `EmbyPhotoSaver` 会返回
+   * 明确的失败原因，而不是静默失败。
+   *
+   * 与 [photoSaveDirUri] 的优先级：路径 > 老 SAF URI > 系统相册。
+   * 设置页选了新目录后**同时清空**老 URI，避免两个位置打架。
+   */
+  val photoSaveDirPath = preferenceStore.getString("photo_save_dir_path", "")
+
+  /**
+   * 照片浏览器**底部缩略图胶片条**开关，默认**关**。
+   *
+   * 关 = 整屏只有这一张照片（沉浸）；开 = 底部多一条横向缩略图，点一下跳到那张。
+   * 默认关的理由：胶片条要吃掉 ~64dp 的高度，而照片浏览器最值钱的就是画面面积；
+   * 想要「快速跳图」的人自己打开即可。
+   */
+  val photoFilmstrip = preferenceStore.getBoolean("photo_filmstrip", false)
+
+  /**
+   * 「上次在这个库/相册里看到第几张」，按 parentId 各存一份，-1 = 没有记录。
+   *
+   * 用途：重新进入相册时网格自动滚动到上次看的位置，不用从头翻。
+   * 两个来源写同一个键：
+   *  · 照片浏览器退出时写「当前第几张」（看过哪张就回到哪张）；
+   *  · 网格页自己退出时写「第一个可见项」（只是滚动浏览、没点开照片也记得住）。
+   *
+   * ⚠️ 做成**函数**而不是 `val`，因为 key 里带 parentId（每个相册一份），
+   * 不可能为每个相册预先声明一个字段。调用方用
+   * `remember(parentId) { prefs.photoLastIndex(parentId) }` 拿稳定对象再 collect。
+   */
+  fun photoLastIndex(parentId: String) =
+    preferenceStore.getInt("photo_last_index_$parentId", -1)
+
+  /**
+   * 与 [photoLastIndex] 配套的**像素级偏移**（该可见项滚过了多少 px）。
+   *
+   * 只记 index 会丢掉「同一项内的滚动量」：一屏 3 列时差一格就是差半屏，
+   * 恢复后看着像「差一点点」，用户还得自己微调。两个值一起存才能精确还原。
+   */
+  fun photoLastOffset(parentId: String) =
+    preferenceStore.getInt("photo_last_offset_$parentId", 0)
 
   // ── 显示偏好服务端同步（清单 #16）──
   //

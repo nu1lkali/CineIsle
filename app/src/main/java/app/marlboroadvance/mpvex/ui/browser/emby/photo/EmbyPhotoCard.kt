@@ -1,12 +1,12 @@
 package app.marlboroadvance.mpvex.ui.browser.emby.photo
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -17,24 +17,26 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
-import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.LocalEmbyAppearance
 
 /**
- * 照片卡片（图集网格用）。
+ * 照片卡片（图集 / 媒体库网格用）。
  *
  * 与视频卡片的区别，每条都是有意的：
- * - **不裁切**（[ContentScale.Fit]）：照片是内容本身，裁掉边缘等于丢画面；
- *   视频海报裁成 2:3 是行业惯例，照片不是。卡片底色用 surfaceVariant，
- *   宽银幕 / 竖图 Letterbox 时露出的就是它，与视频卡同一套底色。
- * - **不固定宽高比**：高度随原图比例（瀑布流的前提），所以不能像海报卡那样
- *   给 Card 加 `aspectRatio`。
+ * - **缩略图裁切填满**（[ContentScale.Crop]）：照片卡是统一 1:1，用 Fit 的话
+ *   竖图左右、横图上下都会露出底色，一屏看下去全是灰边（用户实测反馈）。
+ *   网格裁、单张不裁 —— 完整画面在**全屏浏览器**里看（那边是 Fit）。
+ *   这也是 Google Photos / Emby Web 的做法。卡片底色仍用 surfaceVariant，
+ *   图还没到时露出的就是它（现在被骨架屏盖住）。
+ * - **统一等比**（[aspectRatio]，默认 1:1）：⭐ 每张卡都占同一块尺寸，网格才齐整。
+ *   早先的版本是「高度随原图比例」的瀑布流，横图与竖图并排差出一倍高度，
+ *   观感很乱（用户反馈「卡片大小不一」）。
  * - **没有任何角标**：照片没有播放进度 / 收藏 / 时长 / 多选，
  *   右上角红心、底部进度条一概不渲染。
  * - 副标题给相机型号 + 像素尺寸（见 [photoSubtitle]），不是年份评分。
  *
- * HEIC 走 [photoDisplayUrl] 原格式 + [photoJpegFallbackUrl] 服务端转码兜底，
- * 老系统 / AVIF 也能出图（见 EmbyImageLoader 的 sniffModernMime）。
+ * 缩略图走 [EmbyPhotoThumbnail]（Coil）：HEIC / 老系统解不动时自动改用服务端
+ * `format=jpg` 转码那张（[fallbackUrl]）；加载中是骨架屏，失败给占位 + 重试。
  */
 @Composable
 fun EmbyPhotoCard(
@@ -44,7 +46,8 @@ fun EmbyPhotoCard(
   modifier: Modifier = Modifier,
   fallbackUrl: String? = null,
   subtitle: String? = photoSubtitle(item),
-  maxWidth: Int = 720,
+  /** 卡片图区的宽高比；默认 1:1。所有照片卡都用同一个值才叫「统一」。 */
+  aspectRatio: Float = 1f,
 ) {
   Column(modifier = modifier.fillMaxWidth()) {
     Card(
@@ -53,19 +56,23 @@ fun EmbyPhotoCard(
       shape = RoundedCornerShape(LocalEmbyAppearance.current.corner),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
-      EmbyImage(
-        url = displayUrl,
-        fallbackUrl = fallbackUrl,
-        contentDescription = item.Name,
-        // Fit + 不固定高：高度由原图比例决定（瀑布流）。
-        // heightIn(min) 是给「图还没加载出来」时的占位高度，避免卡片塌成一条。
+      // 定死图区比例：卡片尺寸不再随原图比例浮动。图还没加载出来时也是这一块，
+      // 所以不会出现「先塌成一条、图到了再撑开」的跳动。
+      Box(
         modifier = Modifier
           .fillMaxWidth()
-          .heightIn(min = 120.dp),
-        contentScale = ContentScale.Fit,
-        placeholder = Icons.Default.Image,
-        maxWidth = maxWidth,
-      )
+          .aspectRatio(aspectRatio),
+      ) {
+        // 照片链路走 Coil（EmbyPhotoThumbnail）：加载中骨架屏、失败占位 + 重试，
+        // 缩略图 Crop 填满卡片不留灰边。完整画面在全屏浏览器里看。
+        EmbyPhotoThumbnail(
+          url = displayUrl,
+          fallbackUrl = fallbackUrl,
+          contentDescription = item.Name,
+          modifier = Modifier.fillMaxSize(),
+          contentScale = ContentScale.Crop,
+        )
+      }
     }
 
     Column(modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp)) {

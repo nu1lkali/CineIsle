@@ -45,6 +45,14 @@ lottie = "6.7.1"
 # EmbyImageLoader（OkHttp + BitmapFactory），**不是** Coil/Glide，
 # 所以 zoomable-image/coil、zoomable-image/glide 那几个集成模块一概不需要。
 telephoto = "0.19.0"
+# Coil 3（coil-kt）：照片浏览器 / 照片网格的**图片渲染层**。
+# 项目其余封面（海报、横幅、宫格）仍走自研 EmbyImageLoader —— 只有照片链路换它，
+# 换的是「成熟框架才有的东西」：按显示尺寸采样（自适应，不整张原图进内存）、
+# 内存/磁盘双层缓存按字节上限自动淘汰、crossfade、请求自动取消。
+# ⚠️ 只取 coil-compose 一个 artifact：core 由它传递进来，网络走项目自己的 Fetcher
+#    （EmbyPhotoFetcher → EmbyImageLoader.downloadBytes），不需要官方的 okhttp 模块。
+#    没引 coil-gif / coil-svg / coil-video —— 项目用不到，多引只增体积。
+coil = "3.6.3"
 
 [libraries]
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
@@ -144,6 +152,12 @@ dfm = { module = "com.github.ctiao:dfm", version.ref = "dfm" }
 # ── Lottie 加载动画 ──
 lottie = { module = "com.airbnb.android:lottie", version.ref = "lottie" }
 lottie-compose = { module = "com.airbnb.android:lottie-compose", version.ref = "lottie" }
+
+# ── Coil 3：照片链路的图片渲染层（见 versions 里的说明）──
+# 只要 coil-compose（core 由它传递进来）。网络**不用**官方的 coil-network-okhttp：
+# 照片的字节走项目自己的 EmbyImageLoader（见 EmbyPhotoFetcher），
+# 官方那套不知道 Emby 鉴权，也不该和自研 Fetcher 抢请求。
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 
 # ── Telephoto：照片浏览器的缩放/平移手势 ──
 # Android artifact 带 `-android` 后缀（telephoto 是 KMP 项目，-android 是它的 Android 发布变体）。

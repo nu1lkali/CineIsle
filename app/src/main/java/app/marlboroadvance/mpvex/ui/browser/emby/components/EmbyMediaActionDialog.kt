@@ -119,6 +119,22 @@ fun EmbyMediaActionsDialog(
   val name = item.Name ?: ""
   val isFavorite = item.UserData?.IsFavorite == true
   val isPlayed = item.UserData?.Played == true
+  val isPhoto = item.Type?.equals("Photo", ignoreCase = true) == true
+  // 编辑元数据保存：影视走通用表单、照片走专用轻量表单，但落库逻辑完全一致
+  val saveMetadata: (EmbyItem) -> Unit = { updated ->
+    scope.launch {
+      val ok = viewModel.updateItemMetadata(server, updated)
+      Toast.makeText(
+        context,
+        if (ok) "元数据已保存" else "保存失败，可能需要管理员权限",
+        Toast.LENGTH_LONG,
+      ).show()
+      if (ok) {
+        onChanged(updated)
+        onDismissRequest()
+      }
+    }
+  }
 
   var page by remember { mutableStateOf(MediaPage.MAIN) }
 
@@ -132,24 +148,19 @@ fun EmbyMediaActionsDialog(
       onOpen = { page = it },
     )
 
-    MediaPage.EDIT_METADATA -> EmbyEditMetadataDialog(
-      item = item,
-      onDismissRequest = onDismissRequest,
-      onSave = { updated ->
-        scope.launch {
-          val ok = viewModel.updateItemMetadata(server, updated)
-          Toast.makeText(
-            context,
-            if (ok) "元数据已保存" else "保存失败，可能需要管理员权限",
-            Toast.LENGTH_LONG,
-          ).show()
-          if (ok) {
-            onChanged(updated)
-            onDismissRequest()
-          }
-        }
-      },
-    )
+    MediaPage.EDIT_METADATA -> if (isPhoto) {
+      EmbyEditPhotoMetadataDialog(
+        item = item,
+        onDismissRequest = onDismissRequest,
+        onSave = saveMetadata,
+      )
+    } else {
+      EmbyEditMetadataDialog(
+        item = item,
+        onDismissRequest = onDismissRequest,
+        onSave = saveMetadata,
+      )
+    }
 
     MediaPage.EDIT_IMAGES -> EmbyEditImagesDialog(
       server = server,
@@ -246,6 +257,14 @@ private fun EmbyMediaActionMenu(
   val isPlayed = item.UserData?.Played == true
   // 演员条目：裁剪到只剩收藏一项，文案也按「收藏 / 取消收藏」来
   val isPerson = item.Type?.equals("Person", ignoreCase = true) == true
+  // 照片库两类：单张照片(Type=Photo) 与 相册(Type=PhotoAlbum)。它们的元数据模型和影视完全不同 ——
+  // 没有"已播放"、没有演职员、没有可在线识别的影视库，长按菜单必须按类型裁剪，
+  // 不能把影视那套原样搬过来（详见各 DropdownMenuItem 上的注释）。
+  val isPhoto = item.Type?.equals("Photo", ignoreCase = true) == true
+  val isAlbum = item.Type?.equals("PhotoAlbum", ignoreCase = true) == true
+  val isPhotoOrAlbum = isPhoto || isAlbum
+  // 影视类（电影 / 剧集 / 单集…）：保留完整菜单
+  val isVideoLike = !isPerson && !isPhotoOrAlbum
   // 「只看这位演员 / 导演」要跳作品页，用当前页栈 push（与详情页点头像同一条路由）
   val backStack = LocalBackStack.current
 
@@ -294,90 +313,102 @@ private fun EmbyMediaActionMenu(
         },
       )
     }
-    // 演员到收藏为止：其余操作都不适用于 Person，整块收掉
+    // 演员到收藏为止：上方已单独给过「合并演职员」，其余操作都不适用于 Person，整块收掉
     if (!isPerson) {
-      DropdownMenuItem(
-        text = { Text(if (isPlayed) "标记为未播放" else "标记为已播放") },
-        leadingIcon = { Icon(Icons.Default.Check, contentDescription = null) },
-        onClick = {
-          val id = item.Id
-          if (id != null) {
-            runEmbyLibraryAction(
-              context = context,
-              scope = scope,
-              server = server,
-              itemId = id,
-              name = name,
-              okMessage = if (isPlayed) "已标记为未播放" else "已标记为已播放",
-              action = { s, itemId -> viewModel.setPlayed(s, itemId, !isPlayed) },
-            )
-            onDismissRequest()
-            onChanged(item.copy(UserData = (item.UserData ?: EmbyUserData()).copy(Played = !isPlayed)))
-          }
-        },
-      )
-      // 「更多 TA 出演 / 执导的作品」：取演职员表里第一个演员与第一个导演，各自跳 TA 的作品清单页
-      // （与详情页点头像同一条路由）。
-      // ⚠️ 两个身份**各自独立判断**：只有演员、没有导演的片子就只出现「出演」那一行，
-      // 不会留一个点了没反应的死项；两个都没有（条目缺演职员信息）则两行都不显示。
-      val people = item.People.orEmpty()
-      val leadActor = people.firstOrNull { it.Id != null && it.Type.equals("Actor", ignoreCase = true) }
-      val leadDirector = people.firstOrNull { it.Id != null && it.Type.equals("Director", ignoreCase = true) }
-      // 带上人名，菜单项能直接看出是谁；名字缺失时退回泛指说法
-      val leadActorName = leadActor?.Name?.takeIf { it.isNotBlank() }
-      val leadDirectorName = leadDirector?.Name?.takeIf { it.isNotBlank() }
-      if (leadActor?.Id != null) {
+      // 影视类专属：已播放标记、演职员跳转、刮削、刷新元数据。
+      // 照片 / 相册没有这些概念（没有播放进度、没有可在线识别的影视库），整块收掉，
+      // 避免把影视那套无意义操作摆在照片上误导用户。
+      if (isVideoLike) {
         DropdownMenuItem(
-          text = { Text(leadActorName?.let { "更多 $it 出演的作品" } ?: "更多该演员的作品") },
-          leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+          text = { Text(if (isPlayed) "标记为未播放" else "标记为已播放") },
+          leadingIcon = { Icon(Icons.Default.Check, contentDescription = null) },
           onClick = {
-            onDismissRequest()
-            backStack.add(
-              EmbyPersonScreen(
-                personId = leadActor.Id,
-                personName = leadActor.Name.orEmpty(),
-                personImageTag = leadActor.PrimaryImageTag,
-              ),
-            )
+            val id = item.Id
+            if (id != null) {
+              runEmbyLibraryAction(
+                context = context,
+                scope = scope,
+                server = server,
+                itemId = id,
+                name = name,
+                okMessage = if (isPlayed) "已标记为未播放" else "已标记为已播放",
+                action = { s, itemId -> viewModel.setPlayed(s, itemId, !isPlayed) },
+              )
+              onDismissRequest()
+              onChanged(item.copy(UserData = (item.UserData ?: EmbyUserData()).copy(Played = !isPlayed)))
+            }
           },
         )
-      }
-      if (leadDirector?.Id != null) {
+        // 「更多 TA 出演 / 执导的作品」：取演职员表里第一个演员与第一个导演，各自跳 TA 的作品清单页
+        // （与详情页点头像同一条路由）。
+        // ⚠️ 两个身份**各自独立判断**：只有演员、没有导演的片子就只出现「出演」那一行，
+        // 不会留一个点了没反应的死项；两个都没有（条目缺演职员信息）则两行都不显示。
+        val people = item.People.orEmpty()
+        val leadActor = people.firstOrNull { it.Id != null && it.Type.equals("Actor", ignoreCase = true) }
+        val leadDirector = people.firstOrNull { it.Id != null && it.Type.equals("Director", ignoreCase = true) }
+        // 带上人名，菜单项能直接看出是谁；名字缺失时退回泛指说法
+        val leadActorName = leadActor?.Name?.takeIf { it.isNotBlank() }
+        val leadDirectorName = leadDirector?.Name?.takeIf { it.isNotBlank() }
+        if (leadActor?.Id != null) {
+          DropdownMenuItem(
+            text = { Text(leadActorName?.let { "更多 $it 出演的作品" } ?: "更多该演员的作品") },
+            leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+            onClick = {
+              onDismissRequest()
+              backStack.add(
+                EmbyPersonScreen(
+                  personId = leadActor.Id,
+                  personName = leadActor.Name.orEmpty(),
+                  personImageTag = leadActor.PrimaryImageTag,
+                ),
+              )
+            },
+          )
+        }
+        if (leadDirector?.Id != null) {
+          DropdownMenuItem(
+            text = { Text(leadDirectorName?.let { "更多 $it 执导的作品" } ?: "更多该导演的作品") },
+            leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+            onClick = {
+              onDismissRequest()
+              backStack.add(
+                EmbyPersonScreen(
+                  personId = leadDirector.Id,
+                  personName = leadDirector.Name.orEmpty(),
+                  personImageTag = leadDirector.PrimaryImageTag,
+                ),
+              )
+            },
+          )
+        }
         DropdownMenuItem(
-          text = { Text(leadDirectorName?.let { "更多 $it 执导的作品" } ?: "更多该导演的作品") },
-          leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
-          onClick = {
-            onDismissRequest()
-            backStack.add(
-              EmbyPersonScreen(
-                personId = leadDirector.Id,
-                personName = leadDirector.Name.orEmpty(),
-                personImageTag = leadDirector.PrimaryImageTag,
-              ),
-            )
-          },
+          text = { Text("刮削元数据") },
+          leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+          onClick = { onOpen(MediaPage.IDENTIFY) },
+        )
+        DropdownMenuItem(
+          text = { Text("刷新元数据") },
+          leadingIcon = { Icon(Icons.Default.Autorenew, contentDescription = null) },
+          onClick = { onOpen(MediaPage.REFRESH) },
         )
       }
+      // 编辑元数据：影视 / 相册 / 照片都保留（标签、描述、拍摄年份对照片整理有用）。
+      // 注：当前表单字段偏影视（原名 / 分级 / 类型），对照片略水土不服，后续可换照片专用轻量表单。
       DropdownMenuItem(
         text = { Text("编辑元数据") },
         leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
         onClick = { onOpen(MediaPage.EDIT_METADATA) },
       )
-      DropdownMenuItem(
-        text = { Text("编辑图片") },
-        leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
-        onClick = { onOpen(MediaPage.EDIT_IMAGES) },
-      )
-      DropdownMenuItem(
-        text = { Text("刮削元数据") },
-        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-        onClick = { onOpen(MediaPage.IDENTIFY) },
-      )
-      DropdownMenuItem(
-        text = { Text("刷新元数据") },
-        leadingIcon = { Icon(Icons.Default.Autorenew, contentDescription = null) },
-        onClick = { onOpen(MediaPage.REFRESH) },
-      )
+      // 编辑图片：单张照片本身就是 Primary 图，"换海报"等于用别的图覆盖自己，无意义且危险 ⇒ 仅相册 / 影视显示
+      // （相册 = 换封面，影视 = 换海报，都成立）。
+      if (!isPhoto) {
+        DropdownMenuItem(
+          text = { Text("编辑图片") },
+          leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
+          onClick = { onOpen(MediaPage.EDIT_IMAGES) },
+        )
+      }
+      // 删除：影视 / 相册 / 照片都保留（删掉拍坏的照常是刚需）
       DropdownMenuItem(
         text = { Text("删除", color = MaterialTheme.colorScheme.error) },
         leadingIcon = {
@@ -557,6 +588,90 @@ fun EmbyEditMetadataDialog(
           modifier = Modifier.fillMaxWidth(),
         )
       }
+  }
+}
+
+/**
+ * 照片专用「编辑信息」对话框（比影视版轻量）。
+ *
+ * 影视的 [EmbyEditMetadataDialog] 是片名 / 原名 / 分级 / 类型 / 标签 / 简介那一套，
+ * 对照片水土不服——照片没有「原名」「分级」「类型(Genre)」。这里只留照片真正用得上的四项：
+ * - 描述（Overview）
+ * - 标签（Tags，顿号/逗号分隔）
+ * - 拍摄日期（PremiereDate，ISO 日期，如 2024-06-15）
+ * - 地点（ProductionLocations，顿号/逗号分隔）
+ *
+ * 保存同样走 `PUT /Items/{Id}`（[EmbyViewModel.updateItemMetadata]），其余字段原样带回，
+ * 不会把照片已有的 Name / 图片 tag 之类清掉。
+ */
+@Composable
+fun EmbyEditPhotoMetadataDialog(
+  item: EmbyItem,
+  onDismissRequest: () -> Unit,
+  onSave: (EmbyItem) -> Unit,
+) {
+  var overview by remember { mutableStateOf(item.Overview ?: "") }
+  var tags by remember { mutableStateOf(item.Tags.joinToString("、")) }
+  // PremiereDate 服务端常是带 T 的完整时间戳，这里只取日期部分给输入框
+  var premiereDate by remember {
+    mutableStateOf(item.PremiereDate?.substringBefore('T')?.takeIf { it.isNotBlank() } ?: "")
+  }
+  var locations by remember { mutableStateOf(item.ProductionLocations.joinToString("、")) }
+
+  EmbyActionSheet(
+    title = "编辑照片信息",
+    onDismissRequest = onDismissRequest,
+    confirmLabel = "保存",
+    onConfirm = {
+      onSave(
+        item.copy(
+          Overview = overview.ifBlank { null },
+          Tags = splitList(tags),
+          PremiereDate = premiereDate.trim().ifBlank { null },
+          ProductionLocations = splitList(locations),
+        ),
+      )
+    },
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(max = 460.dp)
+        .verticalScroll(rememberScrollState()),
+    ) {
+      OutlinedTextField(
+        value = overview,
+        onValueChange = { overview = it },
+        label = { Text("描述") },
+        minLines = 3,
+        modifier = Modifier.fillMaxWidth(),
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+      OutlinedTextField(
+        value = tags,
+        onValueChange = { tags = it },
+        label = { Text("标签（顿号分隔）") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+      OutlinedTextField(
+        value = premiereDate,
+        onValueChange = { premiereDate = it.filter { c -> c.isDigit() || c == '-' } },
+        label = { Text("拍摄日期") },
+        placeholder = { Text("如 2024-06-15") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+      OutlinedTextField(
+        value = locations,
+        onValueChange = { locations = it },
+        label = { Text("地点（顿号分隔）") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+      )
+    }
   }
 }
 

@@ -551,6 +551,7 @@ fun EmbyFavoritesScreen() {
           message = error ?: "加载失败",
           buttonText = "重试",
           onAction = { scope.launch { load(force = true) } },
+          isError = true,
           modifier = Modifier.align(Alignment.Center),
         )
 

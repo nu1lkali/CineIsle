@@ -77,6 +77,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchTabRow
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySectionHeader
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
+import app.marlboroadvance.mpvex.ui.browser.emby.components.OopsErrorAnimation
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonHome
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyWideCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyItemActionsDialog
@@ -694,6 +695,8 @@ fun EmbyHomeScreen(
         message = error ?: "加载失败",
         buttonText = "重试",
         onAction = { viewModel.refreshHome() },
+        // 连不上服务器 / 请求失败 ⇒ 给 Oops 指示牌（「这里坏了」而不是「这里没东西」）
+        isError = true,
       )
 
       isLoading && libraries.isEmpty() -> EmbySkeletonHome()
@@ -887,12 +890,21 @@ private fun libraryIcon(collectionType: String?): ImageVector = when (collection
   else -> Icons.Default.PhotoLibrary
 }
 
+/**
+ * 空态 / 错误态的通用占位（全 Emby 模块共用）。
+ *
+ * @param isError **true = 这是出错了**（连不上服务器、加载失败），不是「本来就没内容」。
+ *   这两种情况外观必须分开：出错给 [OopsErrorAnimation] 动态指示牌，
+ *   一眼就知道「这里坏了、可以重试」；单纯的空态仍然只给一个静态图标 ——
+ *   给空态也挂 Oops 是在骗用户「你遇到问题了」。
+ */
 @Composable
 fun EmbyEmptyState(
   message: String,
   buttonText: String,
   onAction: () -> Unit,
   modifier: Modifier = Modifier,
+  isError: Boolean = false,
 ) {
   Column(
     modifier = modifier
@@ -901,12 +913,19 @@ fun EmbyEmptyState(
     horizontalAlignment = Alignment.CenterHorizontally,
     verticalArrangement = Arrangement.spacedBy(16.dp),
   ) {
-    Icon(
-      imageVector = Icons.Default.Dns,
-      contentDescription = null,
-      modifier = Modifier.size(64.dp),
-      tint = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    if (isError) {
+      OopsErrorAnimation(
+        modifier = Modifier.size(width = 128.dp, height = 132.dp),
+        caption = "哎呀，出了点小问题",
+      )
+    } else {
+      Icon(
+        imageVector = Icons.Default.Dns,
+        contentDescription = null,
+        modifier = Modifier.size(64.dp),
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
     Text(
       text = message,
       style = MaterialTheme.typography.bodyLarge,
@@ -919,6 +938,7 @@ fun EmbyEmptyState(
   }
 }
 
+/** 列表里的错误横幅（有内容但某一页失败了）。同样给 Oops 指示牌，只是小一号。 */
 @Composable
 fun EmbyErrorBanner(
   message: String,
@@ -931,6 +951,12 @@ fun EmbyErrorBanner(
       .padding(16.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
+    OopsErrorAnimation(
+      modifier = Modifier
+        .size(width = 112.dp, height = 116.dp)
+        .padding(bottom = 8.dp),
+      caption = "哎呀，出了点小问题",
+    )
     Text(
       text = message,
       color = MaterialTheme.colorScheme.error,

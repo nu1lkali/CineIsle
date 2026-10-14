@@ -269,26 +269,23 @@ data class EmbyLibraryScreen(
     }
     var category by remember(libraryId) { mutableStateOf(savedCategory) }
 
-    // ── 混合库「照片模式」三态开关（仅媒体 / 全部 / 仅照片）──
-    // 只有混合库 / 家庭视频库 / 未知类型库才有意义：纯视频库切过去只会把列表剔空，
-    // 纯照片库本身就走照片网格页，这两类库都不会看到这一排。
-    // 下钻层级（季 / 集）与演员作品子页同样不显示 —— 那里已经是明确的一批内容。
-    val photoModeToggleVisible = includeItemTypes == null && personId == null &&
+    // ── 「照片视频混合库」的处置：内容原样铺开，不再让用户手选档位 ──
+    //
+    // 家庭视频 / 照片这类库（collectionType = homevideos / mixed / 未知）里，同一个
+    // 目录可能既有视频又有照片，也可能只有其中一种。以前的做法是在顶部摆一排
+    // 「仅媒体 / 全部 / 仅照片」让用户先声明「我要看哪种」，两个硬伤：
+    //   ① 默认档「仅媒体」= 只要视频，于是**一个只装照片的目录点进去是空的**
+    //      （服务端被 MediaTypes=Video 滤光）—— 用户看到的就是「点进去什么都没有」；
+    //   ② 用户得先知道这层装的是什么才能选对档位，而他要的恰恰是「点进去看看」。
+    //
+    // 现在改成：这一层**真实装了什么就原样铺什么**（容器 / 视频 / 照片各用各自的卡片），
+    // 与 Emby Web 的行为一致，也是唯一不需要用户先做判断的方案。
+    // 纯视频库（movies / tvshows）与纯照片库（photos）不受影响，口径逐字节不变。
+    val photoCapable = includeItemTypes == null && personId == null &&
       collectionType?.lowercase() in setOf(null, "mixed", "homevideos")
-    // 默认空串 = 仅媒体：与加这个开关之前的行为完全一致，老用户升级后零感知。
-    // 按库各自记住（键带 libraryId），从文件夹下钻返回时停在上次那一档。
-    var photoMode by remember(libraryId) {
-      mutableStateOf(browserPreferences.embyLibraryPhotoMode(libraryId).get())
-    }
-    // 「仅照片」档把整页换成照片视图（工具行 / 查询口径 / 卡片一起换）。
-    // 只在「全部」分类生效：切到收藏 / 文件夹等分类时那些分类有自己的语义
-    // （收藏的视频、文件夹列表），不该被照片口径改写，开关也随之隐藏。
-    val photoOnlyMode = photoMode == PHOTO_MODE_PHOTO &&
-      photoModeToggleVisible && category == EmbyCategory.ALL
-    // 三态里非「仅媒体」的两档才改写查询口径；两个 if 都不进时，
-    // 下面的 effective* 与加这个开关之前逐字节一致。
-    val photoModeActive = photoModeToggleVisible && category == EmbyCategory.ALL &&
-      photoMode != PHOTO_MODE_MEDIA
+    // 「内容原样」只作用于「全部」分类 —— 其余分类（合集 / 收藏 / 文件夹 / 演员）
+    // 各有自己的限定口径，不该被它改写。
+    val contentAsIs = photoCapable && category == EmbyCategory.ALL
     // 「演员」分类 = 展示本库演员（头像网格 + 作品数角标）。
     // 进到某位演员的作品子页时 personId 非空，那时列表是媒体，不算演员模式
     val isActorListMode = category == EmbyCategory.ACTOR && personId == null
@@ -406,11 +403,7 @@ data class EmbyLibraryScreen(
       "cmarks=${chineseMarks.signature()}|" +
       "m=$minRating|fav=$favoriteOnly|" +
       // 搜索筛选也算条件：换类型的结果是另一批，不能复用同一桶缓存
-      "st=${searchFilters.map { it.name }.sorted().joinToString(",")}|" +
-      // 照片模式三态（仅媒体 / 全部 / 仅照片）也算查询条件：切一档就是另一批内容，
-      // 必须各占一个缓存桶 —— 否则从「仅照片」切回「仅媒体」，看到的是照片列表的旧数据。
-      // 切档时 cacheKey 一变，列表自动按新口径重拉、滚动归位，无需手动 reload。
-      "pm=$photoMode"
+      "st=${searchFilters.map { it.name }.sorted().joinToString(",")}"
     val cachedEntry = remember(cacheKey) { EmbyLibraryCache.get(cacheKey) }
 
     // 搜索路径不从这里起值：搜索的「退出再进」由上面的快照（词+结果+滚动位置）回放，
@@ -499,19 +492,21 @@ data class EmbyLibraryScreen(
     }
 
     // 季/集层级由 includeItemTypes 固定，优先于分类筛选
-    // 「仅照片」档：只要照片本体（相册是容器，被 IsFolder=false 挡掉）
-    // 「全部」档：不限条目类型 —— 视频照片都要，容器靠 IsFolder=false + 本地兜底剔
+    // 「内容原样」档（混合库的「全部」）：条目类型完全不限 —— 容器 / 视频 / 照片
+    // 都要，靠下面的 effectiveExclude + 本地过滤剔掉非内容的杂项。
     val effectiveTypes: List<String>? = when {
       includeItemTypes != null -> includeItemTypes
-      photoModeActive && photoMode == PHOTO_MODE_PHOTO -> listOf("Photo")
-      photoModeActive -> null
+      contentAsIs -> null
       category.itemTypes != null -> category.itemTypes
       // 「全部」按库类型限定条目类型；否则 Emby 会把季、集和文件夹一起返回，列表是混的
       category == EmbyCategory.ALL -> allItemTypesFor(collectionType)
       else -> null
     }
     val effectiveFilters: List<String>? = if (includeItemTypes == null) category.filters else null
-    val recursive: Boolean = category != EmbyCategory.FOLDER
+    // 「内容原样」档**不递归**：这一层装了什么就铺什么（文件夹是文件夹、照片是照片），
+    // 和 Emby Web 一样一层一层点进去。递归会把这层和它下面所有层级的东西混在一起，
+    // 既看不出一层里有几个目录，也让分页失去意义。
+    val recursive: Boolean = category != EmbyCategory.FOLDER && !contentAsIs
     // Emby 的 Recursive 查询默认会把文件夹一并返回。
     // 用户期望「全部」直接铺媒体，只有切到「文件夹」分类才看到文件夹，所以这里显式排除。
     // 「全部」只保留媒体本体：合集（BoxSet）单独放到「合集」分类里看，这里排除掉。
@@ -519,14 +514,14 @@ data class EmbyLibraryScreen(
     // 若也排除会把它剔空，所以只对非合集库生效。
     val excludeBoxSet = category == EmbyCategory.ALL &&
       collectionType?.lowercase() != "boxsets"
-    // 照片两档的排除清单：容器 / 合集之外，相册、单曲、电子书也不是目标内容。
-    // 「全部」档服务端没传 MediaTypes，这几类会漏回来，本地过滤也有对应兜底。
-    val photoModeExclude =
-      FOLDER_TYPES + "BoxSet" + "PhotoAlbum" + "MusicTrack" + "AudioBook" + "Book"
+    // 「内容原样」档的排除清单：**容器一个都不排**（文件夹与相册都要当卡片显示、
+    // 点得进去），只排掉确实不是内容的那些（季 / 曲目 / 有声书 / 电子书）。
+    // 这几类在服务端没传 MediaTypes 时会跟着漏回来，本地过滤还有一道兜底。
+    val contentAsIsExclude = listOf("Season", "MusicAlbum", "MusicTrack", "AudioBook", "Book")
     val effectiveExclude: List<String>? = when {
       includeItemTypes != null -> null
       category == EmbyCategory.FOLDER -> null
-      photoModeActive -> photoModeExclude
+      contentAsIs -> contentAsIsExclude
       excludeBoxSet -> FOLDER_TYPES + "BoxSet"
       else -> FOLDER_TYPES
     }
@@ -535,17 +530,16 @@ data class EmbyLibraryScreen(
     // MediaTypes 按媒体形态筛（Video），IsFolder=false 把「本身不能播」的容器整体挡掉。
     // 「文件夹」「合集」分类要的就是容器，所以那两种分类不传。
     val effectiveMediaTypes: List<String>? = when {
-      // 仅照片：按照片形态取
-      photoModeActive && photoMode == PHOTO_MODE_PHOTO -> listOf("Photo")
-      // 「全部」：视频照片两种形态都要，不能传 MediaTypes（传了就成了二选一）
-      photoModeActive -> null
+      // 内容原样：视频（Video）和照片（Photo）两种形态都要，传了就成了二选一
+      contentAsIs -> null
       category == EmbyCategory.FOLDER || category == EmbyCategory.BOXSET -> null
       else -> mediaTypesFor(collectionType, includeItemTypes)
     }
-    // 照片两档都显式要 IsFolder=false：「仅照片」挡掉相册；
-    // 「全部」挡掉季 / 相册 / 文件夹（Recursive 会把它们一并返回）。
+    // 「内容原样」档**不传 IsFolder**：文件夹 / 相册这些容器本身就是要显示、
+    // 要被点进去的卡片，传 false 会把它们全挡掉（那正是「点进文件夹一片空」的成因）。
+    // 其余情况沿用老口径：effectiveMediaTypes 有值就说明只要媒体本体，挡掉容器。
     val effectiveIsFolder: Boolean? = when {
-      photoModeActive -> false
+      contentAsIs -> null
       effectiveMediaTypes == null -> null
       else -> false
     }
@@ -1038,14 +1032,20 @@ data class EmbyLibraryScreen(
           if (mediaType != null && want != null && want.none { it.equals(mediaType, ignoreCase = true) }) {
             return@filter false
           }
-          // 「全部」照片档：服务端没传 MediaTypes（视频照片两种形态都要），
-          // 音频 / 电子书这类非目标形态会漏回来（effectiveExclude 已按类型名排掉大部分，
-          // 兼容层未必认），这里按媒体形态补最后一道。
-          if (photoModeActive && photoMode == PHOTO_MODE_ALL) {
-            val isPhoto = type.equals("Photo", ignoreCase = true)
+          // 「内容原样」档：服务端既没传 MediaTypes（视频 / 照片两种形态都要）
+          // 也没传 IsFolder（容器要留作可下钻的卡片），于是音频 / 电子书 / Genre 这类
+          // 杂项会跟着漏回来（effectiveExclude 已按类型名排掉大部分，但兼容层未必认这些参数），
+          // 这里按「容器 / 照片 / 可播放」三条留最后一道。
+          if (contentAsIs) {
+            // ⚠️ [EmbyItem] 没有 IsFolder 字段（服务端 BaseItemDto 有，本地模型没映射），
+            //    容器判定只能靠类型名。isFolderLike 已含 Folder/CollectionFolder/UserView/BoxSet。
+            val isContainer = isFolderLike(item) ||
+              type.equals("PhotoAlbum", ignoreCase = true)
+            val isPhoto = type.equals("Photo", ignoreCase = true) ||
+              mediaType?.equals("Photo", ignoreCase = true) == true
             val isVideoLike = mediaType?.equals("Video", ignoreCase = true) == true ||
               PLAYABLE_TYPES.any { it.equals(type, ignoreCase = true) }
-            if (!isPhoto && !isVideoLike) return@filter false
+            if (!isContainer && !isPhoto && !isVideoLike) return@filter false
           }
           // 未知库（CollectionType 为空）拿不到类型白名单，此时只能靠 MediaType ——
           // 但 Genre / Tag / Studio 这类「非媒体实体」MediaType 也是空，上面漏得干干净净。
@@ -1426,39 +1426,18 @@ data class EmbyLibraryScreen(
         )
       }
 
-      // ── 混合库「照片模式」三态开关（仅媒体 / 全部 / 仅照片）──
-      // 与分类行同一条视觉线：它选的就是「这一库要铺哪些内容」。
-      // 只对混合库 / 家庭视频库 / 未知类型库的「全部」分类出现；搜索时同样藏起来
-      // （搜索结果与这个开关无关）。纯视频库 / 纯照片库看不到这一排。
-      if (photoModeToggleVisible && category == EmbyCategory.ALL && !searchActive) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          PHOTO_MODE_LABELS.forEach { (mode, label) ->
-            FilterChip(
-              selected = photoMode == mode,
-              onClick = {
-                if (photoMode != mode) {
-                  photoMode = mode
-                  // 落盘 + 换缓存桶：cacheKey 一变，列表按新口径重拉、滚动归位、
-                  // 各档各占一桶缓存 —— 全交给既有的 cacheKey 机制，这里不手动 reload
-                  browserPreferences.embyLibraryPhotoMode(libraryId).set(mode)
-                }
-              },
-              label = { Text(label) },
-            )
-          }
-        }
-      }
-
       // ── 3. 工具行：数量 + 随机播放 + 视图 + 排序 ──
       // 演员列表与「某演员作品」子页都不可随机播放，也没有样式 / 排序 / 再筛选可言，
       // 这些按钮留着只会让人点了没反应 —— 收掉，只保留左边的数量
       val hideToolbarButtons = isActorListMode || personId != null
+      // 工具行给哪几个按钮，由**这一页实际装了什么**决定（不再由用户手选档位决定）：
+      //  · 有照片 ⇒ 给「随机播放图片」
+      //  · 有非容器的可播放条目 ⇒ 给视频那套（随机播放 / 收藏随机 / 视界流 / 筛选）
+      //  · 首屏还没加载出来 ⇒ 按「两种都给」处理，避免工具行先空一排、内容到了再跳出来
+      val pagePhotoCount = items.count { it.Type == "Photo" }
+      val pagePlayableCount = items.count { it.Type != "Photo" && !isFolderLike(it) }
+      val showPhotoRandom = pagePhotoCount > 0
+      val showVideoActions = pagePlayableCount > 0 || items.isEmpty()
       Row(
         modifier = Modifier
           .fillMaxWidth()
@@ -1497,13 +1476,9 @@ data class EmbyLibraryScreen(
         )
 
         if (!hideToolbarButtons) {
-          if (photoOnlyMode) {
-            // 「仅照片」档：随机播放 / 收藏随机 / 视界流 / 筛选都是视频语义，
-            // 留着只会把人带进视频播放器 —— 收掉，只留一个「随机播放图片」
-            IconButton(onClick = { releaseInputFocus(); startRandomPhotoPlayback() }) {
-              Icon(Icons.Default.Image, contentDescription = "随机播放图片")
-            }
-          } else {
+          // 随机播放 / 收藏随机 / 视界流 / 筛选都是**视频语义**：这一页没有任何可播放
+          // 条目（纯照片页 / 纯目录页）时它们点了只会把人带进视频播放器或空结果，收掉。
+          if (showVideoActions) {
             IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = false) }) {
               Icon(Icons.Default.Shuffle, contentDescription = "随机播放")
             }
@@ -1532,8 +1507,16 @@ data class EmbyLibraryScreen(
               )
             }
           }
-          // 视图样式：照片没有海报 / 横版 / 紧凑之分（卡片是瀑布流高度），照片档收掉
-          if (!photoOnlyMode) {
+          // 有照片就给「随机播放图片」（递归取整个范围的照片，落全屏照片浏览器）。
+          // 混合页两个入口并存是有意的：随机看照片和随便挑个视频看，是两件事。
+          if (showPhotoRandom) {
+            IconButton(onClick = { releaseInputFocus(); startRandomPhotoPlayback() }) {
+              Icon(Icons.Default.Image, contentDescription = "随机播放图片")
+            }
+          }
+          // 视图样式（海报 / 横版 / 紧凑）：照片卡是**统一等比**的，跟着切样式会把它
+          // 压成海报比例或拉成一行一条 —— 这一页有照片时收掉，保住照片的版式。
+          if (showVideoActions) {
             IconButton(onClick = { releaseInputFocus(); showStyleDialog = true }) {
               Icon(Icons.Default.GridView, contentDescription = "视图样式")
             }
@@ -1902,14 +1885,16 @@ data class EmbyLibraryScreen(
             message = error ?: "加载失败",
             buttonText = "重试",
             onAction = { scope.launch { load(reset = true) } },
+            // 拉失败了 ⇒ Oops 指示牌（与下面的「这个目录是空的」区分开）
+            isError = true,
             modifier = Modifier.align(Alignment.Center),
           )
 
           items.isEmpty() && !isLoading -> EmbyEmptyState(
             message = when {
-              // 「仅照片」档的空库就是「没有照片」，别说成「没有找到媒体」——
-              // 那一档的列表本来就只该有照片
-              photoOnlyMode -> "此库没有照片"
+              // 「内容原样」档的空库：这一层确实什么都没有（不是被口径滤空了），
+              // 措辞说清楚「空」，别让用户以为加载失败
+              contentAsIs -> "这个目录是空的"
               chineseSubsOnly -> "没有匹配「中文字幕」标记的媒体"
               else -> "没有找到媒体"
             },
@@ -1954,6 +1939,7 @@ data class EmbyLibraryScreen(
                         photoQueue = photos,
                         photoIndex = photos.indexOfFirst { it.Id == item.Id }.coerceAtLeast(0),
                         photoParentId = libraryId,
+                        collectionType = collectionType,
                       )
                     },
                     onLongClick = { offset ->
@@ -2024,6 +2010,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               photoQueue = photos,
               photoIndex = photos.indexOfFirst { it.Id == item.Id }.coerceAtLeast(0),
               photoParentId = libraryId,
+              collectionType = collectionType,
             )
           },
     onLongClick = { offset ->
@@ -2058,6 +2045,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                           photoQueue = photos,
                           photoIndex = photos.indexOfFirst { it.Id == item.Id }.coerceAtLeast(0),
                           photoParentId = libraryId,
+                          collectionType = collectionType,
                         )
                       },
                       onLongClick = { offset ->
@@ -3068,26 +3056,6 @@ private enum class EmbyCategory(
   ACTOR("演员", null, null),
 }
 
-/**
- * 混合库「照片模式」三态的取值（存进偏好的字符串）。
- *
- * - [PHOTO_MODE_MEDIA] 仅媒体：默认，与加这个开关之前逐字节一致
- * - [PHOTO_MODE_ALL] 全部：视频 + 照片一起铺
- * - [PHOTO_MODE_PHOTO] 仅照片：只铺照片，整页换成照片视图
- *
- * ⚠️ 这三个字符串是**持久化键值**，不随界面文案改（文案见 [PHOTO_MODE_LABELS]）。
- */
-private val PHOTO_MODE_MEDIA = ""
-private val PHOTO_MODE_ALL = "all"
-private val PHOTO_MODE_PHOTO = "photo"
-
-/** 三态开关的界面文案（顺序即显示顺序：仅媒体 / 全部 / 仅照片） */
-private val PHOTO_MODE_LABELS = listOf(
-  PHOTO_MODE_MEDIA to "仅媒体",
-  PHOTO_MODE_ALL to "全部",
-  PHOTO_MODE_PHOTO to "仅照片",
-)
-
 @Composable
 private fun CategoryChips(
   selected: EmbyCategory,
@@ -3180,6 +3148,15 @@ private fun openItem(
   photoIndex: Int = 0,
   /** 照片队列的父级 Id（库 Id）：浏览器翻到底时按它继续拉下一页 */
   photoParentId: String = "",
+  /**
+   * 当前页（父页）的媒体库类型，供子页**继承**上下文。
+   *
+   * Emby 只在库根（CollectionFolder）上写 CollectionType，子文件夹拿到的
+   * [EmbyItem.CollectionType] 通常是 null。若直接把它传给子页，子页会以为自己是
+   * 「未知库」——丢掉「这是家庭视频 / 照片库」的语义，查询口径（MediaTypes /
+   * 内容原样档）跟着错位，症状是「点进文件夹后照片目录一片空」。
+   */
+  collectionType: String? = null,
 ) {
   val id = item.Id
   if (id.isNullOrBlank() || id.contains("://")) {
@@ -3222,7 +3199,12 @@ private fun openItem(
         EmbyLibraryScreen(
           libraryId = id,
           title = item.Name ?: "",
-          collectionType = item.CollectionType,
+          // ⚠️ 必须**继承父页的 collectionType**：Emby 只在库根（CollectionFolder）上
+          // 写 CollectionType，子文件夹拿到的通常是 null。若直接传 item.CollectionType，
+          // 子页会以为自己是「未知库」—— 于是丢掉「这是家庭视频/照片库」的上下文，
+          // 查询口径（MediaTypes / 内容原样档）全跟着错位。这正是「点进文件夹后
+          // 照片目录一片空」的根因之一。item 自己带了就用它（极少见），否则继承。
+          collectionType = item.CollectionType ?: collectionType,
         ),
       )
 

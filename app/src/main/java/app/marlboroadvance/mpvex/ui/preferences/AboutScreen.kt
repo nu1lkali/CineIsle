@@ -446,6 +446,16 @@ private val ACKNOWLEDGMENTS =
       summaryRes = R.string.i18n_ack_network_summary,
       url = "https://github.com/hierynomus/smbj",
     ),
+    Acknowledgment(
+      name = "Telephoto",
+      summaryRes = R.string.i18n_ack_telephoto_summary,
+      url = "https://github.com/saket/telephoto",
+    ),
+    Acknowledgment(
+      name = "Coil 3",
+      summaryRes = R.string.i18n_ack_coil_summary,
+      url = "https://github.com/coil-kt/coil",
+    ),
   )
 
 /**
