@@ -224,10 +224,16 @@ fun EmbyHomeScreen(
   // ⚠️ `showHomeMix` 进 key：用户在设置里关掉这个开关后，这里要**立刻停掉请求**，
   // 不是「下次进首页才生效」。所以开关是 LaunchedEffect 的 key 之一，
   // 关掉时 effect 重跑并在第一行就 return。
+  //
+  // ⭐ 排在首页三请求**之后**（2026-10-15）：这一行横滑在页面最底部，用户得滚好久
+  // 才看得见，没道理跟「媒体库 / 继续观看 / 最新加入」抢服务端。十万级条目的库上
+  // 每一发都可能是数百毫秒到数秒，四发同时打过去只会让首屏更晚出来
+  // （详见 EmbyViewModel.loadHome / awaitHomeLoaded 的说明）。
   LaunchedEffect(serverId, showHomeMix) {
     if (!showHomeMix) return@LaunchedEffect
     val current = server ?: return@LaunchedEffect
     if (serverId == 0L) return@LaunchedEffect
+    viewModel.awaitHomeLoaded()
     mixViewModel.loadMix(current, seed = null, limit = homeMixCount)
   }
 

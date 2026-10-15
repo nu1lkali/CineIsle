@@ -80,6 +80,15 @@ object EmbyClient {
   /** 视频类媒体（用于把音乐、图片从影视列表中过滤掉） */
   private const val VIDEO_MEDIA_TYPE = "Video"
 
+  /**
+   * 超过这个耗时的请求，在 [execString] 的计时日志里按「慢请求」标出（毫秒）。
+   *
+   * 定 1500 是因为正常局域网内一次 `/Items` 查询在几十到几百毫秒量级；
+   * 持续超过 1.5 秒基本就是服务端那边在扫大表（十万级条目库里
+   * `SortBy=Random` 这类无法走索引的排序尤其明显），值得单独看一眼。
+   */
+  private const val SLOW_REQUEST_MS = 1_500L
+
   /** 请求 Emby 时统一附加的扩展字段 */
   internal const val ITEM_FIELDS =
     "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources," +
@@ -184,12 +193,26 @@ object EmbyClient {
   }
 
   internal fun execString(request: Request): String {
-    httpClient.newCall(request).execute().use { resp ->
-      val body = resp.body.string()
-      if (!resp.isSuccessful) {
-        throw EmbyApiException(resp.code, body.ifEmpty { resp.message })
+    // 计时日志：所有 Emby API 请求（GET/POST/DELETE）都走这一个收口点，所以在这里
+    // 打一行就够覆盖全部。用途是回答「到底哪个端点在慢」—— 大媒体库（十万级条目）下
+    // `/Items` 系列查询的耗时会随库规模上涨，而外观上只表现为「首页转圈很久」，
+    // 没有这行日志根本分不清是哪一个请求、等了多久。
+    // ⚠️ 只打 path 不打 query：query 里可能有用户输入的搜索词，不进日志。
+    val startedAt = System.nanoTime()
+    try {
+      httpClient.newCall(request).execute().use { resp ->
+        val body = resp.body.string()
+        if (!resp.isSuccessful) {
+          throw EmbyApiException(resp.code, body.ifEmpty { resp.message })
+        }
+        return body
       }
-      return body
+    } finally {
+      val ms = (System.nanoTime() - startedAt) / 1_000_000
+      val line = "${ms}ms ${request.method} ${request.url.encodedPath}"
+      // 慢的单独按 warn 标出：这标签本身是诊断用的（`adb logcat -s EmbyDiag`），
+      // 一屏能刷很多行，慢请求要能一眼挑出来。
+      if (ms >= SLOW_REQUEST_MS) EmbyLog.warn("慢请求 $line") else EmbyLog.info(line)
     }
   }
 

@@ -137,10 +137,17 @@ class EmbyDisplayPrefsSync(
    * 多个库各存一份，取**第一个带本 App 键的**那份为准：它们本该一样，
    * 出现不一样只可能是某台设备只同步了一部分，这时候取先读到的
    * 比「取最后一个覆盖前面」更可预期。
+   *
+   * @param libraries 调用方已经拉到的媒体库列表。传进来就**不再自己发一次 `/Views`**
+   *   （首页加载时手上本来就有，见 [EmbyViewModel.loadHome]）；传 null 时按老路自己拉
+   *   （设置页手动同步这类场景）。
    */
-  suspend fun pull(server: EmbyServer): Outcome = withContext(Dispatchers.IO) {
-    val targets = targetsOf(server)
-    if (targets.isEmpty()) return@withContext Outcome.NoTargets
+  suspend fun pull(server: EmbyServer, libraries: List<EmbyItem>? = null): Outcome =
+    withContext(Dispatchers.IO) {
+      val targets = libraries?.let { list ->
+        list.mapNotNull { it.displayPrefsId() }.distinct()
+      } ?: targetsOf(server)
+      if (targets.isEmpty()) return@withContext Outcome.NoTargets
 
     val fallback = currentSnapshot()
     var found: Snapshot? = null
@@ -173,11 +180,13 @@ class EmbyDisplayPrefsSync(
    * 冷启动 / 切服务器时调用：**只有用户主动上传过、且开关打开**才拉。
    *
    * 三个条件缺一不可 —— 见类注释「首启不覆盖」。
+   *
+   * @param libraries 调用方已经拉到的媒体库列表（见 [pull]）；传 null 则内部自己拉。
    */
-  suspend fun pullIfEnabled(server: EmbyServer): Outcome? {
+  suspend fun pullIfEnabled(server: EmbyServer, libraries: List<EmbyItem>? = null): Outcome? {
     if (!preferences.embyDisplayPrefsAutoSync.get()) return null
     if (!preferences.embyDisplayPrefsPushed.get()) return null
-    return pull(server)
+    return pull(server, libraries)
   }
 
   // ─── 内部 ───

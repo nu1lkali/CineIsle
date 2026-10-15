@@ -52,16 +52,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.koin.java.KoinJavaComponent.inject
 import java.time.Instant
 import java.time.format.DateTimeFormatter
@@ -123,6 +127,15 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
 
   private val _isLoading = MutableStateFlow(false)
   val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+  /**
+   * 首页数据加载完成过几次（每次 [loadHome] 结束 +1，含失败与空服务器分支）。
+   *
+   * 用途只有一个：「随便看看」那一行横滑要排在首页三请求**之后**再拉
+   * （见 [awaitHomeLoaded]）。它不驱动任何 UI 状态，所以做成计数器而不是
+   * Boolean —— 下拉刷新后不能再变回 false，否则那一行会被反复重拉。
+   */
+  private val _homeLoads = MutableStateFlow(0)
 
   private val _error = MutableStateFlow<String?>(null)
   val error: StateFlow<String?> = _error.asStateFlow()
@@ -218,39 +231,80 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * 顺带说明：`SQLitePCL.pretty.SQLiteException` 是**服务端**（.NET）的 SQLite
    * 驱动抛的，不是本机数据库。本项目这三个请求的参数一个都没改过，
    * 所以真出现这个错要去查服务端（库被锁 / 磁盘满 / 库损坏），不是改客户端能绕过的。
+   *
+   * ## ⭐ 三发**并行**（2026-10-15，大媒体库下首页慢的修复）
+   *
+   * 原来是串行的：媒体库 → 继续观看 → 最新加入 一发一发等，首页骨架屏要转到
+   * **三者耗时之和**。十万级条目的库上，每一发都可能是几百毫秒到数秒（尤其是
+   * `/Items/Latest` 不带 `ParentId` 要跨库扫，`SortBy=Random` 更是没法走索引），
+   * 加起来就是用户看到的「打开首页特别慢，有时候还超时」。
+   *
+   * 这三发互不依赖（各查各的维度），所以改成 `coroutineScope { async {} }` 同时发，
+   * 首页耗时从「和」变成「最大者」。`isLoading` 仍然等三发全部结束才置 false ——
+   * 语义不变，只是不再把时间白白串起来。
+   *
+   * ⚠️ 并行**不能**改掉上面那条铁律：三发依旧是各自独立的 `runCatching`，
+   * 一发放鸽子不能拖垮另外两块。
    */
   private suspend fun loadHome() {
     _isLoading.value = true
     _error.value = null
-    // 冷启动时服务器是异步恢复的，这里必须等它恢复完，否则会误判成「没有服务器」
-    val server = repository.ensureLoggedIn(repository.awaitCurrentServer())
-    if (server == null) {
-      _libraries.value = emptyList()
-      _resumeItems.value = emptyList()
-      _latestItems.value = emptyList()
+    try {
+      // 冷启动时服务器是异步恢复的，这里必须等它恢复完，否则会误判成「没有服务器」
+      val server = repository.ensureLoggedIn(repository.awaitCurrentServer())
+      if (server == null) {
+        _libraries.value = emptyList()
+        _resumeItems.value = emptyList()
+        _latestItems.value = emptyList()
+        return
+      }
+
+      coroutineScope {
+        val libsDeferred = async { runCatching { repository.getVirtualFolders(server) } }
+        val resumeDeferred = async { runCatching { repository.getResumeItems(server, limit = 20) } }
+        val latestDeferred = async { runCatching { repository.getLatestItems(server, limit = 24) } }
+
+        val libs = libsDeferred.await()
+        _libraries.value = libs.getOrElse { e ->
+          _error.value = e.message ?: "加载失败"
+          emptyList()
+        }
+
+        // 下面两发失败只留空列表，不碰 _error —— 首页已经有内容了，
+        // 为「继续观看没加载出来」把整页标成失败是本末倒置。
+        _resumeItems.value = resumeDeferred.await().getOrElse { emptyList() }
+        _latestItems.value = latestDeferred.await().getOrElse { emptyList() }
+
+        // 显示偏好自动恢复（清单 #16）。放在数据加载**之后**：
+        // 拉回来的偏好要影响本次已经渲染的首屏，重新触发一次重组就够了，
+        // 而放在前面会让首屏用旧偏好渲染一遍再跳变。
+        // 失败**不写 _error** —— 显示偏好是锦上添花，为它把整个首页标成「加载失败」不合理。
+        // ⚠️ 把已经拉到的媒体库列表传进去：它内部按「每个媒体库一份」读偏好，
+        // 老路会**自己再发一次 /Views**，纯属重复请求。
+        runCatching {
+          displayPrefsSync.pullIfEnabled(server, libraries = libs.getOrNull())
+        }
+      }
+    } finally {
       _isLoading.value = false
-      return
+      _homeLoads.value = _homeLoads.value + 1
     }
+  }
 
-    val libs = runCatching { repository.getVirtualFolders(server) }
-    _libraries.value = libs.getOrElse { e ->
-      _error.value = e.message ?: "加载失败"
-      emptyList()
-    }
-
-    // 下面两发失败只留空列表，不碰 _error —— 首页已经有内容了，
-    // 为「继续观看没加载出来」把整页标成失败是本末倒置。
-    _resumeItems.value = runCatching { repository.getResumeItems(server, limit = 20) }
-      .getOrElse { emptyList() }
-    _latestItems.value = runCatching { repository.getLatestItems(server, limit = 24) }
-      .getOrElse { emptyList() }
-
-    // 显示偏好自动恢复（清单 #16）。放在数据加载**之后**：
-    // 拉回来的偏好要影响本次已经渲染的首屏，重新触发一次重组就够了，
-    // 而放在前面会让首屏用旧偏好渲染一遍再跳变。
-    // 失败**不写 _error** —— 显示偏好是锦上添花，为它把整个首页标成「加载失败」不合理。
-    runCatching { displayPrefsSync.pullIfEnabled(server) }
-    _isLoading.value = false
+  /**
+   * 等首页数据至少加载过一次（含失败 / 没有服务器的情况 —— 那些也算「加载完了」，
+   * 不然首页出不来时，下面那些区块会跟着一起永远不出现）。
+   *
+   * 给「随便看看」那一行横滑用：它在首页最底部，用户得滚好久才看得见，
+   * 没道理跟「媒体库 / 继续观看 / 最新加入」那三发抢服务端。
+   * 十万级条目的库上每一发都可能是数百毫秒到数秒，四发同时打过去只会让首屏更晚出来。
+   *
+   * @param timeoutMs 最长等多久。**必须有**：首页三发万一卡在服务端（读超时是 60s，
+   *   还会重试），不能连带这一行也永远不出现 —— 到点就放行，让它自己发。
+   */
+  suspend fun awaitHomeLoaded(timeoutMs: Long = HOME_LOAD_WAIT_MS) {
+    if (_homeLoads.value > 0) return
+    withTimeoutOrNull(timeoutMs) { _homeLoads.first { it > 0 } }
   }
 
   /**
@@ -2560,6 +2614,14 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
      * 比原来的 100 略高：搜索结果的「浏览价值」随条数快速衰减，取太多反而让网格难用。
      */
     const val GLOBAL_SEARCH_LIMIT = 120
+
+    /**
+     * [awaitHomeLoaded] 最长等多久（毫秒）。
+     *
+     * 正常局域网下首页三发并行也就一秒内回来；给到 8 秒是留给「服务端在扫大表」
+     * 的余量。再往上就不等了 —— 那一行横滑在首页最底部，为它拖住用户不值当。
+     */
+    private const val HOME_LOAD_WAIT_MS = 8_000L
 
     fun factory(application: Application): ViewModelProvider.Factory = viewModelFactory {
       initializer { EmbyViewModel(application) }

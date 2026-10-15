@@ -56,7 +56,7 @@ android {
     // 全项目错误态上方加 Oops 动态指示牌动画。
     // 1.5.2：照片网格页两个真机问题（工具行压住第一排卡片 / 相册态返回键被拦）。
     // 1.5.1：混合库改「内容即所见」+ 子文件夹无限加载修复 + 照片卡统一等比。
-    versionCode = 59
+    versionCode = 60
     versionName = "1.5.4"
 
     vectorDrawables {
