@@ -183,7 +183,16 @@ android {
     //        走不到该判定 ⇒ 它从未按设计意图生效，只是在误伤视频文件夹。
     //        修复：删掉该豁免，并把两处重复的内联判定抽成 `needsFolderMosaic()` 单一实现
     //        （批量预取与卡片必须逐字一致，否则会出现半套行为）。
-    versionCode = 69
+    // 70（修复轮，versionName 仍为 1.5.5）：照片浏览器信息呈现两处打磨（用户反馈）：
+    //     ① 【顶栏标题】长标题被**硬切**成半截（如「exxx xxx [1728P/」）—— 根因是
+    //        `Text` 默认 `overflow = Clip`，两处照片查看器（网络版 / Emby 版）都漏了
+    //        显式 `TextOverflow.Ellipsis`（BrowserTopBar 一直是给全的）。补上 Ellipsis
+    //        （截断处显示「…」）+ 标题右侧留 8dp，与「3 / 120」计数器不再贴在一起。
+    //     ② 【底部信息栏】原名 + 大小 + 序号挤一行、文件名无右间距 ⇒ 文件名尾部数字与
+    //        大小连读（`...kobayashi1027` 接 `719 KB` 被读成「1027719」）。改**两行**：
+    //        文件名独占一行（补 Ellipsis），第二行「大小 · 日期」+ 序号靠右。二者物理
+    //        隔开，误读消失；悬浮控件让位高度 CONTROLS_BOTTOM 64→84dp。
+    versionCode = 70
     versionName = "1.5.5"
 
     vectorDrawables {

@@ -79,6 +79,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -510,7 +511,10 @@ data class EmbyPhotoBrowserScreen(
             color = Color.White,
             style = MaterialTheme.typography.titleMedium,
             maxLines = 1,
-            modifier = Modifier.weight(1f),
+            // ⚠️ 显式 Ellipsis：Text 默认 overflow = Clip，长标题会被硬切成半截
+            overflow = TextOverflow.Ellipsis,
+            // 右侧留 8dp，标题与「3 / 120」计数器不贴在一起
+            modifier = Modifier.weight(1f).padding(end = 8.dp),
           )
           if (queue.isNotEmpty()) {
             Text(

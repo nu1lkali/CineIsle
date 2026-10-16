@@ -14,9 +14,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -55,6 +58,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
@@ -93,7 +97,7 @@ import kotlin.math.abs
  * - **前后预加载**：相邻 ±N 张（N 走「照片预加载张数」1~3，默认 1），
  *   拉的是 [coil3.size.Size.ORIGINAL] 全图，二次浏览命中磁盘缓存；
  * - **上一张 / 下一张**：左下悬浮钮，首尾边界置灰（不留假按钮）；
- * - **底部信息栏**：文件名 + 序号 + 大小 + 日期。
+ * - **底部信息栏**：文件名（独占一行、超长省略）+ 「大小 · 日期」+ 序号。
  *
  * 队列由浏览页传入（目录列表一次拉全，**没有续页** —— SMB 没有分页 API，
  * 这与 Emby 版按 StartIndex 续页是结构性差异）。「随机播放图片」从浏览页
@@ -365,7 +369,11 @@ data class NetworkPhotoViewerScreen(
               color = Color.White,
               style = MaterialTheme.typography.titleMedium,
               maxLines = 1,
-              modifier = Modifier.weight(1f),
+              // ⚠️ 一定要显式给 Ellipsis：Text 默认 overflow = Clip，长标题会被**硬切**
+              // 成半截（如「exxx xxx [1728P/」），既看不出被截断也很突兀。
+              overflow = TextOverflow.Ellipsis,
+              // 右侧留 8dp：标题与「3 / 120」计数器不要贴在一起
+              modifier = Modifier.weight(1f).padding(end = 8.dp),
             )
             if (queue.isNotEmpty()) {
               Text(
@@ -451,7 +459,14 @@ data class NetworkPhotoViewerScreen(
   }
 }
 
-/** 底部信息栏：文件名 + 序号 + 大小 + 日期（缺的段不显示） */
+/**
+ * 底部信息栏：**文件名独占一行**，第二行是「大小 · 日期」+ 序号。
+ *
+ * ⚠️ 为什么拆成两行：原先「文件名(weight) + 大小 + 序号」挤一行，文件名没有右间距、
+ * 大小紧贴其后 —— 当文件名尾部是数字时（如 `e836runa_kobayashi1027` 接 `719 KB`），
+ * 眼睛会把两段数字连读成「1027719」，用户直接读错。拆两行后二者物理隔开，错觉消失。
+ * 文件名同时补 `Ellipsis`（原来无 overflow，长名被硬切成半截）。
+ */
 @Composable
 private fun PhotoInfoBar(
   item: NetworkFile?,
@@ -462,35 +477,43 @@ private fun PhotoInfoBar(
   val sizeText = if (item.size > 0) formatPhotoSize(item.size) else null
   val dateText = if (item.lastModified > 0) formatPhotoDate(item.lastModified) else null
   val meta = listOfNotNull(sizeText, dateText).joinToString(" · ")
-  Row(
+  Column(
     modifier = Modifier
       .fillMaxWidth()
       .background(Color.Black.copy(alpha = 0.4f))
       .navigationBarsPadding()
-      .padding(horizontal = 20.dp, vertical = 10.dp),
-    verticalAlignment = Alignment.CenterVertically,
+      .padding(horizontal = 20.dp, vertical = 8.dp),
   ) {
     Text(
       text = item.name,
       color = Color.White,
       style = MaterialTheme.typography.bodyMedium,
       maxLines = 1,
-      modifier = Modifier.weight(1f),
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.fillMaxWidth(),
     )
-    if (meta.isNotBlank()) {
+    Spacer(Modifier.height(2.dp))
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      if (meta.isNotBlank()) {
+        Text(
+          text = meta,
+          color = Color.White.copy(alpha = 0.6f),
+          style = MaterialTheme.typography.bodySmall,
+          maxLines = 1,
+        )
+      }
+      // 把序号推到最右；有/无 meta 都稳定靠右
+      Spacer(Modifier.weight(1f))
       Text(
-        text = meta,
-        color = Color.White.copy(alpha = 0.7f),
+        text = "$index / $total",
+        color = Color.White.copy(alpha = 0.6f),
         style = MaterialTheme.typography.bodySmall,
         maxLines = 1,
       )
     }
-    Text(
-      text = "$index / $total",
-      color = Color.White.copy(alpha = 0.7f),
-      style = MaterialTheme.typography.bodySmall,
-      modifier = Modifier.padding(start = 12.dp),
-    )
   }
 }
 
@@ -617,8 +640,8 @@ private fun PhotoNavButton(
 /** 下拉关闭的位移阈值（dp）—— 与 Emby 照片浏览器同一口径 */
 private const val DISMISS_THRESHOLD_DP = 120f
 
-/** 悬浮控件（上一张/下一张/幻灯片）距底的高度，给信息栏让位 */
-private val CONTROLS_BOTTOM = 64.dp
+/** 悬浮控件（上一张/下一张/幻灯片）距底的高度，给**两行**底部信息栏让位 */
+private val CONTROLS_BOTTOM = 84.dp
 
 /** 幻灯片计时 tick（ms）与淡入淡出时长（ms） */
 private const val TICK_MS = 250L
