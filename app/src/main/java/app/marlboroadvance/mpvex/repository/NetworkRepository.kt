@@ -259,13 +259,19 @@ class NetworkRepository(
    *
    * ⚠️ 流的生命周期归调用方：用完必须 close（SMB 会话数有限，泄漏会把这台
    *    服务器的连接耗尽）。网络照片链路里 Coil 的 Fetcher 负责关。
+   *
+   * @param sign 可选的下载签名（AList = `fs/list` 条目带的 `sign`）。
+   *   AList 的 `/d/` 下载口在开启「签名所有」/ 存储级签名 / 目录加密时只认它；
+   *   其余协议忽略。传 null 时 [app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.AlistClient]
+   *   还有一层 `fs/get` 兜底，所以**不传也不会取不到**，只是多一个请求。
    */
   suspend fun openFileStream(
     connection: NetworkConnection,
     path: String,
+    sign: String? = null,
   ): Result<java.io.InputStream> =
     try {
-      clientFor(connection).getFileStream(path)
+      clientFor(connection).getFileStream(path, sign)
     } catch (e: Exception) {
       Result.failure(e)
     }

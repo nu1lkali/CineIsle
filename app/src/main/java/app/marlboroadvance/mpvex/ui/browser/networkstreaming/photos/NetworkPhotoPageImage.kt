@@ -66,12 +66,14 @@ fun NetworkPhotoPageImage(
   /** 页码：与 [zoomRegistry] 配套，用于「下拉关闭」查这张有没有被放大 */
   page: Int = 0,
   zoomRegistry: PhotoZoomRegistry? = null,
+  /** AList 下载签名（[NetworkFile.sign]）；其他协议传 null。见 AlistClient 类注释 */
+  sign: String? = null,
 ) {
   val context = LocalContext.current
   val imageLoader = remember(context) { NetworkPhotoImageLoader.get(context) }
   // 全屏大图要原尺寸：采样解码会把细节抹掉，放大时全是马赛克
-  val request = remember(connectionId, path) {
-    NetworkPhotoImageLoader.request(context, connectionId, path, size = Size.ORIGINAL)
+  val request = remember(connectionId, path, sign) {
+    NetworkPhotoImageLoader.request(context, connectionId, path, size = Size.ORIGINAL, sign = sign)
   }
   val painter = rememberAsyncImagePainter(
     model = request,

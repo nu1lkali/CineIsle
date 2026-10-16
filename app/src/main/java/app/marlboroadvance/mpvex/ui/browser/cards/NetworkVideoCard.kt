@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -34,7 +35,6 @@ import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
-import androidx.compose.foundation.combinedClickable
 import org.koin.compose.koinInject
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -46,7 +46,8 @@ fun NetworkVideoCard(
   connection: NetworkConnection,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
-  onLongClick: (() -> Unit)? = null,
+  /** 长按回调带**手指坐标**（root 坐标）—— 调用方据此在手指旁边弹菜单，见 tapAndLongPress */
+  onLongClick: ((Offset) -> Unit)? = null,
   isSelected: Boolean = false,
 ) {
   val appearancePreferences = koinInject<AppearancePreferences>()
@@ -61,10 +62,7 @@ fun NetworkVideoCard(
     modifier =
       modifier
         .fillMaxWidth()
-        .combinedClickable(
-          onClick = onClick,
-          onLongClick = onLongClick,
-        ),
+        .tapAndLongPress(onClick = onClick, onLongClick = onLongClick),
     colors = CardDefaults.cardColors(containerColor = Color.Transparent),
   ) {
     Row(
@@ -88,10 +86,7 @@ fun NetworkVideoCard(
             .size(thumbSizeDp)
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .combinedClickable(
-              onClick = onClick,
-              onLongClick = onLongClick,
-            ),
+            .tapAndLongPress(onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.Center,
       ) {
         // Play icon overlay

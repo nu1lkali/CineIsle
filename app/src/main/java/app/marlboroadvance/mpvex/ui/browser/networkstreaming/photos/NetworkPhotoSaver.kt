@@ -47,7 +47,8 @@ object NetworkPhotoSaver {
       val koin = GlobalContext.getOrNull() ?: return@withContext Result.Failure("应用尚未初始化")
       val repository: NetworkRepository = koin.get()
       val bytes = runCatching {
-        repository.openFileStream(connection, file.path).getOrThrow().use { input ->
+        // sign：AList 的 /d/ 只认签名（见 AlistClient 类注释），带上少一次 fs/get
+        repository.openFileStream(connection, file.path, file.sign).getOrThrow().use { input ->
           // 原图可能 10MB+（HEIC/TIFF），但保存就是要完整字节，读满再写
           input.readBytes()
         }

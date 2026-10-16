@@ -175,7 +175,7 @@ class FtpClient(private val connection: NetworkConnection) : NetworkClient {
       }
     }
 
-  override suspend fun getFileStream(path: String): Result<InputStream> =
+  override suspend fun getFileStream(path: String, sign: String?): Result<InputStream> =
     withContext(Dispatchers.IO) {
       try {
         // Create a fresh FTP client for this stream to avoid connection conflicts

@@ -34,6 +34,8 @@ import coil3.compose.rememberAsyncImagePainter
  * （见 [NetworkPhotoImageLoader] 的 KDoc）。
  *
  * @param size 请求的解码尺寸；null = 按组件约束采样（更省内存）。
+ * @param sign AList 下载签名（[NetworkFile.sign]）；其他协议 / 文件夹封面传 null。
+ *   文件夹封面在缓存里只存了 path（拿不到签名），由 AlistClient 的 `fs/get` 兜底。
  */
 @Composable
 fun NetworkPhotoThumbnail(
@@ -42,11 +44,12 @@ fun NetworkPhotoThumbnail(
   contentDescription: String?,
   modifier: Modifier = Modifier,
   contentScale: ContentScale = ContentScale.Crop,
+  sign: String? = null,
 ) {
   val context = LocalContext.current
   val imageLoader = remember(context) { NetworkPhotoImageLoader.get(context) }
-  val request = remember(connectionId, path) {
-    NetworkPhotoImageLoader.request(context, connectionId, path)
+  val request = remember(connectionId, path, sign) {
+    NetworkPhotoImageLoader.request(context, connectionId, path, sign = sign)
   }
   // 内存缓存里已有 ⇒ 首帧就有图，不必画骨架屏。
   // 否则返回上一级时每张封面都会「闪一下」（painter 从 Loading 重新走一遍），

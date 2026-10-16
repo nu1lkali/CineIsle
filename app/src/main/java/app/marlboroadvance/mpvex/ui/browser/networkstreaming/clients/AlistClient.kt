@@ -25,6 +25,7 @@ import java.io.InputStream
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /**
@@ -55,6 +56,26 @@ import java.util.concurrent.TimeUnit
  * 配套铁律：**response body 在所有出口都必须关闭**。成功路径交给调用方关流
  * （Coil 那边 okio 会传递关闭），错误路径在这里 [Response.close] —— 否则连接会一直
  * 挂在池里占着不放。
+ *
+ * ## ⚠️ 取文件必须带签名，`Authorization` 头在下载口上**完全无效**
+ *
+ * 这是「目录能正常列出来、但所有图片/封面全加载不出来」的根因，别再改回去。
+ *
+ * AList 服务端的下载路由是（源码 `server/router.go`）：
+ * ```
+ * g.GET("/d/<wildcard-path>", middlewares.Down(sign.Verify), downloadLimiter, handles.Down)
+ * ```
+ * ⚠️ 上面把 Gin 的通配段写成 `<wildcard-path>` 而不是原样抄：原样写会在这里制造
+ *    「斜杠 + 星号」两个字符，而 **Kotlin 的块注释可以嵌套** —— 那两字符等于又开了
+ *    一层块注释，会把整个类体吞进去，报错却是「文件末尾 Unclosed comment」，
+ *    排查半天。写 KDoc 时别在注释正文里出现块注释起始符。
+ * —— 注意它挂的是 `middlewares.Down`，**没有 `Auth`**。而 `middlewares.Down`
+ * （源码 `server/middlewares/down.go`）只在 `needSign(...)` 为真时校验 `?sign=`，
+ * 为真即：服务端开了「签名所有」（`conf.SignAll`）／该存储开了签名／目录设了密码。
+ * 此时签名缺失或过期 → **401 直接 Abort**，请求里的 `Authorization` 根本没人读。
+ *
+ * 而 `/api/fs/list`（列目录）走的是 `middlewares.Auth`，照样只认 `Authorization`
+ * —— 于是「目录能列、图片全挂」。见 [getFileStream] 的三级取值。
  */
 class AlistClient(private val connection: NetworkConnection) : NetworkClient {
   companion object {
@@ -62,6 +83,13 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
 
     /** AList 的 `code` 字段：200 = 成功；401 = token 失效需要重登 */
     private const val CODE_OK = 200
+
+    /**
+     * 路径→签名 缓存的上限。超了**直接清空**而不是 LRU 淘汰 ——
+     * 它只是「省掉一次 fs/get」的加速缓存，丢了最多多一个请求，
+     * 不值得为它维护一套淘汰逻辑。
+     */
+    private const val SIGN_CACHE_CAP = 4000
 
     /**
      * 进程内共享的 HTTP 客户端。
@@ -97,6 +125,28 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
 
   @Volatile
   private var connected = false
+
+  /**
+   * 路径 → 签名 的进程内缓存（key = **相对路径**，与 [NetworkFile.path] 同一口径）。
+   *
+   * 每次 `fs/list` 服务端都会给每个条目带上 `sign`，顺手记一笔：之后取封面 / 取图
+   * 就能直接拼出 `?sign=`，**省掉一次 `fs/get`**（一个 100 张图的目录就是 100 个请求）。
+   * 取 [getFileMeta] 拿到的新签名同样会覆盖进来。
+   *
+   * ⚠️ 签名有时效，所以这里只当**加速缓存**用：任何一步失败都会回落到 `fs/get`
+   *   现换一个新鲜签名（见 [getFileStream]），绝不会因为签名过期而取不到文件。
+   */
+  private val signCache = ConcurrentHashMap<String, String>()
+
+  /** 缓存键：统一去掉首尾斜杠，`/电影/a.jpg` 与 `电影/a.jpg` 视为同一条 */
+  private fun keyOf(path: String): String = path.trim('/')
+
+  /** 记一笔签名（空值不记）。写缓存顺手做容量保护：超限直接清空，见 [SIGN_CACHE_CAP] */
+  private fun rememberSign(path: String, sign: String?) {
+    if (sign.isNullOrBlank()) return
+    if (signCache.size > SIGN_CACHE_CAP) signCache.clear()
+    signCache[keyOf(path)] = sign
+  }
 
   // ── URL 拼装 ──
 
@@ -174,29 +224,76 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     }
 
   /**
-   * 取文件流。
+   * 取文件流（网格缩略图 / 全屏大图 / 保存原图都走这里）。
    *
-   * 走 `/d/` 直链 + `Authorization` 头 —— **一次请求**。刻意不先 `fs/get` 换签名：
-   * 那会让每张封面变成两次请求（列目录已经把图片列出来了，取流就该是最后一跳）。
+   * ## 三级取值（顺序不能变）
+   *
+   * 1. **调用方给的 [sign]** —— 来自 `fs/list` 的条目（[NetworkFile.sign]），
+   *    零额外请求，正常路径；
+   * 2. **进程内签名缓存**（[signCache]，每次列目录顺手记的）；
+   * 3. 前两级都没有、或 `/d/` 仍然取不到 ⇒ **`fs/get` 现换一个新签名 / `raw_url`**
+   *    再取一次。
+   *
+   * 第 3 级是**必须**的兜底，不是优化：`?sign=` 是 `/d/` 唯一的凭据
+   * （`Authorization` 头在那条路由上不被读取，见类 KDoc），而签名会过期、
+   * 文件夹封面在网络浏览里只存了 path（拿不到签名，见 `FolderCoverCacheEntity`）。
+   *
+   * ⚠️ 刻意**不**在成功路径上先调 `fs/get`：列目录已经把签名带回来了，
+   *    取流就该是最后一跳；`fs/get` 只在失败时补一次。
    */
-  override suspend fun getFileStream(path: String): Result<InputStream> =
+  override suspend fun getFileStream(path: String, sign: String?): Result<InputStream> =
     withContext(Dispatchers.IO) {
-      runCatching {
-        val response = execute(
-          Request.Builder()
-            .url(directUrl(path, sign = null))
-            .get()
-            .apply { authHeader()?.let { header("Authorization", it) } }
-            .build(),
-        )
-        // 成功：流交给调用方，close 流即 close body（Coil 那边 okio 会传递关闭）
-        response.body?.byteStream()
-          ?: run {
-            response.close()
-            throw IOException("AList 返回空响应体: $path")
-          }
+      try {
+        val knownSign = sign?.takeIf { it.isNotBlank() } ?: signCache[keyOf(path)]
+        // ① /d/ 直链（带上已知签名）
+        val direct = runCatching { openStream(directUrl(path, knownSign)) }
+        if (direct.isSuccess) return@withContext Result.success(direct.getOrThrow())
+
+        // ② 兜底：fs/get 换一个新鲜签名（或 raw_url）再取一次
+        Log.w(TAG, "取流失败，改用 fs/get 换签名重试: $path | ${direct.exceptionOrNull()?.message}")
+        val meta = getFileMeta(path)
+        val fallbackUrl =
+          meta.rawUrl.takeIf { it.isNotBlank() && !meta.isDir }
+            ?: directUrl(path, meta.sign.takeIf { it.isNotBlank() })
+        Result.success(openStream(fallbackUrl))
+      } catch (e: Exception) {
+        Log.w(TAG, "取流失败: $path", e)
+        Result.failure(e)
       }
     }
+
+  /**
+   * GET 一个取流地址，返回字节流。
+   *
+   * 两道防线，缺一不可：
+   * 1. **非 2xx 一律抛**（[execute] 兜住）—— AList 缺签名时就是 401；
+   * 2. **`text/html` 也抛** —— AList 的静态兜底会把没匹配上的路径渲染成前端页面
+   *    （HTTP 200 + `index.html`）。放它过去 Coil 只会在解码阶段失败，症状是
+   *    「图片全挂、却一条错都没有」，比直接失败难查得多。
+   *
+   * ⚠️ 成功路径**不关**流：它交给调用方（Coil 的 okio 会传递关闭）。
+   */
+  private fun openStream(url: String): InputStream {
+    val response =
+      execute(
+        Request.Builder()
+          .url(url)
+          .get()
+          // 下载口不读这个头（见类 KDoc），带上纯属无害 + 兼容非标准部署
+          .apply { authHeader()?.let { header("Authorization", it) } }
+          .build(),
+      )
+    val contentType = response.header("Content-Type").orEmpty()
+    if (contentType.contains("text/html", ignoreCase = true)) {
+      response.close()
+      throw IOException("AList 返回的是网页而不是文件（下载路径没生效）: $url")
+    }
+    return response.body?.byteStream()
+      ?: run {
+        response.close()
+        throw IOException("AList 返回空响应体: $url")
+      }
+  }
 
   /**
    * 给播放器的直链。
@@ -337,7 +434,10 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
       )
       val parsed = json.decodeFromString<AlistResp<AlistFsGet>>(raw)
       if (parsed.code != CODE_OK) throw AlistApiException(parsed.code, parsed.message)
-      parsed.data ?: throw IOException("AList fs/get 没返回 data: $path")
+      val data = parsed.data ?: throw IOException("AList fs/get 没返回 data: $path")
+      // 新签名覆盖旧值（签名有时效，越新越好）
+      rememberSign(path, data.sign)
+      data
     }
 
   /** `POST /api/fs/list` */
@@ -363,15 +463,19 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
       (parsed.data?.content ?: emptyList()).mapNotNull { item ->
         val name = item.name
         if (name.isBlank()) return@mapNotNull null
-        NetworkFile(
-          name = name,
-          path = if (parent.isEmpty()) name else "$parent/$name",
-          size = item.size,
-          isDirectory = item.isDir,
-          lastModified = parseModified(item.modified),
-          mimeType = if (item.isDir) null else guessNetworkMimeType(name),
-          sign = item.sign.takeIf { it.isNotBlank() },
-        )
+        val file =
+          NetworkFile(
+            name = name,
+            path = if (parent.isEmpty()) name else "$parent/$name",
+            size = item.size,
+            isDirectory = item.isDir,
+            lastModified = parseModified(item.modified),
+            mimeType = if (item.isDir) null else guessNetworkMimeType(name),
+            sign = item.sign.takeIf { it.isNotBlank() },
+          )
+        // 顺手把签名记进缓存：照片取流就是最后一跳，不必再为它发一次 fs/get
+        rememberSign(file.path, file.sign)
+        file
       }
     }
 

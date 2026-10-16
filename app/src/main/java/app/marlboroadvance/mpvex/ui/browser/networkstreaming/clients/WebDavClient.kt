@@ -160,7 +160,7 @@ class WebDavClient(private val connection: NetworkConnection) : NetworkClient {
       }
     }
 
-  override suspend fun getFileStream(path: String): Result<InputStream> =
+  override suspend fun getFileStream(path: String, sign: String?): Result<InputStream> =
     withContext(Dispatchers.IO) {
       try {
         // 复用长期存活的 Sardine（连接才能复用）；见 [streamSardine] 的说明

@@ -42,8 +42,13 @@ interface NetworkClient {
 
   /**
    * Get input stream for a file
+   *
+   * @param sign 可选的**下载签名**。目前只有 AList 用得上：它的 `/d/<路径>` 下载口
+   *   在服务端开启「签名所有」/ 存储级签名 / 目录加密时**只认 `?sign=`**，
+   *   `Authorization` 头在那条路由上根本不被读取（见 [AlistClient] 的类注释）。
+   *   SMB / FTP / WebDAV 忽略这个参数。
    */
-  suspend fun getFileStream(path: String): Result<InputStream>
+  suspend fun getFileStream(path: String, sign: String? = null): Result<InputStream>
 
   /**
    * Get file URI for playback

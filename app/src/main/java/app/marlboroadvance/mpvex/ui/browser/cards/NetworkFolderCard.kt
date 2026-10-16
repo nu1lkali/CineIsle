@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
@@ -34,7 +35,6 @@ import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoThumbnail
-import androidx.compose.foundation.combinedClickable
 import org.koin.compose.koinInject
 
 @Composable
@@ -43,7 +43,8 @@ fun NetworkFolderCard(
   connectionId: Long,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
-  onLongClick: (() -> Unit)? = null,
+  /** 长按回调带**手指坐标**（root 坐标）—— 调用方据此在手指旁边弹菜单，见 tapAndLongPress */
+  onLongClick: ((Offset) -> Unit)? = null,
   isSelected: Boolean = false,
   /** 文件夹封面（第一张图片的 path）；null = 还没有 / 没有图片 / 功能关闭 */
   coverPath: String? = null,
@@ -63,10 +64,7 @@ fun NetworkFolderCard(
     modifier =
       modifier
         .fillMaxWidth()
-        .combinedClickable(
-          onClick = onClick,
-          onLongClick = onLongClick,
-        ),
+        .tapAndLongPress(onClick = onClick, onLongClick = onLongClick),
     colors = CardDefaults.cardColors(containerColor = Color.Transparent),
   ) {
     Row(
@@ -85,13 +83,11 @@ fun NetworkFolderCard(
             .size(64.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .combinedClickable(
-              onClick = onClick,
-              onLongClick = onLongClick,
-            ),
+            .tapAndLongPress(onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.Center,
       ) {
-        // 有封面渲染第一张图片的缩略图，否则默认文件夹图标（与网格卡同一口径）
+        // 有封面渲染第一张图片的缩略图，否则默认文件夹图标（与网格卡同一口径）。
+        // 封面缓存里只存了 path（没有签名），靠 AlistClient 的 fs/get 兜底。
         if (coverPath != null) {
           NetworkPhotoThumbnail(
             connectionId = connectionId,

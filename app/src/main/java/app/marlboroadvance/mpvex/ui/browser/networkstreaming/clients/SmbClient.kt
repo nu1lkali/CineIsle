@@ -333,7 +333,7 @@ class SmbClient(private val connection: NetworkConnection) : NetworkClient {
       }
     }
 
-  override suspend fun getFileStream(path: String): Result<InputStream> =
+  override suspend fun getFileStream(path: String, sign: String?): Result<InputStream> =
     withContext(Dispatchers.IO) {
       try {
         val sess = session ?: return@withContext Result.failure(Exception("Not connected"))

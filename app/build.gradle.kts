@@ -108,7 +108,21 @@ android {
     //     且所有出口都保证 response body 被关闭。
     //     顶栏瘦身：收藏 / 随机播放 / 视图切换 三个图标收进竖三点「更多」菜单，
     //     顶栏常驻图标 5 → 3（更多 / 搜索 / 设置），宽度还给文件夹标题。
-    versionCode = 64
+    // 65：【严重】AList 任何图片都加载不出来（封面 + 图片文件全挂，但目录能列）。
+    //     根因（AList 服务端源码实证）：下载路由 `GET /d/*path` 挂的是
+    //     `middlewares.Down(sign.Verify)`，**没有 Auth**；服务端开启「签名所有」/
+    //     存储级签名 / 目录密码时 (needSign) 只认 `?sign=`，缺了直接 401 Abort，
+    //     请求里的 `Authorization` 头**根本不被读取**。而列目录走 `/api/fs/list`
+    //     （middlewares.Auth）只认 Authorization ⇒ 症状就是「目录能列、图片全挂」。
+    //     修复：取流三级取值 —— ① 调用方给的签名（fs/list 条目自带）→ ② 进程内
+    //     签名缓存（每次列目录顺手记）→ ③ 失败时 fs/get 现换新鲜签名 / raw_url 兜底；
+    //     并把 `sign` 从卡片/查看器/保存一路贯穿到客户端。顺带把 `text/html` 响应
+    //     判为失败（AList 静态兜底会把没匹配的路径返回 200 + index.html，放过去
+    //     只会在解码阶段静默失败）。
+    //     长按菜单改回 Emby 媒体库范式：锚定手指位置的 DropdownMenu 气泡菜单
+    //     （原来做成了居中大 AlertDialog —— 自由发挥错了，Alist 库与 Emby 媒体库
+    //     除接口外结构一致，交互观感该是同一套）；重命名 / 删除确认仍走小对话框。
+    versionCode = 65
     versionName = "1.5.4"
 
     vectorDrawables {

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -70,10 +71,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
@@ -107,6 +110,7 @@ import my.nanihadesuka.compose.LazyColumnScrollbar
 import my.nanihadesuka.compose.LazyVerticalGridScrollbar
 import my.nanihadesuka.compose.ScrollbarSettings
 import org.koin.compose.koinInject
+import kotlin.math.roundToInt
 
 /**
  * 网络共享目录浏览页（SMB / WebDAV / FTP 二级页面）。
@@ -187,8 +191,11 @@ data class NetworkBrowserScreen(
     // 随机播放下拉菜单（视频 / 图片）
     // 顶栏竖三点「更多」菜单：收藏 / 随机播放 / 视图切换 全收在这里（见下方 additionalActions）
     var showOverflowMenu by remember { mutableStateOf(false) }
-    // 长按条目：当前协议支持写操作（AList）时才会有值
-    var longPressedFile by remember { mutableStateOf<NetworkFile?>(null) }
+    // 长按条目：当前协议支持写操作（AList）时才会有值。
+    // actionMenuAnchor = 长按那一刻的**手指坐标（root）**，菜单据此锚定
+    // （Emby 媒体库同一手法：气泡菜单出现在手指旁边，而不是屏幕中间的对话框）。
+    var actionTarget by remember { mutableStateOf<NetworkFile?>(null) }
+    var actionMenuAnchor by remember { mutableStateOf(Offset.Zero) }
     var renameTarget by remember { mutableStateOf<NetworkFile?>(null) }
     var deleteTarget by remember { mutableStateOf<NetworkFile?>(null) }
 
@@ -407,6 +414,11 @@ data class NetworkBrowserScreen(
         )
       },
     ) { padding ->
+      // ⚠️ 这层 Box 是**为长按菜单的锚定**而包的（不是排版需要）：
+      //    菜单要用手指的 root 坐标定位，锚点 Box 的原点必须落在屏幕原点。
+      //    直接塞进下面那个 Column 的话，Column 自带 padding(padding)（顶栏高度），
+      //    菜单会整体下移一个顶栏 —— 表现是「菜单出现在手指下方几十 dp 处」。
+      Box(modifier = Modifier.fillMaxSize()) {
       Column(modifier = Modifier.padding(padding)) {
         // ── 本地搜索输入框 ──
         // 点顶栏放大镜出现：对**当前目录已拉到的内容**按名称关键词过滤，
@@ -499,9 +511,15 @@ data class NetworkBrowserScreen(
               videos.indexOfFirst { it.path == video.path }.coerceAtLeast(0),
             )
           },
-          // 长按 = 条目操作菜单（重命名 / 删除）。**只有支持写操作的协议才挂**
-          // （当前只有 AList）—— 不支持的协议弹了菜单也是点了就报错。
-          onFileLongClick = if (supportsWrite) { { file -> longPressedFile = file } } else null,
+          onFileLongClick =
+            if (supportsWrite) {
+              { file, offset ->
+                actionTarget = file
+                actionMenuAnchor = offset
+              }
+            } else {
+              null
+            },
           // 未过滤总数（筛选 / 搜索前的 files.size）——空态文案要区分
           // 「目录真空」和「全被滤掉」，只有过滤后的列表看不出来
           totalCount = files.size,
@@ -510,54 +528,36 @@ data class NetworkBrowserScreen(
       }
 
       // ── 长按条目的操作菜单（重命名 / 删除）──
+      //
+      // **范式照抄 Emby 媒体库**：锚定在手指位置的浮动气泡菜单（`DropdownMenu`），
+      // 不是居中的大卡片 —— AList 库与 Emby 媒体库除接口外结构一致，交互观感
+      // 就该是同一套。（`EmbyItemActionsDialog` 也是这么写的：菜单本体是
+      // DropdownMenu，需要输入 / 二次确认的动作才另开对话框。）
+      //
       // 与 Emby「扫描媒体库」同一原则：**写操作作用在服务器上、发出去撤不回来**，
       // 所以长按只弹菜单，删除还要再过一道确认，绝不直接执行。
-      longPressedFile?.let { file ->
-        AlertDialog(
-          onDismissRequest = { longPressedFile = null },
-          title = { Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-          text = {
-            Column {
-              TextButton(
-                onClick = {
-                  longPressedFile = null
-                  renameTarget = file
-                },
-                modifier = Modifier.fillMaxWidth(),
-              ) {
-                Icon(Icons.Default.Edit, contentDescription = null)
-                Spacer(Modifier.width(12.dp))
-                Text(stringResource(R.string.i18n_rename))
-                Spacer(Modifier.weight(1f))
-              }
-              TextButton(
-                onClick = {
-                  longPressedFile = null
-                  deleteTarget = file
-                },
-                modifier = Modifier.fillMaxWidth(),
-              ) {
-                Icon(
-                  Icons.Default.Delete,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.error,
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                  stringResource(R.string.i18n_delete),
-                  color = MaterialTheme.colorScheme.error,
-                )
-                Spacer(Modifier.weight(1f))
-              }
-            }
-          },
-          confirmButton = {},
-          dismissButton = {
-            TextButton(onClick = { longPressedFile = null }) {
-              Text(stringResource(R.string.i18n_cancel))
-            }
-          },
-        )
+      val target = actionTarget
+      if (target != null) {
+        Box(
+          modifier =
+            Modifier.offset {
+              IntOffset(actionMenuAnchor.x.roundToInt(), actionMenuAnchor.y.roundToInt())
+            },
+        ) {
+          NetworkFileActionMenu(
+            file = target,
+            onDismissRequest = { actionTarget = null },
+            onRename = {
+              actionTarget = null
+              renameTarget = target
+            },
+            onDelete = {
+              actionTarget = null
+              deleteTarget = target
+            },
+          )
+        }
+      }
       }
 
       // 重命名：给个输入框，默认填当前名称
@@ -634,6 +634,52 @@ data class NetworkBrowserScreen(
   }
 }
 
+/**
+ * 长按条目弹出的**操作气泡菜单**（重命名 / 删除）。
+ *
+ * 与 Emby 媒体库的 `EmbyItemActionsDialog` 同一套写法与观感 —— AList 库和
+ * Emby 媒体库除接口外结构一致，长按交互就不该长成两副样子：
+ * - `DropdownMenu`（**不是** AlertDialog）：宽度贴合内容、锚在长按位置；
+ * - 顶部一行条目名（`labelMedium` + `onSurfaceVariant`），一行截断；
+ * - 每项「图标 + 文字」，删除用 `error` 色（危险动作一眼看出来）；
+ * - **需要输入 / 不可逆的动作不塞这里**：菜单只负责选动作，重命名与删除确认
+ *   另开对话框（Emby 那边同样把「刷新元数据」的选项放二级框）。
+ */
+@Composable
+private fun NetworkFileActionMenu(
+  file: NetworkFile,
+  onDismissRequest: () -> Unit,
+  onRename: () -> Unit,
+  onDelete: () -> Unit,
+) {
+  DropdownMenu(expanded = true, onDismissRequest = onDismissRequest) {
+    Text(
+      text = file.name,
+      style = MaterialTheme.typography.labelMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+    )
+    DropdownMenuItem(
+      text = { Text(stringResource(R.string.i18n_rename)) },
+      leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+      onClick = onRename,
+    )
+    DropdownMenuItem(
+      text = { Text(stringResource(R.string.i18n_delete), color = MaterialTheme.colorScheme.error) },
+      leadingIcon = {
+        Icon(
+          Icons.Default.Delete,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.error,
+        )
+      },
+      onClick = onDelete,
+    )
+  }
+}
+
 @Composable
 private fun NetworkBrowserContent(
   /** 过滤后的列表（类型筛选 + 搜索词都已应用） */
@@ -662,8 +708,10 @@ private fun NetworkBrowserContent(
   /**
    * 长按条目的回调；null = 当前协议不支持写操作，长按需忽略
    * （不给入口，免得弹个菜单出来点了全是报错）。
+   *
+   * 第二个参数是**手指坐标（root）** —— 菜单要锚定到它旁边（见 Emby 媒体库）。
    */
-  onFileLongClick: ((NetworkFile) -> Unit)? = null,
+  onFileLongClick: ((NetworkFile, Offset) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   // Load connection details（走仓库而不是直接读 DAO —— 密码落盘是密文，仓库会负责解密）
@@ -820,8 +868,8 @@ private fun NetworkBrowserGrid(
   folderCovers: Map<String, String?>,
   coverTrigger: ((String) -> Unit)?,
   titleMaxLines: Int,
-  /** 长按条目；null = 协议不支持写操作，卡片不挂长按 */
-  onFileLongClick: ((NetworkFile) -> Unit)? = null,
+  /** 长按条目；null = 协议不支持写操作，卡片不挂长按。第二参 = 手指坐标 */
+  onFileLongClick: ((NetworkFile, Offset) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val gridState = rememberLazyGridState()
@@ -890,7 +938,8 @@ private fun NetworkBrowserGrid(
               coverPath = if (file.isDirectory) folderCovers[file.path] else null,
               titleMaxLines = titleMaxLines,
               onCoverNeeded = coverTrigger,
-              onLongClick = if (onFileLongClick == null) null else { { onFileLongClick(file) } },
+              onLongClick =
+                if (onFileLongClick == null) null else { { offset -> onFileLongClick(file, offset) } },
             )
           }
         }
@@ -920,8 +969,8 @@ private fun NetworkBrowserList(
   onVideoClick: (NetworkFile) -> Unit,
   folderCovers: Map<String, String?>,
   coverTrigger: ((String) -> Unit)?,
-  /** 长按条目；null = 协议不支持写操作，卡片不挂长按 */
-  onFileLongClick: ((NetworkFile) -> Unit)? = null,
+  /** 长按条目；null = 协议不支持写操作，卡片不挂长按。第二参 = 手指坐标 */
+  onFileLongClick: ((NetworkFile, Offset) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val navigationBarHeight = LocalNavigationBarHeight.current
@@ -982,7 +1031,12 @@ private fun NetworkBrowserList(
                 onClick = { onFolderClick(folder) },
                 coverPath = folderCovers[folder.path],
                 onCoverNeeded = coverTrigger,
-                onLongClick = if (onFileLongClick == null) null else { { onFileLongClick(folder) } },
+                onLongClick =
+                  if (onFileLongClick == null) {
+                    null
+                  } else {
+                    { offset -> onFileLongClick(folder, offset) }
+                  },
                 modifier = Modifier,
               )
             }
@@ -1001,7 +1055,12 @@ private fun NetworkBrowserList(
                 file = photo,
                 connectionId = connectionId,
                 onClick = { onPhotoClick(photo) },
-                onLongClick = if (onFileLongClick == null) null else { { onFileLongClick(photo) } },
+                onLongClick =
+                  if (onFileLongClick == null) {
+                    null
+                  } else {
+                    { offset -> onFileLongClick(photo, offset) }
+                  },
                 modifier = Modifier,
               )
             }
@@ -1022,7 +1081,12 @@ private fun NetworkBrowserList(
                   file = video,
                   connection = conn,
                   onClick = { onVideoClick(video) },
-                  onLongClick = if (onFileLongClick == null) null else { { onFileLongClick(video) } },
+                  onLongClick =
+                    if (onFileLongClick == null) {
+                      null
+                    } else {
+                      { offset -> onFileLongClick(video, offset) }
+                    },
                   modifier = Modifier,
                 )
               }

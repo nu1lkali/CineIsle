@@ -246,7 +246,13 @@ data class NetworkPhotoViewerScreen(
         val item = queue.getOrNull(currentPage + offset) ?: continue
         scope.launch {
           withContext(Dispatchers.IO) {
-            NetworkPhotoImageLoader.preload(context, connectionId, item.path, size = coil3.size.Size.ORIGINAL)
+            NetworkPhotoImageLoader.preload(
+              context,
+              connectionId,
+              item.path,
+              size = coil3.size.Size.ORIGINAL,
+              sign = item.sign,
+            )
           }
         }
       }
@@ -325,6 +331,7 @@ data class NetworkPhotoViewerScreen(
                 modifier = Modifier.fillMaxSize(),
                 page = page,
                 zoomRegistry = zoomRegistry,
+                sign = item.sign,
               )
             }
           }

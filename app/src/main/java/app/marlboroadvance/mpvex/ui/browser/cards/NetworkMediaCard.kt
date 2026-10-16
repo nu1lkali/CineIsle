@@ -2,6 +2,7 @@ package app.marlboroadvance.mpvex.ui.browser.cards
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,11 +29,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
@@ -42,6 +52,40 @@ import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhoto
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/**
+ * 「单击 + 长按」合成 modifier，把**长按位置（root 坐标）**回传给 [onLongClick]。
+ *
+ * 与 Emby 媒体库那份（`ui/browser/emby/components/EmbyMediaCard.kt` 的 `tapAndLongPress`）
+ * 是同一套做法：用 `detectTapGestures` 而不是 `combinedClickable` —— 后者拿不到手指
+ * 坐标，而长按菜单要「出现在手指旁边」（锚定气泡菜单），不能是居中大卡片。
+ *
+ * 那份是 Emby 文件内的 `private`，这里再写一份而不是放开可见性：两边分属不同
+ * 界面域，各自演进互不牵连（代价只是十几行重复代码）。
+ *
+ * ⚠️ 这一支没有 ripple 按压反馈 —— 长按弹菜单本身已是足够明确的反馈，
+ *    为 ripple 牺牲定位不划算。
+ */
+internal fun Modifier.tapAndLongPress(
+  onClick: () -> Unit,
+  onLongClick: ((Offset) -> Unit)?,
+): Modifier = composed {
+  var posInRoot by remember { mutableStateOf(Offset.Zero) }
+  this
+    .onGloballyPositioned { posInRoot = it.positionInRoot() }
+    .then(
+      if (onLongClick == null) {
+        Modifier.combinedClickable(onClick = onClick)
+      } else {
+        Modifier.pointerInput(onClick, onLongClick) {
+          detectTapGestures(
+            onTap = { onClick() },
+            onLongPress = { offset -> onLongClick(posInRoot + offset) },
+          )
+        }
+      },
+    )
+}
 
 /**
  * 网络浏览的**统一网格卡**：文件夹 / 照片 / 视频三态共用一个卡型，
@@ -80,10 +124,10 @@ fun NetworkMediaCard(
    */
   onCoverNeeded: ((String) -> Unit)? = null,
   /**
-   * 长按：调用方据此弹条目操作菜单（重命名 / 删除）。
+   * 长按：调用方据此在**手指位置**弹条目操作菜单（重命名 / 删除）。
    * null = 不挂长按（协议不支持写操作时调用方传 null）。
    */
-  onLongClick: (() -> Unit)? = null,
+  onLongClick: ((Offset) -> Unit)? = null,
 ) {
   val type = file.type()
 
@@ -95,12 +139,9 @@ fun NetworkMediaCard(
 
   Column(modifier = modifier.fillMaxWidth()) {
     Card(
-      // 用 combinedClickable 而不是 Card(onClick=)：后者接不了长按。
-      // ripple / 无障碍语义由 combinedClickable 自带的 indication 与 semantics 兜住。
-      modifier = Modifier.combinedClickable(
-        onClick = onClick,
-        onLongClick = onLongClick,
-      ),
+      // 用 tapAndLongPress 而不是 Card(onClick=)：后者接不了长按，更给不了
+      // 长按坐标（菜单要锚在手指旁边）。见 tapAndLongPress 的说明。
+      modifier = Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick),
       shape = RoundedCornerShape(12.dp),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
@@ -139,13 +180,16 @@ fun NetworkMediaCard(
           }
 
           NetworkFileType.PHOTO -> {
-            // 网络照片：流式拉全图 + 采样解码，骨架屏 / 失败重试都在组件里
+            // 网络照片：流式拉全图 + 采样解码，骨架屏 / 失败重试都在组件里。
+            // sign 必须带上 —— AList 的 /d/ 下载口在服务端开启签名时只认它
+            // （不带会被 401，兜底多一次 fs/get）。见 AlistClient 类注释。
             NetworkPhotoThumbnail(
               connectionId = connectionId,
               path = file.path,
               contentDescription = file.name,
               modifier = Modifier.fillMaxSize(),
               contentScale = ContentScale.Crop,
+              sign = file.sign,
             )
           }
 
@@ -260,16 +304,13 @@ fun NetworkPhotoRow(
   connectionId: Long,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
-  onLongClick: (() -> Unit)? = null,
+  onLongClick: ((Offset) -> Unit)? = null,
 ) {
   Card(
     modifier =
       modifier
         .fillMaxWidth()
-        .combinedClickable(
-          onClick = onClick,
-          onLongClick = onLongClick,
-        ),
+        .tapAndLongPress(onClick = onClick, onLongClick = onLongClick),
     colors = CardDefaults.cardColors(containerColor = Color.Transparent),
   ) {
     Row(
@@ -291,6 +332,7 @@ fun NetworkPhotoRow(
           contentDescription = file.name,
           modifier = Modifier.fillMaxSize(),
           contentScale = ContentScale.Crop,
+          sign = file.sign,
         )
         NetworkTypeBadge(
           type = NetworkFileType.PHOTO,

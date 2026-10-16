@@ -25,10 +25,15 @@ import org.koin.core.context.GlobalContext
  * 与 [app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoUrl] 同理：
  * 必须套自己的壳，否则 String 会被 Coil 内置网络 Fetcher 抢走（它不认识
  * content:// 代理、更不会走 SMB 会话）。
+ *
+ * @param sign AList 的下载签名（`fs/list` 条目带的 `sign`）。其他协议恒为 null。
+ *   ⚠️ **不参与缓存 key** —— 同一张图换个签名还是同一张图，签名进 key 会让
+ *   缓存永远命中不了（签名每次都可能不同）。
  */
 data class NetworkPhotoRequest(
   val connectionId: Long,
   val path: String,
+  val sign: String? = null,
 )
 
 /**
@@ -79,16 +84,19 @@ object NetworkPhotoImageLoader {
    * @param size 网格缩略图传组件尺寸（默认，走采样解码省内存）；
    *   全屏查看器传 [Size.ORIGINAL]（要放大看细节）。**不传 ORIGINAL 就是对大图采样**，
    *   这正是没有服务端缩放时唯一的内存闸门。
+   * @param sign AList 下载签名（[app.marlboroadvance.mpvex.domain.network.NetworkFile.sign]）；
+   *   其他协议传 null。⚠️ **不进缓存 key**（见 [NetworkPhotoRequest]）。
    */
   fun request(
     context: Context,
     connectionId: Long,
     path: String,
     size: Size? = null,
+    sign: String? = null,
   ): ImageRequest {
     val key = cacheKey(connectionId, path)
     return ImageRequest.Builder(context)
-      .data(NetworkPhotoRequest(connectionId, path))
+      .data(NetworkPhotoRequest(connectionId, path, sign))
       .memoryCacheKey(key)
       .diskCacheKey(key)
       .apply { if (size != null) size(size) }
@@ -118,9 +126,10 @@ object NetworkPhotoImageLoader {
     connectionId: Long,
     path: String,
     size: Size? = null,
+    sign: String? = null,
   ) {
     val loader = get(context)
-    runCatching { loader.execute(request(context, connectionId, path, size)) }
+    runCatching { loader.execute(request(context, connectionId, path, size, sign)) }
   }
 }
 
@@ -138,6 +147,7 @@ object NetworkPhotoImageLoader {
 private class NetworkPhotoFetcher(
   private val connectionId: Long,
   private val path: String,
+  private val sign: String?,
 ) : Fetcher {
   override suspend fun fetch(): FetchResult {
     val koin = GlobalContext.getOrNull() ?: throw java.io.IOException("Koin 未初始化")
@@ -145,7 +155,10 @@ private class NetworkPhotoFetcher(
     val connection = repository.getConnectionById(connectionId)
       ?: throw java.io.IOException("连接不存在（可能已删除）")
 
-    val inputStream = repository.openFileStream(connection, path).getOrElse { e ->
+    // sign 是 AList 的下载签名（其他协议为 null）。AList 的 /d/ 下载口只认它，
+    // 缺了会 401 —— 但 AlistClient 内部还有 fs/get 兜底，所以这里传 null 也能取到
+    // （只是多一个请求）。见 AlistClient 的类注释。
+    val inputStream = repository.openFileStream(connection, path, sign).getOrElse { e ->
       throw java.io.IOException("照片打开失败: $path", e)
     }
     // Coil 会消费这个 Source；无论成败，流都由我们关
@@ -162,6 +175,6 @@ private class NetworkPhotoFetcher(
       data: NetworkPhotoRequest,
       options: Options,
       imageLoader: ImageLoader,
-    ): Fetcher = NetworkPhotoFetcher(data.connectionId, data.path)
+    ): Fetcher = NetworkPhotoFetcher(data.connectionId, data.path, data.sign)
   }
 }
