@@ -38,6 +38,40 @@ class BrowserPreferences(
   val videoGridColumnsPortrait = preferenceStore.getInt("video_grid_columns_portrait", if (isTablet) 4 else 2)
   val videoGridColumnsLandscape = preferenceStore.getInt("video_grid_columns_landscape", 4)
 
+  /**
+   * 网络浏览（SMB/WebDAV/FTP）文件夹卡片是否用「文件夹里第一张图片」当封面。
+   *
+   * 默认开：相册类共享目录一眼能认出内容。**懒加载**：只有文件夹卡片滚动到
+   * 可见时才为它列一次目录（取名称序第一张图片），结果进 VM 缓存，滑回去不重列；
+   * 关掉后不产生任何额外请求，文件夹回到默认图标。
+   */
+  val folderCoverEnabled = preferenceStore.getBoolean("folder_cover_enabled", true)
+
+  /**
+   * 网络浏览**网格视图**卡片标题行数（一行 / 两行 / 全显）。
+   *
+   * 只管网络网格卡（[app.marlboroadvance.mpvex.ui.browser.cards.NetworkMediaCard]）：
+   * 列表卡与本地/Emby 卡的行数走各自既有偏好（如 AppearancePreferences
+   * 的 unlimitedNameLines），不混用。
+   */
+  val networkGridTitleLines = preferenceStore.getEnum("network_grid_title_lines", GridTitleLines.One)
+
+  /**
+   * 网络浏览（SMB/WebDAV/FTP）目录内**排序方式**（名称 / 日期 / 大小）。
+   *
+   * 与本地文件夹排序（[folderSortType]）分开存：那边的「视频数」在网络目录里
+   * 要额外统计、没有意义；网络这边就三个够用的维度。
+   * 排序在 ViewModel 里应用（目录是一次性拉全量的，本地重排不发请求）。
+   */
+  val networkSortType = preferenceStore.getEnum("network_sort_type", NetworkSortType.Name)
+
+  /**
+   * 网络浏览排序方向。**换排序项时会自动切到该项的自然方向**
+   * （名称=升序、日期/大小=降序），见 [NetworkSortType.naturalAscending] ——
+   * 与 Emby 媒体库「空串跟随自然方向」同一思想，省得用户每换一项还要再点一次箭头。
+   */
+  val networkSortOrder = preferenceStore.getEnum("network_sort_order", SortOrder.Ascending)
+
   // Visibility preferences for video card chips
   val showVideoThumbnails = preferenceStore.getBoolean("show_video_thumbnails", true)
   val showSizeChip = preferenceStore.getBoolean("show_size_chip", true)
@@ -691,6 +725,53 @@ enum class MediaLayoutMode {
       LIST -> "List"
       GRID -> "Grid"
     }
+}
+
+/**
+ * 网络浏览网格卡片标题行数。
+ *
+ * ⚠️ 存的是**枚举名**（`getEnum`），常量名发布后不能改 —— 改了老用户的偏好会失效。
+ */
+enum class GridTitleLines(
+  /** 直接喂给 `Text(maxLines =)`；全显用 [Int.MAX_VALUE] */
+  val maxLines: Int,
+  /** 设置项里的展示名 */
+  val label: String,
+) {
+  One(1, "一行"),
+  Two(2, "两行"),
+  Full(Int.MAX_VALUE, "全显"),
+}
+
+/**
+ * 网络浏览目录内的排序维度。
+ *
+ * ⚠️ 存的是**枚举名**（`getEnum`），常量名发布后不能改 —— 改了老用户的排序偏好会失效。
+ * `displayName` 同时是排序弹窗与持久化共用的稳定键，同样不能动。
+ *
+ * 「类型」一档把照片 / 视频 / 其他分开排（顺序与列表视图的 section 一致：
+ * 图片在前、视频在后）—— 混合目录里「先看照片再看视频」是常见诉求。
+ * 「随机」没有方向意义，UI 上不显示升降序箭头。
+ */
+enum class NetworkSortType(
+  /** 持久化 / 排序弹窗共用的稳定键（英文），**不要改动** */
+  val displayName: String,
+  /** 界面上显示的中文名 */
+  val label: String,
+  /** 切到这一项时的自然方向：true = 升序（A-Z / 最旧 / 最小） */
+  val naturalAscending: Boolean,
+) {
+  Name("Name", "名称", true),
+  Date("Date", "时间", false),
+  Size("Size", "大小", false),
+  Type("Type", "类型", true),
+  Random("Random", "随机", true),
+  ;
+
+  companion object {
+    fun fromDisplayName(name: String): NetworkSortType? =
+      entries.find { it.displayName == name }
+  }
 }
 
 /**

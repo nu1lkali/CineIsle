@@ -141,6 +141,15 @@ class App : Application() {
       }
     }
 
+    // 网络文件夹封面缓存的 TTL 清理：删掉 30 天没刷新过的 L2 行（启动时一次）。
+    // 封面对的是「服务器上文件夹里当前有哪些图」，目录内容会变，
+    // 一直不新鲜的缓存比没有缓存更糟（显示一个早就删掉的封面）。
+    // L1 是进程内的不用管；失败吞掉 —— 少扫一次不过是多留几行旧数据。
+    applicationScope.launch {
+      runCatching { networkRepository.clearStaleFolderCovers() }
+        .onFailure { trace("folder cover TTL cleanup failed: ${it.message}") }
+    }
+
     // 「不喜欢」标记的内存快照：启动时读一次库。
     // 这是它**唯一**的读库时机 —— 之后所有查询都走内存（O(1)），
     // 所以播放器切视频时不会因为查状态而掉帧。

@@ -8,6 +8,7 @@ import app.marlboroadvance.mpvex.database.dao.DislikeDao
 import app.marlboroadvance.mpvex.database.dao.DownloadedMediaDao
 import app.marlboroadvance.mpvex.database.dao.EmbyDownloadDao
 import app.marlboroadvance.mpvex.database.dao.EmbyServerDao
+import app.marlboroadvance.mpvex.database.dao.FolderCoverCacheDao
 import app.marlboroadvance.mpvex.database.dao.NetworkConnectionDao
 import app.marlboroadvance.mpvex.database.dao.NetworkFavoriteDao
 import app.marlboroadvance.mpvex.database.dao.PlaybackStateDao
@@ -25,6 +26,7 @@ import app.marlboroadvance.mpvex.database.entities.RecentlyPlayedEntity
 import app.marlboroadvance.mpvex.database.entities.SearchHistoryEntity
 import app.marlboroadvance.mpvex.database.entities.VideoMetadataEntity
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.domain.network.FolderCoverCacheEntity
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFavorite
 
@@ -36,6 +38,8 @@ import app.marlboroadvance.mpvex.domain.network.NetworkFavorite
     NetworkConnection::class,
     // 「网络」里收藏的目录（快捷入口）
     NetworkFavorite::class,
+    // 「网络」文件夹封面缓存（文件夹内第一张图片，L2 落盘）
+    FolderCoverCacheEntity::class,
     PlaylistEntity::class,
     PlaylistItemEntity::class,
     EmbyServer::class,
@@ -48,7 +52,7 @@ import app.marlboroadvance.mpvex.domain.network.NetworkFavorite
     // 见 DislikedMediaEntity 的 KDoc
     DislikedMediaEntity::class,
   ],
-  version = 15,
+  version = 16,
   exportSchema = true,
 )
 @TypeConverters(NetworkProtocolConverter::class)
@@ -62,6 +66,8 @@ abstract class MpvExDatabase : RoomDatabase() {
   abstract fun networkConnectionDao(): NetworkConnectionDao
 
   abstract fun networkFavoriteDao(): NetworkFavoriteDao
+
+  abstract fun folderCoverCacheDao(): FolderCoverCacheDao
 
   abstract fun playlistDao(): PlaylistDao
 

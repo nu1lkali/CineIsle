@@ -37,6 +37,25 @@ object CryptoUtils {
   /** 密文前缀。刻意避开 base64 字母表，方便用 `:` 直接切分 IV 与密文。 */
   private const val PREFIX = "enc:v1:"
 
+  /**
+   * Keystore 加解密操作的全局锁。
+   *
+   * ⚠️ **Android Keystore 的 Cipher 不是线程安全的**：多个线程同时对同一个 key
+   * 做 init/doFinal，keystore2 会把彼此的 operation 句柄剪掉——
+   * `Invalid operation handle … Call on finalized operation with outcome: Pruned`，
+   * 后到的调用直接抛 IllegalBlockSizeException。
+   *
+   * 实测踩坑路径（网络浏览「只有一部分文件夹封面能加载」的根因）：
+   * 网格一屏可见十几个文件夹 ⇒ Coil 并发拉封面 ⇒ 每个 Fetcher 都走
+   * `NetworkRepository.getConnectionById → withDecryptedPassword → decrypt`，
+   * 十几个线程同时捅 Keystore，互相 prune，输的那个拿到**空密码**，
+   * 服务器 401，封面 / 下载全挂 —— 而且纯时序竞争，表现为
+   * 「随机一部分成功一部分失败、洗文件名也没用」。
+   *
+   * Keystore 单次操作是毫秒级，串行化的代价可以忽略，换来的是确定性。
+   */
+  private val keystoreLock = Any()
+
   @Volatile
   private var cachedKey: SecretKey? = null
 
@@ -58,13 +77,17 @@ object CryptoUtils {
     if (value.isEmpty() || isEncrypted(value)) return value
 
     return try {
-      val cipher = Cipher.getInstance(TRANSFORMATION)
-      cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-      val payload = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
-      PREFIX +
-        Base64.encodeToString(cipher.iv, Base64.NO_WRAP) +
-        ":" +
-        Base64.encodeToString(payload, Base64.NO_WRAP)
+      // 整个 Cipher 生命周期（getInstance → init → doFinal）都必须在锁内：
+      // Keystore 的 operation 句柄是进程级竞争的，漏掉任何一步都可能被别的线程剪掉
+      synchronized(keystoreLock) {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
+        val payload = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+        PREFIX +
+          Base64.encodeToString(cipher.iv, Base64.NO_WRAP) +
+          ":" +
+          Base64.encodeToString(payload, Base64.NO_WRAP)
+      }
     } catch (e: Throwable) {
       Log.e(TAG, "encrypt failed; refusing to store plaintext", e)
       ""
@@ -85,16 +108,21 @@ object CryptoUtils {
     if (!isEncrypted(value)) return value
 
     return try {
-      val body = value.removePrefix(PREFIX)
-      val separator = body.indexOf(':')
-      if (separator <= 0) return ""
+      // 同 encrypt：Keystore 操作全程持锁，见 keystoreLock 的注释。
+      // 这里解的是「连接密码」——一旦并发互踩失败，兜底会把密码当空串，
+      // 上层拿着空密码去连服务器，换来的是一个莫名的 401。
+      synchronized(keystoreLock) {
+        val body = value.removePrefix(PREFIX)
+        val separator = body.indexOf(':')
+        if (separator <= 0) return@synchronized ""
 
-      val iv = Base64.decode(body.substring(0, separator), Base64.NO_WRAP)
-      val payload = Base64.decode(body.substring(separator + 1), Base64.NO_WRAP)
+        val iv = Base64.decode(body.substring(0, separator), Base64.NO_WRAP)
+        val payload = Base64.decode(body.substring(separator + 1), Base64.NO_WRAP)
 
-      val cipher = Cipher.getInstance(TRANSFORMATION)
-      cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_LENGTH_BITS, iv))
-      String(cipher.doFinal(payload), Charsets.UTF_8)
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_LENGTH_BITS, iv))
+        String(cipher.doFinal(payload), Charsets.UTF_8)
+      }
     } catch (e: Throwable) {
       Log.e(TAG, "decrypt failed (keystore key rotated or lost?) -> treating as empty", e)
       ""

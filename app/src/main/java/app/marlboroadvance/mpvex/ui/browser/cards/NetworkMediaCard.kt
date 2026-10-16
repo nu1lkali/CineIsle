@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,6 +53,9 @@ import java.util.Locale
  *   沿用旧视频卡的做法 —— surfaceContainerHigh 底 + 播放图标占位。
  * - **照片走 [NetworkPhotoThumbnail]**：拉全图 + Coil 采样解码，Crop 填满
  *   （没有服务端缩放，见 NetworkPhotoImageLoader 的 KDoc）。
+ * - **文件夹封面**（可选）：[coverPath] 非空 = 文件夹里第一张图片的路径，
+ *   用同一套缩略图组件渲染；为空 = 灰色文件夹图标。封面由调用方懒加载提供
+ *   （见 [onCoverNeeded]），本卡只负责渲染。
  * - **统一 1:1 图区**（[aspectRatio]）：与 Emby 照片卡同一理由 ——
  *   高度随原图比例浮动的话网格参差不齐。
  * - **OTHER 不出现**：字幕 / nfo 这类文件网格里直接不渲染（列表视图才显示），
@@ -63,8 +67,27 @@ fun NetworkMediaCard(
   connectionId: Long,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  /** 文件夹封面（第一张图片的 path）；null = 还没有 / 没有图片 / 功能关闭 */
+  coverPath: String? = null,
+  /** 网格标题行数（一行 / 两行 / 全显，走设置项） */
+  titleMaxLines: Int = 1,
+  /**
+   * 文件夹还没有封面时通知调用方去加载（传文件夹 path）。
+   *
+   * ⚠️ 这就是封面的**懒加载触发点**：LazyGrid 只组合可见项，卡片被组合出来
+   *   才会调这里 ⇒ 只有滚到眼前的文件夹才花那次列目录请求。传 null = 不触发
+   *   （用户在设置里关了封面时调用方就不传）。
+   */
+  onCoverNeeded: ((String) -> Unit)? = null,
 ) {
   val type = file.type()
+
+  // 文件夹且还没拿到封面时请求一次。重复调是安全的（VM 侧有缓存/在途去重），
+  // 滑走再滑回来会再触发，但命中缓存不再产生网络请求。
+  if (type == NetworkFileType.FOLDER && coverPath == null && onCoverNeeded != null) {
+    LaunchedEffect(file.path) { onCoverNeeded(file.path) }
+  }
+
   Column(modifier = modifier.fillMaxWidth()) {
     Card(
       onClick = onClick,
@@ -78,18 +101,30 @@ fun NetworkMediaCard(
       ) {
         when (type) {
           NetworkFileType.FOLDER -> {
-            Box(
-              modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                Icons.Filled.Folder,
-                contentDescription = null,
-                modifier = Modifier.size(44.dp),
-                tint = MaterialTheme.colorScheme.secondary,
+            // 有封面（文件夹第一张图片）就渲染缩略图，否则回退文件夹图标。
+            // 封面加载中 / 没有图片 / 功能关闭时都是图标，不会留半张图。
+            if (coverPath != null) {
+              NetworkPhotoThumbnail(
+                connectionId = connectionId,
+                path = coverPath,
+                contentDescription = file.name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
               )
+            } else {
+              Box(
+                modifier = Modifier
+                  .fillMaxSize()
+                  .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  Icons.Filled.Folder,
+                  contentDescription = null,
+                  modifier = Modifier.size(44.dp),
+                  tint = MaterialTheme.colorScheme.secondary,
+                )
+              }
             }
           }
 
@@ -150,7 +185,7 @@ fun NetworkMediaCard(
       text = file.name,
       style = MaterialTheme.typography.bodyMedium,
       color = MaterialTheme.colorScheme.onSurface,
-      maxLines = 1,
+      maxLines = titleMaxLines,
       overflow = TextOverflow.Ellipsis,
       modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp),
     )
@@ -347,9 +382,14 @@ fun NetworkOtherFileRow(
  * 媒体卡片的副标题：「大小 · 日期」，缺哪段就不显示哪段。
  * 文件夹 / 没有任何元数据的条目返回 null（调用方不占位）。
  *
+ * ⚠️ **文件夹一律返回 null**：SMB/WebDAV 的目录项经常带着一个lastModified
+ * （建目录/挪动的时间），单独显示成一个孤零零的「10月15」没人看得懂，
+ * 且对「认内容」没有任何帮助 —— 文件夹的封面与名字已经说清它是什么了。
+ *
  * 纯函数（不读 Composable 状态）：调用点直接拿结果，不参与重组。
  */
 private fun networkFileSubtitle(file: NetworkFile): String? {
+  if (file.isDirectory) return null
   val sizeText = if (file.size > 0) formatNetworkFileSize(file.size) else null
   val dateText = if (file.lastModified > 0) formatNetworkFileDate(file.lastModified) else null
   return when {
@@ -371,6 +411,9 @@ private fun formatNetworkFileSize(bytes: Long): String {
 
 private fun formatNetworkFileDate(timestamp: Long): String {
   val date = Date(timestamp)
-  val format = SimpleDateFormat("MMM dd", Locale.getDefault())
+  // MM/dd 固定数字格式：以前用 "MMM dd"，中文 locale 下会渲染成「12月29」——
+  // 月份被翻成中文、日子后面又没有「日」，读着像个残缺的日期。
+  // 用 Locale.US 保证任何locale 下都是纯 ASCII 的「12/29」。
+  val format = SimpleDateFormat("MM/dd", Locale.US)
   return format.format(date)
 }

@@ -72,6 +72,7 @@ import app.marlboroadvance.mpvex.preferences.AppLockMethod
 import app.marlboroadvance.mpvex.preferences.AppLockPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.DanmakuPreferences
+import app.marlboroadvance.mpvex.preferences.GridTitleLines
 import app.marlboroadvance.mpvex.preferences.PhotoSlideshowInterval
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
@@ -924,6 +925,62 @@ object PreferencesScreen : Screen {
                 onClick = { backstack.add(PersonMergeScreen()) },
               )
             }
+          }
+
+          // ── 网络浏览（SMB / WebDAV / FTP） ──────────────────────────
+          //
+          // 这里放「网络」模块自己的观感项：文件夹封面是这一轮新增的大功能
+          // （懒加载 + 两级缓存，关掉后零额外请求），标题行数是网格信息密度。
+          // 排序维度 / 升降序不进设置 —— 那两个是「当前目录怎么看」的即时操作，
+          // 放在浏览页内容区的排序控件里更顺手，且切换不发请求。
+          item {
+            PreferenceSectionHeader(title = "网络浏览")
+          }
+
+          item {
+            // 文件夹封面：文件夹卡用目录里第一张图片当封面。
+            // 关掉的场景：服务器目录结构深、图片多，不想让浏览产生额外列目录请求；
+            // 或者就喜欢朴素的名字列表。
+            val browserPreferences = koinInject<BrowserPreferences>()
+            val folderCoverEnabled by browserPreferences.folderCoverEnabled.collectAsState()
+            SwitchPreference(
+              value = folderCoverEnabled,
+              onValueChange = { browserPreferences.folderCoverEnabled.set(it) },
+              title = { Text(text = "文件夹封面") },
+              summary = {
+                Text(
+                  text = if (folderCoverEnabled) {
+                    "文件夹卡片显示目录内第一张图片作为封面；只在滚动到可见时加载，" +
+                      "同一目录再次进入不再重复请求"
+                  } else {
+                    "文件夹卡片只显示名称；关闭后浏览过程不产生任何额外请求"
+                  },
+                  color = MaterialTheme.colorScheme.outline,
+                )
+              },
+            )
+          }
+
+          item { PreferenceDivider() }
+
+          item {
+            // 网格标题行数：一行最整齐（信息密度低），两行折中，全显适合长片名库。
+            val browserPreferences = koinInject<BrowserPreferences>()
+            val gridTitleLines by browserPreferences.networkGridTitleLines.collectAsState()
+            ListPreference(
+              value = gridTitleLines,
+              onValueChange = { browserPreferences.networkGridTitleLines.set(it) },
+              values = GridTitleLines.entries,
+              valueToText = { AnnotatedString(it.label) },
+              title = { Text(text = "网格标题行数") },
+              summary = {
+                Text(
+                  text = "网络浏览网格视图下，文件夹 / 图片 / 视频卡片标题最多显示" +
+                    "${gridTitleLines.label}，超出部分省略",
+                  color = MaterialTheme.colorScheme.outline,
+                )
+              },
+            )
           }
 
           // Data & Cache Section

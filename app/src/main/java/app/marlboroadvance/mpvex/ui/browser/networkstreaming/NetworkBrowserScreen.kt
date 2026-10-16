@@ -4,12 +4,18 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -17,15 +23,24 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,6 +48,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
@@ -45,6 +61,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -56,6 +76,8 @@ import app.marlboroadvance.mpvex.domain.network.isVideoFile
 import app.marlboroadvance.mpvex.domain.network.type
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.FolderViewMode
+import app.marlboroadvance.mpvex.preferences.NetworkSortType
+import app.marlboroadvance.mpvex.preferences.SortOrder
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
@@ -89,8 +111,20 @@ import org.koin.compose.koinInject
  *   照片走 [NetworkPhotoRow]，其他文件走 [NetworkOtherFileRow]。
  * - **视图模式与本地文件夹浏览共用同一偏好**（[FolderViewMode]）：
  *   用户在「本地」里选的网格/列表，这里跟着变，不用学两套。
- * - **顶栏三件套**（[BrowserTopBar.additionalActions]）：收藏当前目录（星形）、
- *   随机播放（视频 / 图片二选一）、视图切换。
+ * - **文件夹封面**：文件夹卡用目录内第一张图片作封面，懒加载 + 两级缓存
+ *   （VM 本页 Map → Repository 内存 LRU → Room 持久表），可在设置里关闭。
+ * - **排序**（内容区控制条）：名称 / 时间 / 大小 / 类型 / 随机多维度，
+ *   一个 chip（图标 + 维度名 + ↑/↓）点开下拉菜单换维度，范式对齐 Emby 媒体库
+ *   （[SortMenu]）：选中项标签 append 方向 + 主色高亮、不单列方向选项、
+ *   再点一次已选中项 = 只翻方向；切维度走自然方向。
+ * - **类型筛选**（内容区控制条）：单个「筛选」按钮点开小窗勾选
+ *   （显示文件夹 / 显示图片 / 显示媒体，「显示全部」= 三项全开的派生态），
+ *   多选不关窗；有筛选生效时按钮主色高亮。字幕 / nfo 等其他文件只在列表视图出现，
+ *   不受这三项管。
+ * - **本地搜索**（顶栏放大镜）：对当前目录已拉到的内容按名称过滤，零请求。
+ * - **顶栏标题 = 当前文件夹名**（根目录退化为连接名），过长自动截断。
+ * - **顶栏三件套**（[BrowserTopBar.additionalActions]）：收藏当前目录（星形，
+ *   切完弹 toast）、随机播放（视频 / 图片二选一）、视图切换。
  * - **视频点击即播**：不起详情页，直接走 mpv 队列播放（[NetworkBrowserViewModel.playVideos]）。
  * - **照片点击进查看器**：[NetworkPhotoViewerScreen]（缩放 / 保存 / 幻灯片）。
  */
@@ -121,17 +155,36 @@ data class NetworkBrowserScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val isCurrentFavorite by viewModel.isCurrentFavorite.collectAsState()
+    val folderCovers by viewModel.folderCovers.collectAsState()
+    val sortType by viewModel.sortType.collectAsState()
+    val sortOrder by viewModel.sortOrder.collectAsState()
 
     // 视图模式：与本地文件夹浏览共用同一偏好（AlbumView=网格 / FileManager=列表）
     val browserPreferences = koinInject<BrowserPreferences>()
     val folderViewMode by browserPreferences.folderViewMode.collectAsState()
     val isGridView = folderViewMode == FolderViewMode.AlbumView
 
+    // 文件夹封面开关 + 网格标题行数（设置 → 网络浏览）
+    val folderCoverEnabled by browserPreferences.folderCoverEnabled.collectAsState()
+    val gridTitleLines by browserPreferences.networkGridTitleLines.collectAsState()
+    val titleMaxLines = gridTitleLines.maxLines
+
     // UI State
     val isRefreshing = remember { mutableStateOf(false) }
 
     // 随机播放下拉菜单（视频 / 图片）
     var showRandomMenu by remember { mutableStateOf(false) }
+
+    // 本地搜索（关键词过滤，纯内存 —— 目录列表本来就是全量一次拉完的）
+    var searchActive by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    // 类型筛选（显示文件夹 / 显示图片 / 显示媒体）。「显示全部」= 三项全开，
+    // 不单独存状态 —— 由这三项推导（勾上全部 ⇒ 三项全勾；取消任一项 ⇒ 全部自动取消）。
+    // 字幕 / nfo 等其他文件只出现在列表视图，不受这三项管。
+    var showFolders by remember { mutableStateOf(true) }
+    var showPhotos by remember { mutableStateOf(true) }
+    var showVideos by remember { mutableStateOf(true) }
 
     // 友好提示 Toast：复用同一个实例、每次先 cancel，连点不排队
     // （与 Emby 媒体库快捷收藏同一手法）
@@ -141,7 +194,7 @@ data class NetworkBrowserScreen(
       toastRef.value = Toast.makeText(context, msg, Toast.LENGTH_SHORT).also { it.show() }
     }
 
-    // 当前目录显示名（查看器标题 / 收藏名同一口径）
+    // 当前目录显示名（查看器标题 / 收藏名 / 顶栏标题同一口径）
     val dirTitle =
       currentPath.trimEnd('/').substringAfterLast('/', "").ifBlank { connectionName }
 
@@ -150,21 +203,61 @@ data class NetworkBrowserScreen(
       viewModel.loadFiles()
     }
 
+    // 返回键：搜索态先退搜索（清词 + 收键盘），再退出页面 —— 与 Emby 媒体库同一手势
     BackHandler {
-      backstack.removeLastOrNull()
+      if (searchActive) {
+        searchActive = false
+        searchQuery = ""
+      } else {
+        backstack.removeLastOrNull()
+      }
     }
+
+    // 两级过滤：① 类型（文件夹 / 图片 / 视频，「显示全部」= 三项全开）；
+    // ② 搜索词命中名称（大小写不敏感）。空条件 = 全量。
+    // remember 带上全部依赖：大目录每次重组都过滤一遍纯浪费，条件不变就直接拿旧结果。
+    val visibleFiles = remember(files, showFolders, showPhotos, showVideos, searchQuery) {
+      files.filter { file ->
+        val typeVisible =
+          when {
+            file.isDirectory -> showFolders
+            file.isPhoto() -> showPhotos
+            file.isVideoFile() -> showVideos
+            // 字幕 / nfo 等其他文件只出现在列表视图，不受类型筛选影响
+            else -> true
+          }
+        if (!typeVisible) {
+          false
+        } else if (searchQuery.isBlank()) {
+          true
+        } else {
+          file.name.contains(searchQuery, ignoreCase = true)
+        }
+      }
+    }
+
+    // 封面懒加载触发点：功能开着才传（关了调用方不传 ⇒ 卡片不触发 ⇒ 零额外请求）。
+    // VM 侧有缓存 / 在途去重 / 限流，重复调是安全的。
+    val coverTrigger: ((String) -> Unit)? =
+      if (folderCoverEnabled) viewModel::ensureFolderCover else null
 
     Scaffold(
       topBar = {
         BrowserTopBar(
-          title = connectionName,
+          // 顶栏标题 = **当前文件夹名**（根目录退化为连接名）。
+          // 以前传的是 connectionName，在服务器里层层往下点时，
+          // 左上角永远显示「我的 NAS」这类连接名，看不出当前在哪一层。
+          // 名字过长由 BrowserTopBar 的 maxLines=1 + Ellipsis 自动截断。
+          title = dirTitle,
           isInSelectionMode = false,
           selectedCount = 0,
           totalCount = 0,
           onBackClick = { backstack.removeLastOrNull() },
           onCancelSelection = {},
+          // 排序不走顶栏：顶栏图标已经很多（收藏 / 随机 / 视图 / 搜索 / 设置），
+          // 排序控件放在内容区顶部（见 NetworkSortRow），常驻又能显示当前状态。
           onSortClick = null,
-          onSearchClick = null,
+          onSearchClick = { searchActive = true },
           onSettingsClick = {
             backstack.add(PreferencesScreen)
           },
@@ -181,8 +274,14 @@ data class NetworkBrowserScreen(
             // ── 收藏当前目录 ──
             // 星形点一下即切，状态来自 ViewModel（loadFiles 时同源刷新），
             // 主界面「收藏的目录」section 与这里永远一致。
+            // 切完弹个 toast：收藏成功与否要有即时反馈（星形在小图标上，
+            // 一屏那么多条目，不弹提示根本注意不到刚才那下点没点上）。
             IconButton(
-              onClick = { viewModel.toggleFavoriteCurrent() },
+              onClick = {
+                viewModel.toggleFavoriteCurrent { added ->
+                  toast(if (added) "已收藏「$dirTitle」" else "已取消收藏「$dirTitle」")
+                }
+              },
               modifier = Modifier.padding(horizontal = 2.dp),
             ) {
               Icon(
@@ -285,61 +384,127 @@ data class NetworkBrowserScreen(
         )
       },
     ) { padding ->
-      NetworkBrowserContent(
-        files = files,
-        connectionId = connectionId,
-        isLoading = isLoading && files.isEmpty(),
-        isRefreshing = isRefreshing,
-        error = error,
-        isGridView = isGridView,
-        onRefresh = { viewModel.loadFiles() },
-        onFolderClick = { folder ->
-          backstack.add(
-            NetworkBrowserScreen(
-              connectionId = connectionId,
-              connectionName = connectionName,
-              currentPath = folder.path,
-            ),
+      Column(modifier = Modifier.padding(padding)) {
+        // ── 本地搜索输入框 ──
+        // 点顶栏放大镜出现：对**当前目录已拉到的内容**按名称关键词过滤，
+        // 不发任何请求（目录列表本来就是全量一次拉完的）。
+        if (searchActive) {
+          NetworkSearchField(
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            onClose = {
+              searchActive = false
+              searchQuery = ""
+            },
           )
-        },
-        onPhotoClick = { photo ->
-          // 队列 = 当前目录全部照片（浏览器的目录列表本来就是全量一次拉完，
-          // 没有续页问题），点哪张就从哪张开始
-          val photos = files.filter { it.isPhoto() }
-          backstack.add(
-            NetworkPhotoViewerScreen(
-              connectionId = connectionId,
-              connectionName = connectionName,
-              dirPath = currentPath,
-              photos = photos,
-              initialIndex =
-                photos.indexOfFirst { it.path == photo.path }.coerceAtLeast(0),
-              title = dirTitle,
-            ),
-          )
-        },
-        onVideoClick = { video ->
-          // 点击即播：队列是当前目录全部视频，点哪条从哪条开始连播
-          val videos = files.filter { it.isVideoFile() }
-          viewModel.playVideos(
-            videos,
-            videos.indexOfFirst { it.path == video.path }.coerceAtLeast(0),
-          )
-        },
-        modifier = Modifier.padding(padding),
-      )
+        }
+
+        // ── 类型筛选 + 排序控制条 ──
+        // 有内容才显示：空目录 / 首屏加载中 / 出错时下面就是空态或错误页，
+        // 摆一排控件在上面只会让人对着空气点。
+        // 两个紧凑按钮一排放下（筛选 + 排序），不再横滚、不抢顶栏位置。
+        if (files.isNotEmpty() && error == null) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            NetworkTypeFilterButton(
+              showFolders = showFolders,
+              showPhotos = showPhotos,
+              showVideos = showVideos,
+              onShowFoldersChange = { showFolders = it },
+              onShowPhotosChange = { showPhotos = it },
+              onShowVideosChange = { showVideos = it },
+            )
+            NetworkSortButton(
+              sortType = sortType,
+              sortOrder = sortOrder,
+              onSortTypeChange = viewModel::setSortType,
+              onSortOrderChange = viewModel::setSortOrder,
+            )
+          }
+        }
+
+        NetworkBrowserContent(
+          files = visibleFiles,
+          connectionId = connectionId,
+          isLoading = isLoading && files.isEmpty(),
+          isRefreshing = isRefreshing,
+          error = error,
+          isGridView = isGridView,
+          searchQuery = searchQuery,
+          anyTypeHidden = !(showFolders && showPhotos && showVideos),
+          folderCovers = folderCovers,
+          coverTrigger = coverTrigger,
+          titleMaxLines = titleMaxLines,
+          onRefresh = { viewModel.loadFiles() },
+          onFolderClick = { folder ->
+            backstack.add(
+              NetworkBrowserScreen(
+                connectionId = connectionId,
+                connectionName = connectionName,
+                currentPath = folder.path,
+              ),
+            )
+          },
+          onPhotoClick = { photo ->
+            // 队列 = 当前目录全部照片（浏览器的目录列表本来就是全量一次拉完，
+            // 没有续页问题），点哪张就从哪张开始
+            val photos = files.filter { it.isPhoto() }
+            backstack.add(
+              NetworkPhotoViewerScreen(
+                connectionId = connectionId,
+                connectionName = connectionName,
+                dirPath = currentPath,
+                photos = photos,
+                initialIndex =
+                  photos.indexOfFirst { it.path == photo.path }.coerceAtLeast(0),
+                title = dirTitle,
+              ),
+            )
+          },
+          onVideoClick = { video ->
+            // 点击即播：队列是当前目录全部视频，点哪条从哪条开始连播
+            val videos = files.filter { it.isVideoFile() }
+            viewModel.playVideos(
+              videos,
+              videos.indexOfFirst { it.path == video.path }.coerceAtLeast(0),
+            )
+          },
+          // 未过滤总数（筛选 / 搜索前的 files.size）——空态文案要区分
+          // 「目录真空」和「全被滤掉」，只有过滤后的列表看不出来
+          totalCount = files.size,
+          modifier = Modifier.weight(1f),
+        )
+      }
     }
   }
 }
 
 @Composable
 private fun NetworkBrowserContent(
+  /** 过滤后的列表（类型筛选 + 搜索词都已应用） */
   files: List<NetworkFile>,
   connectionId: Long,
   isLoading: Boolean,
   isRefreshing: MutableState<Boolean>,
   error: String?,
   isGridView: Boolean,
+  /** 当前搜索词（空 = 没在搜），只用于空态文案 */
+  searchQuery: String,
+  /** 是否有类型被筛掉（空态文案用） */
+  anyTypeHidden: Boolean,
+  /** 文件夹封面缓存（path → 封面 path）；功能关闭时传空 Map */
+  folderCovers: Map<String, String?>,
+  /** 封面懒加载触发点；功能关闭时传 null */
+  coverTrigger: ((String) -> Unit)?,
+  /** 网格卡标题行数（设置项：一行 / 两行 / 全显） */
+  titleMaxLines: Int,
+  /** 未过滤的条目数（区分「目录真空」与「全被筛掉」） */
+  totalCount: Int,
   onRefresh: suspend () -> Unit,
   onFolderClick: (NetworkFile) -> Unit,
   onPhotoClick: (NetworkFile) -> Unit,
@@ -366,6 +531,15 @@ private fun NetworkBrowserContent(
     folders + (photos + videos).sortedBy { it.name.lowercase() }
   }
 
+  // 空态文案：把「目录真的空」「搜索没命中」「筛选把内容滤光了」三种情况说清楚，
+  // 别甩一个空网格让人猜。
+  val filteredEmptyMessage =
+    when {
+      searchQuery.isNotBlank() -> "没有匹配「$searchQuery」的内容，换个关键词试试"
+      anyTypeHidden -> "当前筛选条件下没有内容，勾选上方更多类型试试"
+      else -> "此目录下只有其他类型文件（字幕、nfo 等）；切换到列表视图可查看全部文件"
+    }
+
   when {
     isLoading -> {
       Box(
@@ -391,7 +565,8 @@ private fun NetworkBrowserContent(
       }
     }
 
-    files.isEmpty() -> {
+    // 目录本身是空的（没有任何条目）
+    files.isEmpty() && totalCount == 0 -> {
       Box(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
@@ -400,6 +575,20 @@ private fun NetworkBrowserContent(
           icon = Icons.Filled.Folder,
           title = "空文件夹",
           message = "该文件夹中没有文件或子目录",
+        )
+      }
+    }
+
+    // 有内容但全被滤掉（搜索词没命中 / 类型全关）
+    files.isEmpty() -> {
+      Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+      ) {
+        EmptyState(
+          icon = Icons.Filled.Folder,
+          title = "没有可显示的内容",
+          message = filteredEmptyMessage,
         )
       }
     }
@@ -414,7 +603,7 @@ private fun NetworkBrowserContent(
         EmptyState(
           icon = Icons.Filled.Folder,
           title = "没有图片或视频",
-          message = "此目录下只有其他类型文件（字幕、nfo 等）；切换到列表视图可查看全部文件",
+          message = filteredEmptyMessage,
         )
       }
     }
@@ -428,6 +617,9 @@ private fun NetworkBrowserContent(
         onFolderClick = onFolderClick,
         onPhotoClick = onPhotoClick,
         onVideoClick = onVideoClick,
+        folderCovers = folderCovers,
+        coverTrigger = coverTrigger,
+        titleMaxLines = titleMaxLines,
         modifier = modifier,
       )
     }
@@ -445,6 +637,8 @@ private fun NetworkBrowserContent(
         onFolderClick = onFolderClick,
         onPhotoClick = onPhotoClick,
         onVideoClick = onVideoClick,
+        folderCovers = folderCovers,
+        coverTrigger = coverTrigger,
         modifier = modifier,
       )
     }
@@ -466,6 +660,9 @@ private fun NetworkBrowserGrid(
   onFolderClick: (NetworkFile) -> Unit,
   onPhotoClick: (NetworkFile) -> Unit,
   onVideoClick: (NetworkFile) -> Unit,
+  folderCovers: Map<String, String?>,
+  coverTrigger: ((String) -> Unit)?,
+  titleMaxLines: Int,
   modifier: Modifier = Modifier,
 ) {
   val gridState = rememberLazyGridState()
@@ -529,6 +726,11 @@ private fun NetworkBrowserGrid(
                   NetworkFileType.OTHER -> Unit // 网格里不渲染，兜底
                 }
               },
+              // 文件夹封面：缓存里有就用（功能关闭时 Map 是空的 ⇒ 全是 null），
+              // 没有就让卡片触发懒加载（coverTrigger 为 null 时不触发）
+              coverPath = if (file.isDirectory) folderCovers[file.path] else null,
+              titleMaxLines = titleMaxLines,
+              onCoverNeeded = coverTrigger,
             )
           }
         }
@@ -556,6 +758,8 @@ private fun NetworkBrowserList(
   onFolderClick: (NetworkFile) -> Unit,
   onPhotoClick: (NetworkFile) -> Unit,
   onVideoClick: (NetworkFile) -> Unit,
+  folderCovers: Map<String, String?>,
+  coverTrigger: ((String) -> Unit)?,
   modifier: Modifier = Modifier,
 ) {
   val navigationBarHeight = LocalNavigationBarHeight.current
@@ -612,7 +816,10 @@ private fun NetworkBrowserList(
             ) { folder ->
               NetworkFolderCard(
                 file = folder,
+                connectionId = connectionId,
                 onClick = { onFolderClick(folder) },
+                coverPath = folderCovers[folder.path],
+                onCoverNeeded = coverTrigger,
                 modifier = Modifier,
               )
             }
@@ -686,4 +893,310 @@ private fun SectionHeader(text: String) {
     color = MaterialTheme.colorScheme.primary,
     modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp),
   )
+}
+
+/**
+ * 本地搜索输入框。
+ *
+ * 点顶栏放大镜出现：对**当前目录已拉到的内容**按名称关键词过滤，
+ * 不发任何请求（目录列表本来就是全量一次拉完的）。
+ * 打开即自动聚焦要键盘；尾部按钮有词先清词、无词才关搜索 ——
+ * 清词比关搜索更常用，省得关掉再点放大镜。
+ */
+@Composable
+private fun NetworkSearchField(
+  query: String,
+  onQueryChange: (String) -> Unit,
+  onClose: () -> Unit,
+) {
+  val focusRequester = remember { FocusRequester() }
+
+  LaunchedEffect(Unit) {
+    // 要焦点弹键盘。偶发节点还没挂上（重组时序）会抛异常，吞掉不影响使用
+    runCatching { focusRequester.requestFocus() }
+  }
+
+  Surface(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(horizontal = 12.dp, vertical = 8.dp),
+    shape = RoundedCornerShape(24.dp),
+    color = MaterialTheme.colorScheme.surfaceVariant,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector = Icons.Filled.Search,
+        contentDescription = null,
+        modifier = Modifier.size(20.dp),
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Spacer(modifier = Modifier.width(12.dp))
+      BasicTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = Modifier
+          .weight(1f)
+          .focusRequester(focusRequester),
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyLarge.copy(
+          color = MaterialTheme.colorScheme.onSurface,
+        ),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        decorationBox = { innerTextField ->
+          Box(contentAlignment = Alignment.CenterStart) {
+            if (query.isEmpty()) {
+              Text(
+                text = "搜索当前目录…",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            innerTextField()
+          }
+        },
+      )
+      IconButton(
+        onClick = {
+          if (query.isNotEmpty()) onQueryChange("") else onClose()
+        },
+      ) {
+        Icon(
+          imageVector = Icons.Filled.Close,
+          contentDescription = if (query.isNotEmpty()) "清空关键词" else "关闭搜索",
+          modifier = Modifier.size(20.dp),
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * 类型筛选按钮：一个「筛选」chip，点开小窗勾选类型。
+ *
+ * 为什么从四个 chip 收成一个按钮：四个 chip 一行放不下就横滚，还跟排序按钮
+ * 抢控制条的位置；而且「显示全部」这种派生态放在 chip 上，语义也绕。
+ * 收成按钮后控制条只剩两个紧凑控件，勾选观感参考 Emby 媒体库的筛选
+ * （真 Checkbox + 整行可点）：
+ * - **多选不关窗**：勾一项菜单留着，连勾几项再点外面收；
+ * - 「显示全部」= 三项全开的**派生状态**（不单独存）：勾它 = 三项全勾，
+ *   取消任一项它自动灭；
+ * - 有筛选生效时按钮主色高亮 —— 一眼看得出「现在显示的不是全部内容」。
+ * 字幕 / nfo 等其他文件只出现在列表视图，不归这三项管。
+ */
+@Composable
+private fun NetworkTypeFilterButton(
+  showFolders: Boolean,
+  showPhotos: Boolean,
+  showVideos: Boolean,
+  onShowFoldersChange: (Boolean) -> Unit,
+  onShowPhotosChange: (Boolean) -> Unit,
+  onShowVideosChange: (Boolean) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  var menuExpanded by remember { mutableStateOf(false) }
+  val anyHidden = !(showFolders && showPhotos && showVideos)
+
+  Box(modifier = modifier) {
+    Surface(
+      shape = RoundedCornerShape(8.dp),
+      color =
+        if (anyHidden) {
+          MaterialTheme.colorScheme.primaryContainer
+        } else {
+          MaterialTheme.colorScheme.surfaceVariant
+        },
+      contentColor =
+        if (anyHidden) {
+          MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+          MaterialTheme.colorScheme.onSurfaceVariant
+        },
+    ) {
+      Row(
+        modifier = Modifier
+          .clip(RoundedCornerShape(8.dp))
+          .clickable { menuExpanded = true }
+          .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Icon(
+          imageVector = Icons.Filled.FilterList,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+          text = "筛选",
+          style = MaterialTheme.typography.labelLarge,
+        )
+      }
+    }
+    DropdownMenu(
+      expanded = menuExpanded,
+      onDismissRequest = { menuExpanded = false },
+    ) {
+      // 「显示全部」派生：三项全开才选中。勾选 ⇒ 三项全勾；取消 ⇒ 三项全清
+      NetworkFilterDropdownRow(
+        text = "显示全部",
+        checked = showFolders && showPhotos && showVideos,
+        onCheckedChange = { checked ->
+          onShowFoldersChange(checked)
+          onShowPhotosChange(checked)
+          onShowVideosChange(checked)
+        },
+      )
+      NetworkFilterDropdownRow(
+        text = "显示文件夹",
+        checked = showFolders,
+        onCheckedChange = onShowFoldersChange,
+      )
+      NetworkFilterDropdownRow(
+        text = "显示图片",
+        checked = showPhotos,
+        onCheckedChange = onShowPhotosChange,
+      )
+      NetworkFilterDropdownRow(
+        text = "显示媒体",
+        checked = showVideos,
+        onCheckedChange = onShowVideosChange,
+      )
+    }
+  }
+}
+
+/**
+ * 筛选菜单里的一行：真 Checkbox + 文字，整行可点（与 Emby 媒体库
+ * 的筛选行同款）。onClick **不关菜单** —— 多选语义，连勾几项再点外面收。
+ */
+@Composable
+private fun NetworkFilterDropdownRow(
+  text: String,
+  checked: Boolean,
+  onCheckedChange: (Boolean) -> Unit,
+) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .clickable { onCheckedChange(!checked) }
+      .padding(horizontal = 8.dp, vertical = 4.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+    Text(
+      text = text,
+      style = MaterialTheme.typography.bodyMedium,
+      modifier = Modifier.weight(1f),
+    )
+  }
+}
+
+/**
+ * 排序控件：一个 chip（Sort 图标 + 维度名 + ↑/↓），点开下拉菜单换维度。
+ *
+ * 范式对齐 Emby 媒体库的排序（`SortMenu`）：
+ * - **方向包在类型标签里**：chip 上的 ↑/↓ 直接显示当前方向（随机没有方向，
+ *   不显示）；菜单里选中项的标签 append " ↑"/" ↓" + 主色高亮，不用勾；
+ * - **方向不单列菜单项**：再点一次已选中项 = 只翻方向；点其他项 = 换维度
+ *   （ViewModel 走该维度的自然方向）；
+ * - 随机再点一次菜单里的「随机」= 换一批顺序（新种子，ViewModel 处理）。
+ */
+@Composable
+private fun NetworkSortButton(
+  sortType: NetworkSortType,
+  sortOrder: SortOrder,
+  onSortTypeChange: (NetworkSortType) -> Unit,
+  onSortOrderChange: (SortOrder) -> Unit,
+) {
+  var menuExpanded by remember { mutableStateOf(false) }
+  val hasDirection = sortType != NetworkSortType.Random
+
+  Box {
+    Surface(
+      shape = RoundedCornerShape(8.dp),
+      color = MaterialTheme.colorScheme.surfaceVariant,
+      contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    ) {
+      Row(
+        modifier = Modifier
+          .clip(RoundedCornerShape(8.dp))
+          .clickable { menuExpanded = true }
+          .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.Sort,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+          text = sortType.label,
+          style = MaterialTheme.typography.labelLarge,
+        )
+        // 升降序指示包在类型标签里面：随机排序没有方向，不显示
+        if (hasDirection) {
+          Spacer(modifier = Modifier.width(2.dp))
+          Icon(
+            imageVector =
+              if (sortOrder.isAscending) {
+                Icons.Filled.ArrowUpward
+              } else {
+                Icons.Filled.ArrowDownward
+              },
+            contentDescription =
+              if (sortOrder.isAscending) "当前为升序" else "当前为降序",
+            modifier = Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.primary,
+          )
+        }
+      }
+    }
+    DropdownMenu(
+      expanded = menuExpanded,
+      onDismissRequest = { menuExpanded = false },
+    ) {
+      NetworkSortType.entries.forEach { type ->
+        val selected = type == sortType
+        DropdownMenuItem(
+          text = {
+            Text(
+              text = buildString {
+                append(type.label)
+                // 选中项直接带方向后缀（随机除外）；不单列方向选项
+                if (selected && type != NetworkSortType.Random) {
+                  append(if (sortOrder.isAscending) " ↑" else " ↓")
+                }
+              },
+              style = MaterialTheme.typography.bodyMedium,
+              color =
+                if (selected) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.onSurface
+                },
+            )
+          },
+          onClick = {
+            menuExpanded = false
+            when {
+              // 随机再点一次 = 换一批顺序（ViewModel 的 setSortType 同维度重复点即换种子）
+              selected && type == NetworkSortType.Random -> onSortTypeChange(type)
+              // 其他维度再点一次已选中项 = 只翻方向
+              selected ->
+                onSortOrderChange(
+                  if (sortOrder.isAscending) SortOrder.Descending else SortOrder.Ascending,
+                )
+              // 点其他项 = 换维度（ViewModel 走自然方向）
+              else -> onSortTypeChange(type)
+            }
+          },
+        )
+      }
+    }
+  }
 }

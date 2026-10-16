@@ -726,6 +726,48 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
 }
 
 
+/**
+ * v15 → v16：新增「网络文件夹封面缓存」表。
+ *
+ * 纯新增表，不动任何已有表 ⇒ 老用户的服务器配置 / 播放列表 / 播放进度都不受影响。
+ * 语句与 [app.marlboroadvance.mpvex.domain.network.FolderCoverCacheEntity] 的声明
+ * **必须逐字对应**（列名、类型、复合主键、索引名），否则 Room 启动时的 schema
+ * 校验会直接抛异常。
+ *
+ * 这张表的意义：网络浏览的文件夹卡用「文件夹里第一张图片」当封面，列一次子目录
+ * 才知道封面是谁。只放内存的话每进一次父目录都要重拉一遍封面请求；落盘之后
+ * 第二次进来直接读库、零请求（见 Repository 的 L1→L2 两级缓存）。
+ */
+val MIGRATION_15_16 = object : Migration(15, 16) {
+  override fun migrate(db: SupportSQLiteDatabase) {
+    try {
+      android.util.Log.d("Migration_15_16", "Creating folder_cover_cache table")
+      db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `folder_cover_cache` (
+          `connectionId` INTEGER NOT NULL,
+          `path` TEXT NOT NULL,
+          `coverPath` TEXT,
+          `updatedAt` INTEGER NOT NULL,
+          PRIMARY KEY(`connectionId`, `path`)
+        )
+        """.trimIndent()
+      )
+      // TTL 清理（删 30 天前的旧行）按 updatedAt 扫全表，索引直接服务那条 DELETE
+      db.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_folder_cover_cache_updatedAt` " +
+          "ON `folder_cover_cache` (`updatedAt`)"
+      )
+
+      android.util.Log.d("Migration_15_16", "Migration completed successfully")
+    } catch (e: Exception) {
+      android.util.Log.e("Migration_15_16", "Migration failed", e)
+      throw e
+    }
+  }
+}
+
+
 val DatabaseModule =
   module {
     single<Json> {
@@ -758,6 +800,7 @@ val DatabaseModule =
           MIGRATION_12_13,
           MIGRATION_13_14,
           MIGRATION_14_15,
+          MIGRATION_15_16,
         )
         .fallbackToDestructiveMigration(true) // 最后兜底：迁移链有洞时至少不崩 App
         .build()
@@ -870,6 +913,7 @@ val DatabaseModule =
       app.marlboroadvance.mpvex.repository.NetworkRepository(
         dao = get(),
         favoriteDao = get(),
+        coverCacheDao = get<MpvExDatabase>().folderCoverCacheDao(),
       )
     }
 

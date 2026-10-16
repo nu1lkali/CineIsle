@@ -163,6 +163,8 @@ private fun formatFileSize(bytes: Long): String {
 
 private fun formatDate(timestamp: Long): String {
   val date = Date(timestamp)
-  val format = SimpleDateFormat("MMM dd", Locale.getDefault())
+  // MM/dd 固定数字格式（与网格卡副标题统一）：中文 locale 下 "MMM dd"
+  // 会渲染成「12月29」这种没有「日」的残缺日期
+  val format = SimpleDateFormat("MM/dd", Locale.US)
   return format.format(date)
 }
