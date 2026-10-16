@@ -192,7 +192,23 @@ android {
     //        大小连读（`...kobayashi1027` 接 `719 KB` 被读成「1027719」）。改**两行**：
     //        文件名独占一行（补 Ellipsis），第二行「大小 · 日期」+ 序号靠右。二者物理
     //        隔开，误读消失；悬浮控件让位高度 CONTROLS_BOTTOM 64→84dp。
-    versionCode = 70
+    // 71（修复轮，versionName 仍为 1.5.5）：三处交互补齐（用户反馈）：
+    //     ① 【全局卡片按压反馈】所有卡片单击时给一点「按下去」的轻微缩放 ——
+    //        新增 `ui/utils/PressFeedback.kt` 里的 `pressDownScale()` 自包含修饰符
+    //        （pointerInput 记按下 → Animatable 缩放 → graphicsLayer 只重绘不重组；
+    //        超过 touchSlop 即视为滑动、立刻弹回，避免整列卡片随滚动一起缩）。
+    //        挂在各类卡片修饰符链**链尾**：缩放不参与布局、也不影响长按菜单要用的
+    //        detectTapGestures 本地坐标。覆盖本地/网络/Emby 全部卡片。
+    //     ② 【继续观看剩余时间角标】Emby 媒体库「继续播放」分类的卡片左下角给「剩余
+    //        xx分xx秒」。进度与文案抽成单一来源 `EmbyItemProgress.kt`（首页与媒体库页
+    //        共用，替掉两处重复实现），复用卡片既有的左下角角标（演员条目仍显示「作品数」）。
+    //     ③ 【顶栏 Emby 图标长按 → 媒体库显示 / 隐藏】长按顶栏 Emby 图标弹出小菜单：
+    //        列出全部媒体库，每行左侧复选框（勾=首页显示 / 不勾=隐藏）+ 「全部勾选」
+    //        「全部取消」。菜单**复用长按媒体库卡片那套 DropdownMenu 版式**（同一个
+    //        `EmbyItemActionsDialog` 文件、同一骨架），保证两个长按菜单是一套观感。
+    //        隐藏是纯显示层过滤（按服务器存 `emby_hidden_libraries_$serverId`），
+    //        库仍在服务器上、「调整顺序号」弹窗里照旧可见可排。单击图标语义不变（进维护）。
+    versionCode = 71
     versionName = "1.5.5"
 
     vectorDrawables {

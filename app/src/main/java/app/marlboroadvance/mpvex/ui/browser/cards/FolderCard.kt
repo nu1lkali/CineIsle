@@ -34,6 +34,7 @@ import app.marlboroadvance.mpvex.domain.media.model.VideoFolder
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
+import app.marlboroadvance.mpvex.ui.utils.pressDownScale
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.ListItemDefaults.verticalAlignment
 import org.koin.compose.koinInject
@@ -75,7 +76,8 @@ fun FolderCard(
       .combinedClickable(
         onClick = onClick,
         onLongClick = onLongClick,
-      ),
+      )
+      .pressDownScale(),
     colors = CardDefaults. cardColors(containerColor = Color. Transparent),
   ) {
     if (isGridMode) {

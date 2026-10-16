@@ -70,6 +70,7 @@ import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyLibraryCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyLibraryOrderDialog
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyLibraryVisibilityMenu
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMaintainButton
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyPosterCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
@@ -196,15 +197,27 @@ fun EmbyHomeScreen(
 
   val pinsPreference = remember(serverId) { browserPreferences.embyLibraryPins(serverId) }
   val numbersPreference = remember(serverId) { browserPreferences.embyLibraryNumbers(serverId) }
+  val hiddenPreference = remember(serverId) { browserPreferences.embyHiddenLibraries(serverId) }
   val pinsRaw by pinsPreference.collectAsState()
   val numbersRaw by numbersPreference.collectAsState()
+  val hiddenRaw by hiddenPreference.collectAsState()
   val pins = remember(pinsRaw) { LibraryOrdering.parsePins(pinsRaw) }
   val numbers = remember(numbersRaw) { LibraryOrdering.parseNumbers(numbersRaw) }
+  // 「隐藏」与置顶用同一种序列化（逗号分隔的库 Id）—— 两者本来就是同一形状的数据
+  val hiddenIds = remember(hiddenRaw) { LibraryOrdering.parsePins(hiddenRaw).toSet() }
   // 显示顺序 = 置顶优先，其次序号（规则见 LibraryOrdering 的类注释）
   val orderedLibraries = remember(libraries, pins, numbers) {
     LibraryOrdering.sortLibraries(libraries, pins, numbers)
   }
+  // 首页那一眼真正要摆出来的：全部有序库 **减去**被隐藏的。
+  // ⚠️ 隐藏只是**首页这一处**的过滤，「调整顺序号」弹窗和长按菜单仍传 orderedLibraries
+  //   （全部）—— 否则被隐藏的库就再也没法取消隐藏了。
+  val visibleLibraries = remember(orderedLibraries, hiddenIds) {
+    orderedLibraries.filterNot { it.Id != null && it.Id in hiddenIds }
+  }
   var orderDialogShown by remember { mutableStateOf(false) }
+  // 长按顶栏 Emby 图标弹出的「媒体库显示 / 隐藏」小菜单
+  var visibilityMenuExpanded by remember { mutableStateOf(false) }
 
   // 新出现的媒体库（服务端新加了库 / 换了服务器）补一个序号，落在队尾。
   // 只在真的缺号时才写盘，避免每次重组都往偏好里塞一遍同样的值。
@@ -463,7 +476,36 @@ fun EmbyHomeScreen(
         EmbyDownloadEntryButton()
         // Emby 维护：用官方 Emby 图标（品牌绿），与下方齿轮明确区分。
         // 同理常驻顶栏 —— 服务器掉线、认证过期、任务异常都得从这里处理。
-        EmbyMaintainButton(onClick = onManageServers)
+        //
+        // **长按**这个图标弹「媒体库显示」小菜单（勾选决定首页媒体库横滑里显示哪些）。
+        // 复用长按媒体库卡片那套 `DropdownMenu` 版式，两个长按菜单看起来是同一家族。
+        // 单击照旧进服务器维护 —— 长按是额外的一层，不改动原有的单击语义。
+        Box {
+          EmbyMaintainButton(
+            onClick = onManageServers,
+            onLongClick = { visibilityMenuExpanded = true },
+          )
+          // 列的是**全部**已排序库（不是 visibleLibraries）：被隐藏的那几个也得
+          // 出现在菜单里，否则用户没法把它们勾回来。
+          EmbyLibraryVisibilityMenu(
+            expanded = visibilityMenuExpanded,
+            libraries = orderedLibraries,
+            hiddenIds = hiddenIds,
+            onToggle = { id ->
+              val next = if (id in hiddenIds) hiddenIds - id else hiddenIds + id
+              hiddenPreference.set(LibraryOrdering.serializePins(next.toList()))
+            },
+            // 全部勾选 = 一个都不隐藏（写空串，回到默认）
+            onSelectAll = { hiddenPreference.set("") },
+            // 全部取消 = 全部隐藏
+            onDeselectAll = {
+              hiddenPreference.set(
+                LibraryOrdering.serializePins(libraries.mapNotNull { it.Id }),
+              )
+            },
+            onDismissRequest = { visibilityMenuExpanded = false },
+          )
+        }
         // ── 更多（清单：顶栏精简）────────────────────────────────────
         // 之前这里平铺了 6 个功能按钮（下载 / 离线 / 播放列表 / 猜你喜欢 / 合集 / Emby 维护），
         // 挤到连「设置」都差点被顶出可视区域。低频的收成一个 ⋮ 菜单，
@@ -722,7 +764,9 @@ fun EmbyHomeScreen(
             contentPadding = PaddingValues(bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
           ) {
-            if (libraries.isNotEmpty()) {
+            // ⚠️ 用 visibleLibraries 而不是 libraries：被长按菜单隐藏掉的库
+            //   连「媒体库」这个区块标题一起收掉（全隐藏时整块消失是预期行为）。
+            if (visibleLibraries.isNotEmpty()) {
               item {
                 EmbySectionHeader(
                   title = "媒体库",
@@ -732,7 +776,7 @@ fun EmbyHomeScreen(
                   contentPadding = PaddingValues(horizontal = 16.dp),
                   horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                  items(orderedLibraries, key = { it.Id ?: it.Name ?: "" }) { library ->
+                  items(visibleLibraries, key = { it.Id ?: it.Name ?: "" }) { library ->
                     val libraryName = library.Name ?: "媒体库"
                     EmbyLibraryCard(
                       name = libraryName,
@@ -861,34 +905,7 @@ fun EmbyHomeScreen(
   }
 }
 
-/** 计算播放进度（0f~1f）；没有时长信息时返回 null */
-private fun playbackProgress(item: EmbyItem): Float? {
-  val total = item.RunTimeTicks ?: return null
-  if (total <= 0) return null
-  val position = item.UserData?.PlaybackPositionTicks ?: 0L
-  if (position <= 0) return null
-  return (position.toFloat() / total.toFloat()).coerceIn(0f, 1f)
-}
-
-/**
- * 剩余时长文案：「剩余 XX分XX秒」。
- *
- * 只有「已开始播放且尚未看完」的条目才返回非空；
- * 超过 1 小时的用「剩余 X小时XX分」，避免数字太长撑破角标。
- */
-private fun remainingLabel(item: EmbyItem): String? {
-  val total = item.RunTimeTicks ?: return null
-  if (total <= 0) return null
-  val position = item.UserData?.PlaybackPositionTicks ?: 0L
-  if (position <= 0) return null
-  val remain = EmbyTicks.ticksToSeconds(total - position)
-  if (remain <= 0) return null
-  return if (remain >= 3600) {
-    "剩余 ${remain / 3600}小时${(remain % 3600) / 60}分"
-  } else {
-    "剩余 ${remain / 60}分${remain % 60}秒"
-  }
-}
+// playbackProgress / remainingLabel 已抽到同包 EmbyItemProgress.kt（首页与媒体库共用一份）。
 
 /** 按媒体库类型挑选图标 */
 private fun libraryIcon(collectionType: String?): ImageVector = when (collectionType) {

@@ -1,8 +1,15 @@
 package app.marlboroadvance.mpvex.ui.browser.emby.components
 
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -53,10 +60,38 @@ val EmbyLogo: ImageVector by lazy {
  *   而那个位置很贵：actions 一多，标题里的**服务器名称**就被挤没了
  *   （用户反馈「服务器名称都放不下了」）。
  * ⇒ 需要切换时进「Emby 维护」→ 服务器管理。
+ *
+ * @param onClick 单击：进服务器维护
+ * @param onLongClick 长按（可选）：首页传它弹「媒体库显示」小菜单。
+ *   不传就纯粹是单击按钮（收藏页 / 历史页用的就是这一档），行为完全不变。
+ *
+ * 为什么有长按时改用 [combinedClickable] 自己铺点击区、而不继续用 [IconButton]：
+ * `IconButton` 只认单击，要在同一个图标上再挂长按就得换成 combinedClickable。
+ * 手铺时**保持 48dp 触摸目标 + 圆形裁剪**，这样触摸范围和 IconButton 一致、
+ * 水波纹也不会溢成一个方角。
  */
 @Composable
-fun EmbyMaintainButton(onClick: () -> Unit) {
-  IconButton(onClick = onClick) {
+fun EmbyMaintainButton(
+  onClick: () -> Unit,
+  onLongClick: (() -> Unit)? = null,
+) {
+  if (onLongClick == null) {
+    IconButton(onClick = onClick) {
+      Icon(
+        imageVector = EmbyLogo,
+        contentDescription = "Emby 维护",
+        tint = EmbyBrandGreen,
+      )
+    }
+    return
+  }
+  Box(
+    modifier = Modifier
+      .size(48.dp)
+      .clip(CircleShape)
+      .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+    contentAlignment = Alignment.Center,
+  ) {
     Icon(
       imageVector = EmbyLogo,
       contentDescription = "Emby 维护",

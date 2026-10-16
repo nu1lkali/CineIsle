@@ -186,6 +186,23 @@ class BrowserPreferences(
     preferenceStore.getString("emby_library_numbers_$serverId", "")
 
   /**
+   * 首页「媒体库」横滑里被**隐藏**的库 Id 列表（逗号分隔，空串 = 一个都不隐藏）。
+   *
+   * 语义是纯**显示层**过滤：进了这张表的库不再出现在首页那一眼的横滑里，
+   * 但库本身还在服务器上、也仍然能在「调整顺序号」弹窗里看到与排序 ——
+   * 只是首页少滑两下（库特别多的用户的需求）。
+   *
+   * 与 [embyLibraryPins] / [embyLibraryNumbers] 一样**按服务器分开存**：
+   * 库 Id 是服务器级标识，混存会互相误伤。
+   *
+   * 序列化沿用「逗号分隔」的小串（库 Id 是十六进制、不含逗号），
+   * 读写直接复用 [app.marlboroadvance.mpvex.domain.emby.LibraryOrdering]
+   * 的 parsePins / serializePins。
+   */
+  fun embyHiddenLibraries(serverId: Long): Preference<String> =
+    preferenceStore.getString("emby_hidden_libraries_$serverId", "")
+
+  /**
    * 「中文字幕」路径标记配置（[ChineseSubtitleMarks] 的 JSON 串，空串 = 用默认标记）。
    *
    * 全局一份、不按库分：标记是**资源命名惯例**，跟具体哪个库无关。

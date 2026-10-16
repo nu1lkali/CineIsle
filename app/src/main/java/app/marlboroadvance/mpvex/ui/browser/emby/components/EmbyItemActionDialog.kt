@@ -22,10 +22,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.Deselect
 import androidx.compose.material.icons.filled.FormatListNumbered
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -191,6 +193,79 @@ fun EmbyItemActionsDialog(
       leadingIcon = { Icon(Icons.Default.Autorenew, contentDescription = null) },
       onClick = { showMetadataOptions = true },
     )
+  }
+}
+
+/**
+ * 长按顶栏 Emby 图标弹出的「媒体库显示 / 隐藏」小菜单。
+ *
+ * **刻意和 [EmbyItemActionsDialog] 用同一套骨架**（一样是 `DropdownMenu` +
+ * 顶部一行小标题 + 若干 `DropdownMenuItem`）：长按媒体库卡片、长按 Emby 图标
+ * 弹出来的东西看着得是**同一个家族**，用户才不会以为是两套设计。
+ * 差别只有一处 —— 这里每一行左边是**复选框**而不是功能图标。
+ *
+ * 语义：**勾上 = 首页显示该库，不勾 = 隐藏**。隐藏只是首页那一眼的横滑里
+ * 不摆它，库还在服务器上，「调整顺序号」弹窗里也照旧能看到、能排。
+ *
+ * 顶部两行是批量操作（全部勾选 / 全部取消）：库多的用户先「全部勾选」再挨个
+ * 去掉几个，比从「一个不勾」开始逐个点要快得多。
+ *
+ * 点某一行**不关菜单**：这是一个可以连着勾好几个的清单，关掉再长按一次才够
+ * 是反直觉的。菜单只在点空白处（onDismissRequest）时才收起。
+ *
+ * @param expanded 是否展开（由调用方持有状态，长按 Emby 图标时置 true）
+ * @param libraries 全部媒体库，**已按当前显示顺序排好**（和首页那一眼的顺序一致，
+ *   用户对照着勾才不会找错）
+ * @param hiddenIds 当前被隐藏的库 Id 集合
+ * @param onToggle 勾 / 去勾某一个库
+ * @param onSelectAll 全部勾选（= 全部显示）
+ * @param onDeselectAll 全部取消（= 全部隐藏）
+ */
+@Composable
+fun EmbyLibraryVisibilityMenu(
+  expanded: Boolean,
+  libraries: List<EmbyItem>,
+  hiddenIds: Set<String>,
+  onToggle: (libraryId: String) -> Unit,
+  onSelectAll: () -> Unit,
+  onDeselectAll: () -> Unit,
+  onDismissRequest: () -> Unit,
+) {
+  DropdownMenu(expanded = expanded, onDismissRequest = onDismissRequest) {
+    Text(
+      text = "媒体库显示",
+      style = MaterialTheme.typography.labelMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 1,
+      modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+    )
+    DropdownMenuItem(
+      text = { Text("全部勾选") },
+      leadingIcon = { Icon(Icons.Default.SelectAll, contentDescription = null) },
+      onClick = onSelectAll,
+    )
+    DropdownMenuItem(
+      text = { Text("全部取消") },
+      leadingIcon = { Icon(Icons.Default.Deselect, contentDescription = null) },
+      onClick = onDeselectAll,
+    )
+    // 和下面的一串库行之间拉一条细线：上面是「批量动作」、下面是「逐个库」，
+    // 两类东西不隔开会被读成一串同级勾选项。
+    HorizontalDivider()
+    libraries
+      .mapNotNull { lib -> lib.Id?.let { it to (lib.Name ?: "媒体库") } }
+      .forEach { (id, name) ->
+        val visible = id !in hiddenIds
+        DropdownMenuItem(
+          text = {
+            Text(text = name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+          },
+          // 复选框只做显示：`onCheckedChange = null` 让它不可单独点，
+          // 整行的 onClick 才是唯一开关 —— 免得「点框」和「点行」两套状态打架。
+          leadingIcon = { Checkbox(checked = visible, onCheckedChange = null) },
+          onClick = { onToggle(id) },
+        )
+      }
   }
 }
 

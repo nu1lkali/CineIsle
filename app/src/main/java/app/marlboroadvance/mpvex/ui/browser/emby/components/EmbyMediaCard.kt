@@ -55,6 +55,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.graphicsLayer
+import app.marlboroadvance.mpvex.ui.utils.pressDownScale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -841,7 +842,9 @@ private val MEDIA_BADGE_BG = Color(0xFF262229).copy(alpha = 0.85f)
  *
  * 用 detectTapGestures 而不是 combinedClickable：后者拿不到手指坐标，而长按菜单
  * 要「出现在手指点的右边」。代价是这一支没有 ripple 按压反馈 —— 长按弹菜单本身
- * 已经是足够明确的反馈，为 ripple 牺牲定位不划算。
+ * 已经是足够明确的反馈，为 ripple 牺牲定位不划算。改用 `pressDownScale()` 补「按下去」
+ * 的观感（挂在**链尾**：缩放不参与布局，也不影响 detectTapGestures 拿到的本地坐标，
+ * 长按菜单的锚点不会因缩放而偏移）。
  */
 private fun Modifier.tapAndLongPress(
   onClick: () -> Unit,
@@ -862,4 +865,5 @@ private fun Modifier.tapAndLongPress(
         }
       }
     )
+    .pressDownScale()
 }

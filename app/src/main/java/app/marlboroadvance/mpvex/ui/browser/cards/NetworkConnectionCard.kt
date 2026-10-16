@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkProtocol
+import app.marlboroadvance.mpvex.ui.utils.pressDownScale
 
 /**
  * 协议徽标代号。
@@ -131,7 +132,7 @@ fun NetworkConnectionCard(
         else -> onConnect(connection)
       }
     },
-    modifier = modifier.fillMaxWidth(),
+    modifier = modifier.fillMaxWidth().pressDownScale(),
     colors = CardDefaults.cardColors(
       containerColor = if (connection.pinned) {
         MaterialTheme.colorScheme.secondaryContainer

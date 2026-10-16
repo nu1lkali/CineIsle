@@ -2049,7 +2049,7 @@ data class EmbyLibraryScreen(
                     } else {
                       viewModel.imageUrl(s, item, "Primary", 240)
                     },
-                    progress = itemProgress(item),
+                    progress = playbackProgress(item),
                     isFavorite = item.UserData?.IsFavorite == true,
                     onClick = {
                       val photos = displayItems.filter { it.Type == "Photo" }
@@ -2751,9 +2751,11 @@ private fun EmbyLibraryMediaCell(
     imageUrl = viewModel.imageUrl(server, item, imageTypeFor(cardStyle), 480),
     fallbackImageUrl = viewModel.imageUrl(server, item, "Primary", 480),
     mosaicUrls = folderCover,
-    // 搜索时勾「演员」搜出来的 Person 也带作品数，跟演员分类里同一套角标
-    badgeText = item.ChildCount?.takeIf { item.Type == "Person" && it > 0 }?.toString(),
-    progress = itemProgress(item),
+    // 左下角角标：演员是「作品数」；其余条目给「剩余时长」——「继续播放」分类里
+    // 每条都是续播中，于是天然就成了「继续播放卡片左下角的剩余时间」。
+    badgeText = item.ChildCount?.takeIf { item.Type == "Person" && it > 0 }?.toString()
+      ?: remainingLabel(item),
+    progress = playbackProgress(item),
     isFavorite = item.UserData?.IsFavorite == true,
     onClick = onClick,
     style = cardStyle,
@@ -4087,14 +4089,6 @@ private fun itemSubtitleWithMark(
   val base = itemSubtitle(item)
   val mark = chineseHit?.marker?.takeIf { it.isNotBlank() }?.let { "中字 $it" } ?: return base
   return if (base.isNullOrBlank()) mark else "$base · $mark"
-}
-
-private fun itemProgress(item: EmbyItem): Float? {
-  val total = item.RunTimeTicks ?: return null
-  if (total <= 0) return null
-  val position = item.UserData?.PlaybackPositionTicks ?: 0L
-  if (position <= 0) return null
-  return (position.toFloat() / total.toFloat()).coerceIn(0f, 1f)
 }
 
 private const val PAGE_SIZE = 100

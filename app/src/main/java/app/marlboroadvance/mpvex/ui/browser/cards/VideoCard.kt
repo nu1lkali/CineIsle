@@ -47,6 +47,7 @@ import app.marlboroadvance.mpvex.domain.thumbnail.ThumbnailRepository
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
+import app.marlboroadvance.mpvex.ui.utils.pressDownScale
 import androidx.compose.foundation.combinedClickable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -99,7 +100,8 @@ fun VideoCard(
       .combinedClickable(
         onClick = onClick,
         onLongClick = onLongClick,
-      ),
+      )
+      .pressDownScale(),
     colors = CardDefaults. cardColors(containerColor = Color. Transparent),
   ) {
     if (isGridMode) {

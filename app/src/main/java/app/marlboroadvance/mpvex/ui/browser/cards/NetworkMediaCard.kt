@@ -49,6 +49,7 @@ import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.domain.network.NetworkFileType
 import app.marlboroadvance.mpvex.domain.network.type
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoThumbnail
+import app.marlboroadvance.mpvex.ui.utils.pressDownScale
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,7 +65,9 @@ import java.util.Locale
  * 界面域，各自演进互不牵连（代价只是十几行重复代码）。
  *
  * ⚠️ 这一支没有 ripple 按压反馈 —— 长按弹菜单本身已是足够明确的反馈，
- *    为 ripple 牺牲定位不划算。
+ *    为 ripple 牺牲定位不划算。改用 `pressDownScale()` 补「按下去」的观感
+ *    （挂在**链尾**：缩放不参与布局，也不影响 detectTapGestures 拿到的本地坐标，
+ *    长按菜单的锚点不会因缩放而偏移）。
  */
 internal fun Modifier.tapAndLongPress(
   onClick: () -> Unit,
@@ -85,6 +88,7 @@ internal fun Modifier.tapAndLongPress(
         }
       },
     )
+    .pressDownScale()
 }
 
 /**

@@ -18,6 +18,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.ui.browser.emby.components.LocalEmbyAppearance
+import app.marlboroadvance.mpvex.ui.utils.pressDownScale
 
 /**
  * 照片卡片（图集 / 媒体库网格用）。
@@ -52,7 +53,7 @@ fun EmbyPhotoCard(
   Column(modifier = modifier.fillMaxWidth()) {
     Card(
       onClick = onClick,
-      modifier = Modifier.fillMaxWidth(),
+      modifier = Modifier.fillMaxWidth().pressDownScale(),
       shape = RoundedCornerShape(LocalEmbyAppearance.current.corner),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {

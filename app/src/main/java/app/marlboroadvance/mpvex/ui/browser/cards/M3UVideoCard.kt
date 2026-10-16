@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
+import app.marlboroadvance.mpvex.ui.utils.pressDownScale
 import androidx.compose.foundation.combinedClickable
 import org.koin.compose.koinInject
 
@@ -61,7 +62,8 @@ fun M3UVideoCard(
         .combinedClickable(
           onClick = onClick,
           onLongClick = onLongClick,
-        ),
+        )
+        .pressDownScale(),
     colors = CardDefaults.cardColors(containerColor = Color.Transparent),
   ) {
     Row(
