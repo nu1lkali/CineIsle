@@ -200,20 +200,7 @@ class WebDavClient(private val connection: NetworkConnection) : NetworkClient {
       }
     }
 
-  private fun getMimeType(fileName: String): String? {
-    val extension = fileName.substringAfterLast('.', "").lowercase()
-    return when (extension) {
-      "mp4", "m4v" -> "video/mp4"
-      "mkv" -> "video/x-matroska"
-      "avi" -> "video/x-msvideo"
-      "mov" -> "video/quicktime"
-      "wmv" -> "video/x-ms-wmv"
-      "flv" -> "video/x-flv"
-      "webm" -> "video/webm"
-      "mpeg", "mpg" -> "video/mpeg"
-      "3gp" -> "video/3gpp"
-      "ts" -> "video/mp2t"
-      else -> null
-    }
-  }
+  private fun getMimeType(fileName: String): String? =
+    // 表收敛到 domain 层（原来这里各写一份同构 when，还都漏了图片格式）
+    app.marlboroadvance.mpvex.domain.network.guessNetworkMimeType(fileName)
 }

@@ -40,6 +40,18 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
+    // versionCode 62（versionName 仍为 1.5.4，功能轮但不涨名）：网络浏览合并照片库能力 ——
+    //   ① SMB/WebDAV/FTP 目录按「文件夹 / 图片 / 视频 / 其他」四分法混合展示，
+    //      照片不再被 mimeType 过滤掉（此前只能扫到视频）；
+    //   ② 统一网格卡 + 右上角类型小角标，视图切换与本地文件夹浏览共用 FolderViewMode；
+    //   ③ 收藏目录（Room network_favorites，DB v15 + MIGRATION_14_15）：
+    //      浏览页星形收藏、网络主界面「收藏的目录」横排快捷入口（可删除）；
+    //   ④ 照片查看器（缩放 4× 橡皮筋 / 下拉关闭 / 幻灯片淡入淡出 + 倒计时 /
+    //      保存到照片保存位置 / 前后预加载 / 沉浸模式），点击即看、无详情页；
+    //   ⑤ 视频点击即播 mpv 队列（network_file_paths 同序表修连播进度串片）；
+    //   ⑥ 随机播放视频 / 随机播放图片（洗牌 + 同一数量设置，空类型给 Toast 提示）；
+    //   ⑦ 网络照片走 Coil 3 自定义 Fetcher（流式拉全图 + 采样解码 + 128MB 磁盘缓存），
+    //      落盘逻辑抽成 PhotoStorage 与 Emby 照片保存器共用（保存位置不分叉）。
     // versionCode 61（versionName 仍为 1.5.4，修复轮不涨名）：超大媒体库「一直加载中 / 无响应」修复 ——
     //   ① 媒体库页普通分页 StartIndex 改「服务端实际返回条数」游标（consumedCount），
     //      不再用被客户端过滤/去重削过的 items.size（fresh=0 时冻结 ⇒ 同一页无限重拉）；
@@ -65,7 +77,7 @@ android {
     // 全项目错误态上方加 Oops 动态指示牌动画。
     // 1.5.2：照片网格页两个真机问题（工具行压住第一排卡片 / 相册态返回键被拦）。
     // 1.5.1：混合库改「内容即所见」+ 子文件夹无限加载修复 + 照片卡统一等比。
-    versionCode = 61
+    versionCode = 62
     versionName = "1.5.4"
 
     vectorDrawables {

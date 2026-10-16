@@ -1,8 +1,10 @@
 package app.marlboroadvance.mpvex.repository
 
 import app.marlboroadvance.mpvex.database.dao.NetworkConnectionDao
+import app.marlboroadvance.mpvex.database.dao.NetworkFavoriteDao
 import app.marlboroadvance.mpvex.domain.network.ConnectionStatus
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
+import app.marlboroadvance.mpvex.domain.network.NetworkFavorite
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.NetworkClient
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.NetworkClientFactory
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.map
  */
 class NetworkRepository(
   private val dao: NetworkConnectionDao,
+  private val favoriteDao: NetworkFavoriteDao,
 ) {
   // Active network clients
   private val activeClients = mutableMapOf<Long, NetworkClient>()
@@ -86,6 +89,8 @@ class NetworkRepository(
    */
   suspend fun deleteConnection(connection: NetworkConnection) {
     dao.delete(connection)
+    // 连接没了，它的收藏快捷入口也全是死的 —— 一起清掉
+    favoriteDao.deleteByConnection(connection.id)
     // Clean up connection status
     _connectionStatuses.value -= connection.id
     // Disconnect if active
@@ -205,30 +210,47 @@ class NetworkRepository(
     path: String,
   ): Result<List<NetworkFile>> =
     try {
-      // Always fetch the latest connection from database to ensure we have current credentials
-      // 注意：DAO 里存的是密文，这里必须解一次再交给客户端
-      val latestConnection =
-        (dao.getConnectionById(connection.id) ?: connection).withDecryptedPassword()
-
-      // Check if we have an active client
-      val existingClient = activeClients[connection.id]
-
-      // If no client exists, or if connection details have changed, create a new one
-      val client = if (existingClient == null) {
-        // Create new client with latest connection settings
-        NetworkClientFactory.createClient(latestConnection).also { newClient ->
-          newClient.connect().getOrThrow()
-          activeClients[connection.id] = newClient
-        }
-      } else {
-        existingClient
-      }
-
       // List files
-      client.listFiles(path)
+      clientFor(connection).listFiles(path)
     } catch (e: Exception) {
       Result.failure(e)
     }
+
+  /**
+   * 打开一个文件的读取流（照片查看器 / 保存本地 / Coil Fetcher 走这里）。
+   *
+   * ⚠️ 流的生命周期归调用方：用完必须 close（SMB 会话数有限，泄漏会把这台
+   *    服务器的连接耗尽）。网络照片链路里 Coil 的 Fetcher 负责关。
+   */
+  suspend fun openFileStream(
+    connection: NetworkConnection,
+    path: String,
+  ): Result<java.io.InputStream> =
+    try {
+      clientFor(connection).getFileStream(path)
+    } catch (e: Exception) {
+      Result.failure(e)
+    }
+
+  /**
+   * 取（必要时现建并连接）这个连接的客户端。
+   *
+   * 原来这段逻辑长在 [listFiles] 里，照片链路也要用同一套 ——
+   * 抽出来后两边共享：活跃 client 优先，没有就按最新凭据建一个并连上。
+   */
+  private suspend fun clientFor(connection: NetworkConnection): NetworkClient {
+    // Always fetch the latest connection from database to ensure we have current credentials
+    // 注意：DAO 里存的是密文，这里必须解一次再交给客户端
+    val latestConnection =
+      (dao.getConnectionById(connection.id) ?: connection).withDecryptedPassword()
+
+    // Check if we have an active client
+    val existingClient = activeClients[connection.id]
+    return existingClient ?: NetworkClientFactory.createClient(latestConnection).also { newClient ->
+      newClient.connect().getOrThrow()
+      activeClients[connection.id] = newClient
+    }
+  }
 
   /**
    * Get an active client for a connection
@@ -272,6 +294,41 @@ class NetworkRepository(
       }
     }
     return upgraded
+  }
+
+  // ── 收藏的目录（快捷入口） ──
+
+  /** 全部收藏（按收藏时间倒序）。主界面快捷入口 section 直接 collect */
+  fun getAllFavorites(): Flow<List<NetworkFavorite>> = favoriteDao.getAllFavorites()
+
+  suspend fun isFavorite(connectionId: Long, path: String): Boolean =
+    favoriteDao.isFavorite(connectionId, path)
+
+  /**
+   * 收藏 / 取消收藏一个目录。已收藏时再调 = 取消。
+   *
+   * @return true = 本次是「加上去」，false = 「取下来」
+   */
+  suspend fun toggleFavorite(connection: NetworkConnection, path: String, name: String): Boolean {
+    val existing = favoriteDao.getFavorite(connection.id, path)
+    return if (existing == null) {
+      favoriteDao.insert(
+        NetworkFavorite(
+          connectionId = connection.id,
+          path = path,
+          name = name,
+          connectionName = connection.name,
+        ),
+      )
+      true
+    } else {
+      favoriteDao.delete(connection.id, path)
+      false
+    }
+  }
+
+  suspend fun deleteFavorite(id: Long) {
+    favoriteDao.deleteById(id)
   }
 
   private fun updateConnectionStatus(

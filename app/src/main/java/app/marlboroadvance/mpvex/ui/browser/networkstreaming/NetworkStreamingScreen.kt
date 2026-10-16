@@ -13,11 +13,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SignalWifiConnectedNoInternet4
@@ -31,6 +34,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -82,6 +86,11 @@ object NetworkStreamingScreen : Screen {
     val connections by viewModel.connections.collectAsState()
     val connectionStatuses by viewModel.connectionStatuses.collectAsState()
     val browserPreferences = koinInject<app.marlboroadvance.mpvex.preferences.BrowserPreferences>()
+    // 收藏的目录（快捷入口）：直接 collect 仓库的 Flow，
+    // 浏览页加/减收藏后主界面立刻同步（Room Flow 驱动）
+    val repository = koinInject<app.marlboroadvance.mpvex.repository.NetworkRepository>()
+    val favorites by repository.getAllFavorites()
+      .collectAsState(initial = emptyList())
     var showAddSheet by remember { mutableStateOf(false) }
     var editingConnection by remember { mutableStateOf<NetworkConnection?>(null) }
     val navigationBarHeight = app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight.current
@@ -173,6 +182,41 @@ object NetworkStreamingScreen : Screen {
                 MediaUtils.playFile(url, context, "network_stream")
               },
             )
+          }
+
+          // Section 1.5: 收藏的目录（快捷入口）
+          // 空则整段隐藏 —— 没有收藏时不该占着一行标题
+          if (favorites.isNotEmpty()) {
+            item {
+              FavoriteDirsSection(
+                favorites = favorites,
+                connections = connections,
+                onOpen = { favorite ->
+                  val conn = connections.firstOrNull { it.id == favorite.connectionId }
+                  if (conn == null) {
+                    // 连接被删了：收藏还在（快照不联动），说清楚别静默无响应
+                    android.widget.Toast.makeText(
+                      context,
+                      "「${favorite.name}」的连接已删除，请移除该收藏",
+                      android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                  } else {
+                    backstack.add(
+                      NetworkBrowserScreen(
+                        connectionId = favorite.connectionId,
+                        connectionName = conn.name,
+                        currentPath = favorite.path,
+                      ),
+                    )
+                  }
+                },
+                onDelete = { favorite ->
+                  coroutineScope.launch {
+                    repository.deleteFavorite(favorite.id)
+                  }
+                },
+              )
+            }
           }
 
           // Section 2: Local Network header
@@ -281,6 +325,102 @@ object NetworkStreamingScreen : Screen {
             editingConnection = null
           },
         )
+      }
+    }
+  }
+}
+
+/**
+ * 「收藏的目录」快捷入口段：横排卡片，点一下直达该目录
+ * （与在连接列表里一层层点进去等价，但省得每次找连接）。
+ *
+ * - 卡片信息：目录名（大）+ 连接名（小）—— 同名目录在不同连接是两个入口，
+ *   必须显示连接名才分得清；
+ * - 右上角删除钮：取消收藏即从列表消失（Room Flow 驱动，无需手动刷新）；
+ * - 连接已删除的收藏：卡片置灰显示，点击给 Toast 说明（见调用处），
+ *   不静默无响应。
+ */
+@Composable
+private fun FavoriteDirsSection(
+  favorites: List<app.marlboroadvance.mpvex.domain.network.NetworkFavorite>,
+  connections: List<NetworkConnection>,
+  onOpen: (app.marlboroadvance.mpvex.domain.network.NetworkFavorite) -> Unit,
+  onDelete: (app.marlboroadvance.mpvex.domain.network.NetworkFavorite) -> Unit,
+) {
+  Column(
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Text(
+      text = "收藏的目录",
+      style = MaterialTheme.typography.titleLarge,
+      fontWeight = FontWeight.Bold,
+      color = MaterialTheme.colorScheme.primary,
+      modifier = Modifier.padding(vertical = 8.dp),
+    )
+    LazyRow(
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      items(favorites, key = { it.id }) { favorite ->
+        val alive = connections.any { it.id == favorite.connectionId }
+        Card(
+          onClick = { onOpen(favorite) },
+          modifier = Modifier.size(width = 148.dp, height = 96.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+          ),
+        ) {
+          Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+              modifier = Modifier
+                .fillMaxSize()
+                .padding(start = 12.dp, end = 12.dp, top = 12.dp),
+              verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Filled.Folder,
+                contentDescription = null,
+                modifier = Modifier.size(28.dp),
+                tint = if (alive) {
+                  MaterialTheme.colorScheme.secondary
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                },
+              )
+              Text(
+                text = favorite.name,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+              )
+              Text(
+                text = if (alive) {
+                  favorite.connectionName
+                } else {
+                  "连接已删除"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+              )
+            }
+            // 删除钮：取消收藏。放在卡片右上角，与「点击进入」分开
+            IconButton(
+              onClick = { onDelete(favorite) },
+              modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(36.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = "移除收藏",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
       }
     }
   }

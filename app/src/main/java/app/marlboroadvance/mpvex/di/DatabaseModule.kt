@@ -690,6 +690,42 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
 }
 
 
+val MIGRATION_14_15 = object : Migration(14, 15) {
+  override fun migrate(db: SupportSQLiteDatabase) {
+    try {
+      android.util.Log.d("Migration_14_15", "Creating network_favorites table")
+      db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `network_favorites` (
+          `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          `connectionId` INTEGER NOT NULL,
+          `path` TEXT NOT NULL,
+          `name` TEXT NOT NULL,
+          `connectionName` TEXT NOT NULL,
+          `addedAt` INTEGER NOT NULL
+        )
+        """.trimIndent()
+      )
+      // 唯一索引：(connectionId, path) 重复收藏由数据库挡掉
+      db.execSQL(
+        "CREATE UNIQUE INDEX IF NOT EXISTS `index_network_favorites_connectionId_path` " +
+          "ON `network_favorites` (`connectionId`, `path`)"
+      )
+      // 快捷入口按收藏时间倒序列
+      db.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_network_favorites_addedAt` " +
+          "ON `network_favorites` (`addedAt`)"
+      )
+
+      android.util.Log.d("Migration_14_15", "Migration completed successfully")
+    } catch (e: Exception) {
+      android.util.Log.e("Migration_14_15", "Migration failed", e)
+      throw e
+    }
+  }
+}
+
+
 val DatabaseModule =
   module {
     single<Json> {
@@ -721,6 +757,7 @@ val DatabaseModule =
           MIGRATION_11_12,
           MIGRATION_12_13,
           MIGRATION_13_14,
+          MIGRATION_14_15,
         )
         .fallbackToDestructiveMigration(true) // 最后兜底：迁移链有洞时至少不崩 App
         .build()
@@ -728,6 +765,9 @@ val DatabaseModule =
 
     // Emby 服务器配置 DAO
     single { get<MpvExDatabase>().embyServerDao() }
+
+    // 收藏目录 DAO（networkConnectionDao 的注册在下面 NetworkRepository 旁）
+    single { get<MpvExDatabase>().networkFavoriteDao() }
 
     // 搜索历史 DAO + 仓库（首页全库搜索与媒体库搜索共用）
     single { get<MpvExDatabase>().searchHistoryDao() }
@@ -829,6 +869,7 @@ val DatabaseModule =
     single {
       app.marlboroadvance.mpvex.repository.NetworkRepository(
         dao = get(),
+        favoriteDao = get(),
       )
     }
 

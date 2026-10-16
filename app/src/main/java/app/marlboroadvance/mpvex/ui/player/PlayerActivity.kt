@@ -348,6 +348,16 @@ open class PlayerActivity :
   internal var playlistIndex: Int by mutableStateOf(0)
 
   /**
+   * 网络播放队列里每个文件的**原始网络路径**（与 [playlist] 同序同长）。
+   *
+   * 为什么不能只靠 intent 里那个单值 `network_file_path`：队列连播时换片不会重建
+   * intent，单值永远是第一个文件的路径 —— 进度/history 键（见 [getMediaIdentifier]）
+   * 与字幕自动加载就会全串到第一片上。有了这份同序表，两者都能按 [playlistIndex]
+   * 取当前片的真实路径。非网络队列为空表，行为与从前完全一致。
+   */
+  private var networkFilePaths: List<String> = emptyList()
+
+  /**
    * Shuffled order of playlist indices (when shuffle is enabled)
    */
   private var shuffledIndices: List<Int> = emptyList()
@@ -589,6 +599,9 @@ open class PlayerActivity :
       intent.getStringArrayListExtra(
         app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_ITEM_IDS,
       ) ?: emptyList()
+    // 网络队列的原始路径表（与 playlist 同序）—— 换片后按 playlistIndex 取当前片的
+    // 网络路径算进度键 / 找字幕，避免队列连播时全串到第一片（见 networkFilePaths 注释）
+    networkFilePaths = intent.getStringArrayListExtra("network_file_paths") ?: emptyList()
     // Emby 多版本：ItemId → 选定的媒体源 Id（按版本记进度的键靠它拼，见 EmbyVersionProgress）
     embyMediaSourceByItemId = buildEmbyMediaSourceMap(intent)
     viewModel.seriesKey = currentSeriesKey()
@@ -2623,6 +2636,11 @@ private fun cancelAutoplayCountdown() {
     } else if (mediaIdentifier.isBlank()) {
       // If fileName was already set, but mediaIdentifier is missing, set it for safety
       mediaIdentifier = getMediaIdentifier(intent, fileName)
+    } else if (networkFilePaths.isNotEmpty()) {
+      // ⭐ 网络队列连播：换片后必须按当前下标重算进度键（getMediaIdentifier 内部
+      //    会取 networkFilePaths[playlistIndex]），否则第二片起存/取进度都落在
+      //    第一片头上。单文件播放（networkFilePaths 为空）不走这里，行为不变。
+      mediaIdentifier = getMediaIdentifier(intent, fileName)
     }
 
     // Start media notification service (like YouTube - always show notification)
@@ -3266,11 +3284,14 @@ private fun cancelAutoplayCountdown() {
       // For network files played via proxy (SMB/WebDAV/FTP), use the original network file path
       val networkFilePath = intent.getStringExtra("network_file_path")
       val networkConnectionId = intent.getLongExtra("network_connection_id", -1L)
+      // 队列连播时按当前下标取本片的网络路径（同 networkFilePaths 语义），
+      // 否则第二片起会拿第一片的目录去找字幕，要么找不到、要么挂错片子的字幕
+      val networkFilePathForItem = networkFilePaths.getOrNull(playlistIndex) ?: networkFilePath
 
-      if (networkFilePath != null && networkConnectionId != -1L) {
+      if (networkFilePathForItem != null && networkConnectionId != -1L) {
         // Pass network file path and connection ID for subtitle discovery
         SubtitleOps.autoloadSubtitles(
-          videoFilePath = networkFilePath,
+          videoFilePath = networkFilePathForItem,
           videoFileName = fileName,
           networkConnectionId = networkConnectionId,
           autoSelectFirst = autoSelectFirst,
@@ -3623,6 +3644,8 @@ private fun cancelAutoplayCountdown() {
       playlistTitles = intent.getStringArrayListExtra("playlist_titles") ?: emptyList()
       // 记忆键同理：换了队列就换键，否则会把上一部剧的速度套到新剧上
       playlistSeriesKeys = intent.getStringArrayListExtra("playlist_series_keys") ?: emptyList()
+      // 网络路径表同理：换队列必须整份替换，否则新队列会拿旧队列的路径当进度键
+      networkFilePaths = intent.getStringArrayListExtra("network_file_paths") ?: emptyList()
       singleSeriesKey = intent.getStringExtra("emby_series_key")
       // 多版本名同理：换了队列就换，否则会显示上一批的版本名
       playlistMediaSourceNames =
@@ -4671,10 +4694,14 @@ private fun cancelAutoplayCountdown() {
 
     if (networkFilePath != null && networkConnectionId != -1L) {
       // For network files via proxy: use connection ID + file path for stable identifier
-      val identifier = "network_${networkConnectionId}_${networkFilePath.hashCode()}"
+      // ⭐ 队列模式按当前下标取本片路径（networkFilePaths 与 playlist 同序）——
+      //    只用单值 extra 的话，连播换片后进度键永远停留在第一片，看第二片存下的
+      //    进度会记到第一片头上（用户实测「连播后每集进度都一样」就是它）
+      val pathForCurrentItem = networkFilePaths.getOrNull(playlistIndex) ?: networkFilePath
+      val identifier = "network_${networkConnectionId}_${pathForCurrentItem.hashCode()}"
       Log.d(
         TAG,
-        "Using network file identifier: $identifier (connection: $networkConnectionId, path: $networkFilePath)",
+        "Using network file identifier: $identifier (connection: $networkConnectionId, path: $pathForCurrentItem)",
       )
       return identifier
     }

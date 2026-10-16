@@ -9,6 +9,7 @@ import app.marlboroadvance.mpvex.database.dao.DownloadedMediaDao
 import app.marlboroadvance.mpvex.database.dao.EmbyDownloadDao
 import app.marlboroadvance.mpvex.database.dao.EmbyServerDao
 import app.marlboroadvance.mpvex.database.dao.NetworkConnectionDao
+import app.marlboroadvance.mpvex.database.dao.NetworkFavoriteDao
 import app.marlboroadvance.mpvex.database.dao.PlaybackStateDao
 import app.marlboroadvance.mpvex.database.dao.PlaylistDao
 import app.marlboroadvance.mpvex.database.dao.RecentlyPlayedDao
@@ -25,6 +26,7 @@ import app.marlboroadvance.mpvex.database.entities.SearchHistoryEntity
 import app.marlboroadvance.mpvex.database.entities.VideoMetadataEntity
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
+import app.marlboroadvance.mpvex.domain.network.NetworkFavorite
 
 @Database(
   entities = [
@@ -32,6 +34,8 @@ import app.marlboroadvance.mpvex.domain.network.NetworkConnection
     RecentlyPlayedEntity::class,
     VideoMetadataEntity::class,
     NetworkConnection::class,
+    // 「网络」里收藏的目录（快捷入口）
+    NetworkFavorite::class,
     PlaylistEntity::class,
     PlaylistItemEntity::class,
     EmbyServer::class,
@@ -44,7 +48,7 @@ import app.marlboroadvance.mpvex.domain.network.NetworkConnection
     // 见 DislikedMediaEntity 的 KDoc
     DislikedMediaEntity::class,
   ],
-  version = 14,
+  version = 15,
   exportSchema = true,
 )
 @TypeConverters(NetworkProtocolConverter::class)
@@ -56,6 +60,8 @@ abstract class MpvExDatabase : RoomDatabase() {
   abstract fun videoMetadataDao(): VideoMetadataDao
 
   abstract fun networkConnectionDao(): NetworkConnectionDao
+
+  abstract fun networkFavoriteDao(): NetworkFavoriteDao
 
   abstract fun playlistDao(): PlaylistDao
 
