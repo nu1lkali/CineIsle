@@ -587,16 +587,42 @@ data class EmbyPhotoGridScreen(
  *
  * ⚠️ 用 synchronizedMap：下拉续页在 IO 线程回调后回主线程写，而命中缓存的读发生在
  *    组合里，两端不是同一线程。
+ *
+ * ⚠️ 两层上限（百万张相册实测教训）：
+ *    · MAX_ITEMS —— 续页后 put 的是**全量 items**，不封顶的话一个百万张的相册
+ *      翻到底就能把 Entry 撑爆（OOM）。只保前 2000 张「同一副牌」；
+ *      totalCount 保留真实值，命中缓存后 consumed=2000 < totalCount 会自然
+ *      续页从 2000 继续拉服务端，行为是「前 2000 张稳定 + 后面新洗」，比 OOM 好。
+ *    · MAX_PARENTS —— 逛相册是进进出出的，只保最近几个 parent，淘汰最老的。
  */
 object PhotoRandomQueue {
   class Entry(val items: List<EmbyItem>, val totalCount: Int)
+
+  /** 单个 parent 最多缓存多少条随机牌 */
+  private const val MAX_ITEMS = 2_000
+
+  /** 进程内最多缓存几个 parent 的随机牌 */
+  private const val MAX_PARENTS = 4
 
   private val cache = java.util.Collections.synchronizedMap(mutableMapOf<String, Entry>())
 
   fun get(parentId: String): Entry? = cache[parentId]
 
   fun put(parentId: String, items: List<EmbyItem>, totalCount: Int) {
-    cache[parentId] = Entry(items, totalCount)
+    val capped = if (items.size > MAX_ITEMS) items.take(MAX_ITEMS) else items
+    synchronized(cache) {
+      // 先摘掉自己再塞：mutableMapOf 是 LinkedHashMap，已存在的 key 重复 put
+      // **不会刷新顺序** —— 不先摘的话，频繁重进的那个相册会一直排在
+      // 最老位置，下一秒就被误淘汰，缓存等于白建
+      cache.remove(parentId)
+      cache[parentId] = Entry(capped, totalCount)
+      // 淘汰最老的；⚠️ synchronizedMap 的迭代器不支持 remove，
+      // 必须 keys.toList() 快照之后再删（本仓 ConcurrentHashMap 同款教训）
+      while (cache.size > MAX_PARENTS) {
+        val oldest = cache.keys.toList().firstOrNull() ?: break
+        cache.remove(oldest)
+      }
+    }
   }
 
   /** 作废某个相册的随机序列（下次进入重新洗牌） */

@@ -40,6 +40,15 @@ android {
     minSdk = 26
     targetSdk = 36
     // versionCode 决定能否覆盖安装：每发一版都要涨（APK 里的最终值 = versionCode * 10 + ABI 码）
+    // versionCode 61（versionName 仍为 1.5.4，修复轮不涨名）：超大媒体库「一直加载中 / 无响应」修复 ——
+    //   ① 媒体库页普通分页 StartIndex 改「服务端实际返回条数」游标（consumedCount），
+    //      不再用被客户端过滤/去重削过的 items.size（fresh=0 时冻结 ⇒ 同一页无限重拉）；
+    //   ② 续页加并发闸门 loadingMore（触底回调每滚动帧都评估，没闸门会并发重拉同一页）；
+    //   ③ 某页「全新条目为 0」/ 空页即把 totalCount 对齐已消耗，续页条件自然失效；
+    //   ④ items.none{} O(n²) 去重改 HashSet；visibleItems 五遍 O(n) 过滤链 remember 化
+    //      （此前每次重组全量重算，大库翻深后主线程全耗在这，界面发涩像卡死）；
+    //   ⑤ 随机播放 PhotoRandomQueue 加两层上限（单 parent 2000 条 / 最多 4 个 parent），
+    //      防百万张相册把进程内缓存撑爆（OOM）。
     // versionName 涨到 1.5.4：照片浏览器交互补齐 ——
     //   ① 下拉关闭大图（未放大时竖向拖拽，跟手位移 + 缩小变暗，过阈值松手退出）；
     //   ② Telephoto ZoomSpec 显式开橡皮筋回弹、最大倍率 2×→4×；
@@ -56,7 +65,7 @@ android {
     // 全项目错误态上方加 Oops 动态指示牌动画。
     // 1.5.2：照片网格页两个真机问题（工具行压住第一排卡片 / 相册态返回键被拦）。
     // 1.5.1：混合库改「内容即所见」+ 子文件夹无限加载修复 + 照片卡统一等比。
-    versionCode = 60
+    versionCode = 61
     versionName = "1.5.4"
 
     vectorDrawables {

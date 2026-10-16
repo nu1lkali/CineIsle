@@ -423,6 +423,21 @@ data class EmbyLibraryScreen(
         if (searchQuery.isBlank() || chineseSubsOnly) cachedEntry?.totalCount ?: 0 else 0
       )
     }
+    // ── 分页游标（与 PagedList.consumed 同一口径）──
+    // 服务端**实际返回过**多少条 —— 下一页的 StartIndex 只能用它，绝不能用 items.size：
+    // 客户端过滤（幽灵条目 / distinctBy 去重 / 类型白名单）会让 items.size 小于真实消耗，
+    // 拿它当起始下标会让翻页窗口回退、同一段反复拉；一旦某页「全新条目为 0」，
+    // items.size 冻结 ⇒ 同一个 StartIndex 被无限重拉 ⇒ 一直转圈还没响应
+    // （十万级库里服务端混入重复 / 幽灵条目时必现）。缓存里一并存取：
+    // 从缓存恢复列表时，续页游标也要跟着恢复，否则返回后续页会回到开头重拉。
+    var consumedCount by remember(cacheKey) {
+      mutableIntStateOf(
+        if (searchQuery.isBlank() || chineseSubsOnly) cachedEntry?.consumedCount ?: 0 else 0
+      )
+    }
+    // 续页闸门：触底回调每个滚动帧都会评估，没有它会把同一页并发拉好几遍
+    // （照片网格 loadingMore 同款教训）
+    var loadingMore by remember(cacheKey) { mutableStateOf(false) }
     // ── 「演员」分类的独立数据 ──
     // 不走上面媒体那套分页 / 缓存 / 中文字幕扫描：/Persons 一次性把演员给全，
     // 既没有下一页要续拉，也没有字幕可扫。单独存一份，两条路径互不干扰。
@@ -551,6 +566,8 @@ data class EmbyLibraryScreen(
         totalCount = totalCount,
         hits = chineseHits,
         scannedCount = scanScanned,
+        // 分页游标一起存：从缓存恢复列表时续页位置才不会退回开头
+        consumedCount = consumedCount,
         // 扫描中途被打断时缓存里只有前半截命中，标记成「不完整」，下次进来重扫
         complete = !isScanning,
       )
@@ -715,6 +732,9 @@ data class EmbyLibraryScreen(
     suspend fun load(reset: Boolean) {
       // 冷启动时当前服务器可能还没恢复，这里等一下，避免静默不加载
       val current = viewModel.currentServerOrAwait() ?: return
+      // 续页同一时刻只允许一个在飞：触底回调每个滚动帧都会评估，没有这道闸门
+      // 会把同一个 StartIndex 并发拉好几遍（照片网格同款做法）
+      if (!reset && loadingMore) return
       val gen = ++loadGeneration
       val hasGenreTagFilter = selectedGenres.isNotEmpty() || selectedTags.isNotEmpty()
       // 需要「逐页拉全 + 客户端过滤」的两种情况：
@@ -742,7 +762,13 @@ data class EmbyLibraryScreen(
         startScan(current, reset = reset)
         return
       }
-      if (reset) isLoading = true
+      if (reset) {
+        isLoading = true
+        // 重拉第一页：分页游标一起归零（从缓存恢复的那次不走 load，不受影响）
+        consumedCount = 0
+      } else {
+        loadingMore = true
+      }
       error = null
       runCatching {
         if (searchQuery.isBlank()) {
@@ -753,7 +779,10 @@ data class EmbyLibraryScreen(
             filters = effectiveFilters,
             sortBy = sortBy,
             sortOrder = sortOrder,
-            startIndex = if (reset) 0 else items.size,
+            // ⭐ 用 consumedCount（服务端实际给过多少条），不用 items.size ——
+            // 后者被客户端过滤/去重削过，会让翻页窗口回退、同一页反复拉，
+            // 「全新条目为 0」时更是直接把 items.size 冻住、无限重拉同一页。
+            startIndex = if (reset) 0 else consumedCount,
             limit = PAGE_SIZE,
             recursive = recursive,
             excludeItemTypes = effectiveExclude,
@@ -821,13 +850,27 @@ data class EmbyLibraryScreen(
           // 客户端筛过之后服务端总数对不上，数量行显示可见命中数
           totalCount = sorted.size
         } else {
+          val beforeSize = items.size
           items = if (reset) {
             page.items
           } else {
-            // 分页时按 Id 去重后追加
-            items + page.items.filter { new -> items.none { it.Id == new.Id } }
+            // 分页时按 Id 去重后追加。⚠️ 必须用 HashSet —— 老写法
+            // `items.none { it.Id == new.Id }` 是 O(n×页大小)：大库翻深之后
+            // 每页要把整份列表比一遍，全在主线程，越翻越卡。
+            val seen = items.mapTo(HashSet()) { it.Id ?: it.Name ?: "" }
+            items + page.items.filter { seen.add(it.Id ?: it.Name ?: "") }
           }
+          // 游标按**服务端给了多少**推进，与本地去重结果无关
+          if (reset) consumedCount = page.items.size else consumedCount += page.items.size
           totalCount = page.totalCount
+          // ⭐ 这一页一条新的都没有（或服务端干脆返回空页）：它已经在我们见过的地方
+          // 打转了 —— SmartStrm 兼容层忽略 StartIndex、或服务端重复条目被客户端
+          // 去重削光时都会这样。把 totalCount 对齐已消耗，续页条件
+          // （consumedCount < totalCount）自然失效；不拦的话同一个 StartIndex 会被
+          // 无限重拉，表现就是「一直加载中、界面没响应」。
+          if (!reset && (page.items.isEmpty() || items.size == beforeSize)) {
+            totalCount = consumedCount
+          }
         }
         cacheItems()
         // 整批替换（reset）之后要停在第一条。
@@ -860,6 +903,9 @@ data class EmbyLibraryScreen(
       }
       // 过期请求不碰 isLoading：收尾交给当前那次加载
       if (gen == loadGeneration) isLoading = false
+      // loadingMore 自己收：过期的那次也要放开闸门，否则一次被接替的续页
+      // 会让这一页此后再也不续页（照片网格同款教训）
+      loadingMore = false
     }
 
     /**
@@ -987,7 +1033,7 @@ data class EmbyLibraryScreen(
           val scanningFilter = chineseSubsOnly ||
             (hasGenreTagFilter && serverSnapshot != null && !supportsGenreIdFilter(serverSnapshot.id))
           val canLoadMore = !isLoading && !isScanning && !scanningFilter && !isActorListMode &&
-            items.size < totalCount && lastVisible != null
+            !loadingMore && consumedCount < totalCount && lastVisible != null
           if (canLoadMore && lastVisible >= items.size - 6) {
             load(reset = false)
           }
@@ -1006,7 +1052,20 @@ data class EmbyLibraryScreen(
     // 命中集已经扫完在本地，搜索只是它的子集筛选，全程零请求
     // （配套的三处：cacheKey 不含搜索词、load() 早退、下面这条名字过滤）
     val localSearch = chineseSubsOnly && searchQuery.isNotBlank()
-    val visibleItems =
+    // ⭐ 整份过滤链必须 remember：这是 5 遍 O(n)（含 distinctBy 建 HashSet），
+    // 不记忆的话**每次重组**（滚动、扫描进度文字、红心快照……都会触发）都对整个
+    // items 重跑一遍 —— 大库翻深之后主线程全耗在这上面，界面发涩、像卡死。
+    // 只列真正参与判断的依赖；items 引用每页都会变（该变时才重算）。
+    val visibleItems = remember(
+      items,
+      lastRemovedItemId,
+      localSearch,
+      searchQuery,
+      effectiveExclude,
+      effectiveTypes,
+      effectiveMediaTypes,
+      contentAsIs,
+    ) {
       (if (lastRemovedItemId != null) items.filterNot { it.Id == lastRemovedItemId } else items)
         // 顺手剔掉服务端混进来的幽灵条目（详见 isGhostItem）：它与官方客户端的条目数对不上，
         // 点进去还会崩。列表数量行用的是 totalCount（服务端给的），不在这里减，
@@ -1080,6 +1139,7 @@ data class EmbyLibraryScreen(
           }
           true
         }
+    }
 
     // 搜索结果的类型筛选统一由服务端的类型筛选条（`EmbySearchFilterRow`）负责 ——
     // 这里原本还叠了一层「本地按 Type 切一刀」的结果分栏，但两行 chip 的标签一模一样
@@ -3998,6 +4058,13 @@ internal object EmbyLibraryCache {
     var hits: Map<String, ChineseSubtitleHit> = emptyMap()
     /** 全量扫描已扫过的条目数（普通分页时不用） */
     var scannedCount: Int = 0
+    /**
+     * 普通分页已向服务端消耗的条数（续页 StartIndex 用）。
+     *
+     * 必须与 items.size 分开存：客户端过滤 / 去重会让后者小于真实消耗，
+     * 恢复列表时若拿 items.size 当游标，返回后续页会退回到见过的地方重拉。
+     */
+    var consumedCount: Int = 0
     /** 结果是否完整：扫描中途被打断时是 false，下次进页面要重扫 */
     var complete: Boolean = true
   }
@@ -4023,6 +4090,7 @@ internal object EmbyLibraryCache {
     totalCount: Int,
     hits: Map<String, ChineseSubtitleHit> = emptyMap(),
     scannedCount: Int = 0,
+    consumedCount: Int = 0,
     complete: Boolean = true,
   ) {
     val entry = entries.getOrPut(key) { Entry() }
@@ -4030,6 +4098,7 @@ internal object EmbyLibraryCache {
     entry.totalCount = totalCount
     entry.hits = hits
     entry.scannedCount = scannedCount
+    entry.consumedCount = consumedCount
     entry.complete = complete
     touch(key, entry)
   }
