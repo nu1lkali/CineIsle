@@ -9,8 +9,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -82,6 +86,10 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
   }
 
   private val json = Json { ignoreUnknownKeys = true }
+
+  /** AList 有官方写接口（fs/remove、fs/rename、fs/mkdir），其余三个协议没有 */
+  override val supportsWrite: Boolean
+    get() = true
 
   /** 登录换来的 token；游客模式（用户名密码皆空）恒为 null */
   @Volatile
@@ -217,6 +225,78 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
       runCatching { getFileMeta(path).size }
     }
 
+  // ── 写操作（AList 官方 API） ──
+  //
+  // 契约实证自 `D:\project\AlistClientN` 的请求实体：
+  //   `lib/entity/file_remove_req.dart`  → {dir, names[]}
+  //   `lib/entity/file_rename_req.dart`  → {path, name}
+  //   `lib/entity/mkdir_req.dart`        → {path}
+  // SMB / FTP / WebDAV 三个客户端都没实现写操作，所以这些只挂在 AlistClient 上，
+  // 由 [NetworkClient.supportsWrite] 向 UI 声明「我支持」。
+
+  /**
+   * `POST /api/fs/remove`：删除。
+   *
+   * ⚠️ **不可逆**（无回收站），调用方必须先在 UI 上二次确认。
+   *
+   * @param dir 父目录（相对 base path，如 `/电影`）
+   * @param names 要删的**文件名**列表（不是完整路径，也不是目录）
+   */
+  suspend fun remove(dir: String, names: List<String>): Result<Unit> =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        require(names.isNotEmpty()) { "没有要删除的文件" }
+        withAuthRetry {
+          postJsonChecked(
+            endpoint = "fs/remove",
+            body = buildJsonObject {
+              put("dir", fsPath(dir))
+              putJsonArray("names") { names.forEach { add(it) } }
+            },
+          )
+        }
+        Unit
+      }
+    }
+
+  /** `POST /api/fs/rename`：重命名。`path` 是完整路径，`name` 是**新文件名** */
+  suspend fun rename(path: String, newName: String): Result<Unit> =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        val trimmed = newName.trim()
+        require(trimmed.isNotEmpty()) { "名称不能为空" }
+        require(trimmed.none { it == '/' }) { "名称不能包含 /" }
+        withAuthRetry {
+          postJsonChecked(
+            endpoint = "fs/rename",
+            body = buildJsonObject {
+              put("path", fsPath(path))
+              put("name", trimmed)
+            },
+          )
+        }
+        Unit
+      }
+    }
+
+  /**
+   * `POST /api/fs/mkdir`：新建文件夹。
+   *
+   * @param path 待建目录的**完整路径**（如 `/电影/新文件夹`）
+   */
+  suspend fun mkdir(path: String): Result<Unit> =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        withAuthRetry {
+          postJsonChecked(
+            endpoint = "fs/mkdir",
+            body = buildJsonObject { put("path", fsPath(path)) },
+          )
+        }
+        Unit
+      }
+    }
+
   // ── 接口调用 ──
 
   /**
@@ -227,11 +307,11 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
   private fun login(): String {
     val raw = postJson(
       endpoint = "auth/login",
-      fields = mapOf(
-        "username" to connection.username,
-        "password" to connection.password,
-        "otp_code" to "",
-      ),
+      body = buildJsonObject {
+        put("username", connection.username)
+        put("password", connection.password)
+        put("otp_code", "")
+      },
       withAuth = false,
     )
     val parsed = json.decodeFromString<AlistResp<AlistLoginData>>(raw)
@@ -249,7 +329,10 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     withAuthRetry {
       val raw = postJson(
         endpoint = "fs/get",
-        fields = mapOf("path" to fsPath(path), "password" to ""),
+        body = buildJsonObject {
+          put("path", fsPath(path))
+          put("password", "")
+        },
         withAuth = true,
       )
       val parsed = json.decodeFromString<AlistResp<AlistFsGet>>(raw)
@@ -262,14 +345,16 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     withAuthRetry {
       val raw = postJson(
         endpoint = "fs/list",
-        fields = mapOf(
-          "path" to fsPath(path),
-          "password" to "",
-          "page" to "1",
+        // page / per_page 是**数字**、refresh 是**布尔** —— 写成字符串服务端会拒绝
+        // （见 [postJson] 的说明）
+        body = buildJsonObject {
+          put("path", fsPath(path))
+          put("password", "")
+          put("page", 1)
           // per_page=0 = 不分页，一次拿全（参考项目默认就这么干）
-          "per_page" to "0",
-          "refresh" to "false",
-        ),
+          put("per_page", 0)
+          put("refresh", false)
+        },
         withAuth = true,
       )
       val parsed = json.decodeFromString<AlistResp<AlistFsListData>>(raw)
@@ -308,20 +393,49 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     return response
   }
 
+  /**
+   * POST 一个 JSON body。
+   *
+   * ⚠️ **body 必须是 [JsonObject]，不能用 `Map<String, String>`**：
+   * AList 的 Go 后端对字段类型是严的 —— `page` / `per_page` 要 uint64、
+   * `refresh` 要 bool。用 Map<String, String> 会把它们全序列化成字符串，
+   * 服务端直接报
+   * `handles.ListReq. PageReq: readUint64: unexpected character`。
+   * （真机踩过：错误日志里那句 `{"path":"/","password":"","page":"1","per_page":"0",...}`
+   *   就是这么来的。）
+   */
   private fun postJson(
     endpoint: String,
-    fields: Map<String, String>,
+    body: JsonObject,
     withAuth: Boolean,
   ): String {
     val mediaType = "application/json; charset=utf-8".toMediaType()
-    val body = Json.encodeToString(fields).toRequestBody(mediaType)
+    val requestBody = body.toString().toRequestBody(mediaType)
     val request = Request.Builder()
       .url(api(endpoint))
-      .post(body)
+      .post(requestBody)
       .apply { if (withAuth) authHeader()?.let { header("Authorization", it) } }
       .build()
     execute(request).use { response ->
       return response.body?.string() ?: throw IOException("AList 返回空响应体: $endpoint")
+    }
+  }
+
+  /**
+   * POST 并**校验业务码**。
+   *
+   * 列目录那几个是自己解析 `data` 的；写操作（remove / rename / mkdir）不需要
+   * 返回内容，只要知道成没成 —— 统一走这里，免得某个写操作漏判 `code`
+   * （HTTP 200 但 `code != 200` 是 AList 的常见失败形态，比如权限不足）。
+   */
+  private fun postJsonChecked(endpoint: String, body: JsonObject) {
+    val raw = postJson(endpoint, body, withAuth = true)
+    val parsed = json.decodeFromString<AlistSimpleResp>(raw)
+    if (parsed.code != CODE_OK) {
+      throw AlistApiException(
+        parsed.code,
+        parsed.message.ifBlank { "AList $endpoint 失败（code=${parsed.code}）" },
+      )
     }
   }
 
@@ -391,6 +505,16 @@ private data class AlistFsListData(
   val readme: String = "",
   val write: Boolean = false,
   val provider: String = "",
+)
+
+/**
+ * 只关心 `code` / `message` 的响应 —— 写操作（remove / rename / mkdir）用，
+ * 见 [AlistClient.postJsonChecked]。
+ */
+@Serializable
+private data class AlistSimpleResp(
+  val code: Int = -1,
+  val message: String = "",
 )
 
 /** `fs/get` 的 data。比 [AlistFsItem] 多了 `raw_url`（播放直链用的就是它） */

@@ -275,8 +275,11 @@ class NetworkRepository(
    *
    * 原来这段逻辑长在 [listFiles] 里，照片链路也要用同一套 ——
    * 抽出来后两边共享：活跃 client 优先，没有就按最新凭据建一个并连上。
+   *
+   * 对外开放：播放前要用 NaOutput 客户端自己的 [NetworkClient.getFileUri]
+   * （AList 要据此换签名直链），不能只停留在代理 / ContentProvider 两条路上。
    */
-  private suspend fun clientFor(connection: NetworkConnection): NetworkClient {
+  suspend fun clientFor(connection: NetworkConnection): NetworkClient {
     // Always fetch the latest connection from database to ensure we have current credentials
     // 注意：DAO 里存的是密文，这里必须解一次再交给客户端
     val latestConnection =

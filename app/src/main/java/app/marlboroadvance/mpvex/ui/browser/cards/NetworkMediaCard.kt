@@ -79,6 +79,11 @@ fun NetworkMediaCard(
    *   （用户在设置里关了封面时调用方就不传）。
    */
   onCoverNeeded: ((String) -> Unit)? = null,
+  /**
+   * 长按：调用方据此弹条目操作菜单（重命名 / 删除）。
+   * null = 不挂长按（协议不支持写操作时调用方传 null）。
+   */
+  onLongClick: (() -> Unit)? = null,
 ) {
   val type = file.type()
 
@@ -90,7 +95,12 @@ fun NetworkMediaCard(
 
   Column(modifier = modifier.fillMaxWidth()) {
     Card(
-      onClick = onClick,
+      // 用 combinedClickable 而不是 Card(onClick=)：后者接不了长按。
+      // ripple / 无障碍语义由 combinedClickable 自带的 indication 与 semantics 兜住。
+      modifier = Modifier.combinedClickable(
+        onClick = onClick,
+        onLongClick = onLongClick,
+      ),
       shape = RoundedCornerShape(12.dp),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {

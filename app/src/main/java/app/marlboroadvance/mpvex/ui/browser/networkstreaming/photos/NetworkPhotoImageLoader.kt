@@ -70,6 +70,9 @@ object NetworkPhotoImageLoader {
       .diskCache { DiskCache.Builder().maxSizeBytes(DISK_LIMIT_BYTES).build() }
       .build()
 
+  /** 内存 / 磁盘缓存 key。三处（request / isMemoryCached）必须同一口径 */
+  private fun cacheKey(connectionId: Long, path: String): String = "net:$connectionId:$path"
+
   /**
    * 构造图片请求。
    *
@@ -83,7 +86,7 @@ object NetworkPhotoImageLoader {
     path: String,
     size: Size? = null,
   ): ImageRequest {
-    val key = "net:$connectionId:$path"
+    val key = cacheKey(connectionId, path)
     return ImageRequest.Builder(context)
       .data(NetworkPhotoRequest(connectionId, path))
       .memoryCacheKey(key)
@@ -91,6 +94,19 @@ object NetworkPhotoImageLoader {
       .apply { if (size != null) size(size) }
       .build()
   }
+
+  /**
+   * 这张图是否已在内存缓存里。
+   *
+   * 用途：命中 ⇒ 卡片**首帧就能拿到图**，调用方可以跳过骨架屏。
+   * 否则「进入子文件夹 → 返回上一级」时，painter 状态机会从 Loading 重新走一遍，
+   * 每张封面都闪一下骨架屏 —— 图其实一直在缓存里，纯属视觉噪音。
+   *
+   * ⚠️ 只用于决定是否画骨架屏，**不能**用来决定要不要发请求：
+   *    这个判断本身就有竞态（查完到请求发出之间缓存可能被淘汰）。
+   */
+  fun isMemoryCached(context: Context, connectionId: Long, path: String): Boolean =
+    get(context).memoryCache?.get(MemoryCache.Key(cacheKey(connectionId, path))) != null
 
   /**
    * 预取：把图拉进缓存，等真滑到那张时直接命中。

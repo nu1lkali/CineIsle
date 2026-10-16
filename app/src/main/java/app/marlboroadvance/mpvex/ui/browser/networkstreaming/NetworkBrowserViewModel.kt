@@ -16,6 +16,7 @@ import app.marlboroadvance.mpvex.domain.network.isPhoto
 import app.marlboroadvance.mpvex.domain.network.isVideoFile
 import app.marlboroadvance.mpvex.domain.network.type
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.AlistClient
 import app.marlboroadvance.mpvex.preferences.NetworkSortType
 import app.marlboroadvance.mpvex.preferences.SortOrder
 import app.marlboroadvance.mpvex.preferences.preference.Preference
@@ -97,6 +98,15 @@ class NetworkBrowserViewModel(
   val isCurrentFavorite: StateFlow<Boolean> = _isCurrentFavorite.asStateFlow()
 
   /**
+   * 当前连接是否支持**写操作**（重命名 / 删除）。目前只有 AList 支持。
+   *
+   * UI 据此决定要不要响应长按 —— 不支持的协议弹了菜单也是点了就报错，
+   * 不如干脆不给入口。
+   */
+  private val _supportsWrite = MutableStateFlow(false)
+  val supportsWrite: StateFlow<Boolean> = _supportsWrite.asStateFlow()
+
+  /**
    * 文件夹封面缓存：文件夹 path → 「第一张图片」的 path（**本页**可见的）。
    *
    * - value = null：这个文件夹列过了，没有图片（或本次列失败）—— 别再列第二次；
@@ -172,10 +182,81 @@ class NetworkBrowserViewModel(
     }
   }
 
+  // ── 写操作（目前只有 AList 有官方接口） ──
+
+  /**
+   * 取可用于写操作的客户端；协议不支持时返回 null。
+   *
+   * 用 `as? AlistClient` 同时完成「取客户端」与「判断是否支持写」两件事 ——
+   * SMB / FTP / WebDAV 三个客户端都不是 AlistClient，自然返回 null。
+   */
+  private suspend fun writeClient(): AlistClient? {
+    val connection = cachedConnection
+      ?: repository.getConnectionById(connectionId)?.also { cachedConnection = it }
+      ?: return null
+    return runCatching { repository.clientFor(connection) }.getOrNull() as? AlistClient
+  }
+
+  /**
+   * 重命名。
+   *
+   * @param onResult (成功?, 失败原因)。UI 拿它弹 Toast —— 写操作是作用在服务器上的，
+   *   成败必须给明确回执（参考 Emby「扫描媒体库」的做法）。
+   */
+  fun renameFile(file: NetworkFile, newName: String, onResult: (Boolean, String?) -> Unit) {
+    viewModelScope.launch {
+      val client = writeClient()
+      if (client == null) {
+        onResult(false, "当前协议不支持重命名")
+        return@launch
+      }
+      client.rename(file.path, newName)
+        .onSuccess {
+          loadFiles()
+          onResult(true, null)
+        }
+        .onFailure { onResult(false, it.message ?: "重命名失败") }
+    }
+  }
+
+  /**
+   * 删除。
+   *
+   * ⚠️ **不可逆**（AList 没有回收站），UI 必须二次确认后再调。
+   */
+  fun deleteFile(file: NetworkFile, onResult: (Boolean, String?) -> Unit) {
+    viewModelScope.launch {
+      val client = writeClient()
+      if (client == null) {
+        onResult(false, "当前协议不支持删除")
+        return@launch
+      }
+      // fs/remove 要的是「父目录 + 文件名列表」，不是完整路径
+      val lastSlash = file.path.lastIndexOf('/')
+      val dir = if (lastSlash >= 0) file.path.substring(0, lastSlash) else ""
+      client.remove(dir, listOf(file.name))
+        .onSuccess {
+          loadFiles()
+          onResult(true, null)
+        }
+        .onFailure { onResult(false, it.message ?: "删除失败") }
+    }
+  }
+
   /**
    * Load files in the current directory
+   *
+   * @param invalidateCovers 是否顺带失效子文件夹的封面缓存。**只有下拉刷新才传 true**。
+   *
+   *   ⚠️ 原来这个失效动作是**无条件**做的，于是「进入子文件夹 → 返回上一级」
+   *   会把本页十几个子文件夹的封面缓存（本页 Map + Repository L1 + Room L2）
+   *   全部清掉，逼着每个子文件夹**重新列一次目录**、封面图再重新下载一遍 ——
+   *   懒加载与三级缓存全废，来回切几层目录就是成百上千个请求。
+   *   （「100 个文件夹只有前 30 个能加载图片」被这个放大器推得更严重。）
+   *
+   *   现在只有用户显式下拉刷新（= 我要最新）才失效；正常进入 / 返回走缓存，零请求。
    */
-  fun loadFiles() {
+  fun loadFiles(invalidateCovers: Boolean = false) {
     viewModelScope.launch {
       _isLoading.value = true
       _error.value = null
@@ -184,21 +265,27 @@ class NetworkBrowserViewModel(
         val connection = repository.getConnectionById(connectionId)
           ?: throw Exception("Connection not found")
 
+        // 长按菜单只对支持写操作的协议开放（当前只有 AList）
+        _supportsWrite.value = connection.protocol == NetworkProtocol.ALIST
+
         repository.listFiles(connection, currentPath)
           .onSuccess { fileList ->
             _rawFiles.value = fileList.sortedWith(
               compareBy<NetworkFile> { !it.isDirectory }
                 .thenBy { it.name.lowercase() },
             )
-            // 封面可能变了（子文件夹里加了 / 删了照片）：失效这些子文件夹的缓存，
-            // 已看过的按新内容重取（值变了卡面自然刷新），没看过的仍然懒加载。
-            // **只失效不预热** —— 预热等于把整个目录重新列一遍，那就不是懒加载了。
-            val subFolders = fileList.filter { it.isDirectory }.map { it.path }
-            val seenFolders = _folderCovers.value.keys.toList()
-            _folderCovers.update { it - subFolders.toSet() }
-            viewModelScope.launch {
-              repository.invalidateFolderCovers(connectionId, subFolders)
-              seenFolders.forEach { ensureFolderCover(it) }
+            // 只有下拉刷新才动封面缓存：子文件夹里的照片可能增删了，
+            // 已看过的失效重取（值变了卡面自然刷新），没看过的仍然懒加载
+            // （**只失效不预热** —— 预热等于把整个目录重新列一遍，那就不是懒加载了）。
+            // 正常进入 / 返回上一级**什么都不做**：三级缓存直接命中，零请求。
+            if (invalidateCovers) {
+              val subFolders = fileList.filter { it.isDirectory }.map { it.path }
+              val seenFolders = _folderCovers.value.keys.toList()
+              _folderCovers.update { it - subFolders.toSet() }
+              viewModelScope.launch {
+                repository.invalidateFolderCovers(connectionId, subFolders)
+                seenFolders.forEach { ensureFolderCover(it) }
+              }
             }
           }
           .onFailure { e ->
@@ -286,15 +373,23 @@ class NetworkBrowserViewModel(
         val connection = repository.getConnectionById(connectionId)
           ?: throw Exception("Connection not found")
 
-        // Use proxy server for protocols that need seeking support
+        // 播放地址三选一：
+        // - SMB / FTP / WebDAV：走本地代理（会话不能给播放器用，代理支持 Range ⇒ 能拖动）
+        // - AList：服务端直出签名直链 / raw_url，mpv 原生支持 Range ⇒ **直连**，
+        //   既不过代理也不过 ContentProvider 管道（管道是单向流，拖不了进度）
+        // - 其余：ContentProvider 管道兜底
         val useProxy = connection.protocol in PROXY_PROTOCOLS
+        val directUriClient =
+          if (connection.protocol == NetworkProtocol.ALIST) repository.clientFor(connection) else null
         val stamp = System.currentTimeMillis()
 
         val uris = ArrayList<android.net.Uri>(videos.size)
         val titles = ArrayList<String>(videos.size)
         val networkPaths = ArrayList<String>(videos.size)
         videos.forEachIndexed { index, file ->
-          val uri = if (useProxy) {
+          val uri = if (directUriClient != null) {
+            directUriClient.getFileUri(file.path).getOrThrow()
+          } else if (useProxy) {
             val proxy = app.marlboroadvance.mpvex.ui.browser.networkstreaming.proxy.NetworkStreamingProxy.getInstance()
             val streamId = "${connectionId}_${stamp}_$index"
             val proxyUrl = proxy.registerStream(
@@ -366,7 +461,13 @@ class NetworkBrowserViewModel(
   companion object {
     private const val TAG = "NetworkBrowserVM"
 
-    // Protocols that require proxy server for seeking support
+    /**
+     * 需要走本地代理才能**拖动进度**的协议。
+     *
+     * ⚠️ AList **刻意不在**这里：它的 `/d/...?sign=` 与 `raw_url` 本身就是支持
+     * Range 的 http 直链，播放器直连即可（见 [playVideos] 里的 `directUriClient`
+     * 分支）。把它加进来只会白绕一层本地代理。
+     */
     private val PROXY_PROTOCOLS = setOf(
       NetworkProtocol.SMB,
       NetworkProtocol.FTP,

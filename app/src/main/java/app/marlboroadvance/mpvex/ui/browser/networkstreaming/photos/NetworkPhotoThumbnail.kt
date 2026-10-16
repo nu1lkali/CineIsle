@@ -48,6 +48,12 @@ fun NetworkPhotoThumbnail(
   val request = remember(connectionId, path) {
     NetworkPhotoImageLoader.request(context, connectionId, path)
   }
+  // 内存缓存里已有 ⇒ 首帧就有图，不必画骨架屏。
+  // 否则返回上一级时每张封面都会「闪一下」（painter 从 Loading 重新走一遍），
+  // 而图其实一直在缓存里。
+  val memoryCached = remember(connectionId, path) {
+    NetworkPhotoImageLoader.isMemoryCached(context, connectionId, path)
+  }
   val painter = rememberAsyncImagePainter(
     model = request,
     imageLoader = imageLoader,
@@ -67,11 +73,14 @@ fun NetworkPhotoThumbnail(
     }
     when (state) {
       is AsyncImagePainter.State.Loading -> {
-        Box(
-          modifier = Modifier
-            .fillMaxSize()
-            .shimmer(shimmer),
-        )
+        // 缓存命中就别画骨架屏了：那一下闪烁纯属噪音
+        if (!memoryCached) {
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .shimmer(shimmer),
+          )
+        }
       }
 
       is AsyncImagePainter.State.Error -> {

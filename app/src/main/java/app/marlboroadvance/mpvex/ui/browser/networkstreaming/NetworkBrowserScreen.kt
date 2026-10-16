@@ -31,6 +31,8 @@ import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GridView
@@ -41,6 +43,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -48,9 +51,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -67,6 +72,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
@@ -75,6 +82,7 @@ import app.marlboroadvance.mpvex.domain.network.NetworkFileType
 import app.marlboroadvance.mpvex.domain.network.isPhoto
 import app.marlboroadvance.mpvex.domain.network.isVideoFile
 import app.marlboroadvance.mpvex.domain.network.type
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.FolderViewMode
 import app.marlboroadvance.mpvex.preferences.NetworkSortType
@@ -160,6 +168,8 @@ data class NetworkBrowserScreen(
     val folderCovers by viewModel.folderCovers.collectAsState()
     val sortType by viewModel.sortType.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
+    // 当前协议是否支持重命名 / 删除（目前只有 AList）—— 决定卡片挂不挂长按
+    val supportsWrite by viewModel.supportsWrite.collectAsState()
 
     // 视图模式：与本地文件夹浏览共用同一偏好（AlbumView=网格 / FileManager=列表）
     val browserPreferences = koinInject<BrowserPreferences>()
@@ -177,6 +187,10 @@ data class NetworkBrowserScreen(
     // 随机播放下拉菜单（视频 / 图片）
     // 顶栏竖三点「更多」菜单：收藏 / 随机播放 / 视图切换 全收在这里（见下方 additionalActions）
     var showOverflowMenu by remember { mutableStateOf(false) }
+    // 长按条目：当前协议支持写操作（AList）时才会有值
+    var longPressedFile by remember { mutableStateOf<NetworkFile?>(null) }
+    var renameTarget by remember { mutableStateOf<NetworkFile?>(null) }
+    var deleteTarget by remember { mutableStateOf<NetworkFile?>(null) }
 
     // 本地搜索（关键词过滤，纯内存 —— 目录列表本来就是全量一次拉完的）
     var searchActive by remember { mutableStateOf(false) }
@@ -449,7 +463,9 @@ data class NetworkBrowserScreen(
           folderCovers = folderCovers,
           coverTrigger = coverTrigger,
           titleMaxLines = titleMaxLines,
-          onRefresh = { viewModel.loadFiles() },
+          // 下拉刷新 = 用户显式要最新 ⇒ 顺带失效子文件夹封面缓存重取；
+          // 正常进入 / 返回上一级走缓存，不重列目录（见 NetworkBrowserViewModel.loadFiles）
+          onRefresh = { viewModel.loadFiles(invalidateCovers = true) },
           onFolderClick = { folder ->
             backstack.add(
               NetworkBrowserScreen(
@@ -483,10 +499,135 @@ data class NetworkBrowserScreen(
               videos.indexOfFirst { it.path == video.path }.coerceAtLeast(0),
             )
           },
+          // 长按 = 条目操作菜单（重命名 / 删除）。**只有支持写操作的协议才挂**
+          // （当前只有 AList）—— 不支持的协议弹了菜单也是点了就报错。
+          onFileLongClick = if (supportsWrite) { { file -> longPressedFile = file } } else null,
           // 未过滤总数（筛选 / 搜索前的 files.size）——空态文案要区分
           // 「目录真空」和「全被滤掉」，只有过滤后的列表看不出来
           totalCount = files.size,
           modifier = Modifier.weight(1f),
+        )
+      }
+
+      // ── 长按条目的操作菜单（重命名 / 删除）──
+      // 与 Emby「扫描媒体库」同一原则：**写操作作用在服务器上、发出去撤不回来**，
+      // 所以长按只弹菜单，删除还要再过一道确认，绝不直接执行。
+      longPressedFile?.let { file ->
+        AlertDialog(
+          onDismissRequest = { longPressedFile = null },
+          title = { Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+          text = {
+            Column {
+              TextButton(
+                onClick = {
+                  longPressedFile = null
+                  renameTarget = file
+                },
+                modifier = Modifier.fillMaxWidth(),
+              ) {
+                Icon(Icons.Default.Edit, contentDescription = null)
+                Spacer(Modifier.width(12.dp))
+                Text(stringResource(R.string.i18n_rename))
+                Spacer(Modifier.weight(1f))
+              }
+              TextButton(
+                onClick = {
+                  longPressedFile = null
+                  deleteTarget = file
+                },
+                modifier = Modifier.fillMaxWidth(),
+              ) {
+                Icon(
+                  Icons.Default.Delete,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.error,
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                  stringResource(R.string.i18n_delete),
+                  color = MaterialTheme.colorScheme.error,
+                )
+                Spacer(Modifier.weight(1f))
+              }
+            }
+          },
+          confirmButton = {},
+          dismissButton = {
+            TextButton(onClick = { longPressedFile = null }) {
+              Text(stringResource(R.string.i18n_cancel))
+            }
+          },
+        )
+      }
+
+      // 重命名：给个输入框，默认填当前名称
+      renameTarget?.let { file ->
+        // ⚠️ stringResource 只能在这里（Composable 上下文）取：
+        //    下面的 onClick 回调不是 Composable，里面调不了
+        val renamedText = stringResource(R.string.i18n_renamed)
+        var newName by remember(file.path) { mutableStateOf(file.name) }
+        AlertDialog(
+          onDismissRequest = { renameTarget = null },
+          title = { Text(stringResource(R.string.i18n_rename)) },
+          text = {
+            OutlinedTextField(
+              value = newName,
+              onValueChange = { newName = it },
+              label = { Text(stringResource(R.string.i18n_new_name)) },
+              modifier = Modifier.fillMaxWidth(),
+              singleLine = true,
+            )
+          },
+          confirmButton = {
+            TextButton(
+              onClick = {
+                renameTarget = null
+                viewModel.renameFile(file, newName) { _, message ->
+                  // 失败时 message 是服务端/校验给的原因，成功时是 null
+                  toast(message ?: renamedText)
+                }
+              },
+            ) {
+              Text(stringResource(R.string.i18n_confirm))
+            }
+          },
+          dismissButton = {
+            TextButton(onClick = { renameTarget = null }) {
+              Text(stringResource(R.string.i18n_cancel))
+            }
+          },
+        )
+      }
+
+      // 删除：二次确认。AList 没有回收站，删了就是没了
+      deleteTarget?.let { file ->
+        val deletedText = stringResource(R.string.i18n_deleted)
+        AlertDialog(
+          onDismissRequest = { deleteTarget = null },
+          title = { Text(stringResource(R.string.i18n_delete)) },
+          text = {
+            Text(stringResource(R.string.i18n_delete_confirm_message, file.name))
+          },
+          confirmButton = {
+            TextButton(
+              onClick = {
+                deleteTarget = null
+                viewModel.deleteFile(file) { _, message ->
+                  toast(message ?: deletedText)
+                }
+              },
+            ) {
+              Text(
+                stringResource(R.string.i18n_delete),
+                color = MaterialTheme.colorScheme.error,
+              )
+            }
+          },
+          dismissButton = {
+            TextButton(onClick = { deleteTarget = null }) {
+              Text(stringResource(R.string.i18n_cancel))
+            }
+          },
         )
       }
     }
@@ -518,6 +659,11 @@ private fun NetworkBrowserContent(
   onFolderClick: (NetworkFile) -> Unit,
   onPhotoClick: (NetworkFile) -> Unit,
   onVideoClick: (NetworkFile) -> Unit,
+  /**
+   * 长按条目的回调；null = 当前协议不支持写操作，长按需忽略
+   * （不给入口，免得弹个菜单出来点了全是报错）。
+   */
+  onFileLongClick: ((NetworkFile) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   // Load connection details（走仓库而不是直接读 DAO —— 密码落盘是密文，仓库会负责解密）
@@ -629,6 +775,7 @@ private fun NetworkBrowserContent(
         folderCovers = folderCovers,
         coverTrigger = coverTrigger,
         titleMaxLines = titleMaxLines,
+        onFileLongClick = onFileLongClick,
         modifier = modifier,
       )
     }
@@ -648,6 +795,7 @@ private fun NetworkBrowserContent(
         onVideoClick = onVideoClick,
         folderCovers = folderCovers,
         coverTrigger = coverTrigger,
+        onFileLongClick = onFileLongClick,
         modifier = modifier,
       )
     }
@@ -672,6 +820,8 @@ private fun NetworkBrowserGrid(
   folderCovers: Map<String, String?>,
   coverTrigger: ((String) -> Unit)?,
   titleMaxLines: Int,
+  /** 长按条目；null = 协议不支持写操作，卡片不挂长按 */
+  onFileLongClick: ((NetworkFile) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val gridState = rememberLazyGridState()
@@ -740,6 +890,7 @@ private fun NetworkBrowserGrid(
               coverPath = if (file.isDirectory) folderCovers[file.path] else null,
               titleMaxLines = titleMaxLines,
               onCoverNeeded = coverTrigger,
+              onLongClick = if (onFileLongClick == null) null else { { onFileLongClick(file) } },
             )
           }
         }
@@ -769,6 +920,8 @@ private fun NetworkBrowserList(
   onVideoClick: (NetworkFile) -> Unit,
   folderCovers: Map<String, String?>,
   coverTrigger: ((String) -> Unit)?,
+  /** 长按条目；null = 协议不支持写操作，卡片不挂长按 */
+  onFileLongClick: ((NetworkFile) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val navigationBarHeight = LocalNavigationBarHeight.current
@@ -829,6 +982,7 @@ private fun NetworkBrowserList(
                 onClick = { onFolderClick(folder) },
                 coverPath = folderCovers[folder.path],
                 onCoverNeeded = coverTrigger,
+                onLongClick = if (onFileLongClick == null) null else { { onFileLongClick(folder) } },
                 modifier = Modifier,
               )
             }
@@ -847,6 +1001,7 @@ private fun NetworkBrowserList(
                 file = photo,
                 connectionId = connectionId,
                 onClick = { onPhotoClick(photo) },
+                onLongClick = if (onFileLongClick == null) null else { { onFileLongClick(photo) } },
                 modifier = Modifier,
               )
             }
@@ -867,6 +1022,7 @@ private fun NetworkBrowserList(
                   file = video,
                   connection = conn,
                   onClick = { onVideoClick(video) },
+                  onLongClick = if (onFileLongClick == null) null else { { onFileLongClick(video) } },
                   modifier = Modifier,
                 )
               }
