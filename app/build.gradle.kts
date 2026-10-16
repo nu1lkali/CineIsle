@@ -246,7 +246,25 @@ android {
     //           万一某版服务端 400，不能把整个详情页带下水）；
     //        b. 退回分支改拼 `<服务器根>/?redirect=<Provider>:<Id>`（补 `/` + 补
     //           `Provider:` 前缀；值本身已带前缀的不重复补），抽成 `externalLinkUrl()`。
-    versionCode = 73
+    // 74（修复轮，versionName 仍为 1.5.5）：详情页「滚动就重复刷新推荐」的根因修复：",
+    //     ① 现象：详情页从上滑到底再滑回来，两块推荐（「推荐」按演员/导演、「同类型」）",
+    //        都会重新发网络请求刷新。用户预期只有「重新进详情页」或「下拉刷新」才刷。",
+    //     ② 根因：两个推荐区是 `DetailBody` 里 LazyColumn 的 `item {}`。LazyColumn 对",
+    //        **滚出视口的 item 会销毁其组合**、滚回来时**重新组合** —— 请求原先挂在推荐区",
+    //        内部的 `LaunchedEffect` 上，键（item.Id / server）虽然没变，但**组合重建本身**",
+    //        就会让 LaunchedEffect 重跑 ⇒ 每次滚回来都重新请求一轮。",
+    //     ③ 改法（数据提升 / state hoist）：把两块推荐的**状态 + 加载逻辑**从推荐区内部",
+    //        提到 `EmbyDetailScreen` 这一层（随页面存活、不随列表滚动被回收），",
+    //        `RecommendationSection` / `GenreRecommendationSection` 退化成**纯渲染**",
+    //        （数据由参数传入，自己不再发请求）。加载只由两个键决定：",
+    //        a. `item.Id` 变化 ⇒ 重新进 / 切到另一部片的详情页；",
+    //        b. `recommendReloadKey` +1 ⇒ 下拉刷新（`PullRefreshBox` 的 onRefresh 里",
+    //           `load()` 之后跟上 `recommendReloadKey++`，于是下拉也会刷新推荐）。",
+    //        滚动不在键里 ⇒ 怎么滚都不会再触发。两块推荐并发取（`coroutineScope`），",
+    //        并把「随机取样 / 随机挑类型」保留在每次重跑时执行，语义仍是「每次进页面或",
+    //        下拉刷新都换一批」。原先内联在 `GenreRecommendationSection` 里的同类型查询",
+    //        抽成 `loadGenreRecommendations()`；`DetailBody` 不再需要 `viewModel` 参数。",
+    versionCode = 74
     versionName = "1.5.5"
 
     vectorDrawables {

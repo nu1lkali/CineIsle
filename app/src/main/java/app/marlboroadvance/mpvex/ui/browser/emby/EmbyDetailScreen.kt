@@ -109,6 +109,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import app.marlboroadvance.mpvex.domain.dislike.DislikeKey
@@ -310,14 +311,70 @@ data class EmbyDetailScreen(
     // 这个判断需要读到折叠进度。详见下面 PullRefreshBox 处的注释。
     val listState = rememberLazyListState()
     // 详情页推荐区开关：关闭后「推荐」与「同类型推荐」两块整块不渲染，也不发那几次请求。
-    val showRecommendations by
-      koinInject<BrowserPreferences>().embyShowRecommendations.collectAsState()
+    val recommendPreferences = koinInject<BrowserPreferences>()
+    val showRecommendations by recommendPreferences.embyShowRecommendations.collectAsState()
+    /** 「同类型推荐」每次进入是否随机挑一个类型（关掉则固定用第一个类型）。 */
+    val randomGenreRecommend by recommendPreferences.embyRandomGenreRecommend.collectAsState()
     // 折叠状态：**只是列表滚动位置的函数**（没有任何自定义手势 / 动画状态）。
     val collapse = rememberHeaderCollapse(
       listState = listState,
       maxHeight = BACKDROP_HEADER_MAX_HEIGHT_DP,
       toolbarHeight = TOOLBAR_HEIGHT_DP,
     )
+
+    // ── 推荐区数据：**提升到本层**（别挪回推荐区内部，见下方注释）──
+    //
+    // 背景：两个推荐区是 LazyColumn 里的 `item {}`。LazyColumn 会把滚出视口的 item
+    // **销毁组合**、滚回来时**重新组合**；而请求原先挂在推荐区内部的 LaunchedEffect 上 ——
+    // 键（item.Id / server）虽然没变，但**组合重建本身**就会让 LaunchedEffect 重跑。
+    // 于是「从上滑到底再滑回来」会把两个推荐区各重新请求好几轮，用户看到的就是
+    // 「滚动时推荐在重复刷新」。
+    //
+    // 提升到本层后，加载只由这两个键决定：
+    //   · item.Id 变化        ⇒ 重新进（或切到另一部片的）详情页
+    //   · recommendReloadKey  ⇒ 下拉刷新（见 PullRefreshBox 的 onRefresh）
+    // 滚动不在键里，所以无论怎么滚都不会再触发。
+    var recommendItems by remember(itemId) { mutableStateOf<List<EmbyItem>>(emptyList()) }
+    var genreRecommendLabel by remember(itemId) { mutableStateOf<String?>(null) }
+    var genreRecommendItems by remember(itemId) { mutableStateOf<List<EmbyItem>>(emptyList()) }
+    var recommendReloadKey by remember(itemId) { mutableStateOf(0) }
+
+    LaunchedEffect(itemId, item?.Id, server?.id, showRecommendations, recommendReloadKey) {
+      if (!showRecommendations) return@LaunchedEffect
+      val current = item ?: return@LaunchedEffect
+      val currentServer = server ?: return@LaunchedEffect
+      // 清空再取：换条目 / 下拉刷新时不该让用户先看到上一批推荐再被换掉
+      recommendItems = emptyList()
+      genreRecommendLabel = null
+      genreRecommendItems = emptyList()
+      // 两块推荐互不依赖，并发取 —— 别让「同类型」等「按人推荐」跑完才开始
+      coroutineScope {
+        launch {
+          recommendItems =
+            loadRecommendations(item = current, server = currentServer, viewModel = viewModel)
+        }
+        launch {
+          val genres = current.Genres
+          // 候选类型：随机开关打开 → 本片类型打乱后的顺序；关闭 → 只用第一个。
+          // 打乱放在这里（effect 每次按上面的键重跑一次），于是「每次进页面 / 每次下拉刷新
+          // 都换一批类型」，而滚动期间不会变。
+          val candidates = when {
+            genres.isEmpty() -> emptyList()
+            randomGenreRecommend -> genres.shuffled()
+            else -> listOf(genres.first())
+          }
+          // 逐个试：随机挑到的冷门类型可能查不到同类，命中第一个有结果的就停
+          for (g in candidates) {
+            val found = loadGenreRecommendations(currentServer, g, current.Id)
+            if (found.isNotEmpty()) {
+              genreRecommendLabel = g
+              genreRecommendItems = found
+              break
+            }
+          }
+        }
+      }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
       when {
@@ -363,7 +420,12 @@ data class EmbyDetailScreen(
           //    （那段下拉本来就是「把封面滚回来」用的）。
           PullRefreshBox(
             isRefreshing = isRefreshing,
-            onRefresh = { load() },
+            // 下拉刷新：详情 + 两块推荐一起重取（推荐靠 recommendReloadKey 触发上面那个
+            // LaunchedEffect；不加这一句的话下拉只会刷新详情，推荐原地不动）。
+            onRefresh = {
+              load()
+              recommendReloadKey++
+            },
             enabled = collapse.isExpanded,
             listState = listState,
             modifier = Modifier.fillMaxSize(),
@@ -631,7 +693,11 @@ data class EmbyDetailScreen(
                   }
                 }
               },
-              viewModel = viewModel,
+              // 推荐（按演员 / 导演）与同类型推荐的数据：由本层加载好后传进去，
+              // 详情区内只负责画 —— 避免滚动时 item 被回收 / 重组而反复发请求。
+              recommendItems = recommendItems,
+              genreRecommendLabel = genreRecommendLabel,
+              genreRecommendItems = genreRecommendItems,
               // 点推荐卡片：同一位演员 / 导演的另一部片子，直接再开一层详情页
               onRecommendClick = { id, name ->
                 backStack.add(EmbyDetailScreen(itemId = id, title = name))
@@ -1049,8 +1115,13 @@ private fun DetailBody(
   onToggleDislike: () -> Unit,
   /** 设置页「详情页菜单项」开关。为 false 时整个菜单项不渲染。 */
   showDislikeInMenu: Boolean,
-  /** 推荐」区要按人员 Id 反查作品，所以需要 ViewModel */
-  viewModel: EmbyViewModel,
+  /**
+   * 两块推荐区的数据。**由 [EmbyDetailScreen] 加载好后传进来**，这里只负责画 ——
+   * 请求留在区块内部的话，LazyColumn 回收 / 重组 item 时会被反复触发（见那边的注释）。
+   */
+  recommendItems: List<EmbyItem>,
+  genreRecommendLabel: String?,
+  genreRecommendItems: List<EmbyItem>,
   /** 是否正在拉起播放器：播放键转圈 + 禁点（转给 [PlaySection]）。 */
   playLaunching: Boolean = false,
   /** 多版本媒体：当前选中的版本 Id（null = 默认版本）。转给 [PlaySection] 画下拉框。 */
@@ -1331,23 +1402,26 @@ private fun DetailBody(
 
       // ── 推荐：同一位演员 / 导演参与的其他影片 ──
       // 放在演职员之后：看完了主演阵容，顺势往下推荐 TA 的片子，上下文是连着的。
-      // 设置里关掉「详情页推荐」后整块不渲染（连带省掉下面的网络请求）。
+      // 设置里关掉「详情页推荐」后整块不渲染（连带省掉上面的网络请求）。
+      //
+      // ⚠️ 这里只是**把上层加载好的数据画出来**：数据与请求都在 [EmbyDetailScreen]
+      // 那一层（不随滚动被回收），所以滚出视口再滚回来不会重新请求。
       if (showRecommendations) {
         item {
           RecommendationSection(
-            item = item,
             server = server,
-            viewModel = viewModel,
+            recommendations = recommendItems,
             onOpenItem = onRecommendClick,
           )
         }
 
-        // ── 同类型推荐：按本片第一个类型（Genres）横向推荐 ──
+        // ── 同类型推荐：按本片某个类型（Genres）横向推荐 ──
         // 与上面的「演员 / 导演」推荐互补：那边按人找，这边按题材找。
         item {
           GenreRecommendationSection(
-            item = item,
             server = server,
+            genre = genreRecommendLabel,
+            picks = genreRecommendItems,
             onOpenItem = onRecommendClick,
           )
         }
@@ -2576,32 +2650,28 @@ private val RECOMMEND_ITEM_TYPES = listOf("Movie", "Series")
 private const val RECOMMEND_MAX_PERSONS = 5
 
 /**
- * 详情页的推荐区。
+ * 详情页的推荐区（纯渲染）。
  *
  * **随机在客户端做**：Emby 的 `/Items` 虽然有 `SortBy=Random`，但它跟 `SearchTerm`
  * 这类参数组合起来是否生效并不保证（媒体库搜索那趟已经验证过一次），
- * 所以这里一次多取一些候选，最后 `shuffled().take(6)` —— 每次进详情页看到的都不一样。
+ * 所以一次多取一些候选，最后 `shuffled().take(6)` —— 每次进详情页看到的都不一样。
  *
  * **作者不足就往下补**：冷门片里排第一的演员可能只有一两部戏，所以只要还没凑够
  * [RECOMMEND_COUNT]，就顺着候选名单继续取下一个人的作品，补满为止。
  *
+ * ⚠️ 这里**不自己发请求**：数据（含那次随机的取样）由 [EmbyDetailScreen] 加载好后作为
+ * [recommendations] 传进来。请求留在这里的话，LazyColumn 把滚出视口的 item 回收、滚回来
+ * 再重组时，LaunchedEffect 会跟着重跑 —— 表现就是「滚动也在刷推荐」。详见那边的注释。
+ *
+ * @param recommendations 已经加载好、且已经随机取样过的推荐列表；空则不渲染整块
  * @param onOpenItem 打开推荐项的详情页（itemId / 标题）
  */
 @Composable
 private fun RecommendationSection(
-  item: EmbyItem,
   server: EmbyServer?,
-  viewModel: EmbyViewModel,
+  recommendations: List<EmbyItem>,
   onOpenItem: (String, String) -> Unit,
 ) {
-  var recommendations by remember(item.Id) { mutableStateOf<List<EmbyItem>>(emptyList()) }
-
-  LaunchedEffect(item.Id, server) {
-    val current = server ?: return@LaunchedEffect
-    recommendations = emptyList()
-    recommendations = loadRecommendations(item = item, server = current, viewModel = viewModel)
-  }
-
   // 查不到就整块不显示，不留一个空标题占地方
   if (recommendations.isEmpty()) return
 
@@ -2642,7 +2712,7 @@ private fun RecommendationSection(
 }
 
 /**
- * 详情页的「同类型」推荐区：按本片的某个类型（Genres）横向列出同类影片。
+ * 详情页的「同类型」推荐区（纯渲染）。
  *
  * 与 [RecommendationSection]（按演员 / 导演推荐）互补 —— 那边按「人」找，这边按「题材」找；
  * 冷门片常常凑不出足够的同演员作品，但题材相同的片子通常管够。
@@ -2651,67 +2721,21 @@ private fun RecommendationSection(
  * 的话，同一部片每次打开看到的推荐都一模一样。开关 `embyRandomGenreRecommend` 打开时
  * 每次进入把本片的类型**随机打乱**再取，于是每次打开题材都不同；关闭时退回「取第一个」。
  *
- * 随机容易挑到没几部同类的冷门类型，所以这里按打乱后的顺序**逐个尝试、取第一个查得到
+ * 随机容易挑到没几部同类的冷门类型，所以加载侧按打乱后的顺序**逐个尝试、取第一个查得到
  * 同类的**，避免「随机之后整块推荐消失」。全查不到（或服务端没刮削）才整块不显示。
+ *
+ * ⚠️ 与 [RecommendationSection] 同理：这里只画，不请求（原因见那边的注释）。
+ *
+ * @param genre 最终选中的类型名（显示在标题里）；null = 还没选出来，整块不渲染
+ * @param picks 已经加载好的同类影片；空则整块不渲染
  */
 @Composable
 private fun GenreRecommendationSection(
-  item: EmbyItem,
   server: EmbyServer?,
+  genre: String?,
+  picks: List<EmbyItem>,
   onOpenItem: (String, String) -> Unit,
 ) {
-  val browserPreferences = koinInject<BrowserPreferences>()
-  val randomGenre by browserPreferences.embyRandomGenreRecommend.collectAsState()
-
-  // 候选类型：随机开关打开 → 本片类型打乱后的顺序；关闭 → 只用第一个。
-  // remember 以 item.Id 为键：离开详情页再进来组合重建，于是「每次打开都换一批」。
-  val genres = item.Genres
-  val candidateGenres =
-    remember(item.Id, genres, randomGenre) {
-      when {
-        genres.isEmpty() -> emptyList()
-        randomGenre -> genres.shuffled()
-        else -> listOf(genres.first())
-      }
-    }
-
-  var genre by remember(item.Id) { mutableStateOf<String?>(null) }
-  var picks by remember(item.Id) { mutableStateOf<List<EmbyItem>>(emptyList()) }
-
-  LaunchedEffect(item.Id, candidateGenres, server) {
-    val current = server ?: return@LaunchedEffect
-    if (candidateGenres.isEmpty()) return@LaunchedEffect
-    picks = emptyList()
-    genre = null
-    // 按候选顺序逐个试，命中第一个就停；全空才放弃（见上方注释）
-    for (g in candidateGenres) {
-      val found =
-        withContext(Dispatchers.IO) {
-          runCatching {
-            EmbyClient.getItems(
-              server = current,
-              genres = listOf(g),
-              includeItemTypes = RECOMMEND_ITEM_TYPES,
-              // 随机排序：每次进详情页看到的同类顺序不同，避免「永远是那几部」
-              sortBy = "Random",
-              recursive = true,
-              startIndex = 0,
-              limit = 60,
-            ).Items
-          }.getOrDefault(emptyList())
-            // 剔掉自己，并按 Id 去重（服务端偶发重复条目）
-            .filter { it.Id != null && it.Id != item.Id }
-            .distinctBy { it.Id }
-            .take(RECOMMEND_COUNT)
-        }
-      if (found.isNotEmpty()) {
-        genre = g
-        picks = found
-        break
-      }
-    }
-  }
-
   val activeGenre = genre
   if (picks.isEmpty() || activeGenre == null) return
 
@@ -2849,4 +2873,34 @@ private suspend fun loadRecommendations(
 
   if (pool.isEmpty()) return@withContext emptyList<EmbyItem>()
   pool.values.shuffled().take(RECOMMEND_COUNT)
+}
+
+/**
+ * 取某个题材下的同类影片：`SortBy=Random` 由服务端排序（本区不需要客户端再随机），
+ * 拿到后剔掉自己、按 Id 去重（服务端偶发重复条目），最后截到 [RECOMMEND_COUNT]。
+ *
+ * 只查一个题材、一趟请求，所以「逐个试候选题材」的循环交给调用方（见 [EmbyDetailScreen]
+ * 里那块推荐加载逻辑）—— 那边命中第一个非空结果就停。
+ */
+private suspend fun loadGenreRecommendations(
+  server: EmbyServer,
+  genre: String,
+  selfId: String?,
+): List<EmbyItem> = withContext(Dispatchers.IO) {
+  runCatching {
+    EmbyClient.getItems(
+      server = server,
+      genres = listOf(genre),
+      includeItemTypes = RECOMMEND_ITEM_TYPES,
+      // 随机排序：每次进详情页看到的同类顺序不同，避免「永远是那几部」
+      sortBy = "Random",
+      recursive = true,
+      startIndex = 0,
+      limit = 60,
+    ).Items
+  }.getOrDefault(emptyList())
+    // 剔掉自己，并按 Id 去重（服务端偶发重复条目）
+    .filter { it.Id != null && it.Id != selfId }
+    .distinctBy { it.Id }
+    .take(RECOMMEND_COUNT)
 }
