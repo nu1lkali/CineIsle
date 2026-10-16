@@ -708,7 +708,8 @@
   <string name="i18n_add_m3u_playlist">添加 M3U 播放列表</string>
   <string name="i18n_add_m3u_from_url">从网址导入 M3U 播放列表</string>
   <string name="i18n_add_network_connection">添加网络连接</string>
-  <string name="i18n_network_empty_hint">添加 SMB、FTP 或 WebDAV 连接，即可浏览网络文件</string>
+  <string name="i18n_network_empty_hint">添加 SMB、FTP、WebDAV 或 AList 连接，即可浏览网络文件</string>
+  <string name="i18n_network_alist_hint">AList 走的是它自己的 API（不是 WebDAV）。填 AList 的账号密码；两个都留空则是访客访问。</string>
   <string name="i18n_add_to_playlist">添加到播放列表</string>
   <string name="i18n_playlist_add_hint">添加视频即可开始使用</string>
   <string name="i18n_layout_all_used">所有可用按钮都已在使用中。</string>

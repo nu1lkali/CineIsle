@@ -20,6 +20,32 @@ class WebDavClient(private val connection: NetworkConnection) : NetworkClient {
   private var sardine: Sardine? = null
 
   /**
+   * 取流专用的 Sardine，**进程内只建一次、长期复用**。
+   *
+   * ⚠️ 这里原来写着「每次取流新建一个 Sardine 以避免连接冲突」—— 那是个反模式：
+   * `OkHttpSardine()` 内部自带一个独立 OkHttpClient（独立连接池 + 线程池），
+   * 于是**每张封面一条全新 TCP 连接**，keep-alive 完全不复用；再叠加错误路径上
+   * 没关掉的响应体（日志里 `A resource failed to call response.body().close()`），
+   * 连接与 fd 一路堆到耗尽，表现就是「前 30 个文件夹正常、之后全挂」。
+   *
+   * 现在改成复用：并发取流由 OkHttp 自己的连接池与分发器管理（它本来就是为并发
+   * 设计的），不会冲突。
+   */
+  @Volatile
+  private var streamSardine: Sardine? = null
+
+  /** 取流用的 Sardine：惰性创建、长期复用（见 [streamSardine] 的说明） */
+  private fun streamClient(): Sardine =
+    streamSardine ?: synchronized(this) {
+      streamSardine ?: OkHttpSardine().also { client ->
+        if (!connection.isAnonymous) {
+          client.setCredentials(connection.username, connection.password)
+        }
+        streamSardine = client
+      }
+    }
+
+  /**
    * Build full WebDAV URL from connection and relative path
    * Standard approach: protocol://host:port/basePath/relativePath
    * relativePath should be relative to the basePath (connection.path)
@@ -66,6 +92,8 @@ class WebDavClient(private val connection: NetworkConnection) : NetworkClient {
   override suspend fun disconnect() {
     withContext(Dispatchers.IO) {
       sardine = null
+      // 凭据 / 连接变了，取流那个也一起丢掉，下次按需重建
+      streamSardine = null
     }
   }
 
@@ -135,15 +163,11 @@ class WebDavClient(private val connection: NetworkConnection) : NetworkClient {
   override suspend fun getFileStream(path: String): Result<InputStream> =
     withContext(Dispatchers.IO) {
       try {
-        // Create a fresh Sardine client for this stream to avoid connection conflicts
-        val streamClient = OkHttpSardine()
-
-        if (!connection.isAnonymous) {
-          streamClient.setCredentials(connection.username, connection.password)
-        }
+        // 复用长期存活的 Sardine（连接才能复用）；见 [streamSardine] 的说明
+        val client = streamClient()
 
         val url = buildUrl(path)
-        val rawStream = streamClient.get(url)
+        val rawStream = client.get(url)
 
         if (rawStream == null) {
           return@withContext Result.failure(Exception("Failed to open WebDAV stream"))

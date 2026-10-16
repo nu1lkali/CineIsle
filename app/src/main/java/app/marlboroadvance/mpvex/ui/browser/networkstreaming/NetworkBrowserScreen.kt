@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
@@ -123,8 +124,9 @@ import org.koin.compose.koinInject
  *   不受这三项管。
  * - **本地搜索**（顶栏放大镜）：对当前目录已拉到的内容按名称过滤，零请求。
  * - **顶栏标题 = 当前文件夹名**（根目录退化为连接名），过长自动截断。
- * - **顶栏三件套**（[BrowserTopBar.additionalActions]）：收藏当前目录（星形，
- *   切完弹 toast）、随机播放（视频 / 图片二选一）、视图切换。
+ * - **顶栏「更多」菜单**（[BrowserTopBar.additionalActions]）：收藏当前目录
+ *   （切完弹 toast）、随机播放（视频 / 图片二选一）、视图切换，全部收在竖三点里
+ *   —— 顶栏常驻图标只有「更多 / 搜索 / 设置」三个，宽度留给文件夹标题。
  * - **视频点击即播**：不起详情页，直接走 mpv 队列播放（[NetworkBrowserViewModel.playVideos]）。
  * - **照片点击进查看器**：[NetworkPhotoViewerScreen]（缩放 / 保存 / 幻灯片）。
  */
@@ -173,7 +175,8 @@ data class NetworkBrowserScreen(
     val isRefreshing = remember { mutableStateOf(false) }
 
     // 随机播放下拉菜单（视频 / 图片）
-    var showRandomMenu by remember { mutableStateOf(false) }
+    // 顶栏竖三点「更多」菜单：收藏 / 随机播放 / 视图切换 全收在这里（见下方 additionalActions）
+    var showOverflowMenu by remember { mutableStateOf(false) }
 
     // 本地搜索（关键词过滤，纯内存 —— 目录列表本来就是全量一次拉完的）
     var searchActive by remember { mutableStateOf(false) }
@@ -254,8 +257,8 @@ data class NetworkBrowserScreen(
           totalCount = 0,
           onBackClick = { backstack.removeLastOrNull() },
           onCancelSelection = {},
-          // 排序不走顶栏：顶栏图标已经很多（收藏 / 随机 / 视图 / 搜索 / 设置），
-          // 排序控件放在内容区顶部（见 NetworkSortRow），常驻又能显示当前状态。
+          // 排序不走顶栏：它要常驻又能显示当前状态，放在内容区顶部（见 NetworkSortRow）。
+          // 顶栏只留「更多 / 搜索 / 设置」三个图标，把宽度让给文件夹标题。
           onSortClick = null,
           onSearchClick = { searchActive = true },
           onSettingsClick = {
@@ -271,57 +274,62 @@ data class NetworkBrowserScreen(
           onInvertSelection = null,
           onDeselectAll = null,
           additionalActions = {
-            // ── 收藏当前目录 ──
-            // 星形点一下即切，状态来自 ViewModel（loadFiles 时同源刷新），
-            // 主界面「收藏的目录」section 与这里永远一致。
-            // 切完弹个 toast：收藏成功与否要有即时反馈（星形在小图标上，
-            // 一屏那么多条目，不弹提示根本注意不到刚才那下点没点上）。
-            IconButton(
-              onClick = {
-                viewModel.toggleFavoriteCurrent { added ->
-                  toast(if (added) "已收藏「$dirTitle」" else "已取消收藏「$dirTitle」")
-                }
-              },
-              modifier = Modifier.padding(horizontal = 2.dp),
-            ) {
-              Icon(
-                imageVector =
-                  if (isCurrentFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,
-                contentDescription = if (isCurrentFavorite) "取消收藏" else "收藏此目录",
-                modifier = Modifier.size(24.dp),
-                tint =
-                  if (isCurrentFavorite) {
-                    MaterialTheme.colorScheme.primary
-                  } else {
-                    MaterialTheme.colorScheme.secondary
-                  },
-              )
-            }
-
-            // ── 随机播放（视频 / 图片） ──
-            // 一个入口两项：目录经常是混合的，用户想要哪个随机哪个。
-            // 没有对应类型时不静默失败 —— Toast 说清楚「没有」。
+            // ── 顶栏瘦身：三个入口收进一个竖三点菜单 ──
+            // 原先是 5 个平铺图标（收藏 + 随机 + 视图 + 顶栏自带的搜索 + 设置），
+            // 文件夹标题被挤到只剩一两个字。现在顶栏常驻只剩「更多」一个按钮，
+            // 加上搜索与设置共 3 个图标，横向空间基本都还给标题。
+            // 这三个都是低频操作（不像搜索那样随时要点），多一下点击换来的
+            // 「看得清当前在哪个文件夹」是划算的。
             Box {
-              IconButton(
-                onClick = { showRandomMenu = true },
-                modifier = Modifier.padding(horizontal = 2.dp),
-              ) {
+              IconButton(onClick = { showOverflowMenu = true }) {
                 Icon(
-                  imageVector = Icons.Default.Shuffle,
-                  contentDescription = "随机播放",
+                  imageVector = Icons.Default.MoreVert,
+                  contentDescription = "更多操作",
                   modifier = Modifier.size(24.dp),
                   tint = MaterialTheme.colorScheme.secondary,
                 )
               }
               DropdownMenu(
-                expanded = showRandomMenu,
-                onDismissRequest = { showRandomMenu = false },
+                expanded = showOverflowMenu,
+                onDismissRequest = { showOverflowMenu = false },
               ) {
+                // ── 收藏当前目录 ──
+                // 状态来自 ViewModel（loadFiles 时同源刷新），主界面「收藏的目录」
+                // section 与这里永远一致。切完弹 toast：一屏那么多条目，
+                // 没提示根本注意不到刚才那下点没点上。
+                DropdownMenuItem(
+                  text = {
+                    Text(if (isCurrentFavorite) "取消收藏「$dirTitle」" else "收藏「$dirTitle」")
+                  },
+                  leadingIcon = {
+                    Icon(
+                      imageVector =
+                        if (isCurrentFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                      contentDescription = null,
+                      tint =
+                        if (isCurrentFavorite) {
+                          MaterialTheme.colorScheme.primary
+                        } else {
+                          MaterialTheme.colorScheme.secondary
+                        },
+                    )
+                  },
+                  onClick = {
+                    showOverflowMenu = false
+                    viewModel.toggleFavoriteCurrent { added ->
+                      toast(if (added) "已收藏「$dirTitle」" else "已取消收藏「$dirTitle」")
+                    }
+                  },
+                )
+
+                // ── 随机播放（视频 / 图片） ──
+                // 目录经常是混合的，两项都给，用户想要哪个随机哪个。
+                // 没有对应类型时不静默失败 —— Toast 说清楚「没有」。
                 DropdownMenuItem(
                   text = { Text("随机播放视频") },
                   leadingIcon = { Icon(Icons.Default.Movie, contentDescription = null) },
                   onClick = {
-                    showRandomMenu = false
+                    showOverflowMenu = false
                     if (files.none { it.isVideoFile() }) {
                       toast("当前目录没有视频")
                     } else {
@@ -333,7 +341,7 @@ data class NetworkBrowserScreen(
                   text = { Text("随机播放图片") },
                   leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
                   onClick = {
-                    showRandomMenu = false
+                    showOverflowMenu = false
                     val photos = files.filter { it.isPhoto() }
                     if (photos.isEmpty()) {
                       toast("当前目录没有图片")
@@ -355,30 +363,31 @@ data class NetworkBrowserScreen(
                     }
                   },
                 )
-              }
-            }
 
-            // ── 视图切换 ──
-            // 图标指向**目标模式**（网格时显示列表图标），与播放列表页同一惯例
-            IconButton(
-              onClick = {
-                browserPreferences.folderViewMode.set(
-                  if (isGridView) FolderViewMode.FileManager else FolderViewMode.AlbumView,
-                )
-              },
-              modifier = Modifier.padding(horizontal = 2.dp),
-            ) {
-              Icon(
-                imageVector =
-                  if (isGridView) {
-                    Icons.AutoMirrored.Filled.ViewList
-                  } else {
-                    Icons.Default.GridView
+                // ── 视图切换 ──
+                // 文案与图标都指向**目标模式**（网格时显示「列表视图」），
+                // 与播放列表页同一惯例
+                DropdownMenuItem(
+                  text = { Text(if (isGridView) "列表视图" else "网格视图") },
+                  leadingIcon = {
+                    Icon(
+                      imageVector =
+                        if (isGridView) {
+                          Icons.AutoMirrored.Filled.ViewList
+                        } else {
+                          Icons.Default.GridView
+                        },
+                      contentDescription = null,
+                    )
                   },
-                contentDescription = "切换视图",
-                modifier = Modifier.size(24.dp),
-                tint = MaterialTheme.colorScheme.secondary,
-              )
+                  onClick = {
+                    showOverflowMenu = false
+                    browserPreferences.folderViewMode.set(
+                      if (isGridView) FolderViewMode.FileManager else FolderViewMode.AlbumView,
+                    )
+                  },
+                )
+              }
             }
           },
         )

@@ -195,27 +195,39 @@ fun AddConnectionSheet(
         Text("匿名 / 访客访问")
       }
       
-      // HTTPS checkbox (only for WebDAV)
-      if (protocol == NetworkProtocol.WEBDAV) {
+      // HTTPS 开关（HTTP 系协议才有意义：WebDAV / AList）
+      if (protocol == NetworkProtocol.WEBDAV || protocol == NetworkProtocol.ALIST) {
         Row(
           verticalAlignment = Alignment.CenterVertically,
           modifier = Modifier.fillMaxWidth(),
         ) {
           Checkbox(
             checked = useHttps,
-            onCheckedChange = { 
+            onCheckedChange = {
               useHttps = it
-              // Auto-update port when toggling HTTPS
-              if (it && port == "80") {
-                port = "443"
-              } else if (!it && port == "443") {
-                port = "80"
+              // 端口还停在 WebDAV 的默认值上才自动跟着切；AList 的 5244 不随 https 变，
+              // 用户手改过端口也别动他的
+              if (protocol == NetworkProtocol.WEBDAV) {
+                if (it && port == "80") {
+                  port = "443"
+                } else if (!it && port == "443") {
+                  port = "80"
+                }
               }
             },
           )
           Spacer(modifier = Modifier.width(8.dp))
           Text("使用 HTTPS（安全连接）")
         }
+      }
+
+      // AList 是独立协议，说明一下登录口径（留空 = 访客）
+      if (protocol == NetworkProtocol.ALIST) {
+        Text(
+          text = stringResource(R.string.i18n_network_alist_hint),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
       }
 
       // Username and Password in one row

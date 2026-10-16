@@ -13,6 +13,13 @@ data class NetworkFile(
   val isDirectory: Boolean,
   val lastModified: Long = 0,
   val mimeType: String? = null,
+  /**
+   * AList 的签名（`fs/list`、`fs/get` 返回的 `sign`），其余协议恒为 null。
+   *
+   * 有了它可以拼出 `{server}/d/<路径>?sign=<sign>` 这种**不带凭据也能取**的直链
+   * —— 播放器与图片加载都不必再过认证头。签名有时效，服务端不给就当没有。
+   */
+  val sign: String? = null,
 )
 
 /**

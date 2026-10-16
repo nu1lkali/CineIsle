@@ -9,5 +9,6 @@ object NetworkClientFactory {
       NetworkProtocol.SMB -> SmbClient(connection)
       NetworkProtocol.FTP -> FtpClient(connection)
       NetworkProtocol.WEBDAV -> WebDavClient(connection)
+      NetworkProtocol.ALIST -> AlistClient(connection)
     }
 }

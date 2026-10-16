@@ -723,7 +723,8 @@
   <string name="i18n_add_m3u_playlist">Add M3U Playlist</string>
   <string name="i18n_add_m3u_from_url">Add M3U Playlist from URL</string>
   <string name="i18n_add_network_connection">Add Network Connection</string>
-  <string name="i18n_network_empty_hint">Add SMB, FTP, or WebDAV connections to browse network files</string>
+  <string name="i18n_network_empty_hint">Add SMB, FTP, WebDAV or AList connections to browse network files</string>
+  <string name="i18n_network_alist_hint">AList uses its own API (not WebDAV). Sign in with your AList account, or leave both fields blank for guest access.</string>
   <string name="i18n_add_to_playlist">Add to Playlist</string>
   <string name="i18n_playlist_add_hint">Add videos to get started</string>
   <string name="i18n_layout_all_used">All available buttons are in use.</string>
