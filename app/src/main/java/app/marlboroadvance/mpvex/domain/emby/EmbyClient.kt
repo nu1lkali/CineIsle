@@ -1076,6 +1076,12 @@ object EmbyClient {
    *
    * 显式带 Fields：不带的话 Emby 默认不返回 People / Studios / Tags /
    * ProductionLocations 等字段，「编辑元数据」弹窗里就是一片空白。
+   *
+   * ⚠️ **不要把 `TagItems` 加进这个清单**：它不在官方 OpenAPI 的 `ItemFields` 可选值里，
+   * 而服务端对不认识的字段名有可能直接 400（见 [PHOTO_FIELDS] 的同一条告诫）。
+   * 好消息是它**不需要索取**：单条目查询默认就会带 `TagItems`（实测响应里有
+   * `TagItems` 三条、却连 `Tags` 字段都没有）⇒ 详情页读标签用
+   * 「优先 TagItems、为空再退回 Tags」的写法，两边都索取就是白搭风险。
    */
   fun getItem(server: EmbyServer, itemId: String): EmbyItem =
     getJson(
@@ -1097,6 +1103,10 @@ object EmbyClient {
           "ProductionYear",
           "MediaSources",
           "MediaStreams",
+          // 详情页「宣传语」一行 + 「外部链接」一行（ProviderIds → 服务器地址 + ?redirect=）
+          // 的数据来源，两个都是官方 ItemFields 里有的合法值。
+          "Taglines",
+          "ProviderIds",
         ).joinToString(","),
       ),
     )

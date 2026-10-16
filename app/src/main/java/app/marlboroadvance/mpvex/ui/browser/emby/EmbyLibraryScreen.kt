@@ -2141,6 +2141,8 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
          },
           onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
           titleMaxLines = titleLines,
+          // 「剩余时长」角标只在「继续播放」分类里给（用户反馈：别的分类里是噪音）
+          showRemaining = category == EmbyCategory.RESUMABLE,
         )
     }
   }
@@ -2176,6 +2178,8 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                       },
                       onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
                       titleMaxLines = titleLines,
+                      // 「剩余时长」角标只在「继续播放」分类里给（用户反馈：别的分类里是噪音）
+                      showRemaining = category == EmbyCategory.RESUMABLE,
                     )
                   }
                 }
@@ -2704,6 +2708,14 @@ private fun EmbyLibraryMediaCell(
   onLongClick: ((androidx.compose.ui.geometry.Offset) -> Unit)?,
   onToggleFavorite: (() -> Unit)?,
   titleMaxLines: Int = 1,
+  /**
+   * 是否在卡片左下角显示「剩余 xx分xx秒」。
+   *
+   * 只有「继续播放」分类传 true：那一档里每一条都是续播中的，剩余时长才是有用信息。
+   * 放到其它分类（全部 / 合集 / 收藏）就是噪音 —— 用户明确要求「只在该类目显示」。
+   * 演员条目的「N 部」角标与它无关，不受这个开关影响。
+   */
+  showRemaining: Boolean = false,
 ) {
   // 混合库照片档：照片与视频是两套卡片（无进度 / 无收藏角标 / 瀑布流高度 /
   // 副标题是相机型号而不是年份），在这里就分道 —— 把照片塞进视频卡里，
@@ -2751,10 +2763,10 @@ private fun EmbyLibraryMediaCell(
     imageUrl = viewModel.imageUrl(server, item, imageTypeFor(cardStyle), 480),
     fallbackImageUrl = viewModel.imageUrl(server, item, "Primary", 480),
     mosaicUrls = folderCover,
-    // 左下角角标：演员是「作品数」；其余条目给「剩余时长」——「继续播放」分类里
-    // 每条都是续播中，于是天然就成了「继续播放卡片左下角的剩余时间」。
+    // 左下角角标：演员是「作品数」（跟分类无关，一直显示）；
+    // 「剩余时长」**只在「继续播放」分类里给**（用户反馈：别的分类里它只是噪音）。
     badgeText = item.ChildCount?.takeIf { item.Type == "Person" && it > 0 }?.toString()
-      ?: remainingLabel(item),
+      ?: remainingLabel(item).takeIf { showRemaining },
     progress = playbackProgress(item),
     isFavorite = item.UserData?.IsFavorite == true,
     onClick = onClick,

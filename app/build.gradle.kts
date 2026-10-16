@@ -208,7 +208,26 @@ android {
     //        `EmbyItemActionsDialog` 文件、同一骨架），保证两个长按菜单是一套观感。
     //        隐藏是纯显示层过滤（按服务器存 `emby_hidden_libraries_$serverId`），
     //        库仍在服务器上、「调整顺序号」弹窗里照旧可见可排。单击图标语义不变（进维护）。
-    versionCode = 71
+    // 72（修复轮，versionName 仍为 1.5.5）：v71 五项真机反馈返工：
+    //     ① 【角标范围】「剩余 xx分xx秒」只在「继续播放」分类里显示（v71 是全部条目都显示，
+    //        用户反馈在「全部 / 合集 / 收藏」里是噪音）。`EmbyLibraryMediaCell` 新增
+    //        `showRemaining` 入参，两个调用点都传 `category == EmbyCategory.RESUMABLE`；
+    //        演员的「N 部」角标不受影响。
+    //     ② 【菜单定位】长按顶栏 Emby 图标的「媒体库显示」菜单原来被**钳在屏幕最右侧**
+    //        （M3 DropdownMenu 在 LTR 下把菜单左边缘对齐锚点左边缘、向右展开，此处右边放不下
+    //        ⇒ 被钳到 `窗口宽 − 菜单宽`），与手指长按的图标脱开。改：固定菜单宽 240dp +
+    //        负的水平 offset（48 − 240dp），把菜单**右边缘**对到图标右边缘、向左展开。
+    //     ③ 【按压幅度】`pressDownScale()` 默认 0.96 → **0.94**（用户反馈「有点轻」）。
+    //     ④ 【详情页标签】`EmbyItem` 新增 `TagItems`（+ `EmbyNameIdPair` 类型）：部分服务端
+    //        （用户环境）只写 `TagItems` 而 `Tags` 为空/不返回 ⇒ 原来只读 `Tags` 一条都显示不出来。
+    //        详情页改「优先 TagItems、为空退回 Tags」。`TagItems` **不**加进请求 Fields
+    //        （不在官方 ItemFields 白名单里，怕 400；单条目查询默认就带）。
+    //     ⑤ 【详情页外部链接 + 宣传语/导演】新增两行：
+    //        「外部链接」= ProviderIds 每项按 `服务器地址 + ?redirect=<值>` 拼 URL，
+    //        点 chip 交系统浏览器（如 MetaTube）；「宣传语」= Taglines 原文一行，
+    //        其下紧跟一行「导演：<名字>」（People 里 Type=Director）。getItem 的 Fields
+    //        补上 `Taglines` / `ProviderIds`（两个都是合法值）。
+    versionCode = 72
     versionName = "1.5.5"
 
     vectorDrawables {

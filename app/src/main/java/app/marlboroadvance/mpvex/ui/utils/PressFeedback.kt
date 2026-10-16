@@ -14,8 +14,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.launch
 
-/** 按下时缩到的比例 —— 0.96 是「看得出来、又不晃眼」的量级 */
-private const val DEFAULT_PRESSED_SCALE = 0.96f
+/**
+ * 按下时缩到的比例。
+ *
+ * 0.96 在真机上被反馈「有点轻」（几乎看不出来），所以调到 **0.94**：
+ * 缩幅从 4% 提到 6%，是「一眼能看出按下了」但又不至于像按钮在做动画的量级。
+ * 想更明显就继续往下调（0.92 已经很重了，别到 0.9 以下 —— 卡片边缘会明显脱离栅格）。
+ */
+private const val DEFAULT_PRESSED_SCALE = 0.94f
 
 /** 按下与回弹共用的弹簧：MediumLow 刚度 + 轻微回弹，约 150ms 走完 */
 private val PRESS_SPRING = spring<Float>(
@@ -41,7 +47,7 @@ private val PRESS_SPRING = spring<Float>(
  *  3. ⭐ **只做缩放，不改尺寸**：`graphicsLayer` 只影响绘制，卡片占位不变 ⇒ 按下时
  *     周围卡片不会跟着挪位（用 padding / size 做缩放就会抖）。
  *
- * @param pressedScale 按下时缩到的比例；默认 0.96（轻微）
+ * @param pressedScale 按下时缩到的比例；默认 0.94
  * @param enabled false 时完全不挂手势（例如不可点的静态卡）
  */
 @OptIn(ExperimentalFoundationApi::class)

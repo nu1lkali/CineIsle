@@ -397,6 +397,31 @@ data class EmbyItem(
   val PrimaryImageTag: String? = null,
   /** 主图**实际所在条目**的 Id（`BaseItemDto.PrimaryImageItemId`）。 */
   val PrimaryImageItemId: String? = null,
+  /**
+   * 带 Id 的标签列表（`BaseItemDto.TagItems`）。
+   *
+   * ⚠️ **和 [Tags] 是同一份数据的两种形态，但不是任何部署都给全**：
+   * `Tags` 是纯名字数组，`TagItems` 每项带 `Name` + `Id`。有些服务端 / 元数据插件
+   * 只写 `TagItems` 而把 `Tags` 留空（实测用户环境就是这样：响应里有 `TagItems` 三条，
+   * 却**完全没有 `Tags` 字段**），所以详情页读标签时必须
+   * 「优先 [TagItems]，为空再退回 [Tags]」—— 只看 `Tags` 会一条都显示不出来。
+   *
+   * 与 [Genres] / `GenreItems` 是同一套关系。加在末尾并给默认值，不影响既有按位置构造。
+   */
+  val TagItems: List<EmbyNameIdPair> = emptyList(),
+)
+
+/**
+ * Emby 的「名字 + Id」成对条目。
+ *
+ * `TagItems` / `GenreItems` 这类「带 Id 的元数据清单」都是这个形状（官方 schema 里
+ * 每项至少 `Name` + `Id`）。与 [EmbyStudio] 字段完全一样，但**语义不同**，
+ * 所以单独一个类型而不是复用 `EmbyStudio` —— 否则读代码的人会以为标签是「工作室」。
+ */
+@Serializable
+data class EmbyNameIdPair(
+  val Id: String? = null,
+  val Name: String? = null,
 )
 
 /**

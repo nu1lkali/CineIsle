@@ -98,6 +98,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -1127,18 +1128,32 @@ private fun DetailBody(
         )
       }
 
-      // ── 类型 / 标签 / 工作室 ──
-      // 三组都是「点一下进按该维度找片的结果页」的 chip，共用 [MetaChipRow] 排版：
-      // 左边一个分组名，右边横向滚动的一排 chip（分组名固定宽度 ⇒ 三组的 chip 起始边对齐）。
+      // ── 类型 / 标签 / 工作室 / 外部链接 ──
+      // 四组都是「点一下进按该维度找片的结果页」的 chip，共用 [MetaChipRow] 排版：
+      // 左边一个分组名，右边横向滚动的一排 chip（分组名固定宽度 ⇒ 各组的 chip 起始边对齐）。
       //
       // 类型 / 标签按**名字**过滤（Emby 的 Genres / Tags 参数，实测可用）；
       // 工作室优先按 **Id** 过滤（`StudioIds`）—— 条目自带的 Studios 就是 NameGuidPair，
       // 拿得到 Id 就按 Id 走；万一只回了名字，结果页会自动退回按名字的 `Studios` 参数。
       val genreList = item.Genres.filter { it.isNotBlank() }
-      val tagList = item.Tags.filter { it.isNotBlank() }
+      // ⚠️ 标签**优先 TagItems、为空才退回 Tags**：`Tags` 是纯名字数组、`TagItems` 每项带 Id，
+      //    但有些服务端（用户环境就是）只写 `TagItems` 而把 `Tags` 留空甚至整个字段不返回
+      //    ⇒ 只看 `Tags` 会一条标签都显示不出来。两份是同一份数据的两种形态，取到即可。
+      val tagList = item.TagItems.mapNotNull { it.Name?.takeIf { n -> n.isNotBlank() } }
+        .ifEmpty { item.Tags.filter { it.isNotBlank() } }
       val studioList = item.Studios.orEmpty().filter { !it.Name.isNullOrBlank() }
-      if (genreList.isNotEmpty() || tagList.isNotEmpty() || studioList.isNotEmpty()) {
+      // 外部链接：ProviderIds 的每一项都对应一个「服务器地址 + ?redirect=<值>」的跳转页
+      // （用户环境里的 MetaTube 就是 `http://<host>:<port>?redirect=JavBus:ACZD-218` 这种形式）。
+      // 值本身就是跳转参数，所以 URL 按这条规则现拼，不依赖服务端是否回 ExternalUrls。
+      val providerLinks = item.ProviderIds.filterValues { it.isNotBlank() }
+      if (
+        genreList.isNotEmpty() || tagList.isNotEmpty() ||
+        studioList.isNotEmpty() || providerLinks.isNotEmpty()
+      ) {
         item {
+          // Composable 才能取到 UriHandler；LazyListScope 的 content lambda 不是 composable，
+          // 所以必须写在 item{} 里面。
+          val uriHandler = LocalUriHandler.current
           Column(modifier = Modifier.padding(vertical = 4.dp)) {
             MetaChipRow(
               label = "类型",
@@ -1159,6 +1174,54 @@ private fun DetailBody(
                 onMetaClick(name, "studio", id)
               },
             )
+            // chip 上显示的是 provider 名（如 MetaTube），点一下交给系统浏览器打开跳转页
+            MetaChipRow(
+              label = "外部链接",
+              chips = providerLinks.keys.toList(),
+              onClick = { key ->
+                val value = providerLinks[key]
+                val base = server?.baseUrl
+                if (!value.isNullOrBlank() && !base.isNullOrBlank()) {
+                  uriHandler.openUri("$base?redirect=$value")
+                }
+              },
+            )
+          }
+        }
+      }
+
+      // ── 宣传语 / 导演 ──
+      // 宣传语（Taglines）在用户环境里是一条短句（如「配信開始日 2025-04-11」），单独一行；
+      // 紧跟其下一行显示导演 —— **用户指定的格式就是「导演：名字」**，名字取 People 里
+      // `Type=Director` 的条目（与 Emby Web 的「导演」同源）。
+      // 两者都不是筛选维度，所以是**纯文本**而不是 chip —— 做了 chip 却没反应就是「死项」。
+      val taglines = item.Taglines.filter { it.isNotBlank() }
+      val directors = item.People.orEmpty()
+        .filter { it.Type.equals("Director", ignoreCase = true) }
+        .mapNotNull { it.Name?.takeIf { name -> name.isNotBlank() } }
+      if (taglines.isNotEmpty() || directors.isNotEmpty()) {
+        item {
+          Column(
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+          ) {
+            taglines.forEach { line ->
+              Text(
+                text = line,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.longPressToCopy(line, "宣传语"),
+              )
+            }
+            if (directors.isNotEmpty()) {
+              val names = directors.joinToString("、")
+              Text(
+                text = "导演：$names",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.longPressToCopy(names, "导演"),
+              )
+            }
           }
         }
       }
@@ -1924,8 +1987,8 @@ private suspend fun loadVersionResumeSeconds(
 /**
  * 详情页的一行「分组元数据」：左边分组名，右边一排可点的 chip，超出屏宽横向滚动。
  *
- * ⚠️ 分组名用**固定宽度**（[META_LABEL_WIDTH]）而不是自适应：三行名字字数不同
- * （类型 / 标签 / 工作室），不固定的话每行 chip 的起始边都不一样，整块看着就是歪的。
+ * ⚠️ 分组名用**固定宽度**（[META_LABEL_WIDTH]）而不是自适应：各行名字字数不同
+ * （类型 / 标签 / 工作室 / 外部链接），不固定的话每行 chip 的起始边都不一样，整块看着就是歪的。
  *
  * [chips] 为空时整行不渲染 —— 免得出现「只有分组名、右边空着」的噪音行。
  */
@@ -1964,8 +2027,13 @@ private fun MetaChipRow(
   }
 }
 
-/** 分组名的固定宽度：容得下最长的一个（「工作室」三个字，titleSmall 下约 42dp）。 */
-private val META_LABEL_WIDTH = 64.dp
+/**
+ * 分组名的固定宽度：容得下最长的一个。
+ *
+ * 最长的是「外部链接」四个字 —— `titleSmall`（14sp）下约 56dp，取 76dp 留出余量，
+ * 这样用户把系统字号调大一两档时这个标签也不会被挤断（此前的 64dp 只够三个字）。
+ */
+private val META_LABEL_WIDTH = 76.dp
 
 /**
  * 多版本媒体的版本下拉框：当前版本胶囊 + 下拉菜单。
