@@ -190,6 +190,20 @@ data class EmbyLibraryScreen(
   /** 非空时本页 = 该人员的作品列表（预置 PersonIds 筛选），点击演员进作品用 */
   val personId: String? = null,
   val personName: String? = null,
+  /**
+   * 本页是「点进一个真实文件夹（Type=Folder）」下钻出来的页面。
+   *
+   * 为什么要单独标出来：库类型（CollectionType）只描述**库**的分类视角，
+   * 不能拿来约束**文件夹内部**装了什么。一个「电影」库里，没被 Emby 识别成
+   * Movie 的子目录会退化成普通 Folder，里面可能是 `Type=Video` 的视频、
+   * 也可能是更深一层的目录 —— 若在这种页面上继续套 `IncludeItemTypes=Movie`
+   * + `MediaTypes=Video` + `IsFolder=false`，服务端会把这一层的内容**整层滤空**
+   * （症状：点进文件夹只剩几个子目录、视频全不见，而 Emby Web / Yamby 都显示得出来）。
+   *
+   * true 时本页改用「内容原样」口径：不限条目类型 / 不限媒体形态 / 不限是不是容器，
+   * 这一层真实装了什么就铺什么（唯一例外见 [contentAsIsExclude]）。
+   */
+  val isFolderDive: Boolean = false,
 ) : Screen {
   // ⚠️ ExperimentalFoundationApi 是为了 `LazyGridScope.stickyHeader`（年份吸顶，清单 4.1）。
   // 它在 foundation 1.7 里从 Experimental 升为 Stable 了，但为兼容旧版本仍保留注解写法。
@@ -285,7 +299,12 @@ data class EmbyLibraryScreen(
       collectionType?.lowercase() in setOf(null, "mixed", "homevideos")
     // 「内容原样」只作用于「全部」分类 —— 其余分类（合集 / 收藏 / 文件夹 / 演员）
     // 各有自己的限定口径，不该被它改写。
-    val contentAsIs = photoCapable && category == EmbyCategory.ALL
+    //
+    // 第二种进入「内容原样」的路径：本页是**点进真实文件夹**下钻来的（[isFolderDive]）。
+    // 库类型管的是「库怎么分类」，管不了「这个文件夹里装了什么」——「电影」库里一个
+    // 没被识别成 Movie 的子目录，里面可能全是 `Type=Video` 的视频；继续套库类型的
+    // 白名单会把这层滤空。Emby Web 与 Yamby 在文件夹里都是「装什么铺什么」。
+    val contentAsIs = (photoCapable || isFolderDive) && category == EmbyCategory.ALL
     // 「演员」分类 = 展示本库演员（头像网格 + 作品数角标）。
     // 进到某位演员的作品子页时 personId 非空，那时列表是媒体，不算演员模式
     val isActorListMode = category == EmbyCategory.ACTOR && personId == null
@@ -532,7 +551,14 @@ data class EmbyLibraryScreen(
     // 「内容原样」档的排除清单：**容器一个都不排**（文件夹与相册都要当卡片显示、
     // 点得进去），只排掉确实不是内容的那些（季 / 曲目 / 有声书 / 电子书）。
     // 这几类在服务端没传 MediaTypes 时会跟着漏回来，本地过滤还有一道兜底。
-    val contentAsIsExclude = listOf("Season", "MusicAlbum", "MusicTrack", "AudioBook", "Book")
+    //
+    // 文件夹下钻时**不能排 Season**：Season 也是「文件夹里真实存在的子目录」，
+    // 排掉它就成了「点进剧集目录看不到季」——与「装什么铺什么」相悖。
+    val contentAsIsExclude = if (isFolderDive) {
+      listOf("MusicAlbum", "MusicTrack", "AudioBook", "Book")
+    } else {
+      listOf("Season", "MusicAlbum", "MusicTrack", "AudioBook", "Book")
+    }
     val effectiveExclude: List<String>? = when {
       includeItemTypes != null -> null
       category == EmbyCategory.FOLDER -> null
@@ -1120,8 +1146,12 @@ data class EmbyLibraryScreen(
           if (contentAsIs) {
             // ⚠️ [EmbyItem] 没有 IsFolder 字段（服务端 BaseItemDto 有，本地模型没映射），
             //    容器判定只能靠类型名。isFolderLike 已含 Folder/CollectionFolder/UserView/BoxSet。
+            //    文件夹下钻时把 Series / Season 也算容器 —— 它们在「文件夹里」就是子目录，
+            //    排掉会让下钻进来的一层凭空少几张可点的卡片。
             val isContainer = isFolderLike(item) ||
-              type.equals("PhotoAlbum", ignoreCase = true)
+              type.equals("PhotoAlbum", ignoreCase = true) ||
+              (isFolderDive && (type.equals("Series", ignoreCase = true) ||
+                type.equals("Season", ignoreCase = true)))
             val isPhoto = type.equals("Photo", ignoreCase = true) ||
               mediaType?.equals("Photo", ignoreCase = true) == true
             val isVideoLike = mediaType?.equals("Video", ignoreCase = true) == true ||
@@ -3289,7 +3319,20 @@ private fun openItem(
         ),
       )
 
-      "CollectionFolder", "Folder", "UserView", "BoxSet" -> backStack.add(
+      // 真实文件夹（Type=Folder）：**必须**用「内容原样」口径打开。
+      // 库类型（movie/tvshows）是对「库」的分类，不是对「文件夹里装了什么」的约束；
+      // 继续套库类型白名单 + IsFolder=false 会把这一层整层滤空 ——
+      // 症状就是「点进文件夹只剩子目录、里面的视频全不见」。见 [isFolderDive] 的说明。
+      "Folder" -> backStack.add(
+        EmbyLibraryScreen(
+          libraryId = id,
+          title = item.Name ?: "",
+          collectionType = item.CollectionType ?: collectionType,
+          isFolderDive = true,
+        ),
+      )
+
+      "CollectionFolder", "UserView", "BoxSet" -> backStack.add(
         EmbyLibraryScreen(
           libraryId = id,
           title = item.Name ?: "",

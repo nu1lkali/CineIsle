@@ -728,10 +728,21 @@ private fun NetworkBrowserContent(
   val photos = remember(files) { files.filter { it.isPhoto() } }
   val videos = remember(files) { files.filter { it.isVideoFile() } }
   val others = remember(files) { files.filter { it.type() == NetworkFileType.OTHER } }
-  // 网格内容：文件夹在前（它们是导航），照片 + 视频混合按名称排 ——
-  // 混合目录同屏混排正是这次改造的核心，不能再按类型分屏
+  // 网格内容：与列表视图**同一口径** —— 直接沿用 files 的顺序，不再自己排一遍。
+  //
+  // ⚠️ 这里原来写的是 `folders + (photos + videos).sortedBy { it.name.lowercase() }`，
+  // 那是个隐蔽的 bug：`files` 从 ViewModel 出来时**已经**按用户选的排序键排过
+  // （`networkFileComparator` = 文件夹恒在前 + 排序键 + 名称兜底），网格再按名称
+  // 排一次 = 把用户的排序选择丢掉。表现就是「列表视图里排序生效、网格视图里没反应」。
+  //
+  // 而纯目录的那一层（如 TOKYO 下全是 e0xx 子目录）整个走 `folders +`、没被重排，
+  // 看起来「排序是好的」，于是很容易误判成「只有某些文件夹排序失效」——实际是
+  // 「只有媒体被重排」，跟在哪一层无关。
+  //
+  // 仍然排除 OTHER（字幕 / nfo 等）：网格只铺能渲染成卡片的条目（与空态文案一致）。
+  // 照片与视频保持**混排**（不再按类型分屏），顺序仍由上面的排序键决定。
   val gridItems = remember(files) {
-    folders + (photos + videos).sortedBy { it.name.lowercase() }
+    files.filter { it.isDirectory || it.isPhoto() || it.isVideoFile() }
   }
 
   // 空态文案：把「目录真的空」「搜索没命中」「筛选把内容滤光了」三种情况说清楚，
@@ -851,7 +862,10 @@ private fun NetworkBrowserContent(
 }
 
 /**
- * 网格视图：统一卡型混排（文件夹在前，照片 + 视频按名称混合）。
+ * 网格视图：统一卡型混排（文件夹在前，照片 + 视频沿用当前排序混排）。
+ *
+ * 排序沿用 [NetworkBrowserScreen] 传来的 `gridItems` 顺序 —— 也就是用户在顶栏
+ * 选的排序键，这里**不再二次排序**（见该处注释）。
  *
  * 固定 3 列：混合内容没有「海报比例」可依赖，1:1 卡 + 3 列是手机宽度下
  * 缩略图尺寸与信息密度的平衡点（与 Emby 照片网格默认列数一致）。

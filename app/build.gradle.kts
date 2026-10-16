@@ -122,7 +122,24 @@ android {
     //     长按菜单改回 Emby 媒体库范式：锚定手指位置的 DropdownMenu 气泡菜单
     //     （原来做成了居中大 AlertDialog —— 自由发挥错了，Alist 库与 Emby 媒体库
     //     除接口外结构一致，交互观感该是同一套）；重命名 / 删除确认仍走小对话框。
-    versionCode = 65
+    // 66：【严重】Emby 媒体库里「点进文件夹只有子目录、里面的视频全不见」。
+    //     根因：库类型（CollectionType）被当成「文件夹里装了什么」的约束 ——
+    //     点进一个真实文件夹后，子页仍套 `IncludeItemTypes=Movie/Series`
+    //     + `MediaTypes=Video` + `IsFolder=false`，于是这一层里没被 Emby 识别成
+    //     Movie/Series 的内容（`Type=Video` 的视频、普通目录）被服务端**整层滤空**。
+    //     对照 Yamby（com.hush.yamby_2.1.0.11 反汇编实证）：它浏览时永远
+    //     `Recursive=true`、不传 `IsFolder`/`MediaTypes`，且点进 Folder 走
+    //     `RouteFolder` **原样继承父页过滤档、从不按库类型重新收窄**。
+    //     修复：新增 `isFolderDive` —— 从 `Type=Folder` 下钻的页面改用「内容原样」
+    //     口径（不限类型 / 不限媒体形态 / 不限容器），并把 Series / Season 也算容器；
+    //     该口径下不再排掉 Season（Season 也是文件夹里真实存在的子目录）。
+    //     库根（CollectionFolder / UserView）与剧集层级（Series→Season→Episode）口径不变。
+    // 66b：网络浏览「网格视图里排序没反应」。根因：NetworkBrowserScreen 的 gridItems
+    //     写死了 `(photos + videos).sortedBy { name }`，把用户选的排序键又覆盖回名称序；
+    //     列表视图走 files 分节（尊重排序）所以正常，纯目录的那一层整层都是文件夹、
+    //     没被重排，看起来也正常 —— 于是症状表现为「只有照片/视频目录里排序失效」。
+    //     修复：gridItems 直接沿用 files 的顺序，只滤掉 OTHER（字幕 / nfo 等）。
+    versionCode = 66
     versionName = "1.5.4"
 
     vectorDrawables {
