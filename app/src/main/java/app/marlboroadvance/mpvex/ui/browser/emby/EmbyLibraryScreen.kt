@@ -119,7 +119,6 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
-import app.marlboroadvance.mpvex.domain.emby.hasBorrowedPrimaryImage
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -1797,10 +1796,9 @@ data class EmbyLibraryScreen(
       // —— 见 `EmbyLibraryMediaCell` 里的 `folderCoverBatchReady` 守卫。
       val mosaicFolderIds = remember(displayItems, folderRandomCover) {
         displayItems.asSequence()
-          // 有「借用预览图」（相册）的不进批量 —— 它不需要拼宫格（见 needsMosaic）
-          .filter {
-            isFolderLike(it) && it.ImageTags["Primary"] == null && !it.hasBorrowedPrimaryImage()
-          }
+          // ⚠️ 与卡片（EmbyLibraryMediaCell）共用同一个判定函数：两处各写一份内联判定，
+          //    一旦漂移就会出现「进了批量预取但卡片不认」的半套行为。
+          .filter { needsFolderMosaic(it) }
           .mapNotNull { it.Id }
           .distinct()
           .toList()
@@ -2723,10 +2721,10 @@ private fun EmbyLibraryMediaCell(
   }
   val itemId = item.Id
   // 文件夹 / 合集这类容器条目自身没有封面图，改用内部视频的缩略图拼宫格。
-  // ⚠️ 但相册这类条目服务端**已经给了一张现成的预览图**（归属写在 PrimaryImageItemId 上，
-  //    Web 端显示的就是它）—— 这种情况不拼宫格，直接用那张图，省掉成倍的请求。
-  val needsMosaic = isFolderLike(item) && item.ImageTags["Primary"] == null &&
-    !item.hasBorrowedPrimaryImage()
+  // ⚠️ 判定与「批量预取」共用 needsFolderMosaic()，**不要**在这里加
+  //    「服务端给了借来的预览图就不拼」之类的豁免 —— 那个豁免会让被借图的
+  //    视频文件夹只剩一宫格（真机现象），详见该函数的 KDoc。
+  val needsMosaic = needsFolderMosaic(item)
   val folderCover: List<String>? = if (needsMosaic && itemId != null) {
     // 缓存键带上「随机 / 固定」：来回切开关时两种结果各存一份，不会互相串图。
     val coverKey = folderCoverKey(itemId, folderRandomCover)
@@ -3831,6 +3829,33 @@ private val FOLDER_TYPES = listOf("Folder", "CollectionFolder", "UserView")
  */
 private fun isFolderLike(item: EmbyItem): Boolean =
   item.Type in FOLDER_TYPES || item.Type == "BoxSet"
+
+/**
+ * 这个容器条目要不要拼宫格封面。
+ *
+ * 判定只有两条：是容器、且自己没有主图。
+ *
+ * ⚠️⚠️ **这里绝对不能加「有借来的预览图就不拼」这种豁免** —— 曾经有过一条
+ * `!item.hasBorrowedPrimaryImage()`，在真机上造成的现象是「同是视频文件夹，有的四宫格、
+ * 有的一整张缩略图」（用户反馈）。原因是：
+ *
+ * 1. 服务端会**给视频文件夹也「借」一张图**（`PrimaryImageItemId` 指向它内部第一条媒体，
+ *    见 `EmbyPrimaryImage` 的线上实证）。文件夹自己 `ImageTags` 里没有 `Primary`，
+ *    于是「借来的图」这条路一走，宫格就被整条跳过，直接显示那**一张**图 ——
+ *    而那张图就是它内部第一个视频的一帧，摆在宫格的位置上就是「只有一宫格」。
+ * 2. 「服务端被借图」这件事对哪些文件夹成立、对哪些不成立，用户完全不可预期
+ *    ⇒ 同一屏里就出现了四宫格 / 一宫格并存的割裂观感。
+ * 3. 更关键的是：那条豁免**本来是想省掉相册的子项查询**（用户服务器上有 84 个相册），
+ *    可相册（`PhotoAlbum`）压根不在 [FOLDER_TYPES] 里、也走不到这个函数 ——
+ *    这条豁免从头到尾**没有一次是按设计意图生效的**，只是在误伤视频文件夹。
+ *    相册要走照片网格页（见 `openItem` 的 PhotoAlbum 分支），预览图由那边显示。
+ *
+ * 两处调用（批量预取 `mosaicFolderIds` 与卡片 `EmbyLibraryMediaCell`）必须共用这一个
+ * 函数：两处各写一份内联判定，一旦其中一处改了、另一处没改，就会出现
+ * 「进了批量预取但卡片不认」或反过来的半套行为，比不做还难查。
+ */
+private fun needsFolderMosaic(item: EmbyItem): Boolean =
+  isFolderLike(item) && item.ImageTags["Primary"] == null
 
 /**
  * 能「扫描」的条目：媒体库（UserView / CollectionFolder）和真实文件夹。

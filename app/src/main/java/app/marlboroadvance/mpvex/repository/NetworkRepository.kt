@@ -114,6 +114,17 @@ class NetworkRepository(
   }
 
   /**
+   * 置顶 / 取消置顶一个连接。
+   *
+   * 刻意**不走** [updateConnection]：那条路会重新加密密码并**断开正在用的连接**，
+   * 而置顶只是改列表展示顺序，不该把用户正在浏览的会话踢掉。
+   * 顺序由 DAO 的 `ORDER BY pinned DESC, id ASC` 保证，这里不动内存集合。
+   */
+  suspend fun setPinned(id: Long, pinned: Boolean) {
+    dao.updatePinned(id, pinned)
+  }
+
+  /**
    * Delete a connection
    */
   suspend fun deleteConnection(connection: NetworkConnection) {

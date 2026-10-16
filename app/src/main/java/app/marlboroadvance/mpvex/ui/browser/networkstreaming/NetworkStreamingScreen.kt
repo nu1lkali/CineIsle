@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SignalWifiConnectedNoInternet4
@@ -52,6 +52,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -59,9 +60,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
+import app.marlboroadvance.mpvex.domain.network.NetworkFavorite
+import app.marlboroadvance.mpvex.domain.network.NetworkProtocol
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
 import app.marlboroadvance.mpvex.ui.browser.cards.NetworkConnectionCard
+import app.marlboroadvance.mpvex.ui.browser.cards.protocolAccent
+import app.marlboroadvance.mpvex.ui.browser.cards.protocolBadge
 import app.marlboroadvance.mpvex.ui.browser.dialogs.AddConnectionSheet
 import app.marlboroadvance.mpvex.ui.browser.dialogs.EditConnectionSheet
 import app.marlboroadvance.mpvex.ui.browser.states.EmptyState
@@ -222,13 +227,7 @@ object NetworkStreamingScreen : Screen {
           // Section 2: Local Network header
           item {
             Spacer(modifier = Modifier.height(24.dp))
-            Text(
-              text = stringResource(R.string.i18n_local_network),
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.padding(vertical = 8.dp),
-            )
+            SectionHeader(stringResource(R.string.i18n_local_network))
           }
 
           // Show empty state or connection list
@@ -295,10 +294,13 @@ object NetworkStreamingScreen : Screen {
                 onAutoConnectChange = { conn, autoConnect ->
                   viewModel.updateConnection(conn.copy(autoConnect = autoConnect))
                 },
+                onTogglePin = { conn ->
+                  viewModel.setPinned(conn.id, !conn.pinned)
+                },
                 isConnected = status?.isConnected ?: false,
                 isConnecting = status?.isConnecting ?: false,
                 error = status?.error,
-                modifier = Modifier.padding(bottom = 16.dp),
+                modifier = Modifier.padding(bottom = 10.dp),
               )
             }
           }
@@ -331,96 +333,156 @@ object NetworkStreamingScreen : Screen {
 }
 
 /**
+ * 段落标题（网络模块统一版式）。
+ *
+ * 三个段落（直链 / 收藏的目录 / 局域网）共用同一个组件 —— 之前三处各写一份
+ * `Text(style=titleLarge, Bold, primary)`，样式一致性全靠人肉同步，迟早跑偏。
+ */
+@Composable
+private fun SectionHeader(text: String) {
+  Text(
+    text = text,
+    style = MaterialTheme.typography.titleLarge,
+    fontWeight = FontWeight.Bold,
+    color = MaterialTheme.colorScheme.primary,
+    modifier = Modifier.padding(vertical = 8.dp),
+  )
+}
+
+/**
  * 「收藏的目录」快捷入口段：横排卡片，点一下直达该目录
  * （与在连接列表里一层层点进去等价，但省得每次找连接）。
  *
- * - 卡片信息：目录名（大）+ 连接名（小）—— 同名目录在不同连接是两个入口，
+ * ## v69 版式（与 [NetworkConnectionCard] 同一套设计语言）
+ *
+ * - **协议徽标代替通用文件夹图标**：徽标直接用所属连接的协议代号与强调色，
+ *   和下面的连接卡视觉上串成一套 —— 同时一眼能看出这个目录是 SMB 还是 AList 上的；
+ * - **信息两条**：目录名（主）+ 连接名（次）。同名目录在不同连接是两个入口，
  *   必须显示连接名才分得清；
- * - 右上角删除钮：取消收藏即从列表消失（Room Flow 驱动，无需手动刷新）；
- * - 连接已删除的收藏：卡片置灰显示，点击给 Toast 说明（见调用处），
- *   不静默无响应。
+ * - **删除钮收进右上角、视觉降级**：它是低频且带破坏性的操作，不该和
+ *   「点开目录」这个高频动作抢注意力，所以只留一个淡淡的 ✕；
+ * - **连接已删除的收藏**：整卡去色 + 副标题写「连接已删除」，点击由调用方给 Toast
+ *   说明（不静默无响应）。
  */
 @Composable
 private fun FavoriteDirsSection(
-  favorites: List<app.marlboroadvance.mpvex.domain.network.NetworkFavorite>,
+  favorites: List<NetworkFavorite>,
   connections: List<NetworkConnection>,
-  onOpen: (app.marlboroadvance.mpvex.domain.network.NetworkFavorite) -> Unit,
-  onDelete: (app.marlboroadvance.mpvex.domain.network.NetworkFavorite) -> Unit,
+  onOpen: (NetworkFavorite) -> Unit,
+  onDelete: (NetworkFavorite) -> Unit,
 ) {
   Column(
     modifier = Modifier.fillMaxWidth(),
   ) {
-    Text(
-      text = "收藏的目录",
-      style = MaterialTheme.typography.titleLarge,
-      fontWeight = FontWeight.Bold,
-      color = MaterialTheme.colorScheme.primary,
-      modifier = Modifier.padding(vertical = 8.dp),
-    )
+    SectionHeader(stringResource(R.string.i18n_favorite_dirs))
     LazyRow(
-      horizontalArrangement = Arrangement.spacedBy(12.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       items(favorites, key = { it.id }) { favorite ->
-        val alive = connections.any { it.id == favorite.connectionId }
-        Card(
-          onClick = { onOpen(favorite) },
-          modifier = Modifier.size(width = 148.dp, height = 96.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-          ),
+        val conn = connections.firstOrNull { it.id == favorite.connectionId }
+        FavoriteDirCard(
+          name = favorite.name,
+          connectionName = conn?.name ?: favorite.connectionName,
+          protocol = conn?.protocol,
+          alive = conn != null,
+          onOpen = { onOpen(favorite) },
+          onDelete = { onDelete(favorite) },
+        )
+      }
+    }
+  }
+}
+
+/**
+ * 单个收藏目录卡。高度固定 96dp —— 与旧版一致，是「徽标行 + 两行文字」在
+ * 12sp/20sp/16sp 三档字号下的足够空间（详见 KDoc 上的版式说明）。
+ */
+@Composable
+private fun FavoriteDirCard(
+  name: String,
+  connectionName: String,
+  protocol: NetworkProtocol?,
+  alive: Boolean,
+  onOpen: () -> Unit,
+  onDelete: () -> Unit,
+) {
+  val accent = if (protocol != null) {
+    protocolAccent(protocol)
+  } else {
+    MaterialTheme.colorScheme.onSurfaceVariant
+  }
+
+  Card(
+    onClick = onOpen,
+    modifier = Modifier.size(width = 156.dp, height = 96.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    ),
+  ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+      Column(
+        modifier = Modifier
+          .fillMaxSize()
+          .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        // 协议徽标（小一号，24dp —— 快捷入口是次要信息层，不抢主列表的视觉重量）
+        Box(
+          modifier = Modifier
+            .size(24.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+              accent.copy(alpha = if (alive) 0.16f else 0.08f),
+            ),
+          contentAlignment = Alignment.Center,
         ) {
-          Box(modifier = Modifier.fillMaxSize()) {
-            Column(
-              modifier = Modifier
-                .fillMaxSize()
-                .padding(start = 12.dp, end = 12.dp, top = 12.dp),
-              verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-              Icon(
-                imageVector = Icons.Filled.Folder,
-                contentDescription = null,
-                modifier = Modifier.size(28.dp),
-                tint = if (alive) {
-                  MaterialTheme.colorScheme.secondary
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                },
-              )
-              Text(
-                text = favorite.name,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-              )
-              Text(
-                text = if (alive) {
-                  favorite.connectionName
-                } else {
-                  "连接已删除"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-              )
-            }
-            // 删除钮：取消收藏。放在卡片右上角，与「点击进入」分开
-            IconButton(
-              onClick = { onDelete(favorite) },
-              modifier = Modifier
-                .align(Alignment.TopEnd)
-                .size(36.dp),
-            ) {
-              Icon(
-                imageVector = Icons.Filled.Close,
-                contentDescription = "移除收藏",
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
+          Text(
+            text = if (protocol != null) protocolBadge(protocol) else "?",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = if (alive) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+          )
         }
+
+        Text(
+          text = name,
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.SemiBold,
+          color = if (alive) {
+            MaterialTheme.colorScheme.onSurface
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          },
+          maxLines = 1,
+          overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
+
+        Text(
+          text = if (alive) {
+            connectionName
+          } else {
+            stringResource(R.string.i18n_connection_deleted)
+          },
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+          overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
+      }
+
+      // 移除收藏：低频 + 破坏性 ⇒ 只留一个淡 ✕，不与「点开目录」抢注意力
+      IconButton(
+        onClick = onDelete,
+        modifier = Modifier
+          .align(Alignment.TopEnd)
+          .size(32.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Filled.Close,
+          contentDescription = stringResource(R.string.i18n_remove_favorite),
+          modifier = Modifier.size(15.dp),
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
       }
     }
   }
@@ -436,13 +498,7 @@ private fun StreamLinkSection(
   Column(
     modifier = Modifier.fillMaxWidth(),
   ) {
-    Text(
-      text = stringResource(R.string.i18n_stream_link),
-      style = MaterialTheme.typography.titleLarge,
-      fontWeight = FontWeight.Bold,
-      color = MaterialTheme.colorScheme.primary,
-      modifier = Modifier.padding(vertical = 8.dp),
-    )
+    SectionHeader(stringResource(R.string.i18n_stream_link))
     Card(
       modifier = Modifier.fillMaxWidth(),
       colors = CardDefaults.cardColors(

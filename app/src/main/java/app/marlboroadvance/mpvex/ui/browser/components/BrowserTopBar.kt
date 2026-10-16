@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RemoveCircle
@@ -56,6 +55,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -97,8 +97,11 @@ fun BrowserTopBar(
   onAddToPlaylistClick: (() -> Unit)? = null,
   /** 点标题的回调；非空时**接管**标题点击（不再切换深/浅色），并显示一个下拉小箭头提示可点。 */
   onTitleClick: (() -> Unit)? = null,
-  /** 「回到首页」图标的回调；null = 不显示该图标（如已在模块首页那一层）。 */
-  onHomeClick: (() -> Unit)? = null,
+  /**
+   * 标题是否用「小两档」字号（20sp）。默认走 `headlineSmall` = 24sp。
+   * 给「标题常年是长文件夹名、右侧图标又多」的页面用（网络浏览）。
+   */
+  compactTitle: Boolean = false,
 ) {
   if (isInSelectionMode) {
     SelectionTopBar(
@@ -130,7 +133,7 @@ fun BrowserTopBar(
       modifier = modifier,
       onTitleLongPress = onTitleLongPress,
       onTitleClick = onTitleClick,
-      onHomeClick = onHomeClick,
+      compactTitle = compactTitle,
     )
   }
 }
@@ -150,7 +153,7 @@ private fun NormalTopBar(
   modifier: Modifier = Modifier,
   onTitleLongPress: (() -> Unit)?,
   onTitleClick: (() -> Unit)? = null,
-  onHomeClick: (() -> Unit)? = null,
+  compactTitle: Boolean = false,
 ) {
   val preferences = koinInject<AppearancePreferences>()
   val darkMode by preferences.darkMode.collectAsState()
@@ -233,6 +236,11 @@ private fun NormalTopBar(
           style =
             if (onBackClick == null) {
               MaterialTheme.typography.headlineMediumEmphasized
+            } else if (compactTitle) {
+              // 小两档（24sp → 20sp）：长文件夹名 + 右侧一堆图标时留出横向空间。
+              // lineHeight 同步收（headlineSmall 原本是 32sp，按字号等比降到 28sp），
+              // 否则单行标题会被 32sp 的行高撑得上下留白过多。
+              MaterialTheme.typography.headlineSmall.copy(fontSize = 20.sp, lineHeight = 28.sp)
             } else {
               MaterialTheme.typography.headlineSmall
             },
@@ -281,22 +289,6 @@ private fun NormalTopBar(
       }
     },
     actions = {
-      // ── 「回到首页」快捷出口 ──
-      // 给多层级页面（网络浏览）用：从深层文件夹一键回首页，不必连按好几次「上一级」。
-      // 调用方在「没什么可退」的层级（如连接根目录）传 null ⇒ 图标不出现。
-      if (onHomeClick != null) {
-        IconButton(
-          onClick = onHomeClick,
-          modifier = Modifier.padding(horizontal = 2.dp),
-        ) {
-          Icon(
-            Icons.Filled.Home,
-            contentDescription = stringResource(R.string.home),
-            modifier = Modifier.size(24.dp),
-            tint = MaterialTheme.colorScheme.secondary,
-          )
-        }
-      }
       additionalActions()
       if (onSearchClick != null) {
         IconButton(

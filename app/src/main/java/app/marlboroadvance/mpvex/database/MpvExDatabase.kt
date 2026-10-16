@@ -52,7 +52,7 @@ import app.marlboroadvance.mpvex.domain.network.NetworkFavorite
     // 见 DislikedMediaEntity 的 KDoc
     DislikedMediaEntity::class,
   ],
-  version = 16,
+  version = 17,
   exportSchema = true,
 )
 @TypeConverters(NetworkProtocolConverter::class)

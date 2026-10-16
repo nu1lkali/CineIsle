@@ -144,14 +144,14 @@ import kotlin.math.roundToInt
  *   多选不关窗；有筛选生效时按钮主色高亮。字幕 / nfo 等其他文件只在列表视图出现，
  *   不受这三项管。
  * - **本地搜索**（顶栏放大镜）：对当前目录已拉到的内容按名称过滤，零请求。
- * - **顶栏标题 = 当前文件夹名**（根目录退化为连接名），过长自动截断。
+ * - **顶栏标题 = 当前文件夹名**（根目录退化为连接名），过长自动截断；
+ *   标题用**小两档字号（20sp，`compactTitle`）**—— 标题常年是长文件夹名、
+ *   右侧又挂着几个图标，24sp 会把它们挤在一起。
  * - **点标题 → 「跳转到」导航弹窗**（[PathNavigatorSheet]）：列出 根目录 → 当前目录
  *   的全部层级，点任意一层直达；当前层打勾。**点标题不再切换深浅色**（该页让位给导航）。
- * - **顶栏「回到首页」图标**：进到文件夹里之后一键回首页（网络模块首页），
- *   不必连按好几次「上一级」；在连接根目录不显示。
- * - **顶栏「更多」菜单**（[BrowserTopBar.additionalActions]）：收藏当前目录
- *   （切完弹 toast）、随机播放（视频 / 图片二选一）、视图切换，全部收在竖三点里
- *   —— 顶栏常驻图标是「更多 / 搜索 / 设置」，进了文件夹再加一个「首页」。
+ * - **顶栏「更多」菜单**（[BrowserTopBar.additionalActions]）：回到首页（一键回网络模块首页）、
+ *   收藏当前目录（切完弹 toast）、随机播放（视频 / 图片二选一）、视图切换，全部收在竖三点里
+ *   —— 顶栏常驻图标只有「更多 / 搜索 / 设置」，宽度留给文件夹标题。
  * - **视频点击即播**：不起详情页，直接走 mpv 队列播放（[NetworkBrowserViewModel.playVideos]）。
  * - **照片点击进查看器**：[NetworkPhotoViewerScreen]（缩放 / 保存 / 幻灯片）。
  */
@@ -346,20 +346,19 @@ data class NetworkBrowserScreen(
           // 左上角永远显示「我的 NAS」这类连接名，看不出当前在哪一层。
           // 名字过长由 BrowserTopBar 的 maxLines=1 + Ellipsis 自动截断。
           title = dirTitle,
+          // 标题一直是长文件夹名、右侧又挂着 3~4 个图标 ⇒ 用小两档字号（20sp）留出横向空间。
+          compactTitle = true,
           // 点标题 → 打开「跳转到」导航弹窗（列出全部层级，直达任意一层）。
           // 在连接根目录没有可跳的层级，就不接管点击（回落到默认的「切换深浅色」），
           // 也不显示下拉箭头 —— 不给「点了没反应」的死入口。
           onTitleClick = if (atConnectionRoot) null else ({ showPathNavigator = true }),
-          // 「回到首页」：进到文件夹里之后一键回首页（网络模块首页），
-          // 不必连按好几次「上一级」。根目录不显示（那一层本来就只有一级可退）。
-          onHomeClick = if (atConnectionRoot) null else ({ goHome() }),
           isInSelectionMode = false,
           selectedCount = 0,
           totalCount = 0,
           onBackClick = { backstack.removeLastOrNull() },
           onCancelSelection = {},
           // 排序不走顶栏：它要常驻又能显示当前状态，放在内容区顶部（见 NetworkSortRow）。
-          // 顶栏图标：更多 / 搜索 / 设置，进了文件夹再加「首页」（见上面 onHomeClick）。
+          // 顶栏图标只有 更多 / 搜索 / 设置 三个（「回到首页」收进「更多」菜单里）。
           onSortClick = null,
           onSearchClick = { searchActive = true },
           onSettingsClick = {
@@ -394,6 +393,18 @@ data class NetworkBrowserScreen(
                 expanded = showOverflowMenu,
                 onDismissRequest = { showOverflowMenu = false },
               ) {
+                // ── 回到首页（网络模块首页）──
+                // 从深层文件夹一键回首页，不必连按好几次「上一级」。
+                // 原先是个顶栏图标（占横向位置），收进「更多」里。
+                DropdownMenuItem(
+                  text = { Text("回到首页") },
+                  leadingIcon = { Icon(Icons.Default.Home, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    goHome()
+                  },
+                )
+
                 // ── 收藏当前目录 ──
                 // 状态来自 ViewModel（loadFiles 时同源刷新），主界面「收藏的目录」
                 // section 与这里永远一致。切完弹 toast：一屏那么多条目，

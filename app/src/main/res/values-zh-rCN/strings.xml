@@ -772,6 +772,14 @@
   <string name="i18n_media_info">媒体信息</string>
   <string name="i18n_moved_private_space">已移入隐私空间</string>
   <string name="i18n_no_network_connections">暂无网络连接</string>
+  <string name="i18n_pin_top">置顶</string>
+  <string name="i18n_unpin_top">取消置顶</string>
+  <string name="i18n_browse">浏览</string>
+  <string name="i18n_connect">连接</string>
+  <string name="i18n_disconnect">断开连接</string>
+  <string name="i18n_favorite_dirs">收藏的目录</string>
+  <string name="i18n_connection_deleted">连接已删除</string>
+  <string name="i18n_remove_favorite">移除收藏</string>
   <string name="i18n_no_subfolders">没有子文件夹</string>
   <string name="i18n_no_videos_found">未找到视频</string>
   <string name="i18n_no_videos_in_playlist">播放列表中没有视频</string>

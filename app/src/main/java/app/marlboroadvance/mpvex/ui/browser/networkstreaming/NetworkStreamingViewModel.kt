@@ -71,6 +71,15 @@ class NetworkStreamingViewModel(
   }
 
   /**
+   * 置顶 / 取消置顶一个连接（只改列表顺序，不断开已有连接）
+   */
+  fun setPinned(id: Long, pinned: Boolean) {
+    viewModelScope.launch {
+      repository.setPinned(id, pinned)
+    }
+  }
+
+  /**
    * Connect to a network share
    */
   fun connect(connection: NetworkConnection) {

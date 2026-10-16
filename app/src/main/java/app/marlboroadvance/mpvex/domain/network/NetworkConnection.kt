@@ -24,6 +24,14 @@ data class NetworkConnection(
   val lastConnected: Long = 0,
   val autoConnect: Boolean = false,
   val useHttps: Boolean = false,  // For WebDAV: use HTTPS instead of HTTP
+  /**
+   * 是否置顶到连接列表最前。
+   *
+   * 只影响展示顺序（DAO 里 `ORDER BY pinned DESC, id ASC`），不改变任何连接行为。
+   * 落盘是 INTEGER 0/1；v16→v17 用 `ALTER TABLE ... ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`
+   * 补列，老连接默认不置顶，不需要重装。
+   */
+  val pinned: Boolean = false,
 )
 
 /**

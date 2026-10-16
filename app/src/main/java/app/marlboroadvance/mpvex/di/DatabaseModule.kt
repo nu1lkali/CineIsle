@@ -768,6 +768,31 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
 }
 
 
+/**
+ * v16 → v17：给 `network_connections` 补一个「置顶」位。
+ *
+ * 只是加一列、带默认值 ⇒ 老用户的连接一条不丢、也不用重新添加（默认不置顶）。
+ * ⚠️ 列定义必须与 [app.marlboroadvance.mpvex.domain.network.NetworkConnection.pinned]
+ * 完全一致（`INTEGER` + `NOT NULL` + `DEFAULT 0`），否则 Room 启动时的 schema
+ * 校验会直接抛异常。Room 把 Kotlin `Boolean` 存成 INTEGER 0/1。
+ */
+val MIGRATION_16_17 = object : Migration(16, 17) {
+  override fun migrate(db: SupportSQLiteDatabase) {
+    try {
+      android.util.Log.d("Migration_16_17", "Adding pinned column to network_connections")
+      db.execSQL(
+        "ALTER TABLE `network_connections` ADD COLUMN `pinned` INTEGER NOT NULL DEFAULT 0"
+      )
+
+      android.util.Log.d("Migration_16_17", "Migration completed successfully")
+    } catch (e: Exception) {
+      android.util.Log.e("Migration_16_17", "Migration failed", e)
+      throw e
+    }
+  }
+}
+
+
 val DatabaseModule =
   module {
     single<Json> {
@@ -782,7 +807,7 @@ val DatabaseModule =
       Room
         .databaseBuilder(context, MpvExDatabase::class.java, "mpvex.db")
         .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-        // ⚠️ 迁移链必须**逐段连续**（1→2→…→14），少一段就会退化成
+        // ⚠️ 迁移链必须**逐段连续**（1→2→…→17），少一段就会退化成
         // fallbackToDestructiveMigration = 整库删表重建（服务器配置 / 播放列表 / 播放进度全丢）。
         // 任何一次改 @Database version 都要在这里补一对新的 Migration，别指望 Room 兜底。
         .addMigrations(
@@ -801,6 +826,7 @@ val DatabaseModule =
           MIGRATION_13_14,
           MIGRATION_14_15,
           MIGRATION_15_16,
+          MIGRATION_16_17,
         )
         .fallbackToDestructiveMigration(true) // 最后兜底：迁移链有洞时至少不崩 App
         .build()

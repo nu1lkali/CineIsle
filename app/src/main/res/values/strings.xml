@@ -787,6 +787,14 @@
   <string name="i18n_media_info">Media Info</string>
   <string name="i18n_moved_private_space">Moved to Private Space</string>
   <string name="i18n_no_network_connections">No network connections</string>
+  <string name="i18n_pin_top">Pin to top</string>
+  <string name="i18n_unpin_top">Unpin</string>
+  <string name="i18n_browse">Browse</string>
+  <string name="i18n_connect">Connect</string>
+  <string name="i18n_disconnect">Disconnect</string>
+  <string name="i18n_favorite_dirs">Favorite Directories</string>
+  <string name="i18n_connection_deleted">Connection removed</string>
+  <string name="i18n_remove_favorite">Remove from favorites</string>
   <string name="i18n_no_subfolders">No subfolders</string>
   <string name="i18n_no_videos_found">No videos found</string>
   <string name="i18n_no_videos_in_playlist">No videos in playlist</string>
