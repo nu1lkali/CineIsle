@@ -1083,33 +1083,61 @@ object EmbyClient {
    * `TagItems` 三条、却连 `Tags` 字段都没有）⇒ 详情页读标签用
    * 「优先 TagItems、为空再退回 Tags」的写法，两边都索取就是白搭风险。
    */
-  fun getItem(server: EmbyServer, itemId: String): EmbyItem =
-    getJson(
-      server,
-      "/Users/${server.userId}/Items/$itemId",
-      mapOf(
-        "fields" to listOf(
-          "Overview",
-          "OriginalTitle",
-          "SortName",
-          "Genres",
-          "Tags",
-          "Studios",
-          "ProductionLocations",
-          "People",
-          "OfficialRating",
-          "CommunityRating",
-          "PremiereDate",
-          "ProductionYear",
-          "MediaSources",
-          "MediaStreams",
-          // 详情页「宣传语」一行 + 「外部链接」一行（ProviderIds → 服务器地址 + ?redirect=）
-          // 的数据来源，两个都是官方 ItemFields 里有的合法值。
-          "Taglines",
-          "ProviderIds",
-        ).joinToString(","),
-      ),
-    )
+  fun getItem(server: EmbyServer, itemId: String): EmbyItem {
+    val path = "/Users/${server.userId}/Items/$itemId"
+    // 先按「带 ExternalUrls」的清单要一次，失败再退回不带它的（原因见 [ITEM_FIELDS_WITH_EXTERNAL_URLS]）。
+    // ⚠️ 必须显式写 `<EmbyItem>`：runCatching 里推断不出 reified 类型参数。
+    val withExternalUrls = runCatching {
+      getJson<EmbyItem>(server, path, mapOf("fields" to ITEM_FIELDS_WITH_EXTERNAL_URLS))
+    }
+    // 第二次再失败就让它抛出去 —— 真正的错误（网络 / 鉴权 / 404）不能被吞掉。
+    return withExternalUrls.getOrElse {
+      getJson(server, path, mapOf("fields" to ITEM_FIELDS_CORE))
+    }
+  }
+
+  /**
+   * 详情页要的字段清单（基础版）。
+   *
+   * 抽成常量而不是写在 [getItem] 里：它有两个使用者 —— 正常路径和
+   * 「ExternalUrls 不被接受时的降级重试」，两处必须逐字一致。
+   */
+  private val ITEM_FIELDS_CORE: String = listOf(
+    "Overview",
+    "OriginalTitle",
+    "SortName",
+    "Genres",
+    "Tags",
+    "Studios",
+    "ProductionLocations",
+    "People",
+    "OfficialRating",
+    "CommunityRating",
+    "PremiereDate",
+    "ProductionYear",
+    "MediaSources",
+    "MediaStreams",
+    // 详情页「宣传语」一行 + 「外部链接」一行的数据来源，官方 ItemFields 里确实有这两个值
+    "Taglines",
+    "ProviderIds",
+  ).joinToString(",")
+
+  /**
+   * [ITEM_FIELDS_CORE] + `ExternalUrls`（详情页「外部链接」一行的**首选**数据源）。
+   *
+   * 为什么要单列一个、还要在失败时重试：`ExternalUrls` 在 Emby SDK 的 `ItemFields`
+   * 枚举里是有的（`BaseItemDto.ExternalUrls` 是标准字段），但它**没被写进官方 OpenAPI
+   * 那段 `Fields` 可选值描述**（那段描述本身也不全，例如 `Size` / `Chapters` 都不在里面）。
+   * 服务端对不认识的字段名**可能直接 400**，而详情页一旦 400 就整页打不开 ——
+   * 这个代价（整页挂掉）远大于收益（少一个降级路径）。
+   * 所以：带上它、失败就退回 [ITEM_FIELDS_CORE] 重来一次。
+   *
+   * 拿到 `ExternalUrls` 的价值：它的 `Url` 是**服务端/元数据插件拼好的完整地址**
+   * （如 `http://<host>:<port>/?redirect=JavBus:ACZD-218`），与 Emby Web / Yamby
+   * 打开的是同一条链接；拿 `ProviderIds` 自己拼容易拼错（见 `EmbyDetailScreen`）。
+   */
+  private val ITEM_FIELDS_WITH_EXTERNAL_URLS: String =
+    "$ITEM_FIELDS_CORE,ExternalUrls"
 
   /**
    * 拉取条目的章节表。

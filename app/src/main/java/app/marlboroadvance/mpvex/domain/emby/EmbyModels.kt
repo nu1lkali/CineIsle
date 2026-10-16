@@ -409,6 +409,35 @@ data class EmbyItem(
    * 与 [Genres] / `GenreItems` 是同一套关系。加在末尾并给默认值，不影响既有按位置构造。
    */
   val TagItems: List<EmbyNameIdPair> = emptyList(),
+  /**
+   * 条目在**外部网站**上的链接（`BaseItemDto.ExternalUrls`，每项 `Name` + `Url`）。
+   *
+   * 这是详情页「外部链接」一行的**首选**数据源，原因见 `EmbyDetailScreen` 里的定位说明：
+   * `Url` 是**服务端/元数据插件已经拼好的完整地址**（如
+   * `http://<host>:<port>/?redirect=JavBus:ACZD-218`），直接用就和 Emby Web、
+   * 以及 Yamby 这类第三方客户端打开的是同一条链接；而拿 [ProviderIds] 自己拼
+   * 很容易拼错（见那边的注释）。
+   *
+   * 不是每个部署都会返回（内置元数据源通常不产生 ExternalUrls，只有插件型数据源
+   * 如 MetaTube 会），所以只是「优先」，取不到时详情页退回 [ProviderIds] 现拼。
+   * 加在末尾并给默认值，不影响既有按位置构造。
+   */
+  val ExternalUrls: List<EmbyExternalUrl> = emptyList(),
+)
+
+/**
+ * 条目的一个外部链接（`ExternalUrl`）：显示名 + 完整地址。
+ *
+ * 与 [EmbyExternalIdInfo] 的区别：那个描述「这个服务端支持哪些外部 ID」
+ * （`Key` / `Name` / `UrlFormatString`，值是**格式串**），
+ * 这个则是一条**已经拼好的、点开就能访问的**链接。
+ */
+@Serializable
+data class EmbyExternalUrl(
+  /** 显示名（如 `MetaTube` / `IMDb`），详情页 chip 上显示的就是它 */
+  val Name: String? = null,
+  /** 完整 URL（服务端已拼好，直接交给系统浏览器，不要再加工） */
+  val Url: String? = null,
 )
 
 /**

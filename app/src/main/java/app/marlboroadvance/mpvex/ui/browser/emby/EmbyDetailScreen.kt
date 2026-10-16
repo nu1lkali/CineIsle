@@ -1142,13 +1142,34 @@ private fun DetailBody(
       val tagList = item.TagItems.mapNotNull { it.Name?.takeIf { n -> n.isNotBlank() } }
         .ifEmpty { item.Tags.filter { it.isNotBlank() } }
       val studioList = item.Studios.orEmpty().filter { !it.Name.isNullOrBlank() }
-      // 外部链接：ProviderIds 的每一项都对应一个「服务器地址 + ?redirect=<值>」的跳转页
-      // （用户环境里的 MetaTube 就是 `http://<host>:<port>?redirect=JavBus:ACZD-218` 这种形式）。
-      // 值本身就是跳转参数，所以 URL 按这条规则现拼，不依赖服务端是否回 ExternalUrls。
-      val providerLinks = item.ProviderIds.filterValues { it.isNotBlank() }
+      // 外部链接：**首选服务端给的 `ExternalUrls`**，它取不到才退回用 ProviderIds 现拼。
+      //
+      // 为什么首选它（v73 真机返工）：`ExternalUrls[].Url` 是**服务端 / 元数据插件已经
+      // 拼好的完整地址**（用户环境里 MetaTube 给的是
+      // `http://192.168.2.124:8080/?redirect=JavBus:ACZD-218`）—— 直接用，打开的就是
+      // Emby Web 与 Yamby 打开的同一条链接。
+      //
+      // 退回分支（内置元数据源不产生 ExternalUrls）按 `<服务器根>/?redirect=<Provider>:<Id>`
+      // 现拼，细节见 [externalLinkUrl]。
+      //
+      // ⚠️ 曾经**只**按 `"$baseUrl?redirect=$value"` 现拼，真机结果是「跳到了 Emby 首页」：
+      //    少了根路径的 `/`，且 `redirect` 的参数是 `Provider:Id` 而不是裸 Id。
+      val externalLinks = item.ExternalUrls
+        .mapNotNull { e ->
+          val name = e.Name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+          val url = e.Url?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+          name to url
+        }
+        .ifEmpty {
+          item.ProviderIds.filterValues { it.isNotBlank() }
+            .mapNotNull { (name, value) -> externalLinkUrl(server?.baseUrl, name, value) }
+        }
+        // 同名只留第一条：chip 是按名字渲染的，重名会让两个 chip 点出不同地址
+        .distinctBy { it.first }
+        .toMap()
       if (
         genreList.isNotEmpty() || tagList.isNotEmpty() ||
-        studioList.isNotEmpty() || providerLinks.isNotEmpty()
+        studioList.isNotEmpty() || externalLinks.isNotEmpty()
       ) {
         item {
           // Composable 才能取到 UriHandler；LazyListScope 的 content lambda 不是 composable，
@@ -1174,16 +1195,13 @@ private fun DetailBody(
                 onMetaClick(name, "studio", id)
               },
             )
-            // chip 上显示的是 provider 名（如 MetaTube），点一下交给系统浏览器打开跳转页
+            // chip 上显示的是链接名（服务端 ExternalUrls 的 `Name`，如 MetaTube；退回分支里
+            // 就是 ProviderIds 的键），点一下交给系统浏览器打开那条地址
             MetaChipRow(
               label = "外部链接",
-              chips = providerLinks.keys.toList(),
-              onClick = { key ->
-                val value = providerLinks[key]
-                val base = server?.baseUrl
-                if (!value.isNullOrBlank() && !base.isNullOrBlank()) {
-                  uriHandler.openUri("$base?redirect=$value")
-                }
+              chips = externalLinks.keys.toList(),
+              onClick = { label ->
+                externalLinks[label]?.let { uriHandler.openUri(it) }
               },
             )
           }
@@ -1982,6 +2000,37 @@ private suspend fun loadVersionResumeSeconds(
   val anyVersion =
     repository.getVideoDataByTitlePrefix(EmbyVersionProgress.itemPrefix(serverId, itemId))
   return if (anyVersion != null) 0L else null
+}
+
+/**
+ * 用 ProviderIds 现拼一条「外部链接」：`<服务器根>/?redirect=<Provider>:<Id>`。
+ *
+ * 什么时候会走到这里：服务端**没有**回 `ExternalUrls`（内置元数据源不带这个字段，
+ * 只有 MetaTube 这类插件型数据源才有），只能自己拼。回的是
+ * `名字 to 地址`（[MetaChipRow] 的 chip 文案与点击地址），服务器地址缺失时回 null（不显示这一项）。
+ *
+ * ## 两个坑（都是真机踩出来的）
+ * 1. **必须落在服务器根路径上**：`?redirect=` 是 Emby Web 在**站点根**处理的跳转
+ *    （用户环境里的正确地址就是 `http://192.168.2.124:8080/?redirect=JavBus:ACZD-218`）。
+ *    写成 `$baseUrl?redirect=...`（baseUrl 是 `http://host:port`，没有结尾斜杠）时
+ *    浏览器拿到的是「无路径 + query」，Emby Web 认不出来 ⇒ **跳回首页**。
+ *    所以这里统一补上 `/`。
+ * 2. **参数是 `Provider:Id` 两段式**，不是裸 Id：Emby 靠前面那段去认「这是哪个外部站点」
+ *    （Providers 的 `Key`，见 [EmbyExternalIdInfo] 的 `UrlFormatString`）。
+ *    有些数据源自己就把值存成了 `JavBus:ACZD-218` 这种已带前缀的形态 ⇒ 那时**不能再补**
+ *    前缀，否则会拼出 `MetaTube:JavBus:ACZD-218` 这种双前缀。这就是下面那句
+ *    `contains(':')` 判断的由来。
+ */
+private fun externalLinkUrl(
+  baseUrl: String?,
+  providerName: String,
+  providerId: String,
+): Pair<String, String>? {
+  // baseUrl 的形态是 `scheme://host:port`（见 EmbyServer.baseUrl），去掉可能的结尾斜杠，
+  // 免得拼出 `http://host:8080//?redirect=` 这种双斜杠
+  val origin = baseUrl?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() } ?: return null
+  val qualified = if (providerId.contains(':')) providerId else "$providerName:$providerId"
+  return providerName to "$origin/?redirect=$qualified"
 }
 
 /**

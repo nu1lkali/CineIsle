@@ -227,7 +227,26 @@ android {
     //        点 chip 交系统浏览器（如 MetaTube）；「宣传语」= Taglines 原文一行，
     //        其下紧跟一行「导演：<名字>」（People 里 Type=Director）。getItem 的 Fields
     //        补上 `Taglines` / `ProviderIds`（两个都是合法值）。
-    versionCode = 72
+    // 73（修复轮，versionName 仍为 1.5.5）：v72 两处返工（真机反馈）：
+    //     ① 【媒体库显示菜单回到「吸在屏幕右侧」】v72 把用户第 2 条反馈（「长按的媒体库
+    //        显示的弹窗吸在最右侧」）**误读成了 bug**，给菜单加了个负的水平 offset 想把
+    //        它挪到「右边缘贴图标右边缘」⇒ 菜单飘到顶栏中段，用户打回
+    //        （「我不是让你把小菜单吸在屏幕右侧吗」）。现在删掉那个 offset，回到 M3 的
+    //        自然行为：锚点（顶栏 Emby 图标）右边只剩约 96dp、放不下固定的 240dp 菜单
+    //        ⇒ 必然被钳到窗口最右侧 = 用户要的「吸在屏幕右侧」。KDoc 里写死了
+    //        「别再当成 bug 修」和它的两个前提（右边空间 < 菜单宽、宽度必须固定）。
+    //     ② 【详情页外部链接跳错页（跳到 Emby 首页）】v72 只按
+    //        `"$baseUrl?redirect=$value"` 现拼（少了根路径的 `/`，参数还是裸 Id），
+    //        真机跳到了 Emby 首页，而 Yamby 跳的是
+    //        `http://192.168.2.124:8080/?redirect=JavBus:ACZD-218`。改：
+    //        a. **首选服务端 `ExternalUrls`**（`EmbyItem` 新增该字段 + 新类型
+    //           `EmbyExternalUrl(Name/Url)`）：`Url` 是插件拼好的完整地址，直接用就与
+    //           Emby Web / Yamby 一致。getItem 的 Fields 加上 `ExternalUrls`，
+    //           **并在失败时退回不带它的清单重试**（它不在官方 Fields 描述清单里，
+    //           万一某版服务端 400，不能把整个详情页带下水）；
+    //        b. 退回分支改拼 `<服务器根>/?redirect=<Provider>:<Id>`（补 `/` + 补
+    //           `Provider:` 前缀；值本身已带前缀的不重复补），抽成 `externalLinkUrl()`。
+    versionCode = 73
     versionName = "1.5.5"
 
     vectorDrawables {

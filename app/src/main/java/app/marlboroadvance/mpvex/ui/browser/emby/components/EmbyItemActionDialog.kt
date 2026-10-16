@@ -49,7 +49,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
@@ -214,6 +213,22 @@ fun EmbyItemActionsDialog(
  * 点某一行**不关菜单**：这是一个可以连着勾好几个的清单，关掉再长按一次才够
  * 是反直觉的。菜单只在点空白处（onDismissRequest）时才收起。
  *
+ * ## 定位：**吸在屏幕右侧**（用户明确要求，别再"修"它）
+ * 这里**刻意不给** `DropdownMenu` 传 `offset`。M3 的 `DropdownMenu` 在 LTR 下把菜单的
+ * **左边缘**对齐锚点左边缘、向右展开；只有在「右边装不下」时才钳到 `窗口宽 − 菜单宽`。
+ * 锚点是顶栏那个 Emby 图标，它右边还压着「更多」「设置」两个图标（约 96dp 空间），
+ * 而菜单固定 [VISIBILITY_MENU_WIDTH] = 240dp ⇒ **必定**放不下 ⇒ 必定被钳到窗口最右侧。
+ * 也就是「菜单右边缘贴着屏幕右边缘」，正是要的效果。
+ *
+ * ⚠️ 曾经有一版把这个现象当成 bug，给了个负的 x 偏移想把菜单挪到「右边缘贴图标右边缘」，
+ *    结果菜单飘到顶栏中段 —— 用户立刻打回（「我不是让你把小菜单吸在屏幕右侧吗」）。
+ *    **不要**再给它加负偏移，也**不要**为了「对齐锚点」去掉 [VISIBILITY_MENU_WIDTH]。
+ *
+ * 这条依赖两个前提，动顶栏之前先确认：
+ * 1. 锚点右边留给菜单的空间 < 菜单宽（现在约 96dp，远小于 240dp，所以必然触发钳制）；
+ * 2. 菜单宽度**固定** —— 若改成 wrapContent，库名短的时候可能右边刚好放得下，
+ *    那就不再钳到最右侧了。
+ *
  * @param expanded 是否展开（由调用方持有状态，长按 Emby 图标时置 true）
  * @param libraries 全部媒体库，**已按当前显示顺序排好**（和首页那一眼的顺序一致，
  *   用户对照着勾才不会找错）
@@ -235,7 +250,6 @@ fun EmbyLibraryVisibilityMenu(
   DropdownMenu(
     expanded = expanded,
     onDismissRequest = onDismissRequest,
-    offset = VISIBILITY_MENU_OFFSET,
   ) {
     Column(modifier = Modifier.width(VISIBILITY_MENU_WIDTH)) {
       Text(
@@ -279,30 +293,14 @@ fun EmbyLibraryVisibilityMenu(
 /**
  * 「媒体库显示」菜单的固定宽度（240dp，约 2/3 个常见手机宽度）。
  *
- * 为什么**必须固定**：菜单位置要按宽度反推（见 [VISIBILITY_MENU_OFFSET]），
- * 宽度不定就算不出偏移量。库名过长由 `Ellipsis` 截断，不会把菜单撑开。
+ * 为什么**必须固定**（不是审美，是定位前提）：菜单"吸在屏幕右侧"靠的是
+ * 「240dp 在锚点右边放不下 ⇒ M3 把它钳到窗口最右」。宽度一旦改成 wrapContent，
+ * 库名短的时候菜单可能刚好在右边放得下，就**不再**贴右边缘了。详见
+ * [EmbyLibraryVisibilityMenu] 的定位说明。
+ *
+ * 库名过长由 `Ellipsis` 截断，不会把菜单撑开。
  */
 private val VISIBILITY_MENU_WIDTH = 240.dp
-
-/**
- * 「媒体库显示」菜单相对默认位置的**水平偏移**：让菜单的**右边缘**落在顶栏 Emby 图标的
- * 右边缘上、整体向左展开（而不是向右溢出）。
- *
- * ## 为什么需要这一手（真机反馈「弹窗吸在最右侧」）
- * M3 的 `DropdownMenu` 在 LTR 下把菜单的**左边缘**对齐锚点左边缘、向右展开，
- * 只有在「右边装不下」时才钳到 `窗口宽 − 菜单宽`（**先叠加 offset、后钳制**）。
- * 这个锚点在顶栏很靠右（右边还压着「更多」与「设置」两个图标），
- * 240dp 的菜单向右放不下 ⇒ 被钳到屏幕最右边 —— 于是弹窗跟手指长按的那个图标脱开，
- * 看着就是「吸在屏幕最右侧」。
- *
- * 给一个负的 x 偏移把菜单整体左移「菜单宽 − 锚点宽」：锚点左边缘 + 偏移
- * = 锚点左边缘 + 锚点宽 − 菜单宽 = **锚点右边缘 − 菜单宽**，
- * 正好是「右边缘贴住图标右边缘」的位置；之后不会再触发钳制（右边缘本来就在窗口内）。
- *
- * 锚点宽取 48dp —— [EmbyMaintainButton] 的触摸区就是 48dp（`IconButton` 的标准尺寸）。
- * 两者必须同步：改按钮尺寸时这里要跟着改。
- */
-private val VISIBILITY_MENU_OFFSET = DpOffset(x = 48.dp - VISIBILITY_MENU_WIDTH, y = 0.dp)
 
 /**
  * 「调整顺序号」对话框：把首页媒体库的显示顺序一屏管全。
