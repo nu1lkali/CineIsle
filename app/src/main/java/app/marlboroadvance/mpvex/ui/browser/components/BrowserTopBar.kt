@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RemoveCircle
@@ -94,6 +95,10 @@ fun BrowserTopBar(
   onTitleLongPress: (() -> Unit)? = null,
   useRemoveIcon: Boolean = false,
   onAddToPlaylistClick: (() -> Unit)? = null,
+  /** 点标题的回调；非空时**接管**标题点击（不再切换深/浅色），并显示一个下拉小箭头提示可点。 */
+  onTitleClick: (() -> Unit)? = null,
+  /** 「回到首页」图标的回调；null = 不显示该图标（如已在模块首页那一层）。 */
+  onHomeClick: (() -> Unit)? = null,
 ) {
   if (isInSelectionMode) {
     SelectionTopBar(
@@ -124,6 +129,8 @@ fun BrowserTopBar(
       additionalActions = additionalActions,
       modifier = modifier,
       onTitleLongPress = onTitleLongPress,
+      onTitleClick = onTitleClick,
+      onHomeClick = onHomeClick,
     )
   }
 }
@@ -142,6 +149,8 @@ private fun NormalTopBar(
   additionalActions: @Composable RowScope.() -> Unit,
   modifier: Modifier = Modifier,
   onTitleLongPress: (() -> Unit)?,
+  onTitleClick: (() -> Unit)? = null,
+  onHomeClick: (() -> Unit)? = null,
 ) {
   val preferences = koinInject<AppearancePreferences>()
   val darkMode by preferences.darkMode.collectAsState()
@@ -182,13 +191,22 @@ private fun NormalTopBar(
       },
     ),
     title = {
+      // 标题整块可点：
+      //  · 默认 = 切换深/浅色（圆形揭露动画，起点取点击处）；
+      //  · 传了 onTitleClick 的页面（如网络浏览）= 打开「跳转到」导航弹窗，
+      //    并在标题右侧多一个下拉小箭头提示「可点」。此时不再切换深浅色。
       val titleModifier = Modifier
         .onGloballyPositioned { coordinates ->
           titleBounds.value = coordinates.boundsInWindow()
         }
-        .pointerInput(onTitleLongPress) {
+        .pointerInput(onTitleLongPress, onTitleClick) {
           detectTapGestures(
             onTap = { localOffset ->
+              if (onTitleClick != null) {
+                onTitleClick()
+                return@detectTapGestures
+              }
+
               // Don't allow theme change if animation is in progress
               if (themeTransition?.isAnimating == true) return@detectTapGestures
               
@@ -209,27 +227,43 @@ private fun NormalTopBar(
           )
         }
 
-      Text(
-        title,
-        style =
-          if (onBackClick == null) {
-            MaterialTheme.typography.headlineMediumEmphasized
-          } else {
-            MaterialTheme.typography.headlineSmall
-          },
-        fontWeight = FontWeight.ExtraBold,
-        color = MaterialTheme.colorScheme.primary,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier =
-          titleModifier.then(
+      Row(verticalAlignment = Alignment.CenterVertically, modifier = titleModifier) {
+        Text(
+          title,
+          style =
             if (onBackClick == null) {
-              Modifier.padding(start = 8.dp)
+              MaterialTheme.typography.headlineMediumEmphasized
             } else {
-              Modifier
+              MaterialTheme.typography.headlineSmall
             },
-          ),
-      )
+          fontWeight = FontWeight.ExtraBold,
+          color = MaterialTheme.colorScheme.primary,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier =
+            Modifier
+              // ⚠️ 必须给 Text 一个 weight：Row 里**无 weight 的子项**是按「剩余空间」
+              // 顺序测量的 —— 标题先测、可以吃掉整行宽度，右边那个下拉小箭头
+              // 就只能拿到 0 宽（长标题时箭头消失）。fill = false 保证短标题时
+              // Row 仍然按内容宽度收缩，观感与以前一致。
+              .weight(1f, fill = false)
+              .then(
+                if (onBackClick == null) {
+                  Modifier.padding(start = 8.dp)
+                } else {
+                  Modifier
+                },
+              ),
+        )
+        if (onTitleClick != null) {
+          Icon(
+            imageVector = Icons.Filled.ArrowDropDown,
+            contentDescription = null,
+            modifier = Modifier.size(22.dp),
+            tint = MaterialTheme.colorScheme.primary,
+          )
+        }
+      }
     },
     navigationIcon = {
       if (onBackClick != null) {
@@ -247,6 +281,22 @@ private fun NormalTopBar(
       }
     },
     actions = {
+      // ── 「回到首页」快捷出口 ──
+      // 给多层级页面（网络浏览）用：从深层文件夹一键回首页，不必连按好几次「上一级」。
+      // 调用方在「没什么可退」的层级（如连接根目录）传 null ⇒ 图标不出现。
+      if (onHomeClick != null) {
+        IconButton(
+          onClick = onHomeClick,
+          modifier = Modifier.padding(horizontal = 2.dp),
+        ) {
+          Icon(
+            Icons.Filled.Home,
+            contentDescription = stringResource(R.string.home),
+            modifier = Modifier.size(24.dp),
+            tint = MaterialTheme.colorScheme.secondary,
+          )
+        }
+      }
       additionalActions()
       if (onSearchClick != null) {
         IconButton(

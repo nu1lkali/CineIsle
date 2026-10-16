@@ -5,6 +5,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,12 +34,14 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
@@ -49,14 +54,17 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -75,6 +83,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -136,9 +145,13 @@ import kotlin.math.roundToInt
  *   不受这三项管。
  * - **本地搜索**（顶栏放大镜）：对当前目录已拉到的内容按名称过滤，零请求。
  * - **顶栏标题 = 当前文件夹名**（根目录退化为连接名），过长自动截断。
+ * - **点标题 → 「跳转到」导航弹窗**（[PathNavigatorSheet]）：列出 根目录 → 当前目录
+ *   的全部层级，点任意一层直达；当前层打勾。**点标题不再切换深浅色**（该页让位给导航）。
+ * - **顶栏「回到首页」图标**：进到文件夹里之后一键回首页（网络模块首页），
+ *   不必连按好几次「上一级」；在连接根目录不显示。
  * - **顶栏「更多」菜单**（[BrowserTopBar.additionalActions]）：收藏当前目录
  *   （切完弹 toast）、随机播放（视频 / 图片二选一）、视图切换，全部收在竖三点里
- *   —— 顶栏常驻图标只有「更多 / 搜索 / 设置」三个，宽度留给文件夹标题。
+ *   —— 顶栏常驻图标是「更多 / 搜索 / 设置」，进了文件夹再加一个「首页」。
  * - **视频点击即播**：不起详情页，直接走 mpv 队列播放（[NetworkBrowserViewModel.playVideos]）。
  * - **照片点击进查看器**：[NetworkPhotoViewerScreen]（缩放 / 保存 / 幻灯片）。
  */
@@ -199,6 +212,12 @@ data class NetworkBrowserScreen(
     var renameTarget by remember { mutableStateOf<NetworkFile?>(null) }
     var deleteTarget by remember { mutableStateOf<NetworkFile?>(null) }
 
+    // 「跳转到」导航弹窗（点顶栏标题弹出）：把 根目录 → 当前目录 的全部层级列出来，
+    // 点任意一层直达 —— 多层级目录里不用再一层层按「上一级」。
+    // 参考 AlistClientN 的路径导航弹窗（`file_list_screen.dart#_showPathNavigator`），
+    // 并修掉它几处边界问题，见 [PathNavigatorSheet] 的 KDoc。
+    var showPathNavigator by remember { mutableStateOf(false) }
+
     // 本地搜索（关键词过滤，纯内存 —— 目录列表本来就是全量一次拉完的）
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -221,6 +240,60 @@ data class NetworkBrowserScreen(
     // 当前目录显示名（查看器标题 / 收藏名 / 顶栏标题同一口径）
     val dirTitle =
       currentPath.trimEnd('/').substringAfterLast('/', "").ifBlank { connectionName }
+
+    // 是否已在**连接根目录**：根目录再往上就是首页，没有层级可跳 ⇒ 不给导航入口。
+    // 用 trim('/') 判，兼容 ""、"//" 这些异常值。
+    val atConnectionRoot = currentPath.trim('/').isEmpty()
+
+    // 面包屑：根目录 → 当前目录，逐级累积出完整路径（弹窗列表用）。
+    // ⚠️ 先 `trim('/')` 把首尾斜杠归一化再拆 —— 否则「/a/b/」这类尾斜杠会拼出
+    //    「/a/b/」并因此匹配不上栈里的「/a/b」（AlistClientN 没做这层归一化）。
+    val pathLevels = remember(currentPath, connectionName) {
+      val segments = currentPath.trim('/').split('/').filter { it.isNotEmpty() }
+      buildList {
+        add("/" to "根目录")
+        var accumulated = ""
+        segments.forEach { segment ->
+          accumulated = "$accumulated/$segment"
+          add(accumulated to segment)
+        }
+      }
+    }
+
+    // 跳到某一层（面包屑跳转 = **丢弃「前进历史」**，与文件管理器点面包屑同一语义）。
+    fun navigateToPath(target: String) {
+      fun normalize(path: String) = path.trimEnd('/').ifEmpty { "/" }
+      val normalized = normalize(target)
+      if (normalized == normalize(currentPath)) return
+      // 层层下钻时每一层都压在栈里 —— 把目标层之上的都弹掉即可。
+      // 永远保留栈底（MainScreen）：idx >= 0 且 idx <= size-1，不会把栈弹空。
+      val targetIndex =
+        backstack.indexOfLast {
+          it is NetworkBrowserScreen &&
+            it.connectionId == connectionId &&
+            normalize(it.currentPath) == normalized
+        }
+      if (targetIndex >= 0) {
+        repeat(backstack.size - 1 - targetIndex) { backstack.removeLastOrNull() }
+      } else {
+        // 目标层不在栈里（典型：从「收藏目录」一步进了很深的目录，中间层从未压栈）。
+        // ⚠️ 这里**只 push、绝不先弹栈**。AlistClientN 的 `_navigateToPath` 先用
+        //    `Get.until` 弹栈再判断有没有匹配，路径一旦没匹配上就把整条导航栈弹空了。
+        backstack.add(
+          NetworkBrowserScreen(
+            connectionId = connectionId,
+            connectionName = connectionName,
+            currentPath = normalized,
+          ),
+        )
+      }
+    }
+
+    // 一键回首页（MainScreen = 网络模块首页）。导航栈底永远是 MainScreen，
+    // 所以「弹到 size == 1」就是回到首页，与连按返回键等价、只是一步到位。
+    fun goHome() {
+      while (backstack.size > 1) backstack.removeLastOrNull()
+    }
 
     // Load files when connectionId or currentPath changes
     LaunchedEffect(connectionId, currentPath) {
@@ -273,13 +346,20 @@ data class NetworkBrowserScreen(
           // 左上角永远显示「我的 NAS」这类连接名，看不出当前在哪一层。
           // 名字过长由 BrowserTopBar 的 maxLines=1 + Ellipsis 自动截断。
           title = dirTitle,
+          // 点标题 → 打开「跳转到」导航弹窗（列出全部层级，直达任意一层）。
+          // 在连接根目录没有可跳的层级，就不接管点击（回落到默认的「切换深浅色」），
+          // 也不显示下拉箭头 —— 不给「点了没反应」的死入口。
+          onTitleClick = if (atConnectionRoot) null else ({ showPathNavigator = true }),
+          // 「回到首页」：进到文件夹里之后一键回首页（网络模块首页），
+          // 不必连按好几次「上一级」。根目录不显示（那一层本来就只有一级可退）。
+          onHomeClick = if (atConnectionRoot) null else ({ goHome() }),
           isInSelectionMode = false,
           selectedCount = 0,
           totalCount = 0,
           onBackClick = { backstack.removeLastOrNull() },
           onCancelSelection = {},
           // 排序不走顶栏：它要常驻又能显示当前状态，放在内容区顶部（见 NetworkSortRow）。
-          // 顶栏只留「更多 / 搜索 / 设置」三个图标，把宽度让给文件夹标题。
+          // 顶栏图标：更多 / 搜索 / 设置，进了文件夹再加「首页」（见上面 onHomeClick）。
           onSortClick = null,
           onSearchClick = { searchActive = true },
           onSettingsClick = {
@@ -630,6 +710,21 @@ data class NetworkBrowserScreen(
           },
         )
       }
+
+      // ── 「跳转到」导航弹窗 ──
+      if (showPathNavigator) {
+        PathNavigatorSheet(
+          connectionName = connectionName,
+          currentPath = currentPath,
+          levels = pathLevels,
+          onDismiss = { showPathNavigator = false },
+          onSelect = { path ->
+            // 先关窗再跳：避免「弹窗还在收、页面已经切过去」的观感叠影
+            showPathNavigator = false
+            navigateToPath(path)
+          },
+        )
+      }
     }
   }
 }
@@ -677,6 +772,137 @@ private fun NetworkFileActionMenu(
       },
       onClick = onDelete,
     )
+  }
+}
+
+/**
+ * 「跳转到」导航弹窗（点顶栏标题弹出）。
+ *
+ * 列出 **连接根目录 → 当前目录** 的全部路径层级，点任意一层直接跳过去 ——
+ * 多层级目录里不用再一层层按「上一级」，也不止是「回首页」这一个出口。
+ *
+ * 范式参考 AlistClientN 的路径导航（`lib/screen/file_list/file_list_screen.dart`
+ * 的 `_showPathNavigator`，用户自己写的那版），并把它几处边界问题修掉了：
+ *
+ * 1. **列表顺序**：它用 `crumbs.reversed().skip(1)`，于是「根目录」之后紧跟着的是
+ *    **最靠近的上级**、越往下越远 —— 读起来不是面包屑，而这里改成
+ *    根目录 → 逐级向下的自然顺序（与本地文件夹层级一致）。
+ * 2. **当前层**：它把当前层 `skip` 掉，用户看不出自己站在哪一层。这里保留当前层、
+ *    用勾号标出（点它只是关窗）。
+ * 3. **路径尾斜杠**：它按 `path.split('/')` 拼 `fullPath`，若原路径带尾斜杠会拼出
+ *    `/a/b/`。这里统一 `trim('/')` 归一化后再逐级拼。
+ * 4. **无匹配时的破坏性**：它的 `_navigateToPath` 先用 `Get.until` 弹栈再判断是否
+ *    匹配，目标路径没匹配上就把整条导航栈弹空了。这里改成「栈里有就截栈、没有就
+ *    只 push」，见调用方 `navigateToPath`。
+ * 5. **根目录**：它对根目录直接 `return`，点标题毫无反馈。这里根目录干脆不给入口
+ *    （标题不带下拉箭头、也不接管点击）—— 保留原有的「点标题切深浅色」。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PathNavigatorSheet(
+  /** 连接名（「根目录」那一行的副标题，让用户知道这是哪台服务器） */
+  connectionName: String,
+  /** 当前目录完整路径（弹窗标题下那行；同时是「我在哪」的判据） */
+  currentPath: String,
+  /** 根目录 → 当前目录，逐级 (完整路径 to 显示名) */
+  levels: List<Pair<String, String>>,
+  onDismiss: () -> Unit,
+  /** 选中某一层（传该层的完整路径） */
+  onSelect: (String) -> Unit,
+) {
+  val sheetState = rememberModalBottomSheetState()
+
+  // 尾斜杠归一化：只用于判「这一行是不是我当前所在的那层」
+  fun normalize(path: String) = path.trimEnd('/').ifEmpty { "/" }
+  val currentNormalized = normalize(currentPath)
+
+  ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+      Column(modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp)) {
+        Text(
+          text = "跳转到",
+          style = MaterialTheme.typography.headlineSmall,
+          fontWeight = FontWeight.Medium,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+          text = currentPath,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.padding(top = 2.dp),
+        )
+      }
+
+      HorizontalDivider()
+
+      // 层级一般不多（几层到十几层），用普通 Column + 纵向滚动即可；
+      // 给个最大高度上限，免得深目录把整屏铺满。
+      Column(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .heightIn(max = 420.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(vertical = 4.dp),
+      ) {
+        levels.forEach { (path, label) ->
+          val isCurrent = normalize(path) == currentNormalized
+          val isRoot = normalize(path) == "/"
+          Row(
+            modifier =
+              Modifier
+                .fillMaxWidth()
+                // 当前层点了只关窗（已经在那一层了，跳过去是空动作）
+                .clickable { if (isCurrent) onDismiss() else onSelect(path) }
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(
+              imageVector = if (isRoot) Icons.Default.Home else Icons.Default.Folder,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(22.dp),
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                color =
+                  if (isCurrent) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.onSurface
+                  },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Text(
+                // 根目录那行副标题给连接名（比一个赤裸的 "/" 有用）；
+                // 其余层级给完整路径，长路径截断。
+                text = if (isRoot) connectionName.ifBlank { "/" } else path,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+            if (isCurrent) {
+              Spacer(modifier = Modifier.width(8.dp))
+              Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+              )
+            }
+          }
+        }
+      }
+    }
   }
 }
 
