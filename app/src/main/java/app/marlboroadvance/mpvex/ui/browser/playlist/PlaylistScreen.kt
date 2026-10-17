@@ -19,7 +19,9 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
@@ -140,9 +142,13 @@ object PlaylistScreen : Screen {
       onOperationComplete = { viewModel.refresh() },
     )
 
-    // Use the shared LazyListState from CompositionLocal instead of creating a new one
-    val listState = LazyListState()
-    val gridState = LazyGridState()
+    // ⚠️ 必须 `remember*State()`：原来写的是裸 `LazyListState()` / `LazyGridState()`，
+    //    **每次重组都新建** ⇒ 滚动位置归零（滑到中段一重组就弹回顶部）、
+    //    且任何「是否在顶部」的判据（下拉刷新 / FAB 显隐）都会恒为真。
+    //   （上面那行旧注释说「用 CompositionLocal 里共享的那个」，代码却自己在 new ——
+    //    注释与代码不符，按代码的实际危害修成 remember 版本。）
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
     val isRefreshing = remember { mutableStateOf(false) }
     var showRenameDialog by rememberSaveable { mutableStateOf(false) }
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }

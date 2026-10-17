@@ -368,7 +368,36 @@ android {
     //        B4（顺手）：宫格封面缓存上限 200 → 800（一条只是 4 个地址串，开销可忽略）。
     //           定小了会被 LRU 淘汰，淘汰掉的文件夹下次进来要重新取样，同样表现为
     //           「有些封面又重新生成了一遍」。
-    versionCode = 77
+    // 78（手势交互修复，versionName 仍为 1.5.5）：网络浏览「封面没加载出来 → 文件夹点不进去 →
+    //     就算进去了也滑不动」—— 用户报的是三个现象，实为**两个根因串成一条链**：
+    //     ① **封面加载失败 ⇒ 整个文件夹点不进去**（v76 我自己引入的）：
+    //        `NetworkPhotoThumbnail` 的错误态整块 `fillMaxSize().clickable(onClick = 重试)`。
+    //        网格卡里封面是 1:1 大图、几乎占满卡面 ⇒ 这一块变成巨大的「重试」热区，
+    //        把外层卡片的 onClick（进入文件夹）和 onLongClick（长按菜单）**全部吃掉**。
+    //        ⚠️ 我当时还在注释里写「顺手挡掉外层卡片的点击，用户想重试不是想进去」——
+    //        这个判断是错的：**封面加载失败和「能不能进这个文件夹」毫无关系**，
+    //        用户点卡片绝大多数时候就是想进去，重试只是偶尔的次要意图。
+    //        ⇒ 整块的 `clickable` 去掉（Compose 里没有 clickable 的 Box 不拦截手势，
+    //          点击会正常冒泡到外层卡片），重试只保留右下角一个 48dp 的按钮
+    //          （Material 无障碍最小触控尺寸，比 Emby 侧同款的 32dp 更好点）。
+    //        （Emby 侧 `EmbyPhotoThumbnail` 本来就是「只给一个角上的圆钮、不占整块」，
+    //          网络侧当初照抄时跑偏了 —— 这次对齐回正确写法。）
+    //     ② **列表视图每次加载都滚回顶部、根本滑不动**（一直存在，列表视图特有）：
+    //        `NetworkBrowserList` 里写的是 `val networkListState = LazyListState()`
+    //        —— **不是** `rememberLazyListState()`。裸构造每次重组都 new 一个 state，
+    //        滚动位置随之归零。放大它的正是封面懒加载：文件夹越多，`folderCovers`
+    //        更新越频繁 ⇒ 重组越频繁 ⇒ 越滚不下去（滚回顶部又重新组合顶部卡片 →
+    //        又触发封面加载 → 又重组 ……）。这正是用户说的「里面有很多图库文件夹」。
+    //     ③ **「手势冲突」是 ② 的副作用，不是独立问题**：`PullRefreshBox` 的启用判据是
+    //        `listState.firstVisibleItemIndex == 0 && scrollOffset == 0`，而一个刚 new
+    //        出来的 state **永远满足**它 ⇒ 下拉刷新在任何滚动位置都 enabled ⇒
+    //        在列表中段往下拉被判定成「下拉刷新」而不是滚动，两个手势直接打架。
+    //        网格视图用的是 `rememberLazyGridState()`，所以只有列表视图有这毛病 ——
+    //        与用户「我用列表视图进去的」完全吻合。
+    //     ④ 顺手修同类隐患：`PlaylistScreen` 里同样的裸 `LazyListState()` / `LazyGridState()`
+    //        （那行注释还写着「用 CompositionLocal 里共享的那个」，代码却自己在 new）。
+    //        ⚠️ 全局只剩这两处裸构造，其余要么是 `remember { ... }` 要么是 `rememberXxxState()`。
+    versionCode = 78
     versionName = "1.5.5"
 
     vectorDrawables {

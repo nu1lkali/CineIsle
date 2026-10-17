@@ -21,7 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -1225,7 +1225,20 @@ private fun NetworkBrowserList(
   modifier: Modifier = Modifier,
 ) {
   val navigationBarHeight = LocalNavigationBarHeight.current
-  val networkListState = LazyListState()
+  // ⭐⭐ 必须 `rememberLazyListState()`，绝不能写 `LazyListState()` ——
+  //    后者**每次重组都新建一个 state**，滚动位置随之归零。
+  //
+  //    这是「列表视图滑不动、每次加载都弹回顶部」的唯一根因：
+  //    · 封面是懒加载的，文件夹越多、`folderCovers` 更新越频繁 ⇒ 重组越频繁；
+  //    · 每重组一次就 new 一个 state ⇒ firstVisibleItemIndex/ScrollOffset 归零 ⇒ 滚回顶部；
+  //    · 滚回顶部又重新组合顶部卡片 → 又触发封面加载 → 又重组 …… 完全滑不动。
+  //
+  //    ⚠️ 它还会**顺带制造「手势冲突」**（用户原话）：下面 `PullRefreshBox` 的
+  //    `canRefresh` 判据是 `listState.firstVisibleItemIndex == 0 && scrollOffset == 0`，
+  //    而一个刚 new 出来的 state 永远满足它 ⇒ **下拉刷新在任何滚动位置都处于启用状态**
+  //    ⇒ 在列表中段往下拉，被判定成「下拉刷新」而不是滚动，手势直接打架。
+  //    （网格视图用的是 `rememberLazyGridState()`，所以只有列表视图有这毛病。）
+  val networkListState = rememberLazyListState()
 
   val isAtTop by remember {
     derivedStateOf {

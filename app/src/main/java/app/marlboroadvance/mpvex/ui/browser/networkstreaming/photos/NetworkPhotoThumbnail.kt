@@ -1,7 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -127,13 +126,18 @@ fun NetworkPhotoThumbnail(
       }
 
       is AsyncImagePainter.State.Error -> {
+        // ⭐⭐ 这里**绝不能**给整块加 `clickable` —— 曾经的写法就是这样，
+        //    结果整张封面（网格卡里是 1:1 的大图、几乎占满卡面）变成了一个巨大的
+        //    「重试」热区，把外层卡片的 onClick（进入文件夹）和 onLongClick（长按菜单）
+        //    **全部吃掉** ⇒ 用户反馈「一个文件夹封面没加载出来，这个文件夹就点都点不进去了」。
+        //
+        //    ⚠️ 封面加载失败和「能不能进这个文件夹」是**两件完全无关的事**：
+        //    用户点卡片绝大多数时候就是想进去，重试只是偶尔的次要意图。
+        //    ⇒ 重试只占右下角一小块（[RETRY_TOUCH_SIZE]，Material 无障碍最小触控尺寸），
+        //      其余区域保持「不消费点击」—— Compose 里没有 `clickable` 的 Box
+        //      **不会**拦截手势，点击会正常冒泡到外层卡片。
         Box(
-          // 整块可点，不只是右下角那个小图标：32dp 的按钮在缩略图里很容易点偏，
-          // 而这个区域本来就是「这块图没出来」的视觉焦点，点哪儿都该重试。
-          // （也顺手挡掉外层卡片的点击 —— 用户想重试，不是想进这个文件夹。）
-          modifier = Modifier
-            .fillMaxSize()
-            .clickable(onClick = onRetry),
+          modifier = Modifier.fillMaxSize(),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
@@ -146,13 +150,13 @@ fun NetworkPhotoThumbnail(
             onClick = onRetry,
             modifier = Modifier
               .align(Alignment.BottomEnd)
-              .size(34.dp),
+              .size(RETRY_TOUCH_SIZE),
           ) {
             Icon(
               imageVector = Icons.Default.Refresh,
               contentDescription = "重新加载",
               tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(18.dp),
+              modifier = Modifier.size(22.dp),
             )
           }
         }
@@ -162,3 +166,14 @@ fun NetworkPhotoThumbnail(
     }
   }
 }
+
+/**
+ * 失败占位里「重新加载」按钮的触控区边长。
+ *
+ * 48dp 是 Material 规定的**最小可触控尺寸** —— 再小就很难点中，而它又必须和小小的
+ * 破图图标共存于同一张缩略图里。
+ *
+ * ⚠️ 别为了「更好点」把它放大成整块：那会把外层卡片的进入 / 长按手势全吃掉
+ *    （详见 [NetworkPhotoThumbnail] 里错误分支的注释）。
+ */
+private val RETRY_TOUCH_SIZE = 48.dp
