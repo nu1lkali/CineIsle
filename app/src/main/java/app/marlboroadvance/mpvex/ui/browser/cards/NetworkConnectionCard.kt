@@ -18,7 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -290,13 +290,27 @@ fun NetworkConnectionCard(
             DropdownMenuItem(
               text = { Text(stringResource(R.string.i18n_connect_on_launch)) },
               leadingIcon = {
-                // 用「有没有勾」表达开关态 —— 菜单项不适合放 Checkbox，
-                // 但留一个等宽占位（24dp）保证两种状态的文字左对齐
-                if (connection.autoConnect) {
-                  Icon(Icons.Filled.Check, contentDescription = null)
-                } else {
-                  Spacer(modifier = Modifier.size(24.dp))
-                }
+                // 「启动应用时自动连接」的开关态。
+                //
+                // 旧版用「有勾 / 空占位」表达开关：开态一个 ✓，关态一块 24dp 空白。
+                // 问题就出在那块空白上 —— 这一列其他项（置顶 / 连接 / 编辑 / 删除）
+                // 全都有图标，唯独它时有时无，看着像没画完。
+                //
+                // 现改为**恒显示**一个「自动」语义图标（闪电），开关态交给颜色：
+                // 开 = 主色（与卡片上「已连接」状态点同色，即本 App"激活"的颜色语言），
+                // 关 = onSurfaceVariant（与 ⋮ 图标同色，即"待机"灰）。
+                // ⚠️ 不要再改回「关态留空」—— 空占位正是这次的修复对象；
+                //    也不要把开关态做成两种不同图标 —— 同一项的图标形状必须恒定、
+                //    只有颜色变，否则每次开关切换图标都会跳。
+                Icon(
+                  imageVector = Icons.Filled.Bolt,
+                  contentDescription = null,
+                  tint = if (connection.autoConnect) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                )
               },
               onClick = {
                 menuOpen = false
