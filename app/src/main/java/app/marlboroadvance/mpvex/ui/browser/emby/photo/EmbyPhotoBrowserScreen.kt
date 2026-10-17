@@ -15,9 +15,6 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.RotateRight
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetDefaults
@@ -54,6 +51,8 @@ import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
 import app.marlboroadvance.mpvex.ui.browser.photo.PhotoViewerEntry
 import app.marlboroadvance.mpvex.ui.browser.photo.SharedPhotoViewer
+import app.marlboroadvance.mpvex.ui.browser.photo.formatPhotoFileSize
+import app.marlboroadvance.mpvex.ui.browser.photo.rememberPhotoRotationState
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -77,7 +76,7 @@ import org.koin.compose.koinInject
  *   没过就弹回去。⭐ 放大状态下不抢这个手势 —— 那时竖向拖动是「平移画面」，
  *   判据读 [PhotoZoomRegistry.zoomFractionOf]（不是 Compose State，所以不产生重组）。
  * - **沉浸（全屏）**：点画面任意处切换 —— 隐藏顶栏、翻页钮、幻灯片钮，只留照片；
- *   再点一次退出。顶栏也有一个入口（[Icons.Filled.Fullscreen]）。
+ *   再点一次退出。顶栏也有一个入口（外壳画的「全屏」钮）。
  *   沉浸态下返回键先退出沉浸，再按才真的返回（不会「一键退出」）。
  * - **长按**：弹**底部操作面板**（保存原图 / 另存为 JPEG / 收藏 / 旋转 / 图片信息）。
  *   ⚠️ 长按只有这一个出口 —— 旧版「长按直接弹保存对话框」已收编进面板第一组，
@@ -90,7 +89,10 @@ import org.koin.compose.koinInject
  * - **底部胶片条**：设置开关（默认关），开着时底部多一条缩略图，点一下跳到那张。
  * - **左下角悬浮按钮**：横向排布的「上一张 / 下一张」半透明圆钮；
  *   第一张时上一张置灰、最后一张时下一张置灰（不留假按钮）。
+ * - **底部信息栏**：文件名 + 「大小 · 日期」+ 序号，两个入口都有（v94 起不再分叉）。
  * - **旋转**：顶栏按钮每次顺时针 90°，角度**按条目 Id** 记（翻页回来还在）。
+ *   按钮由共享外壳画（[app.marlboroadvance.mpvex.ui.browser.photo.PhotoRotationState] 持有角度），
+ *   长按面板的「旋转 90 度」走同一个入口。
  *   只影响显示与「另存为 JPEG」；「保存原图」永远是原字节，不跟着转。
  * - **前后预加载**：预取相邻 ±N 张（N 走「设置 → Emby 媒体库 → 照片预加载张数」，1~3）。
  * - **更多菜单**：图片信息（懒显示，只在点开时读当前条目的 EXIF 字段）/
@@ -127,9 +129,9 @@ data class EmbyPhotoBrowserScreen(
     var consumed by remember { mutableIntStateOf(initialPhotos.size) }
     var loadingMore by remember { mutableStateOf(false) }
 
-    // 幻灯片 / 沉浸模式 / 下拉关闭 / 底部胶片条全部搬进 [SharedPhotoViewer]
-    // （与网络位置的照片浏览器共用一份实现），这一层只留 Emby 特有的东西：
-    // 保存、长按操作面板、旋转、续页、收藏。
+    // 幻灯片 / 沉浸 / 下拉关闭 / 胶片条 / 信息栏 / 顶栏的全屏与旋转钮
+    // 全部在 [SharedPhotoViewer] 里（与网络位置的照片浏览器共用一份实现），
+    // 这一层只留 Emby 特有的东西：保存、长按操作面板、续页、收藏、取图 URL。
     var saving by remember { mutableStateOf(false) }
     var showInfo by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
@@ -138,21 +140,34 @@ data class EmbyPhotoBrowserScreen(
     // 进页是否自播幻灯片：读全局开关（默认关）**一次**，之后改开关只影响新打开的浏览器
     val autoPlaySlideshow = remember { browserPreferences.photoAutoSlideshow.get() }
 
-    // 交给共享外壳的最小信息：稳定 key + 标题。
-    // Emby 版不显示底部信息栏（文件名 / 尺寸在「图片信息」弹窗里），meta 留空。
+    // 交给共享外壳的最小信息：稳定 key + 标题 + 附注（大小 · 日期）。
+    // ⭐ 附注是 v94 补的：信息栏现在两个入口都显示，Emby 这边不能留一行空白
+    //   —— 同一套外壳，数据各填各的。日期取 DateCreated（拍摄/入库时间）前 10 位。
     val entries = remember(queue) {
       queue.map { item ->
-        PhotoViewerEntry(key = item.Id ?: item.Name.orEmpty(), title = item.Name.orEmpty())
+        PhotoViewerEntry(
+          key = item.Id ?: item.Name.orEmpty(),
+          title = item.Name.orEmpty(),
+          meta = listOfNotNull(
+            item.Size?.takeIf { it > 0 }?.let { formatPhotoFileSize(it) },
+            item.DateCreated?.takeIf { it.isNotBlank() }?.take(10),
+          ).joinToString(" · ").takeIf { it.isNotBlank() },
+        )
       }
     }
 
     // ── 旋转 ──
     // 角度按**条目 Id** 记（不是按页码）：续页追加、来回翻页都不会丢。
-    // 只影响显示与「另存为 JPEG」——「保存原图」写的是原字节，不能动。
-    var rotations by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    // 状态实例与共享外壳**共用同一个**：顶栏旋转钮在外壳里画，这里的
+    // 「另存为 JPEG」导出角度、长按面板的「旋转 90 度」读写的必须是同一份 ——
+    // 各存一份的后果是「顶栏转过了，导出还是正的」。
+    val rotation = rememberPhotoRotationState()
+
+    /** 旋转状态的 key（与 entries 里的 key 完全一致，否则两边会记到不同槽位） */
+    fun rotationKeyOf(item: EmbyItem): Any = item.Id ?: item.Name.orEmpty()
 
     /** 某张照片当前应显示的旋转角（顺时针，0/90/180/270） */
-    fun rotationOf(item: EmbyItem?): Int = item?.Id?.let { rotations[it] } ?: 0
+    fun rotationOf(item: EmbyItem?): Int = item?.let { rotation.of(rotationKeyOf(it)) } ?: 0
 
     /** 长按命中的条目；非空时弹底部操作面板 */
     var longPressTarget by remember { mutableStateOf<EmbyItem?>(null) }
@@ -302,39 +317,11 @@ data class EmbyPhotoBrowserScreen(
       pagerState = pagerState,
       title = title,
       autoPlaySlideshow = autoPlaySlideshow,
-      // Emby 版不要底部信息栏：文件名 / 尺寸这些放在「图片信息」弹窗里看
-      showInfoBar = false,
+      rotation = rotation,
       onBack = { backStack.removeLastOrNull() },
       topBarActions = { chrome ->
-        // 全屏 / 退出全屏：与「点画面」同一个开关，只是给个明确的入口
-        IconButton(onClick = chrome.toggleImmersive) {
-          Icon(
-            imageVector = if (chrome.immersive) {
-              Icons.Filled.FullscreenExit
-            } else {
-              Icons.Filled.Fullscreen
-            },
-            contentDescription = if (chrome.immersive) "退出全屏" else "全屏",
-            tint = Color.White,
-          )
-        }
-        // 旋转 90°（顺时针）：点一次转一档，按条目记角度（翻页回来还在）。
-        // 只影响显示与「另存为 JPEG」；「保存原图」永远是原字节，不跟着转。
-        val rotateItem = queue.getOrNull(chrome.currentIndex)
-        if (rotateItem != null) {
-          IconButton(
-            onClick = {
-              val key = rotateItem.Id ?: return@IconButton
-              rotations = rotations + (key to (rotationOf(rotateItem) + 90) % 360)
-            },
-          ) {
-            Icon(
-              Icons.AutoMirrored.Filled.RotateRight,
-              contentDescription = "旋转 90 度",
-              tint = Color.White,
-            )
-          }
-        }
+        // ⚠️ 全屏 / 旋转**已经由外壳画**（v94 收进共享组件，网络版同步获得）。
+        //    这里只放「更多」——以前这两个按钮写在本文件里，直接导致网络版没有。
         Box {
           IconButton(onClick = { showMenu = true }) {
             Icon(Icons.Default.MoreVert, contentDescription = "更多", tint = Color.White)
@@ -367,7 +354,7 @@ data class EmbyPhotoBrowserScreen(
           }
         }
       },
-      renderPage = { index, zoomRegistry, onTap ->
+      renderPage = { index, zoomRegistry, rotationDegrees, onTap ->
         val item = queue.getOrNull(index)
         if (item != null) {
           val current = server
@@ -377,7 +364,8 @@ data class EmbyPhotoBrowserScreen(
               vm.photoImageUrl(it, item, maxWidth = PHOTO_MAX_WIDTH, format = "jpg")
             },
             contentDescription = item.Name,
-            rotationDegrees = rotationOf(item),
+            // 角度由外壳按 key 取出（顶栏旋转钮改的就是它），页面自己应用
+            rotationDegrees = rotationDegrees,
             // 点一下画面 = 进出沉浸；长按 = 操作面板。
             // 这两个手势交给 zoomable 自己处理（见 EmbyPhotoPageImage 的注释）：
             // 外层再挂一套 tap 检测会跟「双击放大」抢事件。
@@ -467,8 +455,8 @@ data class EmbyPhotoBrowserScreen(
           },
           onRotate = {
             longPressTarget = null
-            val key = longPressed.Id ?: return@PhotoActionSheet
-            rotations = rotations + (key to (rotationOf(longPressed) + 90) % 360)
+            // 与顶栏旋转钮同一个动作入口（外壳持有的那份状态），别在这里另存一份角度
+            rotation.rotate(rotationKeyOf(longPressed))
           },
           onShowInfo = {
             longPressTarget = null

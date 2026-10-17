@@ -1,14 +1,26 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming
 
 import android.widget.Toast
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -17,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
@@ -31,6 +44,8 @@ import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhoto
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoThumbnail
 import app.marlboroadvance.mpvex.ui.browser.photo.PhotoViewerEntry
 import app.marlboroadvance.mpvex.ui.browser.photo.SharedPhotoViewer
+import app.marlboroadvance.mpvex.ui.browser.photo.formatPhotoFileSize
+import app.marlboroadvance.mpvex.ui.browser.photo.rememberPhotoRotationState
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -42,15 +57,20 @@ import org.koin.compose.koinInject
  * 网络照片全屏查看器（SMB / WebDAV / FTP）。
  *
  * ⭐ 外壳全部来自 [SharedPhotoViewer]（与 Emby 照片浏览器**同一份实现**）：
- * 横向翻页、沉浸模式、下拉关闭、幻灯片（间隔 / 倒计时 / 淡入淡出）、
- * 底部胶片条、上一张 / 下一张、底部信息栏，改一处两边同时生效。
+ * 横向翻页、沉浸模式（点画面 / 顶栏全屏钮）、**旋转 90°**、下拉关闭、
+ * 幻灯片（间隔 / 倒计时 / 淡入淡出）、底部胶片条、上一张 / 下一张、
+ * **底部信息栏**（文件名 + 大小·日期 + 序号，两个入口都有），改一处两边同时生效。
+ *
  * 本文件只剩**网络特有的那一层**：
  * - [renderPage]：从 SMB / WebDAV / FTP 会话流式拉原图（[NetworkPhotoPageImage]）；
  * - [renderThumbnail]：胶片条缩略图走同一套网络取图（[NetworkPhotoThumbnail]）；
- * - 顶栏保存钮 → [NetworkPhotoSaver]（保存位置与 Emby 照片同一项设置：
- *   自研目录 > 老 SAF 树 > 系统相册 `Pictures/CineIsle`）；
+ * - 顶栏「更多菜单」→ 保存原图（[NetworkPhotoSaver]）/ 图片信息（含路径与连接名）；
+ *   保存位置与 Emby 照片同一项设置：自研目录 > 老 SAF 树 > 系统相册 `Pictures/CineIsle`；
  * - 前后 ±N 张预加载（N 走「照片预加载张数」1~3，默认 1），拉的是
  *   [coil3.size.Size.ORIGINAL] 全图，二次浏览命中磁盘缓存。
+ *
+ * ⚠️ 全屏 / 旋转**不再由本文件画**（v94）——它们和 Emby 版共用外壳那一份，
+ * 以前各画一份的结果就是「那边有、这边没有」。
  *
  * 队列由浏览页传入（目录列表一次拉全，**没有续页** —— SMB 没有分页 API，
  * 这与 Emby 版按 StartIndex 续页是结构性差异）。「随机播放图片」从浏览页
@@ -88,18 +108,24 @@ data class NetworkPhotoViewerScreen(
     // ── 交给共享外壳的最小信息 ──
     // 标题 = 文件名；附注 = 「大小 · 日期」（信息栏第二行）。
     // ⚠️ key 用 path：同一个目录内唯一，比下标稳（队列被换掉时不会错位复用）。
+    //    旋转角也按这个 key 记 —— 与 Emby 版（按条目 Id 记）同一个机制。
     val entries = remember(queue) {
       queue.map { file ->
         PhotoViewerEntry(
           key = file.path,
           title = file.name,
           meta = listOfNotNull(
-            if (file.size > 0) formatPhotoSize(file.size) else null,
+            if (file.size > 0) formatPhotoFileSize(file.size) else null,
             if (file.lastModified > 0) formatPhotoDate(file.lastModified) else null,
           ).joinToString(" · "),
         )
       }
     }
+
+    // 旋转状态：与外壳共用**同一个实例**（顶栏旋转钮 / 长按 / 导出都要读同一份角度）
+    val rotation = rememberPhotoRotationState()
+    var showMenu by remember { mutableStateOf(false) }
+    var showInfo by remember { mutableStateOf(false) }
 
     // ── 连接（保存要用） ──
     var connection by remember { mutableStateOf<NetworkConnection?>(null) }
@@ -166,32 +192,44 @@ data class NetworkPhotoViewerScreen(
       pagerState = pagerState,
       title = title.ifBlank { connectionName },
       autoPlaySlideshow = autoSlideshow,
-      // 网络版有「文件名 + 大小·日期 + 序号」信息栏（Emby 版把这些放进了「图片信息」弹窗）
-      showInfoBar = true,
+      // 外壳持有的同一个旋转实例（长按面板 / 信息栏之外的地方读角度都走它）
+      rotation = rotation,
       onBack = { backStack.removeLastOrNull() },
       topBarActions = {
-        IconButton(onClick = { saveCurrentPhoto() }, enabled = !saving) {
-          if (saving) {
-            CircularProgressIndicator(
-              modifier = Modifier.size(20.dp),
-              color = androidx.compose.ui.graphics.Color.White,
+        // 顶栏结构与 Emby 版一致：外壳画「全屏 + 旋转」，这里只画「更多」。
+        // ⚠️ 不再单独放一个下载图标 —— 与 Emby 的菜单入口对齐，少一个钮，
+        //    也不会出现「Emby 在菜单里保存、网络在顶栏保存」这种两套习惯。
+        Box {
+          IconButton(onClick = { showMenu = true }) {
+            Icon(Icons.Default.MoreVert, contentDescription = "更多", tint = Color.White)
+          }
+          DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+            DropdownMenuItem(
+              text = { Text("图片信息") },
+              onClick = {
+                showMenu = false
+                showInfo = true
+              },
             )
-          } else {
-            Icon(
-              imageVector = Icons.Default.Download,
-              contentDescription = "保存原图",
-              tint = androidx.compose.ui.graphics.Color.White,
+            DropdownMenuItem(
+              text = { Text("保存原图") },
+              enabled = !saving,
+              onClick = {
+                showMenu = false
+                saveCurrentPhoto()
+              },
             )
           }
         }
       },
-      renderPage = { index, zoomRegistry, onTap ->
+      renderPage = { index, zoomRegistry, rotationDegrees, onTap ->
         val item = queue.getOrNull(index)
         if (item != null) {
           NetworkPhotoPageImage(
             connectionId = connectionId,
             path = item.path,
             contentDescription = item.name,
+            rotationDegrees = rotationDegrees,
             // 长按 = 直接保存这张（网络版没有操作面板）
             onTap = onTap,
             onLongPress = { saveCurrentPhoto() },
@@ -217,19 +255,68 @@ data class NetworkPhotoViewerScreen(
         }
       },
     )
+
+    // ── 图片信息 ──
+    // 与 Emby 版同一个样式（label 左、value 右），字段换成网络侧真实有的：
+    // 名称 / 大小 / 修改时间 / 路径 / 连接。路径是网络版最有用的那一项
+    // （排查「这张到底在哪」时全靠它）。
+    if (showInfo) {
+      val lines = currentItem?.let { networkPhotoInfoLines(it, connectionName) } ?: emptyList()
+      AlertDialog(
+        onDismissRequest = { showInfo = false },
+        title = { Text("图片信息") },
+        text = {
+          if (lines.isEmpty()) {
+            Text("没有可显示的信息")
+          } else {
+            Column(
+              verticalArrangement = Arrangement.spacedBy(6.dp),
+              modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
+              lines.forEach { (label, value) ->
+                Row(modifier = Modifier.fillMaxWidth()) {
+                  Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 12.dp),
+                  )
+                  Text(
+                    text = value,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                  )
+                }
+              }
+            }
+          }
+        },
+        confirmButton = {
+          TextButton(onClick = { showInfo = false }) { Text("知道了") }
+        },
+      )
+    }
   }
 }
 
-private fun formatPhotoSize(bytes: Long): String =
-  when {
-    bytes < 1024 -> "$bytes B"
-    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-    bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
-    else -> String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+/** 「图片信息」的内容行（label → value）：缺的字段不进列表，不占位 */
+private fun networkPhotoInfoLines(file: NetworkFile, connectionName: String): List<Pair<String, String>> =
+  buildList {
+    add("名称" to file.name)
+    if (file.size > 0) add("大小" to formatPhotoFileSize(file.size))
+    if (file.lastModified > 0) add("修改时间" to formatPhotoDateTime(file.lastModified))
+    add("路径" to file.path)
+    if (connectionName.isNotBlank()) add("连接" to connectionName)
   }
 
 private fun formatPhotoDate(timestamp: Long): String {
   val format = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+  return format.format(java.util.Date(timestamp))
+}
+
+/** 对话框里的完整时间（带时分）：信息栏那行只放日期，够用是为了不挤 */
+private fun formatPhotoDateTime(timestamp: Long): String {
+  val format = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
   return format.format(java.util.Date(timestamp))
 }
 

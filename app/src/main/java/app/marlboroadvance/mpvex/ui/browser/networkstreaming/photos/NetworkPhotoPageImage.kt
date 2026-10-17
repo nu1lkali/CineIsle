@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -49,7 +50,9 @@ import me.saket.telephoto.zoomable.zoomable
  *   没有服务端缩放 ⇒ 首屏加载比 Emby 慢是已知限制（磁盘缓存兜二次浏览）。
  * - **没有 HEIC 转码兜底**：老系统解不动就是失败占位 + 重试（Emby 那边有服务端
  *   `format=jpg` 兜底，网络侧没有）。
- * - **没有旋转**：查看器不提供旋转（保存原图语义不变），需要时再按 Emby 那套补。
+ * - **旋转**（[rotationDegrees]）：由共享外壳顶栏的旋转钮驱动，角度按条目 path 记在
+ *   `PhotoRotationState` 里。放在 `.zoomable` **之前** —— 转的是整个画面，
+ *   手势方向才与所见一致（与 Emby 版同一个顺序，别在这里改成 after）。
  *
  * ⚠️ 单击 / 长按**交给 zoomable 自己**（它的 `onClick` / `onLongClick`），
  * 不要在外层再挂 `pointerInput` 检测点击 —— 外层自己检测会与「双击放大」抢事件
@@ -63,6 +66,8 @@ fun NetworkPhotoPageImage(
   onTap: () -> Unit,
   onLongPress: () -> Unit,
   modifier: Modifier = Modifier,
+  /** 显示旋转角（顺时针 0/90/180/270）：只影响画面，保存的仍是原字节 */
+  rotationDegrees: Int = 0,
   /** 页码：与 [zoomRegistry] 配套，用于「下拉关闭」查这张有没有被放大 */
   page: Int = 0,
   zoomRegistry: PhotoZoomRegistry? = null,
@@ -108,6 +113,7 @@ fun NetworkPhotoPageImage(
         contentDescription = contentDescription,
         modifier = Modifier
           .fillMaxSize()
+          .rotate(rotationDegrees.toFloat())
           .zoomable(
             state = zoomableState,
             onClick = { onTap() },

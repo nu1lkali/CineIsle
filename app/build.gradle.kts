@@ -607,7 +607,26 @@ android {
     //     ⚠️ 胶片条开关 `photoFilmstrip` 仍然只有一个，两个入口共用。
     //     ⚠️ 缩略图格 44dp 里不能塞重试钮（48dp 触控区会盖满整格、吃掉点击），网络版
     //        `NetworkPhotoThumbnail(showRetry = false)`。
-    versionCode = 93
+    // 94（合并后的残留分叉收口，versionName 仍为 1.5.6）：用户看得很准 ——「网络位置的照片
+    //     浏览器缩略图下方还会显示文件名等信息（底部信息栏）啊，emby 那边就没有；然后网络位置
+    //     的照片浏览器就不能实现全屏、旋转、更多菜单了吗」。
+    //     ⇒ 这不是两个独立 bug，是 v93 合并时把「哪边有、哪边没有」原样搬进了共享外壳：
+    //     ① 信息栏不再有开关（删 `showInfoBar` 参数），**两个入口都显示**；Emby 侧补
+    //        `PhotoViewerEntry.meta = 大小 · DateCreated(前 10 位)`，否则信息栏第二行空着。
+    //     ② **全屏 / 旋转**从 Emby 适配层的 `topBarActions` 收进外壳：以前这两个按钮写在
+    //        Emby 屏幕里，网络侧自然没有 —— 这是「谁先写的谁有」的典型结果。
+    //        旋转角度改由 `PhotoRotationState`（按 key 存）统一持有，适配层的长按面板
+    //        「旋转 90 度」与「另存为 JPEG」导出角度读**同一份**，不会出现「顶栏转过了导出还是正的」。
+    //        新增 `formatPhotoFileSize` 到外壳共用（两边各写一份必然出现 1.2 MB / 1.20 MB 差异）。
+    //     ③ 网络侧顶栏对齐 Emby：去掉单独的下载图标，改成**更多菜单**（图片信息 / 保存原图），
+    //        `NetworkPhotoPageImage` 新增 `rotationDegrees`（`.rotate` 放在 `.zoomable` 之前，
+    //        与 Emby 同序）。
+    //     ⚠️ 沉浸态整条顶栏是淡出的 ⇒ 外壳**不画**「退出全屏」图标（永远看不见 = 死代码），
+    //        退出靠点画面 / 返回键。
+    //     ⚠️ 顶栏的「3 / 120」计数器**删掉**：信息栏右下角已有同一序号，重复只把标题挤窄
+    //        （网络版顶栏 3 个钮 + 返回已占 192dp）；信息栏与顶栏同隐同现，没有死角。
+    //     ⚠️ `photoControlsBottom` 只剩「有无胶片条」一个变量（信息栏恒有）：148dp / 84dp。
+    versionCode = 94
     versionName = "1.5.6"
 
     vectorDrawables {

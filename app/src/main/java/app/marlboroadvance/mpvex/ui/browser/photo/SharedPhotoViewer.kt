@@ -35,8 +35,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -48,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -98,9 +101,9 @@ data class PhotoViewerEntry(
 /**
  * 顶栏右侧插槽拿到的上下文。
  *
- * 两个入口的顶栏按钮不同（Emby：全屏 / 旋转 / 更多；网络：保存），
- * 但「全屏」这个动作的状态在**外壳**里（沉浸模式），所以要经由这里下发，
- * 不能让调用方自己再存一份 —— 两份状态迟早不同步。
+ * 「全屏 / 旋转 / 计数」这些**外壳已经自己画**了，这里下发是为了让插槽里的
+ * 「更多菜单」「长按面板」也能读到同一份状态、走同一个动作入口 ——
+ * 不能让调用方自己再存一份（两份状态迟早不同步）。
  */
 class PhotoViewerChrome(
   /** 当前页下标（0 基） */
@@ -109,7 +112,34 @@ class PhotoViewerChrome(
   val immersive: Boolean,
   /** 切换沉浸模式（与「点画面任意处」是同一个开关） */
   val toggleImmersive: () -> Unit,
+  /** 当前这张的旋转角（0/90/180/270，顺时针） */
+  val rotation: Int,
+  /** 把当前这张顺时针转 90°（与顶栏那个旋转钮同一个动作） */
+  val rotateCurrent: () -> Unit,
 )
+
+/**
+ * 照片旋转角：**按条目 key 记**，不是按页码。
+ *
+ * 为什么按 key：Emby 版会续页追加、来回翻页，按页码记会在队列变化时把角度错位到
+ * 别的照片上；按 key（Emby 用条目 Id、网络用 path）就永远不会串。
+ *
+ * 为什么放在外壳里：顶栏旋转钮、长按面板的「旋转 90 度」、「另存为 JPEG」的导出角度
+ * 三处要读**同一份**状态。做成一个小 holder 由适配层创建、外壳持有，两边都能用。
+ */
+@Stable
+class PhotoRotationState {
+  private var angles by mutableStateOf<Map<Any, Int>>(emptyMap())
+
+  fun of(key: Any): Int = angles[key] ?: 0
+
+  fun rotate(key: Any) {
+    angles = angles + (key to ((angles[key] ?: 0) + 90) % 360)
+  }
+}
+
+@Composable
+fun rememberPhotoRotationState(): PhotoRotationState = remember { PhotoRotationState() }
 
 /**
  * 照片全屏浏览器的**共享外壳**：Emby 媒体库与网络位置共用这一份。
@@ -120,15 +150,17 @@ class PhotoViewerChrome(
  * 现在**外壳只有一份**，剩下的差异全是插槽：
  *  · [renderPage] —— 每页的照片怎么画（Emby 走服务端缩放 URL，网络走流式拉全图）；
  *  · [renderThumbnail] —— 胶片条里的缩略图怎么画；
- *  · [topBarActions] —— 顶栏右侧多几个什么按钮（保存 / 旋转 / 更多）。
+ *  · [topBarActions] —— 计数 / 全屏 / 旋转之后再放什么（两个入口都放「更多菜单」）。
  *
  * 外壳自己负责（**改这里两个入口同时生效**）：
- * - 横向翻页（[HorizontalPager]）+ 沉浸模式（点画面切换、返回键先退沉浸）；
+ * - 横向翻页（[HorizontalPager]）+ 沉浸模式（点画面切换、顶栏钮、返回键先退沉浸）；
  * - 下拉关闭（未放大时跟手位移 + 缩小 + 变暗，过阈值松手退出）；
  * - 幻灯片（间隔读「幻灯片间隔」设置、淡出→换页→淡入、倒计时圆环、播到最后自动停、
  *   播放期间 keepScreenOn、手动滑页只重置计时不停止播放）；
- * - 底部胶片条（开关与 Emby 版共用 `photoFilmstrip`，当前页自动滚入可见）；
- * - 左下「上一张 / 下一张」、右下幻灯片钮、底部信息栏（[showInfoBar]）。
+ * - 底部胶片条（开关两个入口共用 `photoFilmstrip`，当前页自动滚入可见）；
+ * - 左下「上一张 / 下一张」、右下幻灯片钮、**底部信息栏**（文件名 + 大小日期 + 序号，
+ *   两个入口都有 —— 以前只有网络版有，用户直接指出这是无谓的分叉）；
+ * - **旋转**（顶栏钮 + [PhotoRotationState]，只影响显示，不改原字节）。
  *
  * ⚠️ 外壳**不碰数据**：队列怎么来、怎么续页、怎么保存，全在调用方（适配层）里。
  *    这正是两边能合并的原因 —— 共同的是交互，不同的是来源。
@@ -144,18 +176,20 @@ fun SharedPhotoViewer(
   title: String,
   /** 进页即播幻灯片（Emby 读设置项，网络版按「随机播放图片」入口传 true） */
   autoPlaySlideshow: Boolean = false,
-  /** 底部是否显示「文件名 + 大小日期 + 序号」信息栏（网络版要，Emby 版不要） */
-  showInfoBar: Boolean = false,
+  /** 旋转状态：调用方也持有同一个实例，长按面板 / 导出 JPEG 时要用同一份角度 */
+  rotation: PhotoRotationState = rememberPhotoRotationState(),
   onBack: () -> Unit,
-  /** 顶栏右侧额外按钮（保存 / 旋转 / 更多 …），排在计数之后 */
+  /** 顶栏右侧额外按钮（如「更多菜单」），排在计数 / 全屏 / 旋转之后 */
   topBarActions: @Composable RowScope.(PhotoViewerChrome) -> Unit = {},
   /**
    * 画某一页。`onTap` 交给页面内部的手势（zoomable 的 tap）调用 ——
    * 外层不要再挂一套 tap 检测，那会跟「双击放大」抢事件。
+   * `rotation` 是这一张当前的旋转角，页面自己应用（`.`rotate(deg)`）。
    */
   renderPage: @Composable (
     index: Int,
     zoomRegistry: PhotoZoomRegistry,
+    rotation: Int,
     onTap: () -> Unit,
   ) -> Unit,
   /** 画胶片条里的某一格缩略图 */
@@ -246,7 +280,8 @@ fun SharedPhotoViewer(
     }
   }
 
-  val controlsBottom = photoControlsBottom(showInfoBar = showInfoBar, filmstrip = stripVisible)
+  // 信息栏两个入口都有（不再按入口分叉），只剩胶片条会影响按钮抬高多少
+  val controlsBottom = photoControlsBottom(filmstrip = stripVisible)
   val canNavigate = entries.size > 1
 
   Box(
@@ -310,8 +345,10 @@ fun SharedPhotoViewer(
               Text("照片信息缺失", color = Color.White)
             }
           } else {
-            // 点一下画面 = 进出沉浸；长按的语义两边不同，由页面自己绑定
-            renderPage(page, zoomRegistry) { immersive = !immersive }
+            // 旋转角由外壳按 key 取出、交给页面自己应用（`.rotate(deg)` 放在 zoomable 之前，
+            // 手势方向才与所见一致）。点一下画面 = 进出沉浸；长按的语义两边不同，由页面自己绑定
+            val rotationDegrees = rotation.of(entries[page].key)
+            renderPage(page, zoomRegistry, rotationDegrees) { immersive = !immersive }
           }
         }
       }
@@ -350,17 +387,43 @@ fun SharedPhotoViewer(
             modifier = Modifier.weight(1f).padding(end = 8.dp),
           )
           if (entries.isNotEmpty()) {
-            Text(
-              text = "${currentPage + 1} / ${entries.size}",
-              color = Color.White.copy(alpha = 0.85f),
-              style = MaterialTheme.typography.bodyMedium,
-            )
+            // ⚠️ 顶栏**不再放「3 / 120」计数器**（v94）：信息栏右下角已经有同一个序号，
+            //    重复一遍只会把标题挤到只剩几个字（网络版顶栏 3 个钮 + 返回已经占满 192dp）。
+            //    信息栏跟着沉浸态一起隐藏，所以「没计数器」不会出现死角。
+            // ── 全屏（沉浸）──
+            // 与「点画面任意处」是同一个开关，这里只是给一个明确的入口。
+            // ⚠️ 不做「退出全屏」图标：沉浸态整条顶栏是淡出的（见上面的 AnimatedVisibility），
+            //    那个图标永远没机会显示 —— 写了就是死代码。退出靠点画面 / 返回键。
+            IconButton(onClick = { immersive = true }) {
+              Icon(
+                Icons.Filled.Fullscreen,
+                contentDescription = "全屏",
+                tint = Color.White,
+              )
+            }
+            // ── 旋转 90°（顺时针）──
+            // 角度按条目 key 记（[PhotoRotationState]），翻页回来还在；
+            // 只影响显示与「另存为 JPEG」，「保存原图」永远是原字节。
+            val rotateKey = entries.getOrNull(currentPage)?.key
+            if (rotateKey != null) {
+              IconButton(onClick = { rotation.rotate(rotateKey) }) {
+                Icon(
+                  Icons.AutoMirrored.Filled.RotateRight,
+                  contentDescription = "旋转 90 度",
+                  tint = Color.White,
+                )
+              }
+            }
           }
           topBarActions(
             PhotoViewerChrome(
               currentIndex = currentPage,
               immersive = immersive,
               toggleImmersive = { immersive = !immersive },
+              rotation = entries.getOrNull(currentPage)?.let { rotation.of(it.key) } ?: 0,
+              // 插槽里的「旋转 90 度」（长按面板那类）必须走同一个入口，
+              // 否则它自己再存一份角度，顶栏转过的角度就丢了
+              rotateCurrent = { entries.getOrNull(currentPage)?.let { rotation.rotate(it.key) } },
             ),
           )
         }
@@ -410,7 +473,7 @@ fun SharedPhotoViewer(
         )
       }
 
-      // ── 底部（自下而上）：胶片条（可选）+ 信息栏（可选） ──
+      // ── 底部（自下而上）：胶片条（可选）+ 信息栏 ──
       // 两者都贴底边，所以堆进同一个 Column —— 不用手算信息栏多高，
       // 也不会因为字号 / 语言一换就错位。
       Column(
@@ -430,18 +493,19 @@ fun SharedPhotoViewer(
             onPageClick = { index -> scope.launch { pagerState.animateScrollToPage(index) } },
           )
         }
-        if (showInfoBar) {
-          AnimatedVisibility(
-            visible = !immersive,
-            enter = fadeIn(),
-            exit = fadeOut(),
-          ) {
-            PhotoInfoBar(
-              entry = entries.getOrNull(currentPage),
-              index = currentPage + 1,
-              total = entries.size,
-            )
-          }
+        // ⚠️ 信息栏**两个入口都显示**（不再有 showInfoBar 开关）：
+        //    以前只有网络版有、Emby 版没有，用户直接把这当成「无谓的分叉」。
+        //    数据来自 entries 的 title/meta，与数据源无关。
+        AnimatedVisibility(
+          visible = !immersive,
+          enter = fadeIn(),
+          exit = fadeOut(),
+        ) {
+          PhotoInfoBar(
+            entry = entries.getOrNull(currentPage),
+            index = currentPage + 1,
+            total = entries.size,
+          )
         }
       }
     }
@@ -452,16 +516,23 @@ fun SharedPhotoViewer(
  * 底部悬浮控件（翻页 / 幻灯片）距底的高度。
  *
  * 这几个数是把两个入口**现有的观感**原样固定下来的结果，别再各自手算：
- *  · 有信息栏（网络版）：两行文字 ≈ 84dp；
- *  · 没信息栏（Emby 版）：96dp 给系统手势条 + 呼吸感；
+ *  · 信息栏（两个入口都有）：两行文字 ≈ 84dp；
  *  · 胶片条再吃掉 64dp（56dp 高 + 8dp 间距）。
  * ⚠️ 有胶片条时按钮**不能**压在缩略图上，宁可多留一点。
  */
-private fun photoControlsBottom(showInfoBar: Boolean, filmstrip: Boolean): Dp = when {
-  showInfoBar && filmstrip -> 148.dp
-  showInfoBar -> 84.dp
-  filmstrip -> 84.dp
-  else -> 96.dp
+private fun photoControlsBottom(filmstrip: Boolean): Dp = if (filmstrip) 148.dp else 84.dp
+
+/**
+ * 文件大小的人类可读写法（`719 KB` / `1.2 MB`）。
+ *
+ * 放在外壳里共用：信息栏的 meta 行两个入口都要拼「大小 · 日期」，
+ * 各写一份必然出现「Emby 显示 1.2 MB、网络显示 1.20 MB」这种无谓差异。
+ */
+fun formatPhotoFileSize(bytes: Long): String = when {
+  bytes < 1024 -> "$bytes B"
+  bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+  bytes < 1024L * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
+  else -> String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
 }
 
 /**
