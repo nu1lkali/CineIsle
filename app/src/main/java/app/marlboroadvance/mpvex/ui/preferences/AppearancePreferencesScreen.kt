@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.AutoAwesomeMotion
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -33,6 +34,7 @@ import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.serialization.Serializable
+import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.ProvidePreferenceLocals
 import me.zhanghai.compose.preference.SliderPreference
 import me.zhanghai.compose.preference.SwitchPreference
@@ -223,6 +225,35 @@ object AppearancePreferencesScreen : Screen {
 
                             PreferenceDivider()
 
+                            // 侧边滚动条：网络浏览 / Emby 媒体库等长列表右侧那根可拖动的滚动条。
+                            // **全局开关** —— 消费入口统一在 ui/utils/SideScrollbar.kt 的两个外壳里
+                            // （LazyGridSideScrollbar / LazyListSideScrollbar），所有长列表套同一个壳
+                            // 即自动遵循本设置；新增长列表不要绕过壳直接调滚动条库。
+                            val sideScrollbar by browserPreferences.sideScrollbarEnabled.collectAsState()
+                            SwitchPreference(
+                                value = sideScrollbar,
+                                onValueChange = { browserPreferences.sideScrollbarEnabled.set(it) },
+                                title = {
+                                    Text(
+                                        text = stringResource(id = R.string.pref_appearance_side_scrollbar_title),
+                                    )
+                                },
+                                summary = {
+                                    Text(
+                                        text = stringResource(
+                                            id = if (sideScrollbar) {
+                                                R.string.pref_appearance_side_scrollbar_summary_on
+                                            } else {
+                                                R.string.pref_appearance_side_scrollbar_summary_off
+                                            },
+                                        ),
+                                        color = MaterialTheme.colorScheme.outline,
+                                    )
+                                },
+                            )
+
+                            PreferenceDivider()
+
                             val watchedThreshold by browserPreferences.watchedThreshold.collectAsState()
                             SliderPreference(
                                 value = watchedThreshold.toFloat(),
@@ -260,6 +291,32 @@ object AppearancePreferencesScreen : Screen {
                                         color = MaterialTheme.colorScheme.outline,
                                     )
                                 }
+                            )
+                        }
+                    }
+
+                    // 外观深度定制（桌面图标 / 加载动画）—— 从设置主页「界面与外观」挪进来（用户要求）：
+                    // 都在外观页里改，不用回主页绕一圈。单独一卡，不并进上面两个分类 ——
+                    // 这一页全都会**立刻看到画面变化**，混在长列表里对不上「改了什么」。
+                    item {
+                        PreferenceCard {
+                            Preference(
+                                title = { Text(text = stringResource(id = R.string.appearance_deep_title)) },
+                                summary = {
+                                    Text(
+                                        text = stringResource(id = R.string.appearance_icon_title) + " · " +
+                                            stringResource(id = R.string.appearance_loading_anim_title),
+                                        color = MaterialTheme.colorScheme.outline,
+                                    )
+                                },
+                                icon = {
+                                    Icon(
+                                        Icons.Outlined.AutoAwesomeMotion,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                },
+                                onClick = { backstack.add(AppearanceDeepCustomScreen) },
                             )
                         }
                     }

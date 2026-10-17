@@ -2,8 +2,6 @@ package app.marlboroadvance.mpvex.ui.browser.networkstreaming
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -69,7 +67,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -113,11 +110,10 @@ import app.marlboroadvance.mpvex.ui.browser.cards.NetworkVideoCard
 import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
 import app.marlboroadvance.mpvex.ui.browser.states.EmptyState
 import app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen
+import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
+import app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.serialization.Serializable
-import my.nanihadesuka.compose.LazyColumnScrollbar
-import my.nanihadesuka.compose.LazyVerticalGridScrollbar
-import my.nanihadesuka.compose.ScrollbarSettings
 import org.koin.compose.koinInject
 import kotlin.math.roundToInt
 
@@ -1128,18 +1124,6 @@ private fun NetworkBrowserGrid(
   val gridState = rememberLazyGridState()
   val navigationBarHeight = LocalNavigationBarHeight.current
 
-  val isAtTop by remember {
-    derivedStateOf {
-      gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
-    }
-  }
-  val hasEnoughItems = items.size > 20
-  val scrollbarAlpha by animateFloatAsState(
-    targetValue = if (isAtTop || !hasEnoughItems) 0f else 1f,
-    animationSpec = tween(durationMillis = 200),
-    label = "scrollbarAlpha",
-  )
-
   PullRefreshGridBox(
     isRefreshing = isRefreshing,
     onRefresh = onRefresh,
@@ -1151,13 +1135,8 @@ private fun NetworkBrowserGrid(
         .fillMaxSize()
         .padding(bottom = navigationBarHeight),
     ) {
-      LazyVerticalGridScrollbar(
-        state = gridState,
-        settings = ScrollbarSettings(
-          thumbUnselectedColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f * scrollbarAlpha),
-          thumbSelectedColor = MaterialTheme.colorScheme.primary.copy(alpha = scrollbarAlpha),
-        ),
-      ) {
+      // 滚动条走统一外壳（全局开关 + 出现时机 + 外观都在里面，见 ui/utils/SideScrollbar.kt）
+      LazyGridSideScrollbar(state = gridState) {
         LazyVerticalGrid(
           columns = GridCells.Fixed(3),
           state = gridState,
@@ -1242,18 +1221,6 @@ private fun NetworkBrowserList(
   //    （网格视图用的是 `rememberLazyGridState()`，所以只有列表视图有这毛病。）
   val networkListState = rememberLazyListState()
 
-  val isAtTop by remember {
-    derivedStateOf {
-      networkListState.firstVisibleItemIndex == 0 && networkListState.firstVisibleItemScrollOffset == 0
-    }
-  }
-  val hasEnoughItems = (folders.size + photos.size + videos.size + others.size) > 20
-  val scrollbarAlpha by animateFloatAsState(
-    targetValue = if (isAtTop || !hasEnoughItems) 0f else 1f,
-    animationSpec = tween(durationMillis = 200),
-    label = "scrollbarAlpha",
-  )
-
   PullRefreshBox(
     isRefreshing = isRefreshing,
     onRefresh = onRefresh,
@@ -1265,13 +1232,8 @@ private fun NetworkBrowserList(
         .fillMaxSize()
         .padding(bottom = navigationBarHeight),
     ) {
-      LazyColumnScrollbar(
-        state = networkListState,
-        settings = ScrollbarSettings(
-          thumbUnselectedColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f * scrollbarAlpha),
-          thumbSelectedColor = MaterialTheme.colorScheme.primary.copy(alpha = scrollbarAlpha),
-        ),
-      ) {
+      // 滚动条走统一外壳（全局开关 + 出现时机 + 外观都在里面，见 ui/utils/SideScrollbar.kt）
+      LazyListSideScrollbar(state = networkListState) {
         LazyColumn(
           state = networkListState,
           modifier = Modifier.fillMaxSize(),

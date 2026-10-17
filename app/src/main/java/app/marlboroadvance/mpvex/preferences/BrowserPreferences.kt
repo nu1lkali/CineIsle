@@ -93,6 +93,19 @@ class BrowserPreferences(
   // Auto-scroll to last played media preference (like MX Player)
   val autoScrollToLastPlayed = preferenceStore.getBoolean("auto_scroll_to_last_played", false)
 
+  /**
+   * 侧边可拖动滚动条的总开关（网络浏览 / Emby 媒体库等长列表右侧那根）。
+   *
+   * **全局唯一入口**：「设置 → 界面与外观 → 侧边滚动条」。所有长列表要显示滚动条，
+   * 统一套 [app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar] /
+   * [app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar] 这两个外壳，
+   * 由它们读本偏好 —— 新增列表时套壳即自动遵循，不要绕过外壳直接调库。
+   *
+   * ⚠️ 关掉时外壳是**不套壳**（直接渲染内容），而不是把 thumb 透明度归零：
+   * 透明 thumb 仍占触摸拖动区，会留下一道「摸得到却看不见」的死区。
+   */
+  val sideScrollbarEnabled = preferenceStore.getBoolean("side_scrollbar_enabled", true)
+
   // Watched threshold preference (percentage 1-100)
   val watchedThreshold = preferenceStore.getInt("watched_threshold", 95)
 

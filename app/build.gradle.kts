@@ -462,7 +462,22 @@ android {
     //     （`trim('/')` + `substringAfterLast('/')` 不传第二参），顶栏标题
     //     （`NetworkBrowserScreen.dirTitle`）与收藏目录名（`NetworkBrowserViewModel
     //     .toggleFavoriteCurrent`）两处共用这一份口径。
-    versionCode = 81
+    // 82（侧边滚动条进 Emby + 全局开关，versionName 仍为 1.5.5）：两件事（用户反馈）：
+    //     ①「网络模块那个能拖动调位置的侧边导航条很好，Emby 媒体库也搞上去」——
+    //        把 nanihadesuka 滚动条移植进 `EmbyLibraryScreen`：三个视图模式（演员网格 /
+    //        紧凑列表 / 网格+年份 stickyHeader 时间轴）共用同一个 gridState，各自套壳。
+    //     ②「加个开关，放外观里，app 内所有用这滚动条的地方都听它的」——
+    //        新增 `ui/utils/SideScrollbar.kt` 统一外壳（LazyGridSideScrollbar /
+    //        LazyListSideScrollbar），读 `BrowserPreferences.sideScrollbarEnabled`；
+    //        开关落在「设置 → 外观 → 文件浏览 → 侧边滚动条」；同时把「外观定制」入口
+    //        从设置主页挪进外观页（用户明确要求）。
+    //     ⚠️ 关掉开关时外壳是**不套壳**直接渲染内容，不是把 thumb 透明度归零 ——
+    //        透明 thumb 仍占触摸拖动区，会留下摸得到却看不见的死区。
+    //     ⚠️ 外壳里两个出现判据（isAtTop / hasEnoughItems）必须走 `derivedStateOf`：
+    //        裸读 firstVisibleItemIndex 会让每帧滚动都重组（原网络模块就是这么写的）。
+    //     ⚠️ javap 核验：`LazyVerticalGridScrollbar` 的 content 是普通
+    //        `@Composable () -> Unit`（无 BoxScope / LazyGridScope 接收者）。
+    versionCode = 82
     versionName = "1.5.5"
 
     vectorDrawables {

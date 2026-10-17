@@ -22,7 +22,6 @@ import androidx.compose.material.icons.outlined.Audiotrack
 // ⚠️ material icons 的 `Icons.Outlined.X` 是**顶层扩展属性**，不是成员 ——
 // 每个用到的图标都必须单独 `import androidx.compose.material.icons.outlined.X`，
 // 漏了就是「Unresolved reference 'X'」（图标在库里明明存在）。
-import androidx.compose.material.icons.outlined.AutoAwesomeMotion
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Folder
@@ -198,32 +197,7 @@ object PreferencesScreen : Screen {
 
               PreferenceDivider()
 
-              // 外观深度定制（桌面图标 / 加载动画）—— 单独一页：
-              // 这一页全都会**立刻看到画面变化**，混在长列表里对不上「改了什么」。
               Preference(
-
-                title = { Text(text = stringResource(id = R.string.appearance_deep_title)) },
-                summary = {
-                  Text(
-                    text = stringResource(id = R.string.appearance_icon_title) + " · " +
-                      stringResource(id = R.string.appearance_loading_anim_title),
-                    color = MaterialTheme.colorScheme.outline
-                  )
-                },
-                icon = {
-                  Icon(
-                    Icons.Outlined.AutoAwesomeMotion,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  )
-                },
-                onClick = { backstack.add(AppearanceDeepCustomScreen) },
-              )
-
-              PreferenceDivider()
-              
-              Preference(
-
                 title = { Text(text = stringResource(id = R.string.pref_layout_title)) },
                 summary = { 
                   Text(

@@ -145,6 +145,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoGridScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.photo.photoSubtitle
 import app.marlboroadvance.mpvex.ui.player.feed.FeedItem
 import app.marlboroadvance.mpvex.ui.player.feed.VerticalFeedActivity
+import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -1969,10 +1970,12 @@ data class EmbyLibraryScreen(
           )
 
           isActorListMode && !searchActive -> {
-            LazyVerticalGrid(
-              state = gridState,
-              // 人物只有一张头像图，网格固定海报（一行三个），不跟媒体卡片样式切换
-              columns = GridCells.Fixed(3),
+            // 滚动条走统一外壳（全局开关 + 出现时机 + 外观，见 ui/utils/SideScrollbar.kt）
+            LazyGridSideScrollbar(state = gridState) {
+              LazyVerticalGrid(
+                state = gridState,
+                // 人物只有一张头像图，网格固定海报（一行三个），不跟媒体卡片样式切换
+                columns = GridCells.Fixed(3),
               modifier = Modifier.fillMaxSize(),
               contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 96.dp),
               horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2016,6 +2019,7 @@ data class EmbyLibraryScreen(
                   },
                 )
               }
+            }
             }
           }
 
@@ -2090,7 +2094,9 @@ data class EmbyLibraryScreen(
           else -> {
             when (viewMode) {
               // ── 紧凑列表：一行一条（左侧小海报 + 片名 / 副标题 + 心形），信息密度最高 ──
-              EmbyLibraryViewMode.COMPACT -> LazyVerticalGrid(
+              // 滚动条走统一外壳（全局开关 + 出现时机 + 外观，见 ui/utils/SideScrollbar.kt）
+              EmbyLibraryViewMode.COMPACT -> LazyGridSideScrollbar(state = gridState) {
+                LazyVerticalGrid(
                 state = gridState,
                 // 复用网格容器、只留一列，而不是换成 LazyColumn：这样能共用同一个
                 // 下拉刷新所依赖的 gridState，不必再维护第二份滚动状态。
@@ -2133,10 +2139,13 @@ data class EmbyLibraryScreen(
                     onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
                   )
                 }
+                }
               }
 
               // ── 网格 / 年份时间轴：都走同一个网格，时间轴只是多插了年份标题 ──
-              else -> LazyVerticalGrid(
+              // 滚动条走统一外壳（全局开关 + 出现时机 + 外观，见 ui/utils/SideScrollbar.kt）
+              else -> LazyGridSideScrollbar(state = gridState) {
+                LazyVerticalGrid(
                 state = gridState,
                 // 海报按用户选的每行个数（2~6）；横版 / 横幅样式本身更宽，
                 // 仍按最小宽度自适应，避免被压得过小。
@@ -2245,6 +2254,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                     )
                   }
                 }
+              }
               }
             }
           }

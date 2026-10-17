@@ -33,6 +33,9 @@
   <string name="pref_appearance_theme_picker_label">App Theme</string>
   <string name="pref_appearance_auto_scroll_title">Auto-scroll to last played</string>
   <string name="pref_appearance_auto_scroll_summary">Automatically scroll to the last played video when opening video lists</string>
+  <string name="pref_appearance_side_scrollbar_title">Side scrollbar</string>
+  <string name="pref_appearance_side_scrollbar_summary_on">Long lists (network browsing, Emby libraries) show a draggable scrollbar on the right; drag the thumb to jump quickly</string>
+  <string name="pref_appearance_side_scrollbar_summary_off">No scrollbar is shown on any list; scrolling works with gestures only</string>
   <string name="pref_appearance_watched_threshold_title">Watched threshold</string>
   <string name="pref_appearance_watched_threshold_summary">Mark video as watched when playback reaches %d%%</string>
   <string name="video_label_new">NEW</string>

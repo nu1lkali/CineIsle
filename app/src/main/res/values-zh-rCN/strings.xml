@@ -34,6 +34,9 @@
   <string name="pref_appearance_theme_picker_label">应用主题</string>
   <string name="pref_appearance_auto_scroll_title">自动滚动到上次播放</string>
   <string name="pref_appearance_auto_scroll_summary">打开视频列表时自动滚动到上次播放的视频</string>
+  <string name="pref_appearance_side_scrollbar_title">侧边滚动条</string>
+  <string name="pref_appearance_side_scrollbar_summary_on">网络浏览、Emby 媒体库等长列表右侧显示可拖动滚动条，按住滑块可快速定位</string>
+  <string name="pref_appearance_side_scrollbar_summary_off">所有列表均不显示侧边滚动条，只靠普通手势滚动</string>
   <string name="pref_appearance_watched_threshold_title">已观看阈值</string>
   <string name="pref_appearance_watched_threshold_summary">播放进度达到 %d%% 时标记为已观看</string>
   <string name="video_label_new">新</string>
