@@ -56,8 +56,23 @@ object NetworkPhotoImageLoader {
   /** 与照片链路对齐的磁盘缓存上限 */
   private const val DISK_LIMIT_BYTES = 128L * 1024 * 1024
 
+  /**
+   * 磁盘缓存目录名（挂在系统临时目录 [FileSystem.SYSTEM_TEMPORARY_DIRECTORY] 下）。
+   *
+   * ⭐⭐ 这一项是**必需**的：[DiskCache.Builder.build] 里是
+   *    `checkNotNull(directory) { "directory == null" }`，`Builder()` 构造时
+   *    **不会**给目录赋默认值（已 javap 核验 3.6.3：`<init>` 只设了
+   *    fileSystem / maxSizePercent / min / max，没有 directory）。
+   *    以前这里漏了 `.directory(...)` ⇒ 建缓存必抛 `IllegalStateException`；
+   *    因为 `diskCacheLazy` 是懒加载，异常发生在图片请求协程里，被 Coil 兜成
+   *    Error ⇒ 表现为「封面加载不出来、点重载也没反应」。
+   */
+  private const val NET_IMAGE_CACHE_DIR = "network_photo_cache"
+
   /** 内存缓存占可用堆比例（0.25 = Coil 默认值） */
   private const val MEMORY_PERCENT = 0.25
+
+  private const val TAG = "NetworkPhotoImageLoader"
 
   @Volatile
   private var instance: ImageLoader? = null
@@ -72,7 +87,12 @@ object NetworkPhotoImageLoader {
     ImageLoader.Builder(context)
       .components { add(NetworkPhotoFetcher.Factory(), NetworkPhotoRequest::class) }
       .memoryCache { MemoryCache.Builder().maxSizePercent(context, MEMORY_PERCENT).build() }
-      .diskCache { DiskCache.Builder().maxSizeBytes(DISK_LIMIT_BYTES).build() }
+      .diskCache {
+        DiskCache.Builder()
+          .directory(FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve(NET_IMAGE_CACHE_DIR))
+          .maxSizeBytes(DISK_LIMIT_BYTES)
+          .build()
+      }
       .build()
 
   /** 内存 / 磁盘缓存 key。三处（request / isMemoryCached）必须同一口径 */
@@ -128,12 +148,19 @@ object NetworkPhotoImageLoader {
    *
    * ⚠️ 只删这一张（key 口径与 [request] 完全一致），不动别的图。
    * ⚠️ 有磁盘 IO，调用方放 IO 线程。
+   *
+   * ⭐ **整段包在 `runCatching` 里**：这个方法是「用户点了重载」这种纯 UI 触发的路径，
+   *    它跑在普通协程里、**不在 Coil 的 try/catch 之内** —— 里面任何异常（典型如
+   *    建 ImageLoader 时磁盘缓存目录不可用）都会直接冒泡成崩溃。清缓存失败最多是
+   *    「这次重载没清干净」，绝不该把界面带崩，所以这里吞掉并记日志。
    */
   fun evict(context: Context, connectionId: Long, path: String) {
-    val key = cacheKey(connectionId, path)
-    val loader = get(context)
-    loader.memoryCache?.remove(MemoryCache.Key(key))
-    loader.diskCache?.remove(key)
+    runCatching {
+      val key = cacheKey(connectionId, path)
+      val loader = get(context)
+      loader.memoryCache?.remove(MemoryCache.Key(key))
+      loader.diskCache?.remove(key)
+    }.onFailure { android.util.Log.w(TAG, "清理网络照片缓存失败: $path", it) }
   }
 
   /**

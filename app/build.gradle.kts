@@ -320,7 +320,55 @@ android {
     //           新增 `NetworkPhotoImageLoader.evict()`：重试先清掉这一张的缓存再请求。
     //           c. 附带：失败后自动重试一次（600ms），且整个错误区域都可点重试
     //           （原来只有右下角 32dp 的小图标，很容易点偏）。
-    versionCode = 76
+    // 77（崩溃 + 回退修复，versionName 仍为 1.5.5）：两件事：
+    //     〔A〕修「网络模块挂载 AList 服务器，进图片文件夹直接崩溃」。
+    //     堆栈是 `java.lang.IllegalStateException: directory == null`，
+    //     抛自 `coil3.disk.DiskCache$Builder.build()`。
+    //     根因：两处自建 ImageLoader 都写成
+    //       `DiskCache.Builder().maxSizeBytes(DISK_LIMIT_BYTES).build()`
+    //     —— **漏了 `.directory(...)`**。已 javap 核验 coil-core 3.6.3：`Builder.<init>()`
+    //     只给 fileSystem / maxSizePercent / minimumMaxSizeBytes / maxSizeBytes 赋默认值，
+    //     **directory 从头到尾没被赋值**；而 `build()` 第一行就是
+    //     `checkNotNull(directory) { "directory == null" }` ⇒ 只要不给目录，必抛。
+    //     （Coil 自己 `singletonDiskCache` 里是显式传
+    //      `SYSTEM_TEMPORARY_DIRECTORY.resolve("coil3_disk_cache")` 的，我们抄漏了这一句。）
+    //     ⭐ 为什么 v76 之前「只是加载不出来」、v76 之后「直接崩」：
+    //        ImageLoader 是 `lazy` 单例，异常发生在**图片请求协程**里 —— v75 及以前这条路上
+    //        没有人主动去碰 ImageLoader，异常被 Coil 自己兜成 `ErrorResult`，
+    //        表现为「封面加载失败」（就是 ③ 里那个「点了没反应」的真凶之一）；
+    //        v76 新增的 `evict()` 在**普通协程**里调 `get()`，不在 Coil 的 try/catch 之内，
+    //        同一个异常就冒到崩溃上来了。
+    //     修法（两处一起）：补 `.directory(FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve(...))`，
+    //     网络照片用 `network_photo_cache`、Emby 照片用 `emby_photo_cache`（后者是**潜伏**
+    //     的同一个雷，Emby 照片缩略图重载一旦走到 evict 也会崩，先一起拆掉）。
+    //     外加一道保险：`evict()` 整段包 `runCatching` —— 清缓存是纯 UI 触发的旁路，
+    //     失败最多「这次没清干净」，不该让界面崩。
+    //     ⚠️ 教训：第三方 Builder 的「默认值」不能靠猜。`maxSizeBytes` 没给时 Coil 会自动
+    //        算百分比，**不代表** `directory` 也有兜底 —— 用前 javap 看 `<init>` 才知道。
+    //     〔B〕修「进一个已经合成好四宫图的文件夹，滑一下 → 返回上一级 → 再进来，
+    //         有些文件夹又重新生成了，但不是全部、还挺随机」—— 两个独立成因：
+    //        B1（主因，v76 引入的回退）：`FolderCoverRefreshPolicy` 的默认值写成了
+    //           `Always`，而 v76 之前**只有下拉刷新**会换代；`Always` 让「每一次进入
+    //           任意一层」都整屏重新取样 ⇒ 四宫格当场洗牌换脸。
+    //           ⇒ 新增 `Manual`（「仅下拉刷新时重新合成」）并**改为默认**，回到 v76 之前
+    //             的行为；`Always` 仍保留成可选项（想要每次都新鲜的用户自己选）。
+    //           （看着像「只有一部分在变」，是因为子项 ≤4 个的文件夹怎么抽都是同一批图，
+    //             子项多的那些每次都不一样 —— 于是显得随机。这条判断当时写错了，
+    //             KDoc 里曾声称 `Always` 「与旧版本行为一致」，实为不一致，已更正。）
+    //        B2（一直存在）：批量取封面那个 effect 的 key 里带着 `mosaicFolderIds`
+    //           （这一屏所有需要宫格的文件夹 Id 拼成的串），而无限加载会不断往里加新的
+    //           ⇒ 签名一变，effect 就被**取消重跑**，连已经拼好的那批一起重新取样。
+    //           ⇒ 改成**只取这一代里还没定下来的**（新增 `EmbyFolderCoverCache.isResolved`）：
+    //             翻页 / 返回 / 重组都不再动已经合成好的封面；换代（下拉刷新 / Always）
+    //             时代数变化 ⇒ pending 仍是全部，换脸行为不变。
+    //        B3（顺手）：批量 effect 的 `finally` 原来无条件写 `batchCoveredSignature`。
+    //           签名变化会先取消老协程再起新的，老协程的 finally 可能排在新协程**之后**，
+    //           写进去的是**旧签名** ⇒ `folderCoverBatchReady` 恒 false，所有卡片永远卡在
+    //           「等批量」，整屏封面不加载。⇒ 加 `isActive` 守卫，被取消的协程不写。
+    //        B4（顺手）：宫格封面缓存上限 200 → 800（一条只是 4 个地址串，开销可忽略）。
+    //           定小了会被 LRU 淘汰，淘汰掉的文件夹下次进来要重新取样，同样表现为
+    //           「有些封面又重新生成了一遍」。
+    versionCode = 77
     versionName = "1.5.5"
 
     vectorDrawables {

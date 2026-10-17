@@ -147,8 +147,10 @@ import app.marlboroadvance.mpvex.ui.player.feed.FeedItem
 import app.marlboroadvance.mpvex.ui.player.feed.VerticalFeedActivity
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -1856,18 +1858,34 @@ data class EmbyLibraryScreen(
       val folderCoverBatchReady = batchCoveredSignature == mosaicSignature
       LaunchedEffect(mosaicSignature) {
         val srv = server
-        if (srv == null || mosaicFolderIds.isEmpty()) {
+        // 快照当前代数：写入时要带上它，这样「迟到的上一代结果」不会盖掉新代。
+        val gen = folderCoverGen
+        // ⭐⭐ 只取「这一代里还没定下来」的文件夹 —— 已经拼好的**一律不重取**。
+        //
+        //    这里是「滑动一下 → 返回上一级 → 再进这个文件夹，有些四宫格又重新生成」
+        //    的主因：签名里带着 `mosaicFolderIds`（这一屏所有需要宫格的文件夹 Id），
+        //    而无限加载会不断往里加新的 ⇒ 签名一变，这个 effect 就被**取消重跑**，
+        //    连已经拼好的那批一起重新取样。随机取样每次结果都不同 ⇒ 已经显示着的
+        //    封面当场洗牌换脸。
+        //    看着像「只有一部分在变、还挺随机」，是因为子项不超过 4 个的文件夹
+        //    怎么抽都是同一批图（抽不出新花样），子项多的那些每次都不一样。
+        //
+        // ⚠️ 换代（下拉刷新 / 「每次进入都重新合成」）时 `gen` 变了 ⇒ 缓存里条目的代
+        //    都小于新代 ⇒ pending = 全部，行为与从前一致（整批换脸）。
+        val pending =
+          mosaicFolderIds.filter { fid ->
+            fid.isNotBlank() && !EmbyFolderCoverCache.isResolved(folderCoverKey(fid, folderRandomCover), gen)
+          }
+        if (srv == null || pending.isEmpty()) {
           batchCoveredSignature = mosaicSignature
           return@LaunchedEffect
         }
-        // 快照当前代数：写入时要带上它，这样「迟到的上一代结果」不会盖掉新代。
-        val gen = folderCoverGen
         try {
           viewModel
             .loadFolderCoverBatch(
               server = srv,
               parentId = libraryId,
-              folderIds = mosaicFolderIds,
+              folderIds = pending,
               random = folderRandomCover,
             )
             .forEach { (folderId, urls) ->
@@ -1877,7 +1895,16 @@ data class EmbyLibraryScreen(
             }
         } finally {
           // ⚠️ 请求失败也必须放行：否则所有文件夹的封面都卡在「等批量」上，谁也不去取，整屏空白。
-          batchCoveredSignature = mosaicSignature
+          //
+          // ⚠️ 但**只在自己没被取消时写**：签名变化会先取消老协程再起新的，老协程的
+          //    finally 可能排在新协程**完成之后**才执行，那时写进去的是**旧签名**，
+          //    直接把新签名覆盖掉 ⇒ `folderCoverBatchReady` 变成 false 且再没人来写，
+          //    所有卡片永远卡在「等批量」，整屏封面不加载。
+          //    （`isActive` 在正常收尾的 finally 里仍是 true —— 那时协程还没完成；
+          //     只有被取消时根因已置上，它才是 false。）
+          if (currentCoroutineContext().isActive) {
+            batchCoveredSignature = mosaicSignature
+          }
         }
       }
 
@@ -3971,7 +3998,14 @@ private suspend fun loadAndStoreFolderCover(
  * 老条目原地留着显示，重取回来再把同键的值换掉 —— 视觉上是「换脸」，不是「先变空再出现」。
  */
 private object EmbyFolderCoverCache {
-  private const val MAX_ENTRIES = 200
+  /**
+   * 最多留多少条合成结果。
+   *
+   * ⭐ 一条只是「4 个图片地址字符串」，几百条的开销可以忽略 —— 定小了反而是坑：
+   *    被淘汰的文件夹下次进来要**重新取样**，四宫格当场洗牌，用户看到的就是
+   *    「有些封面又重新生成了一遍，还挺随机」。定大一点，正常翻库根本碰不到淘汰。
+   */
+  private const val MAX_ENTRIES = 800
 
   /** 一条封面：图片地址 + 它属于哪一代（见 [generation]） */
   private class Cover(
@@ -4014,14 +4048,31 @@ private object EmbyFolderCoverCache {
    * @param gen 调用方当前的封面代数（[currentGeneration]）。同一代里已经有值 ⇒ 不再取；
    *   换代后 ⇒ 允许再取一次。这就是「刷新时保留旧图、后台换新图」的开关。
    */
+  /**
+   * 这一代里这张封面**是不是已经有结果了**。
+   *
+   * 批量预取用它筛掉已经拼好的文件夹，避免「整批重取一遍」。
+   *
+   * ⭐ 用 `>=` 而不是 `==`：换代极快时可能出现「缓存里存的是更新的代」这种情况
+   *    （比如连续两次下拉刷新），这时它对我们这一代**同样算已定**，不该再取；
+   *    判成 `==` 就会把新代的结果又覆盖一次，画面白闪。
+   */
+  @Synchronized
+  fun isResolved(
+    folderId: String,
+    gen: Int,
+  ): Boolean {
+    val cover = entries[folderId] ?: return false
+    return cover.generation >= gen
+  }
+
   @Synchronized
   fun beginLoad(
     folderId: String,
     gen: Int,
   ): Boolean {
     if (loading.contains(folderId)) return false
-    val cover = entries[folderId]
-    if (cover != null && cover.generation == gen) return false
+    if (isResolved(folderId, gen)) return false
     loading.add(folderId)
     return true
   }

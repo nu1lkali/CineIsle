@@ -50,6 +50,22 @@ object EmbyPhotoImageLoader {
   private const val DISK_LIMIT_BYTES = 128L * 1024 * 1024
 
   /**
+   * 磁盘缓存目录名（挂在系统临时目录 [FileSystem.SYSTEM_TEMPORARY_DIRECTORY] 下）。
+   *
+   * ⭐⭐ 这一项是**必需**的：[DiskCache.Builder.build] 里是
+   *    `checkNotNull(directory) { "directory == null" }`，而 `Builder()` 构造时
+   *    **不会**给目录赋默认值（已 javap 核验 coil-core 3.6.3：`<init>` 只设了
+   *    fileSystem / maxSizePercent / minimumMaxSizeBytes / maxSizeBytes，没有 directory）。
+   *
+   *    以前这里写成 `DiskCache.Builder().maxSizeBytes(...).build()` ⇒ 一建缓存就抛
+   *    `IllegalStateException: directory == null`。因为 `ImageLoader` 是懒加载单例，
+   *    异常发生在图片请求协程里、被 Coil 兜成 `ErrorResult` ⇒ 表现为「照片加载不出来、
+   *    点重载也没反应」。网络照片链路（[app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoImageLoader]）
+   *    是同一个坑，一起修了。
+   */
+  private const val EMBY_IMAGE_CACHE_DIR = "emby_photo_cache"
+
+  /**
    * 内存缓存占可用堆的比例。
    *
    * ⭐ 这是「预加载会不会炸内存」的答案：堆再大，照片缓存也不会超过这个上限，
@@ -71,7 +87,12 @@ object EmbyPhotoImageLoader {
     ImageLoader.Builder(context)
       .components { add(EmbyPhotoFetcher.Factory(), EmbyPhotoUrl::class) }
       .memoryCache { MemoryCache.Builder().maxSizePercent(context, MEMORY_PERCENT).build() }
-      .diskCache { DiskCache.Builder().maxSizeBytes(DISK_LIMIT_BYTES).build() }
+      .diskCache {
+        DiskCache.Builder()
+          .directory(FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve(EMBY_IMAGE_CACHE_DIR))
+          .maxSizeBytes(DISK_LIMIT_BYTES)
+          .build()
+      }
       .build()
 
   /**
