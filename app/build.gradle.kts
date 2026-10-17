@@ -514,7 +514,18 @@ android {
     //     关 = onSurfaceVariant（与 ⋮ 同色，"待机"灰）。
     //     ⚠️ 两不：不改回「关态留空」（空占位即修复对象）；不做成两种不同图标
     //     （同一项图标形状必须恒定、只变颜色，否则开关切换时图标会跳）。
-    versionCode = 84
+    // 85（启动页动画 + UI 审计，versionName 仍为 1.5.5）：用户要「炫酷的启动动画」
+    //     + 顺手排查可优化的 UI。启动页（`MainActivity.AppSplashScreen`）从静态
+    //     logo 重写为品牌化「揭幕」三段式动画：① 进入——adaptive-icon 以弹性曲线
+    //     弹入（scale 0.6→1 + alpha 0→1），背后 tertiary 光晕无限脉冲（radial
+    //     gradient glow，无需 blur，规避 BOM 差异）；② 停留；③ 揭幕——整体放大
+    //     1.2× 并淡出，露出背后已布局好的 Navigation3 主界面（覆盖层方案，不白屏）。
+    //     名称错峰上移淡入。三段时间见 `MainActivity` 顶部 SPLASH_*_MS 常量
+    //     （ENTER 850 / HOLD 650 / EXIT 420）。
+    //     ⚠️ 红线：启动页是覆盖层、动画结束才 onFinished 卸掉自己；不要改成「替换
+    //     内容」，否则会白屏一闪。颜色全部走 colorScheme（primary/tertiary/surface），
+    //     不在播放器控制条外硬编码颜色。
+    versionCode = 85
     versionName = "1.5.5"
 
     vectorDrawables {
