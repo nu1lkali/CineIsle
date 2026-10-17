@@ -275,6 +275,8 @@ data class EmbyLibraryScreen(
     val folderRandomCover by browserPreferences.embyFolderRandomCover.collectAsState()
     // 随机播放的三个入口：单击下钻 or 长按下钻（默认前者）。用户可反转这组分工。
     val randomDrillDownOnTap by browserPreferences.embyRandomDrillDownOnTap.collectAsState()
+    // 手势提示（Toast）总开关：嫌吵的人可以关掉，只留「取不到内容」那种失败提示。
+    val randomGestureToast by browserPreferences.embyRandomGestureToast.collectAsState()
     // 合成策略：多久才允许把拼好的宫格封面换一批（默认「每次进入都重新合成」＝旧行为）。
     // 只影响「什么时候重取」，不影响取样方式（那是上面那个开关的事）。
     val coverRefreshPolicy by browserPreferences.embyFolderCoverRefreshPolicy.collectAsState()
@@ -1354,25 +1356,20 @@ data class EmbyLibraryScreen(
     }
 
     /**
-     * 下钻随机播放前的一句提示。
+     * 随机播放 / 视界流启动前的一句提示：**只说这次是什么行为**。
      *
-     * 为什么要弹：下钻的后果是「这一层明明只有文件夹，怎么放起来了」，
-     * 需要一句解释；顺带把**另一半手势**说出来 —— 单击/长按的分工是隐藏交互，
-     * 不说没人会发现。
+     * ⚠️ 不要在这里提「另一半手势」。上一版写「随机播放：含子文件夹 · 长按只播当前目录」，
+     * 用户单击后看到「长按」二字，第一反应是「提示写反了 / 我是不是按错了」——
+     * 这句提示的作用只是确认「这次取片范围」，不是在教手势。
+     * 手势分工的说明放在设置项的副标题里（那句是静态说明，不会被误读成动作回执）。
      *
-     * 手势名跟着设置项（[randomDrillDownOnTap]）走：用户把分工调反了之后，
-     * 提示里再写死「长按」就成了错误信息。
+     * 受 [randomGestureToast] 总开关控制；失败提示（[emptyCurrentLevelHint]）不受它控制。
      */
-    fun showDrillDownHint(label: String) {
-      val otherGesture = if (randomDrillDownOnTap) "长按" else "单击"
-      // ⚠️ 必须写 `${otherGesture}`：Kotlin 标识符允许中文，直接 `$otherGesture只播…`
-      // 会被解析成「otherGesture只播当前目录」这一个变量名 → Unresolved reference。
+    fun showGestureHint(label: String, drillDown: Boolean) {
+      if (!randomGestureToast) return
+      val text = if (drillDown) "$label（含子文件夹）" else "$label（仅当前目录）"
       android.widget.Toast
-        .makeText(
-          context,
-          "$label：含子文件夹 · ${otherGesture}只播当前目录",
-          android.widget.Toast.LENGTH_SHORT,
-        )
+        .makeText(context, text, android.widget.Toast.LENGTH_SHORT)
         .show()
     }
 
@@ -1411,8 +1408,9 @@ data class EmbyLibraryScreen(
             .show()
           return@launch
         }
-        // 进播放器**之前**提示：下钻是跨层取片，用户得知道范围被放大了。
-        if (drillDown) showDrillDownHint(if (favoritesOnly) "随机播放收藏" else "随机播放")
+        // 进播放器**之前**提示：这次到底是「含子文件夹」还是「只播当前目录」。
+        // 两种手势都弹 —— 用户反馈只给下钻弹、长按静悄悄，反而更像没生效。
+        showGestureHint(if (favoritesOnly) "随机播放收藏" else "随机播放", drillDown)
         // 随机列表里可能混着看过的剧，切过去若恢复进度会直接跳到片尾，所以每个视频都从头放
         viewModel.launchPlaylist(current, random, playFromStartAll = true)
       }
@@ -1491,8 +1489,8 @@ data class EmbyLibraryScreen(
             .show()
           return@launch
         }
-        // 与「随机播放」同一个意思：视界流同样会跨子文件夹取片，进页面前先说明范围。
-        if (drillDown) showDrillDownHint("视界流")
+        // 与「随机播放」同一个意思：视界流同样要说明这次取片的范围（两种手势都弹）。
+        showGestureHint("视界流", drillDown)
         VerticalFeedActivity.launch(context, items, libraryId, favoritesOnly)
       }
     }

@@ -35,6 +35,16 @@ class BrowserPreferences(
    */
   val embyRandomDrillDownOnTap = preferenceStore.getBoolean("emby_random_drill_down_on_tap", true)
 
+  /**
+   * 随机播放入口的手势提示（Toast）是否显示，默认 true。
+   *
+   * 每次点随机都弹一句「含子文件夹 / 只播当前目录」对老用户是噪音 ——
+   * 但对手势分工不熟的人，这是唯一能发现长按的入口。给开关，不替用户决定。
+   * ⚠️ 只关「动作说明」，不关「取不到内容的提示」：后者是唯一的失败反馈，
+   * 关掉就成了「点了没反应」。
+   */
+  val embyRandomGestureToast = preferenceStore.getBoolean("emby_random_gesture_toast", true)
+
   // Video sorting preferences
   val videoSortType = preferenceStore.getEnum("video_sort_type", VideoSortType.Title)
   val videoSortOrder = preferenceStore.getEnum("video_sort_order", SortOrder.Ascending)

@@ -1013,13 +1013,15 @@ object PreferencesScreen : Screen {
           }
 
           item {
-            // 随机播放的两项设置，放一起：**取多少条** + **单击/长按的分工**。
+            // 随机播放的三项设置，放一起：**取多少条** + **单击/长按的分工** + **手势提示**。
             //  · 数量：库里片子多的用户想要更长的一批，库小的觉得刷来刷去都是重复的；
             //  · 分工：按文件夹组织片子的人要下钻，按「一层一批」组织的人天天只播当前层，
-            //    两边的常用手势正好相反 —— 所以给开关，不替用户定死。
+            //    两边的常用手势正好相反 —— 所以给开关，不替用户定死；
+            //  · 提示：每次点都弹一句对老用户是噪音，但对手势不熟的人是唯一发现入口。
             val browserPreferences = koinInject<BrowserPreferences>()
             val randomCount by browserPreferences.randomPlayCount.collectAsState()
             val drillDownOnTap by browserPreferences.embyRandomDrillDownOnTap.collectAsState()
+            val gestureToast by browserPreferences.embyRandomGestureToast.collectAsState()
             var showRandomDialog by remember { mutableStateOf(false) }
             PreferenceCard {
               Preference(
@@ -1056,6 +1058,24 @@ object PreferencesScreen : Screen {
                         "当前：单击只播当前目录、长按含子文件夹"
                       }
                       ) + "（影响随机播放 / 随机播放收藏 / 视界流）",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              // 手势提示总开关。关掉的只是「这次动作的范围说明」，
+              // **不关**「当前目录 / 范围内没有可播放内容」这类失败提示 ——
+              // 那是唯一的反馈，关掉就退化成「点了没反应」。
+              SwitchPreference(
+                value = gestureToast,
+                onValueChange = { browserPreferences.embyRandomGestureToast.set(it) },
+                title = { Text(text = "显示手势提示") },
+                summary = {
+                  Text(
+                    text = "点击随机播放 / 随机播放收藏 / 视界流时，提示本次是「含子文件夹」还是" +
+                      "「只播当前目录」；关闭后不再提示，但取不到内容时仍会说明原因",
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },
