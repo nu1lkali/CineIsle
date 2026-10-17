@@ -285,6 +285,19 @@ data class EmbyDetailScreen(
       isLoading = false
     }
 
+    /**
+     * 从本页压栈一个子页面（演员作品 / 类型结果页 / 下一层详情页…）。
+     *
+     * ⚠️ 必须走它而不是直接 `backStack.add`：压栈前要给本条的推荐缓存打一个
+     * 「有子页面」标记，子页面返回后本页重新组合时才认得出「这是返回」而不是
+     * 「重新进页面」，从而复用上次那批推荐、不重新随机。详见 [EmbyRecommendCache]。
+     */
+    fun pushChild(screen: Screen) {
+      val sid = server?.id
+      if (sid != null) EmbyRecommendCache.markChildPushed(sid, item?.Id ?: itemId)
+      backStack.add(screen)
+    }
+
     LaunchedEffect(itemId) { load() }
 
     // 从播放器返回时刷新详情：播放器的进度/已看上报是异步落到服务器的，而本页组合
@@ -343,6 +356,21 @@ data class EmbyDetailScreen(
       if (!showRecommendations) return@LaunchedEffect
       val current = item ?: return@LaunchedEffect
       val currentServer = server ?: return@LaunchedEffect
+      val currentId = current.Id ?: itemId
+
+      // ── 先试「复用」──
+      // 若本次组合是「从本页 push 出去的下一层页面返回」造成的（压栈前留过标记，
+      // 见 [EmbyRecommendCache]），就直接拿回上次那批推荐，不再请求、不再随机 ——
+      // 用户视角是「我只是点进去看了一眼又回来，推荐不该换」。
+      // 从列表 / 首页重新进本页时没有标记 ⇒ 走下面的正常加载，「每次进页面换一批」照旧。
+      val restored = EmbyRecommendCache.takeForRestore(currentServer.id, currentId)
+      if (restored != null) {
+        recommendItems = restored.items
+        genreRecommendLabel = restored.genreLabel
+        genreRecommendItems = restored.genreItems
+        return@LaunchedEffect
+      }
+
       // 清空再取：换条目 / 下拉刷新时不该让用户先看到上一批推荐再被换掉
       recommendItems = emptyList()
       genreRecommendLabel = null
@@ -374,6 +402,15 @@ data class EmbyDetailScreen(
           }
         }
       }
+      // 回写缓存：下次从子页面返回时复用这一批（含「查不到 → 空」的情况，
+      // 否则那种条目返回时还会再请求一轮）。
+      EmbyRecommendCache.put(
+        serverId = currentServer.id,
+        itemId = currentId,
+        items = recommendItems,
+        genreLabel = genreRecommendLabel,
+        genreItems = genreRecommendItems,
+      )
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -657,13 +694,13 @@ data class EmbyDetailScreen(
               onScrapeMetadata = { showIdentifySheet = true },
               onEditMetadata = { showEditMeta = true },
               onPersonClick = { pid, pname, tag ->
-                backStack.add(
+                pushChild(
                   EmbyPersonScreen(personId = pid, personName = pname, personImageTag = tag),
                 )
               },
               // 点类型 / 标签 / 工作室 chip：进「按该维度找片」的结果页
               onMetaClick = { keyword, kind, filterId ->
-                backStack.add(
+                pushChild(
                   EmbyTagItemsScreen(keyword = keyword, kind = kind, filterId = filterId),
                 )
               },
@@ -700,7 +737,7 @@ data class EmbyDetailScreen(
               genreRecommendItems = genreRecommendItems,
               // 点推荐卡片：同一位演员 / 导演的另一部片子，直接再开一层详情页
               onRecommendClick = { id, name ->
-                backStack.add(EmbyDetailScreen(itemId = id, title = name))
+                pushChild(EmbyDetailScreen(itemId = id, title = name))
               },
             )
           }

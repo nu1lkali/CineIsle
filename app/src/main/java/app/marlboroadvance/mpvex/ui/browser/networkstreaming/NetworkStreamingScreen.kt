@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -78,6 +79,12 @@ import kotlinx.serialization.Serializable
 import org.koin.compose.koinInject
 import app.marlboroadvance.mpvex.preferences.FolderViewMode
 
+/**
+ * 给常驻 FAB 预留的底部空间：`ExtendedFloatingActionButton` 高 56dp + 上下各留 16dp，
+ * 保证列表滚到底时最后一张卡完整可见、不被 FAB 压住（见 `contentPadding`）。
+ */
+private val FAB_RESERVED_HEIGHT = 88.dp
+
 @Serializable
 object NetworkStreamingScreen : Screen {
   @OptIn(ExperimentalMaterial3Api::class)
@@ -100,35 +107,14 @@ object NetworkStreamingScreen : Screen {
     var editingConnection by remember { mutableStateOf<NetworkConnection?>(null) }
     val navigationBarHeight = app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight.current
 
-    // LazyList state for scroll tracking
-    val listState = LazyListState()
+    // ⚠️ 必须用 rememberLazyListState()：原先是 `LazyListState()` —— 每次重组都新建一个
+    //    滚动状态，「上一次滚到哪」永远读到初始值，于是「上滑显示 / 下滑隐藏」这条判据
+    //    整体失效，用户看到的就是「只有滚回顶部才见得到 FAB」。
+    //    （另：原来的显隐逻辑还把赋值写在 derivedStateOf 里 —— 推导里改快照状态是反模式，
+    //     会让推导结果与实际滚动不同步。现已整段删掉，改为常驻显示。）
+    val listState = rememberLazyListState()
 
-    // Track scroll direction to show/hide FAB
-    var previousFirstVisibleItemIndex by remember { mutableIntStateOf(0) }
-    var previousFirstVisibleItemScrollOffset by remember { mutableIntStateOf(0) }
-    
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
-    
-    val isFabVisible by remember {
-      derivedStateOf {
-        val currentIndex = listState.firstVisibleItemIndex
-        val currentOffset = listState.firstVisibleItemScrollOffset
-
-        // Show FAB when at the top
-        if (currentIndex == 0 && currentOffset == 0) {
-          true
-        } else {
-          // Show when scrolling up, hide when scrolling down
-          val isScrollingUp = currentIndex < previousFirstVisibleItemIndex ||
-            (currentIndex == previousFirstVisibleItemIndex && currentOffset < previousFirstVisibleItemScrollOffset)
-
-          previousFirstVisibleItemIndex = currentIndex
-          previousFirstVisibleItemScrollOffset = currentOffset
-
-          isScrollingUp
-        }
-      }
-    }
 
     Scaffold(
         topBar = {
@@ -157,15 +143,15 @@ object NetworkStreamingScreen : Screen {
         )
       },
       floatingActionButton = {
+        // 常驻显示：这是本页唯一的高频操作（添加连接），「滚动就消失」只会让用户
+        // 以为没入口（原来的显隐判据本身也是坏的，见上面 listState 处的注释）。
         val navigationBarHeight = app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight.current
-        if (isFabVisible) {
-          ExtendedFloatingActionButton(
-            onClick = { showAddSheet = true },
-            icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-            text = { Text("添加连接") },
-            modifier = Modifier.padding(bottom = navigationBarHeight)
-          )
-        }
+        ExtendedFloatingActionButton(
+          onClick = { showAddSheet = true },
+          icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+          text = { Text("添加连接") },
+          modifier = Modifier.padding(bottom = navigationBarHeight),
+        )
       },
     ) { padding ->
       LazyColumn(
@@ -174,10 +160,11 @@ object NetworkStreamingScreen : Screen {
           .fillMaxSize()
           .padding(padding),
         contentPadding = PaddingValues(
-          start = 16.dp, 
-          end = 16.dp, 
-          top = 16.dp, 
-          bottom = navigationBarHeight
+          start = 16.dp,
+          end = 16.dp,
+          top = 16.dp,
+          // 底部要额外留出常驻 FAB 的高度，否则最后一张连接卡会被 FAB 压住
+          bottom = navigationBarHeight + FAB_RESERVED_HEIGHT,
         ),
       ) {
           // Section 1: Stream Link
