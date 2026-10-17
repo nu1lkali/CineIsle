@@ -547,7 +547,13 @@ android {
     //     可能停在中段或底部。落点 NetworkBrowserScreen：内容区/网格/列表补 sortType+sortOrder，
     //     两个子组件各 `LaunchedEffect(sortType, sortOrder) { state.scrollToItem(0) }`。
     //     ⚠️ 键只放排序两项，别带 items（下拉刷新/封面懒加载会抢滚动位置）。
-    versionCode = 88
+    // 89（Emby 文件夹卡片左下角文件夹图标，versionName 仍为 1.5.6）：进入文件夹后子文件夹
+    //     与媒体文件视觉上无区别。EmbyMediaCard 新增 isFolder；左下角原角标重构为
+    //     Row[文件夹图标 chip + 角标 chip]（图标永远最左 ⇒ 结构上不互遮），
+    //     padding(bottom=8) 让开 3dp 进度条；图标不受 showBadges 控制（始终可见）。
+    //     判定复用 isFolderLike(item)（Folder/CollectionFolder/UserView/BoxSet），
+    //     与宫格封面/点击语义同口径；紧凑行 EmbyCompactRow 同步补 10dp 图标。
+    versionCode = 89
     versionName = "1.5.6"
 
     vectorDrawables {

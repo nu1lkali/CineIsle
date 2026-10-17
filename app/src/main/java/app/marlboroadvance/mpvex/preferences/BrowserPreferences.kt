@@ -382,6 +382,17 @@ class BrowserPreferences(
    */
   val embyShowCardBadges = preferenceStore.getBoolean("emby_show_card_badges", true)
 
+  /**
+   * 文件夹类型图标的颜色：true = 蓝色，false = 白色（默认）。
+   *
+   * 白色对比度更高、和「剩余时长」「作品数」等角标同一套语言；蓝色更醒目，但小尺寸
+   * 在深色角标上会发灰、且偏「按钮感」。两种都有人要，就把选择权交给用户。
+   *
+   * ⚠️ 刻意**不**进 `EmbyDisplayPrefsSync`：这是纯本地观感项，不属于「界面布局」，
+   * 不该跟着账号同步到别的设备上把别人的配色也改掉。
+   */
+  val embyFolderIconBlue = preferenceStore.getBoolean("emby_folder_icon_blue", false)
+
   // ── Emby 浏览交互开关 ──
 
   /**

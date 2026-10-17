@@ -826,6 +826,7 @@ object PreferencesScreen : Screen {
             val browserPreferences = koinInject<BrowserPreferences>()
             val cardCorner by browserPreferences.embyCardCorner.collectAsState()
             val showCardBadges by browserPreferences.embyShowCardBadges.collectAsState()
+            val folderIconBlue by browserPreferences.embyFolderIconBlue.collectAsState()
             val folderRandomCover by browserPreferences.embyFolderRandomCover.collectAsState()
             PreferenceCard {
               SliderPreference(
@@ -852,6 +853,22 @@ object PreferencesScreen : Screen {
                 summary = {
                   Text(
                     text = "在封面上显示播放进度条 / 作品数等角标；关闭后卡片更干净",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              // 文件夹类型图标的颜色：白色对比度更高、与其它角标同语言（默认）；
+              // 蓝色更醒目但小尺寸在深炭底上会发灰，所以做成开关让用户自己选。
+              SwitchPreference(
+                value = folderIconBlue,
+                onValueChange = { browserPreferences.embyFolderIconBlue.set(it) },
+                title = { Text(text = "文件夹图标使用蓝色") },
+                summary = {
+                  Text(
+                    text = "媒体库文件夹卡片左下角的类型图标：打开为蓝色，关闭为白色（默认）",
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },

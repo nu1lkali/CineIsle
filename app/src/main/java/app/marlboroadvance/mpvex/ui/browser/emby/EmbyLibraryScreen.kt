@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FilterAlt
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Remove
@@ -82,6 +83,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -129,6 +131,9 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyFavoriteRandomIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyProgressBar
+import app.marlboroadvance.mpvex.ui.browser.emby.components.MEDIA_BADGE_BG
+import app.marlboroadvance.mpvex.ui.browser.emby.components.FOLDER_ICON_BLUE
+import app.marlboroadvance.mpvex.ui.browser.emby.components.LocalEmbyAppearance
 import app.marlboroadvance.mpvex.ui.browser.emby.components.VideoFeedIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyItemActionsDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaActionsDialog
@@ -2119,6 +2124,8 @@ data class EmbyLibraryScreen(
                     },
                     progress = playbackProgress(item),
                     isFavorite = item.UserData?.IsFavorite == true,
+                    // 文件夹类型图标：与网格卡共用 isFolderLike 判定
+                    isFolder = isFolderLike(item),
                     onClick = {
                       val photos = displayItems.filter { it.Type == "Photo" }
                       openItem(
@@ -2847,6 +2854,9 @@ private fun EmbyLibraryMediaCell(
     onLongClick = onLongClick,
     onToggleFavorite = onToggleFavorite,
     titleMaxLines = titleMaxLines,
+    // 文件夹类型图标：与宫格封面 / 「点进去还是播放」共用 isFolderLike 这一个判定，
+    // 避免卡片与批量逻辑各写一份、改一处漏一处（见 needsFolderMosaic 的 KDoc）。
+    isFolder = isFolderLike(item),
   )
 }
 
@@ -2866,6 +2876,8 @@ private fun EmbyCompactRow(
   onClick: () -> Unit,
   onLongClick: ((androidx.compose.ui.geometry.Offset) -> Unit)?,
   onToggleFavorite: (() -> Unit)?,
+  /** 是否为文件夹类条目：true 时在小海报左下角显示文件夹图标（与网格卡同一约定） */
+  isFolder: Boolean = false,
 ) {
   Row(
     modifier = Modifier
@@ -2894,6 +2906,30 @@ private fun EmbyCompactRow(
         modifier = Modifier.fillMaxSize(),
         contentScale = androidx.compose.ui.layout.ContentScale.Crop,
       )
+      // 文件夹类型图标：与网格卡同一套底色与位置（左下角、让开底部进度条）。
+      // 紧凑行的小海报只有 52dp 宽，图标相应缩到 10dp，但仍能一眼分出「进入 / 播放」。
+      if (isFolder) {
+        Surface(
+          modifier = Modifier
+            .align(Alignment.BottomStart)
+            .padding(start = 3.dp, bottom = 6.dp),
+          shape = RoundedCornerShape(4.dp),
+          color = MEDIA_BADGE_BG,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Folder,
+            contentDescription = "文件夹",
+            tint = if (LocalEmbyAppearance.current.folderIconBlue) {
+              FOLDER_ICON_BLUE
+            } else {
+              Color.White
+            },
+            modifier = Modifier
+              .padding(horizontal = 2.dp, vertical = 2.dp)
+              .size(10.dp),
+          )
+        }
+      }
       if (progress != null && progress > 0f) {
         EmbyProgressBar(
           progress = progress,

@@ -220,6 +220,7 @@ fun MpvexTheme(content: @Composable () -> Unit) {
     val browserPreferences = koinInject<BrowserPreferences>()
     val embyCardCorner by browserPreferences.embyCardCorner.collectAsState()
     val embyShowCardBadges by browserPreferences.embyShowCardBadges.collectAsState()
+    val embyFolderIconBlue by browserPreferences.embyFolderIconBlue.collectAsState()
     val darkTheme = isSystemInDarkTheme()
     val context = LocalContext.current
 
@@ -262,6 +263,7 @@ fun MpvexTheme(content: @Composable () -> Unit) {
         LocalEmbyAppearance provides EmbyAppearance(
             corner = embyCardCorner.coerceIn(0, 24).dp,
             showBadges = embyShowCardBadges,
+            folderIconBlue = embyFolderIconBlue,
         ),
     ) {
         ThemeTransitionContent {

@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
@@ -321,10 +322,12 @@ enum class EmbyCardStyle(
  *
  * @param corner 卡片圆角
  * @param showBadges 是否显示封面上的角标（播放进度条 / 作品数）
+ * @param folderIconBlue 文件夹类型图标是否用蓝色（false = 白色，默认）
  */
 data class EmbyAppearance(
   val corner: Dp = EMBY_CARD_CORNER,
   val showBadges: Boolean = true,
+  val folderIconBlue: Boolean = false,
 )
 
 val LocalEmbyAppearance =
@@ -357,6 +360,14 @@ fun EmbyMediaCard(
   onLongClick: ((Offset) -> Unit)? = null,
   /** 左下角角标文案（如演员卡片的「128 部」作品数），null 时不显示 */
   badgeText: String? = null,
+  /**
+   * 是否为「文件夹 / 容器」类条目：true 时在**左下角**显示一枚文件夹图标。
+   *
+   * 判定由调用方传入（媒体库用 `isFolderLike(item)`，与宫格封面 / 「点进去还是播放」
+   * 同一口径），卡片自身不猜类型。图标**不受「显示封面角标」开关控制** ——
+   * 它是「点进去 / 直接播」的类型区分，关掉角标后两类条目就再也分不出来了。
+   */
+  isFolder: Boolean = false,
   /** 多选模式下的选中态：压一层主色遮罩 + 左上角对勾 */
   selected: Boolean = false,
   /**
@@ -498,24 +509,57 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
           }
         }
 
-        // 左下角角标：演员卡片用来垫「参与作品数」；覆盖在底部进度条上方一点，避免压住。
-        // 受「显示封面角标」设置控制（见 EmbyAppearance）
-        if (LocalEmbyAppearance.current.showBadges && !badgeText.isNullOrBlank()) {
-          Surface(
+        // ── 左下角：文件夹类型图标 + 角标 ──
+        // 两者放进**同一个 Row**：文件夹图标永远排最左（用户要求「始终出现在左下角」），
+        // 角标依次排在它右边，于是既不会互相遮挡，也不会被角标挤走位。
+        // 贴在底部进度条（3dp）上方 8dp，避免压住进度条。
+        //
+        // ⚠️ 文件夹图标**刻意不受 `showBadges` 控制**：那个开关管的是「播放进度 / 作品数」
+        //    这类装饰信息；而文件夹图标是「点它是进入还是播放」的类型区分 ——
+        //    关掉角标后两类条目就分不出来了，正是这次要解决的问题。
+        val hasBadge = LocalEmbyAppearance.current.showBadges && !badgeText.isNullOrBlank()
+        if (isFolder || hasBadge) {
+          Row(
             modifier = Modifier
               .align(Alignment.BottomStart)
               .padding(start = 6.dp, bottom = 8.dp),
-            shape = RoundedCornerShape(6.dp),
-            color = MEDIA_BADGE_BG,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
           ) {
-            Text(
-              text = badgeText,
-              style = MaterialTheme.typography.labelSmall,
-              color = Color.White,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-            )
+            if (isFolder) {
+              Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = MEDIA_BADGE_BG,
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Folder,
+                  contentDescription = "文件夹",
+                  tint = if (LocalEmbyAppearance.current.folderIconBlue) {
+                    FOLDER_ICON_BLUE
+                  } else {
+                    Color.White
+                  },
+                  modifier = Modifier
+                    .padding(horizontal = 4.dp, vertical = 3.dp)
+                    .size(14.dp),
+                )
+              }
+            }
+            if (hasBadge) {
+              Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = MEDIA_BADGE_BG,
+              ) {
+                Text(
+                  text = badgeText.orEmpty(),
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color.White,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                )
+              }
+            }
           }
         }
       }
@@ -837,7 +881,16 @@ private val LIBRARY_CARD_HEIGHT = 90.dp
  * 取自 App 暗色背景（`0xFF161217`）那一族的色调，不偏蓝，配白字在任何封面上都稳。
  * 半透明是为了让底下的封面还能透出一点点，不至于像贴了张死色纸。
  */
-private val MEDIA_BADGE_BG = Color(0xFF262229).copy(alpha = 0.85f)
+internal val MEDIA_BADGE_BG = Color(0xFF262229).copy(alpha = 0.85f)
+
+/**
+ * 「蓝色文件夹图标」用的蓝。
+ *
+ * 刻意写死、不取 `colorScheme.primary`：主色随主题/动态取色会变成紫、青、绿，
+ * 那就不再是「蓝色」了；用户要的是一眼能认出的蓝。这个值在 [MEDIA_BADGE_BG]
+ * 的深炭底上仍保持足够亮度，不会糊成一团。
+ */
+internal val FOLDER_ICON_BLUE = Color(0xFF9FC3FF)
 
 /**
  * 「单击 + 长按」合成 modifier，并把**长按的位置（root 坐标）**回传给 [onLongClick]。
