@@ -431,7 +431,24 @@ android {
     //        同理，「下拉刷新之所以有效」正是因为 `fs/list` 给了**新 sign** ——
     //        `NetworkPhotoRequest` 是 data class，sign 一变 request 才真的不等。
     //        这两个事实都写进了 `NetworkPhotoThumbnail` 的注释，防止后来又去改 UI。
-    versionCode = 79
+    // 80（自然排序，versionName 仍为 1.5.5）：用户报「网络模块里挂载的网络位置排序不生效，
+    //     比如按名称排序是 e1018 e1019 e102 e1020 e1021，希望自然排序」。
+    //     **根因**：`NetworkBrowserViewModel.networkFileComparator` 的名称键写的是
+    //     `compareBy { it.name.lowercase() }` —— 纯字典序把数字段**按字符**比
+    //     （'1' 后的 '0' < '2'）⇒ `e1018 < e1019 < e102 < e1020 < e1021`。
+    //     这类 `e0xx` / `Ep 2 vs Ep 10` 命名在媒体库极常见，而**本地文件夹、本地视频、
+    //     文件选择器三处早就用 `SortUtils.NaturalOrderComparator`**（`utils/sort/SortUtils.kt`，
+    //     连续数字段按数值比），网络模块当初漏接了这一层。
+    //     改动（全部对齐既有 DEFAULT 实例，不新造轮子）：
+    //       ① `networkFileComparator` 的名称键 + 同键名称兜底都改自然序
+    //          （兜底不跟着改的话，同日期/同大小的项之间仍会退回字典序，自相矛盾）；
+    //       ② `_rawFiles` 的基准序同样改自然序（最终顺序由比较器决定，但基准序是兜底链）；
+    //       ③ 文件夹封面的「第一张图片」从 `minByOrNull { it.name.lowercase() }` 改成
+    //          `minWithOrNull(NaturalOrderComparator)` —— 否则 `img9/img10` 这种命名下
+    //          封面会取到第 10 张，而网格里排第一的是第 9 张，封面与列表对不上。
+    //     ⚠️ 网格视图无需改：v66b 起 `gridItems` 已直接沿用 `files` 的顺序（不再自己排一遍），
+    //        改比较器即同时生效于列表与网格。
+    versionCode = 80
     versionName = "1.5.5"
 
     vectorDrawables {

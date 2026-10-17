@@ -21,6 +21,7 @@ import app.marlboroadvance.mpvex.preferences.NetworkSortType
 import app.marlboroadvance.mpvex.preferences.SortOrder
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.repository.NetworkRepository
+import app.marlboroadvance.mpvex.utils.sort.SortUtils
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -155,8 +156,9 @@ class NetworkBrowserViewModel(
   /**
    * 确保这个文件夹的封面已缓存（没有就列一次目录）。
    *
-   * 「第一张图片」按**名称序**取（`minByOrNull { it.name.lowercase() }`）——
-   * 与服务端返回顺序无关，同一文件夹每次进来封面稳定。
+   * 「第一张图片」按**名称自然序**取（`minWithOrNull(NaturalOrderComparator)`）——
+   * 与服务端返回顺序无关，同一文件夹每次进来封面稳定；且与列表排序同口径
+   * （否则 `img9/img10` 这种命名下封面会取到第 10 张、列表第一却是第 9 张）。
    * 只认直接子级里的图片，**不递归**子文件夹（递归 = 一张卡片要 N 次列目录，
    * 那就不是「尽可能减少请求」了）。
    *
@@ -197,7 +199,10 @@ class NetworkBrowserViewModel(
               page
                 .getOrNull()
                 ?.filter { it.isPhoto() }
-                ?.minByOrNull { it.name.lowercase() }
+                // ⚠️ 走**自然序**取第一张，不能 `minByOrNull { it.name.lowercase() }`：
+                //    字典序会把 `img10.jpg` 判成比 `img9.jpg` 小 ⇒ 封面取的是第 10 张，
+                //    而网格里排在第一的是第 9 张，两者对不上。与列表排序同口径。
+                ?.minWithOrNull(compareBy(SortUtils.NaturalOrderComparator.DEFAULT) { it.name })
                 ?.path
             listedOk = true
             break
@@ -325,8 +330,11 @@ class NetworkBrowserViewModel(
         repository.listFiles(connection, currentPath)
           .onSuccess { fileList ->
             _rawFiles.value = fileList.sortedWith(
+              // 基准序也走自然序：虽然最终顺序由 networkFileComparator 决定，
+              // 但基准序是它的兜底链，字典序会在这里留下一个不一致的暗面
+              // （同名/同键项之间退回 '0' < '2' 的字符比）。
               compareBy<NetworkFile> { !it.isDirectory }
-                .thenBy { it.name.lowercase() },
+                .thenBy(SortUtils.NaturalOrderComparator.DEFAULT) { it.name },
             )
             // 只有下拉刷新才动封面缓存：子文件夹里的照片可能增删了，
             // 已看过的失效重取（值变了卡面自然刷新），没看过的仍然懒加载
@@ -576,13 +584,23 @@ private fun Preference<Int>.randomPlayLimit(): Int = get().coerceIn(1, 500)
  * 各自再按 [type] 的键排。[order] 只作用于排序键，**不翻转「文件夹优先」**——
  * 直接把整个比较器 reversed() 会把文件夹甩到后面去。
  *
- * 同键时按名称升序兜底：排序结果稳定可预期（基准序本身就是名称序，
+ * 同键时按名称**自然序**兜底：排序结果稳定可预期（基准序本身就是名称序，
  * 加了兜底即使基准序变了同键项也仍然 A-Z）。
+ *
+ * ⚠️ **名称键必须走自然序，不能 `compareBy { it.name.lowercase() }`**（v79 之前就是那么写的，
+ *    用户实测「排序不生效」）：纯字典序把数字段**按字符**比 ⇒
+ *    `e1018 < e1019 < e102 < e1020 < e1021`（'1' 后面那个 '0' 比 '2' 小），
+ *    而人要的是 `e102 < e1018 < e1019 < e1020 < e1021`。
+ *    这类 `e0xx` / `Ep 2 vs Ep 10` 的命名在媒体库里极常见，本地文件夹、本地视频、
+ *    文件选择器三处早就用 [SortUtils.NaturalOrderComparator]（见 `SortUtils.kt`），
+ *    网络模块当初漏了 —— 这次对齐。
  */
 private fun networkFileComparator(type: NetworkSortType, order: SortOrder): Comparator<NetworkFile> {
   val foldersFirst = compareBy<NetworkFile> { !it.isDirectory }
   val key: Comparator<NetworkFile> = when (type) {
-    NetworkSortType.Name -> compareBy { it.name.lowercase() }
+    // ⭐ 自然序：把连续数字段按数值比（e102 < e1018）。大小写不敏感 + 跳过空白，
+    //    与本地文件夹 / 文件选择器同一份 DEFAULT 实例、同一口径。
+    NetworkSortType.Name -> compareBy(SortUtils.NaturalOrderComparator.DEFAULT) { it.name }
     NetworkSortType.Date -> compareBy { it.lastModified }
     NetworkSortType.Size -> compareBy { it.size }
     // 类型：与列表视图的 section 顺序一致（文件夹 → 图片 → 视频 → 其他）
@@ -591,7 +609,8 @@ private fun networkFileComparator(type: NetworkSortType, order: SortOrder): Comp
     NetworkSortType.Random -> compareBy { 0 }
   }
   val directed = if (order.isAscending) key else key.reversed()
-  return foldersFirst.then(directed.thenBy { it.name.lowercase() })
+  // 兜底也用自然序：否则同日期/同大小的项之间会退回字典序，与「按名称」排序自相矛盾
+  return foldersFirst.then(directed).thenBy(SortUtils.NaturalOrderComparator.DEFAULT) { it.name }
 }
 
 /** 类型排序权重：与列表视图 section 顺序（文件夹 / 图片 / 视频 / 其他）一致 */
