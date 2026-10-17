@@ -211,10 +211,11 @@ object NetworkStreamingScreen : Screen {
             }
           }
 
-          // Section 2: Local Network header
+          // Section 2: 已保存的连接（原来是「局域网」—— 但用户完全可能在公网服务器上
+          // 跑 SMB / WebDAV / AList，写死「局域网」既不准确也劝退）
           item {
             Spacer(modifier = Modifier.height(24.dp))
-            SectionHeader(stringResource(R.string.i18n_local_network))
+            SectionHeader(stringResource(R.string.i18n_network_locations))
           }
 
           // Show empty state or connection list
@@ -322,7 +323,7 @@ object NetworkStreamingScreen : Screen {
 /**
  * 段落标题（网络模块统一版式）。
  *
- * 三个段落（直链 / 收藏的目录 / 局域网）共用同一个组件 —— 之前三处各写一份
+ * 三个段落（直链 / 收藏的目录 / 网络位置）共用同一个组件 —— 之前三处各写一份
  * `Text(style=titleLarge, Bold, primary)`，样式一致性全靠人肉同步，迟早跑偏。
  */
 @Composable

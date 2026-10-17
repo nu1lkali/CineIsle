@@ -294,7 +294,33 @@ android {
     //           且 `widthIn(min = 400.dp)` 会把小屏撑出屏幕。⇒ 新增/编辑连接表单改为",
     //           **底部抽屉**（`ModalBottomSheet` + `skipPartiallyExpanded = true`），",
     //           与 `PlayLinkSheet` 同一套范式；两表单字段权重也统一回 0.50/0.50。",
-    versionCode = 75
+    // 76（修复轮，versionName 仍为 1.5.5）：三处收口：
+    //     ① 「合成随机封面图」支持配置**重新合成策略**：新增 `FolderCoverRefreshPolicy`
+    //        （每次进入都重新合成 / 满 X 小时 / 满 X 天）+ 两个 X + 落盘的
+    //        `emby_folder_cover_last_synth_at`。判定抽成纯函数 `shouldResynthesizeCover()`
+    //        —— `Always`、从没合成过、**时钟回拨**三种情况一律判「要换」（不挡时钟回拨的话
+    //        差值恒为负、阈值永远达不到，封面会永久冻结在旧图上）。触发点两个：
+    //        a. 进库时判一次（超期 ⇒ `bumpGeneration()` + 记时间戳；只换代不清缓存，
+    //           旧图继续显示、新图回来同键覆盖）；
+    //        b. 下拉刷新**无条件**换代（手动意图优先），并**同时记时间戳** —— 只换代不记
+    //           时间的话，退出再进来会被「满 X 小时」判成超期，刚刷完又白换一批。
+    //        ⚠️ 时间戳必须落盘且用**墙钟**：`elapsedRealtime` 开机清零，跨重启会把
+    //        差值判成负数 / 极小值，两种都错。关掉随机合成时策略整体跳过（固定取样结果确定）。
+    //     ② 网络模块「局域网」→「网络位置」：用户完全可能在**公网服务器**上跑 SMB /
+    //        WebDAV / AList，写死「局域网」既不准确也劝退（`i18n_local_network` →
+    //        `i18n_network_locations`，zh/en 两处同步）。
+    //     ③ 网络文件夹封面「加载失败后点重载没反应」的两个根因：
+    //        a. `ensureFolderCover` 用 `listFiles(...).getOrNull()` 把**失败吞成 null**，
+    //           再 `putFolderCover(..., null)` 落盘 ⇒ 「这次没列成」被记成「这个文件夹
+    //           没有图片」，整个 30 天 TTL 内都不再加载（而用户点进去明明有图）。
+    //           改为区分 Result：失败**不写**负缓存、不写本页 null，自动重试一次
+    //           （单次 2 试 × 本页 2 轮，计数封顶 —— 目录真被删时来回滑不会一直发请求）。
+    //        b. 缩略图重试只调了 `painter.restart()`（重走同一个请求），而失败常常已在
+    //           磁盘缓存里留下半截数据 / 签名已过期 ⇒ 每次都撞同一堵墙。
+    //           新增 `NetworkPhotoImageLoader.evict()`：重试先清掉这一张的缓存再请求。
+    //           c. 附带：失败后自动重试一次（600ms），且整个错误区域都可点重试
+    //           （原来只有右下角 32dp 的小图标，很容易点偏）。
+    versionCode = 76
     versionName = "1.5.5"
 
     vectorDrawables {

@@ -766,7 +766,7 @@
   <string name="i18n_increase_zoom">放大</string>
   <string name="i18n_invalid_url">网址无效</string>
   <string name="i18n_invalid_url_protocol">网址协议不受支持</string>
-  <string name="i18n_local_network">局域网</string>
+  <string name="i18n_network_locations">网络位置</string>
   <string name="i18n_logcat">日志：</string>
   <string name="i18n_layout_help">长按可拖动排序，点击“-”图标移除。</string>
   <string name="i18n_media_info">媒体信息</string>

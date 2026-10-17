@@ -781,7 +781,7 @@
   <string name="i18n_increase_zoom">Increase zoom</string>
   <string name="i18n_invalid_url">Invalid URL</string>
   <string name="i18n_invalid_url_protocol">Invalid URL protocol</string>
-  <string name="i18n_local_network">Local Network</string>
+  <string name="i18n_network_locations">Network locations</string>
   <string name="i18n_logcat">Logcat:</string>
   <string name="i18n_layout_help">Long press to reorder items. Tap the \'-\' icon to remove them.</string>
   <string name="i18n_media_info">Media Info</string>

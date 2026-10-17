@@ -72,6 +72,7 @@ import app.marlboroadvance.mpvex.preferences.AppLockMethod
 import app.marlboroadvance.mpvex.preferences.AppLockPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.DanmakuPreferences
+import app.marlboroadvance.mpvex.preferences.FolderCoverRefreshPolicy
 import app.marlboroadvance.mpvex.preferences.GridTitleLines
 import app.marlboroadvance.mpvex.preferences.PhotoSlideshowInterval
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -900,6 +901,98 @@ object PreferencesScreen : Screen {
                   )
                 },
               )
+
+              // 合成策略：只在「随机合成」开着时才有意义 —— 固定模式取样结果是确定的，
+              // 重取还是同一批图，摆出来只是个死项。
+              if (folderRandomCover) {
+                val coverPolicy by browserPreferences.embyFolderCoverRefreshPolicy.collectAsState()
+                val coverHours by browserPreferences.embyFolderCoverRefreshHours.collectAsState()
+                val coverDays by browserPreferences.embyFolderCoverRefreshDays.collectAsState()
+                var editHours by remember { mutableStateOf(false) }
+                var editDays by remember { mutableStateOf(false) }
+
+                PreferenceDivider()
+
+                ListPreference(
+                  value = coverPolicy,
+                  onValueChange = { picked ->
+                    browserPreferences.embyFolderCoverRefreshPolicy.set(picked)
+                    // 改策略 = 明确要求「按新规矩来」⇒ 把上次合成时间清零，
+                    // 下次进库一定重新合成一次。不清零的话选了「满 X 天」却半天看不到变化，
+                    // 用户会以为设置根本没生效。
+                    browserPreferences.embyFolderCoverLastSynthAt.set(0L)
+                  },
+                  values = FolderCoverRefreshPolicy.entries,
+                  valueToText = { AnnotatedString(it.label) },
+                  title = { Text(text = "重新合成策略") },
+                  summary = {
+                    Text(
+                      text = "随机取样的封面每次都不一样，这一项决定多久换一批。" +
+                        "选小时 / 天则期间完全复用已合成的封面，不产生请求；" +
+                        "下拉刷新始终立即重取，不受这里限制。",
+                      color = MaterialTheme.colorScheme.outline,
+                    )
+                  },
+                )
+
+                if (coverPolicy == FolderCoverRefreshPolicy.Hours) {
+                  PreferenceDivider()
+                  Preference(
+                    title = { Text(text = "间隔小时数") },
+                    summary = {
+                      Text(
+                        text = "当前 $coverHours 小时 · 取值范围 1~168",
+                        color = MaterialTheme.colorScheme.outline,
+                      )
+                    },
+                    onClick = { editHours = true },
+                  )
+                }
+
+                if (coverPolicy == FolderCoverRefreshPolicy.Days) {
+                  PreferenceDivider()
+                  Preference(
+                    title = { Text(text = "间隔天数") },
+                    summary = {
+                      Text(
+                        text = "当前 $coverDays 天 · 取值范围 1~30",
+                        color = MaterialTheme.colorScheme.outline,
+                      )
+                    },
+                    onClick = { editDays = true },
+                  )
+                }
+
+                if (editHours) {
+                  IntervalInputDialog(
+                    title = "间隔小时数",
+                    hint = "1~168 小时",
+                    current = coverHours,
+                    range = 1..168,
+                    onConfirm = { value ->
+                      browserPreferences.embyFolderCoverRefreshHours.set(value)
+                      browserPreferences.embyFolderCoverLastSynthAt.set(0L)
+                      editHours = false
+                    },
+                    onCancel = { editHours = false },
+                  )
+                }
+
+                if (editDays) {
+                  IntervalInputDialog(
+                    title = "间隔天数",
+                    hint = "1~30 天",
+                    current = coverDays,
+                    range = 1..30,
+                    onConfirm = { value ->
+                      browserPreferences.embyFolderCoverRefreshDays.set(value)
+                      browserPreferences.embyFolderCoverLastSynthAt.set(0L)
+                      editDays = false
+                    },
+                    onCancel = { editDays = false },
+                  )
+                }
+              }
             }
           }
 
@@ -1309,6 +1402,58 @@ private fun RandomPlayCountDialog(
     confirmButton = {
       TextButton(
         onClick = { onConfirm(text.toIntOrNull()?.coerceIn(1, 500) ?: 100) },
+      ) {
+        Text(text = "确定")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onCancel) { Text(text = "取消") }
+    },
+  )
+}
+
+/**
+ * 「间隔 X 小时 / X 天」的数字输入框（合成随机封面图的策略用）。
+ *
+ * 与 [RandomPlayCountDialog] 同一套做法：逐字符过滤非数字，确认时夹到 [range]。
+ * 空串 / 越界一律回落到 [current]（而不是 disabled 掉「确定」）—— 用户填了个 0
+ * 却点不动按钮，他会以为 App 坏了。
+ *
+ * 与上面那个的唯一差别是范围来自参数：小时 1~168、天 1~30 共用这一个组件，
+ * 免得两处各写一份「过滤 + 夹取」将来漂移。
+ */
+@Composable
+private fun IntervalInputDialog(
+  title: String,
+  hint: String,
+  current: Int,
+  range: IntRange,
+  onConfirm: (Int) -> Unit,
+  onCancel: () -> Unit,
+) {
+  var text by remember { mutableStateOf(current.toString()) }
+  AlertDialog(
+    onDismissRequest = onCancel,
+    title = { Text(text = title) },
+    text = {
+      Column {
+        Text(
+          text = "取值 $hint。改完会立刻重新合成一次，之后按这个间隔换新。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.outline,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+          value = text,
+          onValueChange = { input -> text = input.filter(Char::isDigit).take(3) },
+          singleLine = true,
+          label = { Text(text = "间隔") },
+        )
+      }
+    },
+    confirmButton = {
+      TextButton(
+        onClick = { onConfirm(text.toIntOrNull()?.coerceIn(range) ?: current) },
       ) {
         Text(text = "确定")
       }

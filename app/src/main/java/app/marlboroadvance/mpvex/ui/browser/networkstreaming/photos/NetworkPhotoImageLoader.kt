@@ -117,6 +117,26 @@ object NetworkPhotoImageLoader {
     get(context).memoryCache?.get(MemoryCache.Key(cacheKey(connectionId, path))) != null
 
   /**
+   * 把一张图的缓存条目**删掉**（内存 + 磁盘）。
+   *
+   * ⭐ 用途：加载失败后的「重载」。之前那个重试按钮只调 `painter.restart()`，
+   * 也就是**重走同一个请求** —— 而「网络抖了一下」往往在磁盘缓存里留下了
+   * 半截 / 解不动的数据，或者 AList 的签名已经过期，于是每次重试都撞同一堵墙：
+   * 状态从 Error 走一圈回到 Error，界面上就是「点了没反应」。
+   *
+   * 清掉这个 key 之后再取，才是真的从头拉一次。
+   *
+   * ⚠️ 只删这一张（key 口径与 [request] 完全一致），不动别的图。
+   * ⚠️ 有磁盘 IO，调用方放 IO 线程。
+   */
+  fun evict(context: Context, connectionId: Long, path: String) {
+    val key = cacheKey(connectionId, path)
+    val loader = get(context)
+    loader.memoryCache?.remove(MemoryCache.Key(key))
+    loader.diskCache?.remove(key)
+  }
+
+  /**
    * 预取：把图拉进缓存，等真滑到那张时直接命中。
    *
    * ⚠️ 必须在 IO 线程调用（内部有网络 + 解码）。

@@ -21,6 +21,8 @@ import app.marlboroadvance.mpvex.preferences.NetworkSortType
 import app.marlboroadvance.mpvex.preferences.SortOrder
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.repository.NetworkRepository
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -127,6 +129,23 @@ class NetworkBrowserViewModel(
   /** 在途封面请求去重：同一文件夹被多张卡 / 快速滑动重复触发也只列一次 */
   private val coverInFlight: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+  /**
+   * 列目录**失败**过的文件夹 → 本页累计失败次数。
+   *
+   * ⚠️ 必须和 [folderCovers] 里的 `null` 严格区分：
+   * - `folderCovers[path] == null` = 列成功了、里面确实没图片（有效负缓存，别再列）；
+   * - 出现在这里 = 这次**没列成**（网络抖动 / 会话过期），还没到放弃的时候。
+   *
+   * 两者混成同一个 Map 的后果就是：网络抖一下写进 null，这个封面在本页里再也不加载，
+   * 用户只能靠下拉刷新或重进页面救回来。
+   *
+   * 计次是为了**封顶**：失败项不写进 [folderCovers] ⇒ 卡片滚出又滚回来（LazyGrid 会
+   * 重新组合、`LaunchedEffect(path)` 会重跑）时还能再试一次，但不能无限重试 ——
+   * 目录真的被删了时，来回滑一次发两轮请求是没法接受的。到上限就静默放弃，
+   * 等下拉刷新（会清零）或重进页面。
+   */
+  private val coverFailures: MutableMap<String, Int> = ConcurrentHashMap()
+
   /** 封面列目录限流：一屏可见的文件夹可能十几个，全并发会挤爆 SMB 会话 */
   private val coverGate = Semaphore(3)
 
@@ -148,6 +167,8 @@ class NetworkBrowserViewModel(
    */
   fun ensureFolderCover(folderPath: String) {
     if (_folderCovers.value.containsKey(folderPath)) return
+    // 本页已经失败到次数上限：不再发请求，等下拉刷新（会把计数清零）或重进页面
+    if ((coverFailures[folderPath] ?: 0) >= COVER_MAX_PAGE_ATTEMPTS) return
     if (!coverInFlight.add(folderPath)) return
     viewModelScope.launch {
       try {
@@ -155,27 +176,60 @@ class NetworkBrowserViewModel(
         val cached = repository.getFolderCover(connectionId, folderPath)
         if (cached != null) {
           _folderCovers.update { it + (folderPath to cached.coverPath) }
+          coverFailures.remove(folderPath)
           return@launch
         }
-        // 2) 未命中：列一次目录（Semaphore(3) 限流，一屏可见的文件夹可能十几个）
-        val connection = cachedConnection
-          ?: repository.getConnectionById(connectionId)?.also { cachedConnection = it }
-          ?: return@launch
-        val cover = coverGate.withPermit {
-          repository.listFiles(connection, folderPath)
-            .getOrNull()
-            ?.filter { it.isPhoto() }
-            ?.minByOrNull { it.name.lowercase() }
-            ?.path
+        // 2) 未命中：列一次目录（Semaphore(3) 限流，一屏可见的文件夹可能十几个）。
+        //    失败**自动重试一次** —— 刚进页面那一刻连接还在建、会话刚过期都很常见，
+        //    立刻重来一次多半就过了；再失败就不再空转，留给下拉刷新 / 点重载。
+        var attempt = 0
+        var cover: String? = null
+        var listedOk = false
+        while (true) {
+          attempt++
+          val connection = cachedConnection
+            ?: repository.getConnectionById(connectionId)?.also { cachedConnection = it }
+            ?: return@launch
+          val outer = runCatching { coverGate.withPermit { repository.listFiles(connection, folderPath) } }
+          val page = outer.getOrNull()
+          if (page != null && page.isSuccess) {
+            cover =
+              page
+                .getOrNull()
+                ?.filter { it.isPhoto() }
+                ?.minByOrNull { it.name.lowercase() }
+                ?.path
+            listedOk = true
+            break
+          }
+          Log.w(
+            TAG,
+            "封面列目录失败($attempt): $folderPath | " +
+              (outer.exceptionOrNull() ?: page?.exceptionOrNull())?.message,
+          )
+          if (attempt >= COVER_LIST_ATTEMPTS) break
+          delay(COVER_RETRY_DELAY_MS)
         }
-        // 3) 列成功才写持久缓存：失败是暂时的（网络抖动 / 会话过期），
-        //    不能把「这次没列成」记成「没有图片」缓存 30 天
-        repository.putFolderCover(connectionId, folderPath, cover)
-        _folderCovers.update { it + (folderPath to cover) }
+        if (listedOk) {
+          // 3) 列**成功**才写持久缓存（含「确实没图片」的负缓存）。
+          //    ⚠️⚠️ 失败绝不能写：原来这里用 `listFiles(...).getOrNull()`，失败被吞成 null，
+          //    等于把「这次没列成」记成「这个文件夹没有图片」并落盘 30 天 ——
+          //    网络抖一下，这个文件夹的封面在**整个 TTL 内**都不再加载（用户反馈的
+          //    「图片文件夹没封面、点进去却有图」就是这么来的）。
+          repository.putFolderCover(connectionId, folderPath, cover)
+          _folderCovers.update { it + (folderPath to cover) }
+          coverFailures.remove(folderPath)
+        } else {
+          // 两次都没列成：本页**不当负缓存**（滚回来还能再试，见 coverFailures 的说明），
+          // 只把计数 +1，到上限才放弃。
+          coverFailures.merge(folderPath, 1) { a, b -> a + b }
+        }
+      } catch (e: CancellationException) {
+        throw e
       } catch (e: Exception) {
-        Log.w(TAG, "封面列目录失败: $folderPath | ${e.message}")
-        // 本页记 null（负缓存）：滑动里不反复炸；重试交给下拉刷新 / 重启
-        _folderCovers.update { it + (folderPath to null) }
+        // 兜底：缓存读写的数据库异常不能让浏览页直接崩（viewModelScope 里没人接）
+        Log.w(TAG, "封面处理异常: $folderPath | ${e.message}")
+        coverFailures.merge(folderPath, 1) { a, b -> a + b }
       } finally {
         coverInFlight.remove(folderPath)
       }
@@ -280,8 +334,12 @@ class NetworkBrowserViewModel(
             // 正常进入 / 返回上一级**什么都不做**：三级缓存直接命中，零请求。
             if (invalidateCovers) {
               val subFolders = fileList.filter { it.isDirectory }.map { it.path }
-              val seenFolders = _folderCovers.value.keys.toList()
+              // 已拿到结果的 + 上次列失败的，两类都要重取 —— 漏掉后面那类的话，
+              // 「网络抖一下没加载出来」的封面下拉刷新也救不回来（用户反馈的正是这个）。
+              val seenFolders = (_folderCovers.value.keys + coverFailures.keys).toList()
               _folderCovers.update { it - subFolders.toSet() }
+              // 刷新 = 用户明确要求重来 ⇒ 失败计数一并清零，重试预算重新给满
+              subFolders.forEach { coverFailures.remove(it) }
               viewModelScope.launch {
                 repository.invalidateFolderCovers(connectionId, subFolders)
                 seenFolders.forEach { ensureFolderCover(it) }
@@ -460,6 +518,26 @@ class NetworkBrowserViewModel(
 
   companion object {
     private const val TAG = "NetworkBrowserVM"
+
+    /**
+     * 文件夹封面「列目录」最多试几次（含首次）。
+     *
+     * 定 2 而不是 3+：失败基本是「刚连上 / 会话过期」这类一次性状态，第二把就能过；
+     * 真正的错（目录被删、权限不够）重试多少次都一样，多试只是让一屏十几个文件夹
+     * 一起在后台排队等超时。
+     */
+    private const val COVER_LIST_ATTEMPTS = 2
+
+    /** 两次列目录之间的间隔：给连接 / 会话一点恢复时间，又不至于让用户盯着空封面对等 */
+    private const val COVER_RETRY_DELAY_MS = 1_200L
+
+    /**
+     * 同一个文件夹在本页里最多尝试几「轮」（一轮 = 上面 [COVER_LIST_ATTEMPTS] 次列目录）。
+     *
+     * 定 2：首次进页面一轮，滚回来再来一轮 —— 真删掉的目录不会因为用户来回滑
+     * 就一直发请求；而「网络抖了一下」几乎都能在这两轮里自愈。
+     */
+    private const val COVER_MAX_PAGE_ATTEMPTS = 2
 
     /**
      * 需要走本地代理才能**拖动进度**的协议。

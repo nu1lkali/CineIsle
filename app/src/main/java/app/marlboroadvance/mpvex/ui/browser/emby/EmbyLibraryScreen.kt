@@ -122,6 +122,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
+import app.marlboroadvance.mpvex.preferences.shouldResynthesizeCover
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshGridBox
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
@@ -262,6 +263,11 @@ data class EmbyLibraryScreen(
     val suggestCollapsed by browserPreferences.embySearchSuggestCollapsed.collectAsState()
     // 文件夹宫格封面是否随机合成（默认开）。改它会换一套缓存键，来回切不会串图。
     val folderRandomCover by browserPreferences.embyFolderRandomCover.collectAsState()
+    // 合成策略：多久才允许把拼好的宫格封面换一批（默认「每次进入都重新合成」＝旧行为）。
+    // 只影响「什么时候重取」，不影响取样方式（那是上面那个开关的事）。
+    val coverRefreshPolicy by browserPreferences.embyFolderCoverRefreshPolicy.collectAsState()
+    val coverRefreshHours by browserPreferences.embyFolderCoverRefreshHours.collectAsState()
+    val coverRefreshDays by browserPreferences.embyFolderCoverRefreshDays.collectAsState()
     // 联想词的「自动收起」标记：不是用户手动收的，而是程序按下面的判据自己收的。
     // 单独一个状态而不是直接写偏好 —— 自动行为不该污染用户的手动选择。
     var suggestAutoCollapsed by remember { mutableStateOf(false) }
@@ -1818,6 +1824,31 @@ data class EmbyLibraryScreen(
       // 初值取自缓存而不是写死 0：页面重建时若从 0 数起，会和缓存里条目的代数对不上，
       // 变成每次进页面都白重取一遍、进程内缓存白做。
       var folderCoverGen by remember { mutableStateOf(EmbyFolderCoverCache.currentGeneration()) }
+
+      // ── 合成策略：这次进库要不要把已经拼好的封面换一批 ──
+      //
+      // 判据只看「距上次整体合成过了多久」（时间戳落盘，见 BrowserPreferences）。
+      // ⚠️ 必须在下面那个批量取封面的 effect **之前**：换代后 mosaicSignature 会跟着变，
+      //    批量 effect 自然重跑 —— 顺序反过来的话这一次进库会用旧代数取一遍、白费一轮请求。
+      // ⚠️ 关掉「合成随机封面图」时整段跳过：固定模式取样结果是确定的，重取还是同一批图。
+      // ⚠️ 键里带策略与本数：改完设置回到库里能立刻按新规矩重判（不必重启 App）。
+      LaunchedEffect(
+        server?.id,
+        folderRandomCover,
+        coverRefreshPolicy,
+        coverRefreshHours,
+        coverRefreshDays,
+      ) {
+        if (server == null || !folderRandomCover) return@LaunchedEffect
+        val now = System.currentTimeMillis()
+        val last = browserPreferences.embyFolderCoverLastSynthAt.get()
+        if (shouldResynthesizeCover(coverRefreshPolicy, last, now, coverRefreshHours, coverRefreshDays)) {
+          // 只换代、不清缓存：旧封面留在原地继续显示，新封面回来后同键覆盖（见 cache 的 KDoc）。
+          EmbyFolderCoverCache.bumpGeneration()
+          folderCoverGen = EmbyFolderCoverCache.currentGeneration()
+          browserPreferences.embyFolderCoverLastSynthAt.set(now)
+        }
+      }
       val mosaicSignature = remember(libraryId, mosaicFolderIds, folderRandomCover, server?.id, folderCoverGen) {
         "$libraryId|$folderRandomCover|${server?.id}|$folderCoverGen|" + mosaicFolderIds.joinToString(",")
       }
@@ -1877,6 +1908,10 @@ data class EmbyLibraryScreen(
             if (folderRandomCover) {
               EmbyFolderCoverCache.bumpGeneration()
               folderCoverGen = EmbyFolderCoverCache.currentGeneration()
+              // ⚠️ 手动刷新必须**同时记时间戳**：只换代不记时间的话，退出再进来会被
+              //    「满 X 小时 / X 天」判成超期 ⇒ 刚刷完又换一批（白费一整轮请求）。
+              //    手动意图优先于策略，所以这里无条件写 now，不看 policy。
+              browserPreferences.embyFolderCoverLastSynthAt.set(System.currentTimeMillis())
             }
             pendingScrollTop = true
             load(reset = true)

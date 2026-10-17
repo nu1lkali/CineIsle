@@ -303,6 +303,39 @@ class BrowserPreferences(
   val embyFolderRandomCover = preferenceStore.getBoolean("emby_folder_random_cover", true)
 
   /**
+   * 宫格封面的「重新合成策略」——决定**多久**才允许把已经拼好的封面换一批。
+   *
+   * 随机取样每次都不一样，所以「什么时候该换」必须交给用户定（见 [FolderCoverRefreshPolicy]）：
+   * 默认 [FolderCoverRefreshPolicy.Always] 与旧行为完全一致（每次进库都换），
+   * 选小时 / 天则期间一律复用缓存、不产生任何请求。
+   *
+   * ⚠️ 只对「随机合成」有意义：关掉 [embyFolderRandomCover] 时取样结果是确定的，
+   *    重取拿到的还是同一批图，策略整体跳过（见 `EmbyLibraryScreen` 的判定）。
+   */
+  val embyFolderCoverRefreshPolicy =
+    preferenceStore.getEnum(
+      "emby_folder_cover_refresh_policy",
+      FolderCoverRefreshPolicy.Always,
+    )
+
+  /** 「满 X 小时重新合成」的 X：1~168（一周），默认 6 */
+  val embyFolderCoverRefreshHours = preferenceStore.getInt("emby_folder_cover_refresh_hours", 6)
+
+  /** 「满 X 天重新合成」的 X：1~30，默认 1 */
+  val embyFolderCoverRefreshDays = preferenceStore.getInt("emby_folder_cover_refresh_days", 1)
+
+  /**
+   * 上一次**整体重新合成**宫格封面的时间（墙钟毫秒，0 = 从未合成过）。
+   *
+   * ⚠️ 必须**落盘**：策略是「距上次满 X 小时 / X 天」，只放进程内的话每次冷启动都会
+   *    被判成「从没合成过」⇒ 每开一次 App 就把所有封面重取一遍，策略等于没开。
+   * ⚠️ 必须用**墙钟**（`System.currentTimeMillis`），不能用 `elapsedRealtime`：
+   *    后者开机清零、跨重启归零，差值要么变成负数要么突然变得极大，两种都判错。
+   */
+  val embyFolderCoverLastSynthAt =
+    preferenceStore.getLong("emby_folder_cover_last_synth_at", 0L)
+
+  /**
    * 「下载完成后清除服务端播放进度」开关。
    *
    * 打开后，一条媒体下载完成时会顺手把 Emby 服务器上这条的**播放位置**清零 ——
@@ -810,3 +843,74 @@ enum class PhotoSlideshowInterval(
     val Default = FIVE_SECONDS
   }
 }
+
+/**
+ * 宫格封面的「重新合成策略」。
+ *
+ * 三档回答的是同一个问题 ——「多旧的合成结果算旧」：
+ * [Always] = 任何旧结果都算旧（等价于旧版本行为）。
+ *
+ * ⚠️ 存的是**枚举名**（`getEnum`），常量名发布后不能改 —— 改了老用户的偏好会失效。
+ *
+ * ⚠️ 三档只在**每次进库 / 下拉刷新**时判定一次，不是每次渲染都判 ——
+ * 判定结果要么「整批换代重取」要么「什么都不做」，中间没有第三种状态
+ * （`EmbyFolderCoverCache` 的换代本来就是全量的，所以时间戳也只能是全局一个）。
+ */
+enum class FolderCoverRefreshPolicy(
+  /** 设置项下拉里的展示名 */
+  val label: String,
+) {
+  /** 每次进入媒体库都重新取样（有旧图也不复用）—— 与旧版本行为一致 */
+  Always("每次进入都重新合成"),
+
+  /** 距上次合成满 [BrowserPreferences.embyFolderCoverRefreshHours] 小时才换 */
+  Hours("满 X 小时重新合成"),
+
+  /** 距上次合成满 [BrowserPreferences.embyFolderCoverRefreshDays] 天才换 */
+  Days("满 X 天重新合成"),
+}
+
+/**
+ * 这个策略对应的「多久算旧」（毫秒）。
+ *
+ * [FolderCoverRefreshPolicy.Always] 返回 0（任何旧结果都算旧）。两个 X 都做了
+ * `coerceIn` —— 用户被 UI 拦住填 0/负数，但偏好是持久化的、可以手改，这里兜底。
+ */
+fun FolderCoverRefreshPolicy.thresholdMillis(
+  hours: Int,
+  days: Int,
+): Long =
+  when (this) {
+    FolderCoverRefreshPolicy.Always -> 0L
+    FolderCoverRefreshPolicy.Hours -> hours.coerceIn(1, 168) * 3_600_000L
+    FolderCoverRefreshPolicy.Days -> days.coerceIn(1, 30) * 86_400_000L
+  }
+
+/**
+ * 这次要不要把已经拼好的宫格封面换一批。
+ *
+ * 纯函数（`now` 由调用方传入，不在里面取时间）—— 只依赖入参，能直接单测，
+ * 也不会因为「函数内部悄悄读了一次时钟」而出现两个调用点判得不一样。
+ *
+ * 三条「一定要换」的例外：
+ * 1. [FolderCoverRefreshPolicy.Always]：本来就是「有旧图就重做」；
+ * 2. `lastSynthAt <= 0`：从没合成过（首次安装 / 刚清过数据）；
+ * 3. `now < lastSynthAt`：**时钟回拨**（用户改系统时间 / 换时区 / NTP 校正）。
+ *    不挡这一条的话差值恒为负、阈值永远达不到 ⇒ 封面永久冻结在旧图上，
+ *    用户只能清 App 数据才能恢复。
+ *
+ * @param lastSynthAt 上次整体重新合成的墙钟毫秒，0 = 从未
+ */
+fun shouldResynthesizeCover(
+  policy: FolderCoverRefreshPolicy,
+  lastSynthAt: Long,
+  now: Long,
+  hours: Int,
+  days: Int,
+): Boolean =
+  when {
+    policy == FolderCoverRefreshPolicy.Always -> true
+    lastSynthAt <= 0L -> true
+    now < lastSynthAt -> true
+    else -> now - lastSynthAt >= policy.thresholdMillis(hours, days)
+  }

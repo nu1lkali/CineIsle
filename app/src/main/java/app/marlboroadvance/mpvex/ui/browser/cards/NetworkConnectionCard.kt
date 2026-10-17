@@ -92,7 +92,7 @@ internal fun protocolAccent(protocol: NetworkProtocol): Color =
   }
 
 /**
- * 局域网 / 网络连接卡（v69 紧凑版）。
+ * 网络位置卡（SMB / WebDAV / FTP / AList 的已保存连接，v69 紧凑版）。
  *
  * ## 这一版为什么要重做
  *
