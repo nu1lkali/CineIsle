@@ -582,7 +582,32 @@ android {
     //     ② 新增偏好 `embyRandomGestureToast`（默认 true）：「随机播放」卡里第三行
     //        「显示手势提示」。⚠️ 只关「动作范围说明」，**不关**「没有可播放内容」的失败提示
     //        —— 那是唯一的失败反馈，关掉就退化成「点了没反应」。
-    versionCode = 91
+    // 92（照片浏览器底部缩略图扩到网络位置，versionName 仍为 1.5.6）：用户报
+    //     「设置里的照片浏览器底部缩略图目前只应用于 emby 媒体库，请扩宽支持到网络模块」。
+    //     ① `NetworkPhotoViewerScreen` 读同一个偏好 `photoFilmstrip`，新增
+    //        `NetworkPhotoFilmstrip`（44dp 格 / 白框标当前 / 55% 淡化其余 / 当前页自动滚入可见），
+    //        与 Emby 版同一套视觉语言；胶片条 + 信息栏放进同一个底部 `Column` 自下而上堆，
+    //        不手算信息栏高度。
+    //     ② `NetworkPhotoThumbnail` 新增 `showRetry`（默认 true）——胶片条传 **false**：
+    //        44dp 格子里塞 48dp 重试钮会盖满整块，把「点一下跳到那张」吃掉。
+    //     ③ 悬浮控件（翻页 / 幻灯片）在胶片条开着时抬到 `CONTROLS_BOTTOM_WITH_STRIP`(148dp)。
+    //     ⚠️ 一个开关管两个照片浏览器，不按入口分两套偏好。
+    // 93（两个照片浏览器合并成共享外壳，versionName 仍为 1.5.6）：用户提「Emby 与网络位置
+    //     的照片浏览器是两个独立组件，很容易那边改了这边没改，能不能合并复用」。
+    //     ① 新增 `ui/browser/photo/SharedPhotoViewer.kt`：**整套外壳只有一份** ——
+    //        横向分页、沉浸模式（点画面 / 顶栏钮 / 返回键先退沉浸）、下拉关闭（未放大时
+    //        跟手位移 + 缩小变暗）、幻灯片（计时协程不带 currentPage、淡出→换页→淡入、
+    //        倒计时圆环、播完自停、keepScreenOn）、底部胶片条、上一张/下一张、顶栏、信息栏。
+    //     ② 两个屏幕退化成**适配层**，差异全走插槽：`renderPage`（取图方式）、
+    //        `renderThumbnail`（胶片条缩略图）、`topBarActions`（保存 / 旋转 / 更多）。
+    //        数据模型不同（EmbyItem vs NetworkFile）→ 用最小载体 `PhotoViewerEntry`
+    //        （key / title / meta）给外壳，外壳不碰任何协议细节。
+    //     ③ 死代码清理：两边各自的 PhotoFilmstrip / SlideshowButton / PhotoNavButton /
+    //        PhotoInfoBar 与相关常量、import 全部删掉（留在原地就是下一次分叉的种子）。
+    //     ⚠️ 胶片条开关 `photoFilmstrip` 仍然只有一个，两个入口共用。
+    //     ⚠️ 缩略图格 44dp 里不能塞重试钮（48dp 触控区会盖满整格、吃掉点击），网络版
+    //        `NetworkPhotoThumbnail(showRetry = false)`。
+    versionCode = 93
     versionName = "1.5.6"
 
     vectorDrawables {

@@ -43,6 +43,9 @@ import kotlinx.coroutines.withContext
  * @param size 请求的解码尺寸；null = 按组件约束采样（更省内存）。
  * @param sign AList 下载签名（[NetworkFile.sign]）；其他协议 / 文件夹封面传 null。
  *   文件夹封面在缓存里只存了 path（拿不到签名），由 AlistClient 的 `fs/get` 兜底。
+ * @param showRetry 失败时是否给「重新加载」角钮。默认给；**胶片条里必须传 false**：
+ *   那条缩略图只有 44dp 见方，而重试钮的触控区是 48dp —— 会正好盖满整块，
+ *   把「点一下跳到那张」吃掉（这正是网格卡上踩过的坑，见下面错误分支的注释）。
  */
 @Composable
 fun NetworkPhotoThumbnail(
@@ -52,6 +55,7 @@ fun NetworkPhotoThumbnail(
   modifier: Modifier = Modifier,
   contentScale: ContentScale = ContentScale.Crop,
   sign: String? = null,
+  showRetry: Boolean = true,
 ) {
   val context = LocalContext.current
   val imageLoader = remember(context) { NetworkPhotoImageLoader.get(context) }
@@ -168,18 +172,20 @@ fun NetworkPhotoThumbnail(
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
             modifier = Modifier.size(28.dp),
           )
-          IconButton(
-            onClick = onRetry,
-            modifier = Modifier
-              .align(Alignment.BottomEnd)
-              .size(RETRY_TOUCH_SIZE),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Refresh,
-              contentDescription = "重新加载",
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(22.dp),
-            )
+          if (showRetry) {
+            IconButton(
+              onClick = onRetry,
+              modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .size(RETRY_TOUCH_SIZE),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = "重新加载",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+              )
+            }
           }
         }
       }

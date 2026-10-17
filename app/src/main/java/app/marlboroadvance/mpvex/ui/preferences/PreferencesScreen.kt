@@ -730,6 +730,8 @@ object PreferencesScreen : Screen {
               //
               // 照片浏览器底部那条缩略图。默认**关**：它要吃掉约 56dp 的画面高度，
               // 而照片浏览器最值钱的就是画面面积；想要快速跳图的人自己打开。
+              // ⚠️ 这一个开关**同时管两个照片浏览器**（Emby 媒体库 / 网络位置），
+              //    别在两个入口各做一个 —— 同一个用户对「底部要不要缩略图」的偏好不会分两套。
               val photoFilmstrip by browserPreferences.photoFilmstrip.collectAsState()
               SwitchPreference(
                 value = photoFilmstrip,
@@ -738,7 +740,8 @@ object PreferencesScreen : Screen {
                 summary = {
                   Text(
                     text = if (photoFilmstrip) {
-                      "底部显示一排缩略图，点一下跳到那张（会占一点画面高度）"
+                      "底部显示一排缩略图，点一下跳到那张" +
+                        "（Emby 媒体库与网络位置的照片都生效，会占一点画面高度）"
                     } else {
                       "整屏只显示当前这张，画面最大"
                     },
