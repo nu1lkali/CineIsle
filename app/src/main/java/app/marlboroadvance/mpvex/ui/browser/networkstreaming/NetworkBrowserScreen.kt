@@ -237,9 +237,11 @@ data class NetworkBrowserScreen(
       toastRef.value = Toast.makeText(context, msg, Toast.LENGTH_SHORT).also { it.show() }
     }
 
-    // 当前目录显示名（查看器标题 / 收藏名 / 顶栏标题同一口径）
-    val dirTitle =
-      currentPath.trimEnd('/').substringAfterLast('/', "").ifBlank { connectionName }
+    // 当前目录显示名（查看器标题 / 收藏名 / 顶栏标题同一口径）。
+    // ⚠️ 必须走 [networkPathDisplayName]：旧写法 `substringAfterLast('/', "")` 会把
+    //    单段路径（第一层，如 volume1）判成空串 ⇒ 顶栏退化显示成连接名，
+    //    而再进一层就正常 —— 用户报的就是这个。完整推导见那个函数的 KDoc。
+    val dirTitle = networkPathDisplayName(currentPath, connectionName)
 
     // 是否已在**连接根目录**：根目录再往上就是首页，没有层级可跳 ⇒ 不给导航入口。
     // 用 trim('/') 判，兼容 ""、"//" 这些异常值。

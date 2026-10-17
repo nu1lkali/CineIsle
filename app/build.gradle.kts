@@ -448,7 +448,21 @@ android {
     //          封面会取到第 10 张，而网格里排第一的是第 9 张，封面与列表对不上。
     //     ⚠️ 网格视图无需改：v66b 起 `gridItems` 已直接沿用 `files` 的顺序（不再自己排一遍），
     //        改比较器即同时生效于列表与网格。
-    versionCode = 80
+    // 81（顶栏路径名修复，versionName 仍为 1.5.5）：用户报「挂载了个 alist 服务器叫 ABC，
+    //     访问 ABC 顶栏显示 ABC 没错；进 ABC 里的 volume1 挂载路径，顶栏**还是显示 ABC**
+    //     （应显示 volume1）；再从 volume1 进『存储』就正常了」。
+    //     **根因**（Kotlin 标准库语义坑，不在网络模块逻辑里）：`substringAfterLast` 的签名是
+    //     `substringAfterLast(delimiter, missingDelimiterValue = this)` —— 第二个参数是
+    //     **「整个串里找不到分隔符时的返回值」**，默认 `this`。旧代码显式传了 `""`：
+    //       currentPath.trimEnd('/').substringAfterLast('/', "").ifBlank { connectionName }
+    //     单段路径（`volume1`，整串没有 '/'）于是拿到 `""`，被 `.ifBlank` 退化成连接名；
+    //     而多段路径（`volume1/存储`）能取到最后一段所以正常；根目录 trim 完本就是空串、
+    //     本来就该退化 ⇒ **这个 bug 只在「第一层子路径」露出来**，极易漏。
+    //     改动：新增 `NetworkPathDisplayName.kt` 的 `networkPathDisplayName(path, fallback)`
+    //     （`trim('/')` + `substringAfterLast('/')` 不传第二参），顶栏标题
+    //     （`NetworkBrowserScreen.dirTitle`）与收藏目录名（`NetworkBrowserViewModel
+    //     .toggleFavoriteCurrent`）两处共用这一份口径。
+    versionCode = 81
     versionName = "1.5.5"
 
     vectorDrawables {

@@ -379,10 +379,10 @@ class NetworkBrowserViewModel(
   fun toggleFavoriteCurrent(onResult: (added: Boolean) -> Unit = {}) {
     viewModelScope.launch {
       val connection = repository.getConnectionById(connectionId) ?: return@launch
-      val dirName = currentPath
-        .trimEnd('/')
-        .substringAfterLast('/', "")
-        .ifBlank { connection.name }
+      // ⚠️ 必须走 [networkPathDisplayName]：旧写法 `substringAfterLast('/', "")` 会把
+      //    单段路径（第一层）判成空串 ⇒ 收藏名退化成连接名（顶栏标题同一个坑，
+      //    已一起修）。完整推导见那个函数的 KDoc。
+      val dirName = networkPathDisplayName(currentPath, connection.name)
       val added = repository.toggleFavorite(connection, currentPath, dirName)
       _isCurrentFavorite.value = added
       onResult(added)
