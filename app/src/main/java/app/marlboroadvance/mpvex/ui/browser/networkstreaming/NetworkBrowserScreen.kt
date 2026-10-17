@@ -559,6 +559,10 @@ data class NetworkBrowserScreen(
           isRefreshing = isRefreshing,
           error = error,
           isGridView = isGridView,
+          // 排序维度 / 方向：只用于「排序一变就把内容区滚回顶部」，
+          // 用户明确要求「改完排序就停在第一个项目」，别留在中段/底部。
+          sortType = sortType,
+          sortOrder = sortOrder,
           searchQuery = searchQuery,
           anyTypeHidden = !(showFolders && showPhotos && showVideos),
           folderCovers = folderCovers,
@@ -924,6 +928,9 @@ private fun NetworkBrowserContent(
   isRefreshing: MutableState<Boolean>,
   error: String?,
   isGridView: Boolean,
+  /** 当前排序维度 / 方向：两者任一变化时，内容区滚回顶部（用户要求） */
+  sortType: NetworkSortType,
+  sortOrder: SortOrder,
   /** 当前搜索词（空 = 没在搜），只用于空态文案 */
   searchQuery: String,
   /** 是否有类型被筛掉（空态文案用） */
@@ -1061,6 +1068,8 @@ private fun NetworkBrowserContent(
       NetworkBrowserGrid(
         items = gridItems,
         connectionId = connectionId,
+        sortType = sortType,
+        sortOrder = sortOrder,
         isRefreshing = isRefreshing,
         onRefresh = onRefresh,
         onFolderClick = onFolderClick,
@@ -1082,6 +1091,8 @@ private fun NetworkBrowserContent(
         others = others,
         connection = connection,
         connectionId = connectionId,
+        sortType = sortType,
+        sortOrder = sortOrder,
         isRefreshing = isRefreshing,
         onRefresh = onRefresh,
         onFolderClick = onFolderClick,
@@ -1109,6 +1120,9 @@ private fun NetworkBrowserContent(
 private fun NetworkBrowserGrid(
   items: List<NetworkFile>,
   connectionId: Long,
+  /** 排序维度 / 方向：任一变化时滚回顶部（用户要求「改完排序就在第一个」） */
+  sortType: NetworkSortType,
+  sortOrder: SortOrder,
   isRefreshing: MutableState<Boolean>,
   onRefresh: suspend () -> Unit,
   onFolderClick: (NetworkFile) -> Unit,
@@ -1123,6 +1137,14 @@ private fun NetworkBrowserGrid(
 ) {
   val gridState = rememberLazyGridState()
   val navigationBarHeight = LocalNavigationBarHeight.current
+
+  // 排序一变就回到顶部：重排后若停在原位，用户看到的是「一片不相关的中段条目」，
+  // 完全看不出排序结果长什么样。用户明确要求「改完排序就停在第一个项目」。
+  // ⚠️ 键只放排序两项 —— 别把 items 放进来：下拉刷新 / 翻页 / 封面懒加载都会换 items，
+  //    那会把用户的滚动位置无故抢回顶部。
+  LaunchedEffect(sortType, sortOrder) {
+    gridState.scrollToItem(0)
+  }
 
   PullRefreshGridBox(
     isRefreshing = isRefreshing,
@@ -1194,6 +1216,9 @@ private fun NetworkBrowserList(
   others: List<NetworkFile>,
   connection: NetworkConnection?,
   connectionId: Long,
+  /** 排序维度 / 方向：任一变化时滚回顶部（用户要求「改完排序就在第一个」） */
+  sortType: NetworkSortType,
+  sortOrder: SortOrder,
   isRefreshing: MutableState<Boolean>,
   onRefresh: suspend () -> Unit,
   onFolderClick: (NetworkFile) -> Unit,
@@ -1220,6 +1245,12 @@ private fun NetworkBrowserList(
   //    ⇒ 在列表中段往下拉，被判定成「下拉刷新」而不是滚动，手势直接打架。
   //    （网格视图用的是 `rememberLazyGridState()`，所以只有列表视图有这毛病。）
   val networkListState = rememberLazyListState()
+
+  // 排序一变就回到顶部（与网格视图同一约定，注释见 NetworkBrowserGrid）。
+  // ⚠️ 键只放排序两项：items 变化（下拉刷新 / 封面懒加载）不能抢走用户的滚动位置。
+  LaunchedEffect(sortType, sortOrder) {
+    networkListState.scrollToItem(0)
+  }
 
   PullRefreshBox(
     isRefreshing = isRefreshing,

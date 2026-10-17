@@ -542,7 +542,12 @@ android {
     //     `longClickWithHaptic()`（`ui/utils/LongPressCopy.kt`）包一层同样的长按震动。
     //     与播放器 `hapticFeedbackEnabled` 开关无关——那是播放手势专属，浏览卡片长按反馈用户明确要、
     //     全局常开。PlaylistCard 透传到 FolderCard、故自动带上。
-    versionCode = 87
+    // 88（网络浏览排序后回到顶部，修复轮 versionName 仍为 1.5.6）：用户要「改了排序之后视图
+    //     自动停在第一个项目（顶端）」，原来排序只重排 items、滚动 state 保留在原位置，
+    //     可能停在中段或底部。落点 NetworkBrowserScreen：内容区/网格/列表补 sortType+sortOrder，
+    //     两个子组件各 `LaunchedEffect(sortType, sortOrder) { state.scrollToItem(0) }`。
+    //     ⚠️ 键只放排序两项，别带 items（下拉刷新/封面懒加载会抢滚动位置）。
+    versionCode = 88
     versionName = "1.5.6"
 
     vectorDrawables {
