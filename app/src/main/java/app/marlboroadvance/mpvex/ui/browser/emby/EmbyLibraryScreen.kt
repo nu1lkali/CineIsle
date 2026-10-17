@@ -84,6 +84,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -99,6 +100,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -271,6 +273,8 @@ data class EmbyLibraryScreen(
     val suggestCollapsed by browserPreferences.embySearchSuggestCollapsed.collectAsState()
     // 文件夹宫格封面是否随机合成（默认开）。改它会换一套缓存键，来回切不会串图。
     val folderRandomCover by browserPreferences.embyFolderRandomCover.collectAsState()
+    // 随机播放的三个入口：单击下钻 or 长按下钻（默认前者）。用户可反转这组分工。
+    val randomDrillDownOnTap by browserPreferences.embyRandomDrillDownOnTap.collectAsState()
     // 合成策略：多久才允许把拼好的宫格封面换一批（默认「每次进入都重新合成」＝旧行为）。
     // 只影响「什么时候重取」，不影响取样方式（那是上面那个开关的事）。
     val coverRefreshPolicy by browserPreferences.embyFolderCoverRefreshPolicy.collectAsState()
@@ -1290,6 +1294,13 @@ data class EmbyLibraryScreen(
     suspend fun loadRandomForView(
       current: EmbyServer,
       favoritesOnly: Boolean = false,
+      /**
+       * 是否**下钻**（把子文件夹一起纳入随机范围）。
+       *
+       * true = 老的默认行为：`recursive = true`，从当前目录往下递归取；
+       * false = 只取当前这一层（长按入口用），目录里没有直接可播条目时自然为空。
+       */
+      drillDown: Boolean = true,
     ): List<EmbyItem> {
       // 搜索 / 「中文字幕」扫描：结果集已经整批在手上 → 直接洗牌
       if (searchQuery.isNotBlank() || chineseSubsOnly) {
@@ -1320,8 +1331,8 @@ data class EmbyLibraryScreen(
         sortOrder = "Ascending",
         startIndex = 0,
         limit = randomLimit,
-        // 固定用 recursive：容器类分类（如「文件夹」）本身递归不出可播条目
-        recursive = true,
+        // 是否递归到子文件夹由调用方决定：默认下钻（老行为），长按入口只取当前层
+        recursive = drillDown,
         excludeItemTypes = effectiveExclude,
         // 随机只落在能播的条目上，所以这里固定按视频形态 + 非容器来取
         mediaTypes = effectiveMediaTypes ?: listOf("Video"),
@@ -1342,21 +1353,66 @@ data class EmbyLibraryScreen(
       ).items.filter { matchesGenreTagFilter(it) }
     }
 
-    /** 随机播放的统一入口：取一批、没取到就明确提示（以前是静默无反应） */
-    fun startRandomPlayback(favoritesOnly: Boolean) {
+    /**
+     * 下钻随机播放前的一句提示。
+     *
+     * 为什么要弹：下钻的后果是「这一层明明只有文件夹，怎么放起来了」，
+     * 需要一句解释；顺带把**另一半手势**说出来 —— 单击/长按的分工是隐藏交互，
+     * 不说没人会发现。
+     *
+     * 手势名跟着设置项（[randomDrillDownOnTap]）走：用户把分工调反了之后，
+     * 提示里再写死「长按」就成了错误信息。
+     */
+    fun showDrillDownHint(label: String) {
+      val otherGesture = if (randomDrillDownOnTap) "长按" else "单击"
+      // ⚠️ 必须写 `${otherGesture}`：Kotlin 标识符允许中文，直接 `$otherGesture只播…`
+      // 会被解析成「otherGesture只播当前目录」这一个变量名 → Unresolved reference。
+      android.widget.Toast
+        .makeText(
+          context,
+          "$label：含子文件夹 · ${otherGesture}只播当前目录",
+          android.widget.Toast.LENGTH_SHORT,
+        )
+        .show()
+    }
+
+    /**
+     * 「只播当前目录」取不到东西时的说明。
+     *
+     * 单说「没有可播放内容」在纯目录页上是半个假话 —— 内容就在子文件夹里，
+     * 只是这次没往下钻。把另一半手势直接写在提示里，用户不用去猜。
+     */
+    fun emptyCurrentLevelHint(): String {
+      val drillGesture = if (randomDrillDownOnTap) "单击" else "长按"
+      return "当前目录没有可直接播放的内容 · ${drillGesture}可含子文件夹"
+    }
+
+    /**
+     * 随机播放的统一入口：取一批、没取到就明确提示（以前是静默无反应）。
+     *
+     * @param drillDown true = 下钻（含子文件夹，默认单击）；false = 只播当前目录（长按）
+     */
+    fun startRandomPlayback(favoritesOnly: Boolean, drillDown: Boolean = true) {
       scope.launch {
         val current = viewModel.currentServerOrAwait() ?: return@launch
-        val random = loadRandomForView(current, favoritesOnly = favoritesOnly)
+        val random =
+          loadRandomForView(current, favoritesOnly = favoritesOnly, drillDown = drillDown)
         if (random.isEmpty()) {
           android.widget.Toast
             .makeText(
               context,
-              if (favoritesOnly) "当前范围内没有可随机播放的收藏" else "当前范围内没有可随机播放的内容",
+              when {
+                favoritesOnly -> "当前范围内没有可随机播放的收藏"
+                drillDown -> "当前范围内没有可随机播放的内容"
+                else -> emptyCurrentLevelHint()
+              },
               android.widget.Toast.LENGTH_SHORT,
             )
             .show()
           return@launch
         }
+        // 进播放器**之前**提示：下钻是跨层取片，用户得知道范围被放大了。
+        if (drillDown) showDrillDownHint(if (favoritesOnly) "随机播放收藏" else "随机播放")
         // 随机列表里可能混着看过的剧，切过去若恢复进度会直接跳到片尾，所以每个视频都从头放
         viewModel.launchPlaylist(current, random, playFromStartAll = true)
       }
@@ -1404,11 +1460,14 @@ data class EmbyLibraryScreen(
      * 随机取片和上面两个随机按钮走同一条路径（数量设置、容器类分类的兜底都共用），
      * 差别只在最后一步：不是丢给主播放器排队播，而是把整批直连地址交给
      * VerticalFeedActivity，让它自己管「滑到哪放哪」。
+     *
+     * @param drillDown true = 下钻（含子文件夹，默认单击）；false = 只取当前目录（长按）
      */
-    fun startFeedPlayback(favoritesOnly: Boolean) {
+    fun startFeedPlayback(favoritesOnly: Boolean, drillDown: Boolean = true) {
       scope.launch {
         val current = viewModel.currentServerOrAwait() ?: return@launch
-        val random = loadRandomForView(current, favoritesOnly = favoritesOnly)
+        val random =
+          loadRandomForView(current, favoritesOnly = favoritesOnly, drillDown = drillDown)
         val items = random.mapNotNull { item ->
           val id = item.Id ?: return@mapNotNull null
           FeedItem(
@@ -1422,12 +1481,18 @@ data class EmbyLibraryScreen(
           android.widget.Toast
             .makeText(
               context,
-              if (favoritesOnly) "当前范围内没有可随机播放的收藏" else "当前范围内没有可随机播放的内容",
+              when {
+                favoritesOnly -> "当前范围内没有可随机播放的收藏"
+                drillDown -> "当前范围内没有可随机播放的内容"
+                else -> emptyCurrentLevelHint()
+              },
               android.widget.Toast.LENGTH_SHORT,
             )
             .show()
           return@launch
         }
+        // 与「随机播放」同一个意思：视界流同样会跨子文件夹取片，进页面前先说明范围。
+        if (drillDown) showDrillDownHint("视界流")
         VerticalFeedActivity.launch(context, items, libraryId, favoritesOnly)
       }
     }
@@ -1557,12 +1622,18 @@ data class EmbyLibraryScreen(
       val hideToolbarButtons = isActorListMode || personId != null
       // 工具行给哪几个按钮，由**这一页实际装了什么**决定（不再由用户手选档位决定）：
       //  · 有照片 ⇒ 给「随机播放图片」
-      //  · 有非容器的可播放条目 ⇒ 给视频那套（随机播放 / 收藏随机 / 视界流 / 筛选）
+      //  · 有非容器的可播放条目、**或者有子文件夹** ⇒ 给视频那套（随机播放 / 收藏随机 /
+      //    视界流 / 筛选 / 视图）
       //  · 首屏还没加载出来 ⇒ 按「两种都给」处理，避免工具行先空一排、内容到了再跳出来
+      //
+      // ⚠️ 「有子文件夹」必须算进来：随机播放 / 视界流默认**下钻**，纯目录页也是有效入口。
+      //    以前只数 `!isFolderLike` 的条目，纯子文件夹目录（0 个直接媒体）会把整组按钮收掉，
+      //    用户看到的就是「工具栏突然少了一半」。
       val pagePhotoCount = items.count { it.Type == "Photo" }
       val pagePlayableCount = items.count { it.Type != "Photo" && !isFolderLike(it) }
+      val pageFolderCount = items.count { isFolderLike(it) }
       val showPhotoRandom = pagePhotoCount > 0
-      val showVideoActions = pagePlayableCount > 0 || items.isEmpty()
+      val showVideoActions = pagePlayableCount > 0 || pageFolderCount > 0 || items.isEmpty()
       Row(
         modifier = Modifier
           .fillMaxWidth()
@@ -1604,21 +1675,51 @@ data class EmbyLibraryScreen(
           // 随机播放 / 收藏随机 / 视界流 / 筛选都是**视频语义**：这一页没有任何可播放
           // 条目（纯照片页 / 纯目录页）时它们点了只会把人带进视频播放器或空结果，收掉。
           if (showVideoActions) {
-            IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = false) }) {
-              Icon(Icons.Default.Shuffle, contentDescription = "随机播放")
-            }
+            // 三个随机入口共用一组手势：**单击下钻、长按只播当前目录**（默认），
+            // 用户可在设置里把两者调反（[randomDrillDownOnTap]）。
+            // 纯目录页（只有子文件夹）也能用 —— 下钻那一下会往里递归着随机。
+            ToolbarIconAction(
+              icon = Icons.Default.Shuffle,
+              contentDescription = "随机播放",
+              onClick = {
+                releaseInputFocus()
+                startRandomPlayback(favoritesOnly = false, drillDown = randomDrillDownOnTap)
+              },
+              onLongClick = {
+                releaseInputFocus()
+                startRandomPlayback(favoritesOnly = false, drillDown = !randomDrillDownOnTap)
+              },
+            )
             // 同上，只是范围再限定「已收藏」：避免随机到没看过的
-            IconButton(onClick = { releaseInputFocus(); startRandomPlayback(favoritesOnly = true) }) {
+            ToolbarIconAction(
               // 区别于上面的「随机播放」：用它自己的 Emby 收藏随机图标，
               // 原先用的 ShuffleOn 只比 Shuffle 多一条下划线，并排根本分不出来
-              Icon(EmbyFavoriteRandomIcon, contentDescription = "随机播放收藏")
-            }
+              icon = EmbyFavoriteRandomIcon,
+              contentDescription = "随机播放收藏",
+              onClick = {
+                releaseInputFocus()
+                startRandomPlayback(favoritesOnly = true, drillDown = randomDrillDownOnTap)
+              },
+              onLongClick = {
+                releaseInputFocus()
+                startRandomPlayback(favoritesOnly = true, drillDown = !randomDrillDownOnTap)
+              },
+            )
             // 视界流：随机一批进仿抖音竖屏上下滑连播页。
             // 图标刻意不用「随机」语义 —— 前两个按钮已经把那层意思占满了，
             // 第三个得靠形状本身说话，否则一排三个图标看着像三个一样的按钮。
-            IconButton(onClick = { releaseInputFocus(); startFeedPlayback(favoritesOnly = false) }) {
-              Icon(VideoFeedIcon, contentDescription = "视界流")
-            }
+            ToolbarIconAction(
+              icon = VideoFeedIcon,
+              contentDescription = "视界流",
+              onClick = {
+                releaseInputFocus()
+                startFeedPlayback(favoritesOnly = false, drillDown = randomDrillDownOnTap)
+              },
+              onLongClick = {
+                releaseInputFocus()
+                startFeedPlayback(favoritesOnly = false, drillDown = !randomDrillDownOnTap)
+              },
+            )
             // 筛选：有生效条件时图标高亮，让人一眼看出列表不是全量
             IconButton(onClick = { releaseInputFocus(); showFilterDialog = true }) {
               Icon(
@@ -2858,6 +2959,32 @@ private fun EmbyLibraryMediaCell(
     // 避免卡片与批量逻辑各写一份、改一处漏一处（见 needsFolderMosaic 的 KDoc）。
     isFolder = isFolderLike(item),
   )
+}
+
+/**
+ * 工具行图标按钮，**支持长按**。
+ *
+ * 为什么不用 `IconButton`：它只有 `onClick`，接不了长按；而「单击 = 下钻随机 /
+ * 长按 = 不下钻」这组语义必须落在同一个图标上（否则工具行要多排一个按钮、
+ * 一排图标也更挤）。自铺 48dp 圆形触控区 + `combinedClickable`，
+ * 尺寸与 M3 `IconButton` 一致，所以和旁边的筛选 / 视图图标不会高低不齐。
+ */
+@Composable
+private fun ToolbarIconAction(
+  icon: ImageVector,
+  contentDescription: String,
+  onClick: () -> Unit,
+  onLongClick: (() -> Unit)? = null,
+) {
+  Box(
+    modifier = Modifier
+      .size(48.dp)
+      .clip(CircleShape)
+      .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+    contentAlignment = Alignment.Center,
+  ) {
+    Icon(imageVector = icon, contentDescription = contentDescription)
+  }
 }
 
 /**

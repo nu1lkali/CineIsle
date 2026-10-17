@@ -1012,6 +1012,67 @@ object PreferencesScreen : Screen {
             }
           }
 
+          item {
+            // 随机播放的两项设置，放一起：**取多少条** + **单击/长按的分工**。
+            //  · 数量：库里片子多的用户想要更长的一批，库小的觉得刷来刷去都是重复的；
+            //  · 分工：按文件夹组织片子的人要下钻，按「一层一批」组织的人天天只播当前层，
+            //    两边的常用手势正好相反 —— 所以给开关，不替用户定死。
+            val browserPreferences = koinInject<BrowserPreferences>()
+            val randomCount by browserPreferences.randomPlayCount.collectAsState()
+            val drillDownOnTap by browserPreferences.embyRandomDrillDownOnTap.collectAsState()
+            var showRandomDialog by remember { mutableStateOf(false) }
+            PreferenceCard {
+              Preference(
+                title = { Text(text = "随机播放视频数量") },
+                summary = {
+                  Text(
+                    text = "当前 $randomCount 条 · 用于随机播放、随机播放收藏与视界流",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.Shuffle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = { showRandomDialog = true },
+              )
+
+              PreferenceDivider()
+
+              SwitchPreference(
+                value = drillDownOnTap,
+                onValueChange = { browserPreferences.embyRandomDrillDownOnTap.set(it) },
+                title = { Text(text = "随机播放默认下钻") },
+                summary = {
+                  Text(
+                    // ⚠️ 括号不能省：`if (…) "A" else "B" + "C"` 会把后缀只拼给 else 那一支
+                    text = (
+                      if (drillDownOnTap) {
+                        "当前：单击含子文件夹、长按只播当前目录"
+                      } else {
+                        "当前：单击只播当前目录、长按含子文件夹"
+                      }
+                      ) + "（影响随机播放 / 随机播放收藏 / 视界流）",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+            }
+            if (showRandomDialog) {
+              RandomPlayCountDialog(
+                current = randomCount,
+                onConfirm = { value ->
+                  showRandomDialog = false
+                  browserPreferences.randomPlayCount.set(value)
+                },
+                onCancel = { showRandomDialog = false },
+              )
+            }
+          }
+
           // ── 网络浏览（SMB / WebDAV / FTP） ──────────────────────────
           //
           // 这里放「网络」模块自己的观感项：文件夹封面是这一轮新增的大功能
@@ -1119,44 +1180,6 @@ object PreferencesScreen : Screen {
                   }
                 },
                 onCancel = { showClearConfirm = false },
-              )
-            }
-          }
-
-          item {
-            // 随机播放取多少条 —— 媒体库的两个随机按钮和「视界流」统一读这一个值。
-            // 做成可编辑而不是写死：库里片子多的用户想要更长的一批，
-            // 库小的用户觉得刷来刷去都是重复的，需要能缩短。
-            val browserPreferences = koinInject<BrowserPreferences>()
-            val randomCount by browserPreferences.randomPlayCount.collectAsState()
-            var showRandomDialog by remember { mutableStateOf(false) }
-            PreferenceCard {
-              Preference(
-                title = { Text(text = "随机播放视频数量") },
-                summary = {
-                  Text(
-                    text = "当前 $randomCount 条 · 用于随机播放、随机播放收藏与视界流",
-                    color = MaterialTheme.colorScheme.outline,
-                  )
-                },
-                icon = {
-                  Icon(
-                    Icons.Outlined.Shuffle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                  )
-                },
-                onClick = { showRandomDialog = true },
-              )
-            }
-            if (showRandomDialog) {
-              RandomPlayCountDialog(
-                current = randomCount,
-                onConfirm = { value ->
-                  showRandomDialog = false
-                  browserPreferences.randomPlayCount.set(value)
-                },
-                onCancel = { showRandomDialog = false },
               )
             }
           }

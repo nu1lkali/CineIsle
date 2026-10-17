@@ -25,6 +25,16 @@ class BrowserPreferences(
    */
   val randomPlayCount = preferenceStore.getInt("random_play_count", 100)
 
+  /**
+   * 随机播放 / 视界流的**手势分工**：true = 单击下钻、长按只播当前目录（默认）。
+   *
+   * 为什么做成可切：下钻是「按文件夹组织片子」的人想要的（大部分集合都是
+   * `剧名/季/集` 这种结构），但按「一层装一批、各层是不同内容」组织的人
+   * 更常用的是**只播这一层** —— 对他们来说每次都得长按，反而更别扭。
+   * 两种习惯都合理，所以给一个总开关，而不是替用户决定。
+   */
+  val embyRandomDrillDownOnTap = preferenceStore.getBoolean("emby_random_drill_down_on_tap", true)
+
   // Video sorting preferences
   val videoSortType = preferenceStore.getEnum("video_sort_type", VideoSortType.Title)
   val videoSortOrder = preferenceStore.getEnum("video_sort_order", SortOrder.Ascending)

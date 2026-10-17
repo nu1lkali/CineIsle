@@ -553,7 +553,25 @@ android {
     //     padding(bottom=8) 让开 3dp 进度条；图标不受 showBadges 控制（始终可见）。
     //     判定复用 isFolderLike(item)（Folder/CollectionFolder/UserView/BoxSet），
     //     与宫格封面/点击语义同口径；紧凑行 EmbyCompactRow 同步补 10dp 图标。
-    versionCode = 89
+    // 90（纯子文件夹目录工具行 + 随机入口手势分工，versionName 仍为 1.5.6）：
+    //     ① 【按钮消失】用户报「进入的文件夹只有子文件夹（没有直接媒体文件）时，随机播放 /
+    //        随机播放收藏 / 视界流 / 筛选 / 视图 这几个按钮会消失，可随机播放本来就该支持
+    //        下钻子目录」。根因是 `showVideoActions = pagePlayableCount > 0 || items.isEmpty()`：
+    //        纯目录页 `pagePlayableCount = 0` 且列表非空 ⇒ 整组被收掉。补 `pageFolderCount > 0`
+    //        —— 有子文件夹就说明「下钻随机」是有效入口（筛选 / 视图本来就与条目类型无关）。
+    //     ② 【手势分工】三个随机入口改成 `ToolbarIconAction`（自铺 48dp 圆形触控区 +
+    //        combinedClickable，尺寸对齐 M3 IconButton）：单击 = 下钻（老行为）、长按 = 只播
+    //        当前目录。`loadRandomForView` / `startRandomPlayback` / `startFeedPlayback` 统一加
+    //        `drillDown` 参数（传给 `recursive`）。⚠️ 提示必须弹在**下钻真正生效**的分支里，
+    //        且文案里的手势名跟着设置项走，否则用户把分工调反后提示就成了错话。
+    //     ③ 【Toast】下钻随机播放 / 视界流在进播放器（或竖屏流页）**之前**弹一句
+    //        「<入口>：含子文件夹 · 长按只播当前目录」；只播当前目录且取不到内容时改弹
+    //        「当前目录没有可直接播放的内容 · 单击可含子文件夹」，避免纯目录页上的死胡同。
+    //     ④ 【设置项】新增 `embyRandomDrillDownOnTap`（默认 true）可把手势调反：
+    //        设置 → 界面与外观 → 随机播放默认下钻。开关文案随状态给出当前分工。
+    //     ⚠️ Kotlin 坑：字符串模板里 `$gesture只播…` 会被当成一个含中文的标识符 ⇒
+    //        必须写 `${gesture}`（本次真实编译错误 Unresolved reference）。
+    versionCode = 90
     versionName = "1.5.6"
 
     vectorDrawables {
