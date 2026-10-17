@@ -55,6 +55,17 @@ fun NetworkPhotoThumbnail(
 ) {
   val context = LocalContext.current
   val imageLoader = remember(context) { NetworkPhotoImageLoader.get(context) }
+
+  // ⚠️ 这里**不要**加「重载计数器 / nonce」之类的东西去换一个新 request。
+  //    v79 试过（`remember(connectionId, path, sign, retryNonce)`），是**无效功**：
+  //    coil3 3.6.3 的 `ImageRequest` 是 final class 且**重写了 equals**
+  //    （已 javap 核验，构造器 25 个参数逐个比较），字段完全相同的新实例
+  //    与旧实例 **相等**；`AsyncImagePainter$Input.equals` 又走
+  //    `modelEqualityDelegate.equals(request, other.request)` ⇒ 判等通过 ⇒
+  //    `set_input` 认为「没变」⇒ **不会 restart**。
+  //    （下拉刷新之所以有效，是因为 `fs/list` 给了**新 sign**，
+  //     `NetworkPhotoRequest` 是 data class，sign 一变 request 才真的不等。）
+  //    想强制重发就用 [coil3.compose.AsyncImagePainter.restart]，见下面 onRetry。
   val request = remember(connectionId, path, sign) {
     NetworkPhotoImageLoader.request(context, connectionId, path, sign = sign)
   }
@@ -76,12 +87,23 @@ fun NetworkPhotoThumbnail(
   /**
    * 重载：**先清掉这一张的缓存**，再让 painter 重走一次请求。
    *
-   * ⚠️ 只 `painter.restart()` 是不够的 —— 原实现就是这样，用户反馈「点了没反应」：
-   *    取流失败常常在磁盘缓存里留下半截数据，或 AList 的签名已经过期，
-   *    重走同一个请求只会再撞一次同一堵墙（状态 Error → Error，界面毫无变化）。
-   *    清缓存这一步才是关键，见 [NetworkPhotoImageLoader.evict]。
+   * 两步各有各的用途，别合并：
+   * 1. `evict()` —— 清内存 + 磁盘缓存。取流失败常常在磁盘里留下半截数据，
+   *    不清的话重走同一个 key 又会命中那块坏数据。见 [NetworkPhotoImageLoader.evict]。
+   * 2. `painter.restart()` —— Coil 官方的「重发当前请求」入口。
+   *    已 javap 核验 coil3 3.6.3：`restart()` → `launchJob()` →
+   *    `imageLoader.execute(input.request)`，**确实会重新走完整管线**
+   *    （内存缓存 → 磁盘缓存 → 网络）。它唯一的守卫是 `isRemembered`
+   *    （`false` 时整个方法是空操作）—— 用户能看见并点到这个按钮，
+   *    说明 item 正在组合里，必然是 true，所以这里是安全的。
    *
-   * 清缓存是磁盘 IO，放 IO 线程；`restart()` 必须回主线程调。
+   * ⭐ 真正让「重载刷不出来」的是**取流那一层**，不在这个按钮上：
+   *    AList 的签名会过期，旧签名每次都 401，而 `fs/get` 对同一个文件
+   *    返回同一个结果 ⇒ 重发多少次都撞同一堵墙（下拉刷新能好，是因为
+   *    重新 `fs/list` 拿到了新签名）。修复见
+   *    [app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.AlistClient.getFileStream]。
+   *
+   * 清缓存是磁盘 IO，放 IO 线程；`restart()` 回主线程调。
    */
   val onRetry: () -> Unit = {
     scope.launch {

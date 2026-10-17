@@ -397,7 +397,41 @@ android {
     //     ④ 顺手修同类隐患：`PlaylistScreen` 里同样的裸 `LazyListState()` / `LazyGridState()`
     //        （那行注释还写着「用 CompositionLocal 里共享的那个」，代码却自己在 new）。
     //        ⚠️ 全局只剩这两处裸构造，其余要么是 `remember { ... }` 要么是 `rememberXxxState()`。
-    versionCode = 78
+    // 79（取流链路修复，versionName 仍为 1.5.5）：用户报「偶尔有几个没刷出封面图，
+    //     然后**重载也刷不出来**，但正屏下拉刷新能刷出来」，并提醒「我是 alist 协议的，
+    //     刷新应该要走 alist 的 api」。根因不在 UI、不在缓存，在 `AlistClient.getFileStream`
+    //     的取值顺序上，是一整条链：
+    //     ① **过期的签名会在第 ① 级无限复活**。`/d/?sign=` 的签名有时效，过期即 401；
+    //        而调用方（Coil Fetcher）手里攥的是**列目录那一刻**的旧签名，它在第 ① 级
+    //        优先级最高。`fs/get` 换来的新签名被 `rememberSign` 写进了 `signCache`，
+    //        却永远排不上号 —— 于是每次取流都先撞一次旧签名，再走 `fs/get`。
+    //     ② **`fs/get` 对同一个文件返回同一个结果**。如果它给的 `raw_url` 本身取不到
+    //        （过期 / 指向服务端内网地址），那「重载」只不过把同一串字节再请求一遍：
+    //        状态 Error → Error，界面就是「点了没反应」。
+    //     ③ **以前只试 `raw_url`，漏了新签名那条**。`fs/get` 同时给 `raw_url` 和 `sign`，
+    //        旧代码写成 `raw_url ?: directUrl(sign)` —— `raw_url` 非空就**永远不会**
+    //        去试 `/d/?sign=<新签名>`，raw_url 一坏整条链就断死，重载也救不回来。
+    //     三条合起来正好解释全部现象：「偶尔有几个」= 那几个的签名过期了；
+    //     「重载刷不出来」= ①②；「下拉刷新能刷出来」= 重新 `fs/list` 拿到全新签名，
+    //     第 ① 级直接成功。**差别不在缓存，在签名新不新。**
+    //     修法（两半，缺一不可，均落在取流层、对所有调用方生效）：
+    //       A. 新增 `failedSigns`（path → 已证伪的签名）：失败过的签名记下来，
+    //          下一次**直接跳过**，不再复活；`rememberSign` 收到新签名 /
+    //          `fs/list` 刷新 / `disconnect` 时作废该记录 —— 链条因此是**自愈**的：
+    //          失败 → 跳过旧签名 → fs/get 换新签名 → 成功 → 记录作废 → 回到零额外请求的快路。
+    //       B. 第 ② 级把 `raw_url` 和 `/d/?sign=<新签名>` **都试一遍**（buildList + distinct），
+    //          不再让 `raw_url` 一票否决。
+    //     ⚠️ 顺手记录一条 Coil 3.6.3 的核验结论（javap，别再踩）：
+    //        `ImageRequest` 是 final class 且**重写了 equals**（25 个构造参数逐个比），
+    //        字段相同的新实例与旧实例**相等**；`AsyncImagePainter$Input.equals` 又走
+    //        `modelEqualityDelegate.equals(request, other)` ⇒ 想靠「换一个全新的
+    //        ImageRequest」来强制重发是**无效功**（v79 试过，`set_input` 判等通过、不 restart）。
+    //        强制重发只能用 `painter.restart()`（已核验：`restart()` → `launchJob()` →
+    //        `imageLoader.execute(input.request)`，唯一守卫是 `isRemembered`）。
+    //        同理，「下拉刷新之所以有效」正是因为 `fs/list` 给了**新 sign** ——
+    //        `NetworkPhotoRequest` 是 data class，sign 一变 request 才真的不等。
+    //        这两个事实都写进了 `NetworkPhotoThumbnail` 的注释，防止后来又去改 UI。
+    versionCode = 79
     versionName = "1.5.5"
 
     vectorDrawables {

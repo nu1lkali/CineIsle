@@ -133,19 +133,53 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
    * 就能直接拼出 `?sign=`，**省掉一次 `fs/get`**（一个 100 张图的目录就是 100 个请求）。
    * 取 [getFileMeta] 拿到的新签名同样会覆盖进来。
    *
-   * ⚠️ 签名有时效，所以这里只当**加速缓存**用：任何一步失败都会回落到 `fs/get`
-   *   现换一个新鲜签名（见 [getFileStream]），绝不会因为签名过期而取不到文件。
+   * ⚠️ 签名有时效，所以这里只当**加速缓存**用：取流失败就回落到 `fs/get`
+   *   现换一个新鲜签名（见 [getFileStream]），再由 [failedSigns] 保证
+   *   那个过期签名不会在下一次复活 —— 三者是一套，别单独改其中一个。
    */
   private val signCache = ConcurrentHashMap<String, String>()
+
+  /**
+   * **已被证伪**的签名（key = 相对路径，与 [signCache] 同口径；value = 失败过的那个签名）。
+   *
+   * ⭐⭐ 这一张小表是「**点重载刷不出来、下拉刷新却能刷出来**」的根因解药，
+   *     删掉它这个 bug 立刻回来。完整推导见 [getFileStream] 的 KDoc，这里只说结论：
+   *
+   * 签名会过期。过期后 `/d/?sign=` 就是 401，取流只能靠 `fs/get` 兜底 ——
+   * 而 `fs/get` 对**同一个文件**返回的是**同一个**结果。如果那个结果本身取不到，
+   * 「重载」只不过是把同一串字节再请求一遍：Error → Error，界面毫无变化。
+   *
+   * 更阴的是：调用方（Coil 的 Fetcher）手里攥着的是**列目录那一刻**的旧签名，
+   * 它在 [getFileStream] 的第 ① 级里**优先级最高** —— 于是 `fs/get` 辛辛苦苦
+   * 换来的新签名（被 [rememberSign] 写进了 [signCache]）永远排不上号，
+   * 旧签名每一次都从第 ① 级满血复活。
+   *
+   * 所以：失败过的签名必须记下来、下一次**直接跳过**。
+   *
+   * ⚠️ 一个路径只记「最近失败的那一个」：同一路径极少同时存在两个有效签名，
+   *    记一个就够阻断复活，不值得做成集合。来了新签名（[rememberSign]）立刻作废。
+   */
+  private val failedSigns = ConcurrentHashMap<String, String>()
 
   /** 缓存键：统一去掉首尾斜杠，`/电影/a.jpg` 与 `电影/a.jpg` 视为同一条 */
   private fun keyOf(path: String): String = path.trim('/')
 
-  /** 记一笔签名（空值不记）。写缓存顺手做容量保护：超限直接清空，见 [SIGN_CACHE_CAP] */
+  /**
+   * 记一笔签名（空值不记）。写缓存顺手做容量保护：超限直接清空，见 [SIGN_CACHE_CAP]。
+   *
+   * ⭐ **来了一个新签名，就把这个路径的「已证伪」记录作废**（[failedSigns]）——
+   *    这是整条链能自愈的关键：`fs/get` 换到新签名 ⇒ 记录清掉 ⇒
+   *    下一次取流第 ① 级就能用新签名直连，不必再走一趟 `fs/get`。
+   *    （`fs/list` 刷新列表时同理，一批新签名让整张表全部复位。）
+   */
   private fun rememberSign(path: String, sign: String?) {
     if (sign.isNullOrBlank()) return
-    if (signCache.size > SIGN_CACHE_CAP) signCache.clear()
-    signCache[keyOf(path)] = sign
+    val key = keyOf(path)
+    if (signCache.size > SIGN_CACHE_CAP) {
+      signCache.clear()
+      failedSigns.clear()
+    }
+    if (signCache.put(key, sign) != sign) failedSigns.remove(key)
   }
 
   // ── URL 拼装 ──
@@ -213,6 +247,9 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     withContext(Dispatchers.IO) {
       token = null
       connected = false
+      // 断开 = 这一轮的会话 / 签名全部作废，别把旧签名留给下一次连接
+      signCache.clear()
+      failedSigns.clear()
     }
   }
 
@@ -226,36 +263,95 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
   /**
    * 取文件流（网格缩略图 / 全屏大图 / 保存原图都走这里）。
    *
-   * ## 三级取值（顺序不能变）
+   * ## 取值顺序（每一级都可能救命，别删）
    *
-   * 1. **调用方给的 [sign]** —— 来自 `fs/list` 的条目（[NetworkFile.sign]），
-   *    零额外请求，正常路径；
-   * 2. **进程内签名缓存**（[signCache]，每次列目录顺手记的）；
-   * 3. 前两级都没有、或 `/d/` 仍然取不到 ⇒ **`fs/get` 现换一个新签名 / `raw_url`**
-   *    再取一次。
+   * 1. **`/d/` 直链 + 已知签名** —— 调用方给的（`fs/list` 现场拿的）优先，
+   *    进程内签名缓存（[signCache]）其次。零额外请求，正常路径。
+   * 2. **`fs/get`（AList 的 API）** 现换一个签名 / `raw_url`。
+   *    ⚠️ 它给出的地址有**两个**，必须都试：`raw_url` 是对象存储直链，
+   *    `sign` 是服务端现算的下载签名。以前只试 `raw_url`，它一坏整条链就断在这。
    *
-   * 第 3 级是**必须**的兜底，不是优化：`?sign=` 是 `/d/` 唯一的凭据
-   * （`Authorization` 头在那条路由上不被读取，见类 KDoc），而签名会过期、
-   * 文件夹封面在网络浏览里只存了 path（拿不到签名，见 `FolderCoverCacheEntity`）。
+   * ## ⭐⭐ 为什么「重载」刷不出来、下拉刷新却能刷出来（本方法最重要的一条）
+   *
+   * 真机反馈原话：「偶尔有几个没刷出封面图，然后重载也刷不出来」，
+   * 而「正屏下拉刷新能刷出来」。三个现象串起来，根因就在这个方法里：
+   *
+   * - 签名**有时效**。过期后第 1 级的 `/d/?sign=` 就是 401，只能靠 `fs/get` 兜底。
+   * - 而 `fs/get` 对**同一个文件**返回的是**同一个**结果。如果这个结果本身
+   *   取不到（`raw_url` 过期 / 指向服务端内网地址 / 新签名也没用），
+   *   那么「重载」只不过是把同一串字节**再请求一遍**：
+   *   状态 Error → Error，界面上就是「点了没反应」。
+   * - **下拉刷新**不一样：它重新 `fs/list`，服务端给一批**全新的签名**，
+   *   第 1 级直接成功。所以「下拉刷新能刷出来、重载刷不出来」——
+   *   差别不在缓存，在**签名新不新**。
+   *
+   * 雪上加霜的一脚：调用方（Coil 的 Fetcher）手里攥着的是**列目录那一刻**的
+   * 旧签名，它在第 1 级里优先级最高 —— `fs/get` 换来的新签名被
+   * [rememberSign] 写进了 [signCache]，却永远排不上号，旧签名每一次都满血复活。
+   *
+   * 解药两半，缺一不可：
+   * - **[failedSigns]**：失败过的签名记下来，下一次**跳过它**，别再复活；
+   * - 第 2 级把 `raw_url` 和 `/d/?sign=<新签名>` **都试一遍**。
+   *
+   * 两条都上了之后，链条是自愈的：失败 → 跳过旧签名 → `fs/get` 换新签名 →
+   * 成功 → [rememberSign] 作废证伪记录 → 之后又回到零额外请求的快路。
    *
    * ⚠️ 刻意**不**在成功路径上先调 `fs/get`：列目录已经把签名带回来了，
-   *    取流就该是最后一跳；`fs/get` 只在失败时补一次。
+   *    取流就该是最后一跳；`fs/get` 只在失败时补。
    */
   override suspend fun getFileStream(path: String, sign: String?): Result<InputStream> =
     withContext(Dispatchers.IO) {
       try {
-        val knownSign = sign?.takeIf { it.isNotBlank() } ?: signCache[keyOf(path)]
-        // ① /d/ 直链（带上已知签名）
-        val direct = runCatching { openStream(directUrl(path, knownSign)) }
-        if (direct.isSuccess) return@withContext Result.success(direct.getOrThrow())
+        val key = keyOf(path)
 
-        // ② 兜底：fs/get 换一个新鲜签名（或 raw_url）再取一次
-        Log.w(TAG, "取流失败，改用 fs/get 换签名重试: $path | ${direct.exceptionOrNull()?.message}")
+        // ① /d/ 直链（带上已知签名）。⚠️ 已证伪的签名必须跳过，见 KDoc。
+        val failed = failedSigns[key]
+        val known = listOfNotNull(
+          sign?.takeIf { it.isNotBlank() },
+          signCache[key],
+        ).distinct().filter { it != failed }
+
+        for (s in known) {
+          val attempt = runCatching { openStream(directUrl(path, s)) }
+          if (attempt.isSuccess) {
+            failedSigns.remove(key)
+            return@withContext Result.success(attempt.getOrThrow())
+          }
+          Log.w(TAG, "/d/ 直链取流失败: $path | ${attempt.exceptionOrNull()?.message}")
+        }
+        // 把失败的那个签名记下来。少了这一行，下一次（用户点「重载」）
+        // 又会优先用它，而 fs/get 给的是同一个结果 ⇒ 重试永远撞同一堵墙。
+        if (known.isNotEmpty()) {
+          // 容量保护：这张表只按 path 记一条，超限直接清空（和 signCache 同口径）
+          if (failedSigns.size > SIGN_CACHE_CAP) failedSigns.clear()
+          failedSigns[key] = known.last()
+        }
+
+        // ② 兜底：fs/get —— 走 AList 的 API 现换一个签名 / raw_url。
+        //    用户说「我是 alist 协议的，刷新应该要走 alist 的 api」，就是这一跳。
+        Log.w(TAG, "改用 fs/get 换签名重试: $path")
         val meta = getFileMeta(path)
-        val fallbackUrl =
-          meta.rawUrl.takeIf { it.isNotBlank() && !meta.isDir }
-            ?: directUrl(path, meta.sign.takeIf { it.isNotBlank() })
-        Result.success(openStream(fallbackUrl))
+        val freshSign = meta.sign.takeIf { it.isNotBlank() }
+        val urls = buildList {
+          // raw_url：部分驱动直出对象存储直链，绕过 AList 更快
+          if (!meta.isDir) meta.rawUrl.takeIf { it.isNotBlank() }?.let { add(it) }
+          // ⚠️ 但 raw_url 也会过期 / 指错（典型是服务端自己的内网地址）——
+          //    新签名这条必须也试。以前漏了它，raw_url 一坏整条链就断在这里，
+          //    而且重载也救不回来（fs/get 每次返回同一个坏 raw_url）。
+          add(directUrl(path, freshSign))
+        }.distinct()
+
+        var lastError: Throwable? = null
+        for (url in urls) {
+          val attempt = runCatching { openStream(url) }
+          if (attempt.isSuccess) {
+            failedSigns.remove(key)
+            return@withContext Result.success(attempt.getOrThrow())
+          }
+          lastError = attempt.exceptionOrNull()
+          Log.w(TAG, "fs/get 给出的地址取流失败: $url | ${lastError?.message}")
+        }
+        throw lastError ?: IOException("fs/get 没给出可用地址: $path")
       } catch (e: Exception) {
         Log.w(TAG, "取流失败: $path", e)
         Result.failure(e)
