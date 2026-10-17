@@ -48,7 +48,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
@@ -214,20 +218,37 @@ fun EmbyItemActionsDialog(
  * 是反直觉的。菜单只在点空白处（onDismissRequest）时才收起。
  *
  * ## 定位：**吸在屏幕右侧**（用户明确要求，别再"修"它）
- * 这里**刻意不给** `DropdownMenu` 传 `offset`。M3 的 `DropdownMenu` 在 LTR 下把菜单的
- * **左边缘**对齐锚点左边缘、向右展开；只有在「右边装不下」时才钳到 `窗口宽 − 菜单宽`。
- * 锚点是顶栏那个 Emby 图标，它右边还压着「更多」「设置」两个图标（约 96dp 空间），
- * 而菜单固定 [VISIBILITY_MENU_WIDTH] = 240dp ⇒ **必定**放不下 ⇒ 必定被钳到窗口最右侧。
- * 也就是「菜单右边缘贴着屏幕右边缘」，正是要的效果。
+ * 这里**刻意**给 `DropdownMenu` 传一个「必然超宽」的 x 偏移（整个屏宽），
+ * 逼 M3 把菜单放到窗口最右侧。为什么必须这么绕，得从 M3 的真实算法说起
+ * （以下均为 material3 1.5.0-alpha15 的 **javap 实证**，定位器在
+ * `androidx.compose.material3.internal.DropdownMenuPositionProvider`，编译自 MenuPosition.kt）：
  *
- * ⚠️ 曾经有一版把这个现象当成 bug，给了个负的 x 偏移想把菜单挪到「右边缘贴图标右边缘」，
- *    结果菜单飘到顶栏中段 —— 用户立刻打回（「我不是让你把小菜单吸在屏幕右侧吗」）。
- *    **不要**再给它加负偏移，也**不要**为了「对齐锚点」去掉 [VISIBILITY_MENU_WIDTH]。
+ * 横向有三个候选，**按序试，第一个「放得下」的胜出**，全都放不下才用最后一个。
+ * 「放得下」的判定是 `x ≥ 8dp && x + 菜单宽 ≤ 窗口宽 − 8dp`（`MenuHorizontalMargin`
+ * 实证只有 **8dp**，不是想当然的 48dp；垂直边距才是 48dp）。三个候选（LTR）：
+ * 1. `startToAnchorStart`：菜单**左**边缘贴锚点左边缘，再加 offset；
+ * 2. `endToAnchorEnd`：菜单**右**边缘贴锚点右边缘，再加 offset；
+ * 3. 按锚点中心落在窗口左/右半屏二选一：`leftToWindowLeft`（贴窗口左缘 8dp）/
+ *    `rightToWindowRight`（贴窗口右缘 8dp，即 x = 窗口宽 − 8dp − 菜单宽）。
  *
- * 这条依赖两个前提，动顶栏之前先确认：
- * 1. 锚点右边留给菜单的空间 < 菜单宽（现在约 96dp，远小于 240dp，所以必然触发钳制）；
- * 2. 菜单宽度**固定** —— 若改成 wrapContent，库名短的时候可能右边刚好放得下，
- *    那就不再钳到最右侧了。
+ * ⚠️ 曾经有一版**不传 offset**，理由是「240dp 在锚点右边放不下 ⇒ 必然被钳到窗口最右」——
+ *    **这个前提是错的**：锚点右侧虽有约 96dp，扣掉 8dp 边距还剩 88dp ≥ 0，
+ *    240dp 菜单在 `x = 锚点右缘 − 240dp` 处**放得下**（普通手机屏宽 360~412dp 都成立）
+ *    ⇒ 候选 2 `endToAnchorEnd` **永远胜出** ⇒ 菜单右边缘一直贴在图标（= 手指位置），
+ *    从来没能吸到屏幕右侧。这就是用户反馈「还是弹在手指触摸的位置」的根因。
+ *
+ * 现在的做法：`offset.x = 屏宽`，候选 1、2 的 x 都会被顶到 `x + 菜单宽 > 窗口宽 − 8dp`
+ * （必然放不下）⇒ 只剩候选 3。锚点是顶栏 actions 里的图标，恒在窗口右半屏
+ * ⇒ 命中 `rightToWindowRight` ⇒ **菜单右边缘稳定贴在 `窗口宽 − 8dp`**。
+ * 这个结果不依赖锚点精确位置、不依赖屏宽，任何机型一致。
+ *
+ * ⚠️ 三条红线，动之前先读：
+ * 1. **不要**把这个 offset「简化」掉 —— 一去掉就退回 endToAnchorEnd（弹在手指位置）；
+ * 2. **不要**改成负偏移（v72 的老路）：负偏移只会把菜单推到锚点左侧，仍然不是屏幕右侧；
+ * 3. 只在 LTR 下强制（RTL 下对齐语义整体翻转，负负得正的道理不成立，故保持默认行为）。
+ *
+ * [VISIBILITY_MENU_WIDTH] 保持固定只是观感选择（菜单不随库名长短抖动），
+ * 定位已不依赖它 —— 库名过长由 Ellipsis 截断。
  *
  * @param expanded 是否展开（由调用方持有状态，长按 Emby 图标时置 true）
  * @param libraries 全部媒体库，**已按当前显示顺序排好**（和首页那一眼的顺序一致，
@@ -247,9 +268,19 @@ fun EmbyLibraryVisibilityMenu(
   onDeselectAll: () -> Unit,
   onDismissRequest: () -> Unit,
 ) {
+  // 强制「吸在屏幕右侧」：x 偏移直接给整个屏宽，M3 的前两个横向候选
+  // （贴锚点左边缘 / 贴锚点右边缘）都会被「放不下」检查否掉，只剩
+  // rightToWindowRight（贴窗口右缘 − 8dp）。完整推导见 KDoc「定位」一节。
+  val pinToRightEdge =
+    if (LocalLayoutDirection.current == LayoutDirection.Ltr) {
+      DpOffset(x = LocalConfiguration.current.screenWidthDp.dp, y = 0.dp)
+    } else {
+      DpOffset.Zero
+    }
   DropdownMenu(
     expanded = expanded,
     onDismissRequest = onDismissRequest,
+    offset = pinToRightEdge,
   ) {
     Column(modifier = Modifier.width(VISIBILITY_MENU_WIDTH)) {
       Text(
@@ -293,9 +324,9 @@ fun EmbyLibraryVisibilityMenu(
 /**
  * 「媒体库显示」菜单的固定宽度（240dp，约 2/3 个常见手机宽度）。
  *
- * 为什么**必须固定**（不是审美，是定位前提）：菜单"吸在屏幕右侧"靠的是
- * 「240dp 在锚点右边放不下 ⇒ M3 把它钳到窗口最右」。宽度一旦改成 wrapContent，
- * 库名短的时候菜单可能刚好在右边放得下，就**不再**贴右边缘了。详见
+ * 宽度固定现在**只是观感选择**（一行一个库、长名 Ellipsis 截断，菜单不随库名长短抖动），
+ * **不再是定位前提** —— 新机制（offset.x = 整个屏宽）下，无论菜单多宽，
+ * 前两个锚点相对候选都必然「放不下」，照样被推到窗口最右。详见
  * [EmbyLibraryVisibilityMenu] 的定位说明。
  *
  * 库名过长由 `Ellipsis` 截断，不会把菜单撑开。

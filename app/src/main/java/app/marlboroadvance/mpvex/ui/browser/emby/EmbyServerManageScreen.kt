@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -34,6 +37,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
@@ -87,7 +92,21 @@ object EmbyServerManageScreen : Screen {
     Scaffold(
       topBar = {
         TopAppBar(
-          title = { Text("Emby 服务器") },
+          title = {
+            // 标题下挂一行小字计数：这是台数管理页，第一眼就该知道「一共有几台」，
+            // 不用往下滑数卡片。空态时也会显示「共 0 台」，和空态文案互相印证。
+            Column {
+              Text(
+                text = "Emby 服务器",
+                style = MaterialTheme.typography.titleLarge,
+              )
+              Text(
+                text = "共 ${servers.size} 台",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          },
           navigationIcon = {
             IconButton(onClick = { backStack.removeLastOrNull() }) {
               Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -203,6 +222,21 @@ object EmbyServerManageScreen : Screen {
   }
 }
 
+/**
+ * 服务器卡片：点卡片 = 切换到这台服务器；右下角三个图标分别管
+ * 「同机加用户 / 编辑 / 删除」。
+ *
+ * 版式要点（第三版，前两版都被嫌「挤」「分不清哪台是当前的」）：
+ * - **状态徽章**：左侧 40dp 圆形 tonal 底 + 状态图标（未登录 = errorContainer、
+ *   当前 = primary、其它在线 = surfaceVariant），三态不看文字也能分辨；
+ * - **「当前」小胶囊**：当前服务器的名字旁钉一枚 primary 底小标签 ——
+ *   单靠 secondaryContainer 底色，夜间模式 / 色弱用户分不清「当前」和「普通」；
+ * - **动作按钮独立成行**（右下角一排）：前两版把三个 IconButton 和信息挤在同一行，
+ *   名字列被 3×48dp 的按钮区压得只剩一百多 dp，长服务器名必被截断；
+ *   拆开后信息列拿满宽，动作行右对齐，两类内容互不挤压；
+ * - **普通卡 outlineVariant 细边 / 当前卡 primary 实边**：卡片底色接近页面背景，
+ *   没有边就看不出「这是一张卡」；当前卡用 primary 边把层级再拔高一格。
+ */
 @Composable
 private fun ServerCard(
   server: EmbyServer,
@@ -215,6 +249,7 @@ private fun ServerCard(
   Card(
     onClick = onSelect,
     modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(16.dp),
     colors = CardDefaults.cardColors(
       containerColor = if (isCurrent) {
         MaterialTheme.colorScheme.secondaryContainer
@@ -222,71 +257,128 @@ private fun ServerCard(
         MaterialTheme.colorScheme.surface
       },
     ),
+    border = BorderStroke(
+      width = 1.dp,
+      color = if (isCurrent) {
+        MaterialTheme.colorScheme.primary
+      } else {
+        MaterialTheme.colorScheme.outlineVariant
+      },
+    ),
   ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(16.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Icon(
-        imageVector = when {
-          !server.isLoggedIn -> Icons.Default.Error
-          isCurrent -> Icons.Default.CheckCircle
-          else -> Icons.Default.Dns
-        },
-        contentDescription = null,
-        tint = when {
-          !server.isLoggedIn -> MaterialTheme.colorScheme.error
-          isCurrent -> MaterialTheme.colorScheme.primary
-          else -> MaterialTheme.colorScheme.onSurfaceVariant
-        },
-      )
+    Column(modifier = Modifier.padding(16.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        // 状态徽章：圆形 tonal 底 + 状态图标（40dp：20dp 图标 + 上下 10dp 内边距）
+        Surface(
+          shape = CircleShape,
+          color = when {
+            !server.isLoggedIn -> MaterialTheme.colorScheme.errorContainer
+            isCurrent -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.colorScheme.surfaceVariant
+          },
+        ) {
+          Icon(
+            imageVector = when {
+              !server.isLoggedIn -> Icons.Default.Error
+              isCurrent -> Icons.Default.CheckCircle
+              else -> Icons.Default.Dns
+            },
+            contentDescription = null,
+            tint = when {
+              !server.isLoggedIn -> MaterialTheme.colorScheme.onErrorContainer
+              isCurrent -> MaterialTheme.colorScheme.onPrimary
+              else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier
+              .padding(10.dp)
+              .size(20.dp),
+          )
+        }
 
-      Column(
-        modifier = Modifier
-          .weight(1f)
-          .padding(start = 12.dp),
-      ) {
-        Text(text = server.name, style = MaterialTheme.typography.titleMedium)
-        Text(
-          text = server.baseUrl,
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-          text = when {
-            !server.isLoggedIn -> "未登录"
-            server.serverName.isNotBlank() -> "${server.serverName} · ${server.version}"
-            else -> "已登录"
-          },
-          style = MaterialTheme.typography.bodySmall,
-          color = if (server.isLoggedIn) {
-            MaterialTheme.colorScheme.primary
-          } else {
-            MaterialTheme.colorScheme.error
-          },
-        )
-        // a7：账号名单独一行 —— 同一台服务器下多个用户各占一张卡，
-        // 没有这一行时两张卡只差一个 Id，用户根本分不清该点哪张。
-        if (server.isLoggedIn && server.username.isNotBlank()) {
+        Column(
+          modifier = Modifier
+            .weight(1f)
+            .padding(start = 12.dp),
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+              text = server.name,
+              style = MaterialTheme.typography.titleMedium,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              // fill = false：名字短时小胶囊紧跟在名字后面，而不是被顶到行尾
+              modifier = Modifier.weight(1f, fill = false),
+            )
+            if (isCurrent) {
+              Surface(
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.padding(start = 8.dp),
+              ) {
+                Text(
+                  text = "当前",
+                  style = MaterialTheme.typography.labelSmall,
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                )
+              }
+            }
+          }
           Text(
-            text = "账号 ${server.username}",
+            text = server.baseUrl,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
+          Text(
+            text = when {
+              !server.isLoggedIn -> "未登录"
+              server.serverName.isNotBlank() -> "${server.serverName} · ${server.version}"
+              else -> "已登录"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (server.isLoggedIn) {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.error
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          // a7：账号名单独一行 —— 同一台服务器下多个用户各占一张卡，
+          // 没有这一行时两张卡只差一个 Id，用户根本分不清该点哪张。
+          if (server.isLoggedIn && server.username.isNotBlank()) {
+            Text(
+              text = "账号 ${server.username}",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
         }
       }
 
-      // a7：在这台服务器上再登一个用户（地址已填过，不用重打）
-      IconButton(onClick = onAddUser) {
-        Icon(Icons.Default.PersonAdd, contentDescription = "在这台服务器上添加另一个用户")
-      }
-      IconButton(onClick = onEdit) {
-        Icon(Icons.Default.Edit, contentDescription = "编辑")
-      }
-      IconButton(onClick = onDelete) {
-        Icon(Icons.Default.Delete, contentDescription = "删除")
+      // 动作行：右下角一排图标按钮。独立成行后信息列拿满宽，
+      // 三个按钮也不再和服务器名字抢横向空间
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(top = 8.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        // a7：在这台服务器上再登一个用户（地址已填过，不用重打）
+        IconButton(onClick = onAddUser) {
+          Icon(Icons.Default.PersonAdd, contentDescription = "在这台服务器上添加另一个用户")
+        }
+        IconButton(onClick = onEdit) {
+          Icon(Icons.Default.Edit, contentDescription = "编辑")
+        }
+        IconButton(onClick = onDelete) {
+          Icon(Icons.Default.Delete, contentDescription = "删除")
+        }
       }
     }
   }
@@ -435,12 +527,21 @@ private fun ServerEditDialog(
           )
           Text("使用 HTTPS")
         }
+        // 错误信息独立成块（满宽 errorContainer）：和网络连接卡片同一套做法。
+        // 散在输入框末尾的一行红字既容易被忽略，地址/端口类的长错误也读不完。
         errorMessage?.let {
-          Text(
-            text = it,
-            color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodySmall,
-          )
+          Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Text(
+              text = it,
+              style = MaterialTheme.typography.bodySmall,
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+          }
         }
       }
     },

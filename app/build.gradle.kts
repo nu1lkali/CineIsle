@@ -477,7 +477,31 @@ android {
     //        裸读 firstVisibleItemIndex 会让每帧滚动都重组（原网络模块就是这么写的）。
     //     ⚠️ javap 核验：`LazyVerticalGridScrollbar` 的 content 是普通
     //        `@Composable () -> Unit`（无 BoxScope / LazyGridScope 接收者）。
-    versionCode = 82
+    // 83（「媒体库显示」菜单吸右侧 + 服务器维护页美化，versionName 仍为 1.5.5）：
+    //     ① 用户报「长按首页 Emby 图标的『媒体库显示』菜单，我之前让你把它吸在屏幕
+    //        右侧，现在还是弹在手指触摸的位置」。
+    //        **根因**（material3 1.5.0-alpha15 定位算法，javap 实证，类在
+    //        `androidx.compose.material3.internal.DropdownMenuPositionProvider`，
+    //        编译自 MenuPosition.kt）：横向有三个候选**按序试、第一个「放得下」的胜出**
+    //        （放得下 = `x ≥ 8dp && x + 菜单宽 ≤ 窗口宽 − 8dp`），顺序是
+    //        `[startToAnchorStart, endToAnchorEnd, 中心判定(left/rightToWindow)]`，
+    //        全放不下才用最后一个。v73 起删掉 offset「靠 M3 钳到窗口最右」的前提
+    //        「240dp 在锚点右侧放不下」**是错的**：`MenuHorizontalMargin` 实证只有
+    //        **8dp**（不是想当然的 48dp；48dp 是垂直边距），锚点右侧约 96dp 里放
+    //        240dp 菜单完全放得下 ⇒ `endToAnchorEnd`（右边缘贴锚点右边缘）**永远胜出**
+    //        ⇒ 菜单右边缘一直贴在图标（= 手指位置），从来没能吸到屏幕右侧。
+    //        改动：`EmbyLibraryVisibilityMenu` 显式传 `offset.x = 屏宽`，候选 1、2
+    //        必然被「放不下」否掉 ⇒ 确定性地落到 `rightToWindowRight`
+    //        （右缘贴 `窗口宽 − 8dp`），不依赖锚点位置与屏宽；仅 LTR 下强制。
+    //        ⚠️ 三不：不删这个 offset（删了退回 endToAnchorEnd）、不改负偏移
+    //        （v72 老路，只会把菜单推到锚点左侧）、不动其他菜单（用户明确要求）。
+    //     ②「美化一下 emby 服务器维护页的 UI」：`EmbyServerManageScreen` 三处 ——
+    //        ServerCard 加 40dp 圆形 tonal 状态徽章 + 名字旁「当前」小胶囊 +
+    //        普通卡 outlineVariant 细边 / 当前卡 primary 实边 + 三个动作按钮
+    //        从信息行拆到独立的右下角一行（原来和名字挤一行，名字列被 144dp
+    //        按钮区压剩一百多 dp）；顶栏标题加「共 N 台」副标题；登录失败信息
+    //        从一行红字改成满宽 errorContainer 块（与网络连接卡片同一约定）。
+    versionCode = 83
     versionName = "1.5.5"
 
     vectorDrawables {
