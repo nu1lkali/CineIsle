@@ -32,6 +32,7 @@ import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.utils.pressDownScale
+import app.marlboroadvance.mpvex.ui.utils.longClickWithHaptic
 import androidx.compose.foundation.combinedClickable
 import org.koin.compose.koinInject
 
@@ -52,6 +53,7 @@ fun M3UVideoCard(
   val appearancePreferences = koinInject<AppearancePreferences>()
   val unlimitedNameLines by appearancePreferences.unlimitedNameLines.collectAsState()
   val maxLines = if (unlimitedNameLines) Int.MAX_VALUE else 2
+  val onLongClickHaptic = longClickWithHaptic(onLongClick)
 
   val thumbSizeDp = 64.dp
 
@@ -61,7 +63,7 @@ fun M3UVideoCard(
         .fillMaxWidth()
         .combinedClickable(
           onClick = onClick,
-          onLongClick = onLongClick,
+          onLongClick = onLongClickHaptic,
         )
         .pressDownScale(),
     colors = CardDefaults.cardColors(containerColor = Color.Transparent),
@@ -89,7 +91,7 @@ fun M3UVideoCard(
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .combinedClickable(
               onClick = onClick,
-              onLongClick = onLongClick,
+              onLongClick = onLongClickHaptic,
             ),
         contentAlignment = Alignment.Center,
       ) {

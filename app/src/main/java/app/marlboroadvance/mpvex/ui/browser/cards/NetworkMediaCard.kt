@@ -36,6 +36,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -73,6 +75,7 @@ internal fun Modifier.tapAndLongPress(
   onClick: () -> Unit,
   onLongClick: ((Offset) -> Unit)?,
 ): Modifier = composed {
+  val haptics = LocalHapticFeedback.current
   var posInRoot by remember { mutableStateOf(Offset.Zero) }
   this
     .onGloballyPositioned { posInRoot = it.positionInRoot() }
@@ -83,7 +86,10 @@ internal fun Modifier.tapAndLongPress(
         Modifier.pointerInput(onClick, onLongClick) {
           detectTapGestures(
             onTap = { onClick() },
-            onLongPress = { offset -> onLongClick(posInRoot + offset) },
+            onLongPress = { offset ->
+              haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+              onLongClick(posInRoot + offset)
+            },
           )
         }
       },

@@ -534,8 +534,16 @@ android {
     //     ② 「更多」面板 `QuickActionItem` / `PlaybackToggleRow` 加 `pressDownScale()` 按压反馈，
     //     与全局卡片手势一致（MoreSheet）。M/L 级（空态统一、下拉刷新指示器、「换一批」crossfade、
     //     主题圆形揭幕、列表→详情 hero 转场）留作下一轮，逐个验证不回退再发。
-    versionCode = 86
-    versionName = "1.5.5"
+    // 87（卡片长按轻度震动反馈，versionName 升至 1.5.6）：用户要「卡片长按除了原来的事件外
+    //     再加上轻度震动反馈」。落点：① 共享 modifier `tapAndLongPress`（EmbyMediaCard 私有 +
+    //     NetworkMediaCard 内部，承载 Emby 媒体/文件夹卡 + 网络媒体/视频/文件夹卡）的 onLongPress
+    //     里先 `performHapticFeedback(HapticFeedbackType.LongPress)` 再派发；② 直接走
+    //     `combinedClickable` 的本地卡 FolderCard / VideoCard / M3UVideoCard 用新建的
+    //     `longClickWithHaptic()`（`ui/utils/LongPressCopy.kt`）包一层同样的长按震动。
+    //     与播放器 `hapticFeedbackEnabled` 开关无关——那是播放手势专属，浏览卡片长按反馈用户明确要、
+    //     全局常开。PlaylistCard 透传到 FolderCard、故自动带上。
+    versionCode = 87
+    versionName = "1.5.6"
 
     vectorDrawables {
       useSupportLibrary = true

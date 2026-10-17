@@ -48,6 +48,7 @@ import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.utils.pressDownScale
+import app.marlboroadvance.mpvex.ui.utils.longClickWithHaptic
 import androidx.compose.foundation.combinedClickable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -87,6 +88,9 @@ fun VideoCard(
   val showDateChip by browserPreferences.showDateChip.collectAsState()
   val showUnplayedOldVideoLabel by appearancePreferences.showUnplayedOldVideoLabel.collectAsState()
   val maxLines = if (unlimitedNameLines) Int.MAX_VALUE else 2
+
+  // 卡片长按除了原本的事件（弹菜单 / 选择态 / 移除…），额外给一下轻度震动确认
+  val onLongClickHaptic = longClickWithHaptic(onLongClick)
   
   // Use override parameters if provided, otherwise use preferences
   val showSizeChip = overrideShowSizeChip ?: showSizeChipPref
@@ -99,7 +103,7 @@ fun VideoCard(
       )
       .combinedClickable(
         onClick = onClick,
-        onLongClick = onLongClick,
+        onLongClick = onLongClickHaptic,
       )
       .pressDownScale(),
     colors = CardDefaults. cardColors(containerColor = Color. Transparent),
@@ -167,7 +171,7 @@ fun VideoCard(
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .combinedClickable(
               onClick = onThumbClick,
-              onLongClick = onLongClick,
+              onLongClick = onLongClickHaptic,
             ),
           contentAlignment = Alignment.Center,
         ) {
@@ -439,7 +443,7 @@ fun VideoCard(
               .background(MaterialTheme.colorScheme.surfaceContainerHigh)
               .combinedClickable(
                 onClick = onThumbClick,
-                onLongClick = onLongClick,
+                onLongClick = onLongClickHaptic,
               ),
           contentAlignment = Alignment.Center,
         ) {

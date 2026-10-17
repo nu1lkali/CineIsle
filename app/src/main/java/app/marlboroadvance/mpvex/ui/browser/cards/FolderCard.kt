@@ -35,6 +35,7 @@ import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.utils.pressDownScale
+import app.marlboroadvance.mpvex.ui.utils.longClickWithHaptic
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.ListItemDefaults.verticalAlignment
 import org.koin.compose.koinInject
@@ -66,6 +67,7 @@ fun FolderCard(
   val showDateChip by browserPreferences.showDateChip.collectAsState()
   val showFolderPath by browserPreferences.showFolderPath.collectAsState()
   val maxLines = if (unlimitedNameLines) Int.MAX_VALUE else 2
+  val onLongClickHaptic = longClickWithHaptic(onLongClick)
 
   // Remove the redundant folder name from the path
   val parentPath = folder.path.substringBeforeLast("/", folder.path)
@@ -75,7 +77,7 @@ fun FolderCard(
       .fillMaxWidth()
       .combinedClickable(
         onClick = onClick,
-        onLongClick = onLongClick,
+        onLongClick = onLongClickHaptic,
       )
       .pressDownScale(),
     colors = CardDefaults. cardColors(containerColor = Color. Transparent),
@@ -121,7 +123,7 @@ fun FolderCard(
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .combinedClickable(
               onClick = onThumbClick,
-              onLongClick = onLongClick,
+              onLongClick = onLongClickHaptic,
             ),
           contentAlignment = Alignment.Center,
         ) {
@@ -208,7 +210,7 @@ fun FolderCard(
               .background(MaterialTheme.colorScheme.surfaceContainerHigh)
               .combinedClickable(
                 onClick = onThumbClick,
-                onLongClick = onLongClick,
+                onLongClick = onLongClickHaptic,
               ),
           contentAlignment = Alignment.Center,
         ) {

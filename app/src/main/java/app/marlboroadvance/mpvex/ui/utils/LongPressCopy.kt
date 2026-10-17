@@ -15,6 +15,23 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 
 /**
+ * 给「长按」回调叠一层轻度触觉反馈（Android 标准 `LongPress` 震动）。
+ *
+ * 用途：卡片长按除了原本的事件（弹菜单 / 进入选择态 / 移除…），再额外给一下震动确认手感，
+ * 确认「这次长按被吃到了」。与播放器里的 `hapticFeedbackEnabled` 开关无关 —— 那是播放手势专属，
+ * 浏览卡片的长按反馈是用户明确要的、全局常开。
+ *
+ * [onLongClick] 为 null（该卡片不可长按）时**原样返回 null**，不挂任何副作用。
+ */
+@Composable
+fun longClickWithHaptic(onLongClick: (() -> Unit)?): (() -> Unit)? {
+  val haptics = LocalHapticFeedback.current
+  return onLongClick?.let { cb ->
+    { haptics.performHapticFeedback(HapticFeedbackType.LongPress); cb() }
+  }
+}
+
+/**
  * 长按复制一段文字（触觉反馈 + Toast 提示）。
  *
  * ## 为什么要单独抽一个 modifier
