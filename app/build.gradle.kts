@@ -525,7 +525,16 @@ android {
     //     ⚠️ 红线：启动页是覆盖层、动画结束才 onFinished 卸掉自己；不要改成「替换
     //     内容」，否则会白屏一闪。颜色全部走 colorScheme（primary/tertiary/surface），
     //     不在播放器控制条外硬编码颜色。
-    versionCode = 85
+    // 86（启动页修透 + 快捷 UI 打磨，versionName 仍为 1.5.5）：用户复盘 v85 启动页发现
+    //     主界面从动画中央透出来——根因是根背景径向渐变的**中心停靠色半透明**（primary 0.14）
+    //     ⇒ 整层不透明失效。改法（`MainActivity.AppSplashScreen`）：根 `Box` 背景改为**不透明**
+    //     `surface`，品牌辉光另起一层 `primary.copy(0.18)→Transparent` 叠在 surface 之上
+    //     （不透明底色 + 炫光层，既盖住主界面又保留炫酷 glow）。顺手两处 S 级快捷打磨：
+    //     ① 搜索「无结果」从一行裸 `Text` 升级为图标 + 标题 + 提示的居中列（EmbyHomeScreen）；
+    //     ② 「更多」面板 `QuickActionItem` / `PlaybackToggleRow` 加 `pressDownScale()` 按压反馈，
+    //     与全局卡片手势一致（MoreSheet）。M/L 级（空态统一、下拉刷新指示器、「换一批」crossfade、
+    //     主题圆形揭幕、列表→详情 hero 转场）留作下一轮，逐个验证不回退再发。
+    versionCode = 86
     versionName = "1.5.5"
 
     vectorDrawables {

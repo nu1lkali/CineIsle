@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -662,11 +664,31 @@ fun EmbyHomeScreen(
           EmbySkeletonGrid(columns = 3, ratio = 3f / 4f, itemCount = 9)
         } else if (searchResults.isEmpty()) {
           Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-              text = "没有找到「$searchQuery」相关媒体",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              modifier = Modifier.padding(horizontal = 32.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Filled.SearchOff,
+                contentDescription = null,
+                modifier = Modifier.size(56.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+              )
+              Spacer(modifier = Modifier.height(16.dp))
+              Text(
+                text = "没有找到「$searchQuery」相关媒体",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+              )
+              Spacer(modifier = Modifier.height(6.dp))
+              Text(
+                text = "换个关键词，或检查拼写试试",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+              )
+            }
           }
         } else {
           Column(modifier = Modifier.fillMaxSize()) {

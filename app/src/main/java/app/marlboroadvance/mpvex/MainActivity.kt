@@ -305,20 +305,29 @@ class MainActivity : ComponentActivity() {
             scaleX = exitScale
             scaleY = exitScale
           }
-          // 品牌化径向辉光底：中心 primary 微光 → 边缘 surface
-          .background(
-            Brush.radialGradient(
-              colors =
-                listOf(
-                  colors.primary.copy(alpha = 0.14f),
-                  colors.surface,
-                ),
-            ),
-          )
+          // 启动页必须是不透明底色：用 surface 完全盖住背后的主界面，
+          // 否则径向辉光中心是半透明的、主界面内容会从中间透出来。
+          .background(colors.surface)
           // 启动页展示期间吞掉点击，避免误触背后的界面
           .pointerInput(Unit) { detectTapGestures { } },
       contentAlignment = Alignment.Center,
     ) {
+      // 品牌化径向辉光层（叠在 surface 之上、不影响不透明度）：中心 primary 微光 → 透明
+      Box(
+        modifier =
+          Modifier
+            .fillMaxSize()
+            .background(
+              Brush.radialGradient(
+                colors =
+                  listOf(
+                    colors.primary.copy(alpha = 0.18f),
+                    Color.Transparent,
+                  ),
+              ),
+            ),
+      )
+
       // 光晕层（logo 背后）
       Box(
         modifier =

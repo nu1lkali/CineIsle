@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
+import app.marlboroadvance.mpvex.ui.utils.pressDownScale
 
 import `is`.xyz.mpv.MPVLib
 import android.text.format.DateUtils
@@ -646,6 +647,7 @@ private fun QuickActionItem(
       Modifier
         .width(76.dp)
         .clip(RoundedCornerShape(16.dp))
+        .pressDownScale()
         .clickable(onClick = onClick)
         .padding(vertical = MaterialTheme.spacing.small),
   ) {
@@ -698,6 +700,7 @@ private fun PlaybackToggleRow(
       Modifier
         .fillMaxWidth()
         .clip(RoundedCornerShape(16.dp))
+        .pressDownScale()
         .clickable { onCheckedChange(!checked) }
         .padding(horizontal = MaterialTheme.spacing.small, vertical = MaterialTheme.spacing.smaller),
     verticalAlignment = Alignment.CenterVertically,
