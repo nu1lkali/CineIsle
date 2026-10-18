@@ -116,7 +116,7 @@ class BrowserPreferences(
   /**
    * 侧边可拖动滚动条的总开关（网络浏览 / Emby 媒体库等长列表右侧那根）。
    *
-   * **全局唯一入口**：「设置 → 界面与外观 → 侧边滚动条」。所有长列表要显示滚动条，
+   * **全局唯一入口**：「设置 → 外观 → 侧边滚动条」。所有长列表要显示滚动条，
    * 统一套 [app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar] /
    * [app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar] 这两个外壳，
    * 由它们读本偏好 —— 新增列表时套壳即自动遵循，不要绕过外壳直接调库。
@@ -386,7 +386,7 @@ class BrowserPreferences(
   //
   // 这三项是「把散落的视觉常量收口成设置」：圆角原来写死在 EMBY_CARD_CORNER，
   // 角标（进度 / 作品数）也是硬开着。收口之后卡片的样子只有**一个来源**，
-  // 用户在「设置 → Emby 媒体库 → 卡片外观」里改一次，全 App 的卡片一起变。
+  // 用户在「设置 → Emby 卡片与封面」里改一次，全 App 的卡片一起变。
 
   /** 卡片圆角（dp），范围 0~24，默认 12 */
   val embyCardCorner = preferenceStore.getInt("emby_card_corner", 12)
@@ -529,7 +529,7 @@ class BrowserPreferences(
    * 照片浏览器「幻灯片播放」的翻页间隔，默认 [PhotoSlideshowInterval.FIVE_SECONDS]。
    *
    * **全局一份、不按库分**：这是「看照片的习惯」，不是某个媒体库的属性。
-   * 设置入口在「设置 → Emby 媒体库 → 幻灯片间隔」。
+   * 设置入口在「设置 → Emby 照片浏览与保存 → 幻灯片间隔」。
    *
    * 为什么是固定三档而不是滑块：幻灯片是「放手让照片自己走」的场景，
    * 常用就 3 秒（快览）/ 5 秒（默认）/ 10 秒（细看），滑块拖出来的 4.7 秒
@@ -565,7 +565,7 @@ class BrowserPreferences(
    * 关 = 进浏览器停在第一张，用户自己滑 / 自己点播放键；
    * 开 = 进浏览器就按 [photoSlideshowInterval] 自动翻页，适合「当相框用」。
    * 全局一份、不按库分 —— 这是看照片的习惯，不是媒体库的属性。
-   * 设置入口在「设置 → Emby 媒体库 → 幻灯片间隔」下方。
+   * 设置入口在「设置 → Emby 照片浏览与保存 → 幻灯片间隔」下方。
    */
   val photoAutoSlideshow = preferenceStore.getBoolean("photo_auto_slideshow", false)
 
@@ -596,7 +596,7 @@ class BrowserPreferences(
   /**
    * 照片保存目录（**绝对路径**，自研文件夹选择器选出）。**空 = 系统相册**。
    *
-   * v1.5.4 起「设置 → Emby 媒体库 → 照片保存位置」弹的是 App 自己的
+   * v1.5.4 起「设置 → Emby 照片浏览与保存 → 照片保存位置」弹的是 App 自己的
    * [app.marlboroadvance.mpvex.ui.browser.dialogs.FolderPickerDialog]，
    * 拿到的是 `/storage/emulated/0/DCIM/xxx` 这样的真实路径，不再是
    * `content://…` 树 URI —— 系统那个 SAF 选择器界面跟 App 的整体风格完全不搭。

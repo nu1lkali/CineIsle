@@ -57,7 +57,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.EmbyEmptyState
 import kotlinx.serialization.Serializable
 
 /**
- * 「聚合库」管理页（设置 → Emby 媒体库 → 聚合库）。
+ * 「聚合库」管理页（设置 → Emby 媒体库与元数据 → 聚合库）。
  *
  * 页面形态：一张列表 + 右下角「新建」。行内显示「名字 + N 个成员库 + 成员名」，
  * 点行 = 编辑（改名 / 改成员），行尾垃圾桶 = 删除（二次确认）。

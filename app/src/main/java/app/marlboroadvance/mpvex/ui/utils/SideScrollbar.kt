@@ -22,7 +22,7 @@ import org.koin.compose.koinInject
  * 都必须套这两个壳（网格套 [LazyGridSideScrollbar]、列表套 [LazyListSideScrollbar]），
  * 不要绕过壳直接调库。壳负责三件事：
  *
- *  1. **全局开关**：读「设置 → 界面与外观 → 侧边滚动条」
+ *  1. **全局开关**：读「设置 → 外观 → 侧边滚动条」
  *     （[BrowserPreferences.sideScrollbarEnabled]）。关掉时**不套壳**、直接渲染内容 ——
  *     不是把 thumb 透明度归零：透明 thumb 仍占触摸拖动区，会留下一道摸得到却看不见的死区。
  *  2. **出现时机**：回到顶部（露出来会挡第一屏内容）或条目不够多（没有滚动需求）时

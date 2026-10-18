@@ -161,6 +161,8 @@
 > 按版本倒序，当前版本 **v1.5.10**；历史安装包见 [Releases](https://github.com/nu1lkali/CineIsle/releases)。
 
 ### v1.5.10
+- **设置页按模块重排**（`ui/preferences`）：原来「Emby 媒体库」一个分区塞了 28 项 —— 库组织 / 推荐 / 播放同步 / 照片浏览 / 照片保存 / 卡片外观 / 封面合成 / 元数据 / 随机播放全混在一起，找一项要翻很久。现按功能模块拆成 14 个分组（外观 / 播放与控件 / 本地媒体库 / 媒体渲染 / Emby 媒体库与元数据 / Emby 推荐与首页 / Emby 播放与数据同步 / Emby 照片浏览与保存 / Emby 卡片与封面 / Emby 随机播放 / 网络浏览 / 数据与缓存 / 安全与应用锁 / 高级与关于），每组「1 个分区标题 + 1 张卡片」，标题即锚点、与分组一一对应。跨模块项按真实归属挪位：播放界面布局 → 播放与控件、多版本优先选择 → Emby 播放与数据同步、卡片快捷收藏 → Emby 卡片与封面、演职员合并 → Emby 媒体库与元数据、应用锁 → 独立「安全与应用锁」。**45 项设置的偏好键与功能语义一律未改**，只调组织方式与信息层级
+- **依赖子项缩进成层级**（`ui/preferences`）：「开了主功能才显示」的子项原先与主项并排、看不出从属。现在子项缩进到主项之下（如「合成随机封面图 → 重新合成策略 → 间隔小时数/间隔天数」两级链、「照片保存位置 → 恢复默认保存位置」），一眼能看出「先开哪个才有下面这些」
 - **设置页标题单行化 + 补图标 + 文案**（`ui/preferences`）：补齐图标后，长标题（如「下载完成后清除服务端播放进度」「进入照片浏览器自动播放幻灯片」）因图标挤占宽度而折成两行 ⇒ 给 11 个设置页全部偏好行 title 加 `maxLines = 1, overflow = TextOverflow.Ellipsis`（Android 标准单行列表项写法，正常字号完整显示、仅超大字号才省略）；「推荐算法」此前是自定义 Column（非库组件）漏加图标，补 `AutoAwesome`；「间隔小时数」改名为「合成封面图间隔小时数」（偏好项与输入框标题同步，该值是随机封面图重新合成间隔）
 - **设置页图标补齐**（`ui/preferences`）：聚合库入口加了图标后其他设置条目仍「光板」一块，现 11 个设置页凡无图标的偏好条目统一补全（共 152 条）—— me.zhanghai.compose.preference 2.2.0 的 Preference / SwitchPreference / ListPreference / SliderPreference / TextFieldPreference / TwoTargetIconButtonPreference 都带 icon 槽位，图标用 `Icons.Outlined.X` + `colorScheme.primary` 着色，风格与既有条目完全一致；每个图标名都对照 material-icons-extended / core 1.7.8 的实际 AAR 验证过存在性
 - **聚合库（新功能）**（`database` · `domain/emby` · `ui/browser/emby` · `ui/preferences`）：把同一个服务器下多个**同类型**媒体库（如多个电影库）合并成一个本地视图。首页媒体库行末尾出现聚合库卡片（Layers 图标 + 「N 库聚合」角标，与真实库明显错开），点进去是一个归并网格；配置入口在设置里

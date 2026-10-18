@@ -199,7 +199,7 @@ fun SharedPhotoViewer(
   val scope = rememberCoroutineScope()
   val currentPage = pagerState.currentPage
 
-  // 胶片条：**两个入口共用同一个偏好**（设置 → Emby 媒体库 → 照片浏览器）
+  // 胶片条：**两个入口共用同一个偏好**（设置 → Emby 照片浏览与保存 → 照片浏览器）
   val filmstrip by browserPreferences.photoFilmstrip.collectAsState()
   val stripVisible = filmstrip && entries.size > 1
 

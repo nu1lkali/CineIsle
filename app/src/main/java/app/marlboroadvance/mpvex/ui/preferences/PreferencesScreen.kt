@@ -195,7 +195,7 @@ object PreferencesScreen : Screen {
           
           // UI & Appearance Section
           item {
-            PreferenceSectionHeader(title = "界面与外观")
+            PreferenceSectionHeader(title = "外观")
           }
           
           item {
@@ -218,25 +218,6 @@ object PreferencesScreen : Screen {
                 onClick = { backstack.add(AppearancePreferencesScreen) },
               )
 
-              PreferenceDivider()
-
-              Preference(
-                title = { Text(text = stringResource(id = R.string.pref_layout_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = { 
-                  Text(
-                    text = stringResource(id = R.string.pref_layout_summary),
-                    color = MaterialTheme.colorScheme.outline
-                  ) 
-                },
-                icon = { 
-                  Icon(
-                    Icons.AutoMirrored.Outlined.ViewQuilt, 
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  ) 
-                },
-                onClick = { backstack.add(PlayerControlsPreferencesScreen) },
-              )
             }
           }
           
@@ -264,6 +245,26 @@ object PreferencesScreen : Screen {
                   ) 
                 },
                 onClick = { backstack.add(PlayerPreferencesScreen) },
+              )
+
+              PreferenceDivider()
+
+              Preference(
+                title = { Text(text = stringResource(id = R.string.pref_layout_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = { 
+                  Text(
+                    text = stringResource(id = R.string.pref_layout_summary),
+                    color = MaterialTheme.colorScheme.outline
+                  ) 
+                },
+                icon = { 
+                  Icon(
+                    Icons.AutoMirrored.Outlined.ViewQuilt, 
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                  ) 
+                },
+                onClick = { backstack.add(PlayerControlsPreferencesScreen) },
               )
               
               PreferenceDivider()
@@ -363,7 +364,7 @@ object PreferencesScreen : Screen {
           
           // File Management Section
           item {
-            PreferenceSectionHeader(title = "文件管理")
+            PreferenceSectionHeader(title = "本地媒体库")
           }
           
           item {
@@ -391,7 +392,7 @@ object PreferencesScreen : Screen {
           
           // Media Settings Section
           item {
-            PreferenceSectionHeader(title = "媒体设置")
+            PreferenceSectionHeader(title = "媒体渲染（解码 / 字幕 / 音频）")
           }
           
           item {
@@ -459,20 +460,12 @@ object PreferencesScreen : Screen {
             }
           }
           
-          // Emby Media Library Section
+          // ── Emby 媒体库与元数据 ────────────────────────────────────
           item {
-            PreferenceSectionHeader(title = "Emby 媒体库")
+            PreferenceSectionHeader(title = "Emby 媒体库与元数据")
           }
 
           item {
-            val browserPreferences = koinInject<BrowserPreferences>()
-            val quickFavorite by browserPreferences.embyQuickFavorite.collectAsState()
-            val randomGenreRecommend by browserPreferences.embyRandomGenreRecommend.collectAsState()
-            val showRecommendations by browserPreferences.embyShowRecommendations.collectAsState()
-            val homeShowMix by browserPreferences.embyHomeShowMix.collectAsState()
-            val mixColumns by browserPreferences.embyMixGridColumns.collectAsState()
-            val resolveDirectLink by browserPreferences.embyResolveDirectLink.collectAsState()
-            val clearProgressOnDownload by browserPreferences.embyClearProgressOnDownload.collectAsState()
             PreferenceCard {
               // ── 聚合库（配置入口）────────────────────────────────────
               // 把多个同类型媒体库合并成一个本地视图。新建 / 编辑 / 删除都在独立页，
@@ -498,28 +491,40 @@ object PreferencesScreen : Screen {
 
               PreferenceDivider()
 
-              // 卡片右上角心形快捷收藏：点一下即可收藏 / 取消收藏
-              SwitchPreference(
+              // 演职员合并：同一个演员因为名字写法不同会裂成多条 Person（作品页缺片、演职员表重复）。
+              // 这是唯一会写服务器元数据的工具，单独一个页面承载，这里只放入口。
+              Preference(
+                title = { Text(text = "演职员合并", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = "把重复的演员条目归并成一条（写入服务器，所有客户端生效，可撤销）· 需要管理员",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
                 icon = {
                   Icon(
-                    Icons.Outlined.FavoriteBorder,
+                    Icons.Outlined.People,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                value = quickFavorite,
-                onValueChange = { browserPreferences.embyQuickFavorite.set(it) },
-                title = { Text(text = "卡片快捷收藏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = {
-                  Text(
-                    text = "媒体库卡片右上角显示可点的收藏心形；关闭后只作「已收藏」只读角标",
-                    color = MaterialTheme.colorScheme.outline,
-                  )
-                },
+                onClick = { backstack.add(PersonMergeScreen()) },
               )
+            }
+          }
 
-              PreferenceDivider()
+          // ── Emby 推荐与首页 ────────────────────────────────────────
+          item {
+            PreferenceSectionHeader(title = "Emby 推荐与首页")
+          }
 
+          item {
+            val browserPreferences = koinInject<BrowserPreferences>()
+            val showRecommendations by browserPreferences.embyShowRecommendations.collectAsState()
+            val randomGenreRecommend by browserPreferences.embyRandomGenreRecommend.collectAsState()
+            val homeShowMix by browserPreferences.embyHomeShowMix.collectAsState()
+            val mixColumns by browserPreferences.embyMixGridColumns.collectAsState()
+            PreferenceCard {
               // 详情页推荐总开关：关闭后「推荐」与「同类型推荐」在详情页整块不显示
               SwitchPreference(
                 icon = {
@@ -692,9 +697,19 @@ object PreferencesScreen : Screen {
                   )
                 },
               )
+            }
+          }
 
-              PreferenceDivider()
+          // ── Emby 播放与数据同步 ────────────────────────────────────
+          item {
+            PreferenceSectionHeader(title = "Emby 播放与数据同步")
+          }
 
+          item {
+            val browserPreferences = koinInject<BrowserPreferences>()
+            val resolveDirectLink by browserPreferences.embyResolveDirectLink.collectAsState()
+            val clearProgressOnDownload by browserPreferences.embyClearProgressOnDownload.collectAsState()
+            PreferenceCard {
               // ── 以下两项原在「Emby 服务器维护」页，现移到这里 ──────────
               //
               // 移过来的理由：这两项**与具体哪台服务器无关**，是全局播放偏好。
@@ -775,9 +790,17 @@ object PreferencesScreen : Screen {
                   )
                 },
               )
+            }
+          }
 
-              PreferenceDivider()
+          // ── Emby 照片浏览与保存 ────────────────────────────────────
+          item {
+            PreferenceSectionHeader(title = "Emby 照片浏览与保存")
+          }
 
+          item {
+            val browserPreferences = koinInject<BrowserPreferences>()
+            PreferenceCard {
               // ── 照片预加载张数 ────────────────────────────────────────
               //
               // 照片浏览器会提前把「当前这张前后各 N 张」拉进缓存，滑过去时不白屏。
@@ -851,7 +874,7 @@ object PreferencesScreen : Screen {
                 },
                 value = photoAutoSlideshow,
                 onValueChange = { browserPreferences.photoAutoSlideshow.set(it) },
-                title = { Text(text = "进入照片浏览器自动播放幻灯片", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = { Text(text = "照片浏览器自动播放幻灯片", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = if (photoAutoSlideshow) {
@@ -952,30 +975,37 @@ object PreferencesScreen : Screen {
               // 只有选过自定义目录才给「恢复默认」—— 默认状态下这一项没有意义，
               // 常驻只会让人以为「默认」是个需要主动设置的东西。
               if (saveDirPath.isNotBlank()) {
-                PreferenceDivider()
-                Preference(
-                  icon = {
-                    Icon(
-                      Icons.Outlined.Restore,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.primary,
-                    )
-                  },
-                  title = { Text(text = "恢复默认保存位置", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                  summary = {
-                    Text(
-                      text = "改回系统相册的 Pictures/CineIsle",
-                      color = MaterialTheme.colorScheme.outline,
-                    )
-                  },
-                  onClick = {
-                    browserPreferences.photoSaveDirPath.set("")
-                    browserPreferences.photoSaveDirUri.set("")
-                    Toast.makeText(context, "已恢复默认", Toast.LENGTH_SHORT).show()
-                  },
-                )
+                Column(modifier = Modifier.padding(start = 24.dp)) {
+                  PreferenceDivider()
+                  Preference(
+                    icon = {
+                      Icon(
+                        Icons.Outlined.Restore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                      )
+                    },
+                    title = { Text(text = "恢复默认保存位置", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    summary = {
+                      Text(
+                        text = "改回系统相册的 Pictures/CineIsle",
+                        color = MaterialTheme.colorScheme.outline,
+                      )
+                    },
+                    onClick = {
+                      browserPreferences.photoSaveDirPath.set("")
+                      browserPreferences.photoSaveDirUri.set("")
+                      Toast.makeText(context, "已恢复默认", Toast.LENGTH_SHORT).show()
+                    },
+                  )
               }
+                }
             }
+          }
+
+          // ── Emby 卡片与封面 ────────────────────────────────────────
+          item {
+            PreferenceSectionHeader(title = "Emby 卡片与封面")
           }
 
           item {
@@ -985,7 +1015,29 @@ object PreferencesScreen : Screen {
             val showCardBadges by browserPreferences.embyShowCardBadges.collectAsState()
             val folderIconBlue by browserPreferences.embyFolderIconBlue.collectAsState()
             val folderRandomCover by browserPreferences.embyFolderRandomCover.collectAsState()
+            val quickFavorite by browserPreferences.embyQuickFavorite.collectAsState()
             PreferenceCard {
+              // 卡片右上角心形快捷收藏：点一下即可收藏 / 取消收藏
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.FavoriteBorder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = quickFavorite,
+                onValueChange = { browserPreferences.embyQuickFavorite.set(it) },
+                title = { Text(text = "卡片快捷收藏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = "媒体库卡片右上角显示可点的收藏心形；关闭后只作「已收藏」只读角标",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+              PreferenceDivider()
+
               SliderPreference(
                 icon = {
                   Icon(
@@ -1081,141 +1133,128 @@ object PreferencesScreen : Screen {
               // 合成策略：只在「随机合成」开着时才有意义 —— 固定模式取样结果是确定的，
               // 重取还是同一批图，摆出来只是个死项。
               if (folderRandomCover) {
-                val coverPolicy by browserPreferences.embyFolderCoverRefreshPolicy.collectAsState()
-                val coverHours by browserPreferences.embyFolderCoverRefreshHours.collectAsState()
-                val coverDays by browserPreferences.embyFolderCoverRefreshDays.collectAsState()
-                var editHours by remember { mutableStateOf(false) }
-                var editDays by remember { mutableStateOf(false) }
+                Column(modifier = Modifier.padding(start = 24.dp)) {
+                  val coverPolicy by browserPreferences.embyFolderCoverRefreshPolicy.collectAsState()
+                  val coverHours by browserPreferences.embyFolderCoverRefreshHours.collectAsState()
+                  val coverDays by browserPreferences.embyFolderCoverRefreshDays.collectAsState()
+                  var editHours by remember { mutableStateOf(false) }
+                  var editDays by remember { mutableStateOf(false) }
 
-                PreferenceDivider()
-
-                ListPreference(
-                  icon = {
-                    Icon(
-                      Icons.Outlined.Autorenew,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.primary,
-                    )
-                  },
-                  value = coverPolicy,
-                  onValueChange = { picked ->
-                    browserPreferences.embyFolderCoverRefreshPolicy.set(picked)
-                    // 改策略 = 明确要求「按新规矩来」⇒ 把上次合成时间清零，
-                    // 下次进库一定重新合成一次。不清零的话选了「满 X 天」却半天看不到变化，
-                    // 用户会以为设置根本没生效。
-                    browserPreferences.embyFolderCoverLastSynthAt.set(0L)
-                  },
-                  values = FolderCoverRefreshPolicy.entries,
-                  valueToText = { AnnotatedString(it.label) },
-                  title = { Text(text = "重新合成策略", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                  summary = {
-                    Text(
-                      text = "随机取样的封面每次都不一样，这一项决定多久换一批。" +
-                        "默认「仅下拉刷新时」：进出文件夹（含从子文件夹返回）不重取，" +
-                        "滑来滑去看到的还是同一批封面；选小时 / 天则在到期前同样完全复用、" +
-                        "不产生请求。下拉刷新始终立即重取，不受这里限制。",
-                      color = MaterialTheme.colorScheme.outline,
-                    )
-                  },
-                )
-
-                if (coverPolicy == FolderCoverRefreshPolicy.Hours) {
                   PreferenceDivider()
-                  Preference(
+
+                  ListPreference(
                     icon = {
                       Icon(
-                        Icons.Outlined.Schedule,
+                        Icons.Outlined.Autorenew,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                       )
                     },
-                    title = { Text(text = "合成封面图间隔小时数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    value = coverPolicy,
+                    onValueChange = { picked ->
+                      browserPreferences.embyFolderCoverRefreshPolicy.set(picked)
+                      // 改策略 = 明确要求「按新规矩来」⇒ 把上次合成时间清零，
+                      // 下次进库一定重新合成一次。不清零的话选了「满 X 天」却半天看不到变化，
+                      // 用户会以为设置根本没生效。
+                      browserPreferences.embyFolderCoverLastSynthAt.set(0L)
+                    },
+                    values = FolderCoverRefreshPolicy.entries,
+                    valueToText = { AnnotatedString(it.label) },
+                    title = { Text(text = "重新合成策略", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     summary = {
                       Text(
-                        text = "当前 $coverHours 小时 · 取值范围 1~168",
+                        text = "随机取样的封面每次都不一样，这一项决定多久换一批。" +
+                          "默认「仅下拉刷新时」：进出文件夹（含从子文件夹返回）不重取，" +
+                          "滑来滑去看到的还是同一批封面；选小时 / 天则在到期前同样完全复用、" +
+                          "不产生请求。下拉刷新始终立即重取，不受这里限制。",
                         color = MaterialTheme.colorScheme.outline,
                       )
                     },
-                    onClick = { editHours = true },
                   )
-                }
 
-                if (coverPolicy == FolderCoverRefreshPolicy.Days) {
-                  PreferenceDivider()
-                  Preference(
-                    icon = {
-                      Icon(
-                        Icons.Outlined.DateRange,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
+                  if (coverPolicy == FolderCoverRefreshPolicy.Hours) {
+                    Column(modifier = Modifier.padding(start = 24.dp)) {
+                      PreferenceDivider()
+                      Preference(
+                        icon = {
+                          Icon(
+                            Icons.Outlined.Schedule,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                          )
+                        },
+                        title = { Text(text = "合成封面图间隔小时数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        summary = {
+                          Text(
+                            text = "当前 $coverHours 小时 · 取值范围 1~168",
+                            color = MaterialTheme.colorScheme.outline,
+                          )
+                        },
+                        onClick = { editHours = true },
                       )
-                    },
-                    title = { Text(text = "间隔天数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    summary = {
-                      Text(
-                        text = "当前 $coverDays 天 · 取值范围 1~30",
-                        color = MaterialTheme.colorScheme.outline,
+                  }
+                    }
+
+                  if (coverPolicy == FolderCoverRefreshPolicy.Days) {
+                    Column(modifier = Modifier.padding(start = 24.dp)) {
+                      PreferenceDivider()
+                      Preference(
+                        icon = {
+                          Icon(
+                            Icons.Outlined.DateRange,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                          )
+                        },
+                        title = { Text(text = "间隔天数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        summary = {
+                          Text(
+                            text = "当前 $coverDays 天 · 取值范围 1~30",
+                            color = MaterialTheme.colorScheme.outline,
+                          )
+                        },
+                        onClick = { editDays = true },
                       )
-                    },
-                    onClick = { editDays = true },
-                  )
-                }
+                  }
+                    }
 
-                if (editHours) {
-                  IntervalInputDialog(
-                    title = "合成封面图间隔小时数",
-                    hint = "1~168 小时",
-                    current = coverHours,
-                    range = 1..168,
-                    onConfirm = { value ->
-                      browserPreferences.embyFolderCoverRefreshHours.set(value)
-                      browserPreferences.embyFolderCoverLastSynthAt.set(0L)
-                      editHours = false
-                    },
-                    onCancel = { editHours = false },
-                  )
-                }
+                  if (editHours) {
+                    IntervalInputDialog(
+                      title = "合成封面图间隔小时数",
+                      hint = "1~168 小时",
+                      current = coverHours,
+                      range = 1..168,
+                      onConfirm = { value ->
+                        browserPreferences.embyFolderCoverRefreshHours.set(value)
+                        browserPreferences.embyFolderCoverLastSynthAt.set(0L)
+                        editHours = false
+                      },
+                      onCancel = { editHours = false },
+                    )
+                  }
 
-                if (editDays) {
-                  IntervalInputDialog(
-                    title = "间隔天数",
-                    hint = "1~30 天",
-                    current = coverDays,
-                    range = 1..30,
-                    onConfirm = { value ->
-                      browserPreferences.embyFolderCoverRefreshDays.set(value)
-                      browserPreferences.embyFolderCoverLastSynthAt.set(0L)
-                      editDays = false
-                    },
-                    onCancel = { editDays = false },
-                  )
-                }
+                  if (editDays) {
+                    IntervalInputDialog(
+                      title = "间隔天数",
+                      hint = "1~30 天",
+                      current = coverDays,
+                      range = 1..30,
+                      onConfirm = { value ->
+                        browserPreferences.embyFolderCoverRefreshDays.set(value)
+                        browserPreferences.embyFolderCoverLastSynthAt.set(0L)
+                        editDays = false
+                      },
+                      onCancel = { editDays = false },
+                    )
+                  }
               }
+                }
             }
           }
 
+          // ── Emby 随机播放 ──────────────────────────────────────────
           item {
-            // 演职员合并：同一个演员因为名字写法不同会裂成多条 Person（作品页缺片、演职员表重复）。
-            // 这是唯一会写服务器元数据的工具，单独一个页面承载，这里只放入口。
-            PreferenceCard {
-              Preference(
-                title = { Text(text = "演职员合并", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = {
-                  Text(
-                    text = "把重复的演员条目归并成一条（写入服务器，所有客户端生效，可撤销）· 需要管理员",
-                    color = MaterialTheme.colorScheme.outline,
-                  )
-                },
-                icon = {
-                  Icon(
-                    Icons.Outlined.People,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                  )
-                },
-                onClick = { backstack.add(PersonMergeScreen()) },
-              )
-            }
+            PreferenceSectionHeader(title = "Emby 随机播放")
           }
 
           item {
@@ -1324,63 +1363,63 @@ object PreferencesScreen : Screen {
           }
 
           item {
-            // 文件夹封面：文件夹卡用目录里第一张图片当封面。
-            // 关掉的场景：服务器目录结构深、图片多，不想让浏览产生额外列目录请求；
-            // 或者就喜欢朴素的名字列表。
-            val browserPreferences = koinInject<BrowserPreferences>()
-            val folderCoverEnabled by browserPreferences.folderCoverEnabled.collectAsState()
-            SwitchPreference(
-              icon = {
-                Icon(
-                  Icons.Outlined.FolderOpen,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                )
-              },
-              value = folderCoverEnabled,
-              onValueChange = { browserPreferences.folderCoverEnabled.set(it) },
-              title = { Text(text = "文件夹封面", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-              summary = {
-                Text(
-                  text = if (folderCoverEnabled) {
-                    "文件夹卡片显示目录内第一张图片作为封面；只在滚动到可见时加载，" +
-                      "同一目录再次进入不再重复请求"
-                  } else {
-                    "文件夹卡片只显示名称；关闭后浏览过程不产生任何额外请求"
-                  },
-                  color = MaterialTheme.colorScheme.outline,
-                )
-              },
-            )
-          }
+            // 与其它板块一致：整组偏好行包进 PreferenceCard（surfaceContainer 深灰底色）。
+            PreferenceCard {
+              val browserPreferences = koinInject<BrowserPreferences>()
+              // 文件夹封面：文件夹卡用目录里第一张图片当封面。
+              // 关掉的场景：服务器目录结构深、图片多，不想让浏览产生额外列目录请求；
+              // 或者就喜欢朴素的名字列表。
+              val folderCoverEnabled by browserPreferences.folderCoverEnabled.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.FolderOpen,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = folderCoverEnabled,
+                onValueChange = { browserPreferences.folderCoverEnabled.set(it) },
+                title = { Text(text = "文件夹封面", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = if (folderCoverEnabled) {
+                      "文件夹卡片显示目录内第一张图片作为封面；只在滚动到可见时加载，" +
+                        "同一目录再次进入不再重复请求"
+                    } else {
+                      "文件夹卡片只显示名称；关闭后浏览过程不产生任何额外请求"
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
 
-          item { PreferenceDivider() }
+              PreferenceDivider()
 
-          item {
-            // 网格标题行数：一行最整齐（信息密度低），两行折中，全显适合长片名库。
-            val browserPreferences = koinInject<BrowserPreferences>()
-            val gridTitleLines by browserPreferences.networkGridTitleLines.collectAsState()
-            ListPreference(
-              icon = {
-                Icon(
-                  Icons.Outlined.Title,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                )
-              },
-              value = gridTitleLines,
-              onValueChange = { browserPreferences.networkGridTitleLines.set(it) },
-              values = GridTitleLines.entries,
-              valueToText = { AnnotatedString(it.label) },
-              title = { Text(text = "网格标题行数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-              summary = {
-                Text(
-                  text = "网络浏览网格视图下，文件夹 / 图片 / 视频卡片标题最多显示" +
-                    "${gridTitleLines.label}，超出部分省略",
-                  color = MaterialTheme.colorScheme.outline,
-                )
-              },
-            )
+              // 网格标题行数：一行最整齐（信息密度低），两行折中，全显适合长片名库。
+              val gridTitleLines by browserPreferences.networkGridTitleLines.collectAsState()
+              ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Title,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = gridTitleLines,
+                onValueChange = { browserPreferences.networkGridTitleLines.set(it) },
+                values = GridTitleLines.entries,
+                valueToText = { AnnotatedString(it.label) },
+                title = { Text(text = "网格标题行数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = "网络浏览网格视图下，文件夹 / 图片 / 视频卡片标题最多显示" +
+                      "${gridTitleLines.label}，超出部分省略",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+            }
           }
 
           // Data & Cache Section
@@ -1440,7 +1479,7 @@ object PreferencesScreen : Screen {
 
           // Advanced & About Section
           item {
-            PreferenceSectionHeader(title = "高级与关于")
+            PreferenceSectionHeader(title = "安全与应用锁")
           }
 
           // 应用锁（b7）：未开启 → 先选方式（数字 PIN / 九宫格图案）再设凭证；
@@ -1569,6 +1608,10 @@ object PreferencesScreen : Screen {
                 )
               }
             }
+          }
+
+          item {
+            PreferenceSectionHeader(title = "高级与关于")
           }
 
           item {

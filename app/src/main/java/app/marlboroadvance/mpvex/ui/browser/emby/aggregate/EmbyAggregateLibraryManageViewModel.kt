@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
 import org.koin.java.KoinJavaComponent.inject
 
 /**
- * 「聚合库」管理页（设置 → Emby 媒体库 → 聚合库 进入）。
+ * 「聚合库」管理页（设置 → Emby 媒体库与元数据 → 聚合库 进入）。
  *
  * 职责：列出当前服务器的聚合库、新建 / 编辑 / 删除。
  * 校验规则（产品约束，不是技术限制）：
