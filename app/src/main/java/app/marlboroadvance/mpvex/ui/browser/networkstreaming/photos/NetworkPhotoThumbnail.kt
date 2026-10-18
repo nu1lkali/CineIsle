@@ -56,6 +56,15 @@ fun NetworkPhotoThumbnail(
   contentScale: ContentScale = ContentScale.Crop,
   sign: String? = null,
   showRetry: Boolean = true,
+  /**
+   * 内存缓存分桶（见 [NetworkPhotoImageLoader.memoryKey]）。
+   *
+   * 默认 [NetworkPhotoImageLoader.BUCKET_THUMB]（网格 / 列表缩略图）。
+   * **查看器底部胶片条必须传 [NetworkPhotoImageLoader.BUCKET_FILM]** ——
+   * 那条只有 44dp，和网格的 360px 是两个尺寸，共用桶会互相覆盖后互相撑爆，
+   * 表现就是「滚回网格时缩略图全部重新加载」。
+   */
+  cacheBucket: String = NetworkPhotoImageLoader.BUCKET_THUMB,
 ) {
   val context = LocalContext.current
   val imageLoader = remember(context) { NetworkPhotoImageLoader.get(context) }
@@ -70,14 +79,21 @@ fun NetworkPhotoThumbnail(
   //    （下拉刷新之所以有效，是因为 `fs/list` 给了**新 sign**，
   //     `NetworkPhotoRequest` 是 data class，sign 一变 request 才真的不等。）
   //    想强制重发就用 [coil3.compose.AsyncImagePainter.restart]，见下面 onRetry。
-  val request = remember(connectionId, path, sign) {
-    NetworkPhotoImageLoader.request(context, connectionId, path, sign = sign)
+  val request = remember(connectionId, path, sign, cacheBucket) {
+    NetworkPhotoImageLoader.request(
+      context,
+      connectionId,
+      path,
+      sign = sign,
+      bucket = cacheBucket,
+    )
   }
   // 内存缓存里已有 ⇒ 首帧就有图，不必画骨架屏。
   // 否则返回上一级时每张封面都会「闪一下」（painter 从 Loading 重新走一遍），
   // 而图其实一直在缓存里。
-  val memoryCached = remember(connectionId, path) {
-    NetworkPhotoImageLoader.isMemoryCached(context, connectionId, path)
+  // ⚠️ bucket 必须与上面 request 一致，否则永远查不到 ⇒ 白闪骨架屏。
+  val memoryCached = remember(connectionId, path, cacheBucket) {
+    NetworkPhotoImageLoader.isMemoryCached(context, connectionId, path, cacheBucket)
   }
   val painter = rememberAsyncImagePainter(
     model = request,
@@ -140,6 +156,11 @@ fun NetworkPhotoThumbnail(
       )
     }
     when (state) {
+      // ⚠️ Empty 必须一起算：`rememberAsyncImagePainter` 刚创建时是 **Empty 而不是 Loading**，
+      //    这一帧 `Image` 什么都不画 ⇒ 露出卡片底色。item 被 LazyGrid 回收后重建时，
+      //    这一帧空白是必然存在的；不把它归进「加载中」，观感就是
+      //    「图先消失一下，再重新出现」—— 用户会当成重新加载。
+      is AsyncImagePainter.State.Empty,
       is AsyncImagePainter.State.Loading -> {
         // 缓存命中就别画骨架屏了：那一下闪烁纯属噪音
         if (!memoryCached) {

@@ -92,6 +92,20 @@ private const val SPLASH_HOLD_MS = 650L
 private const val SPLASH_EXIT_MS = 420L
 
 /**
+ * saved state 的体积预算（字节）。
+ *
+ * Binder 事务硬上限是 1MB，但那是**整个进程所有 Activity 的待发事务**共享的，
+ * 所以这里取一半（512KB）留余量 —— 别的 Activity / 系统回调也在用同一条 Binder。
+ */
+private const val SAVED_STATE_BUDGET_BYTES = 512 * 1024
+
+/** `SavedStateRegistry` 在 outState 里的容器 key（androidx.lifecycle 内部常量）。 */
+private const val BUNDLABLE_REGISTRY_KEY = "androidx.lifecycle.BundlableSavedStateRegistry.key"
+
+/** Compose `DisposableSaveableStateRegistry` 注册到上者时用的 key 前缀。 */
+private const val SAVEABLE_KEY_PREFIX = "SaveableStateRegistry:"
+
+/**
  * Main entry point for the application
  */
 class MainActivity : ComponentActivity() {
@@ -106,6 +120,60 @@ class MainActivity : ComponentActivity() {
     ActivityResultContracts.StartIntentSenderForResult()
   ) { result ->
     PermissionUtils.handleMediaAccessResult(result.resultCode)
+  }
+
+  /**
+   * 保存实例状态前的**体积闸门**。
+   *
+   * ⚠️ 背景（v95 线上日志，`TransactionTooLargeException: data parcel size 2226748 bytes`）：
+   * 崩在 `activityStopped` → `IActivityClientController$Stub$Proxy.activityStopped` 的 Binder
+   * 回传上。`Bundle stats` 里 2.2MB 几乎全部集中在 Compose 那一个 `SaveableStateRegistry:-1`
+   * 条目下（两个各约 1.1MB 的子项），而 Binder 事务的硬上限是 1MB ⇒ 切后台/按 Home 时必崩，
+   * 用户毫无预警。
+   *
+   * 这些状态是 `rememberSaveable` 写进去的（本项目 80 处调用点存的都是 bool / 短字符串 /
+   * 枚举，具体是哪个页面累积到 MB 级还没坐实，需要复现路径才能定位）。但**崩溃本身必须挡住**，
+   * 所以这里做一道带阈值的裁剪，而不是无脑清空：
+   *
+   * - 正常体积（几百字节 ~ 几十 KB）**原样保留** —— 旋转屏幕该恢复的照旧恢复；
+   * - 逼近上限（> 512KB）才丢掉 Compose 那一整块，换来「不崩」；
+   *   代价仅是「进程被系统杀掉后重建」时滚动位置 / 弹窗开合回到默认值。
+   *
+   * ⚠️ 只清 `SaveableStateRegistry:` 前缀的项。`BundlableSavedStateRegistry` 里其他
+   *    provider（例如自己注册的 SavedStateProvider）一律不动。
+   */
+  override fun onSaveInstanceState(outState: Bundle) {
+    super.onSaveInstanceState(outState)
+    runCatching {
+      // 量不出来时（含 writeBundle 自己就抛）按「已超限」处理，宁可丢滚动位置也不能崩。
+      val size = runCatching { approximateStateSize(outState) }.getOrElse { Int.MAX_VALUE }
+      if (size <= SAVED_STATE_BUDGET_BYTES) return@runCatching
+
+      val registry = outState.getBundle(BUNDLABLE_REGISTRY_KEY)
+      val dropped = registry?.keySet()?.filter { it.startsWith(SAVEABLE_KEY_PREFIX) }.orEmpty()
+      dropped.forEach { registry?.remove(it) }
+      android.util.Log.w(
+        "MainActivity",
+        "saved state 体积 $size 字节，已丢弃 ${dropped.size} 项 Compose 状态，" +
+          "避免 stop 时抛 TransactionTooLargeException",
+      )
+    }
+  }
+
+  /**
+   * 用一次 Parcel 序列化估算 bundle 体积。
+   *
+   * Binder 判 1MB 上限用的就是这个字节数，所以比「数 key 个数」之类的启发式准确得多。
+   * `recycle()` 必须执行 —— Parcel 是池化的，不还回去会累积 native 内存。
+   */
+  private fun approximateStateSize(bundle: Bundle): Int {
+    val parcel = android.os.Parcel.obtain()
+    return try {
+      parcel.writeBundle(bundle)
+      parcel.dataSize()
+    } finally {
+      parcel.recycle()
+    }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {

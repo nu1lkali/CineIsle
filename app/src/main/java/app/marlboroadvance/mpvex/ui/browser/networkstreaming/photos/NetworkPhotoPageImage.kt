@@ -77,8 +77,18 @@ fun NetworkPhotoPageImage(
   val context = LocalContext.current
   val imageLoader = remember(context) { NetworkPhotoImageLoader.get(context) }
   // 全屏大图要原尺寸：采样解码会把细节抹掉，放大时全是马赛克
+  // ⚠️ 必须用 BUCKET_FULL 单独分桶：原图解码后可能有几十 MB，
+  //    与网格缩略图共用内存 key 会把 LRU 里一圈缩略图全挤掉
+  //    ⇒「点过一次大图，回网格滚回来缩略图全部重新加载」。
   val request = remember(connectionId, path, sign) {
-    NetworkPhotoImageLoader.request(context, connectionId, path, size = Size.ORIGINAL, sign = sign)
+    NetworkPhotoImageLoader.request(
+      context,
+      connectionId,
+      path,
+      size = Size.ORIGINAL,
+      sign = sign,
+      bucket = NetworkPhotoImageLoader.BUCKET_FULL,
+    )
   }
   val painter = rememberAsyncImagePainter(
     model = request,

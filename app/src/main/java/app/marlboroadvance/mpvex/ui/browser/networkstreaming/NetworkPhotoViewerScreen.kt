@@ -250,6 +250,9 @@ data class NetworkPhotoViewerScreen(
             // ⚠️ 胶片条的格子只有 44dp，而重试钮的触控区是 48dp —— 放进来会盖满整块，
             //    把「点一下跳到那张」这个唯一手势吃掉。
             showRetry = false,
+            // 44dp 与网格的 360px 是两个尺寸，必须独占一个内存桶：共用会把
+            // 网格缩略图覆盖成 132px 的小图（回去就变糊），反之也浪费内存。
+            cacheBucket = app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoImageLoader.BUCKET_FILM,
             modifier = modifier,
           )
         }

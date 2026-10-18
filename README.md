@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.5.5.svg" alt="Release: v1.5.5" /></a>
+  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.5.8.svg" alt="Release: v1.5.8" /></a>
   <img src=".github/badges/flavor-standard.svg" alt="Flavor: standard" />
   <img src=".github/badges/package-cineisle.svg" alt="Package: app.cineisle.player" />
   <img src=".github/badges/kernel-mpv-gsy.svg" alt="Kernel: mpv + GSYVideoPlayer" />
@@ -130,7 +130,23 @@
 
 ## 更新记录
 
-> 按版本倒序，当前版本 **v1.5.5**；历史安装包见 [Releases](https://github.com/nu1lkali/CineIsle/releases)。
+> 按版本倒序，当前版本 **v1.5.8**；历史安装包见 [Releases](https://github.com/nu1lkali/CineIsle/releases)。
+
+### v1.5.8
+- **崩溃：崩溃页的「重启」按钮自己崩**：换成非默认桌面图标后，重启按钮拉起的入口被系统禁用，一点就再崩一次，形成死循环；现已改为拉起当前实际生效的那个入口
+- **崩溃：切后台偶发闪退**：界面状态的保存体积一度涨到 2 MB，超过系统 1 MB 的上限；现加了体积闸门，正常状态照常保留（旋转屏幕不受影响）
+- **网络照片缩略图滚回来要重新加载**：网格缩略图与大图此前共用同一份内存缓存，看过一次大图就会把周围缩略图挤出缓存；现按显示尺寸分开缓存，滚回原位置直接命中
+- **缩略图首帧空白**：列表回收后重建的那一帧不再露出卡片底色
+
+### v1.5.6 – v1.5.7
+- **AList 大目录只显示一部分**：修复目录条目超过 200 条时只加载前 200 条的问题（服务端对每页条数有默认上限，现在会自动翻页取全）
+- **界面中文化**：删除 / 重命名确认、导入导出、权限说明、媒体信息、播放器提示等此前仍是英文的文案全部补齐
+- **卡片圆角**：设置里的「卡片圆角」现在对全 App 生效（此前本地与网络卡片固定 12dp）
+- **网络首页搜索**：连接列表支持按名称 / 地址 / 协议搜索；有关键词时自动收起直链与收藏入口
+- **加载骨架屏**：本地文件夹、网络目录、最近播放加载时先显示版式骨架，不再是整屏转圈
+- **照片浏览器**：Emby 与网络位置合并为一套 —— 底部信息栏、全屏、旋转、更多菜单两边一致；底部缩略图条也支持网络位置
+- **播放与手势**：新增启动揭幕动画；卡片长按带轻微震动；改排序后自动回到顶部；Emby 子文件夹卡片带文件夹图标
+- **随机播放**：只有子文件夹的目录也能用；单击下钻、长按只播当前层，提示可在设置里关闭
 
 ### v1.5.5
 - **网络存储**：连接列表卡片重新设计，改为单行紧凑样式，一屏能看更多；新增「置顶」，常用连接固定排在最前

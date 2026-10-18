@@ -95,8 +95,47 @@ object NetworkPhotoImageLoader {
       }
       .build()
 
-  /** 内存 / 磁盘缓存 key。三处（request / isMemoryCached）必须同一口径 */
+  /**
+   * 磁盘缓存 key。
+   *
+   * 磁盘里存的是**原始字节**（解码前），与显示尺寸无关 —— 一张图只需要存一份，
+   * 所以这里**不带尺寸**。
+   */
   private fun cacheKey(connectionId: Long, path: String): String = "net:$connectionId:$path"
+
+  /**
+   * 内存缓存 key = 磁盘 key + **尺寸分桶**。
+   *
+   * ⭐⭐ 分桶是**必需**的，不分桶会连锁出一整串症状：
+   *
+   * 内存缓存里存的是**解码后的 Bitmap**，而同一张照片在不同入口要的解码尺寸差了几个数量级：
+   * 网格缩略图 ~360px（约 500KB）、列表行 64dp（约 150KB）、查看器大图
+   * `Size.ORIGINAL`（4000×3000 ARGB_8888 ≈ **48MB**）。它们被塞进同一个 key 时：
+   *
+   * 1. 点开一次大图 ⇒ 该 key 的缓存条目被原图**覆盖**；
+   * 2. 一张 48MB 原图进了「25% 堆」的 LRU（中端机常见 64MB 上限）⇒ 吃掉大半个缓存；
+   * 3. Coil 立刻按字节淘汰 ⇒ **周围一圈缩略图全被踢出内存缓存**；
+   * 4. 滚回去 ⇒ 每张都重新走解码/网络 ⇒ 用户看到的就是
+   *    「图明明加载过，滚回来又要重新加载」。
+   *
+   * 列表视图的 64dp 与网格的 360px 共用一个 key 时也会互相覆盖 —— 后写的把小图钉死，
+   * 另一个入口拿到尺寸不符的条目只能重新解码。所以按**入口**分桶，而不是按像素值
+   * （像素值随屏幕密度变，桶是稳定的语义单位）。
+   *
+   * ⚠️ 三个口径必须一致：`request()` 写入用哪个桶，`isMemoryCached()` 就得查哪个桶，
+   *    `evict()` 得把这张图**所有桶**都清掉（见各自的 KDoc）。
+   */
+  private fun memoryKey(connectionId: Long, path: String, bucket: String): String =
+    "${cacheKey(connectionId, path)}|$bucket"
+
+  /** 网格 / 列表缩略图（按组件尺寸采样解码）。 */
+  const val BUCKET_THUMB = "thumb"
+
+  /** 查看器底部胶片条（44dp 见方，比网格更小）。 */
+  const val BUCKET_FILM = "film"
+
+  /** 全屏查看（`Size.ORIGINAL`，同一张图最大的一份解码结果）。 */
+  const val BUCKET_FULL = "full"
 
   /**
    * 构造图片请求。
@@ -106,6 +145,9 @@ object NetworkPhotoImageLoader {
    *   这正是没有服务端缩放时唯一的内存闸门。
    * @param sign AList 下载签名（[app.marlboroadvance.mpvex.domain.network.NetworkFile.sign]）；
    *   其他协议传 null。⚠️ **不进缓存 key**（见 [NetworkPhotoRequest]）。
+   * @param bucket 内存缓存分桶，见 [memoryKey] 的 KDoc。网格/列表传 [BUCKET_THUMB]、
+   *   胶片条传 [BUCKET_FILM]、全屏查看传 [BUCKET_FULL]。
+   *   ⚠️ **同一个显示尺寸必须始终用同一个桶**，否则会退化成「每次都是新 key = 必然 miss」。
    */
   fun request(
     context: Context,
@@ -113,12 +155,13 @@ object NetworkPhotoImageLoader {
     path: String,
     size: Size? = null,
     sign: String? = null,
+    bucket: String = BUCKET_THUMB,
   ): ImageRequest {
-    val key = cacheKey(connectionId, path)
+    val diskKey = cacheKey(connectionId, path)
     return ImageRequest.Builder(context)
       .data(NetworkPhotoRequest(connectionId, path, sign))
-      .memoryCacheKey(key)
-      .diskCacheKey(key)
+      .memoryCacheKey(memoryKey(connectionId, path, bucket))
+      .diskCacheKey(diskKey)
       .apply { if (size != null) size(size) }
       .build()
   }
@@ -132,9 +175,15 @@ object NetworkPhotoImageLoader {
    *
    * ⚠️ 只用于决定是否画骨架屏，**不能**用来决定要不要发请求：
    *    这个判断本身就有竞态（查完到请求发出之间缓存可能被淘汰）。
+   * @param bucket 必须与 [request] 用的是同一个桶，否则永远查不到（见 [memoryKey]）。
    */
-  fun isMemoryCached(context: Context, connectionId: Long, path: String): Boolean =
-    get(context).memoryCache?.get(MemoryCache.Key(cacheKey(connectionId, path))) != null
+  fun isMemoryCached(
+    context: Context,
+    connectionId: Long,
+    path: String,
+    bucket: String = BUCKET_THUMB,
+  ): Boolean =
+    get(context).memoryCache?.get(MemoryCache.Key(memoryKey(connectionId, path, bucket))) != null
 
   /**
    * 把一张图的缓存条目**删掉**（内存 + 磁盘）。
@@ -146,7 +195,8 @@ object NetworkPhotoImageLoader {
    *
    * 清掉这个 key 之后再取，才是真的从头拉一次。
    *
-   * ⚠️ 只删这一张（key 口径与 [request] 完全一致），不动别的图。
+   * ⚠️ 只删这一张，不动别的图。内存里**三个桶全清**：这张图坏不坏跟显示尺寸无关，
+   *    只清调用方自己那个桶的话，切到另一个入口仍会拿到同一份坏字节解出来的图。
    * ⚠️ 有磁盘 IO，调用方放 IO 线程。
    *
    * ⭐ **整段包在 `runCatching` 里**：这个方法是「用户点了重载」这种纯 UI 触发的路径，
@@ -156,10 +206,11 @@ object NetworkPhotoImageLoader {
    */
   fun evict(context: Context, connectionId: Long, path: String) {
     runCatching {
-      val key = cacheKey(connectionId, path)
       val loader = get(context)
-      loader.memoryCache?.remove(MemoryCache.Key(key))
-      loader.diskCache?.remove(key)
+      listOf(BUCKET_THUMB, BUCKET_FILM, BUCKET_FULL).forEach { bucket ->
+        loader.memoryCache?.remove(MemoryCache.Key(memoryKey(connectionId, path, bucket)))
+      }
+      loader.diskCache?.remove(cacheKey(connectionId, path))
     }.onFailure { android.util.Log.w(TAG, "清理网络照片缓存失败: $path", it) }
   }
 

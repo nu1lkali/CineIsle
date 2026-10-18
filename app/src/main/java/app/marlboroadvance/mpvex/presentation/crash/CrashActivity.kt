@@ -57,7 +57,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.coroutineScope
 import app.marlboroadvance.mpvex.BuildConfig
-import app.marlboroadvance.mpvex.MainActivity
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -327,8 +326,37 @@ class CrashActivity : ComponentActivity() {
           }
           OutlinedButton(
             onClick = {
-              finish()
-              startActivity(Intent(this@CrashActivity, MainActivity::class.java))
+              // ⚠️ 这里**绝不能**写 `Intent(this, MainActivity::class.java)`。
+              // 用户把桌面图标换成「深海 / 午夜 / 极简 / 琥珀」后，AppIconManager.apply() 会把
+              // MainActivity 本身设成 COMPONENT_ENABLED_STATE_DISABLED，只留对应 activity-alias 启用
+              // （见 ui/preferences/AppIconManager.kt:199-206）⇒ 启动被禁用的组件必抛
+              // ActivityNotFoundException，于是「崩溃 → 点重启 → 再崩」死循环（v95 线上日志实录）。
+              // getLaunchIntentForPackage 只会返回当前**启用**的 LAUNCHER 入口，
+              // 天然指向正在生效的那个 alias（或默认图标的 MainActivity 本体）。
+              val launch =
+                packageManager.getLaunchIntentForPackage(packageName)
+                  ?: Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    setPackage(packageName)
+                  }
+              val ok =
+                runCatching {
+                  launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                  startActivity(launch)
+                  true
+                }.getOrDefault(false)
+              // ⚠️ 先确认真的拉起来了再 finish：否则启动失败时用户会被扔回桌面，连提示都看不到。
+              if (ok) {
+                finish()
+              } else {
+                android.widget.Toast
+                  .makeText(
+                    this@CrashActivity,
+                    "重启失败，请从桌面手动打开应用",
+                    android.widget.Toast.LENGTH_SHORT,
+                  )
+                  .show()
+              }
             },
             modifier = Modifier.fillMaxWidth(),
           ) {

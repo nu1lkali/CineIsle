@@ -656,8 +656,24 @@ android {
     //        `per_page: 0` 的全量场景全部改走它：目录浏览 / 子目录预加载 / 空目录清理 /
     //        收藏与最近播放的缩略图 / 复制移动选目录 / 详情页「N 个项目」与递归体积 /
     //        整理器的目标目录重名缓存 / 歌词目录；目录级 TikTok 播放也一并拉全。
-    versionCode = 95
-    versionName = "1.5.7"
+    // versionName 涨到 1.5.8：崩溃收口 + 网络照片内存缓存分桶 ——
+    //     ① CrashActivity 的「重启」按钮不再直接拉起 MainActivity：用户换成非默认桌面图标后
+    //        AppIconManager 会把 MainActivity 置为 DISABLED、只留 activity-alias 启用，
+    //        旧写法必抛 ActivityNotFoundException，形成「崩 → 点重启 → 再崩」死循环。
+    //        改用 getLaunchIntentForPackage（只会返回**当前启用**的 LAUNCHER 入口），
+    //        并先确认拉起来再 finish，失败只 Toast 不再二次崩溃。
+    //     ② MainActivity.onSaveInstanceState 加体积闸门：实测 saved state 冲到 2.2MB
+    //        （Compose 两个 rememberSaveable 子项各约 1.1MB），stop 时 Binder 回传必抛
+    //        TransactionTooLargeException。现按 Parcel 实测字节数判断，>512KB 才丢弃
+    //        Compose 那一块，正常体积原样保留（旋转恢复不受影响）。
+    //     ③ 网络照片内存缓存按**显示尺寸分桶**（thumb / film / full）：原先网格 360px、
+    //        列表 64dp、查看器 Size.ORIGINAL 共用同一个 memoryCacheKey，点开一次大图
+    //        就把该 key 覆盖成几十 MB 的原图，一张即触发 LRU 淘汰掉周围所有缩略图 ⇒
+    //        「滚回来缩略图全部重新加载」。磁盘 key 仍不带尺寸（存的是原始字节，一份即可）。
+    //     ④ 缩略图 Empty 首帧并入骨架屏判断：item 被 LazyGrid 回收重建时 painter 初始为
+    //        Empty（不是 Loading），此前那一帧什么都不画，露出卡片底色像「图没了」。
+    versionCode = 96
+    versionName = "1.5.8"
 
     vectorDrawables {
       useSupportLibrary = true
