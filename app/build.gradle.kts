@@ -672,8 +672,19 @@ android {
     //        「滚回来缩略图全部重新加载」。磁盘 key 仍不带尺寸（存的是原始字节，一份即可）。
     //     ④ 缩略图 Empty 首帧并入骨架屏判断：item 被 LazyGrid 回收重建时 painter 初始为
     //        Empty（不是 Loading），此前那一帧什么都不画，露出卡片底色像「图没了」。
-    versionCode = 96
-    versionName = "1.5.8"
+    // versionName 涨到 1.5.9：网络照片「滚多了缩略图就丢」的真凶 ——
+    //     ① 磁盘缓存 128MB → 512MB。这条缓存存的是**原始字节**（网络照片没有服务端
+    //        缩放，单张 3–8MB），128MB 只够 20–40 张，滚过这一段之后前面看过的全被
+    //        LRU 挤掉 ⇒ 滚回来只能重新走网络。
+    //     ② 内存缓存 25% → 35%，并夹到 64MB~256MB。原先只给了百分比、没有下限，
+    //        低堆设备上算出来的值小到「滚两屏就淘汰」。
+    //     ③ 新增 loadedKeys（进程内 LRU，4096 条）：成功显示过的图，滚回来时即使
+    //        内存缓存已被淘汰，也只走磁盘解码（几十毫秒），不再闪骨架屏 ——
+    //        骨架屏原先只查内存缓存，磁盘命中那一刻也会闪，观感像「图丢了又重下」。
+    //     ④ 磁盘缓存目录改用 context.cacheDir（原 FileSystem.SYSTEM_TEMPORARY_DIRECTORY
+    //        即 java.io.tmpdir，部分 ROM 指向非应用私有且会被清空的目录）。
+    versionCode = 97
+    versionName = "1.5.9"
 
     vectorDrawables {
       useSupportLibrary = true

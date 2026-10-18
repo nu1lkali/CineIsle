@@ -1,6 +1,8 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import coil3.ImageLoader
 import coil3.disk.DiskCache
 import coil3.decode.DataSource
@@ -14,7 +16,9 @@ import coil3.request.Options
 import coil3.request.SuccessResult
 import coil3.size.Size
 import okio.Buffer
+import java.io.File
 import okio.FileSystem
+import okio.Path.Companion.toOkioPath
 import okio.buffer
 import okio.source
 import org.koin.core.context.GlobalContext
@@ -34,6 +38,13 @@ data class NetworkPhotoRequest(
   val connectionId: Long,
   val path: String,
   val sign: String? = null,
+  /**
+   * 内存缓存分桶（同时也是二级缩略图磁盘缓存的维度）。
+   *
+   * 参与 equals：不同桶的 request 本来就不该判等（解码尺寸不同），
+   * 这样 `AsyncImagePainter` 在桶切换时也能正确重发。
+   */
+  val bucket: String = NetworkPhotoImageLoader.BUCKET_THUMB,
 )
 
 /**
@@ -53,11 +64,22 @@ data class NetworkPhotoRequest(
  *    ⚠️ 不要自己提前 close：那时 Coil 还没开始解码。
  */
 object NetworkPhotoImageLoader {
-  /** 与照片链路对齐的磁盘缓存上限 */
-  private const val DISK_LIMIT_BYTES = 128L * 1024 * 1024
+  /**
+   * 磁盘缓存上限。
+   *
+   * ⭐⭐ **这里存的是一张图的原始字节**（完整 JPEG，网络照片常见 3–8MB），
+   *    不是解码后的缩略图 —— 因为本链路没有服务端缩放，只能整张拉下来再采样解码。
+   *    所以这条缓存的**张数**约等于 `上限 ÷ 单张原图大小`：
+   *    128MB 只够 20~40 张，用户滚过这一段之后，前面看过的图全被 LRU 挤掉，
+   *    滚回来只能重新走网络 —— 表现就是「滚得多了缩略图就丢了」。
+   *
+   *    512MB 能放下约 100 张（按 5MB/张），配合内存缓存分桶，日常几百张的目录
+   *    来回滚动基本不再重复下载。再往上（1GB+）收益递减，而且会挤占别的应用空间。
+   */
+  private const val DISK_LIMIT_BYTES = 512L * 1024 * 1024
 
   /**
-   * 磁盘缓存目录名（挂在系统临时目录 [FileSystem.SYSTEM_TEMPORARY_DIRECTORY] 下）。
+   * 磁盘缓存目录名（挂在 [Context.getCacheDir] 下）。
    *
    * ⭐⭐ 这一项是**必需**的：[DiskCache.Builder.build] 里是
    *    `checkNotNull(directory) { "directory == null" }`，`Builder()` 构造时
@@ -66,11 +88,29 @@ object NetworkPhotoImageLoader {
    *    以前这里漏了 `.directory(...)` ⇒ 建缓存必抛 `IllegalStateException`；
    *    因为 `diskCacheLazy` 是懒加载，异常发生在图片请求协程里，被 Coil 兜成
    *    Error ⇒ 表现为「封面加载不出来、点重载也没反应」。
+   *
+   * ⚠️ 用 `context.cacheDir` 而不是 `FileSystem.SYSTEM_TEMPORARY_DIRECTORY`：
+   *    后者是 `java.io.tmpdir`，在部分 ROM 上会指向 `/data/local/tmp` 之类的
+   *    非应用私有目录（不可写 / 被系统定期清空）。`cacheDir` 是本应用的
+   *    缓存目录，语义明确、一定可写，系统清缓存时也会连带清掉（正是我们要的）。
    */
   private const val NET_IMAGE_CACHE_DIR = "network_photo_cache"
 
-  /** 内存缓存占可用堆比例（0.25 = Coil 默认值） */
-  private const val MEMORY_PERCENT = 0.25
+  /**
+   * 内存缓存占堆上限的比例。
+   *
+   * Coil 默认 0.25；这里抬到 0.35 —— 本链路每张缩略图约 490KB（360px ARGB_8888），
+   * 25%（512MB 堆 ≈ 128MB）只够 260 张，用户「滚得多了」就会撞到上限。
+   * 0.35 约 360 张，代价是留给 Bitmap 之外的内存更少，所以下面再压一道
+   * **字节上限**，避免高堆设备上算出 300MB+ 这种不合理的值。
+   */
+  private const val MEMORY_PERCENT = 0.35
+
+  /** 内存缓存下限：低堆设备上也别低于这个值，否则滚两屏就空了。 */
+  private const val MEMORY_MIN_BYTES = 64L * 1024 * 1024
+
+  /** 内存缓存上限：高堆设备上封顶，别真的按 35% 吃满。 */
+  private const val MEMORY_MAX_BYTES = 256L * 1024 * 1024
 
   private const val TAG = "NetworkPhotoImageLoader"
 
@@ -80,20 +120,59 @@ object NetworkPhotoImageLoader {
   /** 进程内单例：网格页与查看器共用一份缓存（从网格点进大图不重新下载） */
   fun get(context: Context): ImageLoader =
     instance ?: synchronized(this) {
-      instance ?: build(context.applicationContext).also { instance = it }
+      instance
+        ?: build(context.applicationContext).also {
+          instance = it
+          // 清掉上个进程可能残留的缩略图临时文件（见 cleanupTempFiles）
+          cleanupTempFiles(context.applicationContext)
+        }
     }
+
+  /**
+   * 清掉上次进程残留的缩略图临时文件。
+   *
+   * 正常路径下 [NetworkPhotoFetcher] 用完就删；只有「原图解码失败、把临时文件
+   * 直接交给 Coil」那条降级路径不会删（Coil 不接管文件生命周期）。这里按
+   * 1 小时前的时间戳清一次，避免长期堆积 —— 顺手也避开「刚写的临时文件正被读」。
+   */
+  private fun cleanupTempFiles(context: Context) {
+    runCatching {
+      val cutoff = System.currentTimeMillis() - 60L * 60 * 1000
+      File(context.cacheDir, TEMP_DIR_NAME).listFiles()?.forEach { file ->
+        if (file.lastModified() < cutoff) file.delete()
+      }
+    }
+  }
 
   private fun build(context: Context): ImageLoader =
     ImageLoader.Builder(context)
-      .components { add(NetworkPhotoFetcher.Factory(), NetworkPhotoRequest::class) }
-      .memoryCache { MemoryCache.Builder().maxSizePercent(context, MEMORY_PERCENT).build() }
+      .components { add(NetworkPhotoFetcher.Factory(context), NetworkPhotoRequest::class) }
+      .memoryCache {
+        MemoryCache.Builder()
+          .maxSizeBytes(memoryCacheBytes())
+          .build()
+      }
       .diskCache {
         DiskCache.Builder()
-          .directory(FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve(NET_IMAGE_CACHE_DIR))
+          // 见 NET_IMAGE_CACHE_DIR：用应用私有 cacheDir，不用 java.io.tmpdir
+          // ⚠️ `DiskCache.Builder.directory(...)` 只接受 okio 的 Path（不是 java.io.File），
+          //    必须 `toOkioPath()` 转换（v97 真实编译错误：Argument type mismatch）。
+          .directory(context.cacheDir.resolve(NET_IMAGE_CACHE_DIR).toOkioPath())
           .maxSizeBytes(DISK_LIMIT_BYTES)
           .build()
       }
       .build()
+
+  /**
+   * 内存缓存字节数：按堆比例算完再夹一道上下限（理由见 [MEMORY_PERCENT]）。
+   *
+   * 不用 `MemoryCache.Builder.maxSizePercent(context, …)` 是因为它只有百分比、
+   * 没法设下限 —— 低堆设备上算出来的值可能小到「滚两屏就淘汰」。
+   */
+  private fun memoryCacheBytes(): Long =
+    (Runtime.getRuntime().maxMemory() * MEMORY_PERCENT)
+      .toLong()
+      .coerceIn(MEMORY_MIN_BYTES, MEMORY_MAX_BYTES)
 
   /**
    * 磁盘缓存 key。
@@ -138,6 +217,16 @@ object NetworkPhotoImageLoader {
   const val BUCKET_FULL = "full"
 
   /**
+   * 二级缩略图磁盘缓存的 key（供 [NetworkPhotoFetcher] 用）。
+   *
+   * 与内存 key 同口径、**含桶**：胶片条的 44dp 和网格的 360px 是两个不同的文件，
+   * 共用会小图覆盖大图 ⇒ 网格显示被放大后的糊图。
+   * ⚠️ `BUCKET_FULL` 不走这份缓存（它要的是原图），key 里也不会出现。
+   */
+  fun thumbDiskKey(connectionId: Long, path: String, bucket: String): String =
+    memoryKey(connectionId, path, bucket)
+
+  /**
    * 构造图片请求。
    *
    * @param size 网格缩略图传组件尺寸（默认，走采样解码省内存）；
@@ -159,7 +248,7 @@ object NetworkPhotoImageLoader {
   ): ImageRequest {
     val diskKey = cacheKey(connectionId, path)
     return ImageRequest.Builder(context)
-      .data(NetworkPhotoRequest(connectionId, path, sign))
+      .data(NetworkPhotoRequest(connectionId, path, sign, bucket))
       .memoryCacheKey(memoryKey(connectionId, path, bucket))
       .diskCacheKey(diskKey)
       .apply { if (size != null) size(size) }
@@ -184,6 +273,47 @@ object NetworkPhotoImageLoader {
     bucket: String = BUCKET_THUMB,
   ): Boolean =
     get(context).memoryCache?.get(MemoryCache.Key(memoryKey(connectionId, path, bucket))) != null
+
+  /**
+   * 「这张图在本进程里成功显示过」的 LRU 记录（按**磁盘 key** 存，不分桶 ——
+   * 只要某个尺寸成功过，这张图就是可用的）。
+   *
+   * 存在的理由：内存缓存必然会被 LRU 淘汰（1000 张的目录不可能全放得下），
+   * 但磁盘里通常还在 —— 命中磁盘只需几十毫秒解码。这几十毫秒里如果画扫光骨架屏，
+   * 观感就是「图丢了又重新加载」；而它其实只是从磁盘读了一次。
+   *
+   * ⚠️ 纯**视觉**判据：只决定画不画骨架屏，**不能**用来跳过请求。
+   * ⚠️ 进程内有效，重启即空（那时磁盘缓存还在，只是会闪一次骨架，可以接受）。
+   */
+  private val loadedKeys = object : LinkedHashMap<String, Unit>(256, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>?): Boolean =
+      size > LOADED_KEYS_MAX
+  }
+
+  /** 这张图的「成功过」记录要记多少条。一条只是一个 path 字符串，不值钱。 */
+  private const val LOADED_KEYS_MAX = 4096
+
+  /** 标记这张图已经成功显示过（见 [loadedKeys]）。 */
+  fun markLoaded(connectionId: Long, path: String) {
+    runCatching {
+      synchronized(loadedKeys) { loadedKeys[cacheKey(connectionId, path)] = Unit }
+    }
+  }
+
+  /**
+   * 这张图是否「已经显示过」= 内存缓存命中 **或** 曾经成功过。
+   *
+   * 调用方拿它决定**画不画骨架屏**：返回 true 就不画，让图自己出来
+   * （内存命中是即时的，磁盘命中是几十毫秒）。详见 [loadedKeys]。
+   */
+  fun hasShownBefore(
+    context: Context,
+    connectionId: Long,
+    path: String,
+    bucket: String = BUCKET_THUMB,
+  ): Boolean =
+    isMemoryCached(context, connectionId, path, bucket) ||
+      synchronized(loadedKeys) { loadedKeys.containsKey(cacheKey(connectionId, path)) }
 
   /**
    * 把一张图的缓存条目**删掉**（内存 + 磁盘）。
@@ -232,33 +362,48 @@ object NetworkPhotoImageLoader {
 }
 
 /**
- * 网络照片的 Coil Fetcher：字节经 [app.marlboroadvance.mpvex.repository.NetworkRepository]
- * 从 SMB/WebDAV/FTP 会话里取，其余交给 Coil。
+ * 网络照片的 Coil Fetcher。
  *
- * ⚠️ **流式 Source，不整读进内存**：单张可能是 20MB+ 的 TIFF/HEIC，
- *    先 `readBytes()` 再交给 Coil 等于白翻一倍内存。`inputStream.source()`
- *    让 Coil 边写磁盘缓存边解码。
+ * 分两条路径，由 [NetworkPhotoRequest.bucket] 决定：
+ *
+ * 1. **缩略图桶（thumb / film）** —— 三级缓存：内存（Coil）→
+ *    **二级缩略图磁盘缓存**（[NetworkThumbnailDiskCache]，压缩后的 JPEG 几十 KB）→ 网络。
+ *    未命中时才把原图下到临时文件、按 `options.size` 采样解码、压成 JPEG 落盘。
+ *    于是「滚回来」命中的是几十 KB 的缩略图，而不是重新下几 MB 的原图 ——
+ *    这才是「滚多了缩略图就丢」的真正解法，单靠调大原图缓存只能治标。
+ *
+ * 2. **全屏桶（[NetworkPhotoImageLoader.BUCKET_FULL]）** —— 原流式直通，要原图细节。
+ *
+ * ⚠️ **不整读进内存**：单张可能是 20MB+ 的 TIFF/HEIC。缩略图路径走
+ *    「流 → 临时文件 → 采样解码」，内存里只留采样后的 Bitmap。
  * ⚠️ **流必须关**：SMB 会话泄漏 = 几次之后这台服务器再也打不开文件。
- *    这里靠 okio 的传递关闭（见第 3 条），**不要**在 fetch 里提前
- *    `inputStream.close()` —— 那时 Coil 还没开始解码。
+ *    缩略图路径用 `use {}` 显式关；全屏路径靠 okio 的传递关闭，
+ *    **不要**在 fetch 里提前 close —— 那时 Coil 还没开始解码。
  */
 private class NetworkPhotoFetcher(
+  private val context: Context,
   private val connectionId: Long,
   private val path: String,
   private val sign: String?,
+  private val bucket: String,
 ) : Fetcher {
   override suspend fun fetch(): FetchResult {
-    val koin = GlobalContext.getOrNull() ?: throw java.io.IOException("Koin 未初始化")
-    val repository: app.marlboroadvance.mpvex.repository.NetworkRepository = koin.get()
-    val connection = repository.getConnectionById(connectionId)
-      ?: throw java.io.IOException("连接不存在（可能已删除）")
+    if (bucket == NetworkPhotoImageLoader.BUCKET_FULL) return fetchOriginal()
 
-    // sign 是 AList 的下载签名（其他协议为 null）。AList 的 /d/ 下载口只认它，
-    // 缺了会 401 —— 但 AlistClient 内部还有 fs/get 兜底，所以这里传 null 也能取到
-    // （只是多一个请求）。见 AlistClient 的类注释。
-    val inputStream = repository.openFileStream(connection, path, sign).getOrElse { e ->
-      throw java.io.IOException("照片打开失败: $path", e)
+    val cacheKey = NetworkPhotoImageLoader.thumbDiskKey(connectionId, path, bucket)
+    // ① 命中二级缩略图缓存：几十 KB 的 JPEG，零网络
+    NetworkThumbnailDiskCache.cachedFile(context, cacheKey)?.let { file ->
+      // 命中即刷新 mtime，让磁盘缓存的淘汰更接近真正的 LRU（见 touch 的说明）
+      NetworkThumbnailDiskCache.touch(file)
+      return fileResult(file, "image/jpeg", DataSource.DISK)
     }
+    // ② 未命中：下载 → 采样 → 压 JPEG → 存盘
+    return fetchAndBuildThumbnail(cacheKey)
+  }
+
+  /** 全屏：原流式直通（要原图细节，不采样、不进缩略图缓存）。 */
+  private suspend fun fetchOriginal(): FetchResult {
+    val inputStream = openStream()
     // Coil 会消费这个 Source；无论成败，流都由我们关
     val source = inputStream.source().buffer()
     return SourceFetchResult(
@@ -268,11 +413,151 @@ private class NetworkPhotoFetcher(
     )
   }
 
-  class Factory : Fetcher.Factory<NetworkPhotoRequest> {
+  /**
+   * 未命中二级缓存：下载 → 采样解码 → 压 JPEG 存盘。
+   *
+   * 首次加载会多花「落临时文件 + 解码 + 编码」约 100~300ms；相比本来就在等的
+   * 网络时间可以忽略，换来的是这张图**以后每次滚回来只要几十毫秒**。
+   */
+  private suspend fun fetchAndBuildThumbnail(cacheKey: String): FetchResult {
+    val raw = downloadToTempFile()
+    val bitmap = decodeSampled(raw, maxDecodeEdge(bucket))
+    if (bitmap == null) {
+      // 解不动（TIFF / 罕见编码 / 文件损坏）：把原始字节交给 Coil，走它原来的解码链路。
+      // 能显示就显示，不能就由 Coil 报 Error 交给卡片的重试 UI ——
+      // 这里不能替它兜底，否则会把「真坏的文件」伪装成成功。
+      // ⚠️ 临时文件不删，由下次启动统一清理（见 cleanupTempFiles）。
+      return fileResult(raw, null, DataSource.NETWORK)
+    }
+    val cached =
+      try {
+        NetworkThumbnailDiskCache.store(context, cacheKey, bitmap)
+      } finally {
+        // 编码完立刻回收：这张 Bitmap 的唯一用途就是压成 JPEG
+        bitmap.recycle()
+      }
+    raw.delete()
+    if (cached == null) throw java.io.IOException("缩略图缓存写入失败: $path")
+    return fileResult(cached, "image/jpeg", DataSource.DISK)
+  }
+
+  private fun fileResult(file: File, mime: String?, source: DataSource): FetchResult =
+    SourceFetchResult(
+      source =
+        ImageSource(
+          source = FileSystem.SYSTEM.source(file.toOkioPath()).buffer(),
+          fileSystem = FileSystem.SYSTEM,
+          metadata = null,
+        ),
+      mimeType = mime,
+      dataSource = source,
+    )
+
+  /** 打开网络流（SMB / WebDAV / FTP / AList）。 */
+  private suspend fun openStream(): java.io.InputStream {
+    val koin = GlobalContext.getOrNull() ?: throw java.io.IOException("Koin 未初始化")
+    val repository: app.marlboroadvance.mpvex.repository.NetworkRepository = koin.get()
+    val connection =
+      repository.getConnectionById(connectionId)
+        ?: throw java.io.IOException("连接不存在（可能已删除）")
+
+    // sign 是 AList 的下载签名（其他协议为 null）。AList 的 /d/ 下载口只认它，
+    // 缺了会 401 —— 但 AlistClient 内部还有 fs/get 兜底，所以这里传 null 也能取到
+    // （只是多一个请求）。见 AlistClient 的类注释。
+    return repository.openFileStream(connection, path, sign).getOrElse { e ->
+      throw java.io.IOException("照片打开失败: $path", e)
+    }
+  }
+
+  /** 把流落到临时文件（内存里不保留整张图）。 */
+  private suspend fun downloadToTempFile(): File {
+    val tempDir = File(context.cacheDir, TEMP_DIR_NAME).apply { if (!isDirectory) mkdirs() }
+    val temp = File.createTempFile("thumb_", ".tmp", tempDir)
+    return try {
+      openStream().use { input ->
+        temp.outputStream().use { out -> input.copyTo(out, DEFAULT_BUFFER_SIZE) }
+      }
+      temp
+    } catch (t: Throwable) {
+      // 半截文件没有任何价值，不删会一直占空间
+      temp.delete()
+      throw t
+    }
+  }
+
+  /** 按目标显示尺寸采样解码；解不动返回 null（由调用方降级）。 */
+  private fun decodeSampled(file: File, maxEdge: Int): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    runCatching { BitmapFactory.decodeFile(file.absolutePath, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+    val options =
+      BitmapFactory.Options().apply {
+        inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, maxEdge)
+      }
+    return runCatching { BitmapFactory.decodeFile(file.absolutePath, options) }.getOrNull()
+  }
+
+  /**
+   * 采样边长的目标值（像素）。
+   *
+   * 这里**故意不用** Coil 的 `Options.size`：它的宽高是 `Dimension` 值类，
+   * 内部字段名随版本变过（v97 实测 `px` 也不存在），为了一个「缩略图存多大」
+   * 的决策去绑死第三方内部结构不划算。改用「按桶给固定上限」——
+   * 桶的语义本来就稳定（网格 / 胶片条），尺寸上限跟着桶走即可。
+   */
+  private fun maxDecodeEdge(bucket: String): Int =
+    if (bucket == NetworkPhotoImageLoader.BUCKET_FILM) FILM_MAX_EDGE_PX else THUMB_MAX_EDGE_PX
+
+  /**
+   * 2 的幂次采样率，保证**短边**采样后仍不小于 [maxEdge]。
+   *
+   * 用短边而不是长边，是因为缩略图一律 `ContentScale.Crop` 成 1:1 ——
+   * 决定清晰度的是短边，按长边算会让竖图/横图被过度采样（糊掉）。
+   * 同时「仍不小于」保证不会采样过头，这正是「质量不要压太严重」的落点。
+   */
+  private fun sampleSizeFor(width: Int, height: Int, maxEdge: Int): Int {
+    if (maxEdge <= 0) return 1
+    val shortEdge = minOf(width, height)
+    var sample = 1
+    while (shortEdge / (sample * 2) >= maxEdge) {
+      sample *= 2
+    }
+    return sample
+  }
+
+  class Factory(private val context: Context) : Fetcher.Factory<NetworkPhotoRequest> {
     override fun create(
       data: NetworkPhotoRequest,
       options: Options,
       imageLoader: ImageLoader,
-    ): Fetcher = NetworkPhotoFetcher(data.connectionId, data.path, data.sign)
+    ): Fetcher =
+      NetworkPhotoFetcher(
+        context = context,
+        connectionId = data.connectionId,
+        path = data.path,
+        sign = data.sign,
+        bucket = data.bucket,
+      )
   }
 }
+
+/**
+ * 缩略图下载用的临时目录名（挂在 `cacheDir` 下）。
+ *
+ * ⚠️ 正常路径用完就删；只有「原图解码失败」那条降级路径会把文件交给 Coil
+ *    （Coil 不接管文件生命周期），所以需要启动时统一清理 —— 见
+ *    [NetworkPhotoImageLoader.cleanupTempFiles]。
+ */
+private const val TEMP_DIR_NAME = "net_thumb_tmp"
+
+/**
+ * 网格 / 列表缩略图的目标短边（像素）。
+ *
+ * 3 列布局在 1080p 屏上每格约 360px，这里留到 512 是给「4 列 / 平板 / 折叠屏」
+ * 以及后续放大查看留余量 —— 只多占约一倍体积，换的是不会在任何机型上糊。
+ */
+private const val THUMB_MAX_EDGE_PX = 512
+
+/** 查看器底部胶片条的目标短边（像素）。44dp @3x ≈ 132px，留到 192 同理。 */
+private const val FILM_MAX_EDGE_PX = 192

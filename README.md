@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.5.8.svg" alt="Release: v1.5.8" /></a>
+  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.5.9.svg" alt="Release: v1.5.9" /></a>
   <img src=".github/badges/flavor-standard.svg" alt="Flavor: standard" />
   <img src=".github/badges/package-cineisle.svg" alt="Package: app.cineisle.player" />
   <img src=".github/badges/kernel-mpv-gsy.svg" alt="Kernel: mpv + GSYVideoPlayer" />
@@ -130,7 +130,13 @@
 
 ## 更新记录
 
-> 按版本倒序，当前版本 **v1.5.8**；历史安装包见 [Releases](https://github.com/nu1lkali/CineIsle/releases)。
+> 按版本倒序，当前版本 **v1.5.9**；历史安装包见 [Releases](https://github.com/nu1lkali/CineIsle/releases)。
+
+### v1.5.9
+- **网络照片缩略图改为压缩缓存**：以前磁盘里存的是原图（单张 3–8MB），只装得下几十张，滚过去再滚回来就得重新下载。现在首次加载后会把缩略图压成 JPEG 单独存一份（约 60KB/张），同样的空间能放几千张
+- **缓存容量上调**：磁盘 128MB → 512MB，内存 25% → 35%（并设 64MB 下限、256MB 上限）
+- **不再闪骨架屏**：显示过的图滚回来时直接出图，不再扫一遍加载动画
+- **画质**：缩略图按显示尺寸采样解码（网格 512px、胶片条 192px），JPEG 质量 85 —— 屏幕上看到的就是原尺寸的清晰度，不是「压过的糊图」
 
 ### v1.5.8
 - **崩溃：崩溃页的「重启」按钮自己崩**：换成非默认桌面图标后，重启按钮拉起的入口被系统禁用，一点就再崩一次，形成死循环；现已改为拉起当前实际生效的那个入口

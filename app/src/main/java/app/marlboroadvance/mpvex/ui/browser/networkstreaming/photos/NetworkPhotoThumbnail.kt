@@ -92,8 +92,12 @@ fun NetworkPhotoThumbnail(
   // 否则返回上一级时每张封面都会「闪一下」（painter 从 Loading 重新走一遍），
   // 而图其实一直在缓存里。
   // ⚠️ bucket 必须与上面 request 一致，否则永远查不到 ⇒ 白闪骨架屏。
-  val memoryCached = remember(connectionId, path, cacheBucket) {
-    NetworkPhotoImageLoader.isMemoryCached(context, connectionId, path, cacheBucket)
+  //
+  // 判据是「显示过」而不只是「内存缓存命中」：内存缓存必然会被 LRU 淘汰
+  // （1000 张的目录放不下），但磁盘里还在，命中磁盘只要几十毫秒。这段空窗期
+  // 如果画扫光骨架，观感就是「图丢了又重下」—— 详见 NetworkPhotoImageLoader.loadedKeys。
+  val shownBefore = remember(connectionId, path, cacheBucket) {
+    NetworkPhotoImageLoader.hasShownBefore(context, connectionId, path, cacheBucket)
   }
   val painter = rememberAsyncImagePainter(
     model = request,
@@ -134,6 +138,14 @@ fun NetworkPhotoThumbnail(
     }
   }
 
+  // 成功显示一次就记下来：之后滚回来（item 被 LazyGrid 回收后重建）即使内存缓存
+  // 已经被 LRU 淘汰，也走「磁盘解码 → 直接显示」，不再闪骨架屏。
+  LaunchedEffect(connectionId, path, state) {
+    if (state is AsyncImagePainter.State.Success) {
+      NetworkPhotoImageLoader.markLoaded(connectionId, path)
+    }
+  }
+
   // 失败后**自动重载一次**：网络抖一下（首包超时 / 会话过期）能自己救回来。
   // 只试一次 —— 真挂了（文件已删 / 编码解不动）就别在后台空转，留给用户点。
   // 延迟 600ms 是给网络栈喘口气，也避开「刚失败立刻又失败」的瞬时状态。
@@ -162,8 +174,8 @@ fun NetworkPhotoThumbnail(
       //    「图先消失一下，再重新出现」—— 用户会当成重新加载。
       is AsyncImagePainter.State.Empty,
       is AsyncImagePainter.State.Loading -> {
-        // 缓存命中就别画骨架屏了：那一下闪烁纯属噪音
-        if (!memoryCached) {
+        // 显示过就别画骨架屏了：那一下闪烁纯属噪音
+        if (!shownBefore) {
           Box(
             modifier = Modifier
               .fillMaxSize()
