@@ -35,7 +35,7 @@
 <hr />
 
 <p align="center">
-  🎬 直链播放不转码 · 📥 离线下载 · 🖥️ mpv / GSY 双内核 ·
+  🎬 直链播放不转码 · 📥 离线下载 · 🖥️ mpv / GSY 双内核 · ☁️ AList 网盘 ·
   📀 远程 ISO 原盘 · 🧑 演职员合并 · 📺 DLNA 投屏 · 🖼️ 图集与照片
 </p>
 
@@ -49,6 +49,8 @@
 
 于是就有了 **影屿 / CineIsle**：在 mpvEx 上补出一整套 Emby 客户端，再把那些「自己用得上」的功能一个个加上去。
 
+播放器不能只播 Emby 里的片子，所以网络存储也补齐了：SMB / FTP / WebDAV，以及给 AList 单独写的一套原生 API 客户端——同一台 AList 用 WebDAV 也能连，但列目录、取封面、播放的请求次数差一个数量级，具体见[功能](#功能)。
+
 名字取自「电影的岛屿」——把自己想看的片子收在一个地方。
 
 ---
@@ -60,7 +62,7 @@
 | **语言 / UI** | Kotlin · Jetpack Compose（Material 3 Expressive）· 单 Activity + Navigation 3 |
 | **架构** | 分层（`domain` 领域 / `ui` 界面 / `database` 持久化 / `preferences` 设置）· Koin 依赖注入 · 协程 + Flow |
 | **持久化** | Room 2.8（KSP 生成、schema 导出、迁移测试）· `me.zhanghai.compose.preference` |
-| **网络** | OkHttp 5 + kotlinx.serialization（手写 Emby 客户端）· SMBJ / Sardine / Commons Net（SMB / FTP / WebDAV）· NanoHTTPD（本地 Range 代理） |
+| **网络** | OkHttp 5 + kotlinx.serialization（手写 Emby 客户端，以及 AList 原生 API 客户端）· SMBJ / Sardine / Commons Net（SMB / FTP / WebDAV）· NanoHTTPD（本地 Range 代理） |
 | **播放** | libmpv（`mpv-android`）为主内核 · GSYVideoPlayer 13.2（IJK / System / ExoPlayer）为备选 · AndroidX Media3 ExoPlayer 1.10 承担视界流多实例播放 |
 | **投屏** | UPnPCast（源码内置） |
 | **加密** | Android Keystore AES-256-GCM |
@@ -79,7 +81,8 @@
 | `domain/dislike` | 「标记为不喜欢」的领域逻辑与持久化 |
 | `domain/media` · `network` · `thumbnail` · `playbackstate` · `recentlyplayed` · `anime4k` | 媒体信息解析、网络存储、缩略图、播放进度、最近播放、Anime4K |
 | `ui/browser/emby` | Emby 界面：首页、媒体库、详情页、搜索、筛选、播放列表、演职员合并、不喜欢管理页 |
-| `ui/browser/networkstreaming` · `filesystem` · `folderlist` · `playlist` · `videolist` · `recentlyplayed` | 本地 / 网络文件浏览与各列表页 |
+| `ui/browser/networkstreaming` | 网络存储：`clients` 下四套协议客户端（SMB / FTP / WebDAV / AList 原生 API）、目录浏览、混合媒体列表、照片查看器、AList 写操作 |
+| `ui/browser/filesystem` · `folderlist` · `playlist` · `videolist` · `recentlyplayed` | 本地文件浏览与各列表页 |
 | `ui/player` | 播放页：`controls` 控件簇布局引擎、`engine` 双内核抽象、`gsy` GSY 内核、`feed` 视界流 |
 | `ui/preferences` | 设置页（含设置搜索） |
 | `database` | Room 实体 / DAO / 仓库，含迁移与 schema 导出 |
@@ -109,6 +112,29 @@
 | **详情页** | 可折叠的封面头部、简介展开 / 收起、演职员与同类型推荐、剧集按季集展开、媒体信息、收藏 / 已看 / 加入下载、更多菜单（刮削 / 刷新元数据 / 删除） |
 | **播放与进度同步** | 直链播放 `stream?static=true` 不转码；剧集连播；进度回传 `/Sessions/Playing` · `/Progress` · `/Stopped`，多端互通 |
 | **离线下载** | `Range` 断点续传；Android 10+ 经 `MediaStore` 写公共 `Download/CineIsle`（免存储权限）；最多同时下 2 个，任务持久化 |
+
+### ☁️ 网络存储与 AList 网盘
+
+支持 SMB / FTP / WebDAV 三种通用协议，外加 **AList 的原生 API**。同一台 AList 两种连法都能用，但原生协议值得单独做一套：列目录、取封面、播放的差别是数量级的。
+
+| 功能区 | 要点 |
+| :-- | :-- |
+| **连接管理** | 添加 / 编辑 / 删除 / 置顶；连接列表可按名称、地址、协议搜索；密码统一 Keystore 加密落盘；可填子路径（base path），HTTP 类协议可选 `https` |
+| **目录浏览** | 文件夹 / 图片 / 视频 / 其它文件混排，各带类型角标；点顶栏标题弹出层级列表，可直达任意一层；网格 / 列表两种视图，侧边滚动条 |
+| **目录封面** | 文件夹封面自动取目录里第一张图（按自然序，`img9` 排在 `img10` 前面）；结果按连接 + 路径缓存进 Room；取不到封面不会被记成「这文件夹没图」——下拉刷新就能恢复 |
+| **照片** | 独立查看器：双指缩放、下拉关闭、幻灯片播放、保存原图；网格与胶片条按各自显示尺寸分别缓存 |
+| **快捷操作** | 收藏当前目录（网络首页有「收藏的目录」入口）、当前目录随机播放、点视频即从该条起连播整个目录 |
+
+**AList 原生协议另外还多这些：**
+
+| 要点 | 说明 |
+| :-- | :-- |
+| **一个接口拿全目录** | `POST /api/fs/list` 按每页 500 自动翻页合并，几千条的大目录也能列全。注意 `per_page: 0` 并不是「一次拿全」——服务端会把它归一化成默认 200 条，这正是早期大目录只显示一部分的原因 |
+| **播放不走本地代理** | `fs/get` 给出的 `raw_url`（对象存储直链）或 `/d/<路径>?sign=` 签名直链可以直接交给 mpv / GSY；SMB / FTP / WebDAV 才必须过本地 Range 代理 |
+| **token 换一次用一场** | `POST /api/auth/login` 拿到 token 后复用（AList 默认 48 小时有效），401 自动重登一次；不像 Basic 认证那样每个请求都要解一次 Keystore 密文 |
+| **签名失效能自愈** | 列目录时服务端会顺手带回每个条目的签名，取封面 / 取图就是最后一跳、零额外请求；签名过期则记住这个「已证伪」的签名、下次直接跳过，再向 `fs/get` 换一个新的 |
+| **访客模式** | 账号密码都留空即访客身份，只读浏览公开目录 |
+| **写操作** | 长按条目可重命名、删除，直接作用在服务器上（删除要过二次确认，无回收站）。SMB / FTP / WebDAV 三个协议是只读的 |
 
 ### 🚀 播放内核与扩展能力
 
@@ -164,7 +190,7 @@
 - **网络存储（SMB / WebDAV / FTP）大改版**：目录里的文件夹、图片、视频、其他文件混合展示，配统一卡片与类型角标；新增「收藏的目录」快捷入口
 - **网络照片查看器**：双指缩放、下拉关闭、幻灯片播放、一键保存原图
 - **路径导航**：浏览网络目录时点顶栏标题，可弹出层级列表直达任意一层，并能一键回到首页
-- **新增 AList 网盘支持**：目录可直接浏览，图片与视频可直接播放
+- **新增 AList 网盘支持**：走的是 AList 自己的原生 API（不是 WebDAV）——目录一个接口列全、图片与视频直链播放不走本地代理；长按条目可重命名 / 删除，写操作直接作用在服务器上
 - **Emby 媒体库**：修复点进文件夹后内容空空如也、网格视图里「排序点了没反应」
 - **大库体验**：修复超大媒体库「一直加载中 / 无响应」；十万条大库的首页加载明显更快
 - **修复**：AList 图片全部无法显示、WebDAV 靠后的文件夹与图片加载失败
@@ -193,6 +219,7 @@
 | [UPnPCast](https://github.com/yinnho/UPnPCast) | DLNA 投屏 |
 | [AboutLibraries](https://github.com/mikepenz/AboutLibraries) | 开源许可清单 |
 | [SMBJ](https://github.com/hierynomus/smbj) · [Sardine](https://github.com/lookfirst/sardine) · [Commons Net](https://commons.apache.org/proper/commons-net/) · [NanoHTTPD](https://github.com/NanoHttpd/nanohttpd) | 网络存储与本地服务 |
+| [AList](https://github.com/AlistGo/alist) | 网盘聚合服务端。客户端按它的公开 API 独立实现（仅作协议对端，未引入其代码） |
 | [mpvKt](https://github.com/abdallahmehiz/mpvKt) · [Next player](https://github.com/anilbeesetti/nextplayer) · [Gramophone](https://github.com/FoedusProgramme/Gramophone) | 界面参考 |
 
 > 上游项目的开源许可（见 [LICENSE](LICENSE)）继续适用。
