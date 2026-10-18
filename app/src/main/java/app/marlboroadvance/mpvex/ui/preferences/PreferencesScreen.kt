@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -69,6 +70,7 @@ import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.ViewComfy
 import androidx.compose.material.icons.outlined.Widgets
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -82,6 +84,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
@@ -198,7 +201,7 @@ object PreferencesScreen : Screen {
           item {
             PreferenceCard {
               Preference(
-                title = { Text(text = stringResource(id = R.string.pref_appearance_title)) },
+                title = { Text(text = stringResource(id = R.string.pref_appearance_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(id = R.string.pref_appearance_summary),
@@ -218,7 +221,7 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               Preference(
-                title = { Text(text = stringResource(id = R.string.pref_layout_title)) },
+                title = { Text(text = stringResource(id = R.string.pref_layout_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(id = R.string.pref_layout_summary),
@@ -246,7 +249,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
-                title = { Text(text = stringResource(id = R.string.pref_player)) },
+                title = { Text(text = stringResource(id = R.string.pref_player), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(id = R.string.pref_player_summary),
@@ -267,7 +270,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
-                title = { Text(text = stringResource(id = R.string.pref_gesture)) },
+                title = { Text(text = stringResource(id = R.string.pref_gesture), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(id = R.string.pref_gesture_summary),
@@ -294,7 +297,7 @@ object PreferencesScreen : Screen {
               val danmakuPrefs = koinInject<DanmakuPreferences>()
               val danmakuEnabled by danmakuPrefs.enabled.collectAsState()
               Preference(
-                title = { Text(text = stringResource(id = R.string.danmaku_title)) },
+                title = { Text(text = stringResource(id = R.string.danmaku_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = stringResource(id = R.string.danmaku_settings_summary) +
@@ -317,7 +320,7 @@ object PreferencesScreen : Screen {
               // GSY 播放器是**独立的一套播放页**（内核 / 渲染 / 手势都跟 mpv 不共用），
               // 所以它的配置单开一页：这一页改什么都不影响 mpv，反之亦然。
               Preference(
-                title = { Text(text = stringResource(id = R.string.pref_gsy_player)) },
+                title = { Text(text = stringResource(id = R.string.pref_gsy_player), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = stringResource(id = R.string.pref_gsy_player_summary),
@@ -339,7 +342,7 @@ object PreferencesScreen : Screen {
               // （关开关会清掉控件簇里的按钮、开开关会加回原簇），
               // 细节见 DislikeLayoutSync。
               Preference(
-                title = { Text(text = stringResource(id = R.string.pref_dislike_title)) },
+                title = { Text(text = stringResource(id = R.string.pref_dislike_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = stringResource(id = R.string.pref_dislike_summary),
@@ -367,7 +370,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
-                title = { Text(text = stringResource(id = R.string.pref_folders_title)) },
+                title = { Text(text = stringResource(id = R.string.pref_folders_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(id = R.string.pref_folders_summary),
@@ -395,7 +398,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
-                title = { Text(text = stringResource(id = R.string.pref_decoder)) },
+                title = { Text(text = stringResource(id = R.string.pref_decoder), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(id = R.string.pref_decoder_summary),
@@ -416,7 +419,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
-                title = { Text(text = stringResource(id = R.string.pref_subtitles)) },
+                title = { Text(text = stringResource(id = R.string.pref_subtitles), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(id = R.string.pref_subtitles_summary),
@@ -437,7 +440,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
-                title = { Text(text = stringResource(id = R.string.pref_audio)) },
+                title = { Text(text = stringResource(id = R.string.pref_audio), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(id = R.string.pref_audio_summary),
@@ -476,7 +479,7 @@ object PreferencesScreen : Screen {
               // 这里只做入口 —— 与播放列表、合集同一套分工：设置里给门，内容在专门页面管。
               // 多服务器 / 多用户：管理页按「当前服务器」分桶，标题下会显示在管哪台。
               Preference(
-                title = { Text(text = "聚合库") },
+                title = { Text(text = "聚合库", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "把多个同类型媒体库合并成一个视图；只在本 App 内生效，不修改服务器",
@@ -506,7 +509,7 @@ object PreferencesScreen : Screen {
                 },
                 value = quickFavorite,
                 onValueChange = { browserPreferences.embyQuickFavorite.set(it) },
-                title = { Text(text = "卡片快捷收藏") },
+                title = { Text(text = "卡片快捷收藏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "媒体库卡片右上角显示可点的收藏心形；关闭后只作「已收藏」只读角标",
@@ -528,7 +531,7 @@ object PreferencesScreen : Screen {
                 },
                 value = showRecommendations,
                 onValueChange = { browserPreferences.embyShowRecommendations.set(it) },
-                title = { Text(text = "详情页推荐") },
+                title = { Text(text = "详情页推荐", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "详情页显示「推荐」与「同类型推荐」；关闭后详情页不再展示推荐内容",
@@ -550,7 +553,7 @@ object PreferencesScreen : Screen {
                 },
                 value = randomGenreRecommend,
                 onValueChange = { browserPreferences.embyRandomGenreRecommend.set(it) },
-                title = { Text(text = "同类型推荐随机选取类型") },
+                title = { Text(text = "同类型推荐随机选取类型", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "详情页「同类型」每次从本片所属的多个类型里随机挑一个；关闭则固定用第一个类型",
@@ -573,7 +576,16 @@ object PreferencesScreen : Screen {
                   .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
               ) {
-                Text(text = "推荐算法", style = MaterialTheme.typography.bodyLarge)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Icon(
+                    Icons.Outlined.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp),
+                  )
+                  Spacer(Modifier.width(12.dp))
+                  Text(text = "推荐算法", style = MaterialTheme.typography.bodyLarge)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                   SimilarAlgorithm.entries.forEach { option ->
                     FilterChip(
@@ -616,7 +628,7 @@ object PreferencesScreen : Screen {
                 },
                 value = excludePlayed,
                 onValueChange = { browserPreferences.embySimilarExcludePlayed.set(it) },
-                title = { Text(text = "推荐时排除已看过") },
+                title = { Text(text = "推荐时排除已看过", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "关闭后看过的片子也会出现在推荐与连播列表里（适合重刷老片）",
@@ -639,7 +651,7 @@ object PreferencesScreen : Screen {
                 },
                 value = homeShowMix,
                 onValueChange = { browserPreferences.embyHomeShowMix.set(it) },
-                title = { Text(text = "首页「随便看看」") },
+                title = { Text(text = "首页「随便看看」", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "在首页「最新加入」下面显示一批可连播的推荐；关闭后首页不再请求这批内容",
@@ -669,7 +681,7 @@ object PreferencesScreen : Screen {
                 // 「连播列表」是「猜你喜欢」页里那个区块的标题（见EmbyDiscoverScreen），
                 // 别写成「即混」—— 那是 Emby 的 InstantMix 接口名，
                 // 玩家在界面上搜不到这个词，只会觉得说的是别的地方。
-                title = { Text(text = "连播列表每行放几个") },
+                title = { Text(text = "连播列表每行放几个", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 valueRange = 2f..6f,
                 valueSteps = 3,
                 summary = {
@@ -700,7 +712,7 @@ object PreferencesScreen : Screen {
                 },
                 value = resolveDirectLink,
                 onValueChange = { browserPreferences.embyResolveDirectLink.set(it) },
-                title = { Text(text = "预解析直链（302）") },
+                title = { Text(text = "预解析直链（302）", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "播放前先取出跳转后的真实地址。用于网盘 / STRM 这类带 302 跳转、" +
@@ -722,7 +734,7 @@ object PreferencesScreen : Screen {
                 },
                 value = clearProgressOnDownload,
                 onValueChange = { browserPreferences.embyClearProgressOnDownload.set(it) },
-                title = { Text(text = "下载完成后清除服务端播放进度") },
+                title = { Text(text = "下载完成后清除服务端播放进度", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "下载完一条就把服务器上这条的续播位置清零，「继续观看」不再挂着它。" +
@@ -755,7 +767,7 @@ object PreferencesScreen : Screen {
                 onValueChange = { browserPreferences.embyMediaSourcePreference.set(it.key) },
                 values = MediaSourcePreference.entries,
                 valueToText = { AnnotatedString(mediaSourcePreferenceLabel(it)) },
-                title = { Text(text = stringResource(R.string.pref_media_source_pref_title)) },
+                title = { Text(text = stringResource(R.string.pref_media_source_pref_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = mediaSourcePreferenceLabel(sourcePref),
@@ -784,7 +796,7 @@ object PreferencesScreen : Screen {
                 onValueChange = { browserPreferences.photoPreloadCount.set(it.coerceIn(1, 3)) },
                 values = listOf(1, 2, 3),
                 valueToText = { AnnotatedString("前后各 $it 张") },
-                title = { Text(text = "照片预加载张数") },
+                title = { Text(text = "照片预加载张数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "前后各预取 ${preloadCount.coerceIn(1, 3)} 张，翻页更快；" +
@@ -813,7 +825,7 @@ object PreferencesScreen : Screen {
                 onValueChange = { browserPreferences.photoSlideshowInterval.set(it) },
                 values = PhotoSlideshowInterval.entries,
                 valueToText = { AnnotatedString("${it.seconds} 秒") },
-                title = { Text(text = "照片幻灯片间隔") },
+                title = { Text(text = "照片幻灯片间隔", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "照片浏览器幻灯片播放时，每 ${slideshowInterval.seconds} 秒自动翻到下一张",
@@ -839,7 +851,7 @@ object PreferencesScreen : Screen {
                 },
                 value = photoAutoSlideshow,
                 onValueChange = { browserPreferences.photoAutoSlideshow.set(it) },
-                title = { Text(text = "进入照片浏览器自动播放幻灯片") },
+                title = { Text(text = "进入照片浏览器自动播放幻灯片", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = if (photoAutoSlideshow) {
@@ -871,7 +883,7 @@ object PreferencesScreen : Screen {
                 },
                 value = photoFilmstrip,
                 onValueChange = { browserPreferences.photoFilmstrip.set(it) },
-                title = { Text(text = "照片浏览器显示底部缩略图") },
+                title = { Text(text = "照片浏览器显示底部缩略图", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = if (photoFilmstrip) {
@@ -904,7 +916,7 @@ object PreferencesScreen : Screen {
               val saveDirPath by browserPreferences.photoSaveDirPath.collectAsState()
               var showFolderPicker by remember { mutableStateOf(false) }
               Preference(
-                title = { Text(text = "照片保存位置") },
+                title = { Text(text = "照片保存位置", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = EmbyPhotoSaver.displayPathLabel(saveDirPath)
@@ -949,7 +961,7 @@ object PreferencesScreen : Screen {
                       tint = MaterialTheme.colorScheme.primary,
                     )
                   },
-                  title = { Text(text = "恢复默认保存位置") },
+                  title = { Text(text = "恢复默认保存位置", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                   summary = {
                     Text(
                       text = "改回系统相册的 Pictures/CineIsle",
@@ -986,7 +998,7 @@ object PreferencesScreen : Screen {
                 onValueChange = { browserPreferences.embyCardCorner.set(it.roundToInt()) },
                 sliderValue = cardCorner.toFloat(),
                 onSliderValueChange = { browserPreferences.embyCardCorner.set(it.roundToInt()) },
-                title = { Text(text = "卡片圆角") },
+                title = { Text(text = "卡片圆角", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 valueRange = 0f..24f,
                 summary = {
                   Text(
@@ -1008,7 +1020,7 @@ object PreferencesScreen : Screen {
                 },
                 value = showCardBadges,
                 onValueChange = { browserPreferences.embyShowCardBadges.set(it) },
-                title = { Text(text = "显示封面角标") },
+                title = { Text(text = "显示封面角标", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "在封面上显示播放进度条 / 作品数等角标；关闭后卡片更干净",
@@ -1031,7 +1043,7 @@ object PreferencesScreen : Screen {
                 },
                 value = folderIconBlue,
                 onValueChange = { browserPreferences.embyFolderIconBlue.set(it) },
-                title = { Text(text = "文件夹图标使用蓝色") },
+                title = { Text(text = "文件夹图标使用蓝色", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "媒体库文件夹卡片左下角的类型图标：打开为蓝色，关闭为白色（默认）",
@@ -1055,7 +1067,7 @@ object PreferencesScreen : Screen {
                 },
                 value = folderRandomCover,
                 onValueChange = { browserPreferences.embyFolderRandomCover.set(it) },
-                title = { Text(text = "合成随机封面图") },
+                title = { Text(text = "合成随机封面图", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "文件夹 / 合集卡片用内部视频的封面拼多宫格；打开后随机取样，" +
@@ -1095,7 +1107,7 @@ object PreferencesScreen : Screen {
                   },
                   values = FolderCoverRefreshPolicy.entries,
                   valueToText = { AnnotatedString(it.label) },
-                  title = { Text(text = "重新合成策略") },
+                  title = { Text(text = "重新合成策略", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                   summary = {
                     Text(
                       text = "随机取样的封面每次都不一样，这一项决定多久换一批。" +
@@ -1117,7 +1129,7 @@ object PreferencesScreen : Screen {
                         tint = MaterialTheme.colorScheme.primary,
                       )
                     },
-                    title = { Text(text = "间隔小时数") },
+                    title = { Text(text = "合成封面图间隔小时数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     summary = {
                       Text(
                         text = "当前 $coverHours 小时 · 取值范围 1~168",
@@ -1138,7 +1150,7 @@ object PreferencesScreen : Screen {
                         tint = MaterialTheme.colorScheme.primary,
                       )
                     },
-                    title = { Text(text = "间隔天数") },
+                    title = { Text(text = "间隔天数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     summary = {
                       Text(
                         text = "当前 $coverDays 天 · 取值范围 1~30",
@@ -1151,7 +1163,7 @@ object PreferencesScreen : Screen {
 
                 if (editHours) {
                   IntervalInputDialog(
-                    title = "间隔小时数",
+                    title = "合成封面图间隔小时数",
                     hint = "1~168 小时",
                     current = coverHours,
                     range = 1..168,
@@ -1187,7 +1199,7 @@ object PreferencesScreen : Screen {
             // 这是唯一会写服务器元数据的工具，单独一个页面承载，这里只放入口。
             PreferenceCard {
               Preference(
-                title = { Text(text = "演职员合并") },
+                title = { Text(text = "演职员合并", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "把重复的演员条目归并成一条（写入服务器，所有客户端生效，可撤销）· 需要管理员",
@@ -1219,7 +1231,7 @@ object PreferencesScreen : Screen {
             var showRandomDialog by remember { mutableStateOf(false) }
             PreferenceCard {
               Preference(
-                title = { Text(text = "随机播放视频数量") },
+                title = { Text(text = "随机播放视频数量", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "当前 $randomCount 条 · 用于随机播放、随机播放收藏与视界流",
@@ -1248,7 +1260,7 @@ object PreferencesScreen : Screen {
                 },
                 value = drillDownOnTap,
                 onValueChange = { browserPreferences.embyRandomDrillDownOnTap.set(it) },
-                title = { Text(text = "随机播放默认下钻") },
+                title = { Text(text = "随机播放默认下钻", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     // ⚠️ 括号不能省：`if (…) "A" else "B" + "C"` 会把后缀只拼给 else 那一支
@@ -1279,7 +1291,7 @@ object PreferencesScreen : Screen {
                 },
                 value = gestureToast,
                 onValueChange = { browserPreferences.embyRandomGestureToast.set(it) },
-                title = { Text(text = "显示手势提示") },
+                title = { Text(text = "显示手势提示", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "点击随机播放 / 随机播放收藏 / 视界流时，提示本次是「含子文件夹」还是" +
@@ -1327,7 +1339,7 @@ object PreferencesScreen : Screen {
               },
               value = folderCoverEnabled,
               onValueChange = { browserPreferences.folderCoverEnabled.set(it) },
-              title = { Text(text = "文件夹封面") },
+              title = { Text(text = "文件夹封面", maxLines = 1, overflow = TextOverflow.Ellipsis) },
               summary = {
                 Text(
                   text = if (folderCoverEnabled) {
@@ -1360,7 +1372,7 @@ object PreferencesScreen : Screen {
               onValueChange = { browserPreferences.networkGridTitleLines.set(it) },
               values = GridTitleLines.entries,
               valueToText = { AnnotatedString(it.label) },
-              title = { Text(text = "网格标题行数") },
+              title = { Text(text = "网格标题行数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
               summary = {
                 Text(
                   text = "网络浏览网格视图下，文件夹 / 图片 / 视频卡片标题最多显示" +
@@ -1388,7 +1400,7 @@ object PreferencesScreen : Screen {
             }
             PreferenceCard {
               Preference(
-                title = { Text(text = "图片缓存") },
+                title = { Text(text = "图片缓存", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "封面等图片的离线缓存（7 天有效）· 当前占用 " +
@@ -1453,7 +1465,7 @@ object PreferencesScreen : Screen {
 
             PreferenceCard {
               Preference(
-                title = { Text(text = stringResource(R.string.app_lock_title)) },
+                title = { Text(text = stringResource(R.string.app_lock_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   val text = if (appLockEnabled) {
                     val base = stringResource(R.string.app_lock_summary_on_format, methodLabel)
@@ -1563,7 +1575,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
-                title = { Text(text = stringResource(R.string.pref_advanced)) },
+                title = { Text(text = stringResource(R.string.pref_advanced), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(id = R.string.pref_advanced_summary),
@@ -1584,7 +1596,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
-                title = { Text(text = stringResource(id = R.string.pref_about_title)) },
+                title = { Text(text = stringResource(id = R.string.pref_about_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(id = R.string.pref_about_summary),
@@ -1639,7 +1651,7 @@ private fun RandomPlayCountDialog(
   var text by remember { mutableStateOf(current.toString()) }
   AlertDialog(
     onDismissRequest = onCancel,
-    title = { Text(text = "随机播放视频数量") },
+    title = { Text(text = "随机播放视频数量", maxLines = 1, overflow = TextOverflow.Ellipsis) },
     text = {
       Column {
         Text(
@@ -1691,7 +1703,7 @@ private fun IntervalInputDialog(
   var text by remember { mutableStateOf(current.toString()) }
   AlertDialog(
     onDismissRequest = onCancel,
-    title = { Text(text = title) },
+    title = { Text(text = title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
     text = {
       Column {
         Text(

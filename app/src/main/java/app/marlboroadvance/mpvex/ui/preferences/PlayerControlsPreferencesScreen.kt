@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
@@ -283,7 +284,7 @@ object PlayerControlsPreferencesScreen : Screen {
                     AnnotatedString("$value ms")
                   }
                 },
-                title = { Text(text = stringResource(R.string.pref_player_display_hide_player_control_time)) },
+                title = { Text(text = stringResource(R.string.pref_player_display_hide_player_control_time), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = if (isCustomTimeValue) {
@@ -299,7 +300,7 @@ object PlayerControlsPreferencesScreen : Screen {
             if (showCustomTimeDialog) {
               AlertDialog(
                 onDismissRequest = { showCustomTimeDialog = false },
-                title = { Text(text = stringResource(R.string.pref_player_display_hide_player_control_time)) },
+                title = { Text(text = stringResource(R.string.pref_player_display_hide_player_control_time), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 text = {
                   Column(
                     modifier = Modifier

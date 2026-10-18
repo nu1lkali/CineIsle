@@ -39,6 +39,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
@@ -134,7 +135,7 @@ object GesturePreferencesScreen : Screen {
                 AnnotatedString("${value}s")
               }
             },
-            title = { Text(text = stringResource(id = R.string.pref_player_double_tap_seek_duration)) },
+            title = { Text(text = stringResource(id = R.string.pref_player_double_tap_seek_duration), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
                 text = if (isCustomValue) {
@@ -152,7 +153,7 @@ object GesturePreferencesScreen : Screen {
           if (showCustomSeekDialog) {
             AlertDialog(
               onDismissRequest = { showCustomSeekDialog = false },
-              title = { Text(text = stringResource(id = R.string.pref_player_double_tap_seek_duration)) },
+              title = { Text(text = stringResource(id = R.string.pref_player_double_tap_seek_duration), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               text = {
                 Column {
                   Text(
@@ -205,7 +206,7 @@ object GesturePreferencesScreen : Screen {
             onValueChange = { preferences.doubleTapSeekAreaWidth.set(it) },
             values = seekAreaValues,
             valueToText = { AnnotatedString("${it}%") },
-            title = { Text(text = stringResource(R.string.i18n_double_tap_area_width)) },
+            title = { Text(text = stringResource(R.string.i18n_double_tap_area_width), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
                 text = "Current: ${doubleTapSeekAreaWidth}%",
@@ -229,7 +230,7 @@ object GesturePreferencesScreen : Screen {
             onValueChange = { preferences.leftSingleActionGesture.set(it) },
             values = SingleActionGesture.entries,
             valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
-            title = { Text(text = stringResource(R.string.pref_gesture_double_tap_left_title)) },
+            title = { Text(text = stringResource(R.string.pref_gesture_double_tap_left_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { Text(
               text = stringResource(leftDoubleTap.titleRes),
               color = MaterialTheme.colorScheme.outline,
@@ -285,7 +286,7 @@ object GesturePreferencesScreen : Screen {
             onValueChange = { preferences.rightSingleActionGesture.set(it) },
             values = SingleActionGesture.entries,
             valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
-            title = { Text(text = stringResource(R.string.pref_gesture_double_tap_right_title)) },
+            title = { Text(text = stringResource(R.string.pref_gesture_double_tap_right_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { Text(
               text = stringResource(rightDoubleTap.titleRes),
               color = MaterialTheme.colorScheme.outline,
@@ -373,7 +374,7 @@ object GesturePreferencesScreen : Screen {
             onValueChange = { preferences.mediaPreviousGesture.set(it) },
             values = SingleActionGesture.entries,
             valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
-            title = { Text(text = stringResource(R.string.pref_gesture_media_previous)) },
+            title = { Text(text = stringResource(R.string.pref_gesture_media_previous), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { Text(
               text = stringResource(mediaPreviousGesture.titleRes),
               color = MaterialTheme.colorScheme.outline,
@@ -399,7 +400,7 @@ object GesturePreferencesScreen : Screen {
                 SingleActionGesture.Custom,
               ),
             valueToText = { AnnotatedString(context.getString(it.titleRes)) },
-            title = { Text(text = stringResource(R.string.pref_gesture_media_play)) },
+            title = { Text(text = stringResource(R.string.pref_gesture_media_play), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { Text(
               text = stringResource(mediaPlayGesture.titleRes),
               color = MaterialTheme.colorScheme.outline,
@@ -420,7 +421,7 @@ object GesturePreferencesScreen : Screen {
             onValueChange = { preferences.mediaNextGesture.set(it) },
             values = SingleActionGesture.entries,
             valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
-            title = { Text(text = stringResource(R.string.pref_gesture_media_next)) },
+            title = { Text(text = stringResource(R.string.pref_gesture_media_next), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { Text(
               text = stringResource(mediaNextGesture.titleRes),
               color = MaterialTheme.colorScheme.outline,

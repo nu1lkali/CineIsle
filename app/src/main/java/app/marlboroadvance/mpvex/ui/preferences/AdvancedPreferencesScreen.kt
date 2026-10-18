@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastJoinToString
 import androidx.core.net.toUri
@@ -148,7 +149,7 @@ object AdvancedPreferencesScreen : Screen {
     if (showExportDialog && exportStats != null) {
       AlertDialog(
         onDismissRequest = { showExportDialog = false },
-        title = { Text("导出完成") },
+        title = { Text("导出完成", maxLines = 1, overflow = TextOverflow.Ellipsis) },
         text = {
           Column(
             modifier = Modifier
@@ -183,7 +184,7 @@ object AdvancedPreferencesScreen : Screen {
     if (showImportDialog && importStats != null) {
       AlertDialog(
         onDismissRequest = { showImportDialog = false },
-        title = { Text("导入完成") },
+        title = { Text("导入完成", maxLines = 1, overflow = TextOverflow.Ellipsis) },
         text = {
           Column(
             modifier = Modifier
@@ -292,7 +293,7 @@ object AdvancedPreferencesScreen : Screen {
           item {
             PreferenceCard {
               Preference(
-                title = { Text(text = stringResource(R.string.i18n_export_settings)) },
+                title = { Text(text = stringResource(R.string.i18n_export_settings), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(R.string.i18n_export_settings_hint),
@@ -314,7 +315,7 @@ object AdvancedPreferencesScreen : Screen {
               PreferenceDivider()
               
               Preference(
-                title = { Text(text = stringResource(R.string.i18n_import_settings)) },
+                title = { Text(text = stringResource(R.string.i18n_import_settings), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(R.string.i18n_import_settings_hint),
@@ -411,7 +412,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                title = { Text(stringResource(R.string.pref_advanced_mpv_conf_storage_location)) },
+                title = { Text(stringResource(R.string.pref_advanced_mpv_conf_storage_location), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   if (mpvConfStorageLocation.isNotBlank()) {
                     Text(
@@ -442,7 +443,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                title = { Text(stringResource(R.string.pref_advanced_mpv_conf)) },
+                title = { Text(stringResource(R.string.pref_advanced_mpv_conf), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   val firstLine = mpvConf.lines().firstOrNull()
                   if (firstLine != null && firstLine.isNotBlank()) {
@@ -471,7 +472,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                title = { Text(stringResource(R.string.pref_advanced_input_conf)) },
+                title = { Text(stringResource(R.string.pref_advanced_input_conf), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   val firstLine = inputConf.lines().firstOrNull()
                   if (firstLine != null && firstLine.isNotBlank()) {
@@ -514,7 +515,7 @@ object AdvancedPreferencesScreen : Screen {
                 },
                 value = enableRecentlyPlayed,
                 onValueChange = preferences.enableRecentlyPlayed::set,
-                title = { Text(stringResource(R.string.pref_advanced_enable_recently_played_title)) },
+                title = { Text(stringResource(R.string.pref_advanced_enable_recently_played_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     stringResource(R.string.pref_advanced_enable_recently_played_summary),
@@ -533,7 +534,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                title = { Text(stringResource(R.string.pref_advanced_clear_playback_history)) },
+                title = { Text(stringResource(R.string.pref_advanced_clear_playback_history), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 onClick = { isConfirmDialogShown = true },
               )
               
@@ -594,7 +595,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                title = { Text(text = stringResource(R.string.i18n_clear_config_cache)) },
+                title = { Text(text = stringResource(R.string.i18n_clear_config_cache), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(R.string.i18n_clear_config_cache_hint),
@@ -630,7 +631,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                title = { Text(text = stringResource(R.string.i18n_clear_thumb_cache)) },
+                title = { Text(text = stringResource(R.string.i18n_clear_thumb_cache), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = stringResource(R.string.i18n_clear_thumb_cache_hint),
@@ -675,7 +676,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                title = { Text(text = stringResource(id = R.string.pref_advanced_clear_fonts_cache)) },
+                title = { Text(text = stringResource(id = R.string.pref_advanced_clear_fonts_cache), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     text = stringResource(R.string.i18n_clear_font_cache_hint),
@@ -733,7 +734,7 @@ object AdvancedPreferencesScreen : Screen {
                 },
                 value = verboseLogging,
                 onValueChange = preferences.verboseLogging::set,
-                title = { Text(stringResource(R.string.pref_advanced_verbose_logging_title)) },
+                title = { Text(stringResource(R.string.pref_advanced_verbose_logging_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     stringResource(R.string.pref_advanced_verbose_logging_summary),
@@ -752,7 +753,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                title = { Text(stringResource(R.string.pref_advanced_dump_logs_title)) },
+                title = { Text(stringResource(R.string.pref_advanced_dump_logs_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
                     stringResource(R.string.pref_advanced_dump_logs_summary),

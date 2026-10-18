@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AudioChannels
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
@@ -101,7 +102,7 @@ object AudioPreferencesScreen : Screen {
             value = preferredLanguages,
             onValueChange = { preferences.preferredLanguages.set(it) },
             textToValue = { it },
-            title = { Text(stringResource(R.string.pref_preferred_languages)) },
+            title = { Text(stringResource(R.string.pref_preferred_languages), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
                 if (preferredLanguages.isNotBlank()) {
                   Text(
@@ -139,7 +140,7 @@ object AudioPreferencesScreen : Screen {
             },
             value = audioPitchCorrection,
             onValueChange = { preferences.audioPitchCorrection.set(it) },
-            title = { Text(stringResource(R.string.pref_audio_pitch_correction_title)) },
+            title = { Text(stringResource(R.string.pref_audio_pitch_correction_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { 
               Text(
                 stringResource(R.string.pref_audio_pitch_correction_summary),
@@ -160,7 +161,7 @@ object AudioPreferencesScreen : Screen {
             },
             value = volumeNormalization,
             onValueChange = { preferences.volumeNormalization.set(it) },
-            title = { Text(stringResource(R.string.pref_audio_volume_normalization_title)) },
+            title = { Text(stringResource(R.string.pref_audio_volume_normalization_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { 
               Text(
                 stringResource(R.string.pref_audio_volume_normalization_summary),
@@ -185,7 +186,7 @@ object AudioPreferencesScreen : Screen {
               onValueChange = { preferences.normalizationStrength.set(it) },
               values = VolumeNormalizationStrength.entries,
               valueToText = { value -> AnnotatedString(stringResource(value.title)) },
-              title = { Text(text = stringResource(id = R.string.pref_audio_normalization_strength)) },
+              title = { Text(text = stringResource(id = R.string.pref_audio_normalization_strength), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               summary = {
                 Text(
                   text = context.getString(normalizationStrength.title),
@@ -207,7 +208,7 @@ object AudioPreferencesScreen : Screen {
             },
             value = automaticBackgroundPlayback,
             onValueChange = { preferences.automaticBackgroundPlayback.set(it) },
-            title = { Text(stringResource(R.string.background_playback_title)) },
+            title = { Text(stringResource(R.string.background_playback_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
           )
           
           PreferenceDivider()
@@ -224,7 +225,7 @@ object AudioPreferencesScreen : Screen {
             onValueChange = { preferences.audioChannels.set(it) },
             values = AudioChannels.entries,
             valueToText = { value -> AnnotatedString(stringResource(value.title)) },
-            title = { Text(text = stringResource(id = R.string.pref_audio_channels)) },
+            title = { Text(text = stringResource(id = R.string.pref_audio_channels), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { 
               Text(
                 text = context.getString(audioChannel.title),
@@ -245,7 +246,7 @@ object AudioPreferencesScreen : Screen {
             },
             value = volumeBoostCap.toFloat(),
             onValueChange = { preferences.volumeBoostCap.set(it.toInt()) },
-            title = { Text(stringResource(R.string.pref_audio_volume_boost_cap)) },
+            title = { Text(stringResource(R.string.pref_audio_volume_boost_cap), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             valueRange = 0f..200f,
             summary = {
               Text(

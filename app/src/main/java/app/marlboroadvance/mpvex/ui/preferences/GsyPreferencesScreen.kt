@@ -50,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.GsyPreferences
 import app.marlboroadvance.mpvex.preferences.GsyFilterKind
@@ -153,7 +154,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = playbackEngine,
                 onValueChange = { playerPrefs.playbackEngine.set(it) },
-                title = { Text("默认播放内核") },
+                title = { Text("默认播放内核", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = listOf("MPV", "GSY"),
                 valueToText = { value ->
                   AnnotatedString(if (value == "GSY") "GSYVideoPlayer" else "mpv")
@@ -184,7 +185,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = longPressReverse,
                 onValueChange = playerPrefs.longPressReverseEngine::set,
-                title = { Text("长按用另一个内核播放") },
+                title = { Text("长按用另一个内核播放", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text =
@@ -214,7 +215,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = kernel,
                 onValueChange = { prefs.kernel.set(it) },
-                title = { Text("GSY 解码内核") },
+                title = { Text("GSY 解码内核", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = GsyKernelKind.entries,
                 valueToText = { AnnotatedString(it.title) },
                 summary = {
@@ -238,7 +239,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = hardwareDecode,
                 onValueChange = { prefs.hardwareDecode.set(it) },
-                title = { Text("硬解码（IJK MediaCodec）") },
+                title = { Text("硬解码（IJK MediaCodec）", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 GSYVideoType.enableMediaCodec()。硬解更省电，遇到花屏 / 黑屏时关掉可回软解",
@@ -260,7 +261,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = smartFallback,
                 onValueChange = { prefs.smartFallback.set(it) },
-                title = { Text("硬解失败自动回退软解") },
+                title = { Text("硬解失败自动回退软解", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 enableSmartMediaCodec()：仅在 IJK 硬解明确失败时重建一次软解",
@@ -282,7 +283,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = overrideExtension,
                 onValueChange = { prefs.overrideExtension.set(it) },
-                title = { Text("强制解封装器（Exo 内核）") },
+                title = { Text("强制解封装器（Exo 内核）", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = listOf("", "m3u8", "mpd", "ism"),
                 valueToText = { AnnotatedString(if (it.isEmpty()) "自动" else it) },
                 summary = {
@@ -311,7 +312,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = renderKind,
                 onValueChange = { prefs.renderKind.set(it) },
-                title = { Text("渲染方式") },
+                title = { Text("渲染方式", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = GsyRenderKind.entries,
                 valueToText = { AnnotatedString(it.title) },
                 summary = {
@@ -336,7 +337,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = showKind,
                 onValueChange = { prefs.showKind.set(it) },
-                title = { Text("显示比例") },
+                title = { Text("显示比例", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = GsyShowKind.entries,
                 valueToText = { AnnotatedString(it.title) },
                 summary = {
@@ -361,7 +362,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = filter,
                 onValueChange = { prefs.filter.set(it) },
-                title = { Text("画面滤镜（GL）") },
+                title = { Text("画面滤镜（GL）", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = GsyFilterKind.entries,
                 valueToText = { AnnotatedString(it.title) },
                 summary = {
@@ -391,7 +392,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = looping,
                 onValueChange = { prefs.looping.set(it) },
-                title = { Text("循环播放") },
+                title = { Text("循环播放", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { Text(text = "官方 setLooping", color = MaterialTheme.colorScheme.outline) },
               )
 
@@ -408,7 +409,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = defaultSpeed,
                 onValueChange = { prefs.defaultSpeed.set(it) },
-                title = { Text("起播倍速") },
+                title = { Text("起播倍速", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 2.5f, 3f),
                 valueToText = { AnnotatedString("${it}x") },
                 summary = {
@@ -432,7 +433,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = soundTouch,
                 onValueChange = { prefs.soundTouch.set(it) },
-                title = { Text("变速不变调") },
+                title = { Text("变速不变调", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setSoundTouch。倍速播放时保持音调（更吃性能）；System 内核不支持",
@@ -454,7 +455,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = cacheWithPlay,
                 onValueChange = { prefs.cacheWithPlay.set(it) },
-                title = { Text("边播边缓存") },
+                title = { Text("边播边缓存", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setUp 的 cacheWithPlay（ProxyCacheManager）。" +
@@ -477,7 +478,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = resumePosition,
                 onValueChange = { prefs.resumePosition.set(it) },
-                title = { Text("续播到上次位置") },
+                title = { Text("续播到上次位置", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setSeekOnStart。来源带播放进度时从该位置起播；带「从头播放」标记时忽略",
@@ -499,7 +500,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = closeAfterEnd,
                 onValueChange = { prefs.closeAfterEnd.set(it) },
-                title = { Text("播完自动退出播放页") },
+                title = { Text("播完自动退出播放页", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 VideoAllCallBack.onAutoComplete。关闭则停在最后一帧",
@@ -521,7 +522,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = muteOnStart,
                 onValueChange = { prefs.muteOnStart.set(it) },
-                title = { Text("进入即静音") },
+                title = { Text("进入即静音", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 GSYVideoManager.setNeedMute。播放页底部的玻璃「静音」按钮可随时切换",
@@ -548,7 +549,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = touchGesture,
                 onValueChange = { prefs.touchGesture.set(it) },
-                title = { Text("非全屏响应手势") },
+                title = { Text("非全屏响应手势", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setIsTouchWiget：左侧上下滑调亮度、右侧上下滑调音量、横滑拖动进度",
@@ -570,7 +571,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = touchGestureFull,
                 onValueChange = { prefs.touchGestureFull.set(it) },
-                title = { Text("全屏响应手势") },
+                title = { Text("全屏响应手势", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setIsTouchWigetFull。全屏时手势更顺手，一般保持开启",
@@ -592,7 +593,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = seekRatio,
                 onValueChange = { prefs.seekRatio.set(it) },
-                title = { Text("横滑 seek 灵敏度") },
+                title = { Text("横滑 seek 灵敏度", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 valueRange = 0.5f..3f,
                 summary = {
                   Text(
@@ -617,7 +618,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = wifiTip,
                 onValueChange = { prefs.wifiTip.set(it) },
-                title = { Text("移动网络提示") },
+                title = { Text("移动网络提示", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setNeedShowWifiTip：用流量播放前先问一句",
@@ -644,7 +645,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = dismiss,
                 onValueChange = { prefs.dismissControlTimeMs.set(it) },
-                title = { Text("控件自动隐藏") },
+                title = { Text("控件自动隐藏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = listOf(2000, 3000, 4000, 5000, 8000, 15000),
                 valueToText = { AnnotatedString("${it / 1000} 秒") },
                 summary = {
@@ -668,7 +669,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = needLockFull,
                 onValueChange = { prefs.needLockFull.set(it) },
-                title = { Text("全屏显示屏幕锁") },
+                title = { Text("全屏显示屏幕锁", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setNeedLockFull。全屏时右侧出现锁按钮，防止误触",
@@ -690,7 +691,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = showDragText,
                 onValueChange = { prefs.showDragProgressText.set(it) },
-                title = { Text("拖动进度条时显示目标时间") },
+                title = { Text("拖动进度条时显示目标时间", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setShowDragProgressTextOnSeekBar",
@@ -712,7 +713,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = showPauseCover,
                 onValueChange = { prefs.showPauseCover.set(it) },
-                title = { Text("暂停保留最后一帧") },
+                title = { Text("暂停保留最后一帧", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setShowPauseCover。关掉后暂停画面可能变黑",
@@ -739,7 +740,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = pipAutoEnter,
                 onValueChange = { prefs.pipAutoEnter.set(it) },
-                title = { Text("按 Home 键自动进小窗") },
+                title = { Text("按 Home 键自动进小窗", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setAutoEnterEnabled（Android 12+ 才生效）。" +
@@ -768,7 +769,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = lockLand,
                 onValueChange = { prefs.lockLand.set(it) },
-                title = { Text("全屏锁横屏") },
+                title = { Text("全屏锁横屏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { Text(text = "官方 setLockLand", color = MaterialTheme.colorScheme.outline) },
               )
 
@@ -785,7 +786,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = onlyRotateLand,
                 onValueChange = { prefs.onlyRotateLand.set(it) },
-                title = { Text("只允许横屏方向变化") },
+                title = { Text("只允许横屏方向变化", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setOnlyRotateLand：全屏时只在左右横屏之间翻转，不会掉回竖屏",
@@ -807,7 +808,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = autoFullWithSize,
                 onValueChange = { prefs.autoFullWithSize.set(it) },
-                title = { Text("竖屏视频自动竖屏全屏") },
+                title = { Text("竖屏视频自动竖屏全屏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setAutoFullWithSize：竖拍的片子点全屏不会硬转成横屏",
@@ -829,7 +830,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = rotateWithSystem,
                 onValueChange = { prefs.rotateWithSystem.set(it) },
-                title = { Text("跟随系统「自动旋转」") },
+                title = { Text("跟随系统「自动旋转」", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "关闭（默认）：播放页内始终响应重力感应，转手机就能转屏；" +
@@ -852,7 +853,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = fullAnimation,
                 onValueChange = { prefs.showFullAnimation.set(it) },
-                title = { Text("全屏过渡动画") },
+                title = { Text("全屏过渡动画", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setShowFullAnimation。用 SurfaceView 渲染时动画会失效，属正常",
@@ -874,7 +875,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = fullHideStatusBar,
                 onValueChange = { prefs.fullHideStatusBar.set(it) },
-                title = { Text("全屏隐藏状态栏") },
+                title = { Text("全屏隐藏状态栏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setFullHideStatusBar",
@@ -896,7 +897,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = hideKey,
                 onValueChange = { prefs.hideKey.set(it) },
-                title = { Text("全屏隐藏虚拟按键") },
+                title = { Text("全屏隐藏虚拟按键", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "官方 setHideKey。全屏时把三大金刚 / 手势条隐掉，画面更完整",
@@ -923,7 +924,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = showStatusBar,
                 onValueChange = { prefs.showSystemStatusBar.set(it) },
-                title = { Text("显示系统状态栏") },
+                title = { Text("显示系统状态栏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "开着时顶栏会落在状态栏下方（避让刘海 / 挖孔）；关掉则顶栏贴屏幕上沿",
@@ -945,7 +946,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = showNavBar,
                 onValueChange = { prefs.showSystemNavigationBar.set(it) },
-                title = { Text("显示系统导航栏") },
+                title = { Text("显示系统导航栏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "开着时底部控件条会抬到手势条上方，避免进度条被压住",

@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
@@ -135,7 +136,7 @@ object DislikePreferencesScreen : Screen {
             },
             value = showInDetailMenu,
             onValueChange = browserPreferences.dislikeShowInDetailMenu::set,
-            title = { Text("详情页菜单项") },
+            title = { Text("详情页菜单项", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
                 "在媒体详情页的「更多」菜单里显示「标记为不喜欢」。",
@@ -175,7 +176,7 @@ object DislikePreferencesScreen : Screen {
                 pendingTurnOff = true
               }
             },
-            title = { Text("播放器按钮") },
+            title = { Text("播放器按钮", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
                 "在播放器控制栏显示「不喜欢」按钮。关闭会同时从布局中移除它。",
@@ -194,7 +195,7 @@ object DislikePreferencesScreen : Screen {
             },
             value = showInFeed,
             onValueChange = browserPreferences.dislikeShowInFeed::set,
-            title = { Text("视界流按钮") },
+            title = { Text("视界流按钮", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
                 "在视界流（竖屏连播）右侧工具栏显示「不喜欢」按钮。",
@@ -214,7 +215,7 @@ object DislikePreferencesScreen : Screen {
                 tint = MaterialTheme.colorScheme.primary,
               )
             },
-            title = { Text("不喜欢视频管理") },
+            title = { Text("不喜欢视频管理", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
                 "查看已标记的条目、取消标记或删除。",

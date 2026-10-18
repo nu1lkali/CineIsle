@@ -725,7 +725,16 @@ android {
     //     Icons.Outlined.X（tint = colorScheme.primary，与既有条目同风格），图标名
     //     逐一对照 material-icons-extended/core 1.7.8 AAR 验证存在性后注入，共
     //     152 条；注入前先确认无位置参数调用（icon 是命名参数）。
-    versionCode = 101
+    // 102（修复轮，versionName 仍为 1.5.10）：设置页标题单行化 + 补充图标 + 文案修正。
+    //     ① 加图标后长标题（"下载完成后清除服务端播放进度" 13 字、"进入照片浏览器
+    //     自动播放幻灯片" 13 字）因可用宽度变窄而折行 ⇒ 给全部 11 个设置页的偏好行
+    //     title Text 统一加 `maxLines = 1, overflow = TextOverflow.Ellipsis`（Android
+    //     标准单行列表项写法；正常字号下完整显示，超大字号才省略，绝不折行）。
+    //     ② 「推荐算法」此前是自定义 Column（非库组件），漏加图标 ⇒ 补 AutoAwesome
+    //     （primary 着色，与其它条目一致）。
+    //     ③ 「间隔小时数」改名为「合成封面图间隔小时数」（偏好项与输入框标题同步，
+    //     该项是随机封面图的重新合成间隔，原命名指向不明）。
+    versionCode = 102
     versionName = "1.5.10"
 
     vectorDrawables {

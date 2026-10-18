@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
@@ -119,7 +120,7 @@ object DecoderPreferencesScreen : Screen {
                 onValueChange = { preferences.profile.set(it.value) },
                 values = MPVProfile.entries,
                 valueToText = { value -> AnnotatedString(stringResource(value.displayNameRes)) },
-                title = { Text(stringResource(R.string.pref_decoder_profile_title)) },
+                title = { Text(stringResource(R.string.pref_decoder_profile_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     stringResource(currentProfile.displayNameRes),
@@ -143,7 +144,7 @@ object DecoderPreferencesScreen : Screen {
                 onValueChange = {
                   preferences.tryHWDecoding.set(it)
                 },
-                title = { Text(stringResource(R.string.pref_decoder_try_hw_dec_title)) },
+                title = { Text(stringResource(R.string.pref_decoder_try_hw_dec_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
 
               PreferenceDivider()
@@ -169,7 +170,7 @@ object DecoderPreferencesScreen : Screen {
                         }
                     }
                 },
-                title = { Text(stringResource(R.string.pref_decoder_gpu_next_title)) },
+                title = { Text(stringResource(R.string.pref_decoder_gpu_next_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     stringResource(R.string.pref_decoder_gpu_next_summary),
@@ -181,7 +182,7 @@ object DecoderPreferencesScreen : Screen {
               if (showGpuNextWarning) {
                   AlertDialog(
                       onDismissRequest = { showGpuNextWarning = false },
-                      title = { Text(stringResource(R.string.pref_decoder_gpu_next_enable_title)) },
+                      title = { Text(stringResource(R.string.pref_decoder_gpu_next_enable_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                       text = {
                           Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                               Text(stringResource(R.string.pref_decoder_gpu_next_warning))
@@ -240,7 +241,7 @@ object DecoderPreferencesScreen : Screen {
                 value = hdrEnabled,
                 onValueChange = { preferences.hdrEnabled.set(it) },
                 enabled = gpuNext,
-                title = { Text(stringResource(R.string.pref_decoder_hdr_title)) },
+                title = { Text(stringResource(R.string.pref_decoder_hdr_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     if (gpuNext) {
@@ -280,7 +281,7 @@ object DecoderPreferencesScreen : Screen {
                   }
                 },
                 enabled = isVulkanSupported,
-                title = { Text(stringResource(R.string.pref_decoder_vulkan_title) + " (Experimental)") },
+                title = { Text(stringResource(R.string.pref_decoder_vulkan_title) + " (Experimental)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     stringResource(
@@ -308,7 +309,7 @@ object DecoderPreferencesScreen : Screen {
                 onValueChange = { preferences.debanding.set(it) },
                 values = Debanding.entries,
                 valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
-                title = { Text(stringResource(R.string.pref_decoder_debanding_title)) },
+                title = { Text(stringResource(R.string.pref_decoder_debanding_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     debanding.name,
@@ -332,7 +333,7 @@ object DecoderPreferencesScreen : Screen {
                 onValueChange = {
                   preferences.useYUV420P.set(it)
                 },
-                title = { Text(stringResource(R.string.pref_decoder_yuv420p_title)) },
+                title = { Text(stringResource(R.string.pref_decoder_yuv420p_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     stringResource(R.string.pref_decoder_yuv420p_summary),
@@ -359,7 +360,7 @@ object DecoderPreferencesScreen : Screen {
                         preferences.gpuNext.set(false)
                     }
                 },
-                title = { Text(stringResource(R.string.pref_anime4k_title)) },
+                title = { Text(stringResource(R.string.pref_anime4k_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Column {
                     Text(

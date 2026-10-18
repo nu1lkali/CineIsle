@@ -161,6 +161,7 @@
 > 按版本倒序，当前版本 **v1.5.10**；历史安装包见 [Releases](https://github.com/nu1lkali/CineIsle/releases)。
 
 ### v1.5.10
+- **设置页标题单行化 + 补图标 + 文案**（`ui/preferences`）：补齐图标后，长标题（如「下载完成后清除服务端播放进度」「进入照片浏览器自动播放幻灯片」）因图标挤占宽度而折成两行 ⇒ 给 11 个设置页全部偏好行 title 加 `maxLines = 1, overflow = TextOverflow.Ellipsis`（Android 标准单行列表项写法，正常字号完整显示、仅超大字号才省略）；「推荐算法」此前是自定义 Column（非库组件）漏加图标，补 `AutoAwesome`；「间隔小时数」改名为「合成封面图间隔小时数」（偏好项与输入框标题同步，该值是随机封面图重新合成间隔）
 - **设置页图标补齐**（`ui/preferences`）：聚合库入口加了图标后其他设置条目仍「光板」一块，现 11 个设置页凡无图标的偏好条目统一补全（共 152 条）—— me.zhanghai.compose.preference 2.2.0 的 Preference / SwitchPreference / ListPreference / SliderPreference / TextFieldPreference / TwoTargetIconButtonPreference 都带 icon 槽位，图标用 `Icons.Outlined.X` + `colorScheme.primary` 着色，风格与既有条目完全一致；每个图标名都对照 material-icons-extended / core 1.7.8 的实际 AAR 验证过存在性
 - **聚合库（新功能）**（`database` · `domain/emby` · `ui/browser/emby` · `ui/preferences`）：把同一个服务器下多个**同类型**媒体库（如多个电影库）合并成一个本地视图。首页媒体库行末尾出现聚合库卡片（Layers 图标 + 「N 库聚合」角标，与真实库明显错开），点进去是一个归并网格；配置入口在设置里
 - **深翻页不重不漏**（`domain/emby`）：每个成员库一条独立泳道（游标 + 本地缓冲），按排序语义从各泳道队头挑「当前最该出现」的条目接上，Id 做 tiebreak —— 滑到第 300 条时不会退回「每个库的前几条」拼重复片段

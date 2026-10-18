@@ -28,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
@@ -145,7 +146,7 @@ object AppearancePreferencesScreen : Screen {
                                 onValueChange = { newValue ->
                                     preferences.amoledMode.set(newValue)
                                 },
-                                title = { Text(text = stringResource(id = R.string.pref_appearance_amoled_mode_title)) },
+                                title = { Text(text = stringResource(id = R.string.pref_appearance_amoled_mode_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 summary = {
                                     Text(
                                         text = stringResource(id = R.string.pref_appearance_amoled_mode_summary),
@@ -226,7 +227,7 @@ object AppearancePreferencesScreen : Screen {
                                 },
                                 value = unplayedOldVideoDays.toFloat(),
                                 onValueChange = { preferences.unplayedOldVideoDays.set(it.roundToInt()) },
-                                title = { Text(text = stringResource(id = R.string.pref_appearance_unplayed_old_video_days_title)) },
+                                title = { Text(text = stringResource(id = R.string.pref_appearance_unplayed_old_video_days_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 valueRange = 1f..30f,
                                 summary = {
                                     Text(
@@ -317,7 +318,7 @@ object AppearancePreferencesScreen : Screen {
                                 onValueChange = { browserPreferences.watchedThreshold.set(it.roundToInt()) },
                                 sliderValue = watchedThreshold.toFloat(),
                                 onSliderValueChange = { browserPreferences.watchedThreshold.set(it.roundToInt()) },
-                                title = { Text(text = stringResource(id = R.string.pref_appearance_watched_threshold_title)) },
+                                title = { Text(text = stringResource(id = R.string.pref_appearance_watched_threshold_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 valueRange = 50f..100f,
                                 valueSteps = 9,
                                 summary = {
@@ -365,7 +366,7 @@ object AppearancePreferencesScreen : Screen {
                     item {
                         PreferenceCard {
                             Preference(
-                                title = { Text(text = stringResource(id = R.string.appearance_deep_title)) },
+                                title = { Text(text = stringResource(id = R.string.appearance_deep_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 summary = {
                                     Text(
                                         text = stringResource(id = R.string.appearance_icon_title) + " · " +

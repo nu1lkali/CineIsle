@@ -42,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
@@ -177,7 +178,7 @@ object SubtitlesPreferencesScreen : Screen {
                 value = preferredLanguages,
                 onValueChange = preferences.preferredLanguages::set,
                 textToValue = { it },
-                title = { Text(stringResource(R.string.pref_preferred_languages)) },
+                title = { Text(stringResource(R.string.pref_preferred_languages), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   if (preferredLanguages.isNotBlank()) {
                     Text(
@@ -217,7 +218,7 @@ object SubtitlesPreferencesScreen : Screen {
                 },
                 value = autoload,
                 onValueChange = { preferences.autoloadMatchingSubtitles.set(it) },
-                title = { Text(stringResource(R.string.pref_subtitles_autoload_title)) },
+                title = { Text(stringResource(R.string.pref_subtitles_autoload_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     stringResource(R.string.pref_subtitles_autoload_summary),
@@ -239,7 +240,7 @@ object SubtitlesPreferencesScreen : Screen {
                 },
                 value = overrideAss,
                 onValueChange = { preferences.overrideAssSubs.set(it) },
-                title = { Text(stringResource(R.string.player_sheets_sub_override_ass)) },
+                title = { Text(stringResource(R.string.player_sheets_sub_override_ass), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     stringResource(R.string.player_sheets_sub_override_ass_subtitle),
@@ -261,7 +262,7 @@ object SubtitlesPreferencesScreen : Screen {
                 },
                 value = followPicture,
                 onValueChange = { preferences.followPictureScale.set(it) },
-                title = { Text(stringResource(R.string.player_sheets_sub_follow_picture)) },
+                title = { Text(stringResource(R.string.player_sheets_sub_follow_picture), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     stringResource(R.string.player_sheets_sub_follow_picture_summary),
