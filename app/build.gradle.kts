@@ -708,8 +708,16 @@ android {
     //     scrollToItem(0)。修法：滚动 state 提升到页面层，组合销毁时按「是否还在
     //     返回栈」记位置（被 pop 不记），返回后等条目落位显式 scrollToItem 恢复；
     //     排序回顶加「已消费 tick」比对，只有真的动过排序才回顶。
-    versionCode = 99
-    versionName = "1.5.9"
+    // 100（功能轮，versionName 涨到 1.5.10）：「聚合库」——把同一个服务器下多个
+    //     同类型媒体库合并成一个本地视图（首页出卡片，点进去是一个归并网格）。
+    //     形态调研结论：Emby 服务端只有「建带多路径的新物理库」（写服务器目录结构、
+    //     需管理员、单 CollectionType），没有「合并库」概念 ⇒ 做成本 App 内的本地
+    //     聚合：Room 存定义（按 serverId 分桶，多服务器不串），AggregateItemPager
+    //     给每个成员库开一条泳道（独立游标 + 缓冲），按 SortBy 语义比较取队头接上，
+    //     Id 做 tiebreak ⇒ 深翻页不重不漏；随机模式固定种子各库混排 = 换一批。
+    //     配置入口在设置里；管理页按当前服务器分桶并显示在管哪台。
+    versionCode = 100
+    versionName = "1.5.10"
 
     vectorDrawables {
       useSupportLibrary = true

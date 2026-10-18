@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Gesture
 import androidx.compose.material.icons.outlined.Grid3x3
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Palette
@@ -78,6 +79,7 @@ import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.PersonMergeScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.aggregate.EmbyAggregateLibraryManageScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarAlgorithm
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
 import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoSaver
@@ -451,6 +453,30 @@ object PreferencesScreen : Screen {
             val resolveDirectLink by browserPreferences.embyResolveDirectLink.collectAsState()
             val clearProgressOnDownload by browserPreferences.embyClearProgressOnDownload.collectAsState()
             PreferenceCard {
+              // ── 聚合库（配置入口）────────────────────────────────────
+              // 把多个同类型媒体库合并成一个本地视图。新建 / 编辑 / 删除都在独立页，
+              // 这里只做入口 —— 与播放列表、合集同一套分工：设置里给门，内容在专门页面管。
+              // 多服务器 / 多用户：管理页按「当前服务器」分桶，标题下会显示在管哪台。
+              Preference(
+                title = { Text(text = "聚合库") },
+                summary = {
+                  Text(
+                    text = "把多个同类型媒体库合并成一个视图；只在本 App 内生效，不修改服务器",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.Layers,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = { backstack.add(EmbyAggregateLibraryManageScreen()) },
+              )
+
+              PreferenceDivider()
+
               // 卡片右上角心形快捷收藏：点一下即可收藏 / 取消收藏
               SwitchPreference(
                 value = quickFavorite,

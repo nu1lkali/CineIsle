@@ -740,6 +740,14 @@ fun EmbyLibraryCard(
   icon: ImageVector,
   /** 是否已置顶：右上角钉一枚小图钉。置顶的库固定排在首页最前面 */
   pinned: Boolean = false,
+  /**
+   * 跟在库名后面的小角标（如聚合库的「3 库聚合」）。
+   *
+   * 与 [itemCount] 的分工：itemCount 是服务端口径的「N 项」，角标是**种类标识** ——
+   * 「这张卡不是普通媒体库」必须一眼可辨，光靠图标不够（用户明确要求过）。
+   * null = 不显示。
+   */
+  badgeText: String? = null,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
   onLongClick: ((Offset) -> Unit)? = null,
@@ -814,6 +822,14 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
                 text = "  $itemCount 项",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.White.copy(alpha = 0.8f),
+                maxLines = 1,
+              )
+            }
+            if (!badgeText.isNullOrBlank()) {
+              Text(
+                text = "  $badgeText",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White,
                 maxLines = 1,
               )
             }

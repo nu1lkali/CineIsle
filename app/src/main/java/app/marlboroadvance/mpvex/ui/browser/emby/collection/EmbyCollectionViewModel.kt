@@ -33,13 +33,23 @@ import org.koin.java.KoinJavaComponent.inject
  * 关键差异在最后一行：合集**无法排序**，所以本类没有 `moveEntry`，
  * UI 也就没有拖拽手柄 —— 不是没做，是服务端做不到。
  *
- * ## 虚拟库（Virtual Folder）为什么不在这里
+ * ## 「合并多个媒体库」为什么不在这里
  *
- * 需求原文是「可以合并多个媒体库为一个虚拟库」。**Emby REST API 没有虚拟库的写接口**：
- * 它只能在网页端 Dashboard → 库里配置（写进 `library.db` 的配置表），
- * 没有对应的 `/VirtualFolders` POST/DELETE 能改结构。
- * 所以本类只做**合集**，并在设置里明确告诉用户虚拟库要去哪配 ——
- * 宁可说清楚做不了，也别做一个「看起来能合并、实际只改了本地显示顺序」的假功能。
+ * 需求原文是「可以合并多个媒体库为一个虚拟库」。这件事**已经做了**，
+ * 但不是在这个类里，也不走服务端 —— 见
+ * [app.marlboroadvance.mpvex.ui.browser.emby.aggregate.EmbyAggregateLibraryScreen]：
+ * 它把多个同类型媒体库在**本 App 内**聚合成一个视图（本地 Room 定义 +
+ * 多泳道游标归并），不写服务器、即时生效、普通用户密钥即可。
+ *
+ * 为什么当年没走服务端路线（2026-10-04 的旧结论，**其中一半是错的**，记在这里以免再被误导）：
+ * - ~~「Emby REST API 没有虚拟库的写接口」~~ —— **错**。`POST /Library/VirtualFolders`
+ *   建库、`.../Delete` / `.../Paths` / `.../LibraryOptions` / `.../Name` 管理都在
+ *   （`LibraryStructureService`，2026-10-18 联网核实）。
+ * - 「服务端没有『合并库』原生概念」 —— **对**。那些接口只能建一个**带路径并集的新
+ *   物理库**：单 CollectionType、要管理员密钥、动的是服务器目录结构、还要重新刮削。
+ *
+ * 两害相权，本地聚合是唯一「不动服务器、还能混着看、普通密钥就够」的形态，
+ * 所以合并需求归聚合库，合集归这里，各自安好。
  */
 class EmbyCollectionViewModel(application: Application) : AndroidViewModel(application) {
 

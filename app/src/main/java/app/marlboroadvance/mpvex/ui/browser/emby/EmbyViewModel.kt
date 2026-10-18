@@ -111,6 +111,10 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   private val playerPreferences by inject<PlayerPreferences>(PlayerPreferences::class.java)
   private val browserPreferences by inject<BrowserPreferences>(BrowserPreferences::class.java)
   private val displayPrefsSync by inject<EmbyDisplayPrefsSync>(EmbyDisplayPrefsSync::class.java)
+  // 「聚合库」：删服务器时要级联清掉这台服务器上的聚合库（成员库 Id 全都失效了）
+  private val aggregateLibraryRepository by inject<app.marlboroadvance.mpvex.database.repository.AggregateLibraryRepository>(
+    app.marlboroadvance.mpvex.database.repository.AggregateLibraryRepository::class.java,
+  )
 
   val servers: StateFlow<List<EmbyServer>> = repository.servers
     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -179,6 +183,9 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
 
   fun deleteServer(server: EmbyServer) {
     viewModelScope.launch {
+      // 先级联清聚合库，再删服务器本身：反过来的话中途失败会留下
+      // 「服务器没了、聚合库还在」的孤儿行（首页 observe 不到，但管理页翻得出来）
+      runCatching { aggregateLibraryRepository.deleteByServer(server.id) }
       runCatching { repository.deleteServer(server) }
         .onFailure { _error.value = it.message ?: "删除失败" }
         .onSuccess {

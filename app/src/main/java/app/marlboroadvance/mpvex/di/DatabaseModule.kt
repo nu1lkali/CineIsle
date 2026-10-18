@@ -793,6 +793,45 @@ val MIGRATION_16_17 = object : Migration(16, 17) {
 }
 
 
+/**
+ * v17 → v18：新建「聚合库」表 `aggregate_libraries`（清单：本地聚合多个同类型媒体库）。
+ *
+ * 纯新增表、不动任何既有列 ⇒ 老用户的服务器配置 / 播放进度 / 收藏原样保留。
+ * ⚠️ 列定义必须与 [app.marlboroadvance.mpvex.database.entities.AggregateLibraryEntity]
+ * 逐字段一致（Room 启动时会校验 schema，差一个默认值都会抛异常）。
+ * Room 把 Kotlin 可空引用存成可空列，所以 `collectionType` 一列不带 NOT NULL。
+ */
+val MIGRATION_17_18 = object : Migration(17, 18) {
+  override fun migrate(db: SupportSQLiteDatabase) {
+    try {
+      android.util.Log.d("Migration_17_18", "Creating aggregate_libraries table")
+      db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `aggregate_libraries` (
+          `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          `serverId` INTEGER NOT NULL,
+          `name` TEXT NOT NULL,
+          `memberLibraryIds` TEXT NOT NULL,
+          `collectionType` TEXT,
+          `sortIndex` INTEGER NOT NULL,
+          `createdAt` INTEGER NOT NULL
+        )
+        """.trimIndent(),
+      )
+      db.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_aggregate_libraries_serverId` " +
+          "ON `aggregate_libraries` (`serverId`)"
+      )
+
+      android.util.Log.d("Migration_17_18", "Migration completed successfully")
+    } catch (e: Exception) {
+      android.util.Log.e("Migration_17_18", "Migration failed", e)
+      throw e
+    }
+  }
+}
+
+
 val DatabaseModule =
   module {
     single<Json> {
@@ -807,7 +846,7 @@ val DatabaseModule =
       Room
         .databaseBuilder(context, MpvExDatabase::class.java, "mpvex.db")
         .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-        // ⚠️ 迁移链必须**逐段连续**（1→2→…→17），少一段就会退化成
+        // ⚠️ 迁移链必须**逐段连续**（1→2→…→18），少一段就会退化成
         // fallbackToDestructiveMigration = 整库删表重建（服务器配置 / 播放列表 / 播放进度全丢）。
         // 任何一次改 @Database version 都要在这里补一对新的 Migration，别指望 Room 兜底。
         .addMigrations(
@@ -827,6 +866,7 @@ val DatabaseModule =
           MIGRATION_14_15,
           MIGRATION_15_16,
           MIGRATION_16_17,
+          MIGRATION_17_18,
         )
         .fallbackToDestructiveMigration(true) // 最后兜底：迁移链有洞时至少不崩 App
         .build()
@@ -896,6 +936,14 @@ val DatabaseModule =
     // 表现为"标记了立刻又变回未标记"。单例是这套"快照即真相"设计的前提。
     single { get<MpvExDatabase>().dislikeDao() }
     single { app.marlboroadvance.mpvex.domain.dislike.DislikeRepository(dao = get()) }
+
+    // 「聚合库」：定义只有一份（管理页 / 首页 / 聚合页共用），DAO 与仓库都单例
+    single { get<MpvExDatabase>().aggregateLibraryDao() }
+    single {
+      app.marlboroadvance.mpvex.database.repository.AggregateLibraryRepository(
+        dao = get(),
+      )
+    }
 
     // 清单 4.2：离线内容仓库（纯 Room 读，断网可用）
     single { app.marlboroadvance.mpvex.domain.emby.DownloadedMediaRepository(dao = get()) }

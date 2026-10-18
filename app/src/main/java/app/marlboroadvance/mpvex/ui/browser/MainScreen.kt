@@ -331,6 +331,14 @@ private fun EmbyHomeRoute() {
     onOpenLiveTv = {
       backStack.add(app.marlboroadvance.mpvex.ui.browser.emby.EmbyLiveTvScreen)
     },
+    // 「聚合库」卡片：进多库合并视图（数据源与归属都在 entity.serverId 上）
+    onOpenAggregate = { entity ->
+      backStack.add(
+        app.marlboroadvance.mpvex.ui.browser.emby.aggregate.EmbyAggregateLibraryScreen(
+          aggregateId = entity.id,
+        ),
+      )
+    },
   )
 }
 

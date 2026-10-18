@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Search
@@ -64,6 +65,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.database.repository.AggregateLibraryRepository
 import app.marlboroadvance.mpvex.database.repository.SearchHistoryRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
@@ -143,6 +145,13 @@ fun EmbyHomeScreen(
    * 同样只传回调、不自己 push：导航栈在 [MainScreen] 手里。
    */
   onOpenLiveTv: () -> Unit = {},
+  /**
+   * 打开一个「聚合库」（多个同类型媒体库的本地合并视图）。
+   *
+   * 只传回调不自己 push，与 onOpenPlaylists / onOpenCollections 同一套做法 ——
+   * 导航栈在 [MainScreen] 手里，首页拿不到。
+   */
+  onOpenAggregate: (app.marlboroadvance.mpvex.database.entities.AggregateLibraryEntity) -> Unit = {},
 ) {
   val context = LocalContext.current
   val viewModel: EmbyViewModel = viewModel(
@@ -221,6 +230,16 @@ fun EmbyHomeScreen(
   var orderDialogShown by remember { mutableStateOf(false) }
   // 长按顶栏 Emby 图标弹出的「媒体库显示 / 隐藏」小菜单
   var visibilityMenuExpanded by remember { mutableStateOf(false) }
+
+  // 「聚合库」：本地定义（Room），**按当前服务器分桶**。
+  // ⚠️ 多服务器 / 多用户模式下 serverId 就是隔离键：同一台主机上两个用户是两行
+  //   EmbyServer 记录（各自 token、各自可见库），聚合库也必须各建各的。
+  //   所以这里 observe 的键是 serverId，切服务器 / 切用户时各自拿到自己那份，
+  //   绝不会把 A 用户的聚合库显示到 B 用户首页上。
+  val aggregateRepository = koinInject<AggregateLibraryRepository>()
+  val aggregates by remember(serverId) {
+    aggregateRepository.observeByServer(serverId)
+  }.collectAsState(initial = emptyList())
 
   // 新出现的媒体库（服务端新加了库 / 换了服务器）补一个序号，落在队尾。
   // 只在真的缺号时才写盘，避免每次重组都往偏好里塞一遍同样的值。
@@ -791,7 +810,9 @@ fun EmbyHomeScreen(
           ) {
             // ⚠️ 用 visibleLibraries 而不是 libraries：被长按菜单隐藏掉的库
             //   连「媒体库」这个区块标题一起收掉（全隐藏时整块消失是预期行为）。
-            if (visibleLibraries.isNotEmpty()) {
+            // ⚠️ 聚合库不参与「隐藏」：它是本 App 本地的定义，没有服务端扫描之类的
+            //   副作用，也没有「隐藏一个库」的用户心智；要收起来去管理页删。
+            if (visibleLibraries.isNotEmpty() || aggregates.isNotEmpty()) {
               item {
                 EmbySectionHeader(
                   title = "媒体库",
@@ -814,6 +835,25 @@ fun EmbyHomeScreen(
                       // 长按 = 弹出操作框（扫描媒体库等）。扫描是作用在服务器上的异步任务、
                       // 发出去撤不回来，所以不直接执行，先让用户确认
                       onLongClick = { offset -> scanTarget = library; menuAnchor = offset },
+                    )
+                  }
+                  // 聚合库卡片：与真实库并列，排在其后。
+                  // 图标用 Layers（与真实库的 PhotoLibrary / Tv 明显错开），
+                  // 角标写「N 库聚合」—— 用户明确要求「一眼能看出这是聚合库」。
+                  items(aggregates, key = { "aggregate-${it.id}" }) { aggregate ->
+                    val memberCount =
+                      AggregateLibraryRepository.membersOf(aggregate.memberLibraryIds).size
+                    EmbyLibraryCard(
+                      name = aggregate.name,
+                      // 不传 itemCount：那是服务端口径的「N 项」，聚合库的总数要翻完
+                      // 所有成员库才知道，摆个错的上去比不摆更糟
+                      itemCount = null,
+                      // 没有封面可拉（它是多个库的合并，没有属于自己的主图），
+                      // EmbyImage 会拿 icon 当占位
+                      imageUrl = null,
+                      icon = Icons.Default.Layers,
+                      badgeText = "$memberCount 库聚合",
+                      onClick = { onOpenAggregate(aggregate) },
                     )
                   }
                 }
@@ -912,7 +952,11 @@ fun EmbyHomeScreen(
               }
             }
 
-            if (libraries.isEmpty() && resumeItems.isEmpty() && latestItems.isEmpty() && !isLoading) {
+            // 聚合库也要算进「有内容」：本地建了聚合库、服务端真实库却为空时，
+            // 摆一句「还没有可显示的媒体」在聚合卡片下面很违和
+            if (libraries.isEmpty() && aggregates.isEmpty() &&
+              resumeItems.isEmpty() && latestItems.isEmpty() && !isLoading
+            ) {
               item {
                 EmbyEmptyState(
                   message = "这个服务器上还没有可显示的媒体",
