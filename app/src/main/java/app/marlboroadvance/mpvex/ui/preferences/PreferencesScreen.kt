@@ -686,7 +686,7 @@ object PreferencesScreen : Screen {
                 // 「连播列表」是「猜你喜欢」页里那个区块的标题（见EmbyDiscoverScreen），
                 // 别写成「即混」—— 那是 Emby 的 InstantMix 接口名，
                 // 玩家在界面上搜不到这个词，只会觉得说的是别的地方。
-                title = { Text(text = "连播列表每行放几个", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = { Text(text = "连播列表每行数量", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 valueRange = 2f..6f,
                 valueSteps = 3,
                 summary = {
@@ -749,7 +749,7 @@ object PreferencesScreen : Screen {
                 },
                 value = clearProgressOnDownload,
                 onValueChange = { browserPreferences.embyClearProgressOnDownload.set(it) },
-                title = { Text(text = "下载完成后清除服务端播放进度", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = { Text(text = "下载后清除播放进度", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
                     text = "下载完一条就把服务器上这条的续播位置清零，「继续观看」不再挂着它。" +
@@ -975,37 +975,35 @@ object PreferencesScreen : Screen {
               // 只有选过自定义目录才给「恢复默认」—— 默认状态下这一项没有意义，
               // 常驻只会让人以为「默认」是个需要主动设置的东西。
               if (saveDirPath.isNotBlank()) {
-                Column(modifier = Modifier.padding(start = 24.dp)) {
-                  PreferenceDivider()
-                  Preference(
-                    icon = {
-                      Icon(
-                        Icons.Outlined.Restore,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                      )
-                    },
-                    title = { Text(text = "恢复默认保存位置", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    summary = {
-                      Text(
-                        text = "改回系统相册的 Pictures/CineIsle",
-                        color = MaterialTheme.colorScheme.outline,
-                      )
-                    },
-                    onClick = {
-                      browserPreferences.photoSaveDirPath.set("")
-                      browserPreferences.photoSaveDirUri.set("")
-                      Toast.makeText(context, "已恢复默认", Toast.LENGTH_SHORT).show()
-                    },
-                  )
-              }
+                PreferenceDivider()
+                Preference(
+                  icon = {
+                    Icon(
+                      Icons.Outlined.Restore,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                    )
+                  },
+                  title = { Text(text = "恢复默认保存位置", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                  summary = {
+                    Text(
+                      text = "改回系统相册的 Pictures/CineIsle",
+                      color = MaterialTheme.colorScheme.outline,
+                    )
+                  },
+                  onClick = {
+                    browserPreferences.photoSaveDirPath.set("")
+                    browserPreferences.photoSaveDirUri.set("")
+                    Toast.makeText(context, "已恢复默认", Toast.LENGTH_SHORT).show()
+                  },
+                )
                 }
             }
           }
 
           // ── Emby 卡片与封面 ────────────────────────────────────────
           item {
-            PreferenceSectionHeader(title = "Emby 卡片与封面")
+            PreferenceSectionHeader(title = "Emby 卡片外观")
           }
 
           item {
@@ -1104,8 +1102,18 @@ object PreferencesScreen : Screen {
                 },
               )
 
-              PreferenceDivider()
+            }
+          }
 
+          // ── Emby 封面合成 ──────────────────────────────────────────
+          item {
+            PreferenceSectionHeader(title = "Emby 封面合成")
+          }
+
+          item {
+            val browserPreferences = koinInject<BrowserPreferences>()
+            val folderRandomCover by browserPreferences.embyFolderRandomCover.collectAsState()
+            PreferenceCard {
               // 文件夹 / 合集卡片没有自己的封面，客户端会拉内部视频的图拼宫格。
               // 开＝随机取样（每次可能不一样）；关＝按名称固定取前几张。
               // 两种模式都会跳过没封面的条目、一直往后凑满四张，所以不会整张空白。
@@ -1133,121 +1141,115 @@ object PreferencesScreen : Screen {
               // 合成策略：只在「随机合成」开着时才有意义 —— 固定模式取样结果是确定的，
               // 重取还是同一批图，摆出来只是个死项。
               if (folderRandomCover) {
-                Column(modifier = Modifier.padding(start = 24.dp)) {
-                  val coverPolicy by browserPreferences.embyFolderCoverRefreshPolicy.collectAsState()
-                  val coverHours by browserPreferences.embyFolderCoverRefreshHours.collectAsState()
-                  val coverDays by browserPreferences.embyFolderCoverRefreshDays.collectAsState()
-                  var editHours by remember { mutableStateOf(false) }
-                  var editDays by remember { mutableStateOf(false) }
+                val coverPolicy by browserPreferences.embyFolderCoverRefreshPolicy.collectAsState()
+                val coverHours by browserPreferences.embyFolderCoverRefreshHours.collectAsState()
+                val coverDays by browserPreferences.embyFolderCoverRefreshDays.collectAsState()
+                var editHours by remember { mutableStateOf(false) }
+                var editDays by remember { mutableStateOf(false) }
 
+                PreferenceDivider()
+
+                ListPreference(
+                  icon = {
+                    Icon(
+                      Icons.Outlined.Autorenew,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                    )
+                  },
+                  value = coverPolicy,
+                  onValueChange = { picked ->
+                    browserPreferences.embyFolderCoverRefreshPolicy.set(picked)
+                    // 改策略 = 明确要求「按新规矩来」⇒ 把上次合成时间清零，
+                    // 下次进库一定重新合成一次。不清零的话选了「满 X 天」却半天看不到变化，
+                    // 用户会以为设置根本没生效。
+                    browserPreferences.embyFolderCoverLastSynthAt.set(0L)
+                  },
+                  values = FolderCoverRefreshPolicy.entries,
+                  valueToText = { AnnotatedString(it.label) },
+                  title = { Text(text = "重新合成策略", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                  summary = {
+                    Text(
+                      text = "随机取样的封面每次都不一样，这一项决定多久换一批。" +
+                        "默认「仅下拉刷新时」：进出文件夹（含从子文件夹返回）不重取，" +
+                        "滑来滑去看到的还是同一批封面；选小时 / 天则在到期前同样完全复用、" +
+                        "不产生请求。下拉刷新始终立即重取，不受这里限制。",
+                      color = MaterialTheme.colorScheme.outline,
+                    )
+                  },
+                )
+
+                if (coverPolicy == FolderCoverRefreshPolicy.Hours) {
                   PreferenceDivider()
-
-                  ListPreference(
+                  Preference(
                     icon = {
                       Icon(
-                        Icons.Outlined.Autorenew,
+                        Icons.Outlined.Schedule,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                       )
                     },
-                    value = coverPolicy,
-                    onValueChange = { picked ->
-                      browserPreferences.embyFolderCoverRefreshPolicy.set(picked)
-                      // 改策略 = 明确要求「按新规矩来」⇒ 把上次合成时间清零，
-                      // 下次进库一定重新合成一次。不清零的话选了「满 X 天」却半天看不到变化，
-                      // 用户会以为设置根本没生效。
-                      browserPreferences.embyFolderCoverLastSynthAt.set(0L)
-                    },
-                    values = FolderCoverRefreshPolicy.entries,
-                    valueToText = { AnnotatedString(it.label) },
-                    title = { Text(text = "重新合成策略", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    title = { Text(text = "合成封面图间隔小时数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     summary = {
                       Text(
-                        text = "随机取样的封面每次都不一样，这一项决定多久换一批。" +
-                          "默认「仅下拉刷新时」：进出文件夹（含从子文件夹返回）不重取，" +
-                          "滑来滑去看到的还是同一批封面；选小时 / 天则在到期前同样完全复用、" +
-                          "不产生请求。下拉刷新始终立即重取，不受这里限制。",
+                        text = "当前 $coverHours 小时 · 取值范围 1~168",
                         color = MaterialTheme.colorScheme.outline,
                       )
                     },
+                    onClick = { editHours = true },
                   )
+                  }
 
-                  if (coverPolicy == FolderCoverRefreshPolicy.Hours) {
-                    Column(modifier = Modifier.padding(start = 24.dp)) {
-                      PreferenceDivider()
-                      Preference(
-                        icon = {
-                          Icon(
-                            Icons.Outlined.Schedule,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                          )
-                        },
-                        title = { Text(text = "合成封面图间隔小时数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        summary = {
-                          Text(
-                            text = "当前 $coverHours 小时 · 取值范围 1~168",
-                            color = MaterialTheme.colorScheme.outline,
-                          )
-                        },
-                        onClick = { editHours = true },
+                if (coverPolicy == FolderCoverRefreshPolicy.Days) {
+                  PreferenceDivider()
+                  Preference(
+                    icon = {
+                      Icon(
+                        Icons.Outlined.DateRange,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
                       )
-                  }
-                    }
-
-                  if (coverPolicy == FolderCoverRefreshPolicy.Days) {
-                    Column(modifier = Modifier.padding(start = 24.dp)) {
-                      PreferenceDivider()
-                      Preference(
-                        icon = {
-                          Icon(
-                            Icons.Outlined.DateRange,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                          )
-                        },
-                        title = { Text(text = "间隔天数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        summary = {
-                          Text(
-                            text = "当前 $coverDays 天 · 取值范围 1~30",
-                            color = MaterialTheme.colorScheme.outline,
-                          )
-                        },
-                        onClick = { editDays = true },
+                    },
+                    title = { Text(text = "间隔天数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    summary = {
+                      Text(
+                        text = "当前 $coverDays 天 · 取值范围 1~30",
+                        color = MaterialTheme.colorScheme.outline,
                       )
-                  }
-                    }
-
-                  if (editHours) {
-                    IntervalInputDialog(
-                      title = "合成封面图间隔小时数",
-                      hint = "1~168 小时",
-                      current = coverHours,
-                      range = 1..168,
-                      onConfirm = { value ->
-                        browserPreferences.embyFolderCoverRefreshHours.set(value)
-                        browserPreferences.embyFolderCoverLastSynthAt.set(0L)
-                        editHours = false
-                      },
-                      onCancel = { editHours = false },
-                    )
+                    },
+                    onClick = { editDays = true },
+                  )
                   }
 
-                  if (editDays) {
-                    IntervalInputDialog(
-                      title = "间隔天数",
-                      hint = "1~30 天",
-                      current = coverDays,
-                      range = 1..30,
-                      onConfirm = { value ->
-                        browserPreferences.embyFolderCoverRefreshDays.set(value)
-                        browserPreferences.embyFolderCoverLastSynthAt.set(0L)
-                        editDays = false
-                      },
-                      onCancel = { editDays = false },
-                    )
-                  }
-              }
+                if (editHours) {
+                  IntervalInputDialog(
+                    title = "合成封面图间隔小时数",
+                    hint = "1~168 小时",
+                    current = coverHours,
+                    range = 1..168,
+                    onConfirm = { value ->
+                      browserPreferences.embyFolderCoverRefreshHours.set(value)
+                      browserPreferences.embyFolderCoverLastSynthAt.set(0L)
+                      editHours = false
+                    },
+                    onCancel = { editHours = false },
+                  )
+                }
+
+                if (editDays) {
+                  IntervalInputDialog(
+                    title = "间隔天数",
+                    hint = "1~30 天",
+                    current = coverDays,
+                    range = 1..30,
+                    onConfirm = { value ->
+                      browserPreferences.embyFolderCoverRefreshDays.set(value)
+                      browserPreferences.embyFolderCoverLastSynthAt.set(0L)
+                      editDays = false
+                    },
+                    onCancel = { editDays = false },
+                  )
+                }
                 }
             }
           }
