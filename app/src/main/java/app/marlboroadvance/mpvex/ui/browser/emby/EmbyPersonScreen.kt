@@ -53,6 +53,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
@@ -89,6 +90,9 @@ data class EmbyPersonScreen(
     val scope = rememberCoroutineScope()
     // 随机播放数量上限读用户设置，与媒体库的随机按钮同一口径
     val browserPreferences = koinInject<BrowserPreferences>()
+    // 每行个数与媒体库同源（2~6）：原先写死 3 列，用户把媒体库调到 5 列后
+    // 点演员进来会突变回 3 列，正是「与其它入口对不上」的那类观感问题。
+    val gridColumns by browserPreferences.embyLibraryGridColumns.collectAsState()
 
     var items by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -382,9 +386,9 @@ data class EmbyPersonScreen(
 
           else -> {
             LazyVerticalGrid(
-              // 与媒体库「演员」分类、收藏页同一套规格：固定一行三列海报卡
+              // 与媒体库「演员」分类、收藏页同一套规格：列数跟随「每行个数」设置
               // （原先用 Adaptive(110dp)，与其它入口的卡片大小对不上，用户反馈已统一）
-              columns = GridCells.Fixed(3),
+              columns = GridCells.Fixed(gridColumns.coerceIn(2, 6)),
               contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 96.dp),
               verticalArrangement = Arrangement.spacedBy(12.dp),
               horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -398,6 +402,7 @@ data class EmbyPersonScreen(
                   progress = null,
                   isFavorite = item.UserData?.IsFavorite == true,
                   fillWidth = true,
+                  modifier = Modifier.animateItem(),
                   onClick = {
                     item.Id?.let { id ->
                       backStack.add(EmbyDetailScreen(itemId = id, title = item.Name ?: ""))

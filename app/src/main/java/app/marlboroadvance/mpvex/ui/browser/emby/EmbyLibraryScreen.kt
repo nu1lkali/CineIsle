@@ -2121,6 +2121,7 @@ data class EmbyLibraryScreen(
                   } else {
                     null
                   },
+                  modifier = Modifier.animateItem(),
                 )
               }
             }
@@ -2243,6 +2244,7 @@ data class EmbyLibraryScreen(
                       menuAnchor = offset
                     },
                     onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
+                    modifier = Modifier.animateItem(),
                   )
                 }
                 }
@@ -2320,6 +2322,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
           titleMaxLines = titleLines,
           // 「剩余时长」角标只在「继续播放」分类里给（用户反馈：别的分类里是噪音）
           showRemaining = category == EmbyCategory.RESUMABLE,
+          modifier = Modifier.animateItem(),
         )
     }
   }
@@ -2357,6 +2360,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                       titleMaxLines = titleLines,
                       // 「剩余时长」角标只在「继续播放」分类里给（用户反馈：别的分类里是噪音）
                       showRemaining = category == EmbyCategory.RESUMABLE,
+                      modifier = Modifier.animateItem(),
                     )
                   }
                 }
@@ -2894,6 +2898,8 @@ private fun EmbyLibraryMediaCell(
    * 演员条目的「N 部」角标与它无关，不受这个开关影响。
    */
   showRemaining: Boolean = false,
+  /** 列表 item 传进来的修饰符（`Modifier.animateItem()`），挂在卡片根节点上做重排位移 */
+  modifier: Modifier = Modifier,
 ) {
   // 混合库照片档：照片与视频是两套卡片（无进度 / 无收藏角标 / 瀑布流高度 /
   // 副标题是相机型号而不是年份），在这里就分道 —— 把照片塞进视频卡里，
@@ -2905,7 +2911,7 @@ private fun EmbyLibraryMediaCell(
       // 原格式（可能是 HEIC/AVIF）解不动时，退回服务端 format=jpg 转码
       fallbackUrl = viewModel.photoImageUrl(server, item, format = "jpg"),
       onClick = onClick,
-      modifier = Modifier.fillMaxWidth(),
+      modifier = modifier.fillMaxWidth(),
     )
     return
   }
@@ -2956,6 +2962,7 @@ private fun EmbyLibraryMediaCell(
     // 文件夹类型图标：与宫格封面 / 「点进去还是播放」共用 isFolderLike 这一个判定，
     // 避免卡片与批量逻辑各写一份、改一处漏一处（见 needsFolderMosaic 的 KDoc）。
     isFolder = isFolderLike(item),
+    modifier = modifier,
   )
 }
 
@@ -3003,9 +3010,11 @@ private fun EmbyCompactRow(
   onToggleFavorite: (() -> Unit)?,
   /** 是否为文件夹类条目：true 时在小海报左下角显示文件夹图标（与网格卡同一约定） */
   isFolder: Boolean = false,
+  /** 列表 item 传进来的修饰符（`Modifier.animateItem()`），挂在根 Row 上做重排位移 */
+  modifier: Modifier = Modifier,
 ) {
   Row(
-    modifier = Modifier
+    modifier = modifier
       .fillMaxWidth()
       .clip(RoundedCornerShape(10.dp))
       .background(MaterialTheme.colorScheme.surfaceContainerHigh)

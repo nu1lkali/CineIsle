@@ -79,7 +79,9 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyEnqueueResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshGridBox
+import app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMaintainButton
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
@@ -156,6 +158,12 @@ fun EmbyFavoritesScreen() {
   // 出现「偏好与 saveable 不一致」时反而更难排查。现状（只落盘）是可接受的：
   // 旋转丢失 tab 的代价，远小于杀进程丢失。
   val browserPreferences = koinInject<BrowserPreferences>()
+  // 每行个数跟随媒体库的设置（同一个 `embyLibraryGridColumns`，2~6）——
+  // 此前这里写死 3 列，用户在媒体库把每行调到 5 之后进收藏页会突然变回 3 列。
+  val gridColumns by browserPreferences.embyLibraryGridColumns.collectAsState()
+  // 底栏高度由 MainScreen 下发（本页是 tab 之一，一定会被 Provide）；
+  // +16 是与原 96dp 等值的呼吸空间，底栏高度若变则自动跟随。
+  val favoritesBottomPadding = LocalNavigationBarHeight.current + 16.dp
   var tab by remember {
     mutableStateOf(
       FavoriteTab.entries.firstOrNull { it.name == browserPreferences.embyFavoritesTab.get() }
@@ -623,7 +631,7 @@ fun EmbyFavoritesScreen() {
         isLoading && items.isEmpty() ->
           // 骨架屏替代转圈：先把网格版式摆出来，收藏列表落下时不会整屏跳变。
           // 演员 tab 也复用这套网格骨架 —— 栏数一致，观感上是同一套节奏。
-          EmbySkeletonGrid(columns = 3, ratio = 3f / 4f)
+          EmbySkeletonGrid(columns = gridColumns.coerceIn(2, 6), ratio = 3f / 4f)
 
         error != null -> EmbyEmptyState(
           message = error ?: "加载失败",
@@ -654,11 +662,11 @@ fun EmbyFavoritesScreen() {
         )
 
         tab == FavoriteTab.MOVIE -> LazyVerticalGrid(
-          // 与媒体库页统一：固定一行三个（含「文件夹」分类下的宫格封面保持一致观感）
-          columns = GridCells.Fixed(3),
+          // 与媒体库页同口径：跟随「每行个数」设置（2~6）
+          columns = GridCells.Fixed(gridColumns.coerceIn(2, 6)),
           state = gridState,
           modifier = Modifier.fillMaxSize(),
-          contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+          contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = favoritesBottomPadding),
           horizontalArrangement = Arrangement.spacedBy(12.dp),
           verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -684,6 +692,8 @@ fun EmbyFavoritesScreen() {
               onLongClick = { toggleSelection(item.Id) },
               style = EmbyCardStyle.POSTER,
               fillWidth = true,
+              // 条目有位移动画：切排序 / 取消收藏时平滑重排，而不是硬切
+              modifier = Modifier.animateItem(),
             )
           }
           // 底部状态行：续拉中 / 出错可重试 / 已到底
@@ -701,11 +711,11 @@ fun EmbyFavoritesScreen() {
         }
 
         tab == FavoriteTab.ACTOR -> LazyVerticalGrid(
-          // 演员网格与媒体库「演员」分类同一套版式：一行三个海报卡 + 人形占位
-          columns = GridCells.Fixed(3),
+          // 演员网格与媒体库「演员」分类同一套版式：同样跟随「每行个数」
+          columns = GridCells.Fixed(gridColumns.coerceIn(2, 6)),
           state = gridState,
           modifier = Modifier.fillMaxSize(),
-          contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+          contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = favoritesBottomPadding),
           horizontalArrangement = Arrangement.spacedBy(12.dp),
           verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -739,17 +749,19 @@ fun EmbyFavoritesScreen() {
               onLongClick = { toggleSelection(person.Id) },
               style = EmbyCardStyle.POSTER,
               fillWidth = true,
+              // 条目有位移动画：切排序 / 取消收藏时平滑重排，而不是硬切
+              modifier = Modifier.animateItem(),
             )
           }
         }
 
         // 类型 / 工作室：点卡片进「该类型 / 工作室下的作品」清单页（与详情页 chip 同一路由）
         else -> LazyVerticalGrid(
-          // 与影片 / 演员同一套版式：一行三个海报卡
-          columns = GridCells.Fixed(3),
+          // 与影片 / 演员同一套版式，列数同源
+          columns = GridCells.Fixed(gridColumns.coerceIn(2, 6)),
           state = gridState,
           modifier = Modifier.fillMaxSize(),
-          contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+          contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = favoritesBottomPadding),
           horizontalArrangement = Arrangement.spacedBy(12.dp),
           verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -785,6 +797,8 @@ fun EmbyFavoritesScreen() {
               onLongClick = { toggleSelection(facet.Id) },
               style = EmbyCardStyle.POSTER,
               fillWidth = true,
+              // 条目有位移动画：切排序 / 取消收藏时平滑重排，而不是硬切
+              modifier = Modifier.animateItem(),
             )
           }
         }

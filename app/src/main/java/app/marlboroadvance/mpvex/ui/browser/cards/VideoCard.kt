@@ -211,7 +211,7 @@ fun VideoCard(
                   .align(Alignment.TopStart)
                   .padding(6.dp)
                   .clip(RoundedCornerShape(4.dp))
-                  .background(Color(0xFFD32F2F)) // Warning red color
+                  .background(MaterialTheme.colorScheme.error) // Warning red color
                   .padding(horizontal = 8.dp, vertical = 3.dp),
             ) {
               Text(
@@ -219,7 +219,7 @@ fun VideoCard(
                 style = MaterialTheme.typography.labelSmall.copy(
                   fontWeight = FontWeight.Bold,
                 ),
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onError,
               )
             }
           }
@@ -483,7 +483,7 @@ fun VideoCard(
                   .align(Alignment.TopStart)
                   .padding(6.dp)
                   .clip(RoundedCornerShape(4.dp))
-                  .background(Color(0xFFD32F2F)) // Warning red color
+                  .background(MaterialTheme.colorScheme.error) // Warning red color
                   .padding(horizontal = 8.dp, vertical = 3.dp),
             ) {
               Text(
@@ -491,7 +491,7 @@ fun VideoCard(
                 style = MaterialTheme.typography.labelSmall.copy(
                   fontWeight = FontWeight.Bold,
                 ),
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onError,
               )
             }
           }

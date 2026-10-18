@@ -142,7 +142,7 @@ fun FolderCard(
                   .align(Alignment.TopEnd)
                   .padding(6.dp)
                   .clip(RoundedCornerShape(4.dp))
-                  .background(Color(0xFFD32F2F))
+                  .background(MaterialTheme.colorScheme.error)
                   .padding(horizontal = 6.dp, vertical = 2.dp),
             ) {
               Text(
@@ -150,7 +150,9 @@ fun FolderCard(
                 style = MaterialTheme.typography.labelSmall.copy(
                   fontWeight = FontWeight.Bold,
                 ),
-                color = Color.White,
+                // 底色已跟随 colorScheme.error（深色主题下它是浅红），
+                // 文字必须用 onError 才不会糊成一片
+                color = MaterialTheme.colorScheme.onError,
               )
             }
           }
@@ -230,7 +232,7 @@ fun FolderCard(
                   .align(Alignment.TopEnd)
                   .padding(4.dp)
                   .clip(RoundedCornerShape(4.dp))
-                  .background(Color(0xFFD32F2F)) // Warning red color
+                  .background(MaterialTheme.colorScheme.error) // Warning red color
                   .padding(horizontal = 6.dp, vertical = 2.dp),
             ) {
               Text(
@@ -238,7 +240,9 @@ fun FolderCard(
                 style = MaterialTheme.typography.labelSmall.copy(
                   fontWeight = FontWeight.Bold,
                 ),
-                color = Color.White,
+                // 底色已跟随 colorScheme.error（深色主题下它是浅红），
+                // 文字必须用 onError 才不会糊成一片
+                color = MaterialTheme.colorScheme.onError,
               )
             }
           }

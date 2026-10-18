@@ -1207,6 +1207,8 @@ private fun NetworkBrowserGrid(
               onCoverNeeded = coverTrigger,
               onLongClick =
                 if (onFileLongClick == null) null else { { offset -> onFileLongClick(file, offset) } },
+              // 切排序 / 删除条目后平滑重排，而不是整屏硬切
+              modifier = Modifier.animateItem(),
             )
           }
         }
@@ -1309,7 +1311,7 @@ private fun NetworkBrowserList(
                   } else {
                     { offset -> onFileLongClick(folder, offset) }
                   },
-                modifier = Modifier,
+                modifier = Modifier.animateItem(),
               )
             }
           }
@@ -1333,7 +1335,7 @@ private fun NetworkBrowserList(
                   } else {
                     { offset -> onFileLongClick(photo, offset) }
                   },
-                modifier = Modifier,
+                modifier = Modifier.animateItem(),
               )
             }
           }
@@ -1359,7 +1361,7 @@ private fun NetworkBrowserList(
                     } else {
                       { offset -> onFileLongClick(video, offset) }
                     },
-                  modifier = Modifier,
+                  modifier = Modifier.animateItem(),
                 )
               }
             }
@@ -1376,7 +1378,7 @@ private fun NetworkBrowserList(
             ) { other ->
               NetworkOtherFileRow(
                 file = other,
-                modifier = Modifier,
+                modifier = Modifier.animateItem(),
               )
             }
           }

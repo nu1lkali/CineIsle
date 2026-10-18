@@ -513,7 +513,7 @@ class GsyPlayerActivity : ComponentActivity() {
     if (url.endsWith(".iso", ignoreCase = true) ||
       uri.lastPathSegment?.endsWith(".iso", ignoreCase = true) == true
     ) {
-      Toast.makeText(this, "ISO 原盘将使�? mpv 内核播放，正在切换�?", Toast.LENGTH_LONG).show()
+      Toast.makeText(this, "ISO 原盘将使用 mpv 内核播放，正在切换", Toast.LENGTH_LONG).show()
       switchToMpvPlayer()
       return
     }
@@ -797,7 +797,7 @@ class GsyPlayerActivity : ComponentActivity() {
           onRecreateNeeded = { message ->
             if (view.isIfCurrentIsFullscreen) {
               // 全屏实例�? GSY 克隆出来的另一棵树，重建会让全屏状态错�? —�? 让用户先退全屏
-              Toast.makeText(this, "$message（请先退出全屏再切换�?", Toast.LENGTH_LONG).show()
+              Toast.makeText(this, "$message（请先退出全屏再切换）", Toast.LENGTH_LONG).show()
             } else {
               Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
               recreateKeepingPosition()
@@ -935,7 +935,7 @@ class GsyPlayerActivity : ComponentActivity() {
     if (kernelFallbackUsed) return
     kernelFallbackUsed = true
     forcedKernel = GsyKernelKind.IJK
-    Toast.makeText(this, "当前内核无法解码此文件，已自动切换至 IJK（ffmpeg）内核重�?", Toast.LENGTH_LONG).show()
+    Toast.makeText(this, "当前内核无法解码此文件，已自动切换至 IJK（ffmpeg）内核重试", Toast.LENGTH_LONG).show()
     recreateKeepingPosition()
   }
 
@@ -1276,7 +1276,7 @@ class GsyPlayerActivity : ComponentActivity() {
       if (unsupported.isEmpty()) {
         getString(R.string.gsy_subtitle_style)
       } else {
-        getString(R.string.gsy_subtitle_style_with_unsupported, unsupported.joinToString("�?"))
+        getString(R.string.gsy_subtitle_style_with_unsupported, unsupported.joinToString("、"))
       }
 
     val items =
@@ -2251,7 +2251,9 @@ class GsyPlayerActivity : ComponentActivity() {
     val speed = netSpeedSmoother.smooth(raw)
 
     speedView.visibility = View.VISIBLE
-    speedView.text = "�? ${formatNetworkSpeed(speed)}"
+    // 只写数值 + 单位：单位自带语义（MB/s），顶栏本来就没多余宽度再放前缀。
+    // 早先这里有个单字前缀，源码编码损坏后已无法确认原字，直接去掉。
+    speedView.text = formatNetworkSpeed(speed)
   }
 
   /**
@@ -2421,15 +2423,15 @@ class GsyPlayerActivity : ComponentActivity() {
      * 字幕色板（`argb`）�?
      *
      * 全不透明 —�? 字幕文字色做半透明只会让字变灰、看着像发虚，没别的用处�?
-     * 前两个（�? / 黑）覆盖绝大多数场景，其余用来适配不同背景亮度�?
+     * 前两个（白 / 黑）覆盖绝大多数场景，其余用来适配不同背景亮度。
      */
     private val SUBTITLE_COLOR_PALETTE =
       intArrayOf(
-        0xFFFFFFFF.toInt(), // �?
-        0xFF000000.toInt(), // �?
-        0xFFFFE03B.toInt(), // �?
+        0xFFFFFFFF.toInt(), // 白
+        0xFF000000.toInt(), // 黑
+        0xFFFFE03B.toInt(), // 黄
         0xFF4FC3F7.toInt(), // 天蓝
-        0xFF81C784.toInt(), // �?
+        0xFF81C784.toInt(), // 绿
         0xFFFF8A80.toInt(), // 浅红
         0xFFE0E0E0.toInt(), // 浅灰
       )

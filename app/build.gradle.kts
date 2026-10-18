@@ -683,7 +683,24 @@ android {
     //        骨架屏原先只查内存缓存，磁盘命中那一刻也会闪，观感像「图丢了又重下」。
     //     ④ 磁盘缓存目录改用 context.cacheDir（原 FileSystem.SYSTEM_TEMPORARY_DIRECTORY
     //        即 java.io.tmpdir，部分 ROM 指向非应用私有且会被清空的目录）。
-    versionCode = 97
+    // 98（修复轮，versionName 仍为 1.5.9）：一轮 UI 收口，五项：
+    //     ① GsyPlayerActivity 代码区残留的 U+FFFD 乱码全部还原（3 个 Toast、
+    //        joinToString 分隔符、网速前缀、4 个颜色注释）。文件里另有 465 行
+    //        **注释**乱码，不影响运行，逐行还原成本高于收益，暂不动。
+    //     ② Emby 收藏 / 演员页的网格列数从写死 3 列改为跟随「每行个数」设置
+    //        （与媒体库同一个 embyLibraryGridColumns），加载骨架屏同步列数 ——
+    //        此前用户把媒体库调到 5 列后进收藏页会突变回 3 列。
+    //     ③ 底部留白统一：首页 / 收藏 / 历史共 5 处 `96.dp` 改读
+    //        LocalNavigationBarHeight（+16 呼吸，与原值等值，底栏高度若变则跟随）。
+    //        ⚠️ 媒体库 / 详情 / 演员 / 播放列表等 9 处仍是 96dp —— 它们是 NavDisplay
+    //        推入的全屏页、底下没有导航栏，那是内容留白而不是给底栏让位；
+    //        换成 LocalNavigationBarHeight 会取到默认 0.dp，底部直接贴边。
+    //     ④ 列表条目加 Modifier.animateItem()：Emby 媒体库 4 处、收藏 3 处、
+    //        演员 1 处、网络目录（网格 + 列表）4 处 —— 切排序 / 增删条目时平滑重排，
+    //        不再整屏硬切。只加在 items 带稳定 key 的列表上。
+    //     ⑤ 卡片「新视频」角标的硬编码红 Color(0xFFD32F2F) 改走 colorScheme.error，
+    //        文字同步换 onError（深色主题下 error 是浅红，白字会糊）。
+    versionCode = 98
     versionName = "1.5.9"
 
     vectorDrawables {

@@ -70,6 +70,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.domain.emby.LibraryOrdering
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
+import app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyLibraryCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyLibraryOrderDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyLibraryVisibilityMenu
@@ -783,7 +784,9 @@ fun EmbyHomeScreen(
           LazyColumn(
             state = homeListState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 96.dp),
+            // 底栏高度由 MainScreen 下发（首页是 tab 之一，一定在 Provide 内）；
+            // +16dp 与原 96dp 等值，底栏高度若变则自动跟随。
+            contentPadding = PaddingValues(bottom = LocalNavigationBarHeight.current + 16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
           ) {
             // ⚠️ 用 visibleLibraries 而不是 libraries：被长按菜单隐藏掉的库

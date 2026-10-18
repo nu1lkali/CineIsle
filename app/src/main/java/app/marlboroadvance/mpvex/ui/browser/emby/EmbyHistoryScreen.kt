@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMaintainButton
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySectionHeader
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonHistory
@@ -170,7 +171,8 @@ fun EmbyHistoryScreen() {
           LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 96.dp),
+            // 底栏高度由 MainScreen 下发（本页是 tab 之一）；+16dp 与原 96dp 等值
+            contentPadding = PaddingValues(bottom = LocalNavigationBarHeight.current + 16.dp),
           ) {
             if (resumeItems.isNotEmpty()) {
               item {
