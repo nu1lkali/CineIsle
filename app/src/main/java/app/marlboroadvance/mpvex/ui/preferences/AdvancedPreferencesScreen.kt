@@ -30,6 +30,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.Cached
+import androidx.compose.material.icons.outlined.CleaningServices
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -395,6 +404,13 @@ object AdvancedPreferencesScreen : Screen {
               }
               
               TwoTargetIconButtonPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Storage,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 title = { Text(stringResource(R.string.pref_advanced_mpv_conf_storage_location)) },
                 summary = {
                   if (mpvConfStorageLocation.isNotBlank()) {
@@ -419,6 +435,13 @@ object AdvancedPreferencesScreen : Screen {
               PreferenceDivider()
               
               Preference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Code,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 title = { Text(stringResource(R.string.pref_advanced_mpv_conf)) },
                 summary = {
                   val firstLine = mpvConf.lines().firstOrNull()
@@ -441,6 +464,13 @@ object AdvancedPreferencesScreen : Screen {
               PreferenceDivider()
               
               Preference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Edit,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 title = { Text(stringResource(R.string.pref_advanced_input_conf)) },
                 summary = {
                   val firstLine = inputConf.lines().firstOrNull()
@@ -475,6 +505,13 @@ object AdvancedPreferencesScreen : Screen {
               val enableRecentlyPlayed by preferences.enableRecentlyPlayed.collectAsState()
               
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.History,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = enableRecentlyPlayed,
                 onValueChange = preferences.enableRecentlyPlayed::set,
                 title = { Text(stringResource(R.string.pref_advanced_enable_recently_played_title)) },
@@ -489,6 +526,13 @@ object AdvancedPreferencesScreen : Screen {
               PreferenceDivider()
               
               Preference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.DeleteSweep,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 title = { Text(stringResource(R.string.pref_advanced_clear_playback_history)) },
                 onClick = { isConfirmDialogShown = true },
               )
@@ -543,6 +587,13 @@ object AdvancedPreferencesScreen : Screen {
               val thumbnailRepository = koinInject<ThumbnailRepository>()
               
               Preference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Cached,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 title = { Text(text = stringResource(R.string.i18n_clear_config_cache)) },
                 summary = { 
                   Text(
@@ -572,6 +623,13 @@ object AdvancedPreferencesScreen : Screen {
               PreferenceDivider()
 
               Preference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.CleaningServices,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 title = { Text(text = stringResource(R.string.i18n_clear_thumb_cache)) },
                 summary = {
                   Text(
@@ -610,6 +668,13 @@ object AdvancedPreferencesScreen : Screen {
               PreferenceDivider()
               
               Preference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.TextFields,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 title = { Text(text = stringResource(id = R.string.pref_advanced_clear_fonts_cache)) },
                 summary = { 
                   Text(
@@ -659,6 +724,13 @@ object AdvancedPreferencesScreen : Screen {
               val verboseLogging by preferences.verboseLogging.collectAsState()
               
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Article,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = verboseLogging,
                 onValueChange = preferences.verboseLogging::set,
                 title = { Text(stringResource(R.string.pref_advanced_verbose_logging_title)) },
@@ -673,6 +745,13 @@ object AdvancedPreferencesScreen : Screen {
               PreferenceDivider()
               
               Preference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.FileDownload,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 title = { Text(stringResource(R.string.pref_advanced_dump_logs_title)) },
                 summary = { 
                   Text(

@@ -161,6 +161,7 @@
 > 按版本倒序，当前版本 **v1.5.10**；历史安装包见 [Releases](https://github.com/nu1lkali/CineIsle/releases)。
 
 ### v1.5.10
+- **设置页图标补齐**（`ui/preferences`）：聚合库入口加了图标后其他设置条目仍「光板」一块，现 11 个设置页凡无图标的偏好条目统一补全（共 152 条）—— me.zhanghai.compose.preference 2.2.0 的 Preference / SwitchPreference / ListPreference / SliderPreference / TextFieldPreference / TwoTargetIconButtonPreference 都带 icon 槽位，图标用 `Icons.Outlined.X` + `colorScheme.primary` 着色，风格与既有条目完全一致；每个图标名都对照 material-icons-extended / core 1.7.8 的实际 AAR 验证过存在性
 - **聚合库（新功能）**（`database` · `domain/emby` · `ui/browser/emby` · `ui/preferences`）：把同一个服务器下多个**同类型**媒体库（如多个电影库）合并成一个本地视图。首页媒体库行末尾出现聚合库卡片（Layers 图标 + 「N 库聚合」角标，与真实库明显错开），点进去是一个归并网格；配置入口在设置里
 - **深翻页不重不漏**（`domain/emby`）：每个成员库一条独立泳道（游标 + 本地缓冲），按排序语义从各泳道队头挑「当前最该出现」的条目接上，Id 做 tiebreak —— 滑到第 300 条时不会退回「每个库的前几条」拼重复片段
 - **随机播放 = 换一批**（`domain/emby`）：随机排序下服务端每次重洗、游标无意义，改为固定种子在各库混排；下拉刷新换种子，语义就是整副牌重洗

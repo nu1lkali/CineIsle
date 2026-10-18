@@ -13,6 +13,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PhoneAndroid
+import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -122,6 +126,13 @@ object DislikePreferencesScreen : Screen {
       item {
         PreferenceCard {
           SwitchPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.MoreVert,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = showInDetailMenu,
             onValueChange = browserPreferences.dislikeShowInDetailMenu::set,
             title = { Text("详情页菜单项") },
@@ -134,6 +145,13 @@ object DislikePreferencesScreen : Screen {
           )
           PreferenceDivider()
           SwitchPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.PlayCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = showInPlayer,
             // 关走二次确认（破坏性：要连带清掉布局里的按钮）
             onValueChange = { wantOn ->
@@ -167,6 +185,13 @@ object DislikePreferencesScreen : Screen {
           )
           PreferenceDivider()
           SwitchPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.PhoneAndroid,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = showInFeed,
             onValueChange = browserPreferences.dislikeShowInFeed::set,
             title = { Text("视界流按钮") },
@@ -182,6 +207,13 @@ object DislikePreferencesScreen : Screen {
       item {
         PreferenceCard {
           Preference(
+            icon = {
+              Icon(
+                Icons.Outlined.ThumbDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             title = { Text("不喜欢视频管理") },
             summary = {
               Text(

@@ -31,6 +31,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.outlined.BlurOn
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -233,6 +235,13 @@ object PlayerControlsPreferencesScreen : Screen {
             
             PreferenceCard {
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.BlurOn,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = hidePlayerButtonsBackground,
                 onValueChange = { appearancePrefs.hidePlayerButtonsBackground.set(it) },
                 title = {
@@ -250,6 +259,13 @@ object PlayerControlsPreferencesScreen : Screen {
               PreferenceDivider()
               
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Timer,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = if (isCustomTimeValue) -1 else playerTimeToDisappear,
                 onValueChange = { newValue ->
                   if (newValue == -1) {

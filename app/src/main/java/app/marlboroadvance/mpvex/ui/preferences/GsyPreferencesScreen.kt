@@ -12,6 +12,38 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.outlined.Animation
+import androidx.compose.material.icons.outlined.AspectRatio
+import androidx.compose.material.icons.outlined.Autorenew
+import androidx.compose.material.icons.outlined.Cached
+import androidx.compose.material.icons.outlined.ExitToApp
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.FilterAlt
+import androidx.compose.material.icons.outlined.Gesture
+import androidx.compose.material.icons.outlined.Hd
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.PictureInPictureAlt
+import androidx.compose.material.icons.outlined.Repeat
+import androidx.compose.material.icons.outlined.RotateLeft
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.ScreenLockLandscape
+import androidx.compose.material.icons.outlined.ScreenRotation
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.StayCurrentPortrait
+import androidx.compose.material.icons.outlined.SwapHoriz
+import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.TouchApp
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.VolumeOff
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -112,6 +144,13 @@ object GsyPreferencesScreen : Screen {
               // 「长按用哪个内核播」说的就是「长按进不进 GSY 播放页」。
               val playbackEngine by playerPrefs.playbackEngine.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Memory,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = playbackEngine,
                 onValueChange = { playerPrefs.playbackEngine.set(it) },
                 title = { Text("默认播放内核") },
@@ -136,6 +175,13 @@ object GsyPreferencesScreen : Screen {
 
               val longPressReverse by playerPrefs.longPressReverseEngine.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.SwapHoriz,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = longPressReverse,
                 onValueChange = playerPrefs.longPressReverseEngine::set,
                 title = { Text("长按用另一个内核播放") },
@@ -159,6 +205,13 @@ object GsyPreferencesScreen : Screen {
 
               val kernel by prefs.kernel.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Extension,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = kernel,
                 onValueChange = { prefs.kernel.set(it) },
                 title = { Text("GSY 解码内核") },
@@ -176,6 +229,13 @@ object GsyPreferencesScreen : Screen {
 
               val hardwareDecode by prefs.hardwareDecode.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Hd,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = hardwareDecode,
                 onValueChange = { prefs.hardwareDecode.set(it) },
                 title = { Text("硬解码（IJK MediaCodec）") },
@@ -191,6 +251,13 @@ object GsyPreferencesScreen : Screen {
 
               val smartFallback by prefs.smartFallback.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Autorenew,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = smartFallback,
                 onValueChange = { prefs.smartFallback.set(it) },
                 title = { Text("硬解失败自动回退软解") },
@@ -206,6 +273,13 @@ object GsyPreferencesScreen : Screen {
 
               val overrideExtension by prefs.overrideExtension.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Layers,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = overrideExtension,
                 onValueChange = { prefs.overrideExtension.set(it) },
                 title = { Text("强制解封装器（Exo 内核）") },
@@ -228,6 +302,13 @@ object GsyPreferencesScreen : Screen {
             PreferenceCard {
               val renderKind by prefs.renderKind.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Palette,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = renderKind,
                 onValueChange = { prefs.renderKind.set(it) },
                 title = { Text("渲染方式") },
@@ -246,6 +327,13 @@ object GsyPreferencesScreen : Screen {
 
               val showKind by prefs.showKind.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.AspectRatio,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showKind,
                 onValueChange = { prefs.showKind.set(it) },
                 title = { Text("显示比例") },
@@ -264,6 +352,13 @@ object GsyPreferencesScreen : Screen {
 
               val filter by prefs.filter.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.FilterAlt,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = filter,
                 onValueChange = { prefs.filter.set(it) },
                 title = { Text("画面滤镜（GL）") },
@@ -287,6 +382,13 @@ object GsyPreferencesScreen : Screen {
             PreferenceCard {
               val looping by prefs.looping.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Repeat,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = looping,
                 onValueChange = { prefs.looping.set(it) },
                 title = { Text("循环播放") },
@@ -297,6 +399,13 @@ object GsyPreferencesScreen : Screen {
 
               val defaultSpeed by prefs.defaultSpeed.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Speed,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = defaultSpeed,
                 onValueChange = { prefs.defaultSpeed.set(it) },
                 title = { Text("起播倍速") },
@@ -314,6 +423,13 @@ object GsyPreferencesScreen : Screen {
 
               val soundTouch by prefs.soundTouch.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.MusicNote,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = soundTouch,
                 onValueChange = { prefs.soundTouch.set(it) },
                 title = { Text("变速不变调") },
@@ -329,6 +445,13 @@ object GsyPreferencesScreen : Screen {
 
               val cacheWithPlay by prefs.cacheWithPlay.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Cached,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = cacheWithPlay,
                 onValueChange = { prefs.cacheWithPlay.set(it) },
                 title = { Text("边播边缓存") },
@@ -345,6 +468,13 @@ object GsyPreferencesScreen : Screen {
 
               val resumePosition by prefs.resumePosition.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.History,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = resumePosition,
                 onValueChange = { prefs.resumePosition.set(it) },
                 title = { Text("续播到上次位置") },
@@ -360,6 +490,13 @@ object GsyPreferencesScreen : Screen {
 
               val closeAfterEnd by prefs.closeAfterEnd.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ExitToApp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = closeAfterEnd,
                 onValueChange = { prefs.closeAfterEnd.set(it) },
                 title = { Text("播完自动退出播放页") },
@@ -375,6 +512,13 @@ object GsyPreferencesScreen : Screen {
 
               val muteOnStart by prefs.muteOnStart.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.VolumeOff,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = muteOnStart,
                 onValueChange = { prefs.muteOnStart.set(it) },
                 title = { Text("进入即静音") },
@@ -395,6 +539,13 @@ object GsyPreferencesScreen : Screen {
             PreferenceCard {
               val touchGesture by prefs.touchGesture.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Gesture,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = touchGesture,
                 onValueChange = { prefs.touchGesture.set(it) },
                 title = { Text("非全屏响应手势") },
@@ -410,6 +561,13 @@ object GsyPreferencesScreen : Screen {
 
               val touchGestureFull by prefs.touchGestureFull.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.TouchApp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = touchGestureFull,
                 onValueChange = { prefs.touchGestureFull.set(it) },
                 title = { Text("全屏响应手势") },
@@ -425,6 +583,13 @@ object GsyPreferencesScreen : Screen {
 
               val seekRatio by prefs.seekRatio.collectAsState()
               SliderPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Tune,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = seekRatio,
                 onValueChange = { prefs.seekRatio.set(it) },
                 title = { Text("横滑 seek 灵敏度") },
@@ -443,6 +608,13 @@ object GsyPreferencesScreen : Screen {
 
               val wifiTip by prefs.wifiTip.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Wifi,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = wifiTip,
                 onValueChange = { prefs.wifiTip.set(it) },
                 title = { Text("移动网络提示") },
@@ -463,6 +635,13 @@ object GsyPreferencesScreen : Screen {
             PreferenceCard {
               val dismiss by prefs.dismissControlTimeMs.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Timer,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = dismiss,
                 onValueChange = { prefs.dismissControlTimeMs.set(it) },
                 title = { Text("控件自动隐藏") },
@@ -480,6 +659,13 @@ object GsyPreferencesScreen : Screen {
 
               val needLockFull by prefs.needLockFull.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Lock,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = needLockFull,
                 onValueChange = { prefs.needLockFull.set(it) },
                 title = { Text("全屏显示屏幕锁") },
@@ -495,6 +681,13 @@ object GsyPreferencesScreen : Screen {
 
               val showDragText by prefs.showDragProgressText.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Schedule,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showDragText,
                 onValueChange = { prefs.showDragProgressText.set(it) },
                 title = { Text("拖动进度条时显示目标时间") },
@@ -510,6 +703,13 @@ object GsyPreferencesScreen : Screen {
 
               val showPauseCover by prefs.showPauseCover.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Image,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showPauseCover,
                 onValueChange = { prefs.showPauseCover.set(it) },
                 title = { Text("暂停保留最后一帧") },
@@ -530,6 +730,13 @@ object GsyPreferencesScreen : Screen {
             PreferenceCard {
               val pipAutoEnter by prefs.pipAutoEnter.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.PictureInPictureAlt,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = pipAutoEnter,
                 onValueChange = { prefs.pipAutoEnter.set(it) },
                 title = { Text("按 Home 键自动进小窗") },
@@ -552,6 +759,13 @@ object GsyPreferencesScreen : Screen {
             PreferenceCard {
               val lockLand by prefs.lockLand.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ScreenLockLandscape,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = lockLand,
                 onValueChange = { prefs.lockLand.set(it) },
                 title = { Text("全屏锁横屏") },
@@ -562,6 +776,13 @@ object GsyPreferencesScreen : Screen {
 
               val onlyRotateLand by prefs.onlyRotateLand.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ScreenRotation,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = onlyRotateLand,
                 onValueChange = { prefs.onlyRotateLand.set(it) },
                 title = { Text("只允许横屏方向变化") },
@@ -577,6 +798,13 @@ object GsyPreferencesScreen : Screen {
 
               val autoFullWithSize by prefs.autoFullWithSize.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.StayCurrentPortrait,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = autoFullWithSize,
                 onValueChange = { prefs.autoFullWithSize.set(it) },
                 title = { Text("竖屏视频自动竖屏全屏") },
@@ -592,6 +820,13 @@ object GsyPreferencesScreen : Screen {
 
               val rotateWithSystem by prefs.rotateWithSystem.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.RotateLeft,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = rotateWithSystem,
                 onValueChange = { prefs.rotateWithSystem.set(it) },
                 title = { Text("跟随系统「自动旋转」") },
@@ -608,6 +843,13 @@ object GsyPreferencesScreen : Screen {
 
               val fullAnimation by prefs.showFullAnimation.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Animation,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = fullAnimation,
                 onValueChange = { prefs.showFullAnimation.set(it) },
                 title = { Text("全屏过渡动画") },
@@ -623,6 +865,13 @@ object GsyPreferencesScreen : Screen {
 
               val fullHideStatusBar by prefs.fullHideStatusBar.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.VisibilityOff,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = fullHideStatusBar,
                 onValueChange = { prefs.fullHideStatusBar.set(it) },
                 title = { Text("全屏隐藏状态栏") },
@@ -638,6 +887,13 @@ object GsyPreferencesScreen : Screen {
 
               val hideKey by prefs.hideKey.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.VisibilityOff,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = hideKey,
                 onValueChange = { prefs.hideKey.set(it) },
                 title = { Text("全屏隐藏虚拟按键") },
@@ -658,6 +914,13 @@ object GsyPreferencesScreen : Screen {
             PreferenceCard {
               val showStatusBar by prefs.showSystemStatusBar.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Visibility,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showStatusBar,
                 onValueChange = { prefs.showSystemStatusBar.set(it) },
                 title = { Text("显示系统状态栏") },
@@ -673,6 +936,13 @@ object GsyPreferencesScreen : Screen {
 
               val showNavBar by prefs.showSystemNavigationBar.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Visibility,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showNavBar,
                 onValueChange = { prefs.showSystemNavigationBar.set(it) },
                 title = { Text("显示系统导航栏") },

@@ -18,6 +18,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.outlined.PanTool
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.SkipNext
+import androidx.compose.material.icons.outlined.SkipPrevious
+import androidx.compose.material.icons.outlined.Straighten
+import androidx.compose.material.icons.outlined.Swipe
+import androidx.compose.material.icons.outlined.SwipeRight
+import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.TouchApp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -101,6 +110,13 @@ object GesturePreferencesScreen : Screen {
           val isCustomValue = !predefinedValues.contains(doubleTapSeekDuration)
 
           ListPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.Timer,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = if (isCustomValue) -1 else doubleTapSeekDuration,
             onValueChange = { newValue ->
               if (newValue == -1) {
@@ -178,6 +194,13 @@ object GesturePreferencesScreen : Screen {
           val seekAreaValues = listOf(20, 25, 30, 35, 40, 45)
 
           ListPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.Straighten,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = doubleTapSeekAreaWidth,
             onValueChange = { preferences.doubleTapSeekAreaWidth.set(it) },
             values = seekAreaValues,
@@ -195,6 +218,13 @@ object GesturePreferencesScreen : Screen {
 
           val leftDoubleTap by preferences.leftSingleActionGesture.collectAsState()
           ListPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.Swipe,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = leftDoubleTap,
             onValueChange = { preferences.leftSingleActionGesture.set(it) },
             values = SingleActionGesture.entries,
@@ -210,6 +240,13 @@ object GesturePreferencesScreen : Screen {
 
           val centerDoubleTap by preferences.centerSingleActionGesture.collectAsState()
           ListPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.TouchApp,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = centerDoubleTap,
             onValueChange = { preferences.centerSingleActionGesture.set(it) },
             values =
@@ -237,6 +274,13 @@ object GesturePreferencesScreen : Screen {
 
           val rightDoubleTap by preferences.rightSingleActionGesture.collectAsState()
           ListPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.SwipeRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = rightDoubleTap,
             onValueChange = { preferences.rightSingleActionGesture.set(it) },
             values = SingleActionGesture.entries,
@@ -252,6 +296,13 @@ object GesturePreferencesScreen : Screen {
 
           val useSingleTapForCenter by preferences.useSingleTapForCenter.collectAsState()
           SwitchPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.PanTool,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = useSingleTapForCenter,
             onValueChange = { preferences.useSingleTapForCenter.set(it) },
             title = {
@@ -311,6 +362,13 @@ object GesturePreferencesScreen : Screen {
             PreferenceCard {
           val mediaPreviousGesture by preferences.mediaPreviousGesture.collectAsState()
           ListPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.SkipPrevious,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = mediaPreviousGesture,
             onValueChange = { preferences.mediaPreviousGesture.set(it) },
             values = SingleActionGesture.entries,
@@ -325,6 +383,13 @@ object GesturePreferencesScreen : Screen {
           PreferenceDivider()
           val mediaPlayGesture by preferences.mediaPlayGesture.collectAsState()
           ListPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.PlayArrow,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = mediaPlayGesture,
             onValueChange = { preferences.mediaPlayGesture.set(it) },
             values =
@@ -344,6 +409,13 @@ object GesturePreferencesScreen : Screen {
           PreferenceDivider()
           val mediaNextGesture by preferences.mediaNextGesture.collectAsState()
           ListPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.SkipNext,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = mediaNextGesture,
             onValueChange = { preferences.mediaNextGesture.set(it) },
             values = SingleActionGesture.entries,

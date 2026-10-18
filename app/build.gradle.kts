@@ -716,7 +716,16 @@ android {
     //     给每个成员库开一条泳道（独立游标 + 缓冲），按 SortBy 语义比较取队头接上，
     //     Id 做 tiebreak ⇒ 深翻页不重不漏；随机模式固定种子各库混排 = 换一批。
     //     配置入口在设置里；管理页按当前服务器分桶并显示在管哪台。
-    versionCode = 100
+    // 101（修复轮，versionName 仍为 1.5.10）：设置页图标补齐 —— 用户看到聚合库
+    //     入口有图标、其他条目没有，要求统一。me.zhanghai.compose.preference 2.2.0
+    //     的 Preference/SwitchPreference/ListPreference/SliderPreference/
+    //     TextFieldPreference/TwoTargetIconButtonPreference 都支持 icon 槽位
+    //     （composable lambda，RadioButtonPreference/BasicPreference 不支持、
+    //     项目也没用）。做法：全量扫描 11 个设置页的偏好组件，凡无 icon 的一律补
+    //     Icons.Outlined.X（tint = colorScheme.primary，与既有条目同风格），图标名
+    //     逐一对照 material-icons-extended/core 1.7.8 AAR 验证存在性后注入，共
+    //     152 条；注入前先确认无位置参数调用（icon 是命名参数）。
+    versionCode = 101
     versionName = "1.5.10"
 
     vectorDrawables {

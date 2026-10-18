@@ -25,6 +25,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.BlurOn
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.ColorLens
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Hd
+import androidx.compose.material.icons.outlined.HighQuality
+import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -100,6 +108,13 @@ object DecoderPreferencesScreen : Screen {
               val profile by preferences.profile.collectAsState()
               val currentProfile = MPVProfile.fromValue(profile)
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Memory,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = currentProfile,
                 onValueChange = { preferences.profile.set(it.value) },
                 values = MPVProfile.entries,
@@ -117,6 +132,13 @@ object DecoderPreferencesScreen : Screen {
 
               val tryHWDecoding by preferences.tryHWDecoding.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Hd,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = tryHWDecoding,
                 onValueChange = {
                   preferences.tryHWDecoding.set(it)
@@ -129,6 +151,13 @@ object DecoderPreferencesScreen : Screen {
               val gpuNext by preferences.gpuNext.collectAsState()
               val useVulkan by preferences.useVulkan.collectAsState() // Added to check Vulkan state
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Bolt,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = gpuNext,
                 onValueChange = { enabled ->
                     if (enabled && !gpuNext && !useVulkan) { // Only show warning if Vulkan is disabled
@@ -201,6 +230,13 @@ object DecoderPreferencesScreen : Screen {
               // 所以直接 disable —— 摆在那儿却怎么点都不生效是最糟的（红线 29）。
               val hdrEnabled by preferences.hdrEnabled.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.HighQuality,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = hdrEnabled,
                 onValueChange = { preferences.hdrEnabled.set(it) },
                 enabled = gpuNext,
@@ -223,6 +259,13 @@ object DecoderPreferencesScreen : Screen {
 
               // val useVulkan by preferences.useVulkan.collectAsState() // Moved up for gpuNext logic
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Extension,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = useVulkan,
                 onValueChange = { enabled ->
                   preferences.useVulkan.set(enabled)
@@ -254,6 +297,13 @@ object DecoderPreferencesScreen : Screen {
 
               val debanding by preferences.debanding.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.BlurOn,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = debanding,
                 onValueChange = { preferences.debanding.set(it) },
                 values = Debanding.entries,
@@ -271,6 +321,13 @@ object DecoderPreferencesScreen : Screen {
 
               val useYUV420p by preferences.useYUV420P.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ColorLens,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = useYUV420p,
                 onValueChange = {
                   preferences.useYUV420P.set(it)
@@ -288,6 +345,13 @@ object DecoderPreferencesScreen : Screen {
               
               val enableAnime4K by preferences.enableAnime4K.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = enableAnime4K,
                 onValueChange = { enabled ->
                     preferences.enableAnime4K.set(enabled)

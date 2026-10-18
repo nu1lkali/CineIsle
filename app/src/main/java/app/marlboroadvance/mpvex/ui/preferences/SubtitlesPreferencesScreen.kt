@@ -63,6 +63,10 @@ import me.zhanghai.compose.preference.TextFieldPreference
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.outlined.AspectRatio
+import androidx.compose.material.icons.outlined.ClosedCaption
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.Subtitles
 import android.net.Uri
 import org.koin.compose.koinInject
 
@@ -163,6 +167,13 @@ object SubtitlesPreferencesScreen : Screen {
 
               val preferredLanguages by preferences.preferredLanguages.collectAsState()
               TextFieldPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Language,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = preferredLanguages,
                 onValueChange = preferences.preferredLanguages::set,
                 textToValue = { it },
@@ -197,6 +208,13 @@ object SubtitlesPreferencesScreen : Screen {
 
               val autoload by preferences.autoloadMatchingSubtitles.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Subtitles,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = autoload,
                 onValueChange = { preferences.autoloadMatchingSubtitles.set(it) },
                 title = { Text(stringResource(R.string.pref_subtitles_autoload_title)) },
@@ -212,6 +230,13 @@ object SubtitlesPreferencesScreen : Screen {
 
               val overrideAss by preferences.overrideAssSubs.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ClosedCaption,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = overrideAss,
                 onValueChange = { preferences.overrideAssSubs.set(it) },
                 title = { Text(stringResource(R.string.player_sheets_sub_override_ass)) },
@@ -227,6 +252,13 @@ object SubtitlesPreferencesScreen : Screen {
 
               val followPicture by preferences.followPictureScale.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.AspectRatio,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = followPicture,
                 onValueChange = { preferences.followPictureScale.set(it) },
                 title = { Text(stringResource(R.string.player_sheets_sub_follow_picture)) },

@@ -51,6 +51,24 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.outlined.Autorenew
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.Dashboard
+import androidx.compose.material.icons.outlined.DateRange
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Label
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.RoundedCorner
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Slideshow
+import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.material.icons.outlined.Title
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.ViewComfy
+import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -479,6 +497,13 @@ object PreferencesScreen : Screen {
 
               // 卡片右上角心形快捷收藏：点一下即可收藏 / 取消收藏
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.FavoriteBorder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = quickFavorite,
                 onValueChange = { browserPreferences.embyQuickFavorite.set(it) },
                 title = { Text(text = "卡片快捷收藏") },
@@ -494,6 +519,13 @@ object PreferencesScreen : Screen {
 
               // 详情页推荐总开关：关闭后「推荐」与「同类型推荐」在详情页整块不显示
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ThumbUp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showRecommendations,
                 onValueChange = { browserPreferences.embyShowRecommendations.set(it) },
                 title = { Text(text = "详情页推荐") },
@@ -509,6 +541,13 @@ object PreferencesScreen : Screen {
 
               // 详情页「同类型」随机选取类型：一部片常属多个类型，随机后每次打开题材不同
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Shuffle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = randomGenreRecommend,
                 onValueChange = { browserPreferences.embyRandomGenreRecommend.set(it) },
                 title = { Text(text = "同类型推荐随机选取类型") },
@@ -568,6 +607,13 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Block,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = excludePlayed,
                 onValueChange = { browserPreferences.embySimilarExcludePlayed.set(it) },
                 title = { Text(text = "推荐时排除已看过") },
@@ -584,6 +630,13 @@ object PreferencesScreen : Screen {
               // 首页「随便看看」（即混的一批）总开关。
               // 关掉后首页不再发那一次推荐请求，也不占首页一整行的位置。
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Dashboard,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = homeShowMix,
                 onValueChange = { browserPreferences.embyHomeShowMix.set(it) },
                 title = { Text(text = "首页「随便看看」") },
@@ -601,6 +654,13 @@ object PreferencesScreen : Screen {
               // 两者默认值一样，但改动的动机不同：媒体库列数是「屏幕宽窄」问题，
               // 即混列数是「一批推荐想看几列」问题。共用一个键会导致想调一边时另一边跟着变。
               SliderPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Grid3x3,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = mixColumns.toFloat(),
                 onValueChange = { browserPreferences.embyMixGridColumns.set(it.roundToInt()) },
                 sliderValue = mixColumns.toFloat(),
@@ -631,6 +691,13 @@ object PreferencesScreen : Screen {
               // 放在本分区是因为存根同源：都是 BrowserPreferences 里的 Emby 偏好。
               // ⚠️ 偏好键**不能改**，改了等于重置所有用户已有的选择。
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Link,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = resolveDirectLink,
                 onValueChange = { browserPreferences.embyResolveDirectLink.set(it) },
                 title = { Text(text = "预解析直链（302）") },
@@ -646,6 +713,13 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Delete,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = clearProgressOnDownload,
                 onValueChange = { browserPreferences.embyClearProgressOnDownload.set(it) },
                 title = { Text(text = "下载完成后清除服务端播放进度") },
@@ -670,6 +744,13 @@ object PreferencesScreen : Screen {
               val sourcePrefKey by browserPreferences.embyMediaSourcePreference.collectAsState()
               val sourcePref = MediaSourcePreference.fromKey(sourcePrefKey)
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Tune,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = sourcePref,
                 onValueChange = { browserPreferences.embyMediaSourcePreference.set(it.key) },
                 values = MediaSourcePreference.entries,
@@ -692,6 +773,13 @@ object PreferencesScreen : Screen {
               // （全屏图一张十几 MB，缓存封顶后多预取的会被后来者顶掉，等于白预取）。
               val preloadCount by browserPreferences.photoPreloadCount.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.PhotoLibrary,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = preloadCount.coerceIn(1, 3),
                 onValueChange = { browserPreferences.photoPreloadCount.set(it.coerceIn(1, 3)) },
                 values = listOf(1, 2, 3),
@@ -714,6 +802,13 @@ object PreferencesScreen : Screen {
               // 不用滑块：常用就 3 / 5 / 10 秒，拖出来的中间值没有意义。
               val slideshowInterval by browserPreferences.photoSlideshowInterval.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Slideshow,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = slideshowInterval,
                 onValueChange = { browserPreferences.photoSlideshowInterval.set(it) },
                 values = PhotoSlideshowInterval.entries,
@@ -735,6 +830,13 @@ object PreferencesScreen : Screen {
               // 全局一份、不按库分：这是看照片的习惯，不是媒体库的属性。
               val photoAutoSlideshow by browserPreferences.photoAutoSlideshow.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.PlayCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = photoAutoSlideshow,
                 onValueChange = { browserPreferences.photoAutoSlideshow.set(it) },
                 title = { Text(text = "进入照片浏览器自动播放幻灯片") },
@@ -760,6 +862,13 @@ object PreferencesScreen : Screen {
               //    别在两个入口各做一个 —— 同一个用户对「底部要不要缩略图」的偏好不会分两套。
               val photoFilmstrip by browserPreferences.photoFilmstrip.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ViewComfy,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = photoFilmstrip,
                 onValueChange = { browserPreferences.photoFilmstrip.set(it) },
                 title = { Text(text = "照片浏览器显示底部缩略图") },
@@ -833,6 +942,13 @@ object PreferencesScreen : Screen {
               if (saveDirPath.isNotBlank()) {
                 PreferenceDivider()
                 Preference(
+                  icon = {
+                    Icon(
+                      Icons.Outlined.Restore,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                    )
+                  },
                   title = { Text(text = "恢复默认保存位置") },
                   summary = {
                     Text(
@@ -859,6 +975,13 @@ object PreferencesScreen : Screen {
             val folderRandomCover by browserPreferences.embyFolderRandomCover.collectAsState()
             PreferenceCard {
               SliderPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.RoundedCorner,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = cardCorner.toFloat(),
                 onValueChange = { browserPreferences.embyCardCorner.set(it.roundToInt()) },
                 sliderValue = cardCorner.toFloat(),
@@ -876,6 +999,13 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Label,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showCardBadges,
                 onValueChange = { browserPreferences.embyShowCardBadges.set(it) },
                 title = { Text(text = "显示封面角标") },
@@ -892,6 +1022,13 @@ object PreferencesScreen : Screen {
               // 文件夹类型图标的颜色：白色对比度更高、与其它角标同语言（默认）；
               // 蓝色更醒目但小尺寸在深炭底上会发灰，所以做成开关让用户自己选。
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Folder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = folderIconBlue,
                 onValueChange = { browserPreferences.embyFolderIconBlue.set(it) },
                 title = { Text(text = "文件夹图标使用蓝色") },
@@ -909,6 +1046,13 @@ object PreferencesScreen : Screen {
               // 开＝随机取样（每次可能不一样）；关＝按名称固定取前几张。
               // 两种模式都会跳过没封面的条目、一直往后凑满四张，所以不会整张空白。
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Widgets,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = folderRandomCover,
                 onValueChange = { browserPreferences.embyFolderRandomCover.set(it) },
                 title = { Text(text = "合成随机封面图") },
@@ -934,6 +1078,13 @@ object PreferencesScreen : Screen {
                 PreferenceDivider()
 
                 ListPreference(
+                  icon = {
+                    Icon(
+                      Icons.Outlined.Autorenew,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                    )
+                  },
                   value = coverPolicy,
                   onValueChange = { picked ->
                     browserPreferences.embyFolderCoverRefreshPolicy.set(picked)
@@ -959,6 +1110,13 @@ object PreferencesScreen : Screen {
                 if (coverPolicy == FolderCoverRefreshPolicy.Hours) {
                   PreferenceDivider()
                   Preference(
+                    icon = {
+                      Icon(
+                        Icons.Outlined.Schedule,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                      )
+                    },
                     title = { Text(text = "间隔小时数") },
                     summary = {
                       Text(
@@ -973,6 +1131,13 @@ object PreferencesScreen : Screen {
                 if (coverPolicy == FolderCoverRefreshPolicy.Days) {
                   PreferenceDivider()
                   Preference(
+                    icon = {
+                      Icon(
+                        Icons.Outlined.DateRange,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                      )
+                    },
                     title = { Text(text = "间隔天数") },
                     summary = {
                       Text(
@@ -1074,6 +1239,13 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Layers,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = drillDownOnTap,
                 onValueChange = { browserPreferences.embyRandomDrillDownOnTap.set(it) },
                 title = { Text(text = "随机播放默认下钻") },
@@ -1098,6 +1270,13 @@ object PreferencesScreen : Screen {
               // **不关**「当前目录 / 范围内没有可播放内容」这类失败提示 ——
               // 那是唯一的反馈，关掉就退化成「点了没反应」。
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Gesture,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = gestureToast,
                 onValueChange = { browserPreferences.embyRandomGestureToast.set(it) },
                 title = { Text(text = "显示手势提示") },
@@ -1139,6 +1318,13 @@ object PreferencesScreen : Screen {
             val browserPreferences = koinInject<BrowserPreferences>()
             val folderCoverEnabled by browserPreferences.folderCoverEnabled.collectAsState()
             SwitchPreference(
+              icon = {
+                Icon(
+                  Icons.Outlined.FolderOpen,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                )
+              },
               value = folderCoverEnabled,
               onValueChange = { browserPreferences.folderCoverEnabled.set(it) },
               title = { Text(text = "文件夹封面") },
@@ -1163,6 +1349,13 @@ object PreferencesScreen : Screen {
             val browserPreferences = koinInject<BrowserPreferences>()
             val gridTitleLines by browserPreferences.networkGridTitleLines.collectAsState()
             ListPreference(
+              icon = {
+                Icon(
+                  Icons.Outlined.Title,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                )
+              },
               value = gridTitleLines,
               onValueChange = { browserPreferences.networkGridTitleLines.set(it) },
               values = GridTitleLines.entries,

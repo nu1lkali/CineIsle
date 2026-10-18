@@ -15,6 +15,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.outlined.CalendarToday
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.Label
+import androidx.compose.material.icons.outlined.Segment
+import androidx.compose.material.icons.outlined.SwapVert
+import androidx.compose.material.icons.outlined.Title
+import androidx.compose.material.icons.outlined.TouchApp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -126,6 +134,13 @@ object AppearancePreferencesScreen : Screen {
 
                             // AMOLED mode toggle
                             SwitchPreference(
+                                icon = {
+                                  Icon(
+                                    Icons.Outlined.DarkMode,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                  )
+                                },
                                 value = amoledMode,
                                 onValueChange = { newValue ->
                                     preferences.amoledMode.set(newValue)
@@ -150,6 +165,13 @@ object AppearancePreferencesScreen : Screen {
                         PreferenceCard {
                             val unlimitedNameLines by preferences.unlimitedNameLines.collectAsState()
                             SwitchPreference(
+                                icon = {
+                                  Icon(
+                                    Icons.Outlined.Title,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                  )
+                                },
                                 value = unlimitedNameLines,
                                 onValueChange = { preferences.unlimitedNameLines.set(it) },
                                 title = {
@@ -169,6 +191,13 @@ object AppearancePreferencesScreen : Screen {
 
                             val showUnplayedOldVideoLabel by preferences.showUnplayedOldVideoLabel.collectAsState()
                             SwitchPreference(
+                                icon = {
+                                  Icon(
+                                    Icons.Outlined.Label,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                  )
+                                },
                                 value = showUnplayedOldVideoLabel,
                                 onValueChange = { preferences.showUnplayedOldVideoLabel.set(it) },
                                 title = {
@@ -188,6 +217,13 @@ object AppearancePreferencesScreen : Screen {
 
                             val unplayedOldVideoDays by preferences.unplayedOldVideoDays.collectAsState()
                             SliderPreference(
+                                icon = {
+                                  Icon(
+                                    Icons.Outlined.CalendarToday,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                  )
+                                },
                                 value = unplayedOldVideoDays.toFloat(),
                                 onValueChange = { preferences.unplayedOldVideoDays.set(it.roundToInt()) },
                                 title = { Text(text = stringResource(id = R.string.pref_appearance_unplayed_old_video_days_title)) },
@@ -210,6 +246,13 @@ object AppearancePreferencesScreen : Screen {
 
                             val autoScrollToLastPlayed by browserPreferences.autoScrollToLastPlayed.collectAsState()
                             SwitchPreference(
+                                icon = {
+                                  Icon(
+                                    Icons.Outlined.SwapVert,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                  )
+                                },
                                 value = autoScrollToLastPlayed,
                                 onValueChange = { browserPreferences.autoScrollToLastPlayed.set(it) },
                                 title = {
@@ -231,6 +274,13 @@ object AppearancePreferencesScreen : Screen {
                             // 即自动遵循本设置；新增长列表不要绕过壳直接调滚动条库。
                             val sideScrollbar by browserPreferences.sideScrollbarEnabled.collectAsState()
                             SwitchPreference(
+                                icon = {
+                                  Icon(
+                                    Icons.Outlined.Segment,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                  )
+                                },
                                 value = sideScrollbar,
                                 onValueChange = { browserPreferences.sideScrollbarEnabled.set(it) },
                                 title = {
@@ -256,6 +306,13 @@ object AppearancePreferencesScreen : Screen {
 
                             val watchedThreshold by browserPreferences.watchedThreshold.collectAsState()
                             SliderPreference(
+                                icon = {
+                                  Icon(
+                                    Icons.Outlined.CheckCircle,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                  )
+                                },
                                 value = watchedThreshold.toFloat(),
                                 onValueChange = { browserPreferences.watchedThreshold.set(it.roundToInt()) },
                                 sliderValue = watchedThreshold.toFloat(),
@@ -278,6 +335,13 @@ object AppearancePreferencesScreen : Screen {
 
                             val tapThumbnailToSelect by gesturePreferences.tapThumbnailToSelect.collectAsState()
                             SwitchPreference(
+                                icon = {
+                                  Icon(
+                                    Icons.Outlined.TouchApp,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                  )
+                                },
                                 value = tapThumbnailToSelect,
                                 onValueChange = { gesturePreferences.tapThumbnailToSelect.set(it) },
                                 title = {

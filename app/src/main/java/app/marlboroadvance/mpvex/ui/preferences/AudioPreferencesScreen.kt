@@ -15,6 +15,13 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Equalizer
+import androidx.compose.material.icons.outlined.GraphicEq
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.SurroundSound
+import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -84,6 +91,13 @@ object AudioPreferencesScreen : Screen {
             PreferenceCard {
           val preferredLanguages by preferences.preferredLanguages.collectAsState()
           TextFieldPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.Language,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = preferredLanguages,
             onValueChange = { preferences.preferredLanguages.set(it) },
             textToValue = { it },
@@ -116,6 +130,13 @@ object AudioPreferencesScreen : Screen {
           PreferenceDivider()
           val audioPitchCorrection by preferences.audioPitchCorrection.collectAsState()
           SwitchPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.GraphicEq,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = audioPitchCorrection,
             onValueChange = { preferences.audioPitchCorrection.set(it) },
             title = { Text(stringResource(R.string.pref_audio_pitch_correction_title)) },
@@ -130,6 +151,13 @@ object AudioPreferencesScreen : Screen {
           PreferenceDivider()
           val volumeNormalization by preferences.volumeNormalization.collectAsState()
           SwitchPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.VolumeUp,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = volumeNormalization,
             onValueChange = { preferences.volumeNormalization.set(it) },
             title = { Text(stringResource(R.string.pref_audio_volume_normalization_title)) },
@@ -146,6 +174,13 @@ object AudioPreferencesScreen : Screen {
             PreferenceDivider()
             val normalizationStrength by preferences.normalizationStrength.collectAsState()
             ListPreference(
+              icon = {
+                Icon(
+                  Icons.Outlined.Equalizer,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                )
+              },
               value = normalizationStrength,
               onValueChange = { preferences.normalizationStrength.set(it) },
               values = VolumeNormalizationStrength.entries,
@@ -163,6 +198,13 @@ object AudioPreferencesScreen : Screen {
           PreferenceDivider()
           val automaticBackgroundPlayback by preferences.automaticBackgroundPlayback.collectAsState()
           SwitchPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.PlayCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = automaticBackgroundPlayback,
             onValueChange = { preferences.automaticBackgroundPlayback.set(it) },
             title = { Text(stringResource(R.string.background_playback_title)) },
@@ -171,6 +213,13 @@ object AudioPreferencesScreen : Screen {
           PreferenceDivider()
           val audioChannel by preferences.audioChannels.collectAsState()
           ListPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.SurroundSound,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = audioChannel,
             onValueChange = { preferences.audioChannels.set(it) },
             values = AudioChannels.entries,
@@ -187,6 +236,13 @@ object AudioPreferencesScreen : Screen {
           PreferenceDivider()
           val volumeBoostCap by preferences.volumeBoostCap.collectAsState()
           SliderPreference(
+            icon = {
+              Icon(
+                Icons.Outlined.Bolt,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
             value = volumeBoostCap.toFloat(),
             onValueChange = { preferences.volumeBoostCap.set(it.toInt()) },
             title = { Text(stringResource(R.string.pref_audio_volume_boost_cap)) },

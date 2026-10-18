@@ -16,6 +16,38 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.outlined.Animation
+import androidx.compose.material.icons.outlined.Audiotrack
+import androidx.compose.material.icons.outlined.Autorenew
+import androidx.compose.material.icons.outlined.BatteryFull
+import androidx.compose.material.icons.outlined.BrightnessMedium
+import androidx.compose.material.icons.outlined.Crop
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.ExitToApp
+import androidx.compose.material.icons.outlined.FastForward
+import androidx.compose.material.icons.outlined.Gesture
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.LightMode
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.PictureInPictureAlt
+import androidx.compose.material.icons.outlined.PlaylistPlay
+import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.ScreenRotation
+import androidx.compose.material.icons.outlined.SdCard
+import androidx.compose.material.icons.outlined.SkipNext
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.Straighten
+import androidx.compose.material.icons.outlined.Subtitles
+import androidx.compose.material.icons.outlined.SwapVert
+import androidx.compose.material.icons.outlined.Swipe
+import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.TouchApp
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VolumeUp
+import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -102,6 +134,13 @@ object PlayerPreferencesScreen : Screen {
             PreferenceCard {
               val orientation by preferences.orientation.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ScreenRotation,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = orientation,
                 onValueChange = preferences.orientation::set,
                 values = PlayerOrientation.entries,
@@ -119,6 +158,13 @@ object PlayerPreferencesScreen : Screen {
               
               val savePositionOnQuit by preferences.savePositionOnQuit.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Save,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = savePositionOnQuit,
                 onValueChange = preferences.savePositionOnQuit::set,
                 title = { Text(stringResource(R.string.pref_player_save_position_on_quit)) },
@@ -128,6 +174,13 @@ object PlayerPreferencesScreen : Screen {
               
               val closeAfterEndOfVideo by preferences.closeAfterReachingEndOfVideo.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ExitToApp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = closeAfterEndOfVideo,
                 onValueChange = preferences.closeAfterReachingEndOfVideo::set,
                 title = { Text(stringResource(id = R.string.pref_player_close_after_eof)) },
@@ -137,6 +190,13 @@ object PlayerPreferencesScreen : Screen {
               
               val autoplayNextVideo by preferences.autoplayNextVideo.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.PlaylistPlay,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = autoplayNextVideo,
                 onValueChange = preferences.autoplayNextVideo::set,
                 title = { Text(text = stringResource(R.string.i18n_autoplay_next_video)) },
@@ -156,6 +216,13 @@ object PlayerPreferencesScreen : Screen {
               // 自动连播倒计时：0 = 播完直接切下一集（原来的行为）
               val autoplayCountdown by preferences.autoplayNextCountdownSeconds.collectAsState()
               ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Timer,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = autoplayCountdown,
                 onValueChange = { preferences.autoplayNextCountdownSeconds.set(it) },
                 title = { Text("连播下一集倒计时") },
@@ -185,6 +252,13 @@ object PlayerPreferencesScreen : Screen {
 
               val rememberSpeed by preferences.rememberSpeedPerSeries.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Speed,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = rememberSpeed,
                 onValueChange = preferences.rememberSpeedPerSeries::set,
                 title = { Text("记住每部剧的播放速度") },
@@ -204,6 +278,13 @@ object PlayerPreferencesScreen : Screen {
 
               val rememberAudioTrack by preferences.rememberAudioTrackPerSeries.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Audiotrack,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = rememberAudioTrack,
                 onValueChange = preferences.rememberAudioTrackPerSeries::set,
                 title = { Text("记住每部剧选择的音轨") },
@@ -223,6 +304,13 @@ object PlayerPreferencesScreen : Screen {
 
               val rememberSubtitleTrack by preferences.rememberSubtitleTrackPerSeries.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Subtitles,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = rememberSubtitleTrack,
                 onValueChange = preferences.rememberSubtitleTrackPerSeries::set,
                 title = { Text(text = stringResource(R.string.pref_remember_subtitle_track_title)) },
@@ -241,6 +329,13 @@ object PlayerPreferencesScreen : Screen {
 
               val rememberGlobalSpeed by preferences.rememberGlobalSpeed.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Speed,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = rememberGlobalSpeed,
                 onValueChange = preferences.rememberGlobalSpeed::set,
                 title = { Text(text = stringResource(R.string.pref_remember_global_speed_title)) },
@@ -259,6 +354,13 @@ object PlayerPreferencesScreen : Screen {
 
               val autoSkipIntro by preferences.autoSkipIntro.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.SkipNext,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = autoSkipIntro,
                 onValueChange = preferences.autoSkipIntro::set,
                 title = { Text(text = stringResource(R.string.pref_auto_skip_intro_title)) },
@@ -277,6 +379,13 @@ object PlayerPreferencesScreen : Screen {
 
               val autoSkipOutro by preferences.autoSkipOutro.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.FastForward,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = autoSkipOutro,
                 onValueChange = preferences.autoSkipOutro::set,
                 title = { Text(text = stringResource(R.string.pref_auto_skip_outro_title)) },
@@ -299,6 +408,13 @@ object PlayerPreferencesScreen : Screen {
               // 原因：GSY 现在是**独立的一套播放页**（GsyPlayerActivity），
               // 它的配置和 mpv 播放页的配置必须各管各的，混在一起改一边会误伤另一边。
               Preference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Tune,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 title = { Text("GSY 播放器") },
                 summary = {
                   Text(
@@ -314,6 +430,13 @@ object PlayerPreferencesScreen : Screen {
 
               val preloadNextVideo by preferences.preloadNextVideo.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Download,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = preloadNextVideo,
                 onValueChange = preferences.preloadNextVideo::set,
                 title = { Text(text = stringResource(R.string.i18n_preload_next_video)) },
@@ -343,6 +466,13 @@ object PlayerPreferencesScreen : Screen {
               }
 
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Storage,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = diskCacheEnabled,
                 onValueChange = preferences.diskCacheEnabled::set,
                 title = { Text(text = stringResource(R.string.pref_player_disk_cache)) },
@@ -357,6 +487,13 @@ object PlayerPreferencesScreen : Screen {
               PreferenceDivider()
 
               SliderPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.SdCard,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = diskCacheSizeMb.toFloat(),
                 onValueChange = { preferences.diskCacheSizeMb.set(it.roundToInt()) },
                 sliderValue = diskCacheSizeMb.toFloat(),
@@ -420,6 +557,13 @@ object PlayerPreferencesScreen : Screen {
 
               val playlistMode by preferences.playlistMode.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Gesture,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = playlistMode,
                 onValueChange = preferences.playlistMode::set,
                 title = { Text(text = stringResource(R.string.i18n_enable_nav)) },
@@ -438,6 +582,13 @@ object PlayerPreferencesScreen : Screen {
 
               val rememberBrightness by preferences.rememberBrightness.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.BrightnessMedium,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = rememberBrightness,
                 onValueChange = preferences.rememberBrightness::set,
                 title = { Text(text = stringResource(R.string.pref_player_remember_brightness)) },
@@ -447,6 +598,13 @@ object PlayerPreferencesScreen : Screen {
 
               val autoPiPOnNavigation by preferences.autoPiPOnNavigation.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.PictureInPictureAlt,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = autoPiPOnNavigation,
                 onValueChange = preferences.autoPiPOnNavigation::set,
                 title = { Text("自动画中画") },
@@ -462,6 +620,13 @@ object PlayerPreferencesScreen : Screen {
 
               val keepScreenOnWhenPaused by preferences.keepScreenOnWhenPaused.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.LightMode,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = keepScreenOnWhenPaused,
                 onValueChange = preferences.keepScreenOnWhenPaused::set,
                 title = { Text("暂停时保持屏幕常亮") },
@@ -488,6 +653,13 @@ object PlayerPreferencesScreen : Screen {
             PreferenceCard {
               val showDoubleTapOvals by preferences.showDoubleTapOvals.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.TouchApp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showDoubleTapOvals,
                 onValueChange = preferences.showDoubleTapOvals::set,
                 title = { Text(stringResource(R.string.show_splash_ovals_on_double_tap_to_seek)) },
@@ -497,6 +669,13 @@ object PlayerPreferencesScreen : Screen {
               
               val showSeekTimeWhileSeeking by preferences.showSeekTimeWhileSeeking.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Schedule,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showSeekTimeWhileSeeking,
                 onValueChange = preferences.showSeekTimeWhileSeeking::set,
                 title = { Text(stringResource(R.string.show_time_on_double_tap_to_seek)) },
@@ -506,6 +685,13 @@ object PlayerPreferencesScreen : Screen {
               
               val usePreciseSeeking by preferences.usePreciseSeeking.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Straighten,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = usePreciseSeeking,
                 onValueChange = preferences.usePreciseSeeking::set,
                 title = { Text(stringResource(R.string.pref_player_use_precise_seeking)) },
@@ -515,6 +701,13 @@ object PlayerPreferencesScreen : Screen {
 
               val customSkipDuration by preferences.customSkipDuration.collectAsState()
               SliderPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Timer,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = customSkipDuration.toFloat(),
                 onValueChange = { preferences.customSkipDuration.set(it.roundToInt()) },
                 title = { Text(stringResource(R.string.pref_player_custom_skip_duration_title)) },
@@ -573,6 +766,13 @@ object PlayerPreferencesScreen : Screen {
               // 控制栏信息：时钟 / 电量两个独立开关。
               val showClock by preferences.showPlayerClock.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Schedule,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showClock,
                 onValueChange = preferences.showPlayerClock::set,
                 title = { Text(stringResource(R.string.pref_show_player_clock_title)) },
@@ -588,6 +788,13 @@ object PlayerPreferencesScreen : Screen {
 
               val showBattery by preferences.showPlayerBattery.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.BatteryFull,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showBattery,
                 onValueChange = preferences.showPlayerBattery::set,
                 title = { Text(stringResource(R.string.pref_show_player_battery_title)) },
@@ -609,6 +816,13 @@ object PlayerPreferencesScreen : Screen {
             PreferenceCard {
               val brightnessGesture by preferences.brightnessGesture.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.BrightnessMedium,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = brightnessGesture,
                 onValueChange = preferences.brightnessGesture::set,
                 title = { Text(stringResource(R.string.pref_player_gestures_brightness)) },
@@ -618,6 +832,13 @@ object PlayerPreferencesScreen : Screen {
               
               val volumeGesture by preferences.volumeGesture.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.VolumeUp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = volumeGesture,
                 onValueChange = preferences.volumeGesture::set,
                 title = { Text(stringResource(R.string.pref_player_gestures_volume)) },
@@ -627,6 +848,13 @@ object PlayerPreferencesScreen : Screen {
               
               val pinchToZoomGesture by preferences.pinchToZoomGesture.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ZoomIn,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = pinchToZoomGesture,
                 onValueChange = preferences.pinchToZoomGesture::set,
                 title = { Text(stringResource(R.string.pref_player_gestures_pinch_to_zoom)) },
@@ -636,6 +864,13 @@ object PlayerPreferencesScreen : Screen {
               
               val horizontalSwipeToSeek by preferences.horizontalSwipeToSeek.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Swipe,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = horizontalSwipeToSeek,
                 onValueChange = preferences.horizontalSwipeToSeek::set,
                 title = { Text(stringResource(R.string.pref_player_gestures_horizontal_swipe_to_seek)) },
@@ -645,6 +880,13 @@ object PlayerPreferencesScreen : Screen {
               
               val horizontalSwipeSensitivity by preferences.horizontalSwipeSensitivity.collectAsState()
               SliderPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Tune,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = horizontalSwipeSensitivity,
                 onValueChange = { preferences.horizontalSwipeSensitivity.set(it.toFixed(3)) },
                 title = { Text(stringResource(R.string.pref_player_gestures_horizontal_swipe_sensitivity)) },
@@ -668,6 +910,13 @@ object PlayerPreferencesScreen : Screen {
               // 总开关而非只管快进：马达强弱因人而异，给一个一键全关的出口比逐项关更实际。
               val hapticFeedbackEnabled by preferences.hapticFeedbackEnabled.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Notifications,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = hapticFeedbackEnabled,
                 onValueChange = preferences.hapticFeedbackEnabled::set,
                 title = { Text(stringResource(R.string.pref_player_haptic_feedback)) },
@@ -683,6 +932,13 @@ object PlayerPreferencesScreen : Screen {
               
               val holdForMultipleSpeed by preferences.holdForMultipleSpeed.collectAsState()
               SliderPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Speed,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = holdForMultipleSpeed,
                 onValueChange = { preferences.holdForMultipleSpeed.set(it.toFixed(2)) },
                 title = { Text(stringResource(R.string.pref_player_gestures_hold_for_multiple_speed)) },
@@ -705,6 +961,13 @@ object PlayerPreferencesScreen : Screen {
               
               val showDynamicSpeedOverlay by preferences.showDynamicSpeedOverlay.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Speed,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showDynamicSpeedOverlay,
                 onValueChange = preferences.showDynamicSpeedOverlay::set,
                 title = { Text("动态倍速浮层") },
@@ -725,6 +988,13 @@ object PlayerPreferencesScreen : Screen {
             PreferenceCard {
               val allowGesturesInPanels by preferences.allowGesturesInPanels.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Gesture,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = allowGesturesInPanels,
                 onValueChange = preferences.allowGesturesInPanels::set,
                 title = {
@@ -738,6 +1008,13 @@ object PlayerPreferencesScreen : Screen {
               
               val swapVolumeAndBrightness by preferences.swapVolumeAndBrightness.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.SwapVert,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = swapVolumeAndBrightness,
                 onValueChange = preferences.swapVolumeAndBrightness::set,
                 title = { Text(stringResource(R.string.swap_the_volume_and_brightness_slider)) },
@@ -747,6 +1024,13 @@ object PlayerPreferencesScreen : Screen {
               
               val showLoadingCircle by preferences.showLoadingCircle.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Autorenew,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showLoadingCircle,
                 onValueChange = preferences.showLoadingCircle::set,
                 title = { Text(stringResource(R.string.pref_player_controls_show_loading_circle)) },
@@ -757,6 +1041,13 @@ object PlayerPreferencesScreen : Screen {
               // 左下角悬浮的上一条/下一条切换按钮（mpv 播放页）
               val showFloatingPlaylistSwitcher by preferences.showFloatingPlaylistSwitcher.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Layers,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showFloatingPlaylistSwitcher,
                 onValueChange = preferences.showFloatingPlaylistSwitcher::set,
                 title = { Text("左下角悬浮切换按钮") },
@@ -773,6 +1064,13 @@ object PlayerPreferencesScreen : Screen {
             PreferenceCard {
               val showSystemStatusBar by preferences.showSystemStatusBar.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Visibility,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showSystemStatusBar,
                 onValueChange = preferences.showSystemStatusBar::set,
                 title = { Text(stringResource(R.string.pref_player_display_show_status_bar)) },
@@ -782,6 +1080,13 @@ object PlayerPreferencesScreen : Screen {
 
               val showSystemNavigationBar by preferences.showSystemNavigationBar.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Visibility,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = showSystemNavigationBar,
                 onValueChange = preferences.showSystemNavigationBar::set,
                 title = { Text("显示控件时同时显示导航栏") },
@@ -791,6 +1096,13 @@ object PlayerPreferencesScreen : Screen {
               
               val reduceMotion by preferences.reduceMotion.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Animation,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = reduceMotion,
                 onValueChange = preferences.reduceMotion::set,
                 title = { Text(stringResource(R.string.pref_player_display_reduce_player_animation)) },
@@ -802,6 +1114,13 @@ object PlayerPreferencesScreen : Screen {
               // 所以默认关闭、放在这里由用户自己决定
               val autoCropBlackBars by preferences.autoCropBlackBars.collectAsState()
               SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Crop,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
                 value = autoCropBlackBars,
                 onValueChange = preferences.autoCropBlackBars::set,
                 title = { Text(stringResource(R.string.pref_auto_crop_black_bars_title)) },
