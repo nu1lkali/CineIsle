@@ -222,7 +222,7 @@ class SettingsManager(
                 stats.imported++
               } catch (e: Exception) {
                 stats.failed++
-                stats.errors.add("Failed to import preference: ${e.message}")
+                stats.errors.add("导入偏好失败：${e.message}")
               }
             }
             TAG_NETWORK_CONNECTION -> {
@@ -235,7 +235,7 @@ class SettingsManager(
                 stats.imported++
               } catch (e: Exception) {
                 stats.failed++
-                stats.errors.add("Failed to import network connection: ${e.message}")
+                stats.errors.add("导入网络连接失败：${e.message}")
               }
             }
           }
@@ -254,7 +254,7 @@ class SettingsManager(
       }
     } catch (e: Exception) {
       stats.failed++
-      stats.errors.add("Failed to insert database data: ${e.message}")
+      stats.errors.add("写入数据库失败：${e.message}")
     }
 
     return stats

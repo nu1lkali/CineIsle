@@ -265,16 +265,16 @@ fun PermissionDeniedState(
           if (isPlayStoreBuild) {
             // Play Store build explanation
             Text(
-              text = "mpvEx needs access to your video files to provide its core functionality as a media player.",
+              text = "本应用需要读取你的视频文件，这是媒体播放器提供核心功能的前提。",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Text(
               text = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                "On Android 13 and above, this permission allows the app to read video files from your device's storage, including Downloads, Movies, and DCIM folders."
+                "在 Android 13 及以上系统，这项权限让应用可以从设备存储（包括「下载」「电影」、DCIM 等目录）读取视频文件。"
               } else {
-                "This permission allows the app to read media files from your device's storage to play videos and audio."
+                "这项权限让应用可以读取设备上的媒体文件，用来播放视频与音频。"
               },
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -288,33 +288,33 @@ fun PermissionDeniedState(
             )
 
             Text(
-              text = "• Discovering and displaying your video files\n• Playing media content\n• Loading subtitle files",
+              text = "• 发现并展示你的视频文件\n• 播放媒体内容\n• 加载字幕文件",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           } else {
             // Standard build explanation
             Text(
-              text = "mpvEx has always required storage access permission as it's essential for the app to find all media and subtitle files on your device, including the ones that are not supported by the system.",
+              text = "本应用一直需要存储访问权限：只有拿到它，才能找到设备上的全部媒体与字幕文件，包括系统本身不支持的那些格式。",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Text(
-              text = "However, due to a change in security policy, apps built for Android 11 and above now require additional permission to continue accessing the same.",
+              text = "但由于安全策略调整，Android 11 及以上系统的应用需要额外授权才能继续这样做。",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Text(
-              text = "Please know that this permission is only used for the auto-discovery of media/subtitle files on your device and will not allow us to access the private data files stored by other apps in any way.",
+              text = "请放心，这项权限只用于自动发现设备上的媒体 / 字幕文件，不会以任何方式读取其他应用存放的私有数据。",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
 
           Text(
-            text = "mpvEx is an open source project. You can review the source code and verify how permissions are used by visiting our GitHub repository at:",
+            text = "本应用是完全开源的项目。你可以访问我们的 GitHub 仓库，核对源码与权限的实际用途：",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -356,7 +356,7 @@ fun PermissionDeniedState(
           )
 
           Text(
-            text = "Be rest assured, your privacy is our utmost priority, and we neither access your files for other purposes nor transfer or store them to our servers. They remain safe on your device.",
+            text = "请放心，你的隐私是我们的最高优先级：我们不会为其他目的访问你的文件，也不会上传或存储到我们的服务器 —— 文件始终留在你自己的设备上。",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.Medium,

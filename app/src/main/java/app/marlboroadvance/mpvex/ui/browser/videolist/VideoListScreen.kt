@@ -532,8 +532,8 @@ data class VideoListScreen(
           text = {
             Text(
               text =
-                "Successfully moved ${privateSpaceMovedCount.intValue} video(s) to private space.\n\n" +
-                  "To access private space, long press on the app name at the top of the main screen.",
+                "已把 ${privateSpaceMovedCount.intValue} 个视频移到私密空间。\n\n" +
+                  "要进入私密空间，在主界面顶部「应用名」上长按。",
               style = MaterialTheme.typography.bodyMedium,
             )
           },

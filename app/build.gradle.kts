@@ -626,8 +626,38 @@ android {
     //     ⚠️ 顶栏的「3 / 120」计数器**删掉**：信息栏右下角已有同一序号，重复只把标题挤窄
     //        （网络版顶栏 3 个钮 + 返回已占 192dp）；信息栏与顶栏同隐同现，没有死角。
     //     ⚠️ `photoControlsBottom` 只剩「有无胶片条」一个变量（信息栏恒有）：148dp / 84dp。
-    versionCode = 94
-    versionName = "1.5.6"
+    // 95（UI 全局体检整改 + AList 大目录只加载一半，versionName 升至 1.5.7）：两批。
+    //     〔A〕四项 UI 整改（用户点名的四条）：
+    //     ① 【英文文案混进中文界面】约 70 条用户可见英文全部中文化：删除/重命名确认、
+    //        刷新与复制 Toast、导入导出、权限说明长文（整段英译中）、播放器轨/字幕/截图
+    //        提示、媒体信息页标题与错误、FileSystem 搜索态漏网的 "Searching..."。
+    //     ② 【卡片圆角只生效一半】新增 `ui/theme/CardAppearance.kt` 的 `LocalCardCorner`
+    //        （主题层与 `EmbyAppearance` 用**同一个** `embyCardCorner` 下发），本地/网络
+    //        7 个卡片文件 11 处写死的 `RoundedCornerShape(12.dp)` 改读它 ⇒「卡片圆角」
+    //        设置现在真的全 App 生效（此前只有 Emby 卡片跟着动）。
+    //     ③ 【网络根页半成品】把被注释掉的搜索接回来：`NetworkSearchField` 从浏览页抽到
+    //        `ui/browser/components/` 两页共用；根页按名称/地址/协议/用户名过滤连接，
+    //        有关键词时收起直链与收藏段，无命中给「没有匹配的连接」提示，返回键先退搜索。
+    //        顶栏那排写死的 `onXxx = null` 删掉（根页没有勾选态，本就不该传）。
+    //     ④ 【骨架屏只有 Emby 有】新增 `ui/browser/states/BrowserSkeleton.kt`：复用
+    //        EmbySkeleton 的扫光原语（同一份动画实例策略），圆角读 `LocalCardCorner`；
+    //        网络浏览（网格 3 列 1:1 / 列表 16:9 行）、本地目录浏览、本地搜索、
+    //        最近播放（按「网格 / 列表」设置与列数选版式）四处替换居中转圈。
+    //     〔B〕AList 大目录只加载一部分（用户报「有些目录会只加载一部分」）：
+    //     根因不在 UI —— AList 后端对 `per_page` 做归一化：`<= 0` ⇒ **默认 200 条**，
+    //     `> 500` ⇒ 截断 500（官方 API 文档 `fs/list`）。所以流传已久的「per_page: 0
+    //     一次拿全」实际只拿前 200 条，200+ 条的目录在界面上就是缺内容且无任何提示。
+    //     ① CineIsle `AlistClient.listInternal`：改「每页 500 + 自动翻页」——判据优先级
+    //        `has_more`(v3.58+) → `filtered_total`/`total` → 满页启发式；按文件名去重；
+    //        50 页（25000 条）保护上限 + 本页无新增即停（防服务端忽略 page 死循环）；
+    //        `listPage` 单页解析，签名仍逐页写入 `signCache`。
+    //     ② AlistClientN（Flutter）：新增 `lib/net/alist_fs.dart` 的 `AlistFs.requestAll`
+    //        （与 `requestNetwork` 同形，便于逐点替换；首页失败才回调 onError），12 处
+    //        `per_page: 0` 的全量场景全部改走它：目录浏览 / 子目录预加载 / 空目录清理 /
+    //        收藏与最近播放的缩略图 / 复制移动选目录 / 详情页「N 个项目」与递归体积 /
+    //        整理器的目标目录重名缓存 / 歌词目录；目录级 TikTok 播放也一并拉全。
+    versionCode = 95
+    versionName = "1.5.7"
 
     vectorDrawables {
       useSupportLibrary = true

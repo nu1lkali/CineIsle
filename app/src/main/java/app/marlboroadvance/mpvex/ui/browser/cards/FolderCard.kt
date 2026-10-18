@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.ui.theme.LocalCardCorner
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.media.model.VideoFolder
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
@@ -119,7 +120,7 @@ fun FolderCard(
           modifier = Modifier
             .width(thumbWidthDp)
             .height(thumbHeightDp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(LocalCardCorner.current))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .combinedClickable(
               onClick = onThumbClick,
@@ -206,7 +207,7 @@ fun FolderCard(
           modifier =
             Modifier
               .size(64.dp)
-              .clip(RoundedCornerShape(12.dp))
+              .clip(RoundedCornerShape(LocalCardCorner.current))
               .background(MaterialTheme.colorScheme.surfaceContainerHigh)
               .combinedClickable(
                 onClick = onThumbClick,

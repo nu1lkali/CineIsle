@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SignalWifiConnectedNoInternet4
 import androidx.compose.material.icons.rounded.SignalWifiStatusbarConnectedNoInternet4
 import androidx.compose.material3.Button
@@ -65,6 +67,7 @@ import app.marlboroadvance.mpvex.domain.network.NetworkFavorite
 import app.marlboroadvance.mpvex.domain.network.NetworkProtocol
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
+import app.marlboroadvance.mpvex.ui.browser.components.NetworkSearchField
 import app.marlboroadvance.mpvex.ui.browser.cards.NetworkConnectionCard
 import app.marlboroadvance.mpvex.ui.browser.cards.protocolAccent
 import app.marlboroadvance.mpvex.ui.browser.cards.protocolBadge
@@ -114,34 +117,73 @@ object NetworkStreamingScreen : Screen {
     //     会让推导结果与实际滚动不同步。现已整段删掉，改为常驻显示。）
     val listState = rememberLazyListState()
 
+    // ── 搜索 ────────────────────────────────────────────────────────────────
+    // 这一页原来的放大镜是被注释掉的（`// Search functionality disabled for production`），
+    // 顶栏只剩一个设置图标 —— 典型的「半成品」痕迹。其实这里根本不需要任何服务端能力：
+    // 连接列表本来就是全量装在内存里的，按名称 / 地址 / 协议做纯字符串过滤即可。
+    //
+    // 搜索只针对**已保存的连接**：直链段、收藏目录段都不是「连接」，有关键词时
+    // 一并收起（否则搜索结果里混着两段无关内容，反而看不出命中了什么）。
+    var searchActive by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    val trimmedQuery = searchQuery.trim()
+    val searchNarrows = trimmedQuery.isNotEmpty()
+    val visibleConnections =
+      remember(connections, trimmedQuery) {
+        if (!searchNarrows) {
+          connections
+        } else {
+          connections.filter { conn ->
+            conn.name.contains(trimmedQuery, ignoreCase = true) ||
+              conn.host.contains(trimmedQuery, ignoreCase = true) ||
+              conn.protocol.displayName.contains(trimmedQuery, ignoreCase = true) ||
+              "${conn.host}:${conn.port}".contains(trimmedQuery, ignoreCase = true) ||
+              conn.username.contains(trimmedQuery, ignoreCase = true)
+          }
+        }
+      }
+
+    // 返回键：搜索态先收搜索（清词 + 收键盘），再退出页面 —— 与网络浏览页同一手势。
+    BackHandler(enabled = searchActive) {
+      searchActive = false
+      searchQuery = ""
+    }
+
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
 
     Scaffold(
         topBar = {
-          BrowserTopBar(
-            title = "网络",
-            isInSelectionMode = false,
-            selectedCount = 0,
-            totalCount = 0,
-            onBackClick = null, // No back button for network screen (root tab)
-            onCancelSelection = { },
-          onSortClick = null,
-          // Search functionality disabled for production
-          onSearchClick = null,
-          onSettingsClick = {
-            backstack.add(app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen)
-          },
-          onDeleteClick = null,
-          onRenameClick = null,
-          isSingleSelection = false,
-          onInfoClick = null,
-          onShareClick = null,
-          onPlayClick = null,
-          onSelectAll = null,
-          onInvertSelection = null,
-          onDeselectAll = null,
-        )
-      },
+          Column {
+            BrowserTopBar(
+              title = "网络",
+              isInSelectionMode = false,
+              selectedCount = 0,
+              totalCount = 0,
+              onBackClick = null, // 根 tab，没有返回
+              onCancelSelection = { },
+              // 根页列表没有勾选态，选择模式相关的 action（删除 / 重命名 / 信息 / 分享 /
+              // 播放 / 全选…）在这页本来就不存在，一律不传 —— 不再写一排 `= null` 占位。
+              // 排序也不需要：连接顺序由「置顶 + 添加顺序」决定（DAO: pinned DESC, id ASC）。
+              onSearchClick = if (connections.isEmpty()) null else ({ searchActive = true }),
+              onSettingsClick = {
+                backstack.add(app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen)
+              },
+            )
+            // 搜索条与顶栏同处 topBar：Scaffold 会把它算进 content padding，
+            // 内容区不会钻到搜索条底下（与网络浏览页的版式一致）。
+            if (searchActive) {
+              NetworkSearchField(
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                onClose = {
+                  searchActive = false
+                  searchQuery = ""
+                },
+                placeholder = "搜索连接…",
+              )
+            }
+          }
+        },
       floatingActionButton = {
         // 常驻显示：这是本页唯一的高频操作（添加连接），「滚动就消失」只会让用户
         // 以为没入口（原来的显隐判据本身也是坏的，见上面 listState 处的注释）。
@@ -168,17 +210,20 @@ object NetworkStreamingScreen : Screen {
         ),
       ) {
           // Section 1: Stream Link
-          item {
-            StreamLinkSection(
-              onPlayLink = { url ->
-                MediaUtils.playFile(url, context, "network_stream")
-              },
-            )
+          // 内容：直链输入框。有关键词时收起 —— 搜索只针对「已保存的连接」。
+          if (!searchNarrows) {
+            item {
+              StreamLinkSection(
+                onPlayLink = { url ->
+                  MediaUtils.playFile(url, context, "network_stream")
+                },
+              )
+            }
           }
 
           // Section 1.5: 收藏的目录（快捷入口）
-          // 空则整段隐藏 —— 没有收藏时不该占着一行标题
-          if (favorites.isNotEmpty()) {
+          // 空则整段隐藏 —— 没有收藏时不该占着一行标题；搜索态同样收起。
+          if (!searchNarrows && favorites.isNotEmpty()) {
             item {
               FavoriteDirsSection(
                 favorites = favorites,
@@ -214,12 +259,16 @@ object NetworkStreamingScreen : Screen {
           // Section 2: 已保存的连接（原来是「局域网」—— 但用户完全可能在公网服务器上
           // 跑 SMB / WebDAV / AList，写死「局域网」既不准确也劝退）
           item {
-            Spacer(modifier = Modifier.height(24.dp))
-            SectionHeader(stringResource(R.string.i18n_network_locations))
+            if (!searchNarrows) {
+              Spacer(modifier = Modifier.height(24.dp))
+              SectionHeader(stringResource(R.string.i18n_network_locations))
+            } else {
+              SectionHeader("搜索结果")
+            }
           }
 
-          // Show empty state or connection list
-          if (connections.isEmpty()) {
+          // 没有连接（且没在搜索）才显示引导卡；搜索无命中另给提示
+          if (connections.isEmpty() && !searchNarrows) {
             item {
               Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -257,7 +306,39 @@ object NetworkStreamingScreen : Screen {
               }
             }
           } else {
-            items(connections, key = { it.id }) { connection ->
+            // 搜索无命中：给一句人话 + 能搜什么，而不是留一片空白让人以为列表坏了
+            if (searchNarrows && visibleConnections.isEmpty()) {
+              item {
+                Column(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 24.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                  Icon(
+                    imageVector = Icons.Filled.Search,
+                    contentDescription = null,
+                    modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                  )
+                  Spacer(modifier = Modifier.height(12.dp))
+                  Text(
+                    text = "没有匹配的连接",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                  )
+                  Spacer(modifier = Modifier.height(6.dp))
+                  Text(
+                    text = "可以搜名称、地址或协议（SMB / FTP / WebDAV / AList）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                  )
+                }
+              }
+            }
+            items(visibleConnections, key = { it.id }) { connection ->
               val status = connectionStatuses[connection.id]
               NetworkConnectionCard(
                 connection = connection,

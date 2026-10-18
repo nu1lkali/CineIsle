@@ -56,7 +56,7 @@ fun FileOperationProgressDialog(
     },
     title = {
       Text(
-        text = "$operationName files",
+        text = "$operationName 个文件",
         style = MaterialTheme.typography.headlineMedium,
         fontWeight = FontWeight.Bold,
       )
@@ -189,7 +189,7 @@ fun FileOperationProgressDialog(
 @Composable
 fun LoadingDialog(
   isOpen: Boolean,
-  message: String = "Loading...",
+  message: String = "处理中…",
   onDismissRequest: () -> Unit = {},
 ) {
   if (!isOpen) return

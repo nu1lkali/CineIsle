@@ -544,7 +544,7 @@ fun TimePickerDialog(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-              text = stringResource(R.string.timer_title), // "Sleep Timer"
+              text = stringResource(R.string.timer_title), // "定时停止"
               style = MaterialTheme.typography.labelMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )

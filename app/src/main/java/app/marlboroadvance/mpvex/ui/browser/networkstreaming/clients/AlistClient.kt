@@ -34,8 +34,9 @@ import java.util.concurrent.TimeUnit
  * ## 为什么放着 WebDAV 不用、单做一套
  *
  * 同一台 AList 服务器，WebDAV 与原生 API 的差别是数量级的：
- * - **列目录**：`POST /api/fs/list` 一次拿全目录，还白送每条的 `sign`（免认证直链
- *   签名）与 `thumb`；WebDAV 要一次 PROPFIND 再逐条取。
+ * - **列目录**：`POST /api/fs/list` 一个接口拿全目录（内部按每页 500 自动翻页补齐，
+ *   见 [listInternal]），还白送每条的 `sign`（免认证直链签名）与 `thumb`；
+ *   WebDAV 要一次 PROPFIND 再逐条取。
  * - **认证**：`POST /api/auth/login` 换一次 token，之后只带 `Authorization` 头。
  *   WebDAV 是 Basic，每请求都要解一次 Keystore 里的密码密文。
  * - **播放**：`fs/get` 给的 `raw_url` / 签名 `/d/` 直链可以直接丢给播放器，
@@ -83,6 +84,24 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
 
     /** AList 的 `code` 字段：200 = 成功；401 = token 失效需要重登 */
     private const val CODE_OK = 200
+
+    /**
+     * `fs/list` 每页条数 —— **必须是显式正数**，别写 0。
+     *
+     * AList 后端对 `per_page` 有归一化：`per_page <= 0` ⇒ **默认 200**，
+     * `per_page > 500` ⇒ 截断成 500（官方 API 文档 `fs/list` 的归一化规则）。
+     * 所以「per_page = 0 一次拿全」是个流传很广的误解：实际只拿前 200 条，
+     * 大目录在界面上就只显示一部分。这里取服务端上限 500，配合翻页拉全。
+     */
+    private const val ALIST_PAGE_SIZE = 500
+
+    /**
+     * 翻页保护上限：500 × 50 = 25000 条。
+     *
+     * 用满即停并打日志，防的是「服务端 / 中间层忽略 page，每次都返回同一批」
+     * 这类异常情形把列目录变成死循环（正常目录根本到不了这里）。
+     */
+    private const val MAX_LIST_PAGES = 50
 
     /**
      * 路径→签名 缓存的上限。超了**直接清空**而不是 LRU 淘汰 ——
@@ -536,43 +555,86 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
       data
     }
 
-  /** `POST /api/fs/list` */
+  /** `POST /api/fs/list` —— 自动翻页，把这个目录**全部**条目拉回来 */
   private fun listInternal(path: String): List<NetworkFile> =
     withAuthRetry {
-      val raw = postJson(
-        endpoint = "fs/list",
-        // page / per_page 是**数字**、refresh 是**布尔** —— 写成字符串服务端会拒绝
-        // （见 [postJson] 的说明）
-        body = buildJsonObject {
-          put("path", fsPath(path))
-          put("password", "")
-          put("page", 1)
-          // per_page=0 = 不分页，一次拿全（参考项目默认就这么干）
-          put("per_page", 0)
-          put("refresh", false)
-        },
-        withAuth = true,
-      )
+      // ⚠️ 为什么要翻页（踩过的坑，别再改回 `per_page = 0` 单次请求）：
+      //    AList 后端对 per_page 有归一化 —— `per_page <= 0` 会被替换成**默认 200**，
+      //    `per_page > 500` 会被**截断成 500**（见官方 API 文档 `fs/list` 的说明）。
+      //    也就是说 `per_page: 0` 从来不是「一次拿全」，而是「只拿前 200 条」；
+      //    大目录（番剧一季、照片文件夹）在界面上就只显示一部分，而且**没有任何提示**。
+      //    正确做法是每页 500（服务端上限）+ 按 `total` / `has_more` 翻到收齐。
+      val merged = LinkedHashMap<String, NetworkFile>()
+      val parent = path.trim('/')
+      var page = 1
+      while (true) {
+        val chunk = listPage(path, page)
+        var added = 0
+        chunk.items.forEach { item ->
+          val name = item.name
+          if (name.isBlank()) return@forEach
+          val file =
+            NetworkFile(
+              name = name,
+              path = if (parent.isEmpty()) name else "$parent/$name",
+              size = item.size,
+              isDirectory = item.isDir,
+              lastModified = parseModified(item.modified),
+              mimeType = if (item.isDir) null else guessNetworkMimeType(name),
+              sign = item.sign.takeIf { it.isNotBlank() },
+            )
+          if (merged.put(name, file) == null) added++
+          // 顺手把签名记进缓存：照片取流就是最后一跳，不必再为它发一次 fs/get
+          rememberSign(file.path, file.sign)
+        }
+        // 停下来的四种情形：本页空 / 服务端忽略了 page 返回同一批 / 已经收齐 / 到达保护上限
+        if (chunk.items.isEmpty() || added == 0) break
+        if (!chunk.hasMore) break
+        if (page >= MAX_LIST_PAGES) {
+          Log.w(TAG, "目录条目超过 ${MAX_LIST_PAGES * ALIST_PAGE_SIZE} 条，只取了前 $page 页：$path")
+          break
+        }
+        page++
+      }
+      merged.values.toList()
+    }
+
+  /** 拉取 `fs/list` 的**某一页**，并顺带判断「还有没有下一页」 */
+  private fun listPage(path: String, page: Int): AlistPage =
+    postJson(
+      endpoint = "fs/list",
+      // page / per_page 是**数字**、refresh 是**布尔** —— 写成字符串服务端会拒绝
+      // （见 [postJson] 的说明）
+      body = buildJsonObject {
+        put("path", fsPath(path))
+        put("password", "")
+        put("page", page)
+        put("per_page", ALIST_PAGE_SIZE)
+        put("refresh", false)
+      },
+      withAuth = true,
+    ).let { raw ->
       val parsed = json.decodeFromString<AlistResp<AlistFsListData>>(raw)
       if (parsed.code != CODE_OK) throw AlistApiException(parsed.code, parsed.message)
-      val parent = path.trim('/')
-      (parsed.data?.content ?: emptyList()).mapNotNull { item ->
-        val name = item.name
-        if (name.isBlank()) return@mapNotNull null
-        val file =
-          NetworkFile(
-            name = name,
-            path = if (parent.isEmpty()) name else "$parent/$name",
-            size = item.size,
-            isDirectory = item.isDir,
-            lastModified = parseModified(item.modified),
-            mimeType = if (item.isDir) null else guessNetworkMimeType(name),
-            sign = item.sign.takeIf { it.isNotBlank() },
-          )
-        // 顺手把签名记进缓存：照片取流就是最后一跳，不必再为它发一次 fs/get
-        rememberSign(file.path, file.sign)
-        file
-      }
+      val data = parsed.data
+      val items = data?.content ?: emptyList()
+      // 「还有下一页吗」的判据按可靠性排序，三个来源都要兜住：
+      //  1. `has_more` —— v3.58.0 起才有，最准；
+      //  2. `filtered_total` / `total` —— 老版本也有，但 `total` 在部分驱动上可能不准；
+      //  3. 都没给（或恒为 0）时退回「满页即可能还有」——最坏情况只是多请求一次空页。
+      val filteredTotal = data?.filteredTotal ?: 0
+      val total = data?.total ?: 0
+      val reportedTotal = if (filteredTotal > 0) filteredTotal else total
+      val effectivePerPage = (data?.perPage ?: 0).takeIf { it > 0 } ?: ALIST_PAGE_SIZE
+      val hasMoreField = data?.hasMore
+      val hasMore =
+        when {
+          items.isEmpty() -> false
+          hasMoreField != null -> hasMoreField
+          reportedTotal > 0 -> page * effectivePerPage < reportedTotal
+          else -> items.size >= effectivePerPage
+        }
+      AlistPage(items = items, hasMore = hasMore)
     }
 
   // ── HTTP 原语 ──
@@ -702,9 +764,28 @@ private data class AlistFsItem(
 private data class AlistFsListData(
   val content: List<AlistFsItem>? = null,
   val total: Int = 0,
+  /** v3.58.0+：**过滤后**（当前用户实际可见）的总数，比 [total] 更贴近真实条数 */
+  @SerialName("filtered_total") val filteredTotal: Int = 0,
+  /** v3.58.0+：服务端归一化之后的当前页码 / 每页条数 */
+  val page: Int = 0,
+  @SerialName("per_page") val perPage: Int = 0,
+  /**
+   * v3.58.0+：是否还有下一页。
+   *
+   * ⚠️ 必须可空：老版本根本没有这个字段，解析成 `null` 才能和「明确 false」
+   * 区分开 —— 否则老服务端会被当成「没有下一页」，翻页在第一页就停住。
+   */
+  @SerialName("has_more") val hasMore: Boolean? = null,
+  @SerialName("pages_total") val pagesTotal: Int = 0,
   val readme: String = "",
   val write: Boolean = false,
   val provider: String = "",
+)
+
+/** `fs/list` 的一页：条目 + 「还有下一页吗」（见 [AlistClient.listPage] 的判据） */
+private data class AlistPage(
+  val items: List<AlistFsItem>,
+  val hasMore: Boolean,
 )
 
 /**

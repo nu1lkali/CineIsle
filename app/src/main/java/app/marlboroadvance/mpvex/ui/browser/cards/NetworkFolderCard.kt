@@ -30,6 +30,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.ui.theme.LocalCardCorner
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
@@ -81,7 +82,7 @@ fun NetworkFolderCard(
         modifier =
           Modifier
             .size(64.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(LocalCardCorner.current))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .tapAndLongPress(onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.Center,

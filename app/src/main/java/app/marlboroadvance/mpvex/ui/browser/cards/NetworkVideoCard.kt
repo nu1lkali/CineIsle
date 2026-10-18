@@ -29,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.ui.theme.LocalCardCorner
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
@@ -84,7 +85,7 @@ fun NetworkVideoCard(
         modifier =
           Modifier
             .size(thumbSizeDp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(LocalCardCorner.current))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .tapAndLongPress(onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.Center,

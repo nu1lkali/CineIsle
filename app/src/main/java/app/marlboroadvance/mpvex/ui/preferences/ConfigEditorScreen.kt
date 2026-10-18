@@ -119,7 +119,7 @@ data class ConfigEditorScreen(
             val tree = DocumentFile.fromTreeUri(context, mpvConfStorageLocation.toUri())
             if (tree == null) {
               withContext(Dispatchers.Main) {
-                Toast.makeText(context, "No storage location set", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "还没有设置保存位置", Toast.LENGTH_LONG).show()
               }
               return@launch
             }
@@ -127,7 +127,7 @@ data class ConfigEditorScreen(
             val confFile = existing ?: tree.createFile("text/plain", fileName)?.also { it.renameTo(fileName) }
             val uri = confFile?.uri ?: run {
               withContext(Dispatchers.Main) {
-                Toast.makeText(context, "Failed to create file", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "创建文件失败", Toast.LENGTH_LONG).show()
               }
               return@launch
             }
@@ -139,12 +139,12 @@ data class ConfigEditorScreen(
 
           withContext(Dispatchers.Main) {
             hasUnsavedChanges = false
-            Toast.makeText(context, "$fileName saved", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "$fileName 已保存", Toast.LENGTH_SHORT).show()
             backStack.removeLastOrNull()
           }
         } catch (e: Exception) {
           withContext(Dispatchers.Main) {
-            Toast.makeText(context, "Failed to save: ${e.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "保存失败：${e.message}", Toast.LENGTH_LONG).show()
           }
         }
       }

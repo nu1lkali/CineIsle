@@ -34,13 +34,22 @@ fun DeleteConfirmationDialog(
 ) {
   if (!isOpen) return
 
-  val itemText = if (itemCount == 1) itemType else "${itemType}s"
+  // ⚠️ 调用方传的是**英文类型名**（"video" / "folder" / "playlist"），这里翻成中文量词。
+  //    以前标题和正文直接拼英文（"Delete 3 videos?"），按钮却是中文「删除」——
+  //    同一个弹窗里两种语言，是全项目最刺眼的一处。中文没有单复数，量词就够了。
+  val noun = when (itemType) {
+    "video" -> "个视频"
+    "folder" -> "个文件夹"
+    "playlist" -> "个播放列表"
+    "photo" -> "张照片"
+    else -> "个条目"
+  }
 
   AlertDialog(
     onDismissRequest = onDismiss,
     title = {
       Text(
-        text = "Delete $itemCount $itemText?",
+        text = "删除 $itemCount$noun？",
         style = MaterialTheme.typography.headlineMedium,
         fontWeight = FontWeight.Bold,
       )
@@ -58,7 +67,7 @@ fun DeleteConfirmationDialog(
           modifier = Modifier.fillMaxWidth(),
         ) {
           Text(
-            text = "This action cannot be undone. The selected item${if (itemCount == 1) "" else "s"} will be permanently deleted.",
+            text = "此操作不可撤销，选中的 $itemCount$noun 会被永久删除。",
             style = MaterialTheme.typography.bodyLarge,
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onErrorContainer,

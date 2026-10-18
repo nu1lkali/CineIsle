@@ -51,12 +51,12 @@ fun RenameDialog(
     when {
       baseName.value.isBlank() -> {
         isError.value = true
-        errorMessage.value = "Name cannot be empty"
+        errorMessage.value = "名称不能为空"
       }
 
       baseName.value.contains("/") || baseName.value.contains("\\") -> {
         isError.value = true
-        errorMessage.value = "Name cannot contain / or \\"
+        errorMessage.value = "名称不能包含 / 或 \\"
       }
 
       else -> {

@@ -259,6 +259,8 @@ fun MpvexTheme(content: @Composable () -> Unit) {
     CompositionLocalProvider(
         LocalSpacing provides Spacing(),
         LocalThemeTransitionState provides rememberThemeTransitionState(),
+        // 本地 / 网络卡片圆角（FolderCard、VideoCard、NetworkMediaCard…）
+        LocalCardCorner provides embyCardCorner.coerceIn(0, 24).dp,
         // Emby 卡片的圆角 / 角标开关在这里统一下发（详见 EmbyAppearance）
         LocalEmbyAppearance provides EmbyAppearance(
             corner = embyCardCorner.coerceIn(0, 24).dp,

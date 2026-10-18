@@ -54,6 +54,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.ui.theme.LocalCardCorner
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkProtocol
@@ -169,7 +170,7 @@ fun NetworkConnectionCard(
         Box(
           modifier = Modifier
             .size(40.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(LocalCardCorner.current))
             .background(accent.copy(alpha = 0.16f)),
           contentAlignment = Alignment.Center,
         ) {

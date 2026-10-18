@@ -479,16 +479,16 @@ class PlayerViewModel(
         val path =
           uri.resolveUri(host.context)
             ?: return@launch withContext(Dispatchers.Main) {
-              showToast("Failed to load audio file: Invalid URI")
+              showToast("加载音轨失败：地址无效")
             }
 
         PlayerLib.command("audio-add", path, "cached")
         withContext(Dispatchers.Main) {
-          showToast("Audio track added")
+          showToast("已添加音轨")
         }
       }.onFailure { e ->
         withContext(Dispatchers.Main) {
-          showToast("Failed to load audio: ${e.message}")
+          showToast("加载音轨失败：${e.message}")
         }
         android.util.Log.e("PlayerViewModel", "Error adding audio", e)
       }
@@ -534,7 +534,7 @@ class PlayerViewModel(
       val fileName = getFileNameFromUri(uri) ?: "subtitle.srt"
 
       if (!isValidSubtitleFile(fileName)) {
-        if (!silent) withContext(Dispatchers.Main) { showToast("Invalid subtitle file format") }
+        if (!silent) withContext(Dispatchers.Main) { showToast("字幕格式不支持") }
         return
       }
 
@@ -562,9 +562,9 @@ class PlayerViewModel(
       if (!_externalSubtitles.contains(uriString)) _externalSubtitles.add(uriString)
 
       val displayName = fileName.take(30).let { if (fileName.length > 30) "$it..." else it }
-      if (!silent) withContext(Dispatchers.Main) { showToast("$displayName added") }
+      if (!silent) withContext(Dispatchers.Main) { showToast("已添加 $displayName") }
     }.onFailure {
-      if (!silent) withContext(Dispatchers.Main) { showToast("Failed to load subtitle") }
+      if (!silent) withContext(Dispatchers.Main) { showToast("加载字幕失败") }
     }
   }
 
@@ -1404,7 +1404,7 @@ class PlayerViewModel(
         // Check if file was created
         if (!tempFile.exists() || tempFile.length() == 0L) {
           withContext(Dispatchers.Main) {
-            Toast.makeText(context, "Failed to create screenshot", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "截图失败", Toast.LENGTH_SHORT).show()
           }
           return@launch
         }
@@ -1497,7 +1497,7 @@ class PlayerViewModel(
         }
       } catch (e: Exception) {
         withContext(Dispatchers.Main) {
-          Toast.makeText(context, "Failed to save snapshot: ${e.message}", Toast.LENGTH_LONG).show()
+          Toast.makeText(context, "保存截图失败：${e.message}", Toast.LENGTH_LONG).show()
         }
       } finally {
         _isSnapshotLoading.value = false
@@ -2006,7 +2006,7 @@ class PlayerViewModel(
     } else {
       PlayerLib.command("vf", "remove", "@mpvex_hflip")
     }
-    playerUpdate.value = PlayerUpdates.ShowText(if (newMirrorState) "H-Flip On" else "H-Flip Off")
+    playerUpdate.value = PlayerUpdates.ShowText(if (newMirrorState) "水平翻转：开" else "水平翻转：关")
   }
 
   fun toggleVerticalFlip() {
@@ -2020,7 +2020,7 @@ class PlayerViewModel(
       PlayerLib.command("vf", "remove", "@mpvex_vflip")
     }
 
-    playerUpdate.value = PlayerUpdates.ShowText(if (newState) "V-Flip On" else "V-Flip Off")
+    playerUpdate.value = PlayerUpdates.ShowText(if (newState) "垂直翻转：开" else "垂直翻转：关")
   }
 
   // ==================== 黑边自动裁切（cropdetect） ====================

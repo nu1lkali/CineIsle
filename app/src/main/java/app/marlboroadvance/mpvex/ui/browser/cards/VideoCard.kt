@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.ui.theme.LocalCardCorner
 import androidx.compose.ui.text.style.TextAlign
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.media.model.Video
@@ -167,7 +168,7 @@ fun VideoCard(
           modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(aspect)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(LocalCardCorner.current))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .combinedClickable(
               onClick = onThumbClick,
@@ -439,7 +440,7 @@ fun VideoCard(
             Modifier
               .width(thumbWidthDp)
               .aspectRatio(aspect)
-              .clip(RoundedCornerShape(12.dp))
+              .clip(RoundedCornerShape(LocalCardCorner.current))
               .background(MaterialTheme.colorScheme.surfaceContainerHigh)
               .combinedClickable(
                 onClick = onThumbClick,

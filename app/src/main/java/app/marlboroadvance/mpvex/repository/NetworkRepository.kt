@@ -195,7 +195,7 @@ class NetworkRepository(
             connectionId = connection.id,
             isConnected = false,
             isConnecting = false,
-            error = e.message ?: "Connection failed",
+            error = e.message ?: "连接失败",
           ),
         )
         throw e
@@ -209,7 +209,7 @@ class NetworkRepository(
           connectionId = connection.id,
           isConnected = false,
           isConnecting = false,
-          error = e.message ?: "Connection failed",
+          error = e.message ?: "连接失败",
         ),
       )
       Result.failure(e)

@@ -47,6 +47,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.ui.theme.LocalCardCorner
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.domain.network.NetworkFileType
 import app.marlboroadvance.mpvex.domain.network.type
@@ -152,7 +153,7 @@ fun NetworkMediaCard(
       // 用 tapAndLongPress 而不是 Card(onClick=)：后者接不了长按，更给不了
       // 长按坐标（菜单要锚在手指旁边）。见 tapAndLongPress 的说明。
       modifier = Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick),
-      shape = RoundedCornerShape(12.dp),
+      shape = RoundedCornerShape(LocalCardCorner.current),
       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
       Box(
@@ -332,7 +333,7 @@ fun NetworkPhotoRow(
       Box(
         modifier = Modifier
           .size(64.dp)
-          .clip(RoundedCornerShape(12.dp))
+          .clip(RoundedCornerShape(LocalCardCorner.current))
           .background(MaterialTheme.colorScheme.surfaceContainerHigh),
         contentAlignment = Alignment.Center,
       ) {
@@ -402,7 +403,7 @@ fun NetworkOtherFileRow(
       Box(
         modifier = Modifier
           .size(64.dp)
-          .clip(RoundedCornerShape(12.dp))
+          .clip(RoundedCornerShape(LocalCardCorner.current))
           .background(MaterialTheme.colorScheme.surfaceContainerHigh),
         contentAlignment = Alignment.Center,
       ) {

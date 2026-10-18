@@ -125,7 +125,7 @@ fun FolderPickerDialog(
           fontWeight = FontWeight.Bold,
         )
         Text(
-          text = selectedPath ?: "Select a storage location",
+          text = selectedPath ?: "选择存储位置",
           style = MaterialTheme.typography.bodyMedium,
           fontWeight = FontWeight.Medium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -434,13 +434,13 @@ private fun CreateFolderDialog(
       Button(
         onClick = {
           if (folderName.isBlank()) {
-            error = "Folder name cannot be empty"
+            error = "文件夹名称不能为空"
             return@Button
           }
 
           val newFolder = File(parentPath, folderName)
           if (newFolder.exists()) {
-            error = "Folder already exists"
+            error = "同名文件夹已存在"
             return@Button
           }
 
@@ -448,10 +448,10 @@ private fun CreateFolderDialog(
             if (newFolder.mkdirs()) {
               onFolderCreated(newFolder.absolutePath)
             } else {
-              error = "Failed to create folder"
+              error = "创建文件夹失败"
             }
           } catch (e: Exception) {
-            error = e.message ?: "Unknown error"
+            error = e.message ?: "未知错误"
           }
         },
         enabled = folderName.isNotBlank(),

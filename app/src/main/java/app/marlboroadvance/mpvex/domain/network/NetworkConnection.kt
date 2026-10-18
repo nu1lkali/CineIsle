@@ -49,7 +49,9 @@ enum class NetworkProtocol(val displayName: String, val defaultPort: Int) {
    * AList 原生 API（不是 WebDAV）。
    *
    * 与 WebDAV 走同一台服务器时的差别是这个协议存在的全部理由：
-   * - **一个请求拿整个目录**：`POST /api/fs/list` 一次返回全部条目，还附带
+   * - **一个接口拿整个目录**：`POST /api/fs/list` 每页 500 自动翻页，最终返回全部条目
+   *   （⚠️ `per_page: 0` 不是「一次拿全」—— 服务端会归一化成默认 200 条，大目录会少内容），
+   *   还附带
    *   每条的 `sign`（免认证直链签名）与 `thumb`；WebDAV 要做 N 次 PROPFIND。
    * - **token 换一次、用一整场**：`POST /api/auth/login` 拿 token，之后只带
    *   `Authorization` 头，不必像 Basic 认证那样每请求都解一次 Keystore 密文。

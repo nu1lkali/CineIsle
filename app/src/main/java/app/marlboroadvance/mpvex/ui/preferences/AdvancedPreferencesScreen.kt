@@ -102,7 +102,7 @@ object AdvancedPreferencesScreen : Screen {
               onFailure = { error ->
                 Toast.makeText(
                   context,
-                  "Export failed: ${error.message}",
+                  "导出失败：${error.message}",
                   Toast.LENGTH_LONG,
                 ).show()
               },
@@ -126,7 +126,7 @@ object AdvancedPreferencesScreen : Screen {
               onFailure = { error ->
                 Toast.makeText(
                   context,
-                  "Import failed: ${error.message}",
+                  "导入失败：${error.message}",
                   Toast.LENGTH_LONG,
                 ).show()
               },
@@ -261,7 +261,7 @@ object AdvancedPreferencesScreen : Screen {
                     tree.createFile("application/octet-stream", "mpv.conf")
                   }
                   withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "MPV directory ready ✓", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "MPV 目录已就绪 ✓", Toast.LENGTH_SHORT).show()
                   }
                 }
               }.onFailure { e ->
@@ -518,7 +518,7 @@ object AdvancedPreferencesScreen : Screen {
                           Toast
                             .makeText(
                               context,
-                              "Failed to clear: ${error.message}",
+                              "清理失败：${error.message}",
                               Toast.LENGTH_LONG,
                             ).show()
                         }
@@ -593,12 +593,12 @@ object AdvancedPreferencesScreen : Screen {
                       }.onSuccess {
                         withContext(Dispatchers.Main) {
                           isClearThumbsConfirmShown = false
-                          Toast.makeText(context, "Thumbnail cache cleared", Toast.LENGTH_SHORT).show()
+                          Toast.makeText(context, "缩略图缓存已清理", Toast.LENGTH_SHORT).show()
                         }
                       }.onFailure { error ->
                         withContext(Dispatchers.Main) {
                           isClearThumbsConfirmShown = false
-                          Toast.makeText(context, "Failed to clear: ${error.message}", Toast.LENGTH_LONG).show()
+                          Toast.makeText(context, "清理失败：${error.message}", Toast.LENGTH_LONG).show()
                         }
                       }
                     }

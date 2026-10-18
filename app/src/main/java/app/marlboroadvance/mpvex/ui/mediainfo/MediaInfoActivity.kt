@@ -149,7 +149,7 @@ class MediaInfoActivity : ComponentActivity() {
       val uri = extractUriFromIntent(activeIntent)
 
       if (uri == null) {
-        error = "No media file or link provided"
+        error = "没有可分析的文件或链接"
         isLoading = false
         return@LaunchedEffect
       }
@@ -170,7 +170,7 @@ class MediaInfoActivity : ComponentActivity() {
                 mediaInfoResult.audioStreams.isEmpty() &&
                 mediaInfoResult.rawReport.isEmpty()
             ) {
-              error = "Unable to read media information. The link may be unreachable or unsupported."
+              error = "无法读取媒体信息：链接可能打不开，或该格式不受支持。"
             } else {
               mediaInfo = mediaInfoResult
 
@@ -182,11 +182,11 @@ class MediaInfoActivity : ComponentActivity() {
             }
             isLoading = false
           }.onFailure { e ->
-            error = e.message ?: "Failed to load media information"
+            error = e.message ?: "加载媒体信息失败"
             isLoading = false
           }
         } catch (e: Exception) {
-          error = e.message ?: "Unknown error"
+          error = e.message ?: "未知错误"
           isLoading = false
         }
       }
@@ -488,9 +488,9 @@ class MediaInfoActivity : ComponentActivity() {
   private suspend fun copyToClipboard(content: String, fileName: String) {
     withContext(Dispatchers.Main) {
       val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-      val clip = android.content.ClipData.newPlainText("Media Info - $fileName", content)
+      val clip = android.content.ClipData.newPlainText("媒体信息 - $fileName", content)
       clipboard.setPrimaryClip(clip)
-      Toast.makeText(this@MediaInfoActivity, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+      Toast.makeText(this@MediaInfoActivity, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
     }
   }
 
@@ -511,7 +511,7 @@ class MediaInfoActivity : ComponentActivity() {
           val shareIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_STREAM, fileUri)
-            putExtra(Intent.EXTRA_SUBJECT, "Media Info - $fileName")
+            putExtra(Intent.EXTRA_SUBJECT, "媒体信息 - $fileName")
             putExtra(Intent.EXTRA_TEXT, "Media information for: $fileName")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
           }
@@ -522,7 +522,7 @@ class MediaInfoActivity : ComponentActivity() {
         withContext(Dispatchers.Main) {
           Toast.makeText(
             this@MediaInfoActivity,
-            "Failed to share: ${e.message}",
+            "分享失败：${e.message}",
             Toast.LENGTH_LONG,
           ).show()
         }

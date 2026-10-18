@@ -76,6 +76,8 @@ import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
 import app.marlboroadvance.mpvex.ui.browser.playlist.PlaylistDetailScreen
 import app.marlboroadvance.mpvex.ui.browser.selection.rememberSelectionManager
 import app.marlboroadvance.mpvex.ui.browser.sheets.PlayLinkSheet
+import app.marlboroadvance.mpvex.ui.browser.states.BrowserSkeletonGrid
+import app.marlboroadvance.mpvex.ui.browser.states.BrowserSkeletonRows
 import app.marlboroadvance.mpvex.ui.browser.states.EmptyState
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import app.marlboroadvance.mpvex.utils.media.MediaUtils
@@ -178,6 +180,18 @@ object RecentlyPlayedScreen : Screen {
     val gridState = remember { LazyGridState() }
     val browserPreferences = koinInject<BrowserPreferences>()
     val mediaLayoutMode by browserPreferences.mediaLayoutMode.collectAsState()
+    // 加载态骨架屏要跟真实版式一致（列数也照抄），否则内容落地时照样跳变
+    val videoGridColumnsPortrait by browserPreferences.videoGridColumnsPortrait.collectAsState()
+    val videoGridColumnsLandscape by browserPreferences.videoGridColumnsLandscape.collectAsState()
+    val recentGridColumns =
+      if (
+        androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
+        android.content.res.Configuration.ORIENTATION_LANDSCAPE
+      ) {
+        videoGridColumnsLandscape
+      } else {
+        videoGridColumnsPortrait
+      }
     app.marlboroadvance.mpvex.ui.browser.fab.FabScrollHelper.trackScrollForFabVisibility(
       listState = listState,
       gridState = if (mediaLayoutMode == MediaLayoutMode.GRID) gridState else null,
@@ -301,13 +315,22 @@ object RecentlyPlayedScreen : Screen {
         }
 
         isLoading && recentItems.isEmpty() -> {
-          Box(
-            modifier = Modifier
-              .fillMaxSize()
-              .padding(padding),
-            contentAlignment = Alignment.Center,
-          ) {
-            app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
+          // 骨架屏替掉居中转圈：最近播放是「网格 / 列表」二选一的布局，
+          // 骨架按当前设置摆，内容落地时不会从一圈转圈突然换成整屏卡片。
+          if (mediaLayoutMode == app.marlboroadvance.mpvex.preferences.MediaLayoutMode.GRID) {
+            BrowserSkeletonGrid(
+              columns = recentGridColumns,
+              ratio = 16f / 9f,
+              itemCount = 12,
+              modifier = Modifier.padding(padding),
+            )
+          } else {
+            BrowserSkeletonRows(
+              itemCount = 8,
+              thumbWidth = 160.dp,
+              thumbRatio = 16f / 9f,
+              modifier = Modifier.padding(padding),
+            )
           }
         }
 
@@ -352,23 +375,18 @@ object RecentlyPlayedScreen : Screen {
       if (deleteDialogOpen.value && selectionManager.isInSelectionMode) {
         // Remove selected items from history
         val itemCount = selectionManager.selectedCount
-        val itemText = if (itemCount == 1) "item" else "items"
         val deleteFiles = deleteFilesCheckbox.value
 
         val title = if (deleteFiles) {
-          "Delete $itemCount $itemText?"
+          "删除 $itemCount 个条目？"
         } else {
-          "Remove $itemCount $itemText from history?"
+          "从历史记录中移除 $itemCount 个条目？"
         }
 
-        val subtitle = buildString {
-          if (deleteFiles) {
-            append("This will permanently delete the original video file(s) from your device storage.\n\n")
-            append("This action cannot be undone.")
-          } else {
-            append("This will remove the selected $itemText from your recently played list. ")
-            append("The original video files will not be deleted.")
-          }
+        val subtitle = if (deleteFiles) {
+          "这会从设备存储中永久删除原视频文件。\n\n此操作不可撤销。"
+        } else {
+          "只会把选中的 $itemCount 个条目从「最近播放」里移除，原视频文件不会被删除。"
         }
 
         ConfirmDialog(

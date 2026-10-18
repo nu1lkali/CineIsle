@@ -104,6 +104,7 @@ import app.marlboroadvance.mpvex.ui.browser.dialogs.ViewModeSelector
 import app.marlboroadvance.mpvex.ui.browser.dialogs.VisibilityToggle
 import app.marlboroadvance.mpvex.ui.browser.selection.rememberSelectionManager
 import app.marlboroadvance.mpvex.ui.browser.sheets.PlayLinkSheet
+import app.marlboroadvance.mpvex.ui.browser.states.BrowserSkeletonRows
 import app.marlboroadvance.mpvex.ui.browser.states.EmptyState
 import app.marlboroadvance.mpvex.ui.browser.states.PermissionDeniedState
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
@@ -1062,14 +1063,14 @@ private fun FileSystemBrowserContent(
 
   when {
     isLoading -> {
-      Box(
-        modifier = modifier
-          .fillMaxSize()
-          .padding(bottom = 80.dp), // Account for bottom navigation bar
-        contentAlignment = Alignment.Center,
-      ) {
-        app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
-      }
+      // 骨架屏替掉居中转圈：目录列表落下来时不会整屏跳变（行版式 = 左缩略图 + 右两行，
+      // 与 FolderCard / VideoCard 的列表形态对齐）
+      BrowserSkeletonRows(
+        itemCount = 8,
+        thumbWidth = 64.dp,
+        thumbRatio = 1f,
+        modifier = modifier,
+      )
     }
 
     error != null -> {
@@ -1271,24 +1272,14 @@ private fun FileSystemSearchContent(
   Box(modifier = modifier.fillMaxSize()) {
     when {
       isLoading -> {
-        Box(
-          modifier = Modifier
-            .fillMaxSize()
-            .padding(bottom = 80.dp), // Account for bottom navigation bar
-          contentAlignment = Alignment.Center,
-        ) {
-          Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-          ) {
-            app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
-            Text(
-              text = if (isAtRoot) "Searching all storage volumes..." else "Searching...",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-        }
+        // 搜索结果加载同样用骨架行：先摆出「待会儿会有几行、每行长什么样」，
+        // 命中结果落下来时不会从一圈转圈突然整屏换内容（原来的「Searching...」
+        // 也随之一并去掉，中文界面里不该混这句英文）
+        BrowserSkeletonRows(
+          itemCount = 8,
+          thumbWidth = 64.dp,
+          thumbRatio = 16f / 9f,
+        )
       }
 
       searchResults.isEmpty() && searchQuery.isNotBlank() -> {

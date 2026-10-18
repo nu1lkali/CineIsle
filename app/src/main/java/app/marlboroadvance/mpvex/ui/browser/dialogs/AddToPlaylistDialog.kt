@@ -253,7 +253,7 @@ private fun PlaylistItemCard(
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-          text = "$itemCount videos • ${formatDate(playlist.updatedAt)}",
+          text = "$itemCount 个视频 • ${formatDate(playlist.updatedAt)}",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

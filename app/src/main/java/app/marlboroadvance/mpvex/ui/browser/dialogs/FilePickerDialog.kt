@@ -189,7 +189,7 @@ fun FilePickerDialog(
                         fontWeight = FontWeight.Bold,
                       )
                       Text(
-                        text = selectedPath ?: "Select a storage location",
+                        text = selectedPath ?: "选择存储位置",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -227,7 +227,7 @@ fun FilePickerDialog(
                             fontWeight = FontWeight.Bold,
                           )
                           Text(
-                            text = selectedPath ?: "Select a storage location",
+                            text = selectedPath ?: "选择存储位置",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -102,6 +102,9 @@ import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefresh
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshGridBox
 import app.marlboroadvance.mpvex.repository.NetworkRepository
 import app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight
+import app.marlboroadvance.mpvex.ui.browser.components.NetworkSearchField
+import app.marlboroadvance.mpvex.ui.browser.states.BrowserSkeletonGrid
+import app.marlboroadvance.mpvex.ui.browser.states.BrowserSkeletonRows
 import app.marlboroadvance.mpvex.ui.browser.cards.NetworkFolderCard
 import app.marlboroadvance.mpvex.ui.browser.cards.NetworkMediaCard
 import app.marlboroadvance.mpvex.ui.browser.cards.NetworkOtherFileRow
@@ -998,13 +1001,23 @@ private fun NetworkBrowserContent(
 
   when {
     isLoading -> {
-      Box(
-        modifier = modifier
-          .fillMaxSize()
-          .padding(bottom = 80.dp), // Account for bottom navigation bar
-        contentAlignment = Alignment.Center,
-      ) {
-        app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 48.dp)
+      // 骨架屏替掉原先居中的转圈：转圈只说明「在加载」，骨架顺带把「待会儿会出现
+      // 什么」先摆出来，内容落地时不会整屏跳变。版式按当前视图模式选 ——
+      // 网格 3 列 1:1（与 NetworkBrowserGrid 一致），列表是「左缩略图 + 右两行」。
+      if (isGridView) {
+        BrowserSkeletonGrid(
+          columns = 3,
+          ratio = 1f,
+          itemCount = 12,
+          modifier = modifier,
+        )
+      } else {
+        BrowserSkeletonRows(
+          itemCount = 9,
+          thumbWidth = 64.dp,
+          thumbRatio = 16f / 9f,
+          modifier = modifier,
+        )
       }
     }
 
@@ -1381,85 +1394,6 @@ private fun SectionHeader(text: String) {
     color = MaterialTheme.colorScheme.primary,
     modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp),
   )
-}
-
-/**
- * 本地搜索输入框。
- *
- * 点顶栏放大镜出现：对**当前目录已拉到的内容**按名称关键词过滤，
- * 不发任何请求（目录列表本来就是全量一次拉完的）。
- * 打开即自动聚焦要键盘；尾部按钮有词先清词、无词才关搜索 ——
- * 清词比关搜索更常用，省得关掉再点放大镜。
- */
-@Composable
-private fun NetworkSearchField(
-  query: String,
-  onQueryChange: (String) -> Unit,
-  onClose: () -> Unit,
-) {
-  val focusRequester = remember { FocusRequester() }
-
-  LaunchedEffect(Unit) {
-    // 要焦点弹键盘。偶发节点还没挂上（重组时序）会抛异常，吞掉不影响使用
-    runCatching { focusRequester.requestFocus() }
-  }
-
-  Surface(
-    modifier = Modifier
-      .fillMaxWidth()
-      .padding(horizontal = 12.dp, vertical = 8.dp),
-    shape = RoundedCornerShape(24.dp),
-    color = MaterialTheme.colorScheme.surfaceVariant,
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Icon(
-        imageVector = Icons.Filled.Search,
-        contentDescription = null,
-        modifier = Modifier.size(20.dp),
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Spacer(modifier = Modifier.width(12.dp))
-      BasicTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        modifier = Modifier
-          .weight(1f)
-          .focusRequester(focusRequester),
-        singleLine = true,
-        textStyle = MaterialTheme.typography.bodyLarge.copy(
-          color = MaterialTheme.colorScheme.onSurface,
-        ),
-        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        decorationBox = { innerTextField ->
-          Box(contentAlignment = Alignment.CenterStart) {
-            if (query.isEmpty()) {
-              Text(
-                text = "搜索当前目录…",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-            innerTextField()
-          }
-        },
-      )
-      IconButton(
-        onClick = {
-          if (query.isNotEmpty()) onQueryChange("") else onClose()
-        },
-      ) {
-        Icon(
-          imageVector = Icons.Filled.Close,
-          contentDescription = if (query.isNotEmpty()) "清空关键词" else "关闭搜索",
-          modifier = Modifier.size(20.dp),
-          tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-      }
-    }
-  }
 }
 
 /**

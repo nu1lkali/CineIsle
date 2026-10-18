@@ -458,10 +458,10 @@ data class PlaylistDetailScreen(val playlistId: Int) : Screen {
               val result = viewModel.refreshM3UPlaylist()
               result
                 .onSuccess {
-                  Toast.makeText(context, "Playlist refreshed successfully", Toast.LENGTH_SHORT).show()
+                  Toast.makeText(context, "播放列表已刷新", Toast.LENGTH_SHORT).show()
                 }
                 .onFailure { error ->
-                  Toast.makeText(context, "Failed to refresh: ${error.message}", Toast.LENGTH_LONG).show()
+                  Toast.makeText(context, "刷新失败：${error.message}", Toast.LENGTH_LONG).show()
                 }
             } else {
               viewModel.refreshNow()
@@ -532,7 +532,7 @@ data class PlaylistDetailScreen(val playlistId: Int) : Screen {
             val clipboardManager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
             val clip = android.content.ClipData.newPlainText("串流地址", urlDialogContent)
             clipboardManager.setPrimaryClip(clip)
-            android.widget.Toast.makeText(context, "URL copied to clipboard", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(context, "链接已复制", android.widget.Toast.LENGTH_SHORT).show()
           }
         )
       }
@@ -750,13 +750,11 @@ private fun RemoveFromPlaylistDialog(
 ) {
   if (!isOpen) return
 
-  val itemText = if (itemCount == 1) "video" else "videos"
-
   androidx.compose.material3.AlertDialog(
     onDismissRequest = onDismiss,
     title = {
       Text(
-        text = "Remove $itemCount $itemText from playlist?",
+        text = "从播放列表移除 $itemCount 个条目？",
         style = MaterialTheme.typography.headlineMedium,
         fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
       )
@@ -773,7 +771,7 @@ private fun RemoveFromPlaylistDialog(
           shape = MaterialTheme.shapes.extraLarge,
         ) {
           Text(
-            text = "The selected $itemText will be removed from this playlist. The original ${if (itemCount == 1) "file" else "files"} will not be deleted.",
+            text = "选中的 $itemCount 个条目会从这个播放列表移除，原视频文件不会被删除。",
             style = MaterialTheme.typography.bodyLarge,
             fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSecondaryContainer,

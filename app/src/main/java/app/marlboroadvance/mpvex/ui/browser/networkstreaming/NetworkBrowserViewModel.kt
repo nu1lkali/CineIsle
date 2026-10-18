@@ -355,12 +355,12 @@ class NetworkBrowserViewModel(
             }
           }
           .onFailure { e ->
-            _error.value = e.message ?: "Unknown error"
+            _error.value = e.message ?: "未知错误"
           }
         // 收藏状态与列表同源刷新：取消收藏后返回 / 重新进入都能看到正确星形
         _isCurrentFavorite.value = repository.isFavorite(connectionId, currentPath)
       } catch (e: Exception) {
-        _error.value = e.message ?: "Unknown error"
+        _error.value = e.message ?: "未知错误"
       } finally {
         _isLoading.value = false
       }
@@ -498,7 +498,7 @@ class NetworkBrowserViewModel(
         application.startActivity(intent)
       } catch (e: Exception) {
         Log.e(TAG, "Error playing videos", e)
-        _error.value = e.message ?: "Unknown error"
+        _error.value = e.message ?: "未知错误"
       }
     }
   }

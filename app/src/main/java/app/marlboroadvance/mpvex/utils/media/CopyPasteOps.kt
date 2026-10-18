@@ -179,7 +179,7 @@ object CopyPasteOps {
         Log.e(TAG, "Copy operation failed: ${e.message}", e)
         _operationProgress.value =
           _operationProgress.value.copy(
-            error = e.message ?: "Unknown error occurred",
+            error = e.message ?: "发生未知错误",
           )
         Result.failure(e)
       }
@@ -260,7 +260,7 @@ object CopyPasteOps {
         Log.e(TAG, "Move operation failed: ${e.message}", e)
         _operationProgress.value =
           _operationProgress.value.copy(
-            error = e.message ?: "Unknown error occurred",
+            error = e.message ?: "发生未知错误",
           )
         Result.failure(e)
       }
@@ -289,7 +289,7 @@ object CopyPasteOps {
         Log.e(TAG, "Copy (tree) failed: ${e.message}", e)
         _operationProgress.value =
           _operationProgress.value.copy(
-            error = e.message ?: "Unknown error occurred",
+            error = e.message ?: "发生未知错误",
           )
         Result.failure(e)
       }
@@ -337,7 +337,7 @@ object CopyPasteOps {
         Log.e(TAG, "Move (tree) failed: ${e.message}", e)
         _operationProgress.value =
           _operationProgress.value.copy(
-            error = e.message ?: "Unknown error occurred",
+            error = e.message ?: "发生未知错误",
           )
         Result.failure(e)
       }
@@ -1023,9 +1023,9 @@ object CopyPasteOps {
       _operationProgress.value =
         _operationProgress.value.copy(
           isCancelled = true,
-          error = "Operation cancelled by user",
+          error = "操作已取消",
         )
-      throw IOException("Operation cancelled by user")
+      throw IOException("操作已取消")
     }
   }
 

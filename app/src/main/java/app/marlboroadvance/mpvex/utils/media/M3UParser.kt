@@ -53,7 +53,7 @@ object M3UParser {
       
       val responseCode = connection.responseCode
       if (responseCode != HttpURLConnection.HTTP_OK) {
-        return@withContext M3UParseResult.Error("HTTP error: $responseCode")
+        return@withContext M3UParseResult.Error("HTTP 错误：$responseCode")
       }
       
       val content = BufferedReader(InputStreamReader(connection.inputStream, "UTF-8")).use { reader ->
@@ -65,7 +65,7 @@ object M3UParser {
       parseContent(content, url)
     } catch (e: Exception) {
       Log.e(TAG, "Error parsing M3U playlist", e)
-      M3UParseResult.Error("Failed to parse playlist: ${e.message}", e)
+      M3UParseResult.Error("解析播放列表失败：${e.message}", e)
     }
   }
   
@@ -80,7 +80,7 @@ object M3UParser {
         BufferedReader(InputStreamReader(inputStream, "UTF-8")).use { reader ->
           reader.readText()
         }
-      } ?: return@withContext M3UParseResult.Error("Failed to open file")
+      } ?: return@withContext M3UParseResult.Error("打开文件失败")
       
       // Get filename for playlist name
       val filename = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -93,7 +93,7 @@ object M3UParser {
       parseContent(content, filename)
     } catch (e: Exception) {
       Log.e(TAG, "Error parsing M3U playlist from URI", e)
-      M3UParseResult.Error("Failed to parse playlist: ${e.message}", e)
+      M3UParseResult.Error("解析播放列表失败：${e.message}", e)
     }
   }
   
@@ -187,7 +187,7 @@ object M3UParser {
       }
       
       if (items.isEmpty()) {
-        return M3UParseResult.Error("No valid media URLs found in playlist")
+        return M3UParseResult.Error("播放列表里没有可用的媒体地址")
       }
       
       // Extract playlist name from source URL/filename or use default
@@ -210,7 +210,7 @@ object M3UParser {
       
     } catch (e: Exception) {
       Log.e(TAG, "Error parsing M3U content", e)
-      return M3UParseResult.Error("Failed to parse playlist content: ${e.message}", e)
+      return M3UParseResult.Error("解析播放列表内容失败：${e.message}", e)
     }
   }
   
