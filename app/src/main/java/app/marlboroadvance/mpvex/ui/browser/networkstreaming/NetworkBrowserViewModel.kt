@@ -62,11 +62,83 @@ class NetworkBrowserViewModel(
   private val _sortType = MutableStateFlow(browserPreferences.networkSortType.get())
   private val _sortOrder = MutableStateFlow(browserPreferences.networkSortOrder.get())
 
+  /**
+   * 目录滚动位置记忆：key = `"$connectionId|$path"`，value = `firstVisibleItemIndex`。
+   *
+   * ⭐ 为什么需要它：从照片查看器 / 播放器返回到浏览页时，滚动位置**不可靠**。
+   *    `rememberLazyGridState()` 靠 `LazyGridState.Saver` 由导航框架的
+   *    `SaveableStateHolder` 保存恢复，而那条链有几个已知不稳的点：
+   *    ① 恢复发生在**条目还没组合出来**的时刻（`loadFiles` 是异步的），
+   *       LazyGrid 在 `totalItemsCount == 0` 时把索引 clamp 成 0，等数据到位也回不去了；
+   *    ② 多个浏览页 entry 的 saved state 可能串键，表现就是「换个文件夹回来位置是上一个的」。
+   *    实测两种症状都出现过：有时停在中间，有时直接回顶端。
+   *
+   *    所以在 UI 侧**等条目落位后再显式 `scrollToItem`** 一次，位置才可预期。
+   *
+   * ⚠️ 放 ViewModel 而不是 `rememberSaveable`：本 ViewModel 是 Activity 作用域
+   *    （多个浏览页 entry 共用），跨「进查看器再返回」活着；而 rememberSaveable 的
+   *    生命周期绑在单个 entry 上，被 pop 就没了，正是要救的那个场景。
+   * ⚠️ 只在**离开页面时**写（组合销毁那一刻，见 UI 侧 DisposableEffect），滚动过程中
+   *    不写 —— 否则每次滚动都触发重组。
+   */
+  private val scrollPositions = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
   /** 随机排序的种子：每次（重）选「随机」都换一个新种子 ⇒ 列表换一批顺序 */
   private val _randomSeed = MutableStateFlow(System.currentTimeMillis())
 
+  /**
+   * 「用户动过排序」的单调计数，每次有效排序操作 +1。
+   *
+   * ⭐ 为什么不能只让 UI 观察 [sortType] / [sortOrder]：**重复点「随机」时这两个值都不变**
+   *    （`setSortType` 只换 [randomSeed] 就 return），而列表确实重排了 ——
+   *    UI 用值变化做回顶的触发条件，这一种就永远不触发，用户停在原来那一段，
+   *    「换了一批」完全看不出来（用户实测反馈）。
+   * 用一个专门的计数器当「动作发生了」的信号，与值是否变化解耦。
+   * 下拉刷新 / 翻页 / 换目录都不碰它，所以不会误抢滚动位置。
+   */
+  private val _sortChangeTick = MutableStateFlow(0)
+
   val sortType: StateFlow<NetworkSortType> = _sortType.asStateFlow()
   val sortOrder: StateFlow<SortOrder> = _sortOrder.asStateFlow()
+
+  /** 「动过排序」的计数，UI 拿它做「回到 item 0」的触发键 */
+  val sortChangeTick: StateFlow<Int> = _sortChangeTick.asStateFlow()
+
+  /** 记下某个目录的滚动位置（离开页面时调用）。见 [scrollPositions] */
+  fun saveScrollPosition(connectionId: Long, path: String, index: Int) {
+    if (index <= 0) {
+      // 顶部的条目不用记：恢复成 0 本来就是默认行为，存了反而多一次无效滚动
+      scrollPositions.remove("$connectionId|$path")
+      return
+    }
+    scrollPositions["$connectionId|$path"] = index
+  }
+
+  /** 取某个目录上次的滚动位置；没有记录返回 0 */
+  fun getScrollPosition(connectionId: Long, path: String): Int =
+    scrollPositions["$connectionId|$path"] ?: 0
+
+  /** 恢复之后清掉：下次从零进这个目录应停在顶部，而不是上次的残留 */
+  fun clearScrollPosition(connectionId: Long, path: String) {
+    scrollPositions.remove("$connectionId|$path")
+  }
+
+  /**
+   * 已经被 UI「消费」过的 [sortChangeTick] —— UI 拿它防止回顶误触发。
+   *
+   * ⭐ 没有它会出一个隐蔽的回归：`LaunchedEffect(sortChangeTick)` 在**每次全新组合时
+   *    都会启动一次**（键不变也启动，这就是 LaunchedEffect 的语义）。而 nav3 只组合
+   *    栈顶 entry —— 从照片查看器/播放器返回时浏览页是**重新组合**的，这个 effect
+   *    立刻 `scrollToItem(0)`，用户就被弹回顶端（用户实测：返回后停顶端）。
+   *    加上「消费位」后：只有 tick 真的比上次消费的值大（用户刚动过排序）才回顶。
+   */
+  private val _consumedSortTick = MutableStateFlow(0)
+  val consumedSortTick: StateFlow<Int> = _consumedSortTick.asStateFlow()
+
+  /** 标记当前 tick 已被 UI 处理（回顶做完后调用） */
+  fun consumeSortTick() {
+    _consumedSortTick.value = _sortChangeTick.value
+  }
 
   /**
    * 当前目录内容（已排序）。
@@ -394,11 +466,15 @@ class NetworkBrowserViewModel(
    * 顶栏排序控件右边的箭头会跟着变，不用用户每换一个维度再手动点一次方向。
    *
    * 重复点「随机」= 换一批顺序（新种子），其他维度重复点无操作。
+   *
+   * ⚠️ 换种子这条路也必须给 [_sortChangeTick] +1：值没变但列表重排了，
+   *    UI 靠 tick 回顶，少了它「随机换批」停在原位（见该字段的 KDoc）。
    */
   fun setSortType(type: NetworkSortType) {
     if (type == _sortType.value) {
       if (type == NetworkSortType.Random) {
         _randomSeed.value = System.currentTimeMillis()
+        _sortChangeTick.value += 1
       }
       return
     }
@@ -408,6 +484,7 @@ class NetworkBrowserViewModel(
     if (type == NetworkSortType.Random) {
       _randomSeed.value = System.currentTimeMillis()
     }
+    _sortChangeTick.value += 1
     browserPreferences.networkSortType.set(type)
     browserPreferences.networkSortOrder.set(order)
   }
@@ -416,6 +493,7 @@ class NetworkBrowserViewModel(
   fun setSortOrder(order: SortOrder) {
     if (order == _sortOrder.value) return
     _sortOrder.value = order
+    _sortChangeTick.value += 1
     browserPreferences.networkSortOrder.set(order)
   }
 

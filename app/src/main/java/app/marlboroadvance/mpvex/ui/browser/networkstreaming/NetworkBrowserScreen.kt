@@ -19,8 +19,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -66,11 +68,13 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -116,6 +120,7 @@ import app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen
 import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 import org.koin.compose.koinInject
 import kotlin.math.roundToInt
@@ -184,6 +189,8 @@ data class NetworkBrowserScreen(
     val folderCovers by viewModel.folderCovers.collectAsState()
     val sortType by viewModel.sortType.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
+    // 「动过排序」的计数（每次有效排序操作 +1，含随机换种子那种值不变的）
+    val sortChangeTick by viewModel.sortChangeTick.collectAsState()
     // 当前协议是否支持重命名 / 删除（目前只有 AList）—— 决定卡片挂不挂长按
     val supportsWrite by viewModel.supportsWrite.collectAsState()
 
@@ -199,6 +206,80 @@ data class NetworkBrowserScreen(
 
     // UI State
     val isRefreshing = remember { mutableStateOf(false) }
+
+    // ⭐⭐ 滚动位置 state 提升到本页顶层持有（网格/列表各建一个，按视图模式选用）。
+    //
+    //     为什么不放进 Grid/List 内部：保存要挂在「本页组合被销毁」上，恢复要等
+    //     条目落位后由本页统一驱动 —— 两头都在这一层最稳，且两个视图能共用一套逻辑。
+    //
+    //     `rememberLazyGridState()` 内部是 `rememberSaveable`，框架那条保存恢复链
+    //     （SaveableStateHolder + 异步 loadFiles）实测不稳，具体见
+    //     [NetworkBrowserViewModel.scrollPositions] 的 KDoc —— 所以这里自己做一份。
+    val networkGridState = rememberLazyGridState()
+    val networkListState = rememberLazyListState()
+
+    // 保存：本页组合销毁时记下当前位置。
+    //
+    // ⭐ 什么时候会销毁：nav3 的 NavDisplay **只组合栈顶 entry** —— 进照片查看器 /
+    //    播放器时本页被盖住，组合即被销毁（用户实测「返回后位置丢了」的根因）。
+    // ⚠️ 只在还留在返回栈里时才记：被 pop 意味着「离开这个目录」，下次从零进来
+    //    应停在顶部；被盖住才需要「回来还在原位」。用实例身份（===）判，不用
+    //    结构相等 —— data class 的 equals 会把同路径的不同 entry 判成相等。
+    val selfEntry = this
+    DisposableEffect(selfEntry) {
+      onDispose {
+        if (backstack.any { it === selfEntry }) {
+          val index =
+            if (isGridView) networkGridState.firstVisibleItemIndex
+            else networkListState.firstVisibleItemIndex
+          viewModel.saveScrollPosition(connectionId, currentPath, index)
+        }
+      }
+    }
+
+    // 恢复：从查看器/播放器返回时本页是**全新组合**（框架恢复不稳，见上）——
+    // 有记录就等条目真正落位后显式滚过去，覆盖框架可能恢复出的任何旧值。
+    // ⚠️ 必须等 `totalItemsCount > 0`：空列表上 scrollToItem 会被 clamp 成 0，
+    //    等数据到位也回不去（loadFiles 虽不清空旧列表，但首帧布局可能还没出）。
+    // ⚠️ `LaunchedEffect(Unit)` 每次全新组合都会跑一次：没有记录时直接返回，
+    //    不影响正常进目录 / 下拉刷新 / 旋屏（旋屏后 VM 重建、map 为空，走框架恢复）。
+    // ⚠️ 两个 state 没有共同父类带 scrollToItem（LazyGridState/LazyListState 各自独立），
+    //    只能按视图模式分开写。
+    LaunchedEffect(Unit) {
+      val saved = viewModel.getScrollPosition(connectionId, currentPath)
+      if (saved <= 0) return@LaunchedEffect
+      if (isGridView) {
+        snapshotFlow { networkGridState.layoutInfo.totalItemsCount }.first { it > 0 }
+        if (networkGridState.firstVisibleItemIndex != saved) {
+          networkGridState.scrollToItem(saved)
+        }
+      } else {
+        snapshotFlow { networkListState.layoutInfo.totalItemsCount }.first { it > 0 }
+        if (networkListState.firstVisibleItemIndex != saved) {
+          networkListState.scrollToItem(saved)
+        }
+      }
+      // 恢复完成即清掉：之后用户再进查看器会重新记，不会拿到过期位置
+      viewModel.clearScrollPosition(connectionId, currentPath)
+    }
+
+    // 排序一动就回到顶部：重排后若停在原位，用户看到的是「一片不相关的中段条目」，
+    // 完全看不出排序结果长什么样。用户明确要求「改完排序就停在第一个项目」。
+    // ⚠️ 键是「排序动作计数」而不是排序值 —— 随机换种子时值不变但列表重排了，
+    //    那也必须回顶（曾漏掉，用户实测反馈）。
+    // ⚠️⚠️ 必须和「已消费 tick」比对：`LaunchedEffect` 在**每次全新组合时都会启动一次**
+    //    （键不变也启动）。而返回查看器时本页正是全新组合 —— 不比对的话这个 effect
+    //    会立刻 scrollToItem(0)，把用户弹回顶端（用户实测：返回后停顶端）。
+    //    只有 tick 真的比上次消费的大（用户刚动过排序）才回顶。
+    LaunchedEffect(sortChangeTick) {
+      if (sortChangeTick == viewModel.consumedSortTick.value) return@LaunchedEffect
+      if (isGridView) {
+        networkGridState.scrollToItem(0)
+      } else {
+        networkListState.scrollToItem(0)
+      }
+      viewModel.consumeSortTick()
+    }
 
     // 随机播放下拉菜单（视频 / 图片）
     // 顶栏竖三点「更多」菜单：收藏 / 随机播放 / 视图切换 全收在这里（见下方 additionalActions）
@@ -562,10 +643,9 @@ data class NetworkBrowserScreen(
           isRefreshing = isRefreshing,
           error = error,
           isGridView = isGridView,
-          // 排序维度 / 方向：只用于「排序一变就把内容区滚回顶部」，
-          // 用户明确要求「改完排序就停在第一个项目」，别留在中段/底部。
-          sortType = sortType,
-          sortOrder = sortOrder,
+          // 滚动 state 由本页顶层持有（保存/恢复/排序回顶都在那一层驱动，见上方注释）
+          gridState = networkGridState,
+          listState = networkListState,
           searchQuery = searchQuery,
           anyTypeHidden = !(showFolders && showPhotos && showVideos),
           folderCovers = folderCovers,
@@ -931,9 +1011,14 @@ private fun NetworkBrowserContent(
   isRefreshing: MutableState<Boolean>,
   error: String?,
   isGridView: Boolean,
-  /** 当前排序维度 / 方向：两者任一变化时，内容区滚回顶部（用户要求） */
-  sortType: NetworkSortType,
-  sortOrder: SortOrder,
+  /**
+   * 滚动 state 由上层（NetworkBrowserScreen.Content）持有并传下来。
+   *
+   * 不在这里 `remember`：保存挂在「本页组合被销毁」上、恢复要等条目落位后统一驱动，
+   * 两头都在上层（见那边注释）。这里只负责把 state 接到 LazyGrid / LazyColumn 上。
+   */
+  gridState: LazyGridState,
+  listState: LazyListState,
   /** 当前搜索词（空 = 没在搜），只用于空态文案 */
   searchQuery: String,
   /** 是否有类型被筛掉（空态文案用） */
@@ -1081,8 +1166,7 @@ private fun NetworkBrowserContent(
       NetworkBrowserGrid(
         items = gridItems,
         connectionId = connectionId,
-        sortType = sortType,
-        sortOrder = sortOrder,
+        gridState = gridState,
         isRefreshing = isRefreshing,
         onRefresh = onRefresh,
         onFolderClick = onFolderClick,
@@ -1104,8 +1188,7 @@ private fun NetworkBrowserContent(
         others = others,
         connection = connection,
         connectionId = connectionId,
-        sortType = sortType,
-        sortOrder = sortOrder,
+        listState = listState,
         isRefreshing = isRefreshing,
         onRefresh = onRefresh,
         onFolderClick = onFolderClick,
@@ -1133,9 +1216,11 @@ private fun NetworkBrowserContent(
 private fun NetworkBrowserGrid(
   items: List<NetworkFile>,
   connectionId: Long,
-  /** 排序维度 / 方向：任一变化时滚回顶部（用户要求「改完排序就在第一个」） */
-  sortType: NetworkSortType,
-  sortOrder: SortOrder,
+  /**
+   * 滚动 state 由上层持有并传入（保存 / 恢复 / 排序回顶都在上层驱动，
+   * 见 NetworkBrowserScreen.Content 的注释）—— 这里只负责接上。
+   */
+  gridState: LazyGridState,
   isRefreshing: MutableState<Boolean>,
   onRefresh: suspend () -> Unit,
   onFolderClick: (NetworkFile) -> Unit,
@@ -1148,16 +1233,7 @@ private fun NetworkBrowserGrid(
   onFileLongClick: ((NetworkFile, Offset) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
-  val gridState = rememberLazyGridState()
   val navigationBarHeight = LocalNavigationBarHeight.current
-
-  // 排序一变就回到顶部：重排后若停在原位，用户看到的是「一片不相关的中段条目」，
-  // 完全看不出排序结果长什么样。用户明确要求「改完排序就停在第一个项目」。
-  // ⚠️ 键只放排序两项 —— 别把 items 放进来：下拉刷新 / 翻页 / 封面懒加载都会换 items，
-  //    那会把用户的滚动位置无故抢回顶部。
-  LaunchedEffect(sortType, sortOrder) {
-    gridState.scrollToItem(0)
-  }
 
   PullRefreshGridBox(
     isRefreshing = isRefreshing,
@@ -1231,9 +1307,16 @@ private fun NetworkBrowserList(
   others: List<NetworkFile>,
   connection: NetworkConnection?,
   connectionId: Long,
-  /** 排序维度 / 方向：任一变化时滚回顶部（用户要求「改完排序就在第一个」） */
-  sortType: NetworkSortType,
-  sortOrder: SortOrder,
+  /**
+   * 滚动 state 由上层持有并传入（保存 / 恢复 / 排序回顶都在上层驱动，
+   * 见 NetworkBrowserScreen.Content 的注释）—— 这里只负责接上。
+   *
+   * ⚠️ 绝不能在这里写 `LazyListState()`（不带 remember）：每次重组都新建一个 state，
+   *    滚动位置归零 ⇒「列表滑不动、每次加载都弹回顶部」，还会顺带让下拉刷新在
+   *    任何位置都处于启用状态（手势冲突）。上层的 `rememberLazyListState()` 正是
+   *    为这个毛病存在的，别把它改回局部新建。
+   */
+  listState: LazyListState,
   isRefreshing: MutableState<Boolean>,
   onRefresh: suspend () -> Unit,
   onFolderClick: (NetworkFile) -> Unit,
@@ -1246,31 +1329,11 @@ private fun NetworkBrowserList(
   modifier: Modifier = Modifier,
 ) {
   val navigationBarHeight = LocalNavigationBarHeight.current
-  // ⭐⭐ 必须 `rememberLazyListState()`，绝不能写 `LazyListState()` ——
-  //    后者**每次重组都新建一个 state**，滚动位置随之归零。
-  //
-  //    这是「列表视图滑不动、每次加载都弹回顶部」的唯一根因：
-  //    · 封面是懒加载的，文件夹越多、`folderCovers` 更新越频繁 ⇒ 重组越频繁；
-  //    · 每重组一次就 new 一个 state ⇒ firstVisibleItemIndex/ScrollOffset 归零 ⇒ 滚回顶部；
-  //    · 滚回顶部又重新组合顶部卡片 → 又触发封面加载 → 又重组 …… 完全滑不动。
-  //
-  //    ⚠️ 它还会**顺带制造「手势冲突」**（用户原话）：下面 `PullRefreshBox` 的
-  //    `canRefresh` 判据是 `listState.firstVisibleItemIndex == 0 && scrollOffset == 0`，
-  //    而一个刚 new 出来的 state 永远满足它 ⇒ **下拉刷新在任何滚动位置都处于启用状态**
-  //    ⇒ 在列表中段往下拉，被判定成「下拉刷新」而不是滚动，手势直接打架。
-  //    （网格视图用的是 `rememberLazyGridState()`，所以只有列表视图有这毛病。）
-  val networkListState = rememberLazyListState()
-
-  // 排序一变就回到顶部（与网格视图同一约定，注释见 NetworkBrowserGrid）。
-  // ⚠️ 键只放排序两项：items 变化（下拉刷新 / 封面懒加载）不能抢走用户的滚动位置。
-  LaunchedEffect(sortType, sortOrder) {
-    networkListState.scrollToItem(0)
-  }
 
   PullRefreshBox(
     isRefreshing = isRefreshing,
     onRefresh = onRefresh,
-    listState = networkListState,
+    listState = listState,
     modifier = modifier.fillMaxSize(),
   ) {
     Box(
@@ -1279,9 +1342,9 @@ private fun NetworkBrowserList(
         .padding(bottom = navigationBarHeight),
     ) {
       // 滚动条走统一外壳（全局开关 + 出现时机 + 外观都在里面，见 ui/utils/SideScrollbar.kt）
-      LazyListSideScrollbar(state = networkListState) {
+      LazyListSideScrollbar(state = listState) {
         LazyColumn(
-          state = networkListState,
+          state = listState,
           modifier = Modifier.fillMaxSize(),
           contentPadding = PaddingValues(
             start = 8.dp,

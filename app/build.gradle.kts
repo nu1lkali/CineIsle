@@ -700,7 +700,15 @@ android {
     //        不再整屏硬切。只加在 items 带稳定 key 的列表上。
     //     ⑤ 卡片「新视频」角标的硬编码红 Color(0xFFD32F2F) 改走 colorScheme.error，
     //        文字同步换 onError（深色主题下 error 是浅红，白字会糊）。
-    versionCode = 98
+    // 99（修复轮，versionName 仍为 1.5.9）：网络图片「进查看器再返回、滚动位置丢失」加固。
+    //     用户实测两个目录：一个返回后停在中间（框架 saveable 恢复了串键的旧值），
+    //     一个直接回顶端。根因两条：① nav3 的 NavDisplay 只组合栈顶 entry，被查看器
+    //     盖住时浏览页组合即被销毁，rememberLazyGridState 的保存恢复链不稳；
+    //     ② LaunchedEffect(sortChangeTick) 每次全新组合都会启动一次，返回时立刻
+    //     scrollToItem(0)。修法：滚动 state 提升到页面层，组合销毁时按「是否还在
+    //     返回栈」记位置（被 pop 不记），返回后等条目落位显式 scrollToItem 恢复；
+    //     排序回顶加「已消费 tick」比对，只有真的动过排序才回顶。
+    versionCode = 99
     versionName = "1.5.9"
 
     vectorDrawables {
