@@ -39,6 +39,22 @@
   📀 远程 ISO 原盘 · 🧑 演职员合并 · 📺 DLNA 投屏 · 🖼️ 图集与照片
 </p>
 
+<!-- 截图：三竖一横。三张竖屏并排铺满一整行（各 32.5%，等高）；横屏播放页整行居中，宽度与三张竖图总宽一致，视觉上成框 -->
+
+<p align="center">
+  <a href="https://img.cdn1.vip/i/6ad5640a2a11d_1792369674.webp"><img src="https://img.cdn1.vip/i/6ad5640a2a11d_1792369674.webp" width="32.5%" alt="首页与媒体库" /></a>
+  <a href="https://img.cdn1.vip/i/6ad5640acfc4c_1792369674.webp"><img src="https://img.cdn1.vip/i/6ad5640acfc4c_1792369674.webp" width="32.5%" alt="媒体库详情" /></a>
+  <a href="https://img.cdn1.vip/i/6ad56404e622b_1792369668.webp"><img src="https://img.cdn1.vip/i/6ad56404e622b_1792369668.webp" width="32.5%" alt="剧集详情页" /></a>
+</p>
+
+<p align="center">
+  <a href="https://img.cdn1.vip/i/6ad56404f41e5_1792369668.webp"><img src="https://img.cdn1.vip/i/6ad56404f41e5_1792369668.webp" width="100%" alt="mpv 内核播放页" /></a>
+</p>
+
+<p align="center">
+  <img src=".github/badges/shots-caption.svg" alt="首页 · 媒体库 · 详情页 · 播放页" />
+</p>
+
 ## 项目背景
 
 一开始用的是某款第三方 Emby 播放器。用着还行，但总有些自己想要的功能它没有，于是去提需求——作者不太愿意做，也没怎么回复。
