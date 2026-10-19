@@ -10,6 +10,7 @@ import android.content.ServiceConnection
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import androidx.compose.runtime.Composable
+import app.marlboroadvance.mpvex.ui.player.danmaku.DanmakuOverlay
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -588,6 +589,9 @@ open class PlayerActivity :
     setupAudio()
     setupBackPressHandler()
     setupPlayerControls()
+    // v118：弹幕层独立成 View 层，声明在 controls 之前（= 控件下面）。
+    // 顺序无依赖：danmakuState 在 onCreate 更早处（L510）就建好了。
+    mountDanmakuLayer()
     setupPipHelper()
     setupMediaSession()
 
@@ -942,45 +946,83 @@ open class PlayerActivity :
               .align(Alignment.BottomEnd)
               .padding(end = 16.dp, bottom = 184.dp),
           )
-          // 弹幕：叠在画面之上、控制条之下。
-          // ⚠️ 声明位置在 PlayerControls **之后** = 绘制在它上面一层，
-          // 所以控制条弹出时仍然压在弹幕之上（弹幕不该盖住按钮）。
-          // ⚠️ 整个弹幕叠层**不能**包在 controlsShown 里 —— 控件隐藏时弹幕仍要继续走。
-          danmakuState?.let { state ->
-            // ⚠️ 这里必须用 **Compose 自带的 `collectAsState()`**（无参、
-            //   返回非空 `State<T>`），**不是** `PlayerViewModel.kt:2200` 那个
-            //   同名的自定义扩展 —— 后者签名是 `Flow<T>.collectAsState(scope, initial)`
-            //   要求显式传 scope，且返回 `T?`，用它会一路报
-            //   「No value passed for parameter 'scope'」+ 一串可空类型错误。
-            //   同名不同签名是这类批量报错的根源，看到「No value for scope」先查这里。
-            val dmComments by state.comments.collectAsState(emptyList())
-            val dmKey by state.episodeKey.collectAsState("")
-            val dmPrefs by state.renderParams.collectAsState(DanmakuRenderParams())
-            // 进度与播放态在这里现取：弹幕叠层自己订阅即可，
-            // 不必让外层 Box 为此多收两个流。
-            val dmPos by viewModel.precisePosition.collectAsState(0f)
-            val dmPaused by PlayerLib.propBoolean["pause"].collectAsState()
-            if (dmPrefs.enabled && dmComments.isNotEmpty()) {
-              app.marlboroadvance.mpvex.ui.player.danmaku.DanmakuOverlay(
-                episodeKey = dmKey,
-                positionSec = dmPos,
-                playing = dmPaused != true,
-                comments = dmComments,
-                alphaPercent = dmPrefs.alphaPercent,
-                fontScale = dmPrefs.fontScale,
-                speedScale = dmPrefs.speedScale,
-                areaRatio = dmPrefs.areaRatio,
-                maxOnScreen = dmPrefs.maxOnScreen,
-                preventOverlapping = dmPrefs.preventOverlapping,
-                // v117：竖屏下 mpv 窗口铺满、画面居中一条，弹幕层要跟着画面走，
-                // 否则 retainer 从窗口顶部 packing ⇒ 全挤在画面上方的黑边里。
-                videoAspectProvider = { player.getVideoOutAspect()?.toFloat() },
-                modifier = Modifier.fillMaxSize(),
-              )
-            }
-          }
+          // 弹幕层**不在这里**了（V118）：它已挪到 `binding.danmaku` 这一独立图层，
+          // 声明在 controls **之前**（= 画在它下面、触摸也让给它）。
+          // 原因见 [mountDanmakuLayer]。
         }
       }
+    }
+  }
+
+  /**
+   * 把弹幕叠层挂到**它自己的 ComposeView**（`binding.danmaku`）上。
+   *
+   * ⚠️⚠️⚠️ V118：这是「点屏幕唤不出控制栏」的根因修复，别再挪回控件那棵 Compose 树里。
+   *
+   * 之前弹幕叠层是 `binding.controls` 那棵 Compose 树里**最靠后（= 最上层）的全屏
+   * `AndroidView`**。Compose 的命中测试里，兄弟节点按 z 序**上面那个先收事件**；
+   * 而 `AndroidView` 必挂 `pointerInteropFilter` —— 它会把 ACTION_DOWN 先交给
+   * 宿主 View 问一句「你要不要」，一旦那句返回 true，整串手势就被它独占
+   * （`suppressMovementConsumption`），排在它后面的 `GestureHandler` 一条都收不到
+   * ⇒ 单击永远走不到「显/隐控件」那条分支。
+   * 用户实测完全对得上：**弹幕还没渲染出来时点屏幕正常，弹幕一出来就点不动了**
+   * （弹幕层进入组合的那一刻，DOWN 就被它先截走）。
+   *
+   * 修法是**改分层，不靠事件传递的运气**：弹幕层变成独立的 View 层，且在 XML 里
+   * 声明在 `controls` **之前** ⇒ 在原生 View 体系的 z 序里它**在控件下面**。
+   * 于是触摸一定先给上层的 `controls`，手势照常工作；弹幕层只是拿漏下来的那部分，
+   * 而它本来就不需要触摸（我们没设 `OnDanmakuClickListener`，弹幕点击功能从没开过）。
+   *
+   * 顺带把叠放顺序也修正成注释里一直写的那样：**弹幕在画面之上、控制条之下**。
+   *
+   * 与 GSY 播放页一致 —— 那边弹幕层同样是独立 ComposeView，实测点击正常。
+   */
+  private fun mountDanmakuLayer() {
+    binding.danmaku.setViewCompositionStrategy(
+      androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed,
+    )
+    binding.danmaku.setContent {
+      MpvexTheme { DanmakuOverlayContent() }
+    }
+  }
+
+  /**
+   * 弹幕叠层本体（跑在 [mountDanmakuLayer] 那棵独立 Compose 树上）。
+   *
+   * 与 GSY 页的差异只在**进度与播放态的来源**：那边没有属性流，在叠层里自己轮询。
+   *
+   * 开关关着 / 没有弹幕数据时整块不渲染：连 DanmakuView 都不建，也就没有绘制线程。
+   */
+  @Composable
+  private fun DanmakuOverlayContent() {
+    val state = danmakuState ?: return
+    // ⚠️ 这里必须用 **Compose 自带的 `collectAsState()`**（无参、返回非空 `State<T>`），
+    //   **不是** `PlayerViewModel.kt` 里那个同名的自定义扩展 —— 后者签名是
+    //   `Flow<T>.collectAsState(scope, initial)`，要求显式传 scope 且返回 `T?`，
+    //   用它会一路报「No value passed for parameter 'scope'」+ 一串可空类型错误。
+    //   同名不同签名是这类批量报错的根源，看到「No value for scope」先查这里。
+    val dmComments by state.comments.collectAsState(emptyList())
+    val dmKey by state.episodeKey.collectAsState("")
+    val dmPrefs by state.renderParams.collectAsState(DanmakuRenderParams())
+    val dmPos by viewModel.precisePosition.collectAsState(0f)
+    val dmPaused by PlayerLib.propBoolean["pause"].collectAsState()
+    if (dmPrefs.enabled && dmComments.isNotEmpty()) {
+      DanmakuOverlay(
+        episodeKey = dmKey,
+        positionSec = dmPos,
+        playing = dmPaused != true,
+        comments = dmComments,
+        alphaPercent = dmPrefs.alphaPercent,
+        fontScale = dmPrefs.fontScale,
+        speedScale = dmPrefs.speedScale,
+        areaRatio = dmPrefs.areaRatio,
+        maxOnScreen = dmPrefs.maxOnScreen,
+        preventOverlapping = dmPrefs.preventOverlapping,
+        // 竖屏下 mpv 窗口铺满、画面居中一条，弹幕层要跟着画面走，
+        // 否则 retainer 从窗口顶部 packing ⇒ 全挤在画面上方的黑边里。
+        videoAspectProvider = { player.getVideoOutAspect()?.toFloat() },
+        modifier = Modifier.fillMaxSize(),
+      )
     }
   }
 

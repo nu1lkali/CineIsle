@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -181,7 +182,9 @@ fun EpisodeListSection(
         }
 
         // ── 批量操作行 ──
-        // 「下载本季」单独一行、靠右：它是**作用于当前这一季**的动作，
+        // 「下载本季」单独一行、**左对齐**：和上面季节 chip 行、下面分集行
+        // 的 16dp 起始边距对齐，视觉上是一条竖线（v118 根据用户反馈从右对齐改过来）。
+        // 单独成行的理由仍在：它是**作用于当前这一季**的动作，
         // 若和季 chip 放同一行最右，横向滚到末尾才会看见，长剧里等于藏起来了。
         // ⚠️ 做成**胶囊按钮**（tonal 底 + 圆角 50% + 下载图标）而不是一段带
         //    clip 的文本：后者看着像正文链接，用户会漏掉这个批量入口。
@@ -189,7 +192,7 @@ fun EpisodeListSection(
           modifier = Modifier
             .fillMaxWidth()
             .padding(start = 16.dp, end = 16.dp, top = 2.dp),
-          horizontalArrangement = Arrangement.End,
+          horizontalArrangement = Arrangement.Start,
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Row(
@@ -422,9 +425,15 @@ private fun EpisodeCard(
     else -> episode.Name?.take(2).orEmpty()
   }
 
-  // 标题固定占**两行**高：实际只一行时也把位置占住，卡片才不会一张高一张矮
+  // 标题**至少**占两行高：实际只一行时也把位置占住，卡片才不会一张高一张矮
   // （横向分集行参差不齐）。行高取 bodySmall 的 lineHeight，缺省按 1.2×字号兜底；
   // sp→dp 要乘 fontScale —— 用户放大系统字号时，两行的高度跟着涨，不会挤爆。
+  //
+  // ⚠️⚠️ v118：这里必须给 **heightIn(min=…)** 而不是 `height(…)`。
+  //   先前写死 `height(两行)`，算出来的高度一旦比文字真正要的两行**少一两个像素**
+  //   （dp→px 取整 + 字体 fallback 的余量），第二行就被裁掉 ——
+  //   用户看到的正是「标题被截断成一行，那还叫不影响标题显示吗」。
+  //   改成最小高度后：**保证至少两行**，两行标题想再高也不会被切，卡片照样等高。
   val titleLineHeightSp = MaterialTheme.typography.bodySmall.let { style ->
     if (style.lineHeight.isSpecified) style.lineHeight.value else style.fontSize.value * 1.2f
   }
@@ -468,7 +477,14 @@ private fun EpisodeCard(
           color = MaterialTheme.colorScheme.onSurface,
           modifier = Modifier
             .weight(1f)
-            .height(titleHeight),
+            // ⚠️ v118：是 **heightIn(min=…)** 不是 `height(…)`。
+            //   `height()` 写死两行高，一旦算出来的高度比文字真正要的两行少一两个像素
+            //   （sp→dp 取整、includeFontPadding 的余量），第二行就被裁掉
+            //   ⇒ 用户看到的正是「标题被截断成一行」。
+            //   `heightIn(min=)` 只保证**至少**两行高：一行标题照样占位、卡片等高，
+            //   真有两行时容器自然长到够放，两行都完完整整显示出来，绝不会被切。
+            //   maxLines=2 + 省略号兜底，超长标题不会把卡片撑高。
+            .heightIn(min = titleHeight),
         )
         // 下载入口：卡宽只有 150dp，所以做成 24dp 的极小钮（48dp 的点击区由 IconButton 撑开
         // 会挤掉标题 ⇒ 这里用最小尺寸的 IconButton，靠外层 padding 补手感）。

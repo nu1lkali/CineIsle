@@ -1034,8 +1034,46 @@ android {
     //        （secondaryContainer 底 + 圆角 50% + Download 图标 + labelMedium）。
     //     另修 v117 编译回归：DanmakuOverlay 竖屏适配块缺 fillMaxSize import、
     //     offset/size 的 Int 参数不匹配 Dp 重载 ⇒ 改 Modifier.layout 做 px 精确定位。
-    versionCode = 117
-    versionName = "1.6.0"
+    //
+    // ────────────────────────────────────────────────────────────────────────
+    // v118（1.6.1）—— 播放器点击回归 + 分集卡片显示 + 构建提速
+    // -------------------------------------------------------------------------
+    // 〔A〕⚠️⚠️ **弹幕层吞掉整屏触摸，点屏幕唤不出控制栏**（v117 竖屏适配引入的 P0 回归）。
+    //     现象（用户实测，这条是定位的关键）：
+    //       **弹幕还没渲染出来时点屏幕完全正常，弹幕一出来就怎么点都点不动了**。
+    //     根因：弹幕层是 `binding.controls` 那棵 Compose 树里**最靠后（= 最上层）的
+    //     全屏 `AndroidView`**。Compose 命中测试里兄弟节点按 z 序**上面那个先收事件**；
+    //     而 `AndroidView` 的 LayoutNode 必挂 `pointerInteropFilter`（全屏尺寸的
+    //     PointerInputModifier），DOWN 一到它就先接管 ⇒ 排在它后面的 `GestureHandler`
+    //     收不到事件 ⇒ 单击永远走不到「显/隐控件」那条分支。
+    //     ⚠️ v117 之前同样挂在最上层却没事，是因为那时自动匹配是坏的、弹幕平时根本
+    //     进不了组合；v117 修好自动加载后它常驻，问题才暴露 —— 别再据此排除它。
+    //     修法（**改分层，不赌事件传递**）：
+    //       ① 弹幕层挪出控件树，独立成 `binding.danmaku` 这一 View 层，
+    //          且在 XML 里声明在 `controls` **之前** ⇒ 在原生 View 体系的 z 序里
+    //          它就**在控件下面**，触摸必然先给上层的 controls。
+    //       ② 顺手把叠放修正成注释里一直写的「弹幕在画面之上、控制条之下」。
+    //       ③ DanmakuView 外加 `InertTouchFrameLayout`，触摸在容器层就短路成 false
+    //          ⇒ `pointerInteropFilter` 必然拿到 false。与 GSY 页的挂法统一。
+    // 〔B〕**分集卡片把标题截断成一行**（用户对 v117 〔E〕①的反馈）：
+    //     `height(两行)` 写死高度，算出来的高度比文字真正要的两行少一两个像素时
+    //     第二行就被裁掉。改用 `heightIn(min=两行)`：一行标题照样占位、卡片等高，
+    //     两行标题要多少给多少，两行都完整显示。
+    // 〔C〕「下载本季 X 集」按钮按用户要求从右对齐改为**左对齐**（与上下行的 16dp
+    //     起始边距对齐）。
+    // 〔D〕**构建提速**（用户反馈「编译越来越慢」）：
+    //     ① `org.gradle.workers.max=6`（物理核数）—— 之前命令行一直传
+    //        `--max-workers=2`，把 6 核机器当 2 核用，这是慢的主因之一；
+    //        ⚠️ 构建命令一律不要再传 --max-workers（会覆盖配置）。
+    //     ② 配置缓存遇到不兼容时降级为 warn 而不是整构建失败
+    //        （`org.gradle.unsafe.configuration-cache-problems=warn`）。
+    //     ③ 复核 kapt→KSP：仓库里已无任何 kapt（只剩 `ksp(libs.room.compiler)`）。
+    //     ④ 6G 堆 / 并行 GC / 构建缓存 / 配置缓存 / 并行 / VFS watch 早已开启。
+    // 〔E〕去掉 v117 引入的 `BoxWithConstraints`：弹幕层容器尺寸改由 `onSizeChanged`
+    //     拿（少一层 SubcomposeLayout，命中路径也更干净），几何计算一行没变。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 118
+    versionName = "1.6.1"
 
     vectorDrawables {
       useSupportLibrary = true

@@ -16,6 +16,15 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- ⚠️ 弹幕层：独立一层，**声明在 controls 之前** = 画在它下面、触摸也让给它。
+         v118：以前它挂在 controls 那棵 Compose 树里（还是最顶上的全屏节点），
+         结果整屏的 DOWN 全被它先接住，`GestureHandler` 收不到 ⇒ 点屏幕唤不出控件。
+         挪成独立 View 层后，触摸由原生 View 体系按 z 序先给上层的 controls。 -->
+    <androidx.compose.ui.platform.ComposeView
+        android:id="@+id/danmaku"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
     <androidx.compose.ui.platform.ComposeView
         android:id="@+id/controls"
         android:layout_width="match_parent"

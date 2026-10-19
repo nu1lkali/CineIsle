@@ -3,7 +3,6 @@ package app.marlboroadvance.mpvex.ui.player.danmaku
 import android.graphics.Color
 import android.util.Log
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -17,6 +16,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.viewinterop.AndroidView
@@ -122,6 +122,19 @@ fun DanmakuOverlay(
 ) {
   val context = LocalContext.current
   val danmakuView = remember { DanmakuView(context) }
+  // ⚠️ v118：真正交给 `AndroidView` 的是这层隔离容器，DanmakuView 是它的子 View。
+  //   触摸在容器那一层就被短路成 false，弹幕永远拿不到事件（详见 [InertTouchFrameLayout]）。
+  val touchShield = remember {
+    InertTouchFrameLayout(context).apply {
+      addView(
+        danmakuView,
+        android.view.ViewGroup.LayoutParams(
+          android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+          android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+        ),
+      )
+    }
+  }
   // 准备完成后的「接着播」位置：prepared() 回调可能比 effect 晚到（要等布局），
   // 而 effect 里又读不到最新播放位置（LaunchedEffect 捕获的是启动那一刻的值），
   // 所以用 rememberUpdatedState 拿「当前值」。
@@ -407,52 +420,100 @@ fun DanmakuOverlay(
     }
   }
 
-  Box(modifier = modifier) {
-    if (videoAspect <= 0.01f) {
-      // 比例未知（视频还没加载出来 / 调用方没提供）⇒ 老行为：铺满。
-      AndroidView(factory = { danmakuView }, modifier = Modifier.fillMaxSize())
+  // ⚠️⚠️ v118：容器尺寸用 `onSizeChanged` 拿，**绝不能用 BoxWithConstraints**。
+  //
+  // v117 用 `BoxWithConstraints` 包这层，结果**整个播放页点屏幕唤不出控制栏**：
+  // `BoxWithConstraints` 是 `SubcomposeLayout`，它的子内容包括 `AndroidView`
+  // 是在**测量阶段**才 subcompose 出来的；而 `AndroidView` 的
+  // `pointerInteropFilter` 是全屏尺寸的 PointerInputModifier，会排进命中路径
+  // 并抢在 `GestureHandler` 前面接到 ACTION_DOWN —— 一旦它把 DOWN 认领掉，
+  // 同一次手势里 `HitPathTracker` 就按 `suppressMovementConsumption` 把后面的
+  // 节点（GestureHandler）整条摁掉 ⇒ 单击永远走不到「显隐控件」那条分支。
+  // 换成 `onSizeChanged` 后：没有 SubcomposeLayout、命中路径干净，
+  // 尺寸（px）一样拿得到，几何计算一行没变。
+  var containerSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+  Box(modifier = modifier.onSizeChanged { containerSize = it }) {
+    val viewW = containerSize.width.toFloat()
+    val viewH = containerSize.height.toFloat()
+    if (videoAspect <= 0.01f || viewW <= 0f || viewH <= 0f) {
+      // 比例未知（视频还没加载出来 / 容器还没测出来）⇒ 老行为：铺满。
+      AndroidView(factory = { touchShield }, modifier = Modifier.fillMaxSize())
     } else {
-      BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val viewW = constraints.maxWidth.toFloat()
-        val viewH = constraints.maxHeight.toFloat()
-        // keepaspect 语义：哪一边贴满就按哪一边算，另一边居中。
-        val drawW: Float
-        val drawH: Float
-        if (viewW / viewH > videoAspect) {
-          drawH = viewH
-          drawW = viewH * videoAspect
-        } else {
-          drawW = viewW
-          drawH = viewW / videoAspect
-        }
-        val insetX = ((viewW - drawW) / 2f).roundToInt()
-        val insetY = ((viewH - drawH) / 2f).roundToInt()
-        if (insetX <= 2 && insetY <= 2) {
-          // 无黑边（或不足 2px）⇒ 直接铺满，避免无谓的尺寸跳变。
-          AndroidView(factory = { danmakuView }, modifier = Modifier.fillMaxSize())
-        } else {
-          // ⚠️ 这里必须 **px 精确定位**：`Modifier.offset/size` 只有 Dp 重载，
-          //    小数密度（2.75/3.25…）上 dp→px 的 rounding 会让弹幕层和画面
-          //    错开一两像素，DanmakuView 的边缘 retainer 判据就跟着偏。
-          //    Int 参数也不会隐式转 Float/Dp，所以走 `Modifier.layout` 自己摆：
-          //    本节点撑成父级全尺寸，再把子 View 钉在画面矩形的左上角。
-          // ⚠️ DanmakuView.onLayout → notifyDispSizeChanged 会按新尺寸重算
-          //    REAL 时长与 retainer 边界，运行中改大小是 DFM 支持的标准路径。
-          AndroidView(
-            factory = { danmakuView },
-            modifier = Modifier.layout { measurable, constraints ->
-              val w = drawW.roundToInt()
-              val h = drawH.roundToInt()
-              val placeable = measurable.measure(Constraints.fixed(w, h))
-              layout(constraints.maxWidth, constraints.maxHeight) {
-                placeable.place(insetX, insetY)
-              }
-            },
-          )
-        }
+      // keepaspect 语义：哪一边贴满就按哪一边算，另一边居中。
+      val drawW: Float
+      val drawH: Float
+      if (viewW / viewH > videoAspect) {
+        drawH = viewH
+        drawW = viewH * videoAspect
+      } else {
+        drawW = viewW
+        drawH = viewW / videoAspect
+      }
+      val insetX = ((viewW - drawW) / 2f).roundToInt()
+      val insetY = ((viewH - drawH) / 2f).roundToInt()
+      if (insetX <= 2 && insetY <= 2) {
+        // 无黑边（或不足 2px）⇒ 直接铺满，避免无谓的尺寸跳变。
+        AndroidView(factory = { touchShield }, modifier = Modifier.fillMaxSize())
+      } else {
+        // ⚠️ 这里必须 **px 精确定位**：`Modifier.offset/size` 只有 Dp 重载，
+        //    小数密度（2.75/3.25…）上 dp→px 的 rounding 会让弹幕层和画面
+        //    错开一两像素，DanmakuView 的边缘 retainer 判据就跟着偏。
+        //    Int 参数也不会隐式转 Float/Dp，所以走 `Modifier.layout` 自己摆：
+        //    本节点撑成父级全尺寸，再把子 View 钉在画面矩形的左上角。
+        // ⚠️ DanmakuView.onLayout → notifyDispSizeChanged 会按新尺寸重算
+        //    REAL 时长与 retainer 边界，运行中改大小是 DFM 支持的标准路径。
+        AndroidView(
+          factory = { touchShield },
+          modifier = Modifier.layout { measurable, constraints ->
+            val w = drawW.roundToInt()
+            val h = drawH.roundToInt()
+            val placeable = measurable.measure(Constraints.fixed(w, h))
+            layout(constraints.maxWidth, constraints.maxHeight) {
+              placeable.place(insetX, insetY)
+            }
+          },
+        )
       }
     }
   }
+}
+
+/**
+ * 把 [DanmakuView] 包起来、让它**绝对拿不到**触摸事件的隔离容器。
+ *
+ * ⚠️⚠️ v118：这是「点屏幕唤不出控制栏」的第二道保险（第一道是不用 BoxWithConstraints）。
+ *
+ * `AndroidView` 会给它的 LayoutNode 挂 `pointerInteropFilter`：DOWN 一到，
+ * Compose 就**先问这个 View 要不要**（`view.dispatchTouchEvent(ev)`），
+ * 它返回 true 的话整串手势就被它独占（`suppressMovementConsumption`），
+ * 同一次手势里排在它后面的 `GestureHandler` 一条事件都收不到。
+ * 而弹幕根本不需要触摸 —— 我们没设 `OnDanmakuClickListener`，
+ * 点击弹幕的功能从来没开过。
+ *
+ * 所以这里在最外层直接把 `dispatchTouchEvent` 短路成 **false**：
+ * 事件连内部 DanmakuView 的手势识别器都到不了，
+ * `pointerInteropFilter` 拿到的必然是 false ⇒ 它永远是 `NotDispatching`。
+ *
+ * 为什么是覆写 `dispatchTouchEvent` 而不是给 DanmakuView 设 `isClickable = false`：
+ * 后者只管 DanmakuView 自己，管不住外面那层 ViewGroup 的兜底分发；
+ * 覆写容器则连子 View 一起挡掉，不依赖任何「View 默认不可点击」的假设。
+ */
+private class InertTouchFrameLayout(context: android.content.Context) : android.widget.FrameLayout(context) {
+  init {
+    isClickable = false
+    isLongClickable = false
+    isFocusable = false
+    // 弹幕可能画到容器边缘外一点点，别让 ViewGroup 把它裁了。
+    clipChildren = false
+  }
+
+  override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean = false
+
+  override fun onInterceptTouchEvent(ev: android.view.MotionEvent?): Boolean = false
+
+  override fun onTouchEvent(event: android.view.MotionEvent?): Boolean = false
+
+  override fun performClick(): Boolean = false
 }
 
 /** 把六个显示参数写进 [DanmakuContext]（方法名全部对过 DanmakuContext 源码）。 */
