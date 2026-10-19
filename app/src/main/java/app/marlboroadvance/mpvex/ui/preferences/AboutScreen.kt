@@ -427,6 +427,11 @@ private val ACKNOWLEDGMENTS =
       url = "https://github.com/androidx/media",
     ),
     Acknowledgment(
+      name = "DanmakuFlameMaster",
+      summaryRes = R.string.i18n_ack_danmaku_summary,
+      url = "https://github.com/bilibili/DanmakuFlameMaster",
+    ),
+    Acknowledgment(
       name = "Emby Java SDK",
       summaryRes = R.string.i18n_ack_emby_summary,
       url = "https://github.com/MediaBrowser/Emby.SDK",

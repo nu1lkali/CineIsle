@@ -167,6 +167,11 @@ class MPVView(
     }
     
     // Cap demuxer cache for mobile to prevent memory issues
+    //
+    // ⚠️ **字节上限才是这里真正的闸门**（秒数只是另一个上限，谁先到算谁）。
+    // 下面 64MB 这条线决定了「大文件播起来到底会不会卡」，原因是 mpv 的
+    // `demuxer-max-bytes` 一旦被打满，主线程上的 demux 线程会**停下来等消费者**，
+    // 表现为「拉不动 / 反复 rebuffer / 播放像幻灯片」。
     val cacheMegs = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) 64 else 32
     MPVLib.setOptionString("demuxer-max-bytes", "${cacheMegs * 1024 * 1024}")
     MPVLib.setOptionString("demuxer-max-back-bytes", "${cacheMegs * 1024 * 1024}")
@@ -177,8 +182,18 @@ class MPVView(
     // AVI 的索引在文件尾部，播放器要反复回头读；一旦中间那层（Emby 中转、远端服务器）
     // 抖动或断一下，画面就卡住甚至再也不动 —— 观感上就是「软解卡得动不了」。
     // 所以把预读和重连都拉起来：抖动能自愈，不要一路卡到用户重进页面。
-    MPVLib.setOptionString("cache-secs", "30")
-    MPVLib.setOptionString("demuxer-readahead-secs", "30")
+    //
+    // ⚠️⚠️ **单位是「秒」，但真正的上限是上面那 64MB 字节**。
+    // 这两个 30 秒在 5Mbps 的番剧上只占 ~19MB（无害），而在用户那种
+    // **70GB / 4K 原盘（实测 6~15MB/s = 50~120Mbps）** 上，
+    // 30 秒 ≈ 180MB ~ 450MB —— 远远超过 64MB 的字节闸门，
+    // 于是 mpv 永远处于「缓存被打满」的状态：readahead 反复停等、
+    // 播放位置一抖就整段重新取数据，观感就是**卡成幻灯片**。
+    //
+    // 所以秒数要跟着字节上限一起收：8 秒 × 64MB 的字节闸门正好能容纳
+    // 「码率高到 8MB/s 的 4K 原盘」，同时低码率流仍然拿到充足的抖动量。
+    MPVLib.setOptionString("cache-secs", "8")
+    MPVLib.setOptionString("demuxer-readahead-secs", "8")
     // 单次网络读取的缓冲区（默认仅 128KiB，高延迟链路上吞吐会很难看）
     MPVLib.setOptionString("stream-buffer-size", "4MiB")
     MPVLib.setOptionString("network-timeout", "30")
@@ -236,7 +251,22 @@ class MPVView(
     }
 
     MPVLib.setOptionString("speed", playerPreferences.defaultSpeed.get().toString())
-    MPVLib.setOptionString("vd-lavc-film-grain", "cpu")
+
+    // ── 解码器侧的通用提速 ──
+    //
+    // ① `vd-lavc-dr=yes`（direct rendering）：解码器直接把输出写进 GPU 可读的缓冲，
+    //    少一次整帧拷贝。4K 一帧（YUV420 10bit）约 25MB，这一拷在低端 SoC 上是
+    //    实实在在的十几毫秒 —— 掉帧就是这么来的。
+    //    ⚠️ 它原本被误写在 `applyAnime4KShaders()` 里（只有开着 Anime4K 才生效），
+    //    于是「不开着色器 ⇒ 每条片子都少一层优化」。挪到这里对所有播放生效。
+    MPVLib.setOptionString("vd-lavc-dr", "yes")
+    //
+    // ② `vd-lavc-film-grain`：ffmpeg 的胶片颗粒合成策略。
+    //    `cpu` 让**每一帧**都在 CPU 上做一遍颗粒合成 —— 在 1080p 上几乎无感，
+    //    但在 4K 高码率上是一笔很重的每帧开销（大文件卡顿的帮凶之一）。
+    //    `gpu` 把这一步交给 shader（本项目默认 gpu-next，支持），效果等价、代价低得多；
+    //    显卡不支持时会自动退化为不合成而不是报错。
+    MPVLib.setOptionString("vd-lavc-film-grain", "gpu")
 
     val preciseSeek = playerPreferences.usePreciseSeeking.get()
     MPVLib.setOptionString("hr-seek", if (preciseSeek) "yes" else "no")
@@ -466,7 +496,8 @@ class MPVView(
         MPVLib.setOptionString("opengl-pbo", "yes")
         MPVLib.setOptionString("opengl-early-flush", "no")
       }
-      MPVLib.setOptionString("vd-lavc-dr", "yes")
+      // 注：`vd-lavc-dr` 不在这里设 —— 它对所有播放都有益，已挪到 initOptions 的
+      // 「解码器侧通用提速」段（原来放在这里导致「不开 Anime4K 就没这层优化」）。
 
       // Apply shaders (MUST use setOptionString in initOptions!)
       MPVLib.setOptionString("glsl-shaders", shaderChain)

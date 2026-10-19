@@ -133,16 +133,38 @@ object DanmakuClient {
   /**
    * 搜番。
    *
-   * @return 命中列表；网络失败 / 认证失败时返回**空列表**（调用方给空态，不崩）。
+   * ⚠️⚠️ **官方端点的参数名是 `keyword`，不是 `anime`**（v100 真机修复的核心）。
+   * 传 `anime=` 服务端不会报参数缺失，而是回一个 **HTTP 200 + `success:false`**：
+   *
+   * ```
+   * {"animes": null, "errorCode": 2, "success": false, "errorMessage": "一个或多个参数不符合规则"}
+   * ```
+   *
+   * 客户端原先只看 `animes`（null → 空列表）⇒ 用户看到的就是「搜索不到弹幕」，
+   * 而网络、凭证、签名全都是好的，根本无从排查。所以这里必须**同时**看 `success`
+   * 和 `errorMessage`，把它变成一句能看懂的话。
+   *
+   * @return 命中列表；网络失败 / 认证失败 / 参数被拒时返回**空列表**（调用方给空态，不崩）。
    */
   suspend fun searchAnime(host: String, keyword: String, credentials: Credentials): List<DandanAnime> {
     val q = keyword.trim()
     if (q.isEmpty()) return emptyList()
-    val path = "/api/v2/search/anime?anime=" + java.net.URLEncoder.encode(q, "UTF-8")
+    val path = "/api/v2/search/anime?keyword=" + java.net.URLEncoder.encode(q, "UTF-8")
     val body = getText(host, path, credentials) ?: return emptyList()
-    return runCatching { json.decodeFromString<DandanSearchResponse>(body).animes }
+    val parsed = runCatching { json.decodeFromString<DandanSearchResponse>(body) }
       .onFailure { lastError = "搜索响应格式不对"; Log.w(TAG, "搜索响应解析失败", it) }
-      .getOrDefault(emptyList())
+      .getOrNull()
+      ?: return emptyList()
+
+    // ⚠️ success=false 时 animes 恒为 null，**绝不能**当成「没搜到」——那是服务端在报错。
+    if (!parsed.success) {
+      lastError = parsed.errorMessage?.takeIf { it.isNotBlank() }
+        ?.let { "弹幕源拒绝请求：$it" }
+        ?: "弹幕源拒绝了这次搜索（errorCode=${parsed.errorCode ?: "?"}）"
+      Log.w(TAG, "搜索成功返回但 success=false：${parsed.errorCode} ${parsed.errorMessage}")
+      return emptyList()
+    }
+    return parsed.animes
   }
 
   /** 拿一部番的分集列表。 */
@@ -159,12 +181,22 @@ object DanmakuClient {
    *
    * `withRelated=false`：只要这一集的评论，不要服务端顺带返回的其它剧集。
    */
+  /**
+   * 拉某一集的弹幕。
+   *
+   * @param withRelated 是否合并「关联剧集」的弹幕（对标 Yamby 的 `danmaku_with_related`）。
+   *   dandanplay 会把同一集在不同版本 / SP / OVA / 不同字幕组下的弹幕一起返回 ——
+   *   开启后弹幕密度明显更高，但也可能混进「同一集另一个剪辑版」的偏差弹幕。
+   *   服务端默认 false，由调用方按用户偏好决定。
+   */
   suspend fun getComments(
     host: String,
     episodeId: Long,
     credentials: Credentials,
+    withRelated: Boolean = false,
   ): List<DandanComment> {
-    val path = "/api/v2/comment/$episodeId?withRelated=false&chConvert=0"
+    // ⚠️ 参数顺序固定：`withRelated` 在前、`chConvert` 在后（服务端按名解析，但保持一致更稳）
+    val path = "/api/v2/comment/$episodeId?withRelated=$withRelated&chConvert=0"
     val body = getText(host, path, credentials) ?: return emptyList()
     return runCatching { json.decodeFromString<DandanCommentResponse>(body).comments }
       .onFailure { lastError = "弹幕响应格式不对"; Log.w(TAG, "弹幕响应解析失败", it) }

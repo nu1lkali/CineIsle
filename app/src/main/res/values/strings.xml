@@ -129,6 +129,8 @@
   <string name="pref_player_seeking_title">Seeking</string>
   <string name="pref_player_close_after_eof">Close after the end of playback</string>
   <string name="pref_player_remember_brightness">Remember display brightness</string>
+  <string name="pref_player_remember_series_brightness">Remember brightness per series</string>
+  <string name="pref_player_remember_series_brightness_summary">Restore the brightness you last used for each series instead of one shared value</string>
   <string name="pref_player_gestures">Gestures</string>
   <string name="pref_player_gestures_brightness">Brightness gestures</string>
   <string name="pref_player_gestures_volume">Volume gestures</string>
@@ -890,6 +892,7 @@
   <string name="i18n_ack_mpv_android_summary">mpv bindings and libmpv integration — the primary playback core.</string>
   <string name="i18n_ack_gsy_summary">The second playback core, together with the IJK (FFmpeg) engine it bundles.</string>
   <string name="i18n_ack_media3_summary">AndroidX Media3 / ExoPlayer — multi-instance playback used by Vertical Feed.</string>
+  <string name="i18n_ack_danmaku_summary">Danmaku rendering engine — vendored as source, with scroll-lifetime and timer fixes.</string>
   <string name="i18n_ack_emby_summary">Official Emby Java SDK — the client\'s API layer is built on it.</string>
   <string name="i18n_ack_upnpcast_summary">DLNA casting — device discovery and playback control.</string>
   <string name="i18n_ack_aboutlibraries_summary">Generates the open-source license list on this screen.</string>
@@ -958,6 +961,7 @@
   <string name="danmaku_not_matched">No danmaku matched yet</string>
   <string name="danmaku_matched_count">%1$s · %2$d comments</string>
   <string name="danmaku_off_hint">Turn on to load and show comments. Data comes from a danmaku source, which needs network access.</string>
+  <string name="danmaku_matching">Matching title and loading comments…</string>
   <string name="danmaku_font_size">Font size</string>
   <string name="danmaku_speed">Speed</string>
   <string name="danmaku_opacity">Opacity</string>
@@ -967,6 +971,8 @@
   <string name="danmaku_density_normal">Medium</string>
   <string name="danmaku_density_dense">High</string>
   <string name="danmaku_block_words">Blocked words (comma separated)</string>
+  <string name="danmaku_prevent_overlapping">Prevent overlap</string>
+  <string name="danmaku_prevent_overlapping_summary">Move a comment to another track instead of letting it pile onto the one in front</string>
   <string name="danmaku_auto_match">Auto match</string>
   <string name="danmaku_auto_match_summary">Search by the current title automatically</string>
   <string name="danmaku_manual_search">Search manually</string>
@@ -974,6 +980,16 @@
   <string name="danmaku_search_action">Search</string>
   <string name="danmaku_episode_count">%1$d episodes</string>
   <string name="danmaku_load">Load</string>
+  <string name="danmaku_pick_episode">Episodes</string>
+  <string name="danmaku_select_episode">Pick an episode of this title</string>
+  <string name="danmaku_remember_selection">Remember manual pick</string>
+  <string name="danmaku_remember_selection_summary">Keep the title you picked for the next episodes instead of re-matching by name</string>
+  <string name="danmaku_with_related">Merge related episodes</string>
+  <string name="danmaku_with_related_summary">Include comments from other releases, SPs and OVAs of the same episode for a denser screen</string>
+  <string name="danmaku_time_offset">Timeline offset</string>
+  <string name="danmaku_time_offset_hint">Positive if danmaku appear too early, negative if too late. Saved per series, so switching titles won\'t mix them up.</string>
+  <string name="danmaku_time_offset_saved">Saved for this series</string>
+  <string name="danmaku_time_offset_clear">Use global</string>
   <string name="danmaku_host">Source address</string>
   <string name="danmaku_app_id">App ID</string>
   <string name="danmaku_app_secret">App secret</string>

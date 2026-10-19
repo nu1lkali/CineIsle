@@ -34,10 +34,10 @@ androidxTestJunit = "1.3.0"
 coroutinesTest = "1.11.0"
 mockk = "1.14.6"
 truth = "1.4.5"
-# 弹幕渲染：B站开源的 DanmakuFlameMaster（Maven Central 上的坐标是 `com.github.ctiao:dfm`，
-# **不是** README 里写的 jcenter 坐标 —— jcenter 早已下线，只有 `dfm` 这个 artifact 还活着）。
-# 这个 AAR 里没有 .so（纯 Java 实现），所以不用再配 ndkbitmap-* 的分 ABI 依赖。
-dfm = "0.9.25"
+# 弹幕渲染：DanmakuFlameMaster 已改为**源码内置**（v115）——
+# 源码在 app/src/main/java/master/flame/danmaku/（+ tv/cjump/jni/），
+# 因为要修引擎自身的「滚动速度与存活寿命同源」缺陷（见 2026-10-19.md v115 段）。
+# 原先的 AAR 坐标 `com.github.ctiao:dfm:0.9.25` 已移除。
 # Lottie（airbnb）：加载动画用。6.x 需要 compileSdk 34+ / minSdk 21+，本项目 37 / 26 都满足。
 lottie = "6.7.1"
 # Telephoto（saket）：Compose 图片缩放/平移手势（照片浏览器用）。
@@ -145,9 +145,8 @@ truth = { module = "com.google.truth:truth", version.ref = "truth" }
 room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
 
 # ── 弹幕 ──
-# 弹幕渲染引擎（B站 DanmakuFlameMaster）。只用它的 View + 数据模型，
-# 解析走我们自己的 parser（dandanplay 的 p 字段 csv，不是 B 站 XML）。
-dfm = { module = "com.github.ctiao:dfm", version.ref = "dfm" }
+# 弹幕渲染引擎（DanmakuFlameMaster）为源码内置：app/src/main/java/master/flame/danmaku/。
+# 只用它的 View + 数据模型，解析走我们自己的 parser（dandanplay 的 p 字段 csv，不是 B 站 XML）。
 
 # ── Lottie 加载动画 ──
 lottie = { module = "com.airbnb.android:lottie", version.ref = "lottie" }

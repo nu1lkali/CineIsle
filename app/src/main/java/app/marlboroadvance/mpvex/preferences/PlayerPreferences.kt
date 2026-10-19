@@ -79,6 +79,68 @@ class PlayerPreferences(
   val rememberBrightness = preferenceStore.getBoolean("remember_brightness")
   val defaultBrightness = preferenceStore.getFloat("default_brightness", -1f)
 
+  /**
+   * 按剧记亮度（对标 Yamby 的 `resume_brightness`）：`seriesKey -> 0.0~1.0`，
+   * 序列化成 `key=value;key=value`。
+   *
+   * ## 和 [rememberBrightness] 的关系
+   *
+   * [rememberBrightness] 是**全局一个值**：调一次，以后所有片都从这个亮度开始。
+   * 那对「整季在晚上看的番」合适，但对「白天看的剧 + 晚上看的另一部」完全不对 ——
+   * 一部片的亮度需求其实是**看片时的环境光**，而不是片子本身的属性，
+   * 可用户真正记得住的是「上次看这部片我调到了这么暗」。
+   *
+   * 所以这里做成**叠加**而不是替代：
+   * - [rememberBrightness] 开着 ⇒ 记下的值同时写进 [defaultBrightness]（保持原有行为）；
+   * - [rememberSeriesBrightness] 开着 ⇒ 再额外按剧写一份，换片时**按剧覆盖 > 全局默认**。
+   *
+   * ## 为什么不建表
+   *
+   * 与弹幕偏移同一个理由：真正会有数值的片子是个位数，拼一行字符串足够。
+   * ⚠️ seriesKey 是 Emby 的 ItemId（32 位十六进制）或本地片的路径 hash，
+   * 不含 `;` / `=`，分隔符是安全的。
+   */
+  val rememberSeriesBrightness = preferenceStore.getBoolean("remember_series_brightness")
+  val seriesBrightness = preferenceStore.getString("series_brightness", "")
+
+  /**
+   * 本次播放该用的初始亮度。
+   *
+   * 返回 `-1f`（即 [PlayerActivity.BRIGHTNESS_NOT_SET] 那个值）表示「没有记录、保持系统亮度」——
+   * 调用方据此决定要不要写 `window.attributes.screenBrightness`。
+   *
+   * ⚠️ 必须是「按剧有记录就用按剧的，哪怕全局默认被改过」：用户上次把这部片
+   * 调暗了，这次开播如果先套全局值再等他手动调，那一瞬间的刺眼就是 bug 本身。
+   */
+  fun brightnessFor(seriesKey: String?): Float {
+    if (!seriesKey.isNullOrBlank()) {
+      parseSeriesBrightness(seriesBrightness.get())[seriesKey]?.let { return it }
+    }
+    return defaultBrightness.get()
+  }
+
+  /** 给某部剧写入亮度；null = 删掉这条覆盖。 */
+  fun setSeriesBrightness(seriesKey: String?, value: Float?) {
+    if (seriesKey.isNullOrBlank()) return
+    val map = parseSeriesBrightness(seriesBrightness.get()).toMutableMap()
+    if (value == null) map.remove(seriesKey) else map[seriesKey] = value.coerceIn(0f, 1f)
+    seriesBrightness.set(
+      map.entries.joinToString(";") { "${it.key}=${it.value}" },
+    )
+  }
+
+  private fun parseSeriesBrightness(raw: String): Map<String, Float> {
+    if (raw.isBlank()) return emptyMap()
+    val out = LinkedHashMap<String, Float>()
+    for (entry in raw.split(';')) {
+      val i = entry.indexOf('=')
+      if (i <= 0) continue
+      val value = entry.substring(i + 1).toFloatOrNull() ?: continue
+      out[entry.substring(0, i)] = value
+    }
+    return out
+  }
+
   val allowGesturesInPanels = preferenceStore.getBoolean("allow_gestures_in_panels")
   val showSystemStatusBar = preferenceStore.getBoolean("show_system_status_bar")
   val showSystemNavigationBar = preferenceStore.getBoolean("show_system_navigation_bar")
@@ -222,6 +284,41 @@ class PlayerPreferences(
    * 只在 [autoplayNextVideo] 打开时才有意义 —— 关掉连播后根本不会走到倒计时。
    */
   val autoplayNextCountdownSeconds = preferenceStore.getInt("autoplay_next_countdown_seconds", 5)
+
+  /**
+   * 「下一集」衔接预取（Yamby 的 `next_up_sec` 对位能力）。
+   *
+   * ## 解决什么
+   *
+   * 连播切集时新集要重新 `loadfile` + 建 HTTP 连接 + 服务端 prepare，
+   * 高码率片源上这几百毫秒~数秒就是「播完黑一下」的来源。
+   *
+   * ## 做法与代价
+   *
+   * 不用 mpv 的 `prefetch-playlist`：那会让新旧两路同时拉流，70GB 级的片源上
+   * 带宽直接对半分，反而把当前这集拉卡（v105 刚修完大文件卡顿，不能再引入这个副作用）。
+   * 这里只做**廉价的预热**：小流量 Range 请求打一次下一集的流地址，
+   * 让 DNS / TLS / 服务端转码方案缓存热起来，切集时首次握手快一个数量级。
+   *
+   * 提前量刻意给短（默认 45 秒，可关）：太早预热会被服务端视为「放弃的会话」，
+   * 有些服务端（Jellyfin 某些版本）还会把上一路转码停掉。
+   */
+  val prefetchNextEpisode = preferenceStore.getBoolean("prefetch_next_episode", true)
+
+  /** 提前多久预热下一集（秒）。0 = 关闭。 */
+  val prefetchNextEpisodeSeconds = preferenceStore.getInt("prefetch_next_episode_seconds", 45)
+
+  /** 下一集卡片在片尾多少秒前开始悬停（Yamby 的 `next_up_sec`）。 */
+  val nextUpShowSeconds = preferenceStore.getInt("next_up_show_seconds", 30)
+
+  /**
+   * 是否显示「下一集」悬停卡片。
+   *
+   * 与 [autoplayNextCountdownSeconds]（最后几秒的数字倒计时）是**两个不同的东西**：
+   * 那个是「马上要切了」的催促，这个是提前半分钟问「要不要接着看」。
+   * 都关掉 = 播完静默切集，什么都不显示。
+   */
+  val showNextUpCard = preferenceStore.getBoolean("show_next_up_card", true)
 
   /**
    * 默认播放内核："MPV" 或 "GSY"。

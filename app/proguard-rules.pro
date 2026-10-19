@@ -81,6 +81,13 @@
 -keep class com.yinnho.upnpcast.** { *; }
 -dontwarn com.yinnho.upnpcast.**
 
+# DanmakuFlameMaster（v115 起源码内置，原先 AAR 的 consumer rules 随之失效，必须自己 keep）
+# 引擎内部按字段名/类型直接访问（flags、duration、mTimer 等），混淆会直接崩。
+-keep class master.flame.danmaku.** { *; }
+-dontwarn master.flame.danmaku.**
+-keep class tv.cjump.jni.** { *; }
+-dontwarn tv.cjump.jni.**
+
 # ── GSYVideoPlayer + IJK ──
 # GSY 的播放器 View 由 XML 布局 inflate、内部大量按类名/反射找 manager，
 # 收缩会直接崩；IJK 的 native 方法被裁掉则是「起播就黑屏」。

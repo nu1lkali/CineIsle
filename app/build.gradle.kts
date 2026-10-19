@@ -754,8 +754,288 @@ android {
     //     ④「下载完成后清除服务端播放进度」13 字加图标后被截断 ⇒ 缩短为
     //        「下载后清除播放进度」（9 字），「下载完 / 服务端」细节留给 summary。
     //     ⚠️ 偏好键与功能语义均未改。
-    versionCode = 104
-    versionName = "1.5.10"
+    // 105（修复轮，versionName 仍为 1.5.10）：弹幕 + 分集 + 大文件卡顿 三批（用户反馈）：
+    //  ① 弹幕搜索恒空：端点参数名 `anime` → `keyword`（服务端回 200+success:false，原先被静默吞掉）；
+    //     并显式消费 success / errorMessage，失败给可读提示而不是"没搜到"。
+    //  ② 带分集的电视剧：详情页新增分集区（默认收起，展开为横向卡片列表，多季出季 chip）；
+    //     点集 = 整季入队从该集起播（可连播）、长按 = 进该集详情。
+    //  ③ 点分集必崩：根因是 `Series`/`Season`/文件夹本身无媒体文件，却拿它的 Id 去请求
+    //     `/Videos/{id}/stream`，播放器一路走到 mpv 初始化后崩。play() 增加容器路由
+    //     （Series 自动挑"有进度→首个未看→首集"，其余容器直接返回），详情页按钮文案同步。
+    //  ④ 弹幕集号错集：传入的是**队列下标**而非真实集号 ⇒ 从第 5 集点播时取到第 1 集弹幕。
+    //     新增 `emby_episode_numbers`（与 itemIds 同序，编码 season*1000+episode），
+    //     播放页 `currentEpisodeIndex()` 解码；队列换位/删除同步维护该平行数组。
+    //  ⑤ 70GB 大文件卡成幻灯片（三个独立原因）：
+    //     · `MpvDiskCache.trimIfNeeded` 在 handleFileLoaded（主线程、首帧要上屏那一刻）
+    //       里 `deleteRecursively()` 几百 MB~2GB 缓存 ⇒ 挪到 IO 线程异步清理；
+    //     · `cache-secs`/`demuxer-readahead-secs` 原为 30 秒，高码率下远超 64MB 字节闸门
+    //       ⇒ readahead 反复停等；收到 8 秒与字节上限匹配；
+    //     · `time-pos` / 网速采样在主线程每 42ms/1s 抢 mpv 播放线程锁（JNI 同步调用），
+    //       码率越高持锁越久 ⇒ 挪到 Dispatchers.Default。
+    //  ⑥ 解码通用提速：`vd-lavc-dr=yes` 原被误写在 applyAnime4KShaders 里（不开着色器就
+    //     没有这层优化）⇒ 挪到 initOptions 无条件生效；`vd-lavc-film-grain` cpu → gpu。
+    // 106（修复轮，versionName 仍为 1.5.10）：弹幕时间轴偏移改为**按剧记忆**（用户反馈）：
+    //  ① 原先全局偏移对所有片生效，换片必须先手动清零。新增 `danmaku_series_offsets`
+    //     偏好（"seriesKey=ms;..." 紧凑串），key = Emby SeriesId，无 SeriesId 时退回全局。
+    //  ② `DanmakuPreferences.timeOffsetFor(seriesKey)` / `setSeriesOffset` / `hasSeriesOffset`；
+    //     `setTimeOffset` 写「本剧覆盖」，新增 `clearTimeOffset` 删覆盖回落到全局。
+    //  ③ 换剧（seriesKey 变化）时同时清 `manualAnime` —— 上一部的弹幕源选择不该带到下一部；
+    //     `rememberSelection` 关掉不影响「按剧偏移」（两者独立）。
+    //  ④ 弹幕面板在偏移滑杆下显示「已按本剧记住」+「跟随全局」撤销按钮。
+    // 106 追加（同号未发布）：四项对标 Yamby 的播放链路能力（用户要求「考虑全面、注意联动」）：
+    //  ⑦ 弹幕时间轴按剧记忆（见上 ①-④）。
+    //  ⑧ 片尾「下一集」悬停卡（对标 Yamby `next_up_sec`）：片尾前 N 秒（默认 30）右下角出卡片，
+    //     带下一集标题、点即切；与原有「连播倒计时胶囊」分工不同（那个是最后几秒催切，
+    //     这个是提前问要不要接着看），两者可同时出现、上下错开摆放。
+    //     偏好 `show_next_up_card` / `next_up_show_seconds`；关闭 = 完全回到旧行为。
+    //  ⑨ 下一集衔接预热：片尾前 N 秒（默认 45）对下一集流地址发一次 64KB Range 请求，
+    //     只为把 DNS/TCP/TLS 与服务端 prepare 焐热 ⇒ 切集少黑一下。
+    //     ⚠️ 刻意不用 mpv `prefetch-playlist`：那会让两路同时拉流，70GB 片源上会把当前集拉卡
+    //     （v105 刚修完大文件卡顿，不能再引入这个副作用）。偏好 `prefetch_next_episode(_seconds)`。
+    //  ⑩ 分集批量下载：分集区展开后新增「下载本季 N 集」（只挑没下过/不在队列里的集），
+    //     分集卡右上角新增单集下载小钮（三态：可下载 / 已交出去 / 已下好）。
+    //     状态复用详情页已有的 downloadTasks Flow，不额外发请求。
+    // 107（修复轮，versionName 仍为 1.5.10）：三件事（用户指定「低成本项 + 新 UI 结构」）：
+    //  ① 弹幕开关「点不动」根因修复：原先 `setEnabled` 只写偏好 + 刷渲染参数，
+    //     **没有任何拉取触发**；而拉取的唯一入口 `onEpisodeChanged` 只在切集时调用 ⇒
+    //     开播时关着、后来打开就永远没弹幕。现在 `pendingTitle`/`pendingEpisodeIndex`
+    //     无条件记录（开关关着也记），打开时按「已有弹幕 / 记住的手动选番 / 自动匹配」补拉；
+    //     `setAutoMatch`、`setWithRelated` 两个开关同样补拉。抽屉里补加载态指示器。
+    //  ② 防重叠（对标 `prevent_danmaku_overlapping`）：`DanmakuContext.preventOverlapping`
+    //     接线 + 面板开关，默认开。⚠️ 必须逐个弹幕类型给值，Map 缺的 key 视作 false。
+    //  ③ 按剧记亮度（对标 `resume_brightness`）：`PlayerPreferences.brightnessFor` /
+    //     `setSeriesBrightness`，与全局 `rememberBrightness` **叠加**；切内核经
+    //     `PlayerHandoff.brightness` 透传（GSY 是另一个 window，不传就弹回系统值）。
+    //     ⚠️ 读 extra 必须判 `hasExtra` —— 默认 0f 是合法亮度（全黑）。
+    //  ④ 分集三分区（对标 `siblingEpisodes` / `showingEpisodes` / `personEpisodes`）：
+    //     `RelatedEpisodesSection` = 同季 / 特别篇 / 演员相关，只在**单集详情页**出现
+    //     （那里原本没有任何切兄弟集的入口）。同季优先用 `SiblingIds`（随详情零额外往返），
+    //     老服务端不返回时退回按 SeriesId 拉全剧再筛同季。演员相关只取首位 Actor。
+    //  ⑤ 弹幕跨内核集号透传：`PlayerHandoff.episodeNumbers` + `episodeIndexAt()`，
+    //     修掉 GSY 侧把队列下标当集号导致的错集。
+    // 108（修复轮，versionName 仍为 1.5.10）：弹幕「抽屉里写着已匹配 N 条、画面上一条没有」，
+    //   用户反馈「开关按了没反应」。根因在**渲染层**，不是拉取层（v107 修的是拉取）：
+    //   ① `DanmakuOverlay` 灌数据的 `LaunchedEffect` 原来只以 `episodeKey` 为 key。
+    //      切集瞬间 `onEpisodeChanged` 先把 comments 清空、联网回来才填满，而 mpv 侧
+    //      episodeKey 在清空的同一刻就已经变了 ⇒ effect 拿着**空列表**跑了一遍走 `stop()`，
+    //      之后 comments 从空变非空而 key 不变 ⇒ 永远不再 `prepare()` ⇒ 零渲染。
+    //      改为三段 key `(danmakuView, episodeKey, comments.isEmpty())`：布尔只在
+    //      「空 ↔ 非空」翻转时多跑一次，既保证「有数据必灌一次」，又不会因为列表内容
+    //      变化（屏蔽词、偏移）重建引擎（那会新建 HandlerThread、弹幕叠两遍）。
+    //   ② `setEnabled` 去掉「值没变直接 return」：它不是幂等 setter，而是「打开它」的意图，
+    //      连点两下时第二次必须仍然补拉，否则观感就是彻底点不动。关闭时顺带清掉旧错误提示。
+    //   ③ `pendingTitle` 为空时不再静默 return，给一句可读提示。
+    //   ④ 排查用日志：`DanmakuSheet` 记点击回执（手势有没有落到开关上）、
+    //      `PlayerDanmakuState` 记 setEnabled 的上下文、`DanmakuOverlay` 记灌数据条数/布局状态。
+    //   ⑤ 顺带把 DFM 的一个误区写进注释：`start()` 在没布局好时**不会丢**，
+    //      `DrawHandler.handleMessage(START)` 内部每 100ms 重投一次直到 `isViewReady()`，
+    //      不需要我们额外兜「等布局完成再 start」。
+    // 109（修复轮，versionName 仍为 1.5.10）：v108 实测日志 mpvex_logs(6) 定位到**三层**问题：
+    //   ① 「开关点不动」的真根因：面板 `PlayerSheets.kt` 读的是 `danmakuState.sheet` 这个 flow，
+    //      而 `_sheet` 初值 `DanmakuSheetState()` 的 `enabled` 是 **false**，全项目
+    //      **一次都没调过** `readSheetState()` ⇒ 面板永远读 false，点了立刻弹回。
+    //      日志铁证：连续 8 次点击全是「弹幕总开关点击：false → true」。
+    //      修法：新增 `refreshSheet()` = `_sheet.value = readSheetState()`，
+    //      `setEnabled` 落库后**立刻**调；同时把 host/appId/appSecret/autoMatch/withRelated/
+    //      rememberSelection/fontScale/speedScale/alpha/area/density/blockWords*/timeOffset
+    //      全部 setter 统一收口到它（原先各自 `.copy()` 漏字段是同类 bug 的温床）。
+    //      * 顺带补 `readSheetState()` 漏掉 `withRelated` 字段（面板上那个开关永远是 false）。
+    //   ② 首次起播**从不通知弹幕状态机**：`onCreate` 走 `player.playFile(uri)` 直通，
+    //      不经 `loadPlaylistItemInternal` ⇒ `pendingTitle` 恒为空。
+    //      日志铁证：`setEnabled(true)：pending=""`、`弹幕灌数据：… key=`。
+    //      ⇒ 自动匹配永远拿不到片名（只能手动搜番），打开开关时的补拉也永远死在
+    //      「还没拿到片名」分支。修法：`handleFileLoaded` 里补调一次
+    //      `notifyDanmakuEpisodeChanged()`（封装：切集与首播共用同一套参数口径）。
+    //      并且 `onEpisodeChanged` 在「片名空 + 集号 0」时直接跳过，不再把 pending 覆成空串。
+    //   ③ `episodeKey` 退化成空串：改为「片名/集号都缺就留空」，
+    //      并由 `syncEpisodeKey()` 在**拉到数据后**用 dandanplay 的 `番名#episodeId`
+    //      覆盖成稳定身份（本地播放没有 Emby SeriesId 时也能区分换片）。
+    //   附：`setBlockWords` 原来在**已过滤**的列表上再滤 ⇒ 删掉屏蔽词后条目回不来；
+    //      改为在 `lastRawComments` 上重滤（与 `setTimeOffset` 同口径）。
+    // 110（修复轮，versionName 仍为 1.5.10）：弹幕「开关能开、条数也有、画面上一条都没有」。
+    //     用户一眼点到关键：「不是让你反编译 yamby 了吗，弹幕的整个流程链参考他的呀」。
+    //     ⇒ 先把 Yamby 2.1.0.11 反编译取证（dexdump 全量 + ELF 符号表），结论：
+    //       **Yamby 一行 DanmakuFlameMaster 运行时类都没引用**（DanmakuView /
+    //       DanmakuContext / DanmakuParser / master/flame 命中数全 0，
+    //       `DanmakuFlameMaster` 只作为 LICENSE 字符串出现）。它的
+    //       `YambyPlayerControllerView` 有一整套 **NATIVE** 弹幕 API
+    //       （getDanmakuCache / setDanmakuCache / getDanmakuTimeOffset / …），
+    //       渲染入口是 `ۥۚۥۘۧ۠ۨ(List, Z)V`（NATIVE），调用点在
+    //       `if (duration >= 10s) { native.render(getDanmakuCache(), true); setDanmakuCache(null) }`
+    //       —— 一次性把弹幕推给 native，推完就清空 Java 侧缓存。实现落在
+    //       `libnmmp.so`（1.1MB，导出 vmInterpret/gVm/cacheInitial + JNI_OnLoad = 加密 VM），
+    //       `libmpv.so` 里 **0 处 danmaku 字样** ⇒ 也**不是**转 ASS 交给 mpv。
+    //       连 `onPlayPause` / `onPlaybackSeek` 都是 NATIVE ⇒ 整个播放控制层在 native。
+    //       ⇒ 「照抄 Yamby」= 自写 native 渲染器，工程量极大且不解决眼前问题。
+    //       真正该抄的是**它的时序纪律**：不在 View 尚未就绪时驱动渲染。
+    //     我们这边的真凶（DFM 源码级确认，v109 及以前一直在犯）：
+    //     ① `prepare(parser, ctx)` → 同一帧 `start(0L)`。而 `DanmakuView.start(long)` 是
+    //        `handler.removeCallbacksAndMessages(null)`（handler 非空时），
+    //        把 prepare() 刚投出的 PREPARE 消息**连同它 100ms 自投的重试链一起清空**；
+    //        而 `AndroidView` 是先组合、后布局 ⇒ 那一刻 `onLayout` 还没跑、
+    //        `isViewReady()`(=isSurfaceCreated) 还是 false ⇒ PREPARE 本来就该重试。
+    //        结果：再没人投 PREPARE ⇒ `mReady` 永远 false ⇒ `drawTask` 永远 null
+    //        ⇒ `onDraw` 里 `handler.draw(canvas)` 直接返回 ⇒ 画布永远空白。
+    //        `resume()` 救不了：它是 `if (prepared) post(...) else if (handler == null) restart()`
+    //        —— 「handler 非空但未 prepared」这个**第三态什么都不做**（库的漏洞）。
+    //     ② 空列表时调 `danmakuView.stop()`。`stop()` 不可逆（handler=null、线程 quit+join），
+    //        之后 `resume()` 走 `restart()` → `start()` → handler==null → 调**无参** `prepare()`
+    //        （只建线程、不 setParser）⇒ PREPARE 分支 `mParser == null` 恒成立 ⇒ 100ms 死循环。
+    //     修法：① 只 `prepare()`，**不 start**；注册 `DrawHandler.Callback`，
+    //        在 `prepared()` 回调里才 `start(当前播放位置)`（DFM 官方用法）；
+    //        并按**当前**播放状态决定 resume 还是 pause（start 一定会把计时器跑到播放态）。
+    //     ② 空列表只 `clear()`，绝不 `stop()`。
+    //     ③ `DanmakuPositionSync` 增补「播放状态对账」：另一处 `DisposableEffect(playing)`
+    //        是在引擎未 prepared 时下发的，DFM 第三态会静默吞掉 ⇒ 每 250ms 补一次。
+    // 111（修复轮，versionName 仍为 1.5.10）：v110 出包后用户确认 `prepared()` **已经触发**
+    //     （日志 13:18:18.354「DFM prepared，从 938437ms 开始绘制」）、2528 条已灌、
+    //     size=2340x1080，但画面仍然一条都不动。⇒ 第二层根因，全部在 **parser 产出物**
+    //     而不是在时序上（`DanmakuListParser.parse()` 缺了官方 `FakeDanmakuView$CustomParser`
+    //     每次都写的三行赋值，DFM 源码逐行核对）：
+    //     ① 缺 `item.setTimer(timer)`。`DrawTask.loadDanmakus()` 只做 `parser.setTimer(mTimer)`，
+    //        把计时器存在 **parser 字段**上，**不会替你分发给每条 item**。缺了它：
+    //          · `BaseDanmaku.isTimeOut()` = `mTimer == null || …` ⇒ **恒 true**
+    //            ⇒ `DanmakuRenderer.Consumer.accept` 第一句就 `disp.recycle(drawItem);
+    //               return ACTION_CONTINUE` ⇒ 2528 条全部绕过绘制。
+    //          · `isLate()` 同理恒 true ⇒ 第二道保险 `ACTION_BREAK` 直接终止整轮 forEach。
+    //          · `R2LDanmaku/FTDanmaku/L2RDanmaku.layout()` 是
+    //            `if (mTimer != null) { … setVisibility(true) … } setVisibility(false);`
+    //            ⇒ 走 else 分支永不置 VISIBLE。
+    //     ② 缺 `item.flags = mGlobalFlagValues`。`BaseDanmaku.flags` 默认 null，而
+    //        `isShown()/isMeasured()/isPrepared()/setVisibility(true)` 全都要读
+    //        `flags.XXX_RESET_FLAG` ⇒ NPE 或判等失败。`DrawHandler.addDanmaku()` 里就有这行。
+    //     ③ 缺 `item.setVisibility(true)`（须排在 ② 之后）。`visibility` 默认 0 = INVISIBLE。
+    //     另修两个「同样让人误以为没渲染」的坑：
+    //     ④ **`index` 恒为 0**：走 `parse()` 批量灌数据时没人赋 index（正常入口是
+    //        `DrawTask.addDanmaku()` 里 `item.index = danmakuList.size()`）。而 `Danmakus`
+    //        默认 `TreeSet(TimeComparator)`，落到 `DanmakuUtils.compare()` 的**最后一行是
+    //        库自己的 bug**（`obj1.hashCode() - obj1.hashCode()` 恒 0）⇒ time 与 index 都
+    //        相等时比较器返 0 ⇒ `TreeSet.add` 返回 false ⇒ 同毫秒的弹幕**静默被丢**。
+    //     ⑤ **字号没换算**：dandanplay 第 3 列是「档位」(25=标准) 而 `paint.setTextSize()`
+    //        吃的是 **px**；25px 在 1080p 横屏上小到看不见。按库自己的密度约定
+    //        `(density - 0.6f)` 补齐（与 `updateViewportState` 折算滚动时长同一基准），下限 1f。
+    //     顺带把 `prepared()` 里的 `start(at)` 改成 `seekTo(at)`：`start()` 会
+    //     `removeCallbacksAndMessages(null)` 并把 `mInSeekingAction` 置 true，与 250ms 的
+    //     进度同步撞车时 `syncTimer()` 一直返 0 ⇒ 计时器卡死在起点。
+    //     `DanmakuPositionSync` 也不再绑 `playing`（暂停时退出 ⇒ 恢复时强制硬 seek），
+    //     首轮不做 seek（交给 prepared 回调），播放状态对账拆成常驻 effect。
+    // 112（修复轮，versionName 仍为 1.5.10）：两件事。
+    //   〔A〕**弹幕自动匹配拿错名字**（用户反馈「这个自动匹配的逻辑你参考看看 yamby 的，
+    //       不应该用单集标题去搜索电视剧名」）。根因：`PlayerActivity.notifyDanmakuEpisodeChanged`
+    //       传的是 `fileName`，而 Emby 发起方写的是 `putExtra("filename", first.Name)` ——
+    //       Episode 的 `Name` 是**分集名**（「都市传说」），拿它去查 dandanplay 当然搜不到番，
+    //       要搜的是**剧名**（「某科学的超电磁炮」）。
+    //       ⇒ 新增与 `playlistSeriesKeys` 平行的剧名数组（`EXTRA_SERIES_NAMES` /
+    //       `EXTRA_SERIES_NAME`，源自 `EmbyItem.SeriesName`），由 `EmbyViewModel.play` 写出；
+    //       播放器侧新增 `danmakuMatchTitle(index)`：有剧名用剧名，**没有就退回 fileName**
+    //       （电影 / 本地文件 / 网络串流都没有 SeriesName，行为保持不变）。
+    //       ⚠️ 并行数组必须在 `movePlaylistItem` / `removePlaylistItem` 里同步移动删除，
+    //       且 intent 二次解析处（跨内核重建走的那条路）也要整份替换，否则队伍换错 ±1 位。
+    //   〔B〕**滚动弹幕存活时间过短**（用户反馈「滚动一秒左右就消失了」「滚动速度能接受，
+    //       就是消失太快」，剧集单集约 24 分钟）。`DanmakuFactory` 的
+    //       `REAL_DANMAKU_DURATION` 被夹在 [MIN=4000, MAX=9000] 之间，而且所有滚动弹幕
+    //       共用同一个 `Duration` 实例、事后还要被「滚动速度」偏好再乘一遍 ⇒ 实际值是黑箱，
+    //       在横屏宽设备上会退化到三四秒。
+    //       ⇒ ① 修正 `createDanmaku` 的重载误用：原先调的
+    //          `createDanmaku(type, displayer, 1f, 1f)` 把 viewportScale **当作**
+    //          viewportSizeFactor 传下去，等于把 `setDisplayer()` 刚设好的密度因子覆成 1.0；
+    //          改用 `createDanmaku(type, danmakuContext)`，它用的是正确的
+    //          `CURRENT_DISP_SIZE_FACTOR`。
+    //        ② parse 结束后按「跑完一屏要多久」这个直观物理量重写时长（滚动 10s / 固定 5s），
+    //          并抬高 `MAX_DANMAKU_DURATION` 渲染窗口 —— 窗口比时长小会让弹幕提前被
+    //          `sub(begin,end)` 裁掉。
+    //        ③ 新增运行时测量：`DFM 状态` 里带「时钟比」（timer 增量 / 真实时间增量）。
+    //          一次就能区分「时长短」与「计时器跑太快」这两种完全不同的病因。
+    //    ⚠️ 事后回归：自动匹配已确认正常（v112 的剧名数组生效），但用户实测滚动弹幕
+    //       「还是两秒左右就消失」—— 即 112〔B〕只解决了一半。
+    // 113（修复轮）：曾把时长重写下沉到 prepared() + 250ms 对账兜底「sizeChanged 覆写」。
+    //   事后仍被用户抓到「有的消失快有的慢」—— 用户日志实锤两个叠加因：
+    //     ① `弹幕时长重写(parse)：scroll=9441→16023ms`：用户速度偏好 1.6 经
+    //        `setScrollSpeedFactor` 乘在 duration 上（DFM 里 factor 越大越慢，
+    //        与我们 UI 文案「>1 更快」相反）⇒ 10 秒被乘成 16 秒；
+    //     ② 滚动 16s vs 固定 5s 同屏 ⇒ 观感「有的慢有的快」。
+    // 114（本轮，对照桌面 `Sample` 官方 demo 逐条清理）：**停止覆写框架内部时长**。
+    //   · 删 `DanmakuFactory.MAX_Duration_*.setValue(...)` / `updateMaxDanmakuDuration()`
+    //     全部外挂写入（parse / prepared / 250ms 对账三处），时长回归框架自己的
+    //     `REAL = 3800 × viewportSizeFactor × 屏宽/682`（[4000,9000] 夹住；
+    //     2340px 实测约 5.9s = 「从右出现到完全移出左边缘」）。
+    //   · 用户可控项保留：`setScrollSpeedFactor` 改为 `1f / speedScale`（官方 demo
+    //     自己也 setScrollSpeedFactor，只是它用固定常量）—— 默认 1.0 = 框架默认行为，
+    //     调到 2.0 ⇒ factor 0.5 ⇒ duration 减半 ⇒ 更快，UI 文案「>1 更快」终于对得上。
+    //   · 保留的被迫适配（与官方 demo 的差异，均非自作主张）：
+    //     自写 parser（AAR 裁了 BiliDanmukuParser，字段赋值照抄 jar 内官方示例
+    //     `FakeDanmakuView$CustomParser`）；`enableDanmakuDrawingCache(false)`
+    //     （规避 CacheManagingDrawTask 的 NPE，崩在库自己的线程上 catch 不住）；
+    //     `prepared()` 里 `seekTo(at)` 而非 demo 的 `start()`（播放位置由 mpv 驱动，
+    //     demo 注释也写明 "sync to the video time in your practice"）。
+    // 115（本轮，用户要求「从源码修并内置」）：DanmakuFlameMaster 从 AAR 改为**源码内置**
+    //   （app/src/main/java/master/flame/danmaku/ + tv/cjump/jni/，AAR 依赖已删，
+    //   proguard 补 keep），从引擎层修掉「寿命短」的三个真凶：
+    //     ① **速度与寿命解耦**：新增 `Duration.getLifetime()`（= mInitialDuration，
+    //        不吃速度因子）作寿命判据（isTimeOut/isOutside/layout/getAccurateLeft），
+    //        滚动速度仍读 value（吃 factor）⇒ 调速不再改寿命。
+    //     ② **计时器不再超前真实时间**：原库 syncTimer 每帧至少推进硬编码 16ms，
+    //        90/120Hz 屏上 timer 持续超前（时钟比>1）⇒ 寿命被等比例烧短
+    //        （120Hz 上 5.9s 只活约 2.9s 真实时间 —— 用户反馈「大概 2 秒就消失」）。
+    //        改为按屏幕真实刷新率取帧间隔 + 超前时只按真实帧间隔推进。
+    //     ③ 修两个库 bug：`DanmakuUtils.compare` 的 `obj1.hashCode() - obj1.hashCode()`
+    //        笔误（同毫秒+同 index 弹幕被 TreeSet 静默丢弃）、`Duration.setFactor`
+    //        的 `if (factor != f)` 守卫（先调速后 setValue 时 value 不重算）。
+    //   · 新增引擎内诊断 `DFM-Diag`（2s 一条：timer/时钟比/取窗/scrollVal/scrollLife）。
+    //   · ⚠️ v116 事后修正：115② 的「计时器超前」**不是**「2 秒就没」的主凶 ——
+    //     用户切 60/120Hz 复测无效已证明；①③ 作为正确修复保留。
+    // 116（本轮，v115 出包后用户实测「还是一样，60/120Hz 都只活 2 秒，长弹幕探个头就消失」）：
+    //   真凶是 **DanmakuPositionSync 每 ~1.75 秒假 seek 一次**，与引擎无关：
+    //   · 旧逻辑用「上次 seek 的位置 lastSeekSec」当对齐基准，而它**只在 seek 时更新**。
+    //     正常播放时 now 每 250ms 前进 0.25s ⇒ 每约 1.75s 就超过 1.5s 阈值 ⇒ 硬 seekTo。
+    //   · 而 DFM 的 seek 是「跳转」语义：`DrawTask.seek(pos)` 会把
+    //     `mStartRenderTime = pos`，渲染器 `getActualTime() < startRenderTime` 的弹幕
+    //     **永久跳过不画** ⇒ 每次假 seek 后所有在飞舞幕全部中途消失。
+    //     每条弹幕最多活 ~1.75s（用户看到的「2 秒」）；长弹幕位移慢，1.75s 内只从
+    //     右缘露出个头 ⇒ 「探了个头就消失」；与刷新率/速度设置全都无关。
+    //   · 修法：对齐基准改为**引擎自己的计时器**（danmakuView.currentTime）——
+    //     正常播放 drift≈0 永不 seek；只有真实跳变（拖动/卡顿/引擎计时器冻结）才纠正。
+    //   · 教训：v112~v115 在 duration/lifetime/计时器上打转全砸，根因在集成层
+    //     （seek 语义 + 错误的对账基准），不在引擎参数。详见 DanmakuOverlay.kt
+    //     DanmakuPositionSync 文档与 2026-10-19.md v116 段。
+    // 117（versionName 涨到 1.6.0；v116 经用户确认「弹幕正常了」后的一轮打磨）：
+    //   〔A〕**竖屏播放器弹幕全挤在最上方**：mpv/GSY 竖屏下窗口铺满全屏、画面居中一条，
+    //     而弹幕叠层跟着窗口铺满 ⇒ `AlignTopRetainer` 从**窗口顶部**往下 packing
+    //     （topPos = lastItem.getBottom() + margin，isOutVerticalEdge 按 disp.getHeight()
+    //     判溢出）⇒ 弹幕全落在画面上方的黑边/状态栏区域。
+    //     ⇒ DanmakuOverlay 新增 `videoAspectProvider`：按视频宽高比算出居中画面矩形，
+    //     把 DanmakuView 约束到它里面（offset+size，px 重载）；retainer 改为在画面
+    //     条带内 packing，REAL 时长也改按画面宽度算。无黑边时矩形≈全屏自动回退。
+    //     两个调用点：PlayerActivity 传 `player.getVideoOutAspect()`，
+    //     GsyPlayerActivity 传 `activePlayer.currentVideoWidth/Height`。
+    //   〔B〕**设置项文案截断**：「显示控件时同时显示系统状态栏」（14 字，加图标后
+    //     maxLines=1 被省略号截断）⇒ 缩短为「显示控件时显示状态栏」，与相邻的
+    //     「显示控件时显示导航栏」同长同构。
+    //   〔C〕**关于-致谢补弹幕引擎**：DFM 自 v115 起源码内置、不再是 gradle 依赖，
+    //     AboutLibraries 清单里不会出现 ⇒ 手动加一条 DanmakuFlameMaster 致谢
+    //     （中英文 summary 各一条：i18n_ack_danmaku_summary）。
+    //   〔D〕**弹幕面板开关错乱 / 「防止弹幕重叠」关了就打不开**（v117 出包前用户实测）：
+    //     根因是 DanmakuSheetState 快照与偏好脱钩，两处：
+    //       1. `setPreventOverlapping` 是全类唯一不调 `refreshSheet()` 的 setter
+    //          ⇒ 点它偏好已改、面板 UI 停旧值（"关了再也打不开"）；之后碰任何一个
+    //          会刷面板的控件（自动匹配/密度/滑杆…）旧值一次性追平，另一个开关
+    //          跟着翻面（"开这个同时那个就会关掉"）。
+    //       2. 面板打开时从不刷新 ⇒ 「设置-弹幕」页直接写偏好开了总开关+自动匹配，
+    //          播放时弹幕正常加载，面板总开关却显示灭的（构造时默认快照 enabled=false）。
+    //     ⇒ setPreventOverlapping 补 refreshSheet()；PlayerSheets 的 Sheets.Danmaku
+    //       分支加 LaunchedEffect 打开即刷；refreshSheet() 转 public。
+    //     另：关掉防重叠后弹幕允许互相覆盖是**设计行为**（换密度上限），叠在顶端
+    //     是竖屏 packing 问题，由本条〔A〕修复。
+    //   〔E〕**详情页分集卡片高度参差 + 「下载本季」不像按钮**（用户反馈）：
+    //     ① EpisodeCard 标题 maxLines=2 ⇒ 一行标题的卡比两行矮一截，横向列表参差不齐。
+    //        修法：标题按 bodySmall.lineHeight×2 固定占两行高（sp→dp 乘 fontScale，
+    //        随系统字号缩放；lineHeight 缺省按 1.2×字号兜底），一行也占住位置。
+    //     ② 「下载本季 X 集」原是一段带 clip 的文本，看着像正文链接 ⇒ 改成胶囊按钮
+    //        （secondaryContainer 底 + 圆角 50% + Download 图标 + labelMedium）。
+    //     另修 v117 编译回归：DanmakuOverlay 竖屏适配块缺 fillMaxSize import、
+    //     offset/size 的 Int 参数不匹配 Dp 重载 ⇒ 改 Modifier.layout 做 px 精确定位。
+    versionCode = 117
+    versionName = "1.6.0"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -1066,9 +1346,11 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.okhttp)
 
-  // 弹幕：只取 View + 数据模型，解析走我们自己的 parser（见 domain/danmaku/）。
-  // 这个 AAR 里没有 .so，纯 Java，所以不需要 ndkbitmap-* 的分 ABI 依赖。
-  implementation(libs.dfm)
+  // 弹幕：DanmakuFlameMaster **源码内置**（v115）—— 源码在 app/src/main/java/master/flame/danmaku/
+  // （+ tv/cjump/jni/），解析仍走我们自己的 parser（见 domain/danmaku/）。
+  // 为什么内置：要修引擎自身缺陷（v115：滚动速度系数与存活寿命同源、计时器高刷屏超前），
+  // 详见 2026-10-19.md v115 段与 DanmakuOverlay.kt 类头说明。
+  // 原先的 AAR 依赖 `com.github.ctiao:dfm:0.9.25` 已移除；proguard 里补了 keep 规则。
 
   // Lottie：加载动画可换（外观 → 加载动画）。搬的是 Yamby 内置的那 12 个 json（res/raw/yamby_*.json）
   // + 自研的两套，用 lottie-compose 在 Compose 里渲染。

@@ -31,6 +31,15 @@ internal data class PlayerHandoff(
   val titles: List<String> = emptyList(),
   /** 与 [playlist] 下标一一对应的「记忆设置」键（Emby 是 SeriesId） */
   val seriesKeys: List<String> = emptyList(),
+  /**
+   * 与 [playlist] 下标一一对应的 **Emby 原始集号编码**（`season*1000 + episode`，空串 = 非剧集）。
+   *
+   * ⚠️ 弹幕匹配必须按**真实集号**，绝不能拿队列下标顶替：
+   * 从第 5 集单独点播时队列只有 1 条，下标 0 会被当成第 1 集，弹幕整体错一季。
+   * mpv 侧原本就有这份数据（见 `PlayerActivity.playlistEpisodeNumbers`），
+   * 但切内核时没跟着交过去，于是 GSY 侧只能退回下标 —— 那正是错集的来源。
+   */
+  val episodeNumbers: List<String> = emptyList(),
   /** 当前播放的是 [playlist] 中的第几个 */
   val index: Int = 0,
   /** 自定义播放列表 ID（可选） */
@@ -45,6 +54,14 @@ internal data class PlayerHandoff(
   val embyItemIds: List<String> = emptyList(),
   /** 网络流请求头，格式与 mpv 侧的 `headers` extra 相同 */
   val headers: Array<String>? = null,
+  /**
+   * 当前屏幕亮度（0~1）；null = 没有记录 / 不记忆。
+   *
+   * 「按剧记亮度」是跨内核的：mpv 侧调暗了切到 GSY，那边是**另一个 Activity 的 window**，
+   * 不交过去就是「切内核 = 亮度弹回系统默认」那一下刺眼。
+   * 只交**当前这一项**的值而不是整张表 —— 那边换集时会按自己的 seriesKey 重新查。
+   */
+  val brightness: Float? = null,
 ) {
   /** 当前这一项在队列里取到的真实下标（越界时夹回合法范围） */
   val safeIndex: Int
@@ -61,6 +78,20 @@ internal data class PlayerHandoff(
   fun embyItemIdAt(i: Int = safeIndex): String? = embyItemIds.getOrNull(i)
 
   /**
+   * 当前这一项的**真实集号（0-based）**，供弹幕匹配使用。
+   *
+   * 解码规则与 mpv 侧 `PlayerActivity.currentEpisodeIndex` 必须逐字一致：
+   * 编码是 `season*1000 + episode`，集号从 1 开始，转 0-based 后再交给 DanmakuMatcher。
+   * 拿不到（本地播放 / 网盘 / 非剧集）时退回队列下标 —— 与 mpv 侧同样的兜底。
+   */
+  fun episodeIndexAt(i: Int = safeIndex): Int {
+    val encoded = episodeNumbers.getOrNull(i)?.takeIf { it.isNotBlank() } ?: return i
+    val number = encoded.toIntOrNull() ?: return i
+    val episode = number % 1000
+    return if (episode > 0) episode - 1 else i
+  }
+
+  /**
    * 把本单子写进 intent。
    *
    * 注意 `position` 只在 > 0 时写入：mpv 侧 `POSITION_NOT_SET = 0`，
@@ -72,6 +103,9 @@ internal data class PlayerHandoff(
       putExtra(EXTRA_INDEX, safeIndex)
       if (titles.isNotEmpty()) putStringArrayListExtra(EXTRA_TITLES, ArrayList(titles))
       if (seriesKeys.isNotEmpty()) putStringArrayListExtra(EXTRA_SERIES_KEYS, ArrayList(seriesKeys))
+      if (episodeNumbers.isNotEmpty()) {
+        putStringArrayListExtra(EXTRA_EPISODE_NUMBERS, ArrayList(episodeNumbers))
+      }
     }
     playlistId?.let { putExtra(EXTRA_PLAYLIST_ID, it) }
     if (positionMs > 0) putExtra(EXTRA_POSITION, positionMs.toInt())
@@ -82,17 +116,29 @@ internal data class PlayerHandoff(
       putStringArrayListExtra(EmbyPlaybackReporter.EXTRA_ITEM_IDS, ArrayList(embyItemIds))
     }
     headers?.let { putExtra(EXTRA_HEADERS, it) }
+    brightness?.let { putExtra(EXTRA_BRIGHTNESS, it) }
   }
 
   companion object {
     const val EXTRA_PLAYLIST = "playlist"
     const val EXTRA_TITLES = "playlist_titles"
     const val EXTRA_SERIES_KEYS = "playlist_series_keys"
+    const val EXTRA_EPISODE_NUMBERS = "playlist_episode_numbers"
     const val EXTRA_INDEX = "playlist_index"
     const val EXTRA_PLAYLIST_ID = "playlist_id"
     const val EXTRA_POSITION = "position"
     const val EXTRA_SERIES_KEY = "emby_series_key"
     const val EXTRA_HEADERS = "headers"
+    const val EXTRA_BRIGHTNESS = "screen_brightness"
+    /**
+     * 与 [EXTRA_SERIES_KEYS] 平行的「**剧名**」数组。
+     *
+     * ⚠️ 剧名≠分集名：弹幕自动匹配必须拿**剧名**去搜番
+     *    （搜「某科学的超电磁炮」而不是某一集的「都市传说」）。
+     *    `playlist_titles` 存的是 `S01E05 都市传说` 这种分集显示名，不能拿来匹配。
+     */
+    const val EXTRA_SERIES_NAMES = "playlist_series_names"
+    const val EXTRA_SERIES_NAME = "emby_series_name"
 
     /** 从 intent 读回一份交接单（缺项按空处理，绝不抛异常） */
     fun read(intent: Intent): PlayerHandoff {
@@ -110,6 +156,7 @@ internal data class PlayerHandoff(
         playlist = playlist,
         titles = intent.getStringArrayListExtra(EXTRA_TITLES) ?: emptyList(),
         seriesKeys = intent.getStringArrayListExtra(EXTRA_SERIES_KEYS) ?: emptyList(),
+        episodeNumbers = intent.getStringArrayListExtra(EXTRA_EPISODE_NUMBERS) ?: emptyList(),
         index = intent.getIntExtra(EXTRA_INDEX, 0),
         playlistId = intent.getIntExtra(EXTRA_PLAYLIST_ID, -1).takeIf { it != -1 },
         positionMs = intent.getIntExtra(EXTRA_POSITION, 0).toLong(),
@@ -118,6 +165,13 @@ internal data class PlayerHandoff(
           intent.getLongExtra(EmbyPlaybackReporter.EXTRA_SERVER_ID, -1L).takeIf { it > 0 },
         embyItemIds = itemIds,
         headers = intent.getStringArrayExtra(EXTRA_HEADERS),
+        // ⚠️ hasExtra 必须判：getFloatExtra 的默认值 0f 是**合法亮度**（全黑），
+        //    拿它当「没有」会把用户切过内核之后整屏压黑。
+        brightness = if (intent.hasExtra(EXTRA_BRIGHTNESS)) {
+          intent.getFloatExtra(EXTRA_BRIGHTNESS, -1f).takeIf { it in 0f..1f }
+        } else {
+          null
+        },
       )
     }
   }

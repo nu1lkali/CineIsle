@@ -370,6 +370,13 @@ fun PlayerSheets(
       val host = LocalActivity.current as? app.marlboroadvance.mpvex.ui.player.PlayerActivity
       val danmakuState = host?.danmakuState()
       if (danmakuState != null) {
+        // ⚠️ v117：面板每次打开都从偏好刷一次快照。`_sheet` 的初始值是
+        //    `DanmakuSheetState()`（enabled=false），而「设置-弹幕」页的开关
+        //    是直接写 preference 的（不走本状态的 setter）—— 不刷的话，
+        //    用户在设置里开了弹幕+自动匹配，播放时弹幕正常加载、画面正常渲染，
+        //    面板总开关却显示灭的（「弹幕加载了，开关没自动打开」）。
+        //    只在进入本分支时跑一次：关闭面板即离开组合，重开自然重刷。
+        LaunchedEffect(danmakuState) { danmakuState.refreshSheet() }
         val sheetState by danmakuState.sheet.composeCollectAsState()
         app.marlboroadvance.mpvex.ui.player.danmaku.DanmakuSheet(
           state = sheetState,
@@ -383,13 +390,22 @@ fun PlayerSheets(
           onAlphaChange = danmakuState::setAlpha,
           onAreaChange = danmakuState::setArea,
           onDensityChange = danmakuState::setDensity,
+          onPreventOverlappingChange = danmakuState::setPreventOverlapping,
           onBlockWordsChange = danmakuState::setBlockWords,
+          onTimeOffsetChange = danmakuState::setTimeOffset,
+          onClearTimeOffset = danmakuState::clearTimeOffset,
+          onRememberSelectionChange = danmakuState::setRememberSelection,
+          onWithRelatedChange = danmakuState::setWithRelated,
           onSearch = danmakuState::search,
           onPickAnime = { anime ->
             // ⚠️ 手动选番时按**当前播放的集号**取那一集，
             // 不能拿搜索结果的第一集 —— 用户搜的是系列，要看的是当前这集。
-            danmakuState.pick(anime, host.playlistIndex)
+            // 且必须是「真实集号」而不是 playlistIndex（理由见 currentEpisodeIndexForDanmaku）。
+            danmakuState.pick(anime, host.currentEpisodeIndexForDanmaku())
           },
+          // 「选集」：自动挑错集时（跨季番最常见）由用户自己指定。
+          onLoadEpisodes = { anime -> danmakuState.episodeList(anime) },
+          onPickEpisode = { anime, episode -> danmakuState.pickEpisode(anime, episode) },
           onDismissRequest = onDismissRequest,
         )
       }

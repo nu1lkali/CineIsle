@@ -112,6 +112,18 @@ class PlayerViewModel(
   val autoplayNextTitle = MutableStateFlow<String?>(null)
 
   /**
+   * 「下一集」悬停卡片是否可见（Yamby 的 `next_up_sec`）。
+   *
+   * 与 [autoplayCountdown] 的区别：那个只在**最后几秒**出现且带数字倒计时、
+   * 是「马上就要切了」的催促；这个提前 30 秒左右出现、不带倒计时，
+   * 是「后面还有一集，要不要现在就看」的提示 —— 长片尾（预告 / 片花）时特别有用。
+   */
+  val nextUpVisible = MutableStateFlow(false)
+
+  /** 「下一集」卡片里显示的标题 */
+  val nextUpTitle = MutableStateFlow<String?>(null)
+
+  /**
    * 「跳过片头 / 跳过片尾」小胶囊的文案；null = 不显示。
    *
    * 由播放页的片头片尾盯梢协程写入：自动跳过关着、而播放头又落在
@@ -162,7 +174,18 @@ class PlayerViewModel(
 
   init {
     // Poll precise position only when playing
-    viewModelScope.launch {
+    //
+    // ⚠️⚠️ **必须跑在 IO 线程上，不能留在 viewModelScope 默认的 Main。**
+    //
+    // `MPVLib.getPropertyDouble` 是同步 JNI 调用，客户端线程会去抢 mpv 的
+    // 播放线程锁（`mpctx->lock`）。而 demux / 解码线程每秒要持锁几十次，
+    // **码率越高、单帧越大，持锁时间越长** —— 4K 原盘（70GB 那种）上主线程
+    // 每 42ms 抢一次锁，抢不到就阻塞，直接和「渲染 + 触摸事件」抢同一个线程，
+    // 观感就是**整个 App 卡成幻灯片**（不是视频卡，是 UI 卡）。
+    //
+    // 挪到 `Dispatchers.Default` 之后：读不到锁只影响这个采样协程自己，
+    // 位置稍晚一拍对进度条完全无感，但主线程再也不会被 JNI 卡住。
+    viewModelScope.launch(Dispatchers.Default) {
       while (isActive) {
         val time = PlayerLib.getPropertyDouble("time-pos")
         if (time != null) {
@@ -185,7 +208,9 @@ class PlayerViewModel(
     // ── 网络加载速度：固定 1 秒一拍 ──
     // 数据源与归零策略见 [MpvNetSpeedSampler] / [netSpeedBytesPerSec] 的注释。
     // 轮询而非 observe：cache-speed 的属性变更通知不保证按秒触发，定时读最稳。
-    viewModelScope.launch {
+    // ⚠️ 同样放 Default：一条采样要连读好几个 mpv 属性（JNI + 播放线程锁），
+    // 放在主线程上就又多一处周期性卡顿源（理由见上面 time-pos 那段）。
+    viewModelScope.launch(Dispatchers.Default) {
       while (isActive) {
         val paused = PlayerLib.getPropertyBoolean("pause") == true
         _netSpeedBytesPerSec.value = MpvNetSpeedSampler.sample(
@@ -1039,6 +1064,13 @@ class PlayerViewModel(
     // Save brightness to preferences if enabled
     if (playerPreferences.rememberBrightness.get()) {
       playerPreferences.defaultBrightness.set(coercedBrightness)
+    }
+    // 按剧再记一份（对标 Yamby 的 resume_brightness）。
+    // ⚠️ 和全局记忆是**叠加**关系不是二选一：用户可能只想全局固定一个亮度、
+    //   不想某部片单独记住，所以两个开关各自独立判断。
+    // ⚠️ seriesKey 为 null（本地播放 / 网盘）时不写 —— 没有稳定的剧标识可挂。
+    if (playerPreferences.rememberSeriesBrightness.get()) {
+      playerPreferences.setSeriesBrightness(seriesKey, coercedBrightness)
     }
   }
 

@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.AlertDialog
@@ -142,6 +143,11 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyIdentifyDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyRefreshMetadataDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonDetail
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EpisodeDownloadState
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EpisodeListSection
+import app.marlboroadvance.mpvex.ui.browser.emby.components.RelatedEpisodes
+import app.marlboroadvance.mpvex.ui.browser.emby.components.RelatedEpisodesSection
+import app.marlboroadvance.mpvex.ui.browser.emby.components.isSpecial
 import app.marlboroadvance.mpvex.ui.browser.emby.components.ExternalPlayerPickerDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.rememberDominantColor
@@ -300,6 +306,26 @@ data class EmbyDetailScreen(
 
     LaunchedEffect(itemId) { load() }
 
+    // ── 分集列表（电视剧 / 综艺）──
+    //
+    // ⚠️ 数据**必须提在这一层**，理由与下面的推荐区完全相同：分集区是 LazyColumn 里的
+    // `item {}`，滚出视口会被销毁组合、滚回来重新组合 —— 请求写在区块内部的话，
+    // 上下滑一趟就会把整部剧的分集重新拉好几轮（长剧一次几百 KB）。
+    //
+    // 只有 `Series` 才发这个请求：`Episode` 自己的详情页不需要，电影更没有。
+    var seriesEpisodes by remember(itemId) { mutableStateOf<List<EmbyItem>>(emptyList()) }
+    var episodesLoading by remember(itemId) { mutableStateOf(false) }
+    LaunchedEffect(itemId, item?.Type, server?.id) {
+      val current = item ?: return@LaunchedEffect
+      val currentServer = server ?: return@LaunchedEffect
+      if (current.Type != "Series") return@LaunchedEffect
+      episodesLoading = true
+      seriesEpisodes = runCatching {
+        viewModel.loadSeriesEpisodes(currentServer, current.Id ?: itemId)
+      }.getOrDefault(emptyList())
+      episodesLoading = false
+    }
+
     // 从播放器返回时刷新详情：播放器的进度/已看上报是异步落到服务器的，而本页组合
     // 在播放期间并未销毁（播放器是另一个 Activity），返回时 LaunchedEffect 不会重跑，
     // 不刷新的话进度条就停在进来之前的旧值。延迟 800ms 等上报先落库再拉。
@@ -351,6 +377,79 @@ data class EmbyDetailScreen(
     var genreRecommendLabel by remember(itemId) { mutableStateOf<String?>(null) }
     var genreRecommendItems by remember(itemId) { mutableStateOf<List<EmbyItem>>(emptyList()) }
     var recommendReloadKey by remember(itemId) { mutableStateOf(0) }
+
+    // ── 单集详情页的「相关分集」──
+    //
+    // 只有**当前条目是 Episode** 时才需要：这时 `seriesEpisodes` 是空的（只有 Series 才拉全剧），
+    // 页面上没有任何入口能切到兄弟集，用户点进第 3 集就困在第 3 集。
+    //
+    // 数据分两段、成本差很多：
+    //  ① 同季 + 特别篇：`SiblingIds`（随详情一起回来，零额外往返）→ 一次 `Ids` 批量取内容；
+    //  ② 演员相关：`/Items?PersonIds&IncludeItemTypes=Episode` 再按 SeriesId 过滤。
+    //      这一步要多发请求，所以只取**第一个演员**（`People` 首位），不遍历全阵容。
+    var relatedEpisodes by remember(itemId) { mutableStateOf(RelatedEpisodes()) }
+    LaunchedEffect(itemId, item?.Id, item?.Type, server?.id, recommendReloadKey) {
+      val current = item ?: return@LaunchedEffect
+      val currentServer = server ?: return@LaunchedEffect
+      if (current.Type != "Episode") {
+        relatedEpisodes = RelatedEpisodes()
+        return@LaunchedEffect
+      }
+      val selfId = current.Id ?: itemId
+      val siblingIds = current.SiblingIds.filter { it != selfId }
+      withContext(Dispatchers.IO) {
+        // ① 兄弟集：有 SiblingIds 就只取它们；没有就退回「按 SeriesId 拉全剧」——
+        //    老服务端不返回 SiblingIds，退回路径保证这一区不会凭空消失。
+        val seasonmates = if (siblingIds.isNotEmpty()) {
+          viewModel.loadItemsByIds(currentServer, siblingIds + selfId)
+            .sortedBy { it.IndexNumber ?: Int.MAX_VALUE }
+        } else {
+          val seriesId = current.SeriesId
+          if (seriesId.isNullOrBlank()) {
+            emptyList()
+          } else {
+            viewModel.loadSeriesEpisodes(currentServer, seriesId)
+              // ⚠️ 只留**同一季**：没有 SiblingIds 时只能靠 ParentIndexNumber 判「同季」，
+              //    不判的话整部剧几十集全塞进「同季」区，名不副实。
+              .filter { it.ParentIndexNumber == current.ParentIndexNumber }
+              .sortedBy { it.IndexNumber ?: Int.MAX_VALUE }
+          }
+        }
+        val (specials, mains) = seasonmates.partition { it.isSpecial() }
+        relatedEpisodes = RelatedEpisodes(
+          sameSeason = mains,
+          specials = specials,
+        )
+
+        // ② 演员相关：只取一个演员（`People` 里 Type == Actor 的第一位）
+        val actor = current.People.orEmpty()
+          .firstOrNull { it.Type == "Actor" && it.Id != null }
+        if (actor?.Id == null) return@withContext
+        val seriesId = current.SeriesId
+        val works = viewModel.loadPersonItems(
+          server = currentServer,
+          personId = actor.Id,
+          limit = 100,
+          includeItemTypes = listOf("Episode"),
+        )
+        val siblings = works
+          .filter { ep ->
+            ep.Id != null && ep.Id != selfId &&
+              // 同一部剧：SeriesId 一致。本地 / 缺字段时退化成按剧名比 —— 否则整区为空。
+              (ep.SeriesId != null && ep.SeriesId == seriesId || ep.SeriesName == current.SeriesName)
+          }
+          .distinctBy { it.Id }
+          .sortedWith(
+            compareBy({ it.ParentIndexNumber ?: Int.MAX_VALUE }, { it.IndexNumber ?: Int.MAX_VALUE }),
+          )
+        if (siblings.isNotEmpty()) {
+          relatedEpisodes = relatedEpisodes.copy(
+            actorEpisodes = siblings,
+            actorName = actor.Name,
+          )
+        }
+      }
+    }
 
     LaunchedEffect(itemId, item?.Id, server?.id, showRecommendations, recommendReloadKey) {
       if (!showRecommendations) return@LaunchedEffect
@@ -507,6 +606,27 @@ data class EmbyDetailScreen(
                 }
               },
               playLaunching = playLaunching,
+              // 电视剧「从头播放」：走独立的入口，不受大按钮「挑有进度的那集」影响。
+              onPlayFromStart = {
+                if (!playLaunching) {
+                  playLaunching = true
+                  scope.launch {
+                    try {
+                      viewModel.play(
+                        currentServer,
+                        current,
+                        0L,
+                        false,
+                        playSourceId,
+                        mediaSourceLabel = playSourceLabel,
+                        fromStart = true,
+                      )
+                    } finally {
+                      playLaunching = false
+                    }
+                  }
+                }
+              },
               selectedMediaSourceId = selectedMediaSourceId,
               onSelectMediaSource = { selectedMediaSourceId = it },
               versionResumeSeconds = versionResumeSeconds,
@@ -738,6 +858,91 @@ data class EmbyDetailScreen(
               // 点推荐卡片：同一位演员 / 导演的另一部片子，直接再开一层详情页
               onRecommendClick = { id, name ->
                 pushChild(EmbyDetailScreen(itemId = id, title = name))
+              },
+              episodes = seriesEpisodes,
+              relatedEpisodes = relatedEpisodes,
+              // 点某一集 = 播这一集（并带后续连播）。
+              // ⚠️ 这里**不要**再走详情页的 playLaunching 闸门：那个闸门是给
+              //    「点播放按钮」防连点用的，而分集卡片各自独立，连点不同集是正常操作。
+              onPlayEpisode = { episode, resume ->
+                val currentServer = server
+                // 服务器尚未解析出来时点集：不静默吞掉点击，也不带着 null 往下走
+                //（launchPlaylist 的 server 不可空）。此时页面下方就是加载态，
+                // 用户再点一次即可 —— 比「点下去什么都没发生」好排查。
+                if (currentServer != null) {
+                  scope.launch {
+                    // 点某一集时把**整季**带进播放队列（从这一集起），而不是只播这一条：
+                    // - 队列里有兄弟集 ⇒ 片尾能自动连播、切集时标题对得上；
+                    // - 队列里每条都带着自己的集号 ⇒ 弹幕按真实集号匹配，
+                    //   否则单独播第 5 集时队列只有 1 条，弹幕会取成第 1 集。
+                    val startAt = seriesEpisodes.indexOfFirst { it.Id == episode.Id }
+                      .takeIf { it >= 0 } ?: 0
+                    // 单集详情页没有 seriesEpisodes，队列只有这一条 ⇒ 追「同季」的后续：
+                    // 否则从第 3 集点进去就再也连播不到第 4 集（片尾只能退出）。
+                    val base = seriesEpisodes.ifEmpty {
+                      relatedEpisodes.sameSeason.ifEmpty { listOf(episode) }
+                    }
+                    val from = base.indexOfFirst { it.Id == episode.Id }.takeIf { it >= 0 } ?: 0
+                    val queue = base.drop(from).ifEmpty { listOf(episode) }
+                    viewModel.launchPlaylist(
+                      server = currentServer,
+                      items = queue,
+                      resumeSeconds = resume,
+                    )
+                  }
+                }
+              },
+              // 长按某一集 = 进这一集的详情页（看简介 / 换版本 / 换音轨）
+              onOpenEpisode = { epId, epName ->
+                pushChild(EmbyDetailScreen(itemId = epId, title = epName))
+              },
+              // 分集卡上的「下载这一集」：状态直接从已有的 downloadTasks 里查，
+              // 不额外发请求 —— 下载管理页与本页看的是同一份 Flow。
+              downloadStateOf = { ep ->
+                val task = ep.Id?.let { id -> downloadTasks.firstOrNull { it.itemId == id } }
+                when (task?.status) {
+                  null -> null
+                  EmbyDownloadStatus.COMPLETED -> EpisodeDownloadState.Done
+                  else -> EpisodeDownloadState.Queued
+                }
+              },
+              // 整季批量下载：只挑**还没下过、没在队列里**的集，重复入队会刷一堆
+              // 「已在下载列表中」的提示，而这里用户是明确要「补齐这一季」。
+              // 全部下过 → 直接给一句提示，不要静默什么都不发生。
+              onDownloadSeason = { seasonEpisodes ->
+                val currentServer = server
+                if (currentServer != null) {
+                  val pending = seasonEpisodes.filter { ep ->
+                    ep.Id == null || downloadTasks.none { it.itemId == ep.Id }
+                  }
+                  if (pending.isEmpty()) {
+                    Toast.makeText(context, "这一季都已经下载过了", Toast.LENGTH_SHORT).show()
+                  } else {
+                    var added = 0
+                    pending.forEach { ep ->
+                      if (downloadViewModel.enqueue(currentServer, ep) == EmbyEnqueueResult.STARTED) added++
+                    }
+                    Toast.makeText(
+                      context,
+                      if (added > 0) "已加入 $added 集到下载队列" else "这些集都已在下队列中",
+                      Toast.LENGTH_SHORT,
+                    ).show()
+                  }
+                }
+              },
+              onDownloadEpisode = { ep ->
+                val currentServer = server
+                if (currentServer != null) {
+                  val result = downloadViewModel.enqueue(currentServer, ep)
+                  val text =
+                    when (result) {
+                      EmbyEnqueueResult.STARTED -> "已加入下载队列"
+                      EmbyEnqueueResult.EXISTS -> "这一集已经在队列里了"
+                      EmbyEnqueueResult.COMPLETED -> "这一集已经下载过了"
+                      EmbyEnqueueResult.INVALID -> "这一集没有可下载的媒体文件"
+                    }
+                  Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
+                }
               },
             )
           }
@@ -1109,6 +1314,16 @@ private fun DetailBody(
   posterUrl: String?,
   /** resumeSeconds = 续播秒数（0 = 从头）；reverseEngine = 用与默认相反的内核（长按） */
   onPlay: (resumeSeconds: Long, reverseEngine: Boolean) -> Unit,
+  /**
+   * 电视剧专用：从**第一集开头**播放（不受「上次看到哪」影响）。
+   *
+   * 与 [onPlay] 的区别是「选哪一集」：`onPlay` 会挑有进度的那一集续播，
+   * 而这里固定落在这些集里的第一集、并强制从头。三处联动：
+   * - 播放按钮旁的小按钮（`PlaySection`）
+   * - 右上角「更多」菜单里的「从头播放」
+   * - 分集区展开后的「从头播放本季」
+   */
+  onPlayFromStart: () -> Unit,
   onToggleFavorite: () -> Unit,
   onTogglePlayed: (played: Boolean) -> Unit,
   onBack: () -> Unit,
@@ -1174,6 +1389,26 @@ private fun DetailBody(
   versionResumeSeconds: Long? = null,
   /** 点推荐卡片：打开对应媒体的详情页（itemId / 标题） */
   onRecommendClick: (String, String) -> Unit,
+  /** 全剧分集（非 Series 恒为空）。数据由 [EmbyDetailScreen] 加载，这里只负责画。 */
+  episodes: List<EmbyItem> = emptyList(),
+  /** 点某一集：直接播（resumeSeconds = 那一集自己的续播位置，0 = 从头） */
+  onPlayEpisode: (EmbyItem, Long) -> Unit = { _, _ -> },
+  /** 长按某一集：进这一集的详情页 */
+  onOpenEpisode: (String, String) -> Unit = { _, _ -> },
+  /** 取某一集的离线下载状态（null = 没下过） */
+  downloadStateOf: (EmbyItem) -> EpisodeDownloadState? = { null },
+  /** 点分集卡上的下载按钮 */
+  onDownloadEpisode: (EmbyItem) -> Unit = {},
+  /** 点「下载本季」：参数是当前季的所有集（由组件按季筛好） */
+  onDownloadSeason: (List<EmbyItem>) -> Unit = {},
+  /**
+   * 「相关分集」区：同季其它集 / 特别篇 / 同剧其它集。
+   *
+   * 只有**从单集进详情页**时非空 —— 此时用户看到的是「某一集」，而不是整部剧，
+   * 分集区（[episodes]）是空的，于是没有任何地方能切到兄弟集。
+   * 数据由 [EmbyDetailScreen] 加载好后传进来（同 [recommendItems] 的理由：不能在区块内部发请求）。
+   */
+  relatedEpisodes: RelatedEpisodes = RelatedEpisodes(),
 ) {
   val isFavorite = item.UserData?.IsFavorite == true
   val isPlayed = item.UserData?.Played == true
@@ -1233,7 +1468,46 @@ private fun DetailBody(
           selectedMediaSourceId = selectedMediaSourceId,
           onSelectMediaSource = onSelectMediaSource,
           versionResumeSeconds = versionResumeSeconds,
+          onPlayFromStart = onPlayFromStart,
+          episodes = episodes,
         )
+      }
+
+      // ── 分集（电视剧 / 综艺）──
+      // 紧跟播放区：用户点进一部剧，最先要的就是「从第几集开始」。
+      // 放在简介 / 演职员之前，是因为那些是「了解这部剧」，而分集是「开始看」。
+      //
+      // 点一集 = 直接播（带后续连播）；长按 = 进那一集的详情（换版本 / 看简介）。
+      if (episodes.isNotEmpty()) {
+        item {
+          EpisodeListSection(
+            episodes = episodes,
+            // 高亮「上次看到的那一集」，让用户一眼找到该从哪儿继续。
+            currentEpisodeId = episodes
+              .firstOrNull { (it.UserData?.PlaybackPositionTicks ?: 0L) > 0L }
+              ?.Id,
+            onClick = { ep, resume -> onPlayEpisode(ep, resume) },
+            onLongClick = { ep -> ep.Id?.let { onOpenEpisode(it, ep.Name ?: "") } },
+            downloadStateOf = downloadStateOf,
+            onDownload = onDownloadEpisode,
+            onDownloadSeason = onDownloadSeason,
+          )
+        }
+      }
+
+      // ── 相关分集（单集详情页专用）──
+      // 只有当前条目是 Episode 时非空：同季 / 特别篇 / 演员相关三分区。
+      // 放在播放区之后、简介之前，和上面的「分集」区同一个位置逻辑（先能开始看）。
+      // ⚠️ 点卡片的语义与分集区一致：点 = 直接播这一集，长按 = 进那一集详情。
+      if (!relatedEpisodes.isEmpty) {
+        item {
+          RelatedEpisodesSection(
+            related = relatedEpisodes,
+            currentEpisodeId = item.Id,
+            onClick = { ep, resume -> onPlayEpisode(ep, resume) },
+            onLongClick = { ep -> ep.Id?.let { onOpenEpisode(it, ep.Name ?: "") } },
+          )
+        }
       }
 
       // ── 类型 / 标签 / 工作室 / 外部链接 ──
@@ -1878,6 +2152,16 @@ private fun PlaySection(
    * 4K 看到的位置继续。null（单版本条目）时行为与改动前完全一致。
    */
   versionResumeSeconds: Long? = null,
+  /**
+   * 电视剧专用：从头播放（第一集 / 第一集开头）。
+   *
+   * 只有 `item.Type == "Series"` 且分集里确实有「看过的痕迹」时才显示小按钮 ——
+   * 一部新番里没有进度时，「继续播放」和「从头播放」是同一个动作，
+   * 摆两个按钮只会让人以为它们不一样。
+   */
+  onPlayFromStart: () -> Unit = {},
+  /** 分集列表：只用来判「这部剧是不是追过」（决定要不要露「从头播放」小按钮）。 */
+  episodes: List<EmbyItem> = emptyList(),
 ) {
   val serverPositionTicks = item.UserData?.PlaybackPositionTicks ?: 0L
   val positionTicks =
@@ -1889,6 +2173,12 @@ private fun PlaySection(
   val remainingTicks = (runTimeTicks - positionTicks).coerceAtLeast(0L)
   val hasResume = resumeSeconds > 10 && runTimeTicks > 0 &&
     (positionTicks.toFloat() / runTimeTicks.toFloat()) < 0.95f
+  // 电视剧的「从头播放」小按钮：
+  // ⚠️ Series 自身 RunTimeTicks = 0 ⇒ hasResume 恒为 false，不能拿它判。
+  //   改看**分集**里有没有看过 —— 播放按钮此时文案是「开始播放」（会挑有进度的那集），
+  //   一旦真的追过剧，旁边就该给一个「回到第一集」的出口。
+  val seriesFromStartVisible = item.Type == "Series" &&
+    (item.UserData?.Played == true || episodes.any { it.UserData?.Played == true })
   val progressPercent = if (runTimeTicks > 0) {
     (positionTicks.toFloat() / runTimeTicks.toFloat() * 100).toInt().coerceIn(0, 100)
   } else {
@@ -1913,7 +2203,14 @@ private fun PlaySection(
       // 只能收到长按，两者行为对不上。这里直接用 Box + combinedClickable 自己画。
       // 占满除两个动作键以外的全部宽度（删除键已收进右上角「更多」菜单）。
       PlayButton(
-        label = if (hasResume) "继续播放 · ${formatClock(resumeSeconds)}" else "播放",
+        // Series 自身没有 RunTimeTicks，`hasResume` 恒为 false ⇒ 这里得单独给文案。
+        // 「开始播放」比光秃秃的「播放」更能说明「点了会从该看的那一集开始」，
+        // 具体挑哪一集由 EmbyViewModel.play 负责（优先未看完的那一集）。
+        label = when {
+          item.Type == "Series" -> "开始播放"
+          hasResume -> "继续播放 · ${formatClock(resumeSeconds)}"
+          else -> "播放"
+        },
         onClick = { onPlay(if (hasResume) resumeSeconds else 0, false) },
         onLongClick = { onPlay(if (hasResume) resumeSeconds else 0, true) },
         // 拉起播放器期间：转圈 + 禁点。
@@ -1931,6 +2228,35 @@ private fun PlaySection(
           .weight(1f)
           .height(56.dp),
       )
+
+      // 「从头播放」小按钮（电视剧专用，追过才露）。
+      //
+      // ⚠️ 为什么是**小按钮**而不是长按大按钮 / 二级菜单：
+      //   「继续看上次那一集」和「回第一集重刷」是并列的两个意图，没有主次。
+      //   把「从头」藏进长按或菜单里，用户想重刷时会先点到大按钮被带到第 8 集，
+      //   再拖回来 —— 这一趟白走。给它一枚 48dp 的图标键，一眼可见、一指点到。
+      // ⚠️ 图标用 Replay：语义就是「倒回去重放」，和播放键的三角一眼分得开
+      //   （不同于外部播放器的 OpenInNew，那两者是「把内容送出去」，才需要小心区分）。
+      if (seriesFromStartVisible) {
+        Box(
+          modifier =
+            Modifier
+              .size(48.dp)
+              .clip(RoundedCornerShape(16.dp))
+              .background(MaterialTheme.colorScheme.primaryContainer)
+              .then(
+                // 拉起播放器期间同样禁点：否则「继续」和「从头」能各起一个播放页
+                if (playLaunching) Modifier else Modifier.clickable(onClick = onPlayFromStart),
+              ),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Replay,
+            contentDescription = "从头播放",
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+          )
+        }
+      }
 
       // 下载：与播放按钮同一行，只保留图标。按钮内部**自下而上**填充一块进度色带 ——
       //   下载中：跟真实进度走（300ms 平滑过渡，不会一格格跳）

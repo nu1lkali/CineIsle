@@ -1,8 +1,10 @@
 package app.marlboroadvance.mpvex.ui.player.danmaku
 
+import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -42,9 +44,11 @@ import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.danmaku.DanmakuMatcher
 import app.marlboroadvance.mpvex.domain.danmaku.DandanAnime
+import app.marlboroadvance.mpvex.domain.danmaku.DandanEpisode
 import app.marlboroadvance.mpvex.presentation.components.PlayerSheet
 import app.marlboroadvance.mpvex.ui.theme.spacing
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /** 弹幕面板的状态：由宿主（PlayerViewModel）持有并回传。 */
 data class DanmakuSheetState(
@@ -58,7 +62,17 @@ data class DanmakuSheetState(
   val alphaPercent: Int = 100,
   val areaRatio: Float = 1f,
   val densityKey: String = "normal",
+  /** 防重叠：同轨道会撞车时自动换轨道。 */
+  val preventOverlapping: Boolean = true,
   val blockWords: String = "",
+  /** 时间轴偏移（毫秒，正数 = 弹幕延后）。**当前这部剧**生效的值。 */
+  val timeOffsetMs: Int = 0,
+  /** 这个偏移是本剧单独记住的（而不是跟随全局默认）。 */
+  val seriesOffsetApplied: Boolean = false,
+  /** 手动选过的番是否跨集沿用。 */
+  val rememberSelection: Boolean = true,
+  /** 合并关联剧集弹幕（提高密度；关掉则只取当前这一条时间轴）。 */
+  val withRelated: Boolean = true,
   /** 已命中的集名；null = 还没匹配。 */
   val matchedTitle: String? = null,
   val commentCount: Int = 0,
@@ -87,17 +101,33 @@ fun DanmakuSheet(
   onAlphaChange: (Int) -> Unit,
   onAreaChange: (Float) -> Unit,
   onDensityChange: (String) -> Unit,
+  /** 防重叠开关（立刻生效，不重建引擎）。 */
+  onPreventOverlappingChange: (Boolean) -> Unit = {},
   onBlockWordsChange: (String) -> Unit,
+  onTimeOffsetChange: (Int) -> Unit,
+  /** 清掉本剧的偏移覆盖（回落到全局默认）。 */
+  onClearTimeOffset: () -> Unit,
+  onRememberSelectionChange: (Boolean) -> Unit,
+  /** 切换「合并关联剧集弹幕」（改了会重新拉一次当前集）。 */
+  onWithRelatedChange: (Boolean) -> Unit = {},
   /** 手动搜番；返回命中列表由本面板展示。 */
   onSearch: suspend (keyword: String) -> List<DandanAnime>,
-  /** 选定某个搜索结果后加载它的弹幕。 */
+  /** 选定某个搜索结果后加载它的弹幕（自动按当前集号挑）。 */
   onPickAnime: suspend (anime: DandanAnime) -> Unit,
+  /** 展开某部番的分集列表（官方搜索端点不带分集，要单独取一次）。 */
+  onLoadEpisodes: suspend (anime: DandanAnime) -> List<DandanEpisode>,
+  /** 用户明确指定了某一集 ⇒ 直接用它，不再按集号猜。 */
+  onPickEpisode: suspend (anime: DandanAnime, episode: DandanEpisode) -> Unit,
   onDismissRequest: () -> Unit,
 ) {
   val scope = rememberCoroutineScope()
   var keyword by remember { mutableStateOf("") }
   var results by remember { mutableStateOf<List<DandanAnime>>(emptyList()) }
   var searching by remember { mutableStateOf(false) }
+  // 正在展开分集的番（null = 没展开）。与「搜索结果」一样都是一次性中间态。
+  var episodesFor by remember { mutableStateOf<DandanAnime?>(null) }
+  var episodes by remember { mutableStateOf<List<DandanEpisode>>(emptyList()) }
+  var loadingEpisodes by remember { mutableStateOf(false) }
 
   PlayerSheet(onDismissRequest = onDismissRequest) {
     Column(
@@ -111,7 +141,12 @@ fun DanmakuSheet(
           stringResource(R.string.danmaku_matched_count, it, state.commentCount)
         } ?: stringResource(R.string.danmaku_not_matched),
         checked = state.enabled,
-        onCheckedChange = onEnabledChange,
+        onCheckedChange = {
+          // 点击回执：排查「开关点了没反应」时先看这一行有没有打出来 ——
+          // 没打 = 手势没落到开关上（那是布局问题）；打了 = 状态机没生效（往 setEnabled 里查）。
+          Log.i("DanmakuSheet", "弹幕总开关点击：${state.enabled} → $it")
+          onEnabledChange(it)
+        },
       )
 
       if (!state.enabled) {
@@ -123,6 +158,25 @@ fun DanmakuSheet(
           modifier = Modifier.padding(vertical = MaterialTheme.spacing.small),
         )
       } else {
+        // ⚠️ 正在拉弹幕时必须给反馈：开关刚打开时没有任何弹幕，
+        //    画面上看起来和「没打开」一模一样 —— 用户会以为开关是坏的、点不动。
+        if (state.loading) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
+            modifier = Modifier.padding(vertical = MaterialTheme.spacing.smaller),
+          ) {
+            CircularProgressIndicator(
+              modifier = Modifier.size(16.dp),
+              strokeWidth = 2.dp,
+            )
+            Text(
+              text = stringResource(R.string.danmaku_matching),
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
         LabeledSlider(
           label = stringResource(R.string.danmaku_font_size),
           value = state.fontScale,
@@ -183,12 +237,68 @@ fun DanmakuSheet(
             .padding(top = MaterialTheme.spacing.small),
         )
 
+        // 防重叠放在密度下面：它和密度是同一类诉求（画面怎么排），
+        // 但语义相反 —— 密度想要更多、防重叠宁可少也不叠。
+        ToggleRow(
+          title = stringResource(R.string.danmaku_prevent_overlapping),
+          summary = stringResource(R.string.danmaku_prevent_overlapping_summary),
+          checked = state.preventOverlapping,
+          onCheckedChange = onPreventOverlappingChange,
+        )
+
         ToggleRow(
           title = stringResource(R.string.danmaku_auto_match),
           summary = stringResource(R.string.danmaku_auto_match_summary),
           checked = state.autoMatch,
           onCheckedChange = onAutoMatchChange,
         )
+
+        ToggleRow(
+          title = stringResource(R.string.danmaku_remember_selection),
+          summary = stringResource(R.string.danmaku_remember_selection_summary),
+          checked = state.rememberSelection,
+          onCheckedChange = onRememberSelectionChange,
+        )
+
+        ToggleRow(
+          title = stringResource(R.string.danmaku_with_related),
+          summary = stringResource(R.string.danmaku_with_related_summary),
+          checked = state.withRelated,
+          onCheckedChange = onWithRelatedChange,
+        )
+
+        // ── 时间轴偏移 ──
+        // 正数 = 弹幕延后出现。步长 100ms：人眼看着「差半秒」就明显了，
+        // 再细的步长纯属骚扰。±5 秒覆盖绝大多数版本差（多一段片头 / 少一段回顾）。
+        LabeledSlider(
+          label = stringResource(R.string.danmaku_time_offset),
+          value = state.timeOffsetMs.toFloat(),
+          valueText = formatOffset(state.timeOffsetMs),
+          range = -5000f..5000f,
+          steps = 49,
+          onValueChange = { onTimeOffsetChange((it / 100f).roundToInt() * 100) },
+        )
+        Text(
+          text = stringResource(R.string.danmaku_time_offset_hint),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(top = MaterialTheme.spacing.smaller),
+        )
+        // 偏移是**按剧**记的。给出「本剧已记住 + 可清除」的反馈，
+        // 否则用户会以为这是个全局设置，换片后看到数值不变反而困惑。
+        if (state.seriesOffsetApplied) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+              text = stringResource(R.string.danmaku_time_offset_saved),
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onClearTimeOffset) {
+              Text(stringResource(R.string.danmaku_time_offset_clear))
+            }
+          }
+        }
 
         // ── 弹幕源 ──
         // ⚠️ 放在「已打开」这一侧的原因：默认 host 已经能用了，
@@ -268,7 +378,7 @@ fun DanmakuSheet(
 
       if (results.isNotEmpty()) {
         results.forEach { anime ->
-          val episodes = anime.episodeCount ?: anime.episodes.size
+          val episodes2 = anime.episodeCount ?: anime.episodes.size
           Row(
             modifier = Modifier
               .fillMaxWidth()
@@ -289,17 +399,85 @@ fun DanmakuSheet(
               Text(
                 text = buildString {
                   append(anime.typeDescription ?: anime.type ?: "")
-                  if (episodes > 0) {
+                  if (episodes2 > 0) {
                     if (isNotEmpty()) append(" · ")
-                    append(stringResource(R.string.danmaku_episode_count, episodes))
+                    append(stringResource(R.string.danmaku_episode_count, episodes2))
                   }
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
+            // 「选集」：自动匹配把集选错了时（跨季番最常见）的唯一出路。
+            // 不把它做成默认点击路径 —— 大多数情况自动挑的那一集就是对的。
+            TextButton(
+              enabled = !loadingEpisodes,
+              onClick = {
+                if (episodesFor?.animeId == anime.animeId) {
+                  episodesFor = null
+                  episodes = emptyList()
+                } else {
+                  episodesFor = anime
+                  loadingEpisodes = true
+                  scope.launch {
+                    episodes = runCatching { onLoadEpisodes(anime) }.getOrDefault(emptyList())
+                    loadingEpisodes = false
+                  }
+                }
+              },
+            ) {
+              Text(stringResource(R.string.danmaku_pick_episode))
+            }
             TextButton(onClick = { scope.launch { runCatching { onPickAnime(anime) } } }) {
               Text(stringResource(R.string.danmaku_load))
+            }
+          }
+
+          // 展开的分集列表：网格排列，按播放顺序（库里通常就是按集号排的）。
+          if (episodesFor?.animeId == anime.animeId) {
+            if (loadingEpisodes) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(vertical = MaterialTheme.spacing.small),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(MaterialTheme.spacing.small))
+                Text(
+                  text = stringResource(R.string.danmaku_select_episode),
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+            } else if (episodes.isEmpty()) {
+              Text(
+                text = stringResource(R.string.danmaku_select_episode),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(vertical = MaterialTheme.spacing.small),
+              )
+            } else {
+              // 每行 5 个：集号是 1~3 位数，5 列在手机竖屏上刚好不挤。
+              FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
+              ) {
+                episodes.forEachIndexed { i, ep ->
+                  val label = ep.episodeNumber?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: (i + 1).toString()
+                  FilterChip(
+                    selected = state.matchedTitle == ep.episodeTitle.ifBlank { anime.animeTitle },
+                    onClick = {
+                      scope.launch {
+                        runCatching { onPickEpisode(anime, ep) }
+                        episodesFor = null
+                        episodes = emptyList()
+                      }
+                    },
+                    label = { Text(label) },
+                  )
+                }
+              }
             }
           }
         }
@@ -351,6 +529,21 @@ private fun ToggleRow(
     }
     Switch(checked = checked, onCheckedChange = onCheckedChange)
   }
+}
+
+/**
+ * 偏移量的读数文案：`+0.6s` / `-1.2s` / `0`。
+ *
+ * 只在 0 时显示「0」而不是「+0.0s」—— 用户看不出差别，但多出来的符号会让人
+ * 以为「明明没调却有偏移」。
+ */
+private fun formatOffset(ms: Int): String {
+  if (ms == 0) return "0"
+  val sign = if (ms > 0) "+" else "-"
+  val abs = kotlin.math.abs(ms)
+  val sec = abs / 1000
+  val tenth = (abs % 1000) / 100
+  return if (tenth == 0) "$sign${sec}.0s" else "$sign$sec.${tenth}s"
 }
 
 /**

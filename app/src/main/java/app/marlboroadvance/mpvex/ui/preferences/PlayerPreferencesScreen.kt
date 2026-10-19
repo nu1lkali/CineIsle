@@ -251,6 +251,86 @@ object PlayerPreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              // 「下一集」悬停卡（片尾前约 30 秒）：与上面的倒计时是两件事 ——
+              // 那个是最后几秒催你「要切了」，这个是提前问「要不要接着看」。
+              val showNextUp by preferences.showNextUpCard.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.SkipNext,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = showNextUp,
+                onValueChange = preferences.showNextUpCard::set,
+                title = { Text("片尾提示下一集", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = if (showNextUp) {
+                      "片尾前 ${preferences.nextUpShowSeconds.get()} 秒在右下角提示下一集，点一下立刻切"
+                    } else {
+                      "不提示，播完按连播设置自动切"
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              if (showNextUp) {
+                val nextUpSec by preferences.nextUpShowSeconds.collectAsState()
+                ListPreference(
+                  icon = {
+                    Icon(
+                      Icons.Outlined.Timer,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                    )
+                  },
+                  value = nextUpSec,
+                  onValueChange = { preferences.nextUpShowSeconds.set(it) },
+                  title = { Text("提前多少秒提示", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                  values = listOf(15, 30, 60, 90),
+                  valueToText = { AnnotatedString("$it 秒") },
+                  type = ListPreferenceType.DROPDOWN_MENU,
+                  summary = {
+                    Text(
+                      text = "长片尾（带预告 / 片花）建议 60 秒以上",
+                      color = MaterialTheme.colorScheme.outline,
+                    )
+                  },
+                )
+              }
+
+              PreferenceDivider()
+
+              // 下一集衔接预取：只打一次小流量 Range 预热连接，不动 mpv 的缓冲策略。
+              val prefetchNext by preferences.prefetchNextEpisode.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Speed,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = prefetchNext,
+                onValueChange = preferences.prefetchNextEpisode::set,
+                title = { Text("提前预热下一集", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = if (prefetchNext) {
+                      "片尾前 ${preferences.prefetchNextEpisodeSeconds.get()} 秒预热下一集连接，切集更快；不额外占用带宽"
+                    } else {
+                      "关闭：切集时才建立连接"
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
               val rememberSpeed by preferences.rememberSpeedPerSeries.collectAsState()
               SwitchPreference(
                 icon = {
@@ -593,6 +673,28 @@ object PlayerPreferencesScreen : Screen {
                 value = rememberBrightness,
                 onValueChange = preferences.rememberBrightness::set,
                 title = { Text(text = stringResource(R.string.pref_player_remember_brightness), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+              )
+
+              // 按剧记亮度：与上面那条**叠加**而不是替代（见 PlayerPreferences 的说明）。
+              // 放在紧跟它的位置，用户才能一眼看出「一个全局、一个按剧」。
+              val rememberSeriesBrightness by preferences.rememberSeriesBrightness.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.BrightnessMedium,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = rememberSeriesBrightness,
+                onValueChange = preferences.rememberSeriesBrightness::set,
+                title = { Text(text = stringResource(R.string.pref_player_remember_series_brightness), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = stringResource(R.string.pref_player_remember_series_brightness_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
               )
 
               PreferenceDivider()
@@ -1090,7 +1192,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = showSystemNavigationBar,
                 onValueChange = preferences.showSystemNavigationBar::set,
-                title = { Text("显示控件时同时显示导航栏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = { Text("显示控件时显示导航栏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
               
               PreferenceDivider()

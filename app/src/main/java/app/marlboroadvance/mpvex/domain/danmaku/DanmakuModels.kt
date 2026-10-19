@@ -17,6 +17,14 @@ import kotlinx.serialization.Serializable
 data class DandanSearchResponse(
   @SerialName("success") val success: Boolean = false,
   @SerialName("errorCode") val errorCode: Int? = null,
+  /**
+   * 服务端给的人类可读错误（如「一个或多个参数不符合规则」）。
+   *
+   * ⚠️ 这个字段只有在 `success=false` 时才非空，而那种情况**同样是 HTTP 200**：
+   * `animes` 会是 `null`。把 null 当成「没搜到」的话，参数写错、凭证过期、
+   * 服务端维护这几种完全不同的故障会全部显示成同一句话（v100 的翻车点）。
+   */
+  @SerialName("errorMessage") val errorMessage: String? = null,
   @SerialName("animes") val animes: List<DandanAnime> = emptyList(),
 )
 

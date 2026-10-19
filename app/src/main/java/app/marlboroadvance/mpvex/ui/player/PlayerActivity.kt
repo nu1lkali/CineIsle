@@ -278,6 +278,26 @@ open class PlayerActivity :
   private var singleSeriesKey: String? = null
 
   /**
+   * 与 [playlistSeriesKeys] 平行的「**剧名**」（Emby 的 `SeriesName`）。
+   *
+   * ⚠️ 弹幕自动匹配只能拿剧名去搜番。原因是：点第 5 集进来时 title 是
+   * 「都市传说」这种**分集名**，拿它去查 dandanplay 是查不到结果的；
+   * 要查的是整部剧的名（「某科学的超电磁炮」）。电影这类非剧集条目没有剧名
+   * ⇒ 空串 ⇒ 调用方退回用显示名。
+   */
+  private var playlistSeriesNames: List<String> = emptyList()
+  private var singleSeriesName: String? = null
+
+  /**
+   * 交接单里带来的「当前亮度」（0~1），由 [onStart] 消费一次即清空。
+   *
+   * 为什么要有这一份：`onStart` 会按记忆重设亮度，但记忆里可能**根本没有这部片**
+   * （用户从没在 mpv 侧调过亮度、刚在 GSY 侧调暗后切回来），那种情况下只有
+   * 交接单里的值才是正确的。不消费它是「切内核亮度跳一下」的根因。
+   */
+  private var handoffBrightness: Float? = null
+
+  /**
    * 与 [playlist] 同序的「多版本名」（空串 = 这一条没有多版本 / 没选版本）。
    *
    * 只在 Emby 多版本条目上才有值（用户在下拉框里选了哪个版本），顶栏会把它追加在片名后面。
@@ -295,6 +315,18 @@ open class PlayerActivity :
    * 队列换位 / 删除时必须同步（见 `movePlaylistItem` / `removePlaylistItem`）。
    */
   private var playlistItemIds: List<String> = emptyList()
+
+  /**
+   * 与 [playlist] 同序的 Emby 剧集原始序号（`"2005"` = S02E05；空串 = 不是剧集）。
+   *
+   * ⚠️ 只给**弹幕匹配**用：弹幕库的集号是「第几集」，而 [playlistIndex] 是「队列里的第几个」。
+   * 从第 5 集点进详情页播放时队列只有 1 条，按下标算会取成第 1 集的弹幕 ——
+   * 用户看到的现象就是「弹幕和画面完全对不上」。
+   *
+   * 与 [playlistItemIds] 一样是平行数组，所以队列换位 / 删除时必须同步
+   * （见 `movePlaylistItem` / `removePlaylistItem`）。
+   */
+  private var playlistEpisodeNumbers: List<String> = emptyList()
 
   /**
    * Emby **ItemId → 用户为该条选定的媒体源 Id**（多版本条目才有；单版本 / 非 Emby 为空表）。
@@ -591,6 +623,13 @@ open class PlayerActivity :
     // 「记住每部剧的播放设置」的键，与 playlist 下标一一对应
     playlistSeriesKeys = intent.getStringArrayListExtra("playlist_series_keys") ?: emptyList()
     singleSeriesKey = intent.getStringExtra("emby_series_key")
+    // ⚠️ 剧名（与 playlist 同序）——**弹幕自动匹配必须用它**，不能用某一集的标题。
+    //    搜「都市传说」（分集名）在弹幕库里是搜不到番的，必须搜「某科学的超电磁炮」。
+    //    电影/音乐等非剧集条目没有剧名 ⇒ 空串 ⇒ 退回显示名，行为与旧版一致。
+    playlistSeriesNames = intent.getStringArrayListExtra("playlist_series_names") ?: emptyList()
+    singleSeriesName = intent.getStringExtra("emby_series_name")
+    // 交接单带来的亮度（重建 / 首次进入时由 onStart 消费）
+    handoffBrightness = PlayerHandoff.read(intent).brightness
     // Emby 多版本名（与 playlist 下标一一对应，空串占位）——顶栏用它显示「正在播的是哪个版本」
     playlistMediaSourceNames =
       intent.getStringArrayListExtra("emby_media_source_names") ?: emptyList()
@@ -602,6 +641,12 @@ open class PlayerActivity :
     // 网络队列的原始路径表（与 playlist 同序）—— 换片后按 playlistIndex 取当前片的
     // 网络路径算进度键 / 找字幕，避免队列连播时全串到第一片（见 networkFilePaths 注释）
     networkFilePaths = intent.getStringArrayListExtra("network_file_paths") ?: emptyList()
+    // Emby 剧集原始序号（与 playlist 同序，空串 = 不是剧集）—— 弹幕按真实集号匹配，
+    // 而不是按队列下标（从第 5 集单独点播时，队列只有 1 条，下标 0 会被当成第 1 集）
+    playlistEpisodeNumbers =
+      intent.getStringArrayListExtra(
+        app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_EPISODE_NUMBERS,
+      ) ?: emptyList()
     // Emby 多版本：ItemId → 选定的媒体源 Id（按版本记进度的键靠它拼，见 EmbyVersionProgress）
     embyMediaSourceByItemId = buildEmbyMediaSourceMap(intent)
     viewModel.seriesKey = currentSeriesKey()
@@ -822,6 +867,25 @@ open class PlayerActivity :
             modifier = Modifier.align(Alignment.Center),
           )
 
+          // 下一集「悬停卡」（片尾前约 30 秒出现，无倒计时）：比倒计时胶囊(136)更高一截，
+          // 两者可能同时出现 —— 悬停卡在上、倒计时胶囊在下，各自都能点到。
+          NextUpCard(
+            viewModel = viewModel,
+            onPlayNow = {
+              autoplayCancelled = false
+              cancelAutoplayCountdown()
+              playNext()
+            },
+            onDismiss = {
+              // 收起只是「这次别再提示了」：本集播完仍然按原逻辑自动连播，
+              // 与倒计时胶囊上的 ×（那是取消连播）语义**不同**，别合并。
+              viewModel.nextUpVisible.value = false
+              viewModel.nextUpTitle.value = null
+            },
+            modifier = Modifier
+              .align(Alignment.BottomEnd)
+              .padding(end = 16.dp, bottom = 176.dp),
+          )
           // 下一集连播倒计时：贴在底部、抬高一截避开控制栏。
           // 只有倒计时 > 0 时卡片才出现（AnimatedVisibility 内部判断）。
           AutoplayCountdownCard(
@@ -907,6 +971,10 @@ open class PlayerActivity :
                 speedScale = dmPrefs.speedScale,
                 areaRatio = dmPrefs.areaRatio,
                 maxOnScreen = dmPrefs.maxOnScreen,
+                preventOverlapping = dmPrefs.preventOverlapping,
+                // v117：竖屏下 mpv 窗口铺满、画面居中一条，弹幕层要跟着画面走，
+                // 否则 retainer 从窗口顶部 packing ⇒ 全挤在画面上方的黑边里。
+                videoAspectProvider = { player.getVideoOutAspect()?.toFloat() },
                 modifier = Modifier.fillMaxSize(),
               )
             }
@@ -1240,8 +1308,18 @@ open class PlayerActivity :
 
       audioFocus.registerNoisyReceiver()
 
-      if (playerPreferences.rememberBrightness.get()) {
-        val brightness = playerPreferences.defaultBrightness.get()
+      // 交接单（从 GSY 切回来 / 重建）带来的亮度：那是**用户此刻眼睛看到的值**，
+      // 优先级高于记忆 —— 记忆里可能还没有这部片（用户从没在这边调过）。
+      if (handoffBrightness != null) {
+        viewModel.changeBrightnessTo(handoffBrightness!!)
+        handoffBrightness = null
+      } else if (playerPreferences.rememberBrightness.get() ||
+        playerPreferences.rememberSeriesBrightness.get()
+      ) {
+        // 按剧优先于全局默认（见 PlayerPreferences.brightnessFor）：
+        // 上次把这部片调暗了，这次开播第一帧就该是暗的，不能先套全局值闪一下。
+        // ⚠️ 不写「两份都开时取按剧的」以外的分支 —— 由 brightnessFor 统一裁决。
+        val brightness = playerPreferences.brightnessFor(currentSeriesKey())
         if (brightness != BRIGHTNESS_NOT_SET) {
           viewModel.changeBrightnessTo(brightness)
         }
@@ -1720,6 +1798,11 @@ open class PlayerActivity :
       k.add(to, k.removeAt(from))
       playlistSeriesKeys = k
     }
+    if (playlistSeriesNames.size == movedItems.size) {
+      val s = playlistSeriesNames.toMutableList()
+      s.add(to, s.removeAt(from))
+      playlistSeriesNames = s
+    }
     if (playlistMediaSourceNames.size == movedItems.size) {
       val n = playlistMediaSourceNames.toMutableList()
       n.add(to, n.removeAt(from))
@@ -1729,6 +1812,12 @@ open class PlayerActivity :
       val i = playlistItemIds.toMutableList()
       i.add(to, i.removeAt(from))
       playlistItemIds = i
+    }
+    // 剧集序号也必须跟着换位：弹幕按它匹配集号，错位 = 整场弹幕对不上画面
+    if (playlistEpisodeNumbers.size == movedItems.size) {
+      val e = playlistEpisodeNumbers.toMutableList()
+      e.add(to, e.removeAt(from))
+      playlistEpisodeNumbers = e
     }
 
     playlistIndex = remap(playlistIndex)
@@ -1762,11 +1851,17 @@ open class PlayerActivity :
     if (playlistSeriesKeys.size == items.size + 1) {
       playlistSeriesKeys = playlistSeriesKeys.toMutableList().also { it.removeAt(index) }
     }
+    if (playlistSeriesNames.size == items.size + 1) {
+      playlistSeriesNames = playlistSeriesNames.toMutableList().also { it.removeAt(index) }
+    }
     if (playlistMediaSourceNames.size == items.size + 1) {
       playlistMediaSourceNames = playlistMediaSourceNames.toMutableList().also { it.removeAt(index) }
     }
     if (playlistItemIds.size == items.size + 1) {
       playlistItemIds = playlistItemIds.toMutableList().also { it.removeAt(index) }
+    }
+    if (playlistEpisodeNumbers.size == items.size + 1) {
+      playlistEpisodeNumbers = playlistEpisodeNumbers.toMutableList().also { it.removeAt(index) }
     }
     if (shuffledIndices.isNotEmpty()) {
       // 被删的下标从随机序列里摘掉，其后所有下标整体前移一位
@@ -1844,6 +1939,8 @@ open class PlayerActivity :
           playlist = playlist,
           titles = playlistTitles,
           seriesKeys = playlistSeriesKeys,
+          // 弹幕要按真实集号匹配，必须一起交给 GSY，否则那边只剩队列下标可用（会错集）
+          episodeNumbers = playlistEpisodeNumbers,
           index = playlistIndex,
           playlistId = playlistId,
           positionMs = positionMs,
@@ -1857,6 +1954,12 @@ open class PlayerActivity :
               app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_ITEM_IDS,
             ) ?: emptyList(),
           headers = intent.getStringArrayExtra("headers"),
+          // 按剧亮度跨内核带过去（GSY 是另一个 Activity 的 window，不带就弹回默认）
+          brightness = if (playerPreferences.rememberSeriesBrightness.get()) {
+            viewModel.currentBrightness.value.takeIf { it in 0f..1f }
+          } else {
+            null
+          },
         ).writeTo(this)
       }
 
@@ -2203,30 +2306,83 @@ open class PlayerActivity :
   private fun startAutoplayCountdownWatcher() {
   autoplayCountdownJob?.cancel()
   val total = playerPreferences.autoplayNextCountdownSeconds.get()
-  // 设置里选了「不显示，播完直接切」：不需要盯进度，播完走原逻辑即可
-  if (total <= 0) {
+  // 下一集卡片（Yamby 的 next_up_sec）：比倒计时更早出现，给用户「要不要继续看」的决策时间。
+  // 只在设置页真的开了这一项且大于 0 时生效，否则严格保持老行为（不额外探测）。
+  val nextUpTotal = if (playerPreferences.showNextUpCard.get()) {
+    playerPreferences.nextUpShowSeconds.get().coerceIn(0, 300)
+  } else {
+    0
+  }
+  val prefetchLead = if (playerPreferences.prefetchNextEpisode.get()) {
+    playerPreferences.prefetchNextEpisodeSeconds.get().coerceIn(0, 300)
+  } else {
+    0
+  }
+  // 两件事都关、连倒计时也是 0 ⇒ 完全不盯，老行为。
+  if (total <= 0 && nextUpTotal <= 0 && prefetchLead <= 0) {
     autoplayCountdownJob = null
     return
   }
     val startIndex = playlistIndex
   autoplayCountdownJob = lifecycleScope.launch {
+    var prefetched = false
     while (kotlinx.coroutines.currentCoroutineContext().isActive) {
       kotlinx.coroutines.delay(500)
       // 用户自己切了集 / 退出了 / 在片尾取消了：这次盯梢作废
       if (playlistIndex != startIndex || isFinishing || autoplayCancelled) break
-      if (peekNextIndex() == null && !viewModel.shouldRepeatPlaylist()) break // 没有下一集
+      val nextIdx = peekNextIndex()
+      if (nextIdx == null && !viewModel.shouldRepeatPlaylist()) break // 没有下一集
       val left = wallClockSecondsToEnd() ?: continue
+      // 预热：进入提前量窗口就打一次小流量 Range（每个会话只打一次）
+      if (!prefetched && prefetchLead > 0 && left in 0.1..prefetchLead.toDouble()) {
+        prefetched = true
+        peekNextIndex()?.let { warmUpNextEpisode(it) }
+      }
+      // 下一集卡片：比倒计时早 nextUpTotal 秒出现
+      if (nextUpTotal > 0 && left in 0.1..nextUpTotal.toDouble()) {
+        if (viewModel.nextUpTitle.value == null) {
+          viewModel.nextUpTitle.value = nextIdx?.let { playlistTitles.getOrNull(it) }
+        }
+        viewModel.nextUpVisible.value = true
+      } else if (left > nextUpTotal && viewModel.nextUpVisible.value) {
+        viewModel.nextUpVisible.value = false
+        viewModel.nextUpTitle.value = null
+      }
       // 进入最后 total 秒：把卡片推出来，之后每 0.5 秒刷新一次，数字自然往下走
-      if (left in 0.1..total.toDouble()) {
+      if (total > 0 && left in 0.1..total.toDouble()) {
         if (viewModel.autoplayNextTitle.value == null) {
           viewModel.autoplayNextTitle.value = peekNextIndex()?.let { playlistTitles.getOrNull(it) }
         }
         viewModel.autoplayCountdown.value = kotlin.math.ceil(left).toInt().coerceAtLeast(1)
-      } else if (left > total && viewModel.autoplayCountdown.value > 0) {
+      } else if (total > 0 && left > total && viewModel.autoplayCountdown.value > 0) {
         // 用户往后拖了进度条：卡片收起来，等再次接近片尾再出现
         viewModel.autoplayCountdown.value = 0
         viewModel.autoplayNextTitle.value = null
       }
+    }
+  }
+}
+
+/**
+ * 预热下一集：只发一个**很小的** Range 请求，拿到响应头就断开。
+ *
+ * ⚠️ 故意不用 `Cache-Control: no-cache` 之类 —— 让它落进 okhttp 的连接池 / DNS 缓存，
+ *    这才是要的：切集时省掉 DNS + TCP + TLS 三次握手（高延迟网络上这才是主要耗时）。
+ * ⚠️ 失败静默：预热本来就是锦上添花，绝不能弹提示打扰播放。
+ */
+private fun warmUpNextEpisode(index: Int) {
+  val url = networkFilePaths.getOrNull(index)?.takeIf { it.startsWith("http") } ?: return
+  lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+    runCatching {
+      val client = okhttp3.OkHttpClient.Builder()
+        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+      val req = okhttp3.Request.Builder()
+        .url(url)
+        .header("Range", "bytes=0-65535")
+        .build()
+      client.newCall(req).execute().use { it.body?.close() }
     }
   }
 }
@@ -2268,6 +2424,8 @@ private fun cancelAutoplayCountdown() {
   autoplayCountdownJob = null
   viewModel.autoplayCountdown.value = 0
   viewModel.autoplayNextTitle.value = null
+  viewModel.nextUpVisible.value = false
+  viewModel.nextUpTitle.value = null
 }
 
   /**
@@ -2301,6 +2459,71 @@ private fun cancelAutoplayCountdown() {
    */
   private fun currentSeriesKey(): String? =
     playlistSeriesKeys.getOrNull(playlistIndex) ?: singleSeriesKey
+
+  /**
+   * 当前这一集所属**剧**的名字；没有剧名时（电影 / 本地文件 / 音乐）退回 [fileName]。
+   *
+   * ⚠️ 仅供弹幕自动匹配使用 —— 它要搜的是整部番，不是某一集的标题。
+   *
+   * @param index 目标条目在队列里的下标
+   */
+  private fun danmakuMatchTitle(index: Int = playlistIndex): String {
+    val series = playlistSeriesNames.getOrNull(index) ?: singleSeriesName
+    return if (!series.isNullOrBlank()) series else fileName
+  }
+
+  /**
+   * 通知弹幕状态机「现在是哪一集」。
+   *
+   * ## 为什么要封装
+   *
+   * 有两个时机需要通知：切集（[loadPlaylistItemInternal]）和**首次起播**
+   * （[handleFileLoaded]，那条路径是 `playFile` 直通，不经队列装载）。
+   * 两处的参数口径必须完全一致 —— 尤其是集号要用 [currentEpisodeIndex] 而不是队列下标，
+   * 否则「从第 5 集点进详情页播放」会被当成第 1 集。
+   *
+   * ⚠️ 队列下标必须**显式传**：切集时调用方手里的 `index` 才是目标条目，
+   * 而 `handleFileLoaded` 时 `playlistIndex` 已经更新过了。默认参数取 `playlistIndex`，
+   * 两个时机都成立。
+   *
+   * @param index 目标条目在队列里的下标；默认当前正在播的那一条
+   */
+  private fun notifyDanmakuEpisodeChanged(index: Int = playlistIndex) {
+    danmakuState?.onEpisodeChanged(
+      currentSeriesKey(),
+      danmakuMatchTitle(index),
+      currentEpisodeIndex(index),
+    )
+  }
+
+  /**
+   * 当前这一条在**剧集里的真实集号（0-based）**，供弹幕「自动按当前集挑」使用。
+   *
+   * 弹幕面板手动选番时要按「当前是第几集」取那一集，而 [playlistIndex] 是队列下标 ——
+   * 从第 5 集点播时队列只有 1 条，用下标会取成第 1 集。
+   */
+  fun currentEpisodeIndexForDanmaku(): Int = currentEpisodeIndex()
+
+  /**
+   * 当前这一条在**剧集里的真实集号（0-based）**，供弹幕匹配使用。
+   *
+   * 之所以不能直接用 [playlistIndex]：
+   * - 从第 5 集点进详情页播放时，队列只有 1 条 ⇒ 下标 0 ⇒ 会被当成第 1 集；
+   * - 单文件播放（`launchSingle`）根本没有队列，下标恒为 0。
+   *
+   * 优先用 intent 里下发的 Emby 原始序号（`S02E05` → `2005` → 2004）；
+   * 拿不到（本地播放 / 网盘）才退回队列下标。
+   *
+   * @param index 要查的队列下标；默认取当前的 [playlistIndex]。
+   */
+  private fun currentEpisodeIndex(index: Int = playlistIndex): Int {
+    val encoded = playlistEpisodeNumbers.getOrNull(index)?.takeIf { it.isNotBlank() } ?: return index
+    val number = encoded.toIntOrNull() ?: return index
+    // 编码是 season*1000 + episode：整除得季、取余得集。
+    // 集号从 1 开始，转成 0-based 后再交给 DanmakuMatcher（它内部再 +1）。
+    val episode = number % 1000
+    return if (episode > 0) episode - 1 else index
+  }
 
   /**
    * 当前这一条对应的「多版本名」（如 "1080P HEVC"）；不是多版本条目就返回 null。
@@ -2657,15 +2880,34 @@ private fun cancelAutoplayCountdown() {
     // 落盘缓存超限就先清一遍（清单 #18）。mpv 自己的 LRU 只管「单条流不超过
     // cache-persize」，**不管总量** —— 连看 10 部片子总占用早就撑爆了，
     // 到那时 mpv 写不进去，表现为「缓存开着但没效果」。
-    // 放在换片这一刻而不是开设置页时：这是缓存真正会被写入的前一刻。
-    runCatching {
-      MpvDiskCache.trimIfNeeded(
-        this,
-        playerPreferences.diskCacheSizeMb.get(),
-      )
+    //
+    // ⚠️⚠️ 必须扔到后台线程：之前这行就在主线程上裸跑，而 [MpvDiskCache.trimIfNeeded]
+    // 会 `deleteRecursively()` 几百 MB ~ 2GB 的缓存目录 —— 这里是 handleFileLoaded，
+    // 正好卡在「首帧要上屏」的时机上，删得越久画面越是定住不动。
+    // 缓存容量越大越慢，所以开着大缓存播大文件时表现为「卡成幻灯片」。
+    // mpv 自己写缓存是异步的，晚几百毫秒清一次完全不影响这次播放。
+    val diskCacheLimitMb = playerPreferences.diskCacheSizeMb.get()
+    lifecycleScope.launch(Dispatchers.IO) {
+      runCatching { MpvDiskCache.trimIfNeeded(this@PlayerActivity, diskCacheLimitMb) }
     }
 
     setIntentExtras(intent.extras)
+
+    // ── 弹幕：文件真正加载完成时补一次「换集」通知 ──
+    //
+    // ⚠️⚠️ 首次起播**不走** [loadPlaylistItemInternal]：`onCreate` 里是直接
+    //   `player.playFile(uri)`（见 L695），那条路径不会通知弹幕状态机。
+    //   于是 `pendingTitle` 一直是空串 —— 线上日志里 `setEnabled(true)：pending=""`、
+    //   `弹幕灌数据：… key=` 就是这么来的：
+    //   ① 自动匹配永远拿不到片名，弹幕只能靠手动搜番；
+    //   ② 「打开开关时补拉」这条兜底路径永远死在「还没拿到片名」上。
+    //
+    // 放在这里的理由：此刻 `fileName` 已经定稿（上面刚处理完）、`playlistIndex`
+    // 指向正确的一条、intent 里的剧集键也都在。切集时 [loadPlaylistItemInternal]
+    // 已经通知过一次，这里再通知一次是**幂等**的（同一 key 不会重新拉）——
+    // 因为只有 `episodeKey` 变了引擎才重建，网络请求也只在自动匹配时发一次。
+    // ⚠️ 用 `playlistIndex` 而不是 0：单条播放时它是 0，队列播放时它已被切集流程更新。
+    notifyDanmakuEpisodeChanged(playlistIndex)
 
     // mpv 已经换成新文件：轨道列表重建了，外挂字幕跟踪表必须跟着清。
     // 不清的话恢复流程会以为「这条字幕已经加过了」而跳过，字幕就再也加不回来。
@@ -3623,6 +3865,10 @@ private fun cancelAutoplayCountdown() {
     val hasPlaylistExtras = intent.hasExtra("playlist_id") ||
       intent.hasExtra("playlist")
 
+    // 交接单带来的亮度（从 GSY 切回来）：存起来让下一次 onStart 消费。
+    // ⚠️ 必须在下面处理 playlist 之前读 —— 两者互不相干，但顺序读起来更清楚。
+    handoffBrightness = PlayerHandoff.read(intent).brightness
+
     // Load playlist from intent extras first (fast path)
     val playlistFromIntent = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
       intent.getParcelableArrayListExtra("playlist", Uri::class.java) ?: emptyList()
@@ -3647,6 +3893,9 @@ private fun cancelAutoplayCountdown() {
       // 网络路径表同理：换队列必须整份替换，否则新队列会拿旧队列的路径当进度键
       networkFilePaths = intent.getStringArrayListExtra("network_file_paths") ?: emptyList()
       singleSeriesKey = intent.getStringExtra("emby_series_key")
+      // 剧名同理：换了队列就必须整份替换，否则弹幕会拿上一部剧的名字去搜番
+      playlistSeriesNames = intent.getStringArrayListExtra("playlist_series_names") ?: emptyList()
+      singleSeriesName = intent.getStringExtra("emby_series_name")
       // 多版本名同理：换了队列就换，否则会显示上一批的版本名
       playlistMediaSourceNames =
         intent.getStringArrayListExtra("emby_media_source_names") ?: emptyList()
@@ -4359,7 +4608,8 @@ private fun cancelAutoplayCountdown() {
 
     // 弹幕：换集 = 重新匹配。内部会先取消上一次加载，
     // 否则上一集的慢响应会回来覆盖这一集（竞态）。
-    danmakuState?.onEpisodeChanged(currentSeriesKey(), fileName, index)
+    // ⚠️ 第三个参数是「**集号**」，不是队列下标 —— 见 [currentEpisodeIndex]。
+    notifyDanmakuEpisodeChanged(index)
 
     // Set HTTP headers (including referer) for network streams
     setHttpHeadersForUri(uri)

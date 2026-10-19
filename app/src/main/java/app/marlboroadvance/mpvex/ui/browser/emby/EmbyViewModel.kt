@@ -77,6 +77,26 @@ private val GLOBAL_SEARCH_DEFAULT_TYPES =
   listOf("Movie", "Series", "Episode", "Video", "MusicVideo")
 
 /**
+ * **自身没有视频文件**的条目类型 —— 对它们请求 `/Videos/{id}/stream` 必崩。
+ *
+ * `Series` / `Season` 是容器（内容在子条目上）；`BoxSet` / `Folder` / `CollectionFolder`
+ * 是目录；相册 / 歌单 / 音乐人同理。缺了这条判据的表现就是「点播放直接闪退」。
+ */
+private val CONTAINER_TYPES = setOf(
+  "Series",
+  "Season",
+  "BoxSet",
+  "Folder",
+  "CollectionFolder",
+  "PhotoAlbum",
+  "MusicAlbum",
+  "MusicArtist",
+  "Playlist",
+  "Book",
+  "AudioBook",
+)
+
+/**
  * 「演职员合并」的运行态快照。
  *
  * 进度**必须是 ViewModel 上的状态**而不是页面里的 `remember`：
@@ -977,13 +997,56 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
      * 由 UI 传进来而不是在这里重算 —— 保证「选的」和「播的时候顶栏显示的」是同一个标签。
      */
     mediaSourceLabel: String? = null,
+    /**
+     * 电视剧「从头播放」：**强制**落在第一集、并且忽略进度。
+     *
+     * ⚠️ 必须单独一个开关，不能靠 `resumeSeconds == 0` 推断：
+     *   普通「播放」在没看过时也是 0，但那种情况该挑「第一集未看的」；
+     *   而「从头播放」的语义是「第一集开头」，哪怕第 1 集已经看完。
+     */
+    fromStart: Boolean = false,
   ) {
     val itemId = item.Id ?: return
     val engine = resolveEngine(reverseEngine)
 
+    // ⚠️⚠️ 容器类条目**绝不能**直接交给播放器。
+    //
+    // `Series` / `Season` / 文件夹自身没有媒体文件，`/Videos/{id}/stream` 会回一个
+    // 404 或空 body；播放器拿到「HTTP 成功但 0 字节」不会当场报错，而是一路推进到
+    // mpv 初始化，最后在没有可解码帧那条路径上崩掉 —— 用户看到的就是「点播放闪退」。
+    //
+    // 电视剧的正确行为是「点封面 = 从上一集没看完的地方接着看」：
+    // 先取分集列表，优先挑有进度的第一集，其次挑第一集未看的，最后退回首集。
+    val playTarget: EmbyItem = if (isContainerOnly(item) && item.Type == "Series") {
+      val episodes = runCatching {
+        withContext(Dispatchers.IO) { repository.getEpisodes(server, itemId, null, 0, null).Items }
+      }.getOrDefault(emptyList())
+      if (fromStart) {
+        // 「从头播放」= 第一集开头，哪怕第 1 集早看完了。
+        episodes.firstOrNull() ?: return
+      } else {
+        episodes.firstOrNull { (it.UserData?.PlaybackPositionTicks ?: 0L) > 0L }
+          ?: episodes.firstOrNull { it.UserData?.Played != true }
+          ?: episodes.firstOrNull()
+          ?: return  // 一集都没有（还没刮削完）：什么都不做，比崩掉好
+      }
+    } else if (isContainerOnly(item)) {
+      // 季节 / 文件夹 / 合集：不知道用户想要哪一集，只能安静返回。
+      // 详情页已把这类条目的播放按钮改成「选择分集」，走到这里属于兜底。
+      return
+    } else {
+      item
+    }
+    val itemIdToPlay = playTarget.Id ?: return
+    val playItem = playTarget
+    // 「从头播放」一律从头：哪怕调用方顺手传了续播秒数也不认。
+    // （分集里的「从头播放本季」走 onPlayEpisode(ep, 0)，本就不带秒数，
+    //   这里兜的是「Series 大按钮 + 老版本调用方」这类组合。）
+    val effectiveResume = if (fromStart) 0L else resumeSeconds
+
     // 剧集：构建从当前集开始的播放列表，实现"播完自动下一集"
-    val playlist = if (item.Type == "Episode") {
-      buildEpisodePlaylist(server, item)
+    val playlist = if (playItem.Type == "Episode") {
+      buildEpisodePlaylist(server, playItem)
     } else {
       emptyList()
     }
@@ -995,14 +1058,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       val directUrls = playlist
         .mapNotNull { it.Id }
         .mapNotNull { id ->
-          val sourceForThisItem = if (id == itemId) mediaSourceId else null
+          val sourceForThisItem = if (id == itemIdToPlay) mediaSourceId else null
           resolveIfEnabled(server, id, sourceForThisItem)?.let { id to it }
         }
         .toMap()
       launchPlaylist(
         server = server,
         items = playlist,
-        resumeSeconds = resumeSeconds,
+        resumeSeconds = effectiveResume,
         engine = engine,
         directUrls = directUrls,
         firstMediaSourceId = mediaSourceId,
@@ -1023,20 +1086,20 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       //   单版本媒体（mediaSourceId == null）完全不走这条路，行为与改动前一致。
       val versionUrl = if (mediaSourceId != null) {
         withContext(Dispatchers.IO) {
-          runCatching { repository.directStreamUrl(server, itemId, mediaSourceId) }.getOrNull()
+          runCatching { repository.directStreamUrl(server, itemIdToPlay, mediaSourceId) }.getOrNull()
         }
       } else {
         null
       }
-      val direct = versionUrl ?: resolveIfEnabled(server, itemId, mediaSourceId)
+      val direct = versionUrl ?: resolveIfEnabled(server, itemIdToPlay, mediaSourceId)
       // 独立再解析一次给 ISO 探测用（上面那次可能因为开关关着而没解）。
-      val isoSource = direct ?: resolveDirectUrl(server, itemId, mediaSourceId = mediaSourceId)
+      val isoSource = direct ?: resolveDirectUrl(server, itemIdToPlay, mediaSourceId = mediaSourceId)
       // ISO 容器要用**选中版本**的容器名，否则多版本下（4K 是 ISO、1080P 是 mkv）
       // 会拿错容器的预筛结论，把真 ISO 拦在探测之前。
-      val selectedContainer = item.MediaSources
+      val selectedContainer = playItem.MediaSources
         ?.firstOrNull { it.Id == mediaSourceId }
         ?.Container
-        ?: item.MediaSources?.firstOrNull()?.Container
+        ?: playItem.MediaSources?.firstOrNull()?.Container
       val isoUrl =
         isoSource?.let {
           prepareRemoteIso(
@@ -1045,14 +1108,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
             renewDirect = {
               // 直链中途过期 → 重新走一次 302 解析换新的。
               // ⚠️ 与探测必须同一套 UA，resolveDirectUrl 内部已经保证了。
-              resolveDirectUrl(server, itemId, mediaSourceId = mediaSourceId)
+              resolveDirectUrl(server, itemIdToPlay, mediaSourceId = mediaSourceId)
             },
           )
         }
       launchSingle(
         server = server,
-        item = item,
-        resumeSeconds = resumeSeconds,
+        item = playItem,
+        resumeSeconds = effectiveResume,
         engine = engine,
         overrideUrl = isoUrl ?: direct,
         mediaSourceId = mediaSourceId,
@@ -1065,7 +1128,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       runCatching {
         repository.reportPlaybackStart(
           server = server,
-          itemId = itemId,
+          itemId = itemIdToPlay,
           positionTicks = EmbyTicks.secondsToTicks(resumeSeconds),
           mediaSourceId = mediaSourceId,
         )
@@ -1381,6 +1444,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
         mediaSourceIds = mediaSourceId?.let { listOf(it) } ?: emptyList(),
         mediaSourceNames = mediaSourceLabel?.takeIf { it.isNotBlank() }?.let { listOf(it) }
           ?: emptyList(),
+        episodeNumbers = listOf(encodeEpisodeNumber(item)),
       )
       // 「记忆播放设置」的键：剧集用所属剧的 Id（整季共用一份速度 / 音轨），
       // 电影没有 SeriesId，就用它自己的 Id。
@@ -1465,6 +1529,12 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     // 与上面同序的版本显示名，供播放页顶栏显示「正在播的是哪个版本」。
     // 只有「用户点播的那一条」才会有值（用户只为这一条选了版本），其余一律空串占位。
     val mediaSourceNames = ArrayList<String>()
+    // 与上面同序的「S*E*」原始序号，供弹幕按真实集号匹配（队列下标 ≠ 集号）。
+    val episodeNumbers = ArrayList<String>()
+    // 与上面同序的**剧名**（Emby 的 SeriesName）。弹幕自动匹配要搜的是剧名 ——
+    // 拿分集名（item.Name，如「都市传说」）去搜番是搜不到的。电影没有 SeriesName ⇒ 空串，
+    // 播放器侧会退回用显示名。
+    val seriesNames = ArrayList<String>()
     val firstNameId = items.firstOrNull()?.Id
     items.forEach { item ->
       val id = item.Id ?: return@forEach
@@ -1483,10 +1553,15 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       ids.add(id)
       titles.add(displayTitle(item))
       seriesKeys.add(item.SeriesId ?: id)
+      // ⚠️ 剧名：弹幕自动匹配要搜的是「某科学的超电磁炮」，
+      //    不是某一集的 Name（如「都市传说」）。电影没有 SeriesName，该项留空
+      //    ⇒ 播放器侧会退回用显示名，行为不变。
+      seriesNames.add(item.SeriesName.orEmpty())
       mediaSourceIds.add(sourceId ?: "")
       mediaSourceNames.add(
         if (id == firstNameId) firstMediaSourceName.orEmpty() else "",
       )
+      episodeNumbers.add(encodeEpisodeNumber(item))
     }
     if (uris.isEmpty()) return
 
@@ -1512,15 +1587,88 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       putParcelableArrayListExtra("playlist", uris)
       putStringArrayListExtra("playlist_titles", titles)
       putStringArrayListExtra("playlist_series_keys", seriesKeys)
+      putStringArrayListExtra("playlist_series_names", seriesNames)
+      // 单文件/单条播放时也有剧名可用于匹配（电影为空串 ⇒ 退回显示名）
+      putExtra("emby_series_name", items.firstOrNull()?.SeriesName.orEmpty())
       putExtra("playlist_index", 0)
       // 播放列表的 ID 顺序与 uris 一致，切集时据此把"正在播放"同步给服务器
-      putEmbyPlaybackExtras(server, ids, mediaSourceIds, mediaSourceNames)
+      putEmbyPlaybackExtras(server, ids, mediaSourceIds, mediaSourceNames, episodeNumbers)
       putEngine(engine)
       // 列表里只要有用预解析直链换掉的条目，就得同步请求头（理由见 [putStreamHeaders]）
       if (directUrls.isNotEmpty()) putStreamHeaders(server)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     getApplication<Application>().startActivity(intent)
+  }
+
+  /**
+   * 这个条目**自身**是否真的有视频文件可播。
+   *
+   * ⚠️ 这是 v100 崩溃的直接原因：`Series` / `Season` / 文件夹 / 合集本身没有媒体文件，
+   * 拿它们的 Id 去请求 `/Videos/{id}/stream`，服务端回 404 或一个空 body；
+   * 播放器拿到「成功的 HTTP、0 字节」会一路走到 mpv 初始化，最后在
+   * 「没有任何可解码帧」这条路径上崩掉 —— 现象就是「点播放 App 直接闪退」。
+   *
+   * 判据用白名单而不是黑名单：宁可漏判（退化成现在的行为）也不能误判，
+   * 误判会把能播的东西拦下来。`Episode` 必须在内 —— 它才是电视剧真正的播放单元。
+   */
+  fun isContainerOnly(item: EmbyItem): Boolean = item.Type?.let { it in CONTAINER_TYPES } ?: true
+
+  /**
+   * 详情页的分集列表（电视剧用）。
+   *
+   * 一次拉全剧所有集（`SeasonId = null`），因为：
+   *  · 详情页要按季分组显示，逐季发请求会让「第一屏」等 N 次往返；
+   *  · Emby 的 `/Shows/{id}/Episodes` 本来就支持不带 SeasonId 全量返回。
+   *
+   * 失败**不抛**：分集区只是详情页的增强，拿不到就退回「只有播放按钮」的老样子，
+   * 不能让整页变成错误态。
+   */
+  suspend fun loadSeriesEpisodes(server: EmbyServer, seriesId: String): List<EmbyItem> =
+    withContext(Dispatchers.IO) {
+      runCatching { repository.getEpisodes(server, seriesId, null, 0, null).Items }.getOrDefault(emptyList())
+    }
+
+  /**
+   * 按 Id 批量取条目（有序、缺项跳过）。
+   *
+   * 用途：单集详情页的「同季其它集」——`BaseItemDto.SiblingIds` 只给 Id 不给内容，
+   * 而 `/Items?Ids=a,b,c` 一次就能把它们连同 UserData（进度/已看）一起拿回来。
+   *
+   * ⚠️ 不用 `Recursive` 参数：`Ids` 查询本身就是精确命中，加 `Recursive=true`
+   * 在部分第三方服务端会把参数组合当成非法（实测某些版本直接回空）。
+   */
+  suspend fun loadItemsByIds(server: EmbyServer, ids: List<String>): List<EmbyItem> =
+    withContext(Dispatchers.IO) {
+      if (ids.isEmpty()) return@withContext emptyList()
+      // 服务端对超长 Ids 有 URL 长度限制，按 60 个一批（32 位 Id 约 2KB，安全）
+      runCatching {
+        ids.chunked(60).flatMap { chunk ->
+          EmbyClient.getItems(
+            server = server,
+            ids = chunk,
+            includeItemTypes = listOf("Episode"),
+            limit = chunk.size,
+            fields = "Overview,MediaSources,MediaStreams,People,Genres,Studios,BasicSyncInfo",
+          ).Items.filter { it.Id != null && it.Id in chunk }
+        }
+      }.getOrDefault(emptyList())
+    }
+
+  /**
+   * 把剧集的「S*E*」原始序号编码成一个字符串，随播放 intent 下发给播放页。
+   *
+   * 格式 `ParentIndexNumber*1000 + IndexNumber`，例如 S02E05 → `"2005"`；
+   * 非剧集（电影 / 本地文件）返回空串 —— 播放页见到空串就退回队列下标。
+   *
+   * ⚠️ 为什么要编码而不是直接传 "S02E05"：播放页最终要的是一个**可比较的集号**
+   * 去和弹幕库的 `episodeNumber` 对齐，字符串还要再解析一次；直接传数字最省事。
+   * 乘 1000 是因为单季集数按惯例远小于 1000，跨季仍能保持单调递增。
+   */
+  private fun encodeEpisodeNumber(item: EmbyItem): String {
+    val season = item.ParentIndexNumber ?: return ""
+    val episode = item.IndexNumber ?: return ""
+    return (season * 1000 + episode).toString()
   }
 
   /** 显示用的标题：剧集用「剧集名 S01E05」这类格式 */

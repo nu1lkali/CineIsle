@@ -196,6 +196,8 @@ class GsyPlayerActivity : ComponentActivity() {
   private var playlist: List<Uri> = emptyList()
   private var titles: List<String> = emptyList()
   private var seriesKeys: List<String> = emptyList()
+  /** 与 [playlist] 同序的 Emby 原始集号编码（`season*1000+episode`，空串 = 非剧集）。弹幕匹配用。 */
+  private var episodeNumbers: List<String> = emptyList()
   private var currentIndex: Int = 0
   private var currentUri: Uri? = null
 
@@ -214,6 +216,9 @@ class GsyPlayerActivity : ComponentActivity() {
   private var embyServerId: Long? = null
   private var embyItemIds: List<String> = emptyList()
   private var headers: Array<String>? = null
+
+  /** 交接单带来的当前亮度（0~1）；null = 没带。见 [applyRememberedBrightness]。 */
+  private var handoffBrightness: Float? = null
 
   // ── 本次播放的外挂字幕（切集不清，用户选一次就能一直用）──
   private var subtitleSource: GSYSubtitleSource? = null
@@ -321,6 +326,10 @@ class GsyPlayerActivity : ComponentActivity() {
       return
     }
 
+    // 按剧亮度：交接单里带了就直接用，没带就按本页 seriesKey 查一次记忆。
+    // ⚠️ 必须在 startSession 之前：GSY 建好 surface 之后才设亮度，第一帧会闪一下亮的。
+    applyRememberedBrightness(handoffBrightness)
+
     // ── 官方 demo 的「三件套�? ──
     setUpOrientation(view)
     installCallbacks(view)
@@ -409,11 +418,13 @@ class GsyPlayerActivity : ComponentActivity() {
     playlist = handoff.playlist
     titles = handoff.titles
     seriesKeys = handoff.seriesKeys
+    episodeNumbers = handoff.episodeNumbers
     currentIndex = handoff.safeIndex
     playlistId = handoff.playlistId
     embyServerId = handoff.embyServerId
     embyItemIds = handoff.embyItemIds
     headers = handoff.headers
+    handoffBrightness = handoff.brightness
 
     // 解码失败降级时由 recreate 带过来的「强制内核」；普通起播时没有这一项（null�?
     forcedKernel =
@@ -427,7 +438,6 @@ class GsyPlayerActivity : ComponentActivity() {
         ?: source.getStringExtra(EXTRA_URL)?.toUri()
 
     if (currentUri == null) return false
-
     // 标题：交接单里的「与本项一一对应的标题」优先，其次才是 intent 里的兜底字段�?
     // Emby 的流地址末段固定�? "stream"，没有标题列表就只能显示 "stream"�?
     videoTitle =
@@ -523,7 +533,9 @@ class GsyPlayerActivity : ComponentActivity() {
     // 弹幕：起播 / 切集都走这里（startSession 与 playIndex 共用）⇒ 按**当前这一集**
     // 的片名重新匹配。内部会先取消上一次加载，否则上一集的慢响应回来会把
     // 这一集的弹幕覆盖掉（竞态，与 mpv 播放页同一处理）。
-    danmakuState?.onEpisodeChanged(seriesKeys.getOrNull(currentIndex), videoTitle, currentIndex)
+    // ⚠️ 第三个参数是**真实集号**，不是队列下标 —— 从第 5 集单独点播时队列只有 1 条，
+    //    用下标会去取第 1 集的弹幕。解码规则与 mpv 侧 `currentEpisodeIndex` 逐字一致。
+    danmakuState?.onEpisodeChanged(seriesKeys.getOrNull(currentIndex), videoTitle, episodeIndex(currentIndex))
 
     val headData = headerMap()
     if (headData != null) {
@@ -533,6 +545,21 @@ class GsyPlayerActivity : ComponentActivity() {
     }
     // 外挂字幕是「跟着播放器实例」的，重�? setUp 后要再挂一�?
     applySubtitle(target)
+  }
+
+  /**
+   * 当前这一条在**剧集里的真实集号（0-based）**，供弹幕匹配使用。
+   *
+   * ⚠️ 与 mpv 侧 `PlayerActivity.currentEpisodeIndex` **必须逐字一致**：
+   * 编码是 `season*1000 + episode`，集号从 1 开始，转 0-based 后再交给 DanmakuMatcher。
+   * 拿不到（本地播放 / 网盘 / 非剧集）时退回队列下标 —— 同样是 mpv 侧的兜底口径。
+   * 两处口径一旦分叉，「同一个文件在 mpv 里弹幕对、切到 GSY 就错集」这种 bug 极难查。
+   */
+  private fun episodeIndex(index: Int = currentIndex): Int {
+    val encoded = episodeNumbers.getOrNull(index)?.takeIf { it.isNotBlank() } ?: return index
+    val number = encoded.toIntOrNull() ?: return index
+    val episode = number % 1000
+    return if (episode > 0) episode - 1 else index
   }
 
   /**
@@ -618,6 +645,7 @@ class GsyPlayerActivity : ComponentActivity() {
           playlist = playlist,
           titles = titles,
           seriesKeys = seriesKeys,
+          episodeNumbers = episodeNumbers,
           index = currentIndex,
           playlistId = playlistId,
           positionMs = positionMs,
@@ -625,12 +653,51 @@ class GsyPlayerActivity : ComponentActivity() {
           embyServerId = embyServerId,
           embyItemIds = embyItemIds,
           headers = headers,
+          // 切回 mpv 时把此刻的亮度交回去：那边 onStart 会按记忆重设，
+          // 但记忆里可能还没有这部片（用户从没调过），此时只有交过去的才是对的。
+          brightness = handoffBrightness
+            ?: runCatching { window.attributes.screenBrightness }.getOrNull()?.takeIf { it in 0f..1f },
         ).writeTo(this)
       }
 
     startActivity(target)
     // 立刻收摊：两套播放器同时持有解码�? / 音频焦点只会互相打架
     finish()
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // 按剧亮度
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * 套用「这部片上次的亮度」。
+   *
+   * 取值顺序：交接单带来的（切内核时最准，那是**此刻屏幕上真实的值**）>
+   * 本页 seriesKey 的记忆 > 全局默认 > 不动（保持系统亮度）。
+   *
+   * ⚠️ 只在「记忆开关打开」时用记忆值 —— 关着的时候切内核也应当保持当前亮度，
+   *   交接单那条路径是**必然**要用的（它代表用户眼睛现在看到的东西），所以两条分开判。
+   */
+  private fun applyRememberedBrightness(handoff: Float?) {
+    val remembered =
+      if (playerPreferences.rememberBrightness.get() ||
+        playerPreferences.rememberSeriesBrightness.get()
+      ) {
+        playerPreferences.brightnessFor(seriesKeys.getOrNull(currentIndex))
+      } else {
+        -1f
+      }
+    val value = remembered.takeIf { it in 0f..1f } ?: handoff ?: return
+    setScreenBrightness(value)
+    // 记录是「本集所属的剧」的，不是「上一次打开的那个」—— 切集后这个标记也该失效。
+    handoffBrightness = value
+  }
+
+  /** 真的写进 window（GSY 页没有亮度手势，只在进入/切集时用）。 */
+  private fun setScreenBrightness(value: Float) {
+    runCatching {
+      window.attributes = window.attributes.apply { screenBrightness = value.coerceIn(0f, 1f) }
+    }
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -947,6 +1014,7 @@ class GsyPlayerActivity : ComponentActivity() {
         playlist = playlist,
         titles = titles,
         seriesKeys = seriesKeys,
+        episodeNumbers = episodeNumbers,
         index = currentIndex,
         playlistId = playlistId,
         positionMs = position,
@@ -954,6 +1022,9 @@ class GsyPlayerActivity : ComponentActivity() {
         embyServerId = embyServerId,
         embyItemIds = embyItemIds,
         headers = headers,
+        // 重建是新 Activity，window 亮度会回到系统值 ⇒ 必须把当前亮度带过去
+        brightness = handoffBrightness
+          ?: runCatching { window.attributes.screenBrightness }.getOrNull()?.takeIf { it in 0f..1f },
       )
     Intent(intent).apply {
       data = currentUri
@@ -2013,6 +2084,15 @@ class GsyPlayerActivity : ComponentActivity() {
         speedScale = dmPrefs.speedScale,
         areaRatio = dmPrefs.areaRatio,
         maxOnScreen = dmPrefs.maxOnScreen,
+        preventOverlapping = dmPrefs.preventOverlapping,
+        // v117：竖屏适配 —— GSY 的 AspectTextureView 同样居中留黑边，
+        // 弹幕层按视频宽高比约束到画面矩形内（拿不到尺寸时回退全屏）。
+        videoAspectProvider = {
+          val p = activePlayer
+          val w = p?.currentVideoWidth ?: 0
+          val h = p?.currentVideoHeight ?: 0
+          if (w > 0 && h > 0) w.toFloat() / h else null
+        },
         modifier = Modifier.fillMaxSize(),
       )
     }

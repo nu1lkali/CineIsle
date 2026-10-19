@@ -423,6 +423,29 @@ data class EmbyItem(
    * 加在末尾并给默认值，不影响既有按位置构造。
    */
   val ExternalUrls: List<EmbyExternalUrl> = emptyList(),
+  /**
+   * 这一集所属的「同季兄弟集 Id 列表」（`BaseItemDto.SiblingIds`）。
+   *
+   * 只有 `Episode` 有，且**只有请求的 `Fields` 里带上 `SiblingIds` 才返回**。
+   * 用途见详情页的「相关分集」：从一部剧的某一集进详情页时，把同季其它集也列出来，
+   * 否则用户点进第 3 集就只能看到第 3 集本身（Yamby 的 `siblingEpisodes` 就是干这个的）。
+   *
+   * 它与「本剧全部分集」(`/Shows/{id}/Episodes`) 是**两个代价完全不同**的请求：
+   * 这一个随详情一起回来、零额外往返，所以从单集进详情页时优先用它。
+   * 加在末尾并给默认值，不影响既有按位置构造。
+   */
+  val SiblingIds: List<String> = emptyList(),
+  /**
+   * 这一集是不是「特别篇 / 花絮 / 幕后 / 预告」等非正片（`BaseItemDto.IsSpecialFeature`
+   * / `ExtraType`）。
+   *
+   * 详情页的「相关分集」用它把正片与特别篇**分区呈现**：混在一起会让「第 3 集、
+   * 第 4 集、幕后花絮、第 5 集」这种顺序看起来像番号错乱。
+   * 服务端不一定返回这一个字段，所以列表里**保留**它、只做分区提示，不做过滤 ——
+   * 判错时最坏情况是「本该分区的没分区」，而不是「某一集凭空消失了」。
+   */
+  val IsSpecialFeature: Boolean? = null,
+  val ExtraType: String? = null,
 )
 
 /**

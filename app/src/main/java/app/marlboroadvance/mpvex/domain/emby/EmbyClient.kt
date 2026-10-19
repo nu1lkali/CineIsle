@@ -442,8 +442,18 @@ object EmbyClient {
      * `MediaSources`、`Overview` 这些大字段去掉 —— 一页 500 条时响应体能小掉一大半。
      */
     fields: String = ITEM_FIELDS,
+    /**
+     * 按 Id 精确取条目（`Ids` 参数，逗号分隔）。
+     *
+     * 与 `Recursive` / `ParentId` 互斥的用法：`Ids` 命中即可，递归没有意义。
+     * 用途见详情页的「同季其它集」（`BaseItemDto.SiblingIds` 只有 Id、没有内容）。
+     */
+    ids: List<String>? = null,
   ): EmbyItemsResult {
     val q = LinkedHashMap<String, String?>()
+    // ⚠️ Ids 必须放在最前面并**关掉 Recursive**：Emby 在 `Ids + Recursive=true` 时
+    // 会先展开整个库再过滤，几千条库能拖到超时（第三方服务端更甚）。
+    ids?.takeIf { it.isNotEmpty() }?.let { q["Ids"] = it.joinToString(",") }
     parentId?.let { q["ParentId"] = it }
     sortBy?.let { q["SortBy"] = it }
     sortOrder?.let { q["SortOrder"] = it }
@@ -475,7 +485,9 @@ object EmbyClient {
     mediaTypes?.takeIf { it.isNotEmpty() }?.let { q["MediaTypes"] = it.joinToString(",") }
     q["StartIndex"] = startIndex.toString()
     q["Limit"] = limit.toString()
-    q["Recursive"] = recursive.toString()
+    // Ids 查询一律非递归（见上方 ids 参数的说明）
+    val byIds = ids?.takeIf { it.isNotEmpty() }
+    q["Recursive"] = if (byIds != null) "false" else recursive.toString()
     q["Fields"] = fields
     q["EnableImages"] = "true"
     q["EnableUserData"] = "true"
@@ -1137,7 +1149,10 @@ object EmbyClient {
    * 打开的是同一条链接；拿 `ProviderIds` 自己拼容易拼错（见 `EmbyDetailScreen`）。
    */
   private val ITEM_FIELDS_WITH_EXTERNAL_URLS: String =
-    "$ITEM_FIELDS_CORE,ExternalUrls"
+    // SiblingIds：单集详情页要拿「同季其它集」。它是标准 BaseItemDto 字段，
+    // 但同样不一定被老服务端认 —— 所以放在这个「失败就降级」的清单里，
+    // 而不是塞进 [ITEM_FIELDS_CORE]（那会把降级路径一起弄坏）。
+    "$ITEM_FIELDS_CORE,ExternalUrls,SiblingIds"
 
   /**
    * 拉取条目的章节表。

@@ -130,6 +130,8 @@
   <string name="pref_player_seeking_title">快进 / 快退</string>
   <string name="pref_player_close_after_eof">播放结束后关闭</string>
   <string name="pref_player_remember_brightness">记住屏幕亮度</string>
+  <string name="pref_player_remember_series_brightness">按剧记住亮度</string>
+  <string name="pref_player_remember_series_brightness_summary">每部剧恢复各自上次的亮度，而不是共用一个值</string>
   <string name="pref_player_gestures">手势</string>
   <string name="pref_player_gestures_brightness">亮度手势</string>
   <string name="pref_player_gestures_volume">音量手势</string>
@@ -145,7 +147,7 @@
   <string name="pref_player_controls_allow_gestures_in_panels">面板内允许手势</string>
   <string name="pref_player_controls_display_volume_as_percentage">音量按百分比显示</string>
   <string name="pref_player_controls_show_loading_circle">显示加载圈</string>
-  <string name="pref_player_display_show_status_bar">显示控件时同时显示系统状态栏</string>
+  <string name="pref_player_display_show_status_bar">显示控件时显示状态栏</string>
   <string name="pref_player_display_panel_opacity">面板不透明度</string>
   <string name="pref_player_display">显示</string>
   <string name="pref_gesture">手势</string>
@@ -875,6 +877,7 @@
   <string name="i18n_ack_mpv_android_summary">mpv 绑定与 libmpv 集成 —— 主播放内核。</string>
   <string name="i18n_ack_gsy_summary">第二个播放内核，以及它自带的 IJK（FFmpeg）引擎。</string>
   <string name="i18n_ack_media3_summary">AndroidX Media3 / ExoPlayer —— 视界流用的多实例播放。</string>
+  <string name="i18n_ack_danmaku_summary">弹幕渲染引擎 —— 已源码内置，并修复了滚动寿命与计时器相关问题。</string>
   <string name="i18n_ack_emby_summary">Emby 官方 Java SDK —— 客户端的接口层基于它实现。</string>
   <string name="i18n_ack_upnpcast_summary">DLNA 投屏 —— 设备发现与播放控制。</string>
   <string name="i18n_ack_aboutlibraries_summary">生成本页里的开源许可清单。</string>
@@ -958,6 +961,7 @@
   <string name="danmaku_not_matched">还没有匹配到弹幕</string>
   <string name="danmaku_matched_count">%1$s · %2$d 条</string>
   <string name="danmaku_off_hint">打开后会联网搜索并加载弹幕。弹幕来自弹幕服务器，需要网络。</string>
+  <string name="danmaku_matching">正在匹配片名并加载弹幕…</string>
   <string name="danmaku_font_size">字号</string>
   <string name="danmaku_speed">速度</string>
   <string name="danmaku_opacity">透明度</string>
@@ -967,6 +971,8 @@
   <string name="danmaku_density_normal">标准</string>
   <string name="danmaku_density_dense">密集</string>
   <string name="danmaku_block_words">屏蔽词（用逗号分隔）</string>
+  <string name="danmaku_prevent_overlapping">防止弹幕重叠</string>
+  <string name="danmaku_prevent_overlapping_summary">弹幕会追上前面一条时自动换一条轨道，而不是压在一起；关掉能多挤几条但会叠字</string>
   <string name="danmaku_auto_match">自动匹配</string>
   <string name="danmaku_auto_match_summary">按当前这一集的片名自动搜索对应弹幕</string>
   <string name="danmaku_manual_search">手动搜索</string>
@@ -974,6 +980,16 @@
   <string name="danmaku_search_action">搜索</string>
   <string name="danmaku_episode_count">共 %1$d 集</string>
   <string name="danmaku_load">加载</string>
+  <string name="danmaku_pick_episode">选集</string>
+  <string name="danmaku_select_episode">选择这一部番的一集</string>
+  <string name="danmaku_remember_selection">记住手动选择</string>
+  <string name="danmaku_remember_selection_summary">手动选过番剧后，切集沿用同一部番，不再按片名重新匹配</string>
+  <string name="danmaku_with_related">合并关联剧集弹幕</string>
+  <string name="danmaku_with_related_summary">把同一集的其它版本、SP、OVA 弹幕一并拉进来，弹幕更密；若混进其它剪辑版的时间偏差可关掉</string>
+  <string name="danmaku_time_offset">时间轴偏移</string>
+  <string name="danmaku_time_offset_hint">弹幕比画面早出现就调正、晚出现就调负。按本剧记住，换片不会串。</string>
+  <string name="danmaku_time_offset_saved">已按本剧记住这个偏移</string>
+  <string name="danmaku_time_offset_clear">跟随全局</string>
   <string name="danmaku_host">弹幕源地址</string>
   <string name="danmaku_app_id">AppId</string>
   <string name="danmaku_app_secret">应用密钥</string>

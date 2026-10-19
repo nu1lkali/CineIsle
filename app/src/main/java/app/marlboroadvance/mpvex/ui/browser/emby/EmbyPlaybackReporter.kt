@@ -252,6 +252,20 @@ object EmbyPlaybackReporter {
   const val EXTRA_MEDIA_SOURCE_NAMES = "emby_media_source_names"
 
   /**
+   * 与 [EXTRA_ITEM_IDS] **同序同长**的「原始剧目顺序号」，编码成
+   * `ParentIndexNumber*1000 + IndexNumber`（任一为空则存空串）。
+   *
+   * ⚠️ 为什么弹幕非要这个：`PlayerActivity` 传给弹幕匹配的是「播放队列下标」，
+   * 那是**队列里的第几个**，不是「第几集」。用户从第 5 集点进详情页播放时，
+   * 队列只有 1 条 ⇒ 下标 0 ⇒ 会被当成第 1 集去取弹幕。
+   * 有了这个字段，弹幕按真实集号匹配（跨季也成立：index 随 Season 累积）。
+   *
+   * 为什么不用 [EXTRA_ITEM_IDS] 反查服务端：那是异步的，而弹幕加载在切集瞬间就要用，
+   * 多一次网络往返只在换集时失败率更高，还会与「预解析直链」的路径反查打架。
+   */
+  const val EXTRA_EPISODE_NUMBERS = "emby_episode_numbers"
+
+  /**
    * 挂在 PlayerActivity 上的生命周期观察者。
    *
    * 用法：`lifecycle.addObserver(EmbyPlaybackLifecycleObserver(intent))`
@@ -286,9 +300,17 @@ internal fun Intent.putEmbyPlaybackExtras(
    * 播放页顶栏据此在片名后追加「· <版本名>」。
    */
   mediaSourceNames: List<String> = emptyList(),
+  /**
+   * 与 [itemIds] **同序同长**的「S*E*」原始序号，见 [EmbyPlaybackReporter.EXTRA_EPISODE_NUMBERS]。
+   * 非剧集（电影 / 本地文件）传空表即可 —— 播放页拿不到就退回队列下标。
+   */
+  episodeNumbers: List<String> = emptyList(),
 ) {
   putExtra(EmbyPlaybackReporter.EXTRA_SERVER_ID, server.id)
   putStringArrayListExtra(EmbyPlaybackReporter.EXTRA_ITEM_IDS, ArrayList(itemIds))
+  if (episodeNumbers.isNotEmpty()) {
+    putStringArrayListExtra(EmbyPlaybackReporter.EXTRA_EPISODE_NUMBERS, ArrayList(episodeNumbers))
+  }
   if (mediaSourceIds.isNotEmpty()) {
     putStringArrayListExtra(
       EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID,
