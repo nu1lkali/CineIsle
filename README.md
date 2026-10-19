@@ -45,10 +45,15 @@
   <a href="https://img.cdn1.vip/i/6ad5640a2a11d_1792369674.webp"><img src="https://img.cdn1.vip/i/6ad5640a2a11d_1792369674.webp" width="32.5%" alt="首页与媒体库" /></a>
   <a href="https://img.cdn1.vip/i/6ad5640acfc4c_1792369674.webp"><img src="https://img.cdn1.vip/i/6ad5640acfc4c_1792369674.webp" width="32.5%" alt="媒体库详情" /></a>
   <a href="https://img.cdn1.vip/i/6ad56404e622b_1792369668.webp"><img src="https://img.cdn1.vip/i/6ad56404e622b_1792369668.webp" width="32.5%" alt="剧集详情页" /></a>
+
 </p>
 
 <p align="center">
   <a href="https://img.cdn1.vip/i/6ad56404f41e5_1792369668.webp"><img src="https://img.cdn1.vip/i/6ad56404f41e5_1792369668.webp" width="100%" alt="mpv 内核播放页" /></a>
+</p>
+
+<p align="center">
+  <a href="https://img.cdn1.vip/i/6ad60927a712d_1792411943.webp"><img src="https://img.cdn1.vip/i/6ad60927a712d_1792411943.webp" width="100%" alt="弹幕渲染" /></a>
 </p>
 
 <p align="center">
