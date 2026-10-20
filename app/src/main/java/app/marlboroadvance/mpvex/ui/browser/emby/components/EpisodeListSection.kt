@@ -513,24 +513,44 @@ private fun EpisodeCard(
           )
         }
       }
-      val runTime = episode.runTimeLabel()
-      if (runTime != null) {
-        Spacer(modifier = Modifier.height(4.dp))
+      // ⚠️⚠️ v119：卡片高度一共三个变量，三个都要治，治漏一个就是「有的高有的矮」：
+      //   ① 标题 1 行 vs 2 行   → 上面 `heightIn(min = titleHeight)` 已治；
+      //   ② 时长行在 `RunTimeTicks` 缺失时返回 null ⇒ 整行塌掉（±20dp）；
+      //   ③ 进度条只在「看过一部分」时才存在（±9dp）。
+      // ②③ 合并进**同一行**并给它**固定高度**：缺内容时留空而不塌缩。
+      // ⚠️ 不能写成两个 `if` —— 那正是 v118 只治了 ① 之后仍然参差的原因：
+      //   卡高由「有没有内容」决定，而不是由「最高那张卡」决定。
+      //   卡宽只有 150dp，进度条挤不下一整行，所以做成 32dp 跟在时长右边。
+      val metaLineHeightSp = MaterialTheme.typography.labelSmall.let { style ->
+        if (style.lineHeight.isSpecified) style.lineHeight.value else style.fontSize.value * 1.2f
+      }
+      val metaHeight = with(LocalDensity.current) { (metaLineHeightSp * fontScale).dp }
+      Spacer(modifier = Modifier.height(4.dp))
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+          .fillMaxWidth()
+          .height(metaHeight),
+      ) {
         Text(
-          text = runTime,
+          // 没有时长就渲染空串：**位置照样占住**，卡片才不会矮一截
+          text = episode.runTimeLabel().orEmpty(),
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.weight(1f),
         )
-      }
-      if (progress != null && progress > 0f && progress < 1f) {
-        Spacer(modifier = Modifier.height(6.dp))
-        LinearProgressIndicator(
-          progress = { progress },
-          modifier = Modifier
-            .fillMaxWidth()
-            .height(3.dp)
-            .clip(RoundedCornerShape(2.dp)),
-        )
+        if (progress != null && progress > 0f && progress < 1f) {
+          LinearProgressIndicator(
+            progress = { progress },
+            modifier = Modifier
+              .padding(start = 6.dp)
+              .width(32.dp)
+              .height(3.dp)
+              .clip(RoundedCornerShape(2.dp)),
+          )
+        }
       }
     }
   }

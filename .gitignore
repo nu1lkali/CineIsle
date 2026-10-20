@@ -126,3 +126,4 @@ __pycache__/
 *.md
 app/src/_lottiefix.txt
 /logs
+/.gh
