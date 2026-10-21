@@ -181,11 +181,17 @@ fun EmbyFavoritesScreen() {
   // 影片 tab 走 [PagedList]（分页，状态本身可观察，UI 直接读 moviePage.items）；
   // 演员 / 类型 / 工作室三个 tab 一次性拉全量（收藏数量都不大），沿用同一套 list 缓存。
   // 缓存按 server.id 区分：切服务器后旧数据不会串台。
-  val actorItems = remember { mutableStateListOf<EmbyItem>() }
+  // ⚠️⚠️ 这三份列表**必须整体替换**（`value = 新 list`），不能用 mutableStateListOf
+  // 就地 clear/addAll —— 原因在下面 filteredItems 的注释里，一句话版：
+  // SnapshotStateList 的**对象实例永远不变**，拿它当 remember 的 key 等于没有 key，
+  // 内容从空变成有数据时缓存永远停在首次算出的空列表。
+  // 改成不可变 List + mutableStateOf 后，每次更新都是一个新的 List 实例
+  // （与影片 tab 的 moviePage.items、作品页的 items 同一套路）。
+  var actorItems by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
   val actorCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
-  val genreItems = remember { mutableStateListOf<EmbyItem>() }
+  var genreItems by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
   val genreCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
-  val studioItems = remember { mutableStateListOf<EmbyItem>() }
+  var studioItems by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
   val studioCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
   /** 影片 tab 的分页缓存：serverId → 已加载到的页数（0 = 没加载过） */
   val movieCache = remember { mutableStateOf<Pair<Long, Int>?>(null) }
@@ -228,6 +234,12 @@ fun EmbyFavoritesScreen() {
   // ⚠️ 不能每次重组现洗 —— 敲一个搜索字都会重组，列表会在手指底下乱跳。
   var randomSeed by rememberSaveable { mutableIntStateOf(Random.nextInt()) }
 
+  // ⚠️⚠️ `remember(items, ...)` 能成立的前提：**items 每次更新都是一个新的 List 实例**
+  // （四份数据源现在全是 `mutableStateOf<List<...>>`，见各自声明处）。
+  // 早期这三份是 mutableStateListOf —— 实例永远不变 ⇒ remember 的 key 永远不变 ⇒
+  // 缓存死在首次（空列表）那一版：一进收藏页就弹「没有匹配「」的收藏」，网格也是空的。
+  // 影片 tab 当时躲过一劫只是因为 PagedList 每次换的是新 List 实例 —— 同一个 bug 两种表现，
+  // 排查时别被「只有某个 tab 有问题」带偏。
   val filteredItems = remember(items, searchQuery) {
     items.filter {
       searchQuery.isBlank() || it.Name?.contains(searchQuery.trim(), ignoreCase = true) == true
@@ -361,21 +373,21 @@ fun EmbyFavoritesScreen() {
    * 再灌进对应的列表。抽成一个局部函数，省得三份 copy 各自漂移。
    *
    * @param cache  该 tab 的页内缓存（serverId → 名单）
-   * @param target 该 tab 的展示列表（会被清空后重填）
+   * @param target 该 tab 的展示列表赋值器（**整体替换** `xxxItems = 新 list`，
+   *               见其声明处的说明；用 lambda 是因为列表本身是 `by mutableStateOf` 委托属性）
    * @param fetch  真正发请求的挂起函数（各 tab 各自的 ViewModel 方法）
    */
   suspend fun loadAll(
     current: app.marlboroadvance.mpvex.domain.emby.EmbyServer,
     force: Boolean,
     cache: androidx.compose.runtime.MutableState<Pair<Long, List<EmbyItem>>?>,
-    target: SnapshotStateList<EmbyItem>,
+    target: (List<EmbyItem>) -> Unit,
     failureMessage: String,
     fetch: suspend () -> List<EmbyItem>,
   ) {
     val cached = cache.value
     if (!force && cached != null && cached.first == current.id) {
-      target.clear()
-      target.addAll(cached.second)
+      target(cached.second)
       return
     }
     runCatching { fetch() }
@@ -383,8 +395,7 @@ fun EmbyFavoritesScreen() {
         // 按 key 口径去重防网格崩溃（部分服务端会把同一条目返回两次）
         val deduped = list.distinctBy { it.Id ?: it.Name ?: "" }
         cache.value = current.id to deduped
-        target.clear()
-        target.addAll(deduped)
+        target(deduped)
       }
       .onFailure { error = it.message ?: failureMessage }
   }
@@ -394,7 +405,7 @@ fun EmbyFavoritesScreen() {
       current = current,
       force = force,
       cache = actorCache,
-      target = actorItems,
+      target = { actorItems = it },
       failureMessage = "加载收藏演员失败",
       fetch = { viewModel.loadFavoritePersons(current, forceRefresh = force) },
     )
@@ -404,7 +415,7 @@ fun EmbyFavoritesScreen() {
       current = current,
       force = force,
       cache = genreCache,
-      target = genreItems,
+      target = { genreItems = it },
       failureMessage = "加载收藏类型失败",
       fetch = { viewModel.loadFavoriteGenres(current, forceRefresh = force) },
     )
@@ -414,7 +425,7 @@ fun EmbyFavoritesScreen() {
       current = current,
       force = force,
       cache = studioCache,
-      target = studioItems,
+      target = { studioItems = it },
       failureMessage = "加载收藏工作室失败",
       fetch = { viewModel.loadFavoriteStudios(current, forceRefresh = force) },
     )
@@ -836,7 +847,9 @@ fun EmbyFavoritesScreen() {
         // ⚠️ 原来是 when 的一个分支、与网格互斥：敲一个字只要中间态滤出 0 条，
         // 整个 LazyVerticalGrid 就被卸载，再敲一个字又整体重建 ⇒ 卡片全部重新组合、
         // 封面全部重新加载 ⇒ 「搜索时封面闪一下」。网格常驻后只剩列表内容在变。
-        if (visibleItems.isEmpty() && items.isNotEmpty() && error == null && server != null) {
+        // ⚠️ 只在**真的敲了搜索词**时说「没有匹配」：空搜索词下滤空只能是代码 bug，
+        // 弹一句「没有匹配「」的收藏」比一片空白更让人以为自己哪里点错了（v124 真事故）。
+        if (visibleItems.isEmpty() && items.isNotEmpty() && error == null && server != null && searchQuery.isNotBlank()) {
           EmbyEmptyState(
             message = "没有匹配「${searchQuery.trim()}」的收藏",
             buttonText = "清空搜索",
