@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -22,14 +23,21 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -46,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -111,7 +120,24 @@ data class EmbyPersonScreen(
     var itemTab by rememberSaveable { mutableStateOf(PersonItemTab.ALL) }
     // 参与身份筛选：全部 / 演员 / 导演 / 编剧（按条目自带的 People 列表本地筛）
     var roleFilter by rememberSaveable { mutableStateOf(PersonRoleFilter.ALL) }
-    val visibleItems = items.filter { itemTab.matches(it) && roleFilter.matches(it, personId) }
+
+    // ── 搜索 / 排序（与收藏页同一套：纯本地，不发请求）──
+    // 本页作品是**一次性拉全**的（见 [loadPersonItems] 的翻页循环），所以本地搜索能覆盖全部作品
+    // —— 不像收藏页那样存在「只搜到已翻到的页」的问题，这里搜不到就是真没有。
+    // 用 rememberSaveable：旋转屏幕后输入框里打的字不该丢。
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    // 排序选择**落盘**：从作品页点进详情页再返回时，本页的组合状态会重建，
+    // 只放在组合里的话就被打回默认排序（收藏页的排序是同一套考虑）。
+    var sort by remember {
+      mutableStateOf(
+        PersonSort.entries.firstOrNull { it.name == browserPreferences.embyPersonSort.get() }
+          ?: PersonSort.NAME,
+      )
+    }
+    val visibleItems = items
+      .filter { itemTab.matches(it) && roleFilter.matches(it, personId) }
+      .filter { searchQuery.isBlank() || it.matchesKeyword(searchQuery.trim()) }
+      .let { sort.apply(it) }
 
     // 「参与身份」只在**确实观察到**该身份时才提供对应 chip：
     // 一个只演戏、从不导也不写的人，作品页再挂「导演 / 编剧」两个 chip，点下去永远是空 ——
@@ -373,6 +399,19 @@ data class EmbyPersonScreen(
         )
       }
 
+      // ── 搜索 + 排序 ──
+      // 与收藏页的 FavoriteSearchSortRow 同一套版式/口径：左边即时搜索、右边当前排序 + 下拉。
+      // 高产演员能有几百部作品，只能靠这两样在海里捞片。
+      PersonSearchSortRow(
+        query = searchQuery,
+        onQueryChange = { searchQuery = it },
+        sort = sort,
+        onSortChange = {
+          sort = it
+          browserPreferences.embyPersonSort.set(it.name)
+        },
+      )
+
       Box(modifier = Modifier.fillMaxSize()) {
         when {
           isLoading && items.isEmpty() -> {
@@ -391,10 +430,17 @@ data class EmbyPersonScreen(
             )
           }
 
-          // 有数据但被当前筛选条件滤空：给一句提示，别让用户以为加载失败
+          // 有数据但被当前筛选条件滤空：给一句提示，别让用户以为加载失败。
+          // 搜索词命中不到时把词说出来 —— 「没有匹配『xxx』的作品」比笼统的「没有作品」
+          // 能让人一眼看出是自己的词有问题（打错字 / 记错片名），而不是功能坏了。
           visibleItems.isEmpty() -> {
+            val keyword = searchQuery.trim()
             Text(
-              text = "这个筛选条件下没有作品",
+              text = if (keyword.isEmpty()) {
+                "这个筛选条件下没有作品"
+              } else {
+                "没有匹配「$keyword」的作品"
+              },
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               modifier = Modifier
@@ -479,6 +525,144 @@ private enum class PersonRoleFilter(val label: String, val apiType: String?) {
     val self = people.filter { it.Id == personId }
     if (self.isEmpty()) return true
     return self.any { it.Type.equals(type, ignoreCase = true) }
+  }
+}
+
+/**
+ * 作品列表的排序方式（本地排序，不发请求）。
+ *
+ * 与收藏页的 `FavoriteSort` 同一套口径：选「名称」时用 [EmbyItem.SortName]（Emby 内部的
+ * 排序名，已剥离 "The/A" 这类前缀）而不是 Name —— 服务端返回的顺序本来就是按 SortName 排的，
+ * 本地沿用同一个键才不会「切一下排序突然乱序」。
+ */
+private enum class PersonSort(
+  val label: String,
+  /** 排序方向提示：菜单里作为副标题显示，避免「勾了但不知道是升还是降」 */
+  val hint: String,
+) {
+  NAME("名称", "A → Z"),
+  YEAR("年份", "新 → 旧"),
+  RATING("评分", "高 → 低"),
+  ADDED("最新添加", "新 → 旧"),
+  ;
+
+  fun apply(list: List<EmbyItem>): List<EmbyItem> = when (this) {
+    NAME -> list.sortedBy { (it.SortName ?: it.Name ?: "").lowercase() }
+    YEAR -> list.sortedByDescending { it.ProductionYear ?: 0 }
+    RATING -> list.sortedByDescending { it.CommunityRating ?: 0.0 }
+    // DateCreated 是 ISO-8601 串，字典序即时间序（同格式下成立）
+    ADDED -> list.sortedByDescending { it.DateCreated ?: "" }
+  }
+}
+
+/**
+ * 搜索关键字匹配：**片名 + 原名**。
+ *
+ * 带上原名是为了「用英文原名搜中文标题」（或反过来）—— 库里标题和原名常常是两个语言，
+ * 只匹配其中一个会让人以为搜索坏了。
+ */
+private fun EmbyItem.matchesKeyword(keyword: String): Boolean =
+  Name?.contains(keyword, ignoreCase = true) == true ||
+    OriginalTitle?.contains(keyword, ignoreCase = true) == true
+
+/**
+ * 作品列表顶部的「搜索框 + 排序」一行（与收藏页的 `FavoriteSearchSortRow` 同款版式）。
+ *
+ * 搜索与排序都是**纯本地、不打服务器**：本页作品是一次性拉全的，过滤 / 重排零成本，
+ * 敲一个字就重算一次也不会有网络开销。高产演员几百部作品时，这两样是唯一的捞片手段。
+ */
+@Composable
+private fun PersonSearchSortRow(
+  query: String,
+  onQueryChange: (String) -> Unit,
+  sort: PersonSort,
+  onSortChange: (PersonSort) -> Unit,
+) {
+  var sortMenu by remember { mutableStateOf(false) }
+  val focusManager = LocalFocusManager.current
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(horizontal = 16.dp, vertical = 8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    OutlinedTextField(
+      value = query,
+      onValueChange = onQueryChange,
+      modifier = Modifier.weight(1f),
+      singleLine = true,
+      shape = MaterialTheme.shapes.large,
+      placeholder = { Text("搜索作品") },
+      leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+      trailingIcon = {
+        if (query.isNotEmpty()) {
+          IconButton(onClick = { onQueryChange("") }) {
+            Icon(Icons.Default.Clear, contentDescription = "清空搜索")
+          }
+        }
+      },
+    )
+    Spacer(modifier = Modifier.width(8.dp))
+    Box {
+      // 触发区直接标出「当前按什么排序」，不用点开就知道现在排的是什么
+      Surface(
+        modifier = Modifier.clickable {
+          // ⚠️ 展开前先收掉输入框焦点：搜索态下焦点还在输入框上，菜单关闭时会把焦点
+          // 「还」给它，于是每切一次排序就弹一次软键盘。焦点提前清掉后就没得可还。
+          focusManager.clearFocus()
+          sortMenu = true
+        },
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Sort,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(text = sort.label, style = MaterialTheme.typography.labelLarge)
+          Icon(
+            imageVector = Icons.Default.ArrowDropDown,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+      DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+        PersonSort.entries.forEach { option ->
+          val selected = option == sort
+          DropdownMenuItem(
+            text = {
+              Column {
+                Text(
+                  text = option.label,
+                  color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.onSurface
+                  },
+                )
+                // 方向副标题：让「名称 / 年份 / 评分」到底怎么排一目了然
+                Text(
+                  text = option.hint,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.outline,
+                )
+              }
+            },
+            onClick = {
+              sortMenu = false
+              onSortChange(option)
+            },
+          )
+        }
+      }
+    }
   }
 }
 

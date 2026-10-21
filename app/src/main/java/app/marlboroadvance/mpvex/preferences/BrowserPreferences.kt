@@ -270,6 +270,15 @@ class BrowserPreferences(
   val embyFavoritesSort = preferenceStore.getString("emby_favorites_sort", "")
 
   /**
+   * 演员 / 导演作品页的排序方式（存枚举名，空串 = 默认「名称」）。
+   *
+   * 与 [embyFavoritesSort] 同一套语义：作品是一次性拉全后本地排序，切换即时生效、不发请求。
+   * 落盘的原因也一样 —— 从作品页点进详情页再返回，这一屏的组合状态会重建，
+   * 只放在 `remember` 里会被打回默认排序。
+   */
+  val embyPersonSort = preferenceStore.getString("emby_person_sort", "")
+
+  /**
    * 「预解析直链（302）」开关。
    *
    * 打开后，播放前先把 `/Videos/{id}/stream` 背后跳转到的真实直链取出来再交给播放器。
