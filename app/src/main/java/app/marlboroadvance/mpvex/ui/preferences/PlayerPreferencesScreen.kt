@@ -828,7 +828,7 @@ object PlayerPreferencesScreen : Screen {
 
               PreferenceDivider()
 
-              // ⭐ 快进/快退时长：带刻度的滑块（见 TickedSlider）。
+              // 快进/快退时长：带刻度的滑块（见 TickedSlider）。
               // 用自绘滑块而不是 SliderPreference，是因为 Material 那个没有刻度 ——
               // 1~300 秒这个跨度，用户需要一眼看出自己大概在哪个量级。
               val seekForward by preferences.seekForwardSeconds.collectAsState()

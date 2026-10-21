@@ -161,7 +161,7 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
   /**
    * **已被证伪**的签名（key = 相对路径，与 [signCache] 同口径；value = 失败过的那个签名）。
    *
-   * ⭐⭐ 这一张小表是「**点重载刷不出来、下拉刷新却能刷出来**」的根因解药，
+   * ⭐ 这一张小表是「**点重载刷不出来、下拉刷新却能刷出来**」的根因解药，
    *     删掉它这个 bug 立刻回来。完整推导见 [getFileStream] 的 KDoc，这里只说结论：
    *
    * 签名会过期。过期后 `/d/?sign=` 就是 401，取流只能靠 `fs/get` 兜底 ——
@@ -186,7 +186,7 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
   /**
    * 记一笔签名（空值不记）。写缓存顺手做容量保护：超限直接清空，见 [SIGN_CACHE_CAP]。
    *
-   * ⭐ **来了一个新签名，就把这个路径的「已证伪」记录作废**（[failedSigns]）——
+   * **来了一个新签名，就把这个路径的「已证伪」记录作废**（[failedSigns]）——
    *    这是整条链能自愈的关键：`fs/get` 换到新签名 ⇒ 记录清掉 ⇒
    *    下一次取流第 ① 级就能用新签名直连，不必再走一趟 `fs/get`。
    *    （`fs/list` 刷新列表时同理，一批新签名让整张表全部复位。）
@@ -438,7 +438,6 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     }
 
   // ── 写操作（AList 官方 API） ──
-  //
   // 契约实证自 `D:\project\AlistClientN` 的请求实体：
   //   `lib/entity/file_remove_req.dart`  → {dir, names[]}
   //   `lib/entity/file_rename_req.dart`  → {path, name}

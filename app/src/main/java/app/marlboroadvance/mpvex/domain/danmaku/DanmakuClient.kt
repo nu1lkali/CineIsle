@@ -133,7 +133,7 @@ object DanmakuClient {
   /**
    * 搜番。
    *
-   * ⚠️⚠️ **官方端点的参数名是 `keyword`，不是 `anime`**（v100 真机修复的核心）。
+   * ⚠️ **官方端点的参数名是 `keyword`，不是 `anime`**。
    * 传 `anime=` 服务端不会报参数缺失，而是回一个 **HTTP 200 + `success:false`**：
    *
    * ```

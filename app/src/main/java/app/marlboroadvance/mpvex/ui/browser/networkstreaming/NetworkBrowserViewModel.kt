@@ -65,13 +65,13 @@ class NetworkBrowserViewModel(
   /**
    * 目录滚动位置记忆：key = `"$connectionId|$path"`，value = `firstVisibleItemIndex`。
    *
-   * ⭐ 为什么需要它：从照片查看器 / 播放器返回到浏览页时，滚动位置**不可靠**。
+   * 为什么需要它：从照片查看器 / 播放器返回到浏览页时，滚动位置**不可靠**。
    *    `rememberLazyGridState()` 靠 `LazyGridState.Saver` 由导航框架的
    *    `SaveableStateHolder` 保存恢复，而那条链有几个已知不稳的点：
    *    ① 恢复发生在**条目还没组合出来**的时刻（`loadFiles` 是异步的），
    *       LazyGrid 在 `totalItemsCount == 0` 时把索引 clamp 成 0，等数据到位也回不去了；
    *    ② 多个浏览页 entry 的 saved state 可能串键，表现就是「换个文件夹回来位置是上一个的」。
-   *    实测两种症状都出现过：有时停在中间，有时直接回顶端。
+   *    两种症状都出现过：有时停在中间，有时直接回顶端。
    *
    *    所以在 UI 侧**等条目落位后再显式 `scrollToItem`** 一次，位置才可预期。
    *
@@ -89,10 +89,10 @@ class NetworkBrowserViewModel(
   /**
    * 「用户动过排序」的单调计数，每次有效排序操作 +1。
    *
-   * ⭐ 为什么不能只让 UI 观察 [sortType] / [sortOrder]：**重复点「随机」时这两个值都不变**
+   * 为什么不能只让 UI 观察 [sortType] / [sortOrder]：**重复点「随机」时这两个值都不变**
    *    （`setSortType` 只换 [randomSeed] 就 return），而列表确实重排了 ——
    *    UI 用值变化做回顶的触发条件，这一种就永远不触发，用户停在原来那一段，
-   *    「换了一批」完全看不出来（用户实测反馈）。
+   *    「换了一批」完全看不出来（反馈）。
    * 用一个专门的计数器当「动作发生了」的信号，与值是否变化解耦。
    * 下拉刷新 / 翻页 / 换目录都不碰它，所以不会误抢滚动位置。
    */
@@ -126,10 +126,10 @@ class NetworkBrowserViewModel(
   /**
    * 已经被 UI「消费」过的 [sortChangeTick] —— UI 拿它防止回顶误触发。
    *
-   * ⭐ 没有它会出一个隐蔽的回归：`LaunchedEffect(sortChangeTick)` 在**每次全新组合时
+   * 没有它会出一个隐蔽的回归：`LaunchedEffect(sortChangeTick)` 在**每次全新组合时
    *    都会启动一次**（键不变也启动，这就是 LaunchedEffect 的语义）。而 nav3 只组合
    *    栈顶 entry —— 从照片查看器/播放器返回时浏览页是**重新组合**的，这个 effect
-   *    立刻 `scrollToItem(0)`，用户就被弹回顶端（用户实测：返回后停顶端）。
+   *    立刻 `scrollToItem(0)`，用户就被弹回顶端（用户返回后停顶端）。
    *    加上「消费位」后：只有 tick 真的比上次消费的值大（用户刚动过排序）才回顶。
    */
   private val _consumedSortTick = MutableStateFlow(0)
@@ -289,9 +289,9 @@ class NetworkBrowserViewModel(
         }
         if (listedOk) {
           // 3) 列**成功**才写持久缓存（含「确实没图片」的负缓存）。
-          //    ⚠️⚠️ 失败绝不能写：原来这里用 `listFiles(...).getOrNull()`，失败被吞成 null，
+          //    ⚠️ 失败绝不能写：原来这里用 `listFiles(...).getOrNull()`，失败被吞成 null，
           //    等于把「这次没列成」记成「这个文件夹没有图片」并落盘 30 天 ——
-          //    网络抖一下，这个文件夹的封面在**整个 TTL 内**都不再加载（用户反馈的
+          //    网络抖一下，这个文件夹的封面在**整个 TTL 内**都不再加载（
           //    「图片文件夹没封面、点进去却有图」就是这么来的）。
           repository.putFolderCover(connectionId, folderPath, cover)
           _folderCovers.update { it + (folderPath to cover) }
@@ -415,7 +415,7 @@ class NetworkBrowserViewModel(
             if (invalidateCovers) {
               val subFolders = fileList.filter { it.isDirectory }.map { it.path }
               // 已拿到结果的 + 上次列失败的，两类都要重取 —— 漏掉后面那类的话，
-              // 「网络抖一下没加载出来」的封面下拉刷新也救不回来（用户反馈的正是这个）。
+              // 「网络抖一下没加载出来」的封面下拉刷新也救不回来（正是这个）。
               val seenFolders = (_folderCovers.value.keys + coverFailures.keys).toList()
               _folderCovers.update { it - subFolders.toSet() }
               // 刷新 = 用户明确要求重来 ⇒ 失败计数一并清零，重试预算重新给满
@@ -665,8 +665,8 @@ private fun Preference<Int>.randomPlayLimit(): Int = get().coerceIn(1, 500)
  * 同键时按名称**自然序**兜底：排序结果稳定可预期（基准序本身就是名称序，
  * 加了兜底即使基准序变了同键项也仍然 A-Z）。
  *
- * ⚠️ **名称键必须走自然序，不能 `compareBy { it.name.lowercase() }`**（v79 之前就是那么写的，
- *    用户实测「排序不生效」）：纯字典序把数字段**按字符**比 ⇒
+ * ⚠️ **名称键必须走自然序，不能 `compareBy { it.name.lowercase() }`**（此前就是那么写的，
+ *    用户「排序不生效」）：纯字典序把数字段**按字符**比 ⇒
  *    `e1018 < e1019 < e102 < e1020 < e1021`（'1' 后面那个 '0' 比 '2' 小），
  *    而人要的是 `e102 < e1018 < e1019 < e1020 < e1021`。
  *    这类 `e0xx` / `Ep 2 vs Ep 10` 的命名在媒体库里极常见，本地文件夹、本地视频、
@@ -676,7 +676,7 @@ private fun Preference<Int>.randomPlayLimit(): Int = get().coerceIn(1, 500)
 private fun networkFileComparator(type: NetworkSortType, order: SortOrder): Comparator<NetworkFile> {
   val foldersFirst = compareBy<NetworkFile> { !it.isDirectory }
   val key: Comparator<NetworkFile> = when (type) {
-    // ⭐ 自然序：把连续数字段按数值比（e102 < e1018）。大小写不敏感 + 跳过空白，
+    // 自然序：把连续数字段按数值比（e102 < e1018）。大小写不敏感 + 跳过空白，
     //    与本地文件夹 / 文件选择器同一份 DEFAULT 实例、同一口径。
     NetworkSortType.Name -> compareBy(SortUtils.NaturalOrderComparator.DEFAULT) { it.name }
     NetworkSortType.Date -> compareBy { it.lastModified }

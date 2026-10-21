@@ -115,7 +115,7 @@ object AppIconManager {
   /**
    * MainActivity 的真实类对象。
    *
-   * ⭐ 用 `MainActivity::class.java` 拿**运行期真实全限定名**，而不是手写字符串 ——
+   * 用 `MainActivity::class.java` 拿**运行期真实全限定名**，而不是手写字符串 ——
    * 这样 manifest 里的包前缀（由 namespace 决定）怎么变都不用改代码。
    */
   private val mainActivityClass: Class<*> get() = MainActivity::class.java
@@ -129,7 +129,7 @@ object AppIconManager {
   /**
    * 自检：清单里真的有这些 alias 吗？
    *
-   * ⚠️ 这一段专门为了防「本轮这个 bug」再犯：`setComponentEnabledSetting` 对
+   * ⚠️ 这一段专门为了防「本次这个 bug」再犯：`setComponentEnabledSetting` 对
    * **不存在**的组件既不抛异常也不生效，所以写错名字时唯一的症状就是
    * 「点了没反应」。这里在真正切换前先查一遍 `PackageManager.getActivityInfo`，
    * 查不到就当作切换失败返回 false（调用方会提示用户），而不是静默吞掉。

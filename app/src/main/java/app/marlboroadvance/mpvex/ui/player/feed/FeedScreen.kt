@@ -122,7 +122,6 @@ internal fun FeedScreen(
     // 注：单击 / 双击的点击层**不在这里** —— 它挪进了 VerticalPager 的每一页内部
     // （见 VerticalFeedActivity.FeedVideoPage）。原因也写在那里：一层盖住全屏的
     // 兄弟节点会把 Pager 的触摸全部拦掉，而翻页必须由 Pager 原生滚动来完成。
-    //
     // 本层剩下的都是「边缘控件」：顶栏、右侧工具栏、底部进度条。它们各自只在自己
     // 的尺寸范围内拦截触摸，中间那一大片画面仍然完整地留给 Pager。
 

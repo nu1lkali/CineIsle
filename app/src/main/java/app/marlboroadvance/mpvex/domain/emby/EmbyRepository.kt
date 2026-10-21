@@ -556,7 +556,6 @@ class EmbyRepository(
   }
 
   // ─── 相似推荐 / 即混 / 续播 ───
-  //
   // 服务端算法那三套（`/Items/{Id}/Similar` / `/Items/{Id}/InstantMix` / `/Shows/NextUp`）
   // 与本地算法（`LocalSimilarity`）由 `SimilarAlgorithm` 偏好二选一，
   // 详见 `EmbyClient` 2.5 节的说明。
@@ -595,7 +594,6 @@ class EmbyRepository(
   }
 
   // ─── 合集（BoxSet）───
-  //
   // ⚠️ REST 路径是 `/Collections` 不是 `/BoxSets`（那是 Jellyfin 的命名），
   // 且参数名一律 `Ids`（只有 Playlist 增删用 `EntryIds`）。详见 [EmbyClient] 5.7 节。
 
@@ -646,7 +644,6 @@ class EmbyRepository(
   }
 
   // ─── 显示偏好（DisplayPreferences）───
-  //
   // ⚠️ 粒度是「每个媒体库一份」而不是「每个用户一份」，且写操作是**整体覆盖**。
   // 详见 [EmbyClient] 5.8 节与 [EmbyDisplayPrefsCodec]。
 
@@ -704,7 +701,6 @@ class EmbyRepository(
     }
 
   // ─── 播放列表（Emby 服务端）───
-  //
   // ⚠️ 与本地播放列表（Room `PlaylistRepository`）是两套完全独立的东西，
   // 详见 [EmbyClient] 里 5.5 节的说明。
 

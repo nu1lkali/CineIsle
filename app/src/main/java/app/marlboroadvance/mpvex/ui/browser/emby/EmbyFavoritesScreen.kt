@@ -97,14 +97,8 @@ import kotlin.random.Random
 import org.koin.compose.koinInject
 
 /**
- * 收藏页的内容类型。
- *
- *  · 影片 = 收藏的媒体（Movie/Series/…，可播放）；
- *  · 演员 = 收藏的演员（Person）；
- *  · 类型 = 收藏的类型（Genre）；
- *  · 工作室 = 收藏的工作室（Studio）。
- *
- * 后两者是「点进去看这个类型 / 工作室下有哪些作品」的入口，本身不可播放。
+ * 收藏页的内容类型。影片可播放；演员 / 类型 / 工作室是「点进去看作品清单」的入口，
+ * 本身不可播放。
  */
 private enum class FavoriteTab(val label: String) {
   MOVIE("影片"),
@@ -113,34 +107,26 @@ private enum class FavoriteTab(val label: String) {
   STUDIO("工作室"),
   ;
 
-  /** 是否为「点进去看作品清单」的聚合 tab（演员 / 类型 / 工作室）。 */
+  /** 是否为聚合 tab（演员 / 类型 / 工作室），即条目本身不可播放。 */
   val isAggregate: Boolean get() = this != MOVIE
 }
 
-/** 收藏影片一页拉多少条（清单 1.1：原来是固定 200 条一次性拉完） */
+/** 收藏影片每页条数。 */
 private const val MOVIE_PAGE_SIZE = 100
 
 /**
  * 搜索时最多自动往后补拉几页。
  *
- * 本地过滤只能看见已加载的页，不补拉就会「搜不到后面才出现的片名」；
- * 但收藏几千部时全翻完又太费流量，所以设个上限（10 页 ≈ 1000 项），
- * 剩下的仍然可以正常滚动到底加载。
+ * 本地过滤只能看见已加载的页，不补拉就搜不到后面才出现的片名；但收藏几千部时全翻完
+ * 太费流量，故设上限（10 页 ≈ 1000 项），更多内容仍可正常滚动到底加载。
  */
 private const val SEARCH_AUTOFILL_MAX_PAGES = 10
 
 /**
  * Emby 收藏页：展示服务器上标记为收藏的媒体、演员、类型与工作室。
  *
- * 标题右侧有「影片 / 演员 / 类型 / 工作室」下拉切换（默认影片）：
- *  · 影片 → 单击进媒体详情页（原有逻辑）；
- *  · 演员 → 单击进该演员的作品清单页（EmbyPersonScreen）；
- *  · 类型 / 工作室 → 单击进该类型 / 工作室下的作品清单页（EmbyTagItemsScreen）。
- *
- * 各 tab 的列表各自缓存一份，来回切换不重复发请求；
- * 顶栏刷新按钮只重拉当前 tab（并作废其缓存）。
- *
- * 交互与首页一致：**单击播放 / 看详情，长按查看详情**。
+ * 标题右侧下拉切换 tab（默认影片），各 tab 列表各自缓存一份，来回切换不重复发请求；
+ * 顶栏刷新按钮只重拉当前 tab 并作废其缓存。交互与首页一致：单击进详情 / 作品清单，长按多选。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -153,22 +139,12 @@ fun EmbyFavoritesScreen() {
   val server by viewModel.currentServer.collectAsState()
   val scope = rememberCoroutineScope()
 
-  // 当前选中的类型：初始值从偏好里恢复（默认「影片」）。
-  // **必须落盘**：从收藏页点进演员作品页再返回时整屏会重建，
-  // 只放 remember 的话 tab 就被打回「影片」，用户还得再点一次。
-  //
-  // ⚠️ 这里用「偏好落盘」而不是 `rememberSaveable`，因为它要跨的场景更远：
-  // 落盘防的是**冷启动 / 杀进程后重进**（用户明天再打开还要看到自己选的「演员」tab），
-  // 而 `rememberSaveable` 只防**旋转**（同一次 alive 期内）。两者互补，不是替代关系 ——
-  // 真要防旋转还得再加一层 saveable，但那就成了双写同一个状态，
-  // 出现「偏好与 saveable 不一致」时反而更难排查。现状（只落盘）是可接受的：
-  // 旋转丢失 tab 的代价，远小于杀进程丢失。
+  // 当前 tab 落盘到偏好而非 rememberSaveable：需要跨冷启动恢复（重启后还停在上次选的 tab），
+  // 而 saveable 只防旋转。两者同时维护会双写同一状态，出现不一致时更难排查。
   val browserPreferences = koinInject<BrowserPreferences>()
-  // 每行个数跟随媒体库的设置（同一个 `embyLibraryGridColumns`，2~6）——
-  // 此前这里写死 3 列，用户在媒体库把每行调到 5 之后进收藏页会突然变回 3 列。
+  // 每行个数跟随媒体库设置，避免两页栏数不一致
   val gridColumns by browserPreferences.embyLibraryGridColumns.collectAsState()
-  // 底栏高度由 MainScreen 下发（本页是 tab 之一，一定会被 Provide）；
-  // +16 是与原 96dp 等值的呼吸空间，底栏高度若变则自动跟随。
+  // 底栏高度由宿主下发；+16 为呼吸空间
   val favoritesBottomPadding = LocalNavigationBarHeight.current + 16.dp
   var tab by remember {
     mutableStateOf(
@@ -178,33 +154,21 @@ fun EmbyFavoritesScreen() {
   }
 
   // ── 各 tab 各自的数据 ──
-  // 影片 tab 走 [PagedList]（分页，状态本身可观察，UI 直接读 moviePage.items）；
-  // 演员 / 类型 / 工作室三个 tab 一次性拉全量（收藏数量都不大），沿用同一套 list 缓存。
-  // 缓存按 server.id 区分：切服务器后旧数据不会串台。
-  // ⚠️⚠️ 这三份列表**必须整体替换**（`value = 新 list`），不能用 mutableStateListOf
-  // 就地 clear/addAll —— 原因在下面 filteredItems 的注释里，一句话版：
-  // SnapshotStateList 的**对象实例永远不变**，拿它当 remember 的 key 等于没有 key，
-  // 内容从空变成有数据时缓存永远停在首次算出的空列表。
-  // 改成不可变 List + mutableStateOf 后，每次更新都是一个新的 List 实例
-  // （与影片 tab 的 moviePage.items、作品页的 items 同一套路）。
+  // 影片走 [PagedList]（分页）；其余三个 tab 一次拉全量，沿用同一套 list 缓存，按 server.id 区分。
+  // ⚠️⚠️ 这三份列表必须整体替换（`value = 新 list`），不能用 mutableStateListOf 就地改 ——
+  // 原因见下方 filteredItems 处：SnapshotStateList 实例永远不变，当 remember 的 key 等于没有 key。
   var actorItems by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
   val actorCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
   var genreItems by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
   val genreCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
   var studioItems by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
   val studioCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
-  /** 影片 tab 的分页缓存：serverId → 已加载到的页数（0 = 没加载过） */
+  /** 影片 tab 的分页缓存：serverId → 已加载页数（0 = 没加载过） */
   val movieCache = remember { mutableStateOf<Pair<Long, Int>?>(null) }
   var isLoading by remember { mutableStateOf(true) }
   var error by remember { mutableStateOf<String?>(null) }
 
-  /**
-   * 收藏影片的分页状态（对应清单 1.1）。
-   *
-   * 原来是 `loadFavorites(current, 0, 200)` 一次拉 200 条塞进内存，
-   * 收藏过千部的库会明显卡顿，且**剩下的永远看不到**。
-   * 现在按 [MOVIE_PAGE_SIZE] 分页、滚到底自动续拉。
-   */
+  /** 收藏影片的分页状态，滚到底自动续拉。 */
   val moviePage = remember { PagedList<EmbyItem>(MOVIE_PAGE_SIZE, keyOf = { it.Id ?: it.Name ?: "" }) }
 
   /** 展示列表 = 当前 tab 对应的那一份 */
@@ -216,10 +180,8 @@ fun EmbyFavoritesScreen() {
   }
 
   // ── 搜索 / 排序 ──
-  // 过滤与排序都在**已加载的页**上做：即时、不发请求。
-  // ⚠️ 分页后本地搜索只能搜到「已经翻到的那些」—— 所以下面 [searchQuery] 变化时
-  // 会自动往后补拉（有上限，见 SEARCH_AUTOFILL_MAX_PAGES），否则用户搜一个只存在于
-  // 第 5 页的片名会得到「无匹配」，比原来全量时代更让人困惑。
+  // 过滤与排序都在已加载的页上做，即时且不发请求。分页后本地搜索只覆盖已翻到的页，
+  // 故 searchQuery 变化时会自动补拉（有上限，见 SEARCH_AUTOFILL_MAX_PAGES）。
   var searchQuery by rememberSaveable { mutableStateOf("") }
   var sort by remember {
     mutableStateOf(
@@ -227,19 +189,15 @@ fun EmbyFavoritesScreen() {
         ?: FavoriteSort.NAME,
     )
   }
-  // 方向（true = 升序）同样落盘：只存排序项的话，从详情页返回后方向会被打回默认，
-  // 同一屏上「名称 ↓」悄悄变「名称 ↑」比整体重置更让人困惑。
+  // 方向同样落盘：只存排序项的话，返回页面后方向会被打回默认，比整体重置更让人困惑
   var sortAsc by remember { mutableStateOf(browserPreferences.embyFavoritesSortAsc.get()) }
-  // 随机排序的种子：只在「切到随机 / 再点一次随机」时变。
-  // ⚠️ 不能每次重组现洗 —— 敲一个搜索字都会重组，列表会在手指底下乱跳。
+  // 随机种子只在「切到随机 / 再点一次随机」时变
+  // ⚠️ 不能每次重组现洗 —— 敲一个搜索字都会重组，列表会在手指底下乱跳
   var randomSeed by rememberSaveable { mutableIntStateOf(Random.nextInt()) }
 
-  // ⚠️⚠️ `remember(items, ...)` 能成立的前提：**items 每次更新都是一个新的 List 实例**
-  // （四份数据源现在全是 `mutableStateOf<List<...>>`，见各自声明处）。
-  // 早期这三份是 mutableStateListOf —— 实例永远不变 ⇒ remember 的 key 永远不变 ⇒
-  // 缓存死在首次（空列表）那一版：一进收藏页就弹「没有匹配「」的收藏」，网格也是空的。
-  // 影片 tab 当时躲过一劫只是因为 PagedList 每次换的是新 List 实例 —— 同一个 bug 两种表现，
-  // 排查时别被「只有某个 tab 有问题」带偏。
+  // ⚠️⚠️ `remember(items, ...)` 成立的前提是 items 每次更新都为新的 List 实例。
+  // 若用 mutableStateListOf，实例不变 ⇒ key 不变 ⇒ 缓存死在首次（空列表）那一版，
+  // 表现为一进页面就弹「没有匹配「」的收藏」且网格空白。
   val filteredItems = remember(items, searchQuery) {
     items.filter {
       searchQuery.isBlank() || it.Name?.contains(searchQuery.trim(), ignoreCase = true) == true
@@ -249,16 +207,12 @@ fun EmbyFavoritesScreen() {
     sort.apply(filteredItems, sortAsc, randomSeed)
   }
 
-  // 「排序一变就回顶」放在 gridState 声明之后（见下方）
-
   // ── 多选模式（批量操作）──
   // 长按任意卡片进入；选中集合存条目 Id；退出时清空。
-  // ⚠️ selectionMode 与 selectedIds **必须一起改成 saveable**：
-  // 只改开关不改集合的话，旋转后会停在「已进入多选但一条没选」的自相矛盾状态，
-  // 底部批量按钮亮着却点什么都没反应，比直接退出多选更让人懵。
+  // ⚠️ selectionMode 与 selectedIds 必须一起 saveable：只改开关不改集合，
+  // 旋转后会停在「已进入多选但一条没选」的矛盾状态。
   var selectionMode by rememberSaveable { mutableStateOf(false) }
-  // SnapshotStateList 不能直接交给 rememberSaveable（它没有默认 Saver），
-  // 用 listSaver 包一层：存成 List<String>，恢复时重建 snapshot list。
+  // SnapshotStateList 没有默认 Saver，用 listSaver 存成 List<String>，恢复时重建
   val selectedIds = rememberSaveable(
     saver = listSaver<SnapshotStateList<String>, String>(
       save = { it.toList() },
@@ -269,43 +223,35 @@ fun EmbyFavoritesScreen() {
       },
     ),
   ) { mutableStateListOf<String>() }
-  // 批量动作完成后的结果提示 + **一次性撤销**入口：Snackbar 上的「撤销」把刚做的动作
-  // 用反向动作跑一遍（取消收藏 → 收藏回去、标为未看 → 标为已看…）。只保留最近一次。
+  // 批量动作的结果提示 + 一次性撤销入口（只保留最近一次）
   val snackbarHostState = remember { SnackbarHostState() }
-  // 错误点（防误触）：点底部按钮先只记下意图，弹窗确认之后才真正执行。
+  // 防误触：底部按钮只记意图，弹窗确认后才执行
   var pendingBatch by remember { mutableStateOf<BatchAction?>(null) }
-  // 批量下载走的是与详情页同一个下载管理器（持久化在 manager 里，任务队列共享）
+  // 与详情页共用同一个下载管理器（任务队列共享）
   val downloadViewModel: EmbyDownloadViewModel = viewModel(
     factory = EmbyDownloadViewModel.factory(context.applicationContext as Application),
   )
 
-  // 进多选就把外层底部导航栏收起来 —— 本页的批量操作条画在屏幕最底部，
-  // 而宿主 MainScreen 的内容是**全屏铺**的（导航栏浮在内容之上、没让出高度），
-  // 不收起来这条就会被导航栏整条盖住，用户根本看不到按钮（用户报障）。
-  // 与「本地」文件浏览页多选时的做法一致（见 FileSystemBrowserScreen）。
+  // 进多选就收起外层底部导航栏：本页批量条画在屏幕最底部，而宿主内容全屏铺、
+  // 导航栏浮在其上，不收起来按钮会被整条盖住。
   DisposableEffect(selectionMode) {
     app.marlboroadvance.mpvex.ui.browser.MainScreen.updateBottomBarVisibility(!selectionMode)
     onDispose {
       // key 变化时 onDispose 先跑、之后才执行上面那行，两次写入语义一致；
-      // 离开页面（多选还没退）时则由这里负责恢复。
+      // 离开页面时则由这里恢复。
       app.marlboroadvance.mpvex.ui.browser.MainScreen.updateBottomBarVisibility(true)
     }
   }
 
-  // 多选态下系统返回（含边缘滑动）**先退多选**，别直接退页面。
-  // 顶部那个 ✕ 走的是同一件事；导航栏这时已被收起，不给返回键兜住的话
-  // 用户按一下返回就直接退出 App（比看不到按钮更糟）。enabled = selectionMode
-  // ⇒ 非多选态完全不拦截，交给宿主正常出栈。
+  // 多选态下系统返回先退多选，避免一按返回就直接退出 App；
+  // enabled ⇒ 非多选态完全不拦截，交给宿主正常出栈。
   BackHandler(enabled = selectionMode) {
     selectionMode = false
     selectedIds.clear()
   }
 
   /**
-   * 切换某条的选中态。
-   *
-   * 首次调用（还没进多选模式）会顺带进入多选并把这一条选上 —— 这样「长按 → 直接多选」
-   * 一步到位，不用先点一个「多选」按钮再点卡片。
+   * 切换某条的选中态。首次调用会顺带进入多选模式，实现「长按 → 直接多选」。
    */
   fun toggleSelection(id: String?) {
     if (id == null) return
@@ -319,14 +265,13 @@ fun EmbyFavoritesScreen() {
   /**
    * 收藏影片的分页加载器（首屏 / 续拉共用，区别只在起始下标）。
    *
-   * 写成显式 `suspend (Int, Int) -> PagedResult<EmbyItem>?` 而不是靠推导 ——
-   * 推导出来的类型里 `loadFavorites` 不带 suspend，编译器会拒这个调用。
+   * 必须显式标注 `suspend (Int, Int) -> PagedResult<EmbyItem>?`：靠推导得到的类型里
+   * `loadFavorites` 不带 suspend，编译器会拒绝该调用。
    */
   fun moviePageLoader(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer):
     suspend (Int, Int) -> PagedResult<EmbyItem>? = { start, limit ->
     val page = viewModel.loadFavorites(current, start, limit)
-    // 网格 key = Id ?: Name：服务端把同一条目返回两次时（SmartStrm 实测有此问题），
-    // 重复 key 会直接撞崩 LazyVerticalGrid，这里按同一口径去重。
+    // 网格 key = Id ?: Name：服务端可能重复返回同一条目，重复 key 会撞崩 LazyVerticalGrid
     PagedResult(
       items = page.items.distinctBy { it.Id ?: it.Name ?: "" },
       totalCount = page.totalCount,
@@ -335,7 +280,7 @@ fun EmbyFavoritesScreen() {
   }
 
   suspend fun loadMovies(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer, force: Boolean) {
-    // 缓存命中：只在这个服务器已经拉过至少一页时才跳过请求（切 tab 回来不再发一次）
+    // 只有本服务器已拉过至少一页才跳过请求（切 tab 回来不再发一次）
     val cached = movieCache.value
     if (!force && cached != null && cached.first == current.id && moviePage.items.isNotEmpty()) {
       return
@@ -352,9 +297,8 @@ fun EmbyFavoritesScreen() {
   }
 
   /**
-   * 滚到底：续拉下一页收藏影片。
-   *
-   * 顺带把续拉结果并进 [movieCache] 的页数，改搜索条件时据此判断「还要不要继续往后翻」。
+   * 滚到底：续拉下一页收藏影片，并把页数并进 [movieCache]，
+   * 改搜索条件时据此判断还要不要继续往后翻。
    */
   suspend fun loadMoreMovies(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer) {
     if (!moviePage.hasMore) return
@@ -367,15 +311,12 @@ fun EmbyFavoritesScreen() {
   }
 
   /**
-   * 「一次性拉全量」类 tab（演员 / 类型 / 工作室）的通用加载器。
-   *
-   * 三者逻辑完全一致：命中本页缓存就直接摊平，否则请求一次、按 server.id 落缓存、
-   * 再灌进对应的列表。抽成一个局部函数，省得三份 copy 各自漂移。
+   * 「一次性拉全量」类 tab（演员 / 类型 / 工作室）的通用加载器：命中缓存则直接摊平，
+   * 否则请求一次、按 server.id 落缓存并灌进列表。
    *
    * @param cache  该 tab 的页内缓存（serverId → 名单）
-   * @param target 该 tab 的展示列表赋值器（**整体替换** `xxxItems = 新 list`，
-   *               见其声明处的说明；用 lambda 是因为列表本身是 `by mutableStateOf` 委托属性）
-   * @param fetch  真正发请求的挂起函数（各 tab 各自的 ViewModel 方法）
+   * @param target 列表赋值器（必须整体替换，理由见其声明处）
+   * @param fetch  真正发请求的挂起函数
    */
   suspend fun loadAll(
     current: app.marlboroadvance.mpvex.domain.emby.EmbyServer,
@@ -392,7 +333,7 @@ fun EmbyFavoritesScreen() {
     }
     runCatching { fetch() }
       .onSuccess { list ->
-        // 按 key 口径去重防网格崩溃（部分服务端会把同一条目返回两次）
+        // 按同一 key 口径去重，防网格崩溃
         val deduped = list.distinctBy { it.Id ?: it.Name ?: "" }
         cache.value = current.id to deduped
         target(deduped)
@@ -431,7 +372,7 @@ fun EmbyFavoritesScreen() {
     )
 
   suspend fun load(force: Boolean) {
-    // 冷启动时当前服务器可能还没恢复，这里等一下，避免误判成「没有服务器」而空白
+    // 冷启动时当前服务器可能还没恢复，这里等一下，避免误判成「没有服务器」
     val current = viewModel.currentServerOrAwait() ?: run {
       isLoading = false
       return
@@ -450,9 +391,8 @@ fun EmbyFavoritesScreen() {
   /**
    * 一次批量操作的收尾：退出多选态 → 弹结果 Snackbar。
    *
-   * [undo] 非空时 Snackbar 上会多一个「撤销」按钮，点了就把**反向动作**跑一遍
-   * （取消收藏 → 收藏回去、标为未看 → 标为已看…）。只保证「最近一次」可撤销，
-   * 再操作一次就被新的覆盖 —— 一次性回退，不做撤销栈。
+   * [undo] 非空时多给一个「撤销」按钮，点了把反向动作跑一遍；只保证最近一次可撤销，
+   * 再操作就被覆盖，不做撤销栈。
    */
   fun finishBatch(
     actionLabel: String,
@@ -475,11 +415,10 @@ fun EmbyFavoritesScreen() {
   }
 
   /**
-   * 执行一个**已确认**的批量动作。底部按钮本身只负责弹确认框（防误触），
-   * 真正发请求都在这里；跑完把反向动作交给 [finishBatch] 当撤销凭据。
+   * 执行一个已确认的批量动作；跑完把反向动作交给 [finishBatch] 当撤销凭据。
    *
-   * ⚠️ ids / items 都要在进协程**之前**取快照：finishBatch 一进来就清空 selectedIds，
-   * 闭包里再去读只剩空集合。定义在 [load] 之后也是必须的 —— 局部函数不能前向引用。
+   * ⚠️ ids / items 必须在进协程之前取快照：finishBatch 一进来就清空 selectedIds，
+   * 闭包里再读只剩空集合。定义在 [load] 之后也是必须的 —— 局部函数不能前向引用。
    */
   fun executeBatch(action: BatchAction) {
     val current = server
@@ -506,10 +445,10 @@ fun EmbyFavoritesScreen() {
         if (current != null && picked.isNotEmpty()) {
           scope.launch {
             val r = viewModel.setFavoriteBatch(current, picked, false)
-            // 取消收藏后这批就不在收藏页了，重拉一次让列表同步
+            // 取消收藏后这批已不在收藏页，重拉让列表同步
             load(force = true)
             finishBatch("取消收藏", r) {
-              // 撤销 = 收藏回去（影片 / 演员同一条路，setFavoriteBatch 内部按类型分流）
+              // 撤销 = 收藏回去（影片 / 演员同一路径，setFavoriteBatch 内部按类型分流）
               viewModel.setFavoriteBatch(current, picked, true)
               load(force = true)
             }
@@ -526,8 +465,8 @@ fun EmbyFavoritesScreen() {
             else -> queued++
           }
         }
-        // 下载只是「加入队列」：误触的代价小（下载页里随时能暂停 / 删除），
-        // 所以只给确认、不给撤销，免得「撤销」把用户之前在队列里的任务也误删。
+        // 下载只是入队，误触代价小（下载页可随时暂停 / 删除），故不给撤销，
+        // 免得「撤销」把队列里原有的任务一起删掉。
         selectionMode = false
         selectedIds.clear()
         Toast.makeText(
@@ -545,16 +484,14 @@ fun EmbyFavoritesScreen() {
   val isRefreshing = remember { mutableStateOf(false) }
   val gridState = rememberLazyGridState()
 
-  // 换了排序（换项 / 反转方向 / 随机换一批）就回到第一条：
-  // 翻到第一百部再切排序，视口还停在原处的话看到的完全是另一批内容，
-  // 会让人以为「排序没生效」。与媒体库页「排序一变就回顶」同一套行为。
+  // 换排序（换项 / 反转 / 随机换一批）就回顶：视口停在原处会看到完全另一批内容，
+  // 让人以为排序没生效。与媒体库页行为一致。
   LaunchedEffect(sort, sortAsc, randomSeed) {
     gridState.scrollToItem(0)
   }
 
-  // ── 触底自动续拉（清单 1.1）──
-  // 预取距离走「预测性懒加载」开关（开 ≈ 一屏 / 关 ≈ 贴近末尾）：数据到得比用户滚到得快，
-  // 感知不到等待。actor tab 不分页（一次拉完），所以只在 MOVIE tab 生效。
+  // ── 触底自动续拉 ──
+  // 预取距离跟随「预测性懒加载」开关；演员等 tab 不分页，只在 MOVIE 生效。
   val reachBottomServer = server
   val gridSource = gridState.pagingSource()
   val prefetchDistance = rememberPredictivePreloadDistance(browserPreferences)
@@ -566,8 +503,8 @@ fun EmbyFavoritesScreen() {
   )
 
   // ── 搜索时自动补拉后面的页 ──
-  // 本地过滤只能看见已加载的页；不补拉的话「第 5 页才有的片名」永远搜不出来。
-  // 每敲一个字最多补 [SEARCH_AUTOFILL_MAX_PAGES] 页，避免收藏几千部时把流量跑满。
+  // 本地过滤只覆盖已加载的页，不补拉则「第 5 页才有的片名」永远搜不出；
+  // 每敲一个字最多补 SEARCH_AUTOFILL_MAX_PAGES 页，避免收藏几千部时跑满流量。
   LaunchedEffect(searchQuery, tab, reachBottomServer?.id) {
     val target = reachBottomServer ?: return@LaunchedEffect
     if (tab != FavoriteTab.MOVIE || searchQuery.isBlank()) return@LaunchedEffect
@@ -581,11 +518,10 @@ fun EmbyFavoritesScreen() {
     }
   }
 
-  // Scaffold + TopAppBar：自动为状态栏留出安全区域，避免网格压在状态栏下
+  // Scaffold + TopAppBar：自动为状态栏留出安全区域
   Scaffold(
-    // 批量操作的结果提示挂在本页自己的 Snackbar 上 —— 一次性「撤销」入口也在这里。
-    // ⚠️ 内容区是全屏铺的、宿主底部导航栏浮在其上：Snackbar 默认贴底会被导航栏整条盖住，
-    // 所以先让开导航栏的高度，再叠上**系统**手势条的高度，把它抬到导航栏之上。
+    // ⚠️ 内容区全屏铺、宿主底部导航栏浮在其上：Snackbar 默认贴底会被导航栏盖住，
+    // 所以先让开导航栏高度，再叠上系统手势条高度。
     snackbarHost = {
       SnackbarHost(
         hostState = snackbarHostState,
@@ -627,10 +563,9 @@ fun EmbyFavoritesScreen() {
       if (selectionMode) {
         FavoritesBatchBar(
           // 演员 / 类型 / 工作室 tab 只有「取消收藏」有意义
-          //（播放进度、下载是媒体条目的概念，对 Person / Genre / Studio 无意义）
           nonMediaTab = tab.isAggregate,
           count = selectedIds.size,
-          // 四个动作都只「记下意图」并弹确认框 —— 真正发请求在 executeBatch（防误触）
+          // 四个动作都只记意图并弹确认框，真正发请求在 executeBatch
           onMarkPlayed = { pendingBatch = BatchAction.MARK_PLAYED },
           onMarkUnplayed = { pendingBatch = BatchAction.MARK_UNPLAYED },
           onUnfavorite = { pendingBatch = BatchAction.UNFAVORITE },
@@ -640,7 +575,7 @@ fun EmbyFavoritesScreen() {
     },
   ) { innerPadding ->
     Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-      // 搜索 + 排序：只作用于当前 tab 的列表（见上方 visibleItems），本地过滤不发请求
+      // 搜索 + 排序：只作用于当前 tab 的已加载列表，本地过滤不发请求
       FavoriteSearchSortRow(
         query = searchQuery,
         onQueryChange = { searchQuery = it },
@@ -651,7 +586,7 @@ fun EmbyFavoritesScreen() {
           sortAsc = newAsc
           browserPreferences.embyFavoritesSort.set(newSort.name)
           browserPreferences.embyFavoritesSortAsc.set(newAsc)
-          // 切到随机时给一个新种子：不然沿用旧种子洗出来的还是眼熟的那一批
+          // 切到随机时给新种子，否则沿用旧种子洗出来的还是同一批
           if (newSort == FavoriteSort.RANDOM) randomSeed = Random.nextInt()
         },
         onReshuffle = { randomSeed = Random.nextInt() },
@@ -664,7 +599,7 @@ fun EmbyFavoritesScreen() {
       ) {
         Box(modifier = Modifier.fillMaxSize()) {
       when {
-        // 加载尚未结束时不判定「没有服务器」，避免冷启动瞬间闪一下空状态
+        // 加载未结束时不下「没有服务器」的判定，避免冷启动闪一下空状态
         server == null && !isLoading -> EmbyEmptyState(
           message = "还没有添加 Emby 服务器",
           buttonText = "添加服务器",
@@ -673,8 +608,7 @@ fun EmbyFavoritesScreen() {
         )
 
         isLoading && items.isEmpty() ->
-          // 骨架屏替代转圈：先把网格版式摆出来，收藏列表落下时不会整屏跳变。
-          // 演员 tab 也复用这套网格骨架 —— 栏数一致，观感上是同一套节奏。
+          // 骨架屏替代转圈：先摆出网格版式，列表落下时不会整屏跳变
           EmbySkeletonGrid(columns = gridColumns.coerceIn(2, 6), ratio = 3f / 4f)
 
         error != null -> EmbyEmptyState(
@@ -697,8 +631,8 @@ fun EmbyFavoritesScreen() {
           modifier = Modifier.align(Alignment.Center),
         )
 
-        // 有收藏但被搜索框滤空：**不在这里判**（见下面网格后的空态叠加）——
-        // 让网格常驻，否则每敲一个字都可能把整个网格卸载重建、封面集体重载。
+        // 有收藏但被搜索滤空不在这里判，见网格后的空态叠加：
+        // 让网格常驻，否则每敲一个字都可能卸载重建整个网格、封面集体重载。
 
         tab == FavoriteTab.MOVIE -> LazyVerticalGrid(
           // 与媒体库页同口径：跟随「每行个数」设置（2~6）
@@ -727,16 +661,16 @@ fun EmbyFavoritesScreen() {
                   if (id != null) backStack.add(EmbyDetailScreen(id, item.Name ?: ""))
                 }
               },
-              // 长按 = 进入多选并选上这一条（已在多选模式则等价于切换）
+              // 长按 = 进入多选并选上这一条
               onLongClick = { toggleSelection(item.Id) },
               style = EmbyCardStyle.POSTER,
               fillWidth = true,
-              // 条目有位移动画：切排序 / 取消收藏时平滑重排，而不是硬切
+              // 条目位移动画：切排序 / 取消收藏时平滑重排
               modifier = Modifier.animateItem(),
             )
           }
           // 底部状态行：续拉中 / 出错可重试 / 已到底
-          // span = GridItemSpan(maxLineSpan) 让它横跨整行（否则只占一格宽度）
+          // span = maxLineSpan 让它横跨整行（否则只占一格宽度）
           item(span = { GridItemSpan(maxLineSpan) }) {
             EmbyPagingFooter(
               appending = moviePage.appending,
@@ -750,7 +684,7 @@ fun EmbyFavoritesScreen() {
         }
 
         tab == FavoriteTab.ACTOR -> LazyVerticalGrid(
-          // 演员网格与媒体库「演员」分类同一套版式：同样跟随「每行个数」
+          // 与媒体库「演员」分类同一套版式，同样跟随「每行个数」
           columns = GridCells.Fixed(gridColumns.coerceIn(2, 6)),
           state = gridState,
           modifier = Modifier.fillMaxSize(),
@@ -763,7 +697,7 @@ fun EmbyFavoritesScreen() {
             EmbyMediaCard(
               title = person.Name.orEmpty(),
               subtitle = null,
-              // 人物只有 Primary（头像）一张图，人形图标兜底
+              // 人物只有 Primary（头像），人形图标兜底
               imageUrl = viewModel.imageUrl(currentServer, person, "Primary", 480),
               progress = null,
               isFavorite = true,
@@ -784,11 +718,9 @@ fun EmbyFavoritesScreen() {
                   ),
                 )
               },
-              // 长按 = 进入多选并选上这一条
               onLongClick = { toggleSelection(person.Id) },
               style = EmbyCardStyle.POSTER,
               fillWidth = true,
-              // 条目有位移动画：切排序 / 取消收藏时平滑重排，而不是硬切
               modifier = Modifier.animateItem(),
             )
           }
@@ -796,7 +728,6 @@ fun EmbyFavoritesScreen() {
 
         // 类型 / 工作室：点卡片进「该类型 / 工作室下的作品」清单页（与详情页 chip 同一路由）
         else -> LazyVerticalGrid(
-          // 与影片 / 演员同一套版式，列数同源
           columns = GridCells.Fixed(gridColumns.coerceIn(2, 6)),
           state = gridState,
           modifier = Modifier.fillMaxSize(),
@@ -809,7 +740,7 @@ fun EmbyFavoritesScreen() {
             EmbyMediaCard(
               title = facet.Name.orEmpty(),
               subtitle = null,
-              // 类型 / 工作室通常没有 Primary 图，交给卡片默认兜底占位
+              // 类型 / 工作室通常没有 Primary 图，交给卡片默认占位
               imageUrl = viewModel.imageUrl(currentServer, facet, "Primary", 480),
               progress = null,
               isFavorite = true,
@@ -820,10 +751,8 @@ fun EmbyFavoritesScreen() {
                   return@EmbyMediaCard
                 }
                 val name = facet.Name ?: return@EmbyMediaCard
-                // 进该类型 / 工作室的作品清单页（与详情页点 chip 同一条路由）。
-                // 类型 / 工作室都把**条目 Id** 带上：结果页顶栏的收藏红心要拿它去取
-                // 「本条目当前收没收藏」，有 Id 就不必再按名字反查一次
-                // （清单本身的筛选口径不变 —— 类型仍按名字筛，见 EmbyTagItemsScreen）。
+                // 带上条目 Id：结果页顶栏的收藏红心要用它取收藏状态，免得按名字反查。
+                // 清单本身的筛选口径不变 —— 类型仍按名字筛（见 EmbyTagItemsScreen）。
                 backStack.add(
                   EmbyTagItemsScreen(
                     keyword = name,
@@ -832,23 +761,19 @@ fun EmbyFavoritesScreen() {
                   ),
                 )
               },
-              // 长按 = 进入多选并选上这一条
               onLongClick = { toggleSelection(facet.Id) },
               style = EmbyCardStyle.POSTER,
               fillWidth = true,
-              // 条目有位移动画：切排序 / 取消收藏时平滑重排，而不是硬切
               modifier = Modifier.animateItem(),
             )
           }
         }
       }
 
-        // ── 搜索滤空的提示：**叠在网格上层**，不参与上面的 when 二选一 ──
-        // ⚠️ 原来是 when 的一个分支、与网格互斥：敲一个字只要中间态滤出 0 条，
-        // 整个 LazyVerticalGrid 就被卸载，再敲一个字又整体重建 ⇒ 卡片全部重新组合、
-        // 封面全部重新加载 ⇒ 「搜索时封面闪一下」。网格常驻后只剩列表内容在变。
-        // ⚠️ 只在**真的敲了搜索词**时说「没有匹配」：空搜索词下滤空只能是代码 bug，
-        // 弹一句「没有匹配「」的收藏」比一片空白更让人以为自己哪里点错了（v124 真事故）。
+        // ── 搜索滤空的提示：叠在网格上层，不参与上面的 when 二选一 ──
+        // ⚠️ 若做成 when 分支与网格互斥，中间态滤出 0 条时整个网格会被卸载重建，
+        // 卡片全部重新组合、封面重新加载，表现为搜索时封面闪一下。
+        // ⚠️ 只在真的敲了搜索词时提示：空搜索词下滤空只可能是代码 bug。
         if (visibleItems.isEmpty() && items.isNotEmpty() && error == null && server != null && searchQuery.isNotBlank()) {
           EmbyEmptyState(
             message = "没有匹配「${searchQuery.trim()}」的收藏",
@@ -863,7 +788,7 @@ fun EmbyFavoritesScreen() {
   }
 
   // ── 批量操作的二次确认弹窗 ──
-  // 点底部按钮只走到这里：确认过才调 executeBatch；做错的那一次可在结果提示上「撤销」。
+  // 底部按钮只走到这里：确认过才调 executeBatch；做错的那次可在结果提示上撤销。
   pendingBatch?.let { action ->
     val (title, body, confirmLabel) =
       when (action) {
@@ -902,10 +827,8 @@ fun EmbyFavoritesScreen() {
 }
 
 /**
- * 收藏页顶部标题栏。
- *
- * 标题右侧有「影片 / 演员 / 类型 / 工作室」下拉切换：点击弹出一列选项，
- * 选中项打勾。样式用 M3 的 Surface + DropdownMenu，与顶栏其它控件同一套观感。
+ * 收藏页顶部标题栏：标题右侧为 tab 下拉切换（用 Surface + DropdownMenu，
+ * ExposedDropdownMenuBox 在 TopAppBar 标题区点击判定容易出问题）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -943,13 +866,7 @@ private fun EmbyFavoritesTopBar(
   )
 }
 
-/**
- * 收藏类型切换器（影片 / 演员 / 类型 / 工作室）：当前值胶囊 + 下拉菜单。
- *
- * 不用 Spinner：Compose 下 M3 没有直接对应的控件，ExposedDropdownMenuBox 的
- * 展开态与 TopAppBar 的标题区叠加时点击判定容易出问题；一个小 Surface + DropdownMenu
- * 最稳，观感也与项目里其它下拉一致。
- */
+/** 收藏类型切换器：当前值胶囊 + 下拉菜单。 */
 @Composable
 private fun FavoriteTabSwitch(
   current: FavoriteTab,
@@ -985,7 +902,7 @@ private fun FavoriteTabSwitch(
         DropdownMenuItem(
           text = { Text(option.label) },
           leadingIcon = {
-            // 选中项打勾；未选中放一个同宽占位，两行文字左对齐
+            // 选中项打勾；未选中放同宽占位，保持文字左对齐
             if (option == current) {
               Icon(Icons.Default.Check, contentDescription = null)
             } else {
@@ -1022,8 +939,8 @@ private fun itemProgressOf(item: EmbyItem): Float? {
 /**
  * 收藏页的排序方式（本地排序，不发请求）。
  *
- * 选「名称」时用 [EmbyItem.SortName]（Emby 内部的排序名，已剥离 "The/A" 这类前缀）
- * 而不是 Name —— 和服务器按 SortName 排序的口径保持一致，切到本地排序不会突然乱序。
+ * 名称用 [EmbyItem.SortName]（已剥离 "The/A" 前缀）而非 Name，与服务器排序口径一致，
+ * 切到本地排序不会突然乱序。
  */
 private enum class FavoriteSort(
   val label: String,
@@ -1046,7 +963,7 @@ private enum class FavoriteSort(
   val hasDirection: Boolean get() = this != RANDOM
 
   fun apply(list: List<EmbyItem>, asc: Boolean, seed: Int = 0): List<EmbyItem> = when (this) {
-    // ⚠️ 随机必须用**固定种子**：直接 shuffled() 会在每次重组时洗出不同顺序
+    // ⚠️ 随机必须用固定种子：直接 shuffled() 会在每次重组时洗出不同顺序
     RANDOM -> list.shuffled(Random(seed))
     NAME -> sortByKey(list, asc) { (it.SortName ?: it.Name)?.lowercase() }
     YEAR -> sortByKey(list, asc) { it.ProductionYear }
@@ -1057,13 +974,12 @@ private enum class FavoriteSort(
 }
 
 /**
- * 按可空键排序，**键值缺失的条目一律沉底**（无论升 / 降序）。
+ * 按可空键排序，键值缺失的条目一律沉底（无论升 / 降序）。
  *
- * 沉底而不是当 0 处理：没有年份的片子挤在「0 年」那一档、升序时全顶在最前面，
- * 比排在最后更像「排序坏了」。也不能简单 `sortedWith(cmp.reversed())` 完事 ——
- * 反转会把「无值组」一起翻到最前面，所以先partition 出有值 / 无值两段，只排有值的。
+ * 不能简单对整体 `reversed()`：那会把无值组一起翻到最前面。故先 partition 出有值与无值
+ * 两段，只对前者排序，再把无值段接在末尾。
  *
- * @param key 取排序键；null 表示该条目没有这个值（服务端没回传 / 条目本身没有）
+ * @param key 取排序键；null 表示该条目没有这个值
  */
 private inline fun <T : Comparable<T>> sortByKey(
   list: List<EmbyItem>,
@@ -1078,11 +994,8 @@ private inline fun <T : Comparable<T>> sortByKey(
 }
 
 /**
- * 收藏页顶部的「搜索框 + 排序」一行。
- *
- * 搜索是即时的本地过滤（只作用在已加载的页上），不做防抖也不需要防抖 ——
- * 不打服务器，敲一个字就重算一次毫无成本。已加载页不够时由外层的
- * `searchQuery` 副作用自动往后补拉，保证「搜得到全库」。
+ * 顶部的「搜索框 + 排序」一行。搜索是即时的本地过滤（只作用在已加载的页上），
+ * 不打服务器所以无需防抖；已加载页不够时由外层副作用自动往后补拉。
  */
 @Composable
 private fun FavoriteSearchSortRow(
@@ -1121,11 +1034,10 @@ private fun FavoriteSearchSortRow(
     )
     Spacer(modifier = Modifier.width(8.dp))
     Box {
-      // 触发区直接标出「当前按什么排序」，不用点开就知道现在的排序方式
+      // 触发区直接标出当前排序，不用点开就知道
       Surface(
         modifier = Modifier.clickable {
-          // ⚠️ 展开前先收掉输入框焦点：搜索态下焦点还在输入框上，菜单关闭会把焦点
-          // 「还」给它 ⇒ 每切一次排序弹一次软键盘（媒体库 SortMenu 同一个坑）
+          // ⚠️ 展开前先收掉输入框焦点：否则菜单关闭会把焦点还给它，每切一次排序弹一次软键盘
           focusManager.clearFocus()
           sortMenu = true
         },
@@ -1143,7 +1055,7 @@ private fun FavoriteSearchSortRow(
           )
           Spacer(modifier = Modifier.width(6.dp))
           Text(text = sort.label, style = MaterialTheme.typography.labelLarge)
-          // 触发器上也带方向：不看菜单就知道现在是升还是降（随机没有方向，给骰子图标）
+          // 带上方向图标：不看菜单就知道升还是降（随机没有方向，给骰子图标）
           Icon(
             imageVector = if (!sort.hasDirection) {
               Icons.Default.Shuffle
@@ -1169,8 +1081,7 @@ private fun FavoriteSearchSortRow(
             text = {
               Column {
                 Text(
-                  // 与首页 / 媒体库同一套：选中项**直接标出当前方向**（↑ 升 / ↓ 降），
-                  // 不单列「升序 / 降序」两个选项 —— 菜单短一半，方向也一眼可见
+                  // 选中项直接标出当前方向（↑ 升 / ↓ 降），不单列「升序 / 降序」两个选项
                   text = buildString {
                     append(option.label)
                     if (selected && option.hasDirection) {
@@ -1183,15 +1094,15 @@ private fun FavoriteSearchSortRow(
                     MaterialTheme.colorScheme.onSurface
                   },
                 )
-                // 方向副标题：让「名称 / 年份 / 评分」在这个方向下到底怎么排一目了然
+                // 方向副标题：说明这项在该方向下具体怎么排
                 Text(
                   text = if (!option.hasDirection) {
                     option.ascHint
                   } else if (selected) {
-                    // 已选中：副标题跟着当前方向走
+                    // 已选中：副标题跟随当前方向
                     if (asc) option.ascHint else option.descHint
                   } else {
-                    // 未选中：预告「点下去会变成哪个方向」（= 该项的自然方向）
+                    // 未选中：预告点下去会变成哪个方向（= 该项的自然方向）
                     if (option.naturalAsc) option.ascHint else option.descHint
                   },
                   style = MaterialTheme.typography.labelSmall,
@@ -1199,8 +1110,7 @@ private fun FavoriteSearchSortRow(
                 )
               }
             },
-            // 勾放**尾部**（M3 惯例）：明确表示「当前选中的就是这一项」，
-            // 再用主色文字强化，不再靠一个位置飘忽的首位图标表达选中。
+            // 勾放尾部（M3 惯例），再用主色文字强化，不靠位置飘忽的首位图标表达选中
             trailingIcon = {
               if (selected) {
                 Icon(
@@ -1216,7 +1126,7 @@ private fun FavoriteSearchSortRow(
                 // 再点一次已选中的项 = 只反转方向（随机则是换一批），不换排序项
                 selected && option.hasDirection -> onSortChange(option, !asc)
                 selected -> onReshuffle()
-                // 换排序项：方向重置为该项的自然方向（名称升序、年份降序…）
+                // 换排序项：方向重置为该项的自然方向
                 else -> onSortChange(option, option.naturalAsc)
               }
             },
@@ -1227,9 +1137,7 @@ private fun FavoriteSearchSortRow(
   }
 }
 
-/**
- * 多选模式下的顶栏：左侧关闭、中间「已选 N / 总数」、右侧全选 / 取消全选。
- */
+/** 多选模式顶栏：左侧关闭、中间「已选 N / 总数」、右侧全选 / 取消全选。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FavoritesSelectionTopBar(
@@ -1257,14 +1165,10 @@ private fun FavoritesSelectionTopBar(
 }
 
 /**
- * 多选模式下的底部批量操作条。
+ * 多选模式底部批量操作条：每个动作为「图标 + 文字」竖排等分，点击区比纯文字按钮大得多。
  *
- * 每个动作 = 「图标 + 文字」竖排、等宽平分，点按有水波纹 —— 比原来一排光秃秃的文字按钮
- * 更好认，点击区也更大（原来文字按钮的可点范围只有文字本身那么宽，很容易点空）。
- *
- * 图标会歧义的顾虑用**文字兜底**：图标只当视觉锚点，下面一行始终写着动作名。
- * 非媒体 tab（演员 / 类型 / 工作室）只保留「取消收藏」—— 播放进度、下载是媒体条目的概念，
- * 对 Person / Genre / Studio 无意义；只剩一个动作时让它占满整行居中，不至于孤零零挤在左边。
+ * 非媒体 tab（演员 / 类型 / 工作室）只保留「取消收藏」，因为播放进度、下载是媒体条目
+ * 的概念；只剩一个动作时让它占满整行居中。
  */
 @Composable
 private fun FavoritesBatchBar(
@@ -1279,8 +1183,7 @@ private fun FavoritesBatchBar(
   Surface(
     color = MaterialTheme.colorScheme.surfaceVariant,
     tonalElevation = 3.dp,
-    // 应用自己的底部导航栏已被收起（见上面的 DisposableEffect），但**系统**手势条还在，
-    // 留出它的高度：否则按钮会被系统导航条压住，手指从手势区起划还会误触发「返回」。
+    // 应用底部导航栏已收起，但系统手势条还在：留出它的高度，否则按钮被压住且易误触返回
     modifier = Modifier.navigationBarsPadding(),
   ) {
     Row(
@@ -1311,7 +1214,7 @@ private fun FavoritesBatchBar(
         icon = Icons.Filled.FavoriteBorder,
         label = "取消收藏",
         enabled = enabled,
-        // 破坏性动作：用 error 色区分，别和「标为已看」这类平行动作混作一块
+        // 破坏性动作用 error 色区分
         danger = true,
         onClick = onUnfavorite,
       )
@@ -1329,7 +1232,7 @@ private fun FavoritesBatchBar(
 }
 
 /**
- * 批量条上的单个动作：图标 + 文字竖排，宽度由调用方的 weight 决定（等分）。
+ * 批量条上的单个动作：图标 + 文字竖排，宽度由调用方的 weight 决定。
  *
  * [danger] = 破坏性动作（取消收藏），用 error 色区分；禁用态统一降到 38% 不透明度。
  */

@@ -64,7 +64,7 @@ import org.koin.compose.koinInject
 /**
  * 照片全屏浏览器（Emby）。
  *
- * ⭐ **外壳来自 [SharedPhotoViewer]**（与网络位置的 [app.marlboroadvance.mpvex.ui.browser
+ * **外壳来自 [SharedPhotoViewer]**（与网络位置的 [app.marlboroadvance.mpvex.ui.browser
  * .networkstreaming.NetworkPhotoViewerScreen] 共用同一份实现）：翻页、沉浸、下拉关闭、
  * 幻灯片、胶片条、上一张/下一张、顶栏。改那些交互只需要改共享组件，两个入口同时生效。
  * 本文件只剩 Emby 特有的那一层：从服务端取图（`photoImageUrl` 的缩放 / JPEG 兜底）、
@@ -90,7 +90,7 @@ import org.koin.compose.koinInject
  * - **底部胶片条**：设置开关（默认关），开着时底部多一条缩略图，点一下跳到那张。
  * - **左下角悬浮按钮**：横向排布的「上一张 / 下一张」半透明圆钮；
  *   第一张时上一张置灰、最后一张时下一张置灰（不留假按钮）。
- * - **底部信息栏**：文件名 + 「大小 · 日期」+ 序号，两个入口都有（v94 起不再分叉）。
+ * - **底部信息栏**：文件名 + 「大小 · 日期」+ 序号，两个入口都有。
  * - **旋转**：顶栏按钮每次顺时针 90°，角度**按条目 Id** 记（翻页回来还在）。
  *   按钮由共享外壳画（[app.marlboroadvance.mpvex.ui.browser.photo.PhotoRotationState] 持有角度），
  *   长按面板的「旋转 90 度」走同一个入口。
@@ -142,7 +142,7 @@ data class EmbyPhotoBrowserScreen(
     val autoPlaySlideshow = remember { browserPreferences.photoAutoSlideshow.get() }
 
     // 交给共享外壳的最小信息：稳定 key + 标题 + 附注（大小 · 日期）。
-    // ⭐ 附注是 v94 补的：信息栏现在两个入口都显示，Emby 这边不能留一行空白
+    // 附注是 补的：信息栏现在两个入口都显示，Emby 这边不能留一行空白
     //   —— 同一套外壳，数据各填各的。日期取 DateCreated（拍摄/入库时间）前 10 位。
     val entries = remember(queue) {
       queue.map { item ->
@@ -213,15 +213,12 @@ data class EmbyPhotoBrowserScreen(
     }
 
     // ── 前后预加载（相邻 ±N 张）──
-    //
     // N 走设置（1~3，默认 1）。提前把左右的图拉进 Coil 的缓存，滑过去时直接命中。
-    //
     // 内存怎么兜的（用户问「会不会炸」）：
     //   · 图片尺寸由 URL 里的 maxWidth=2048 限制，不会拿相机原图；
     //   · Coil 的内存缓存按堆的 25% 封顶（见 EmbyPhotoImageLoader.MEMORY_PERCENT），
     //     超了自动丢最旧的 —— 所以 N 调大只是「缓存更容易被后来者顶掉」，
-    //     不是无上限增长；N=3 时最多 6 张旁侧图，实测几十 MB，低内存机也不会崩。
-    //
+    //     不是无上限增长；N=3 时最多 6 张旁侧图，几十 MB，低内存机也不会崩。
     // ⚠️ 仍坚持「用页面级 scope 发射，不在本 effect 里直接挂起下载」：
     //    本 effect 的 key 含 currentPage，翻页会取消它；预取一旦被取消，
     //    已经在途的那次下载会前功尽弃，恰好滑到那张就白一下。
@@ -322,7 +319,7 @@ data class EmbyPhotoBrowserScreen(
       rotation = rotation,
       onBack = { backStack.removeLastOrNull() },
       topBarActions = { chrome ->
-        // ⚠️ 全屏 / 旋转**已经由外壳画**（v94 收进共享组件，网络版同步获得）。
+        // ⚠️ 全屏 / 旋转**已经由外壳画**。
         //    这里只放「更多」——以前这两个按钮写在本文件里，直接导致网络版没有。
         Box {
           IconButton(onClick = { showMenu = true }) {
@@ -434,8 +431,7 @@ data class EmbyPhotoBrowserScreen(
       }
 
       // ── 长按操作面板 ──
-      //
-      // ⭐ 长按的**唯一**出口。「保存原图 / 另存为 JPEG」从旧版那个「长按直接弹的
+      // 长按的**唯一**出口。「保存原图 / 另存为 JPEG」从旧版那个「长按直接弹的
       // 保存对话框」搬到这里的第一组 —— 功能一个没少，但不再有两个长按入口打架。
       val longPressed = longPressTarget
       if (longPressed != null) {

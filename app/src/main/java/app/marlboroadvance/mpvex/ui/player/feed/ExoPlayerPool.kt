@@ -57,7 +57,7 @@ import kotlin.math.roundToInt
  *
  * ── 显示尺寸为什么也归这里管 ──
  * 画面该铺满还是留黑边，取决于「容器方向 × 视频方向」两个变量，而这个判断需要
- * 视频尺寸（只有这里知道）与容器实测宽高（只有 View 知道）。把它统一放在
+ * 视频尺寸（只有这里知道）与容器宽高（只有 View 知道）。把它统一放在
  * [applyVideoLayout] 里算，旋转（容器尺寸变化）与换片（视频尺寸变化）都只走这一条路。
  *
  * ── 生命周期约定 ──
@@ -78,7 +78,7 @@ internal class ExoPlayerPool(
   /**
    * 拉流时附带的默认请求头（`User-Agent` / `Referer` 等）。
    *
-   * ⭐ **这不是可选项，缺了就会导致 strm 播不了**（现象是「服务器拒绝了」）：
+   * **这不是可选项，缺了就会导致 strm 播不了**（现象是「服务器拒绝了」）：
    * strm 条目的真实媒体在网盘 CDN 上（115 / 阿里云盘之类），这类直链的签名
    * **把 UA 和 Referer 一起算进去**。主播放器（mpv）一直显式带着
    * `EmbyClient.STREAM_USER_AGENT` + 服务器 origin 作 Referer，所以那边能播；
@@ -104,7 +104,7 @@ internal class ExoPlayerPool(
   /**
    * index → 承载画面的那个容器（view_feed_video.xml 的根 FrameLayout）。
    *
-   * 画面的尺寸由我们自己设进 TextureView 的 LayoutParams，依据是**容器的实测宽高**
+   * 画面的尺寸由我们自己设进 TextureView 的 LayoutParams，依据是**容器的宽高**
    * —— 所以必须拿到容器本身。同时在它身上挂一次布局监听：横竖屏切换、分屏、
    * 折叠屏展开都会让容器换一个尺寸，那时画面矩形要重算。
    */
@@ -195,7 +195,7 @@ internal class ExoPlayerPool(
 
   private fun build(url: String): ExoPlayer {
     val builder = ExoPlayer.Builder(context)
-    // ⭐ 请求头必须挂在这里（DefaultHttpDataSource），而不是 `MediaItem` 的
+    // 请求头必须挂在这里（DefaultHttpDataSource），而不是 `MediaItem` 的
     // `MediaItem.LocalConfiguration`—— 那些 header 只对**本地文件**的
     // `setDataSource(path, headers)` 有意义，http(s) 走的是 DataSource 层，
     // 挂错地方等于没挂（这坑很容易踩，因为两个 API 长得极像）。
@@ -278,10 +278,10 @@ internal class ExoPlayerPool(
   fun isPortraitAt(index: Int): Boolean = ratioOf(index)?.let { it <= 1f } ?: false
 
   /**
-   * 按**屏幕当前实测尺寸**把画面摆好：等比缩放，完整显示，不裁掉任何一个像素。
+   * 按**屏幕当前尺寸**把画面摆好：等比缩放，完整显示，不裁掉任何一个像素。
    *
    * ── 规则：永远 contain，永远不丢画面 ──
-   * 按容器实测宽高算出「刚好放得下」的最大等比矩形，多出来的地方留黑边。
+   * 按容器宽高算出「刚好放得下」的最大等比矩形，多出来的地方留黑边。
    * 竖屏视频在竖屏上留一点上下边、横屏视频在竖屏上留上下边、竖屏视频转到横屏后
    * 留两侧边 —— 每种组合都能看到完整构图。
    *
@@ -294,7 +294,7 @@ internal class ExoPlayerPool(
    * 它只有 `aspectRatio` + 一个**全局**的 resizeMode，而 `aspectRatio` 在 match_parent
    * （宽高都是 EXACTLY，本页正是如此）时根本不生效 —— 真正起作用的只剩那个全局开关，
    * 于是横竖屏切换后容器尺寸变了却没人重算，模式就停在旧方向上。
-   * 现在尺寸由我们按容器实测宽高每次重算，容器一变就重算，不存在「停在旧方向」。
+   * 现在尺寸由我们按容器宽高每次重算，容器一变就重算，不存在「停在旧方向」。
    *
    * 触发点有三处：拿到视频尺寸时、页面登记时、容器尺寸变化时（含旋转）。
    */

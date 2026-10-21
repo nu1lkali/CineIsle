@@ -169,7 +169,7 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
       onFrameVisible = { index ->
         if (index == viewModel.index) viewModel.applySnapshot(pool.snapshotOf(index))
       },
-      // ⭐ strm 能播的关键（见 ExoPlayerPool.defaultHttpHeaders 的说明）：
+      // strm 能播的关键（见 ExoPlayerPool.defaultHttpHeaders 的说明）：
       // UA 必须与主播放器（mpv）以及直链预解析探测用的是**同一个常量**，
       // 否则网盘直链的签名校验对不上，服务器直接 403（现象：「strm 提示服务器拒绝」）。
       defaultHttpHeaders = feedStreamHeaders(items),
@@ -271,7 +271,6 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
         ) {
           // 相邻页一起留在 Composition 里，它们的画面 View 与实例才得以并存 ——
           // 这是相邻那条能被提前准备好的前提。
-          //
           // ── 翻页为什么交回 Pager 原生（userScrollEnabled 保持默认 true）──
           // 之前那一版是「关掉 Pager 滚动，由手势层逐帧喂 dispatchRawDelta」。那条路
           // 确实能翻页，但它**没有速度投掷**：松手只按走过的距离归位，整段行程里画面
@@ -322,7 +321,7 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
    *
    * 画面容器不用 PlayerView 的原因见 view_feed_video.xml：截图需要一个我们
    * 自己拿得住引用的 TextureView，而不是事后去问 PlayerView 内部到底用了哪个 View。
-   * 画面该占多大也由池按屏幕实测尺寸算（见 `ExoPlayerPool.applyVideoLayout`），
+   * 画面该占多大也由池按屏幕尺寸算（见 `ExoPlayerPool.applyVideoLayout`），
    * 这里不掺和。
    *
    * ── 点击层为什么在「页」里面 ──

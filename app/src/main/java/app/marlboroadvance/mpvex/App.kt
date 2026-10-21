@@ -76,7 +76,7 @@ class App : Application() {
     super.onCreate()
     trace("super.onCreate done")
 
-    // 启动双标记：写 start、清 ok，并清除上一轮的「崩溃页已显示」防循环标记（每次冷启动都是新会话）。
+    // 启动双标记：写 start、清 ok，并清除此前的「崩溃页已显示」防循环标记（每次冷启动都是新会话）。
     val lastBootStuck = runCatching { bootStartedFile().exists() && !bootOkFile().exists() }.getOrDefault(false)
     runCatching { bootStartedFile().writeText("${System.currentTimeMillis()}") }
     runCatching { bootOkFile().delete() }

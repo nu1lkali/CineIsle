@@ -330,7 +330,7 @@ class CrashActivity : ComponentActivity() {
               // 用户把桌面图标换成「深海 / 午夜 / 极简 / 琥珀」后，AppIconManager.apply() 会把
               // MainActivity 本身设成 COMPONENT_ENABLED_STATE_DISABLED，只留对应 activity-alias 启用
               // （见 ui/preferences/AppIconManager.kt:199-206）⇒ 启动被禁用的组件必抛
-              // ActivityNotFoundException，于是「崩溃 → 点重启 → 再崩」死循环（v95 线上日志实录）。
+              // ActivityNotFoundException，于是「崩溃 → 点重启 → 再崩」死循环。
               // getLaunchIntentForPackage 只会返回当前**启用**的 LAUNCHER 入口，
               // 天然指向正在生效的那个 alias（或默认图标的 MainActivity 本体）。
               val launch =

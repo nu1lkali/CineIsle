@@ -276,7 +276,6 @@ data class EmbyPlaylistDetailScreen(
                     },
                   )
                   // 单击进详情页（播放由详情页发起，和 Emby 其他页面一致）
-                  //
                   // ⚠️ 必须用 `MediaItemId` 而不是 `Id`：
                   // `/Playlists/{Id}/Items` 返回的每一行是「播放列表里的一条目」，
                   // 它的 `Id` 是条目自己的 Id，拿去请求媒体详情服务端查不到 ⇒ 500。

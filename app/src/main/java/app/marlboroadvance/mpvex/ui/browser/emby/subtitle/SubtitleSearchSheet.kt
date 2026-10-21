@@ -275,7 +275,7 @@ fun SubtitleSearchSheet(
           state = rememberLazyListState(),
           modifier = Modifier.heightIn(max = 360.dp),
         ) {
-          // 改语言重搜时candidates 里还压着上一轮的旧结果，如果什么都不加，
+          // 改语言重搜时candidates 里还压着此前的旧结果，如果什么都不加，
           // 用户会以为搜索已经结束、结果就是这些 —— 完全没有加载反馈。
           // 所以在列表顶部挂一条「正在搜索」，旧结果照常显示（比清空更平滑）。
           if (searching) {

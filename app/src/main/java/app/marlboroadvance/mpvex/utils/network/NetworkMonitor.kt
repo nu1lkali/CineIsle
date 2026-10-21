@@ -98,7 +98,6 @@ class NetworkMonitor(context: Context) {
     // —— 第二参是 **Handler**，不是 NetworkCallback。传 callback 过去报的错是
     // 「actual type is '<anonymous>', but 'Handler' was expected」，很直白但很容易
     // 误以为是 callback 匿名类写错了。
-    //
     // 语义上单参版才是我们要的：「只监听系统当前选中的那条默认网络」，
     // 正好对应 [queryCurrent] 问的那个问题（我正在用的这条通不通）。
     runCatching { manager.registerDefaultNetworkCallback(callback) }

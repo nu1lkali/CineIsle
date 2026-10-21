@@ -224,11 +224,9 @@ data class EmbyDetailScreen(
     var selectedMediaSourceId by remember(itemId) { mutableStateOf<String?>(null) }
 
     // ── 多版本媒体：当前版本自己的续播进度（本地）──
-    //
     // Emby 服务端的 `UserData.PlaybackPositionTicks` 是**按条目**存的 —— 4K / 1080P /
     // 导演剪辑版共用一个续播点，服务端层面无解。所以多版本条目按版本各记各的本地进度
     // （播放页退出时按版本写入，键见 [EmbyVersionProgress]），这里读出来覆盖服务端进度。
-    //
     // null = 不覆盖（单版本条目 / 本地还没按版本记过进度 ⇒ 沿用服务端进度）。
     var versionResumeSeconds by remember(itemId) { mutableStateOf<Long?>(null) }
     val playbackStateRepository = koinInject<PlaybackStateRepository>()
@@ -307,11 +305,9 @@ data class EmbyDetailScreen(
     LaunchedEffect(itemId) { load() }
 
     // ── 分集列表（电视剧 / 综艺）──
-    //
     // ⚠️ 数据**必须提在这一层**，理由与下面的推荐区完全相同：分集区是 LazyColumn 里的
     // `item {}`，滚出视口会被销毁组合、滚回来重新组合 —— 请求写在区块内部的话，
     // 上下滑一趟就会把整部剧的分集重新拉好几轮（长剧一次几百 KB）。
-    //
     // 只有 `Series` 才发这个请求：`Episode` 自己的详情页不需要，电影更没有。
     var seriesEpisodes by remember(itemId) { mutableStateOf<List<EmbyItem>>(emptyList()) }
     var episodesLoading by remember(itemId) { mutableStateOf(false) }
@@ -344,8 +340,7 @@ data class EmbyDetailScreen(
     }
 
     // ── 折叠头部的状态（提到这里是因为「下拉刷新」要用到它）──
-    //
-    // ⭐ 提到 EmbyDetailScreen 这一层、而不是留在 DetailBody 里，是因为下拉刷新挂在
+    // 提到 EmbyDetailScreen 这一层、而不是留在 DetailBody 里，是因为下拉刷新挂在
     // DetailBody **外面**（PullRefreshBox 包着它），而「封面收着的时候禁止下拉刷新」
     // 这个判断需要读到折叠进度。详见下面 PullRefreshBox 处的注释。
     val listState = rememberLazyListState()
@@ -362,13 +357,11 @@ data class EmbyDetailScreen(
     )
 
     // ── 推荐区数据：**提升到本层**（别挪回推荐区内部，见下方注释）──
-    //
     // 背景：两个推荐区是 LazyColumn 里的 `item {}`。LazyColumn 会把滚出视口的 item
     // **销毁组合**、滚回来时**重新组合**；而请求原先挂在推荐区内部的 LaunchedEffect 上 ——
     // 键（item.Id / server）虽然没变，但**组合重建本身**就会让 LaunchedEffect 重跑。
     // 于是「从上滑到底再滑回来」会把两个推荐区各重新请求好几轮，用户看到的就是
     // 「滚动时推荐在重复刷新」。
-    //
     // 提升到本层后，加载只由这两个键决定：
     //   · item.Id 变化        ⇒ 重新进（或切到另一部片的）详情页
     //   · recommendReloadKey  ⇒ 下拉刷新（见 PullRefreshBox 的 onRefresh）
@@ -379,10 +372,8 @@ data class EmbyDetailScreen(
     var recommendReloadKey by remember(itemId) { mutableStateOf(0) }
 
     // ── 单集详情页的「相关分集」──
-    //
     // 只有**当前条目是 Episode** 时才需要：这时 `seriesEpisodes` 是空的（只有 Series 才拉全剧），
     // 页面上没有任何入口能切到兄弟集，用户点进第 3 集就困在第 3 集。
-    //
     // 数据分两段、成本差很多：
     //  ① 同季 + 特别篇：`SiblingIds`（随详情一起回来，零额外往返）→ 一次 `Ids` 批量取内容；
     //  ② 演员相关：`/Items?PersonIds&IncludeItemTypes=Episode` 再按 SeriesId 过滤。
@@ -547,7 +538,6 @@ data class EmbyDetailScreen(
           // ── 下拉刷新 ──
           // 详情页的数据（进度、已看状态、演员、推荐）都是进页面那一次拉回来的，
           // 从播放器返回时虽然有 800ms 延迟的自动刷新，但用户手动拉一下仍然是最直接的重取方式。
-          //
           // 新版折叠头部已经**不再消费任何手势**（封面高度只是列表滚动位置的函数），
           // 所以这里只要老老实实把 listState 传进去 + 加一道「封面已完全展开」的闸门，
           // 两者就不会再抢手势：
@@ -1266,10 +1256,8 @@ data class EmbyDetailScreen(
     // 详情页点播放 → 播放器真正起来之间有段网络 Prep（解析直链 / ISO 探测 /
     // 建连播列表，慢的时候要好几秒）。原来只有播放按钮里一枚 20dp 小转圈，
     // 用户视线不在按钮上就等于「点了没反应」。
-    //
     // ⇒ 整页居中渲染大加载动画（走统一入口，「外观 → 加载动画」在这里也生效）；
     //   按钮内的小转圈随之撤掉（见 PlayButton），免得两处同时转、互相抢注意力。
-    //
     // ⚠️ 挂在**内容 Box 之后**（同一个 Content() 体层级）：后声明的子节点画在
     //   上层，才盖得住页面内容。这层的对话框（castSheet / externalPlayers /
     //   identify / refresh / editMeta / deleteConfirm）本来就是挂在这层的 ——
@@ -1425,13 +1413,11 @@ private fun DetailBody(
     )
 
   // ── 折叠头部：高度**完全由列表滚动位置推导**，没有任何自定义手势 / 嵌套滚动 ──
-  //
   // 此前这里同时挂着两套纵向滚动的消费者（自定义 NestedScrollConnection + 下拉刷新），
   // 两者抢同一个手势，就是「卡手 / 时灵时不灵」的根源。现在整块删掉，只留一条规则：
   //     封面有多高 = 列表滚了多少（见 [rememberHeaderCollapse]）
   // 手势只有 LazyColumn 一个消费者；下拉刷新只在列表贴顶时接住溢出量 —— 结构上不可能再打架。
-  //
-  // ⭐ 因为播放区一直贴着封面底边一起上移，封面收完的那一刻播放区正好停在工具栏下方，
+  // 因为播放区一直贴着封面底边一起上移，封面收完的那一刻播放区正好停在工具栏下方，
   //    所以天然就是「滑到播放按钮就折叠」，不需要任何触发距离常量。
   val density = LocalDensity.current
   val headerHeightDp = with(density) { collapse.headerHeightPx.toDp() }
@@ -1444,7 +1430,6 @@ private fun DetailBody(
       contentPadding = PaddingValues(bottom = 96.dp),
     ) {
       // 第 0 项是「封面占位稿」：高度 = 封面最大高度，本身不可见（被上层的封面盖住）。
-      //
       // ⚠️ 用**真实 item** 而不是 `contentPadding.top`，是为了避开一个语义坑：
       // `firstVisibleItemIndex` / `firstVisibleItemScrollOffset` 与
       // `visibleItemsInfo` 的 offset 对 contentPadding 的处理并不一致（前者「不含内容内边距」），
@@ -1476,7 +1461,6 @@ private fun DetailBody(
       // ── 分集（电视剧 / 综艺）──
       // 紧跟播放区：用户点进一部剧，最先要的就是「从第几集开始」。
       // 放在简介 / 演职员之前，是因为那些是「了解这部剧」，而分集是「开始看」。
-      //
       // 点一集 = 直接播（带后续连播）；长按 = 进那一集的详情（换版本 / 看简介）。
       if (episodes.isNotEmpty()) {
         item {
@@ -1513,8 +1497,7 @@ private fun DetailBody(
       // ── 类型 / 标签 / 工作室 / 外部链接 ──
       // 四组都是「点一下进按该维度找片的结果页」的 chip，共用 [MetaChipRow] 排版：
       // 左边一个分组名，右边横向滚动的一排 chip（分组名固定宽度 ⇒ 各组的 chip 起始边对齐）。
-      //
-      // 类型 / 标签按**名字**过滤（Emby 的 Genres / Tags 参数，实测可用）；
+      // 类型 / 标签按**名字**过滤（Emby 的 Genres / Tags 参数，可用）；
       // 工作室优先按 **Id** 过滤（`StudioIds`）—— 条目自带的 Studios 就是 NameGuidPair，
       // 拿得到 Id 就按 Id 走；万一只回了名字，结果页会自动退回按名字的 `Studios` 参数。
       val genreList = item.Genres.filter { it.isNotBlank() }
@@ -1525,15 +1508,12 @@ private fun DetailBody(
         .ifEmpty { item.Tags.filter { it.isNotBlank() } }
       val studioList = item.Studios.orEmpty().filter { !it.Name.isNullOrBlank() }
       // 外部链接：**首选服务端给的 `ExternalUrls`**，它取不到才退回用 ProviderIds 现拼。
-      //
-      // 为什么首选它（v73 真机返工）：`ExternalUrls[].Url` 是**服务端 / 元数据插件已经
+      // 为什么首选它：`ExternalUrls[].Url` 是**服务端 / 元数据插件已经
       // 拼好的完整地址**（用户环境里 MetaTube 给的是
       // `http://192.168.2.124:8080/?redirect=JavBus:ACZD-218`）—— 直接用，打开的就是
       // Emby Web 与 Yamby 打开的同一条链接。
-      //
       // 退回分支（内置元数据源不产生 ExternalUrls）按 `<服务器根>/?redirect=<Provider>:<Id>`
       // 现拼，细节见 [externalLinkUrl]。
-      //
       // ⚠️ 曾经**只**按 `"$baseUrl?redirect=$value"` 现拼，真机结果是「跳到了 Emby 首页」：
       //    少了根路径的 `/`，且 `redirect` 的参数是 `Provider:Id` 而不是裸 Id。
       val externalLinks = item.ExternalUrls
@@ -1714,7 +1694,6 @@ private fun DetailBody(
       // ── 推荐：同一位演员 / 导演参与的其他影片 ──
       // 放在演职员之后：看完了主演阵容，顺势往下推荐 TA 的片子，上下文是连着的。
       // 设置里关掉「详情页推荐」后整块不渲染（连带省掉上面的网络请求）。
-      //
       // ⚠️ 这里只是**把上层加载好的数据画出来**：数据与请求都在 [EmbyDetailScreen]
       // 那一层（不随滚动被回收），所以滚出视口再滚回来不会重新请求。
       if (showRecommendations) {
@@ -2230,7 +2209,6 @@ private fun PlaySection(
       )
 
       // 「从头播放」小按钮（电视剧专用，追过才露）。
-      //
       // ⚠️ 为什么是**小按钮**而不是长按大按钮 / 二级菜单：
       //   「继续看上次那一集」和「回第一集重刷」是并列的两个意图，没有主次。
       //   把「从头」藏进长按或菜单里，用户想重刷时会先点到大按钮被带到第 8 集，
@@ -2727,7 +2705,6 @@ private fun isDownloadable(item: EmbyItem): Boolean {
 
 // ════════════════════════════════════════════════════════════════════════
 // 媒体信息：基本信息 + 视频/音频/字幕轨道编码信息
-//
 // 数据组装（buildEmbyMediaInfoEntries / MediaInfoEntry）已抽到
 // domain/emby/EmbyMediaInfo.kt —— 播放页「更多 → 媒体信息」弹窗用的是同一份，
 // 两个页面不会再各写一套。这里只负责把 entries 画成详情页里的静态分区。
@@ -2820,7 +2797,6 @@ private fun formatClock(seconds: Long): String {
 
 // ══════════════════════════════════════════════════════════════════════════
 // 折叠头部的尺寸常量
-//
 // 对应 XML 里 AppBarLayout 的展开高度与 Toolbar 的 pin 高度。
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -2830,7 +2806,7 @@ private fun formatClock(seconds: Long): String {
  * 它同时是：① 封面能撑到的最大高度；② 列表第 0 项「封面占位稿」的高度。
  * 折叠时封面按滚动量线性缩矮，收到 [TOOLBAR_HEIGHT_DP] 为止。
  *
- * ⭐ 想改「折叠触发点」就调这个值：调高 = 封面撑得更久、要滚更多才收完（触发点更靠后）；
+ * 想改「折叠触发点」就调这个值：调高 = 封面撑得更久、要滚更多才收完（触发点更靠后）；
  * 调低 = 收得更早更快。**不需要另外维护任何「触发距离」常量** —— 折叠点由几何关系决定。
  */
 private val BACKDROP_HEADER_MAX_HEIGHT_DP = 320.dp
@@ -2840,7 +2816,6 @@ private val TOOLBAR_HEIGHT_DP = 56.dp
 
 // ══════════════════════════════════════════════════════════════════════════
 // 折叠头部：把「滚动位置」变成「封面高度」
-//
 // 这是整个折叠头部**唯一的状态来源**。设计上刻意不引入任何自定义手势：
 // 列表滚动是唯一的输入，封面高度是它的纯函数。
 // ══════════════════════════════════════════════════════════════════════════
@@ -2914,7 +2889,6 @@ private fun rememberHeaderCollapse(
 }
 
 // ══════════════════════════════════════════════════════════════════════════// 折叠动效参数
-//
 // 折叠**位置**由滚动驱动（见 [rememberHeaderCollapse]）—— 这里只放「外观怎么变」的参数：
 // 封面反压扁（底图横向反向放大、维持 CenterCrop 的「缓慢推近」）+ 缓动曲线。
 // ══════════════════════════════════════════════════════════════════════════

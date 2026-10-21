@@ -503,11 +503,11 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
  *
  * ## 为什么这是一个「空迁移」，却必须存在
  *
- * v11 那次发版**只改了别的**（不是数据库），schema 与 v10 完全一致
+ * 那次发版**只改了别的**（不是数据库），schema 与 完全一致
  * （对比 `app/schemas/…/10.json` 与 `11.json`：表、列、索引逐条一致）。
  * 但 Room 的迁移是靠 `addMigrations` 里注册的相邻版本对来串路径的，
  * **不会因为 schema 没变就自动跳过** —— 缺了 10→11 这一段，
- * v10 的用户升到 v12 时找不到完整路径，会落到
+ * 的用户升到 时找不到完整路径，会落到
  * `fallbackToDestructiveMigration(true)`：**整库删表重建**，
  * Emby 服务器配置、播放列表、播放进度、最近播放全部丢失。
  *
@@ -651,7 +651,7 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
 }
 
 /**
- * v13 → v14：新增「标记为不喜欢」表。
+ * → 新增「标记为不喜欢」表。
  *
  * 纯新增表，不动任何已有表 ⇒ 老用户的服务器配置 / 播放列表 / 播放进度都不受影响。
  * 语句与 [app.marlboroadvance.mpvex.database.entities.DislikedMediaEntity] 的声明**必须逐字对应**
@@ -727,7 +727,7 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
 
 
 /**
- * v15 → v16：新增「网络文件夹封面缓存」表。
+ * → 新增「网络文件夹封面缓存」表。
  *
  * 纯新增表，不动任何已有表 ⇒ 老用户的服务器配置 / 播放列表 / 播放进度都不受影响。
  * 语句与 [app.marlboroadvance.mpvex.domain.network.FolderCoverCacheEntity] 的声明
@@ -769,7 +769,7 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
 
 
 /**
- * v16 → v17：给 `network_connections` 补一个「置顶」位。
+ * → 给 `network_connections` 补一个「置顶」位。
  *
  * 只是加一列、带默认值 ⇒ 老用户的连接一条不丢、也不用重新添加（默认不置顶）。
  * ⚠️ 列定义必须与 [app.marlboroadvance.mpvex.domain.network.NetworkConnection.pinned]
@@ -794,7 +794,7 @@ val MIGRATION_16_17 = object : Migration(16, 17) {
 
 
 /**
- * v17 → v18：新建「聚合库」表 `aggregate_libraries`（清单：本地聚合多个同类型媒体库）。
+ * → 新建「聚合库」表 `aggregate_libraries`（清单：本地聚合多个同类型媒体库）。
  *
  * 纯新增表、不动任何既有列 ⇒ 老用户的服务器配置 / 播放进度 / 收藏原样保留。
  * ⚠️ 列定义必须与 [app.marlboroadvance.mpvex.database.entities.AggregateLibraryEntity]
@@ -833,11 +833,11 @@ val MIGRATION_17_18 = object : Migration(17, 18) {
 
 
 /**
- * v18 → v19：搜索历史按「服务器 + 用户」隔离（主键 (serverId, keyword)）。
+ * → 搜索历史按「服务器 + 用户」隔离（主键 (serverId, keyword)）。
  *
  * ## 旧数据去哪了（兼容策略）
  *
- * v18 及以前的 search_history 没有归属列，一份历史全库混用。升级时把这些
+ *及以前的 search_history 没有归属列，一份历史全库混用。升级时把这些
  * 旧行整体挂到**默认服务器**名下：
  *
  * - 默认服务器 = `emby_servers` 里**已登录**（有 apiToken + userId）且

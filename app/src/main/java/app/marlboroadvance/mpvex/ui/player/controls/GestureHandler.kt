@@ -831,7 +831,6 @@ fun GestureHandler(
           var initialVideoPosition = 0f
           var wasPlayerAlreadyPaused = false
           // ── 横滑快进的震动计数（issue 反馈新增）─────────────────────
-          //
           // 记「已经震过几个 2 秒档」，而不是「上次震在哪」——
           // 后者在手指抖回来时会立刻再震一次，手感很碎。
           // 用「已震档数」单向推进，往回滑也不会重复震动，符合直觉：
@@ -889,7 +888,6 @@ fun GestureHandler(
                     viewModel.seekTo(clampedPosition.toInt())
 
                     // ── 横滑快进的震动反馈（issue 反馈新增）─────────────
-                    //
                     // 每跨过一个「2 秒」档震一次，让用户不看屏幕也知道跳了多少。
                     // 刻意用「相对位移」而不是当前播放位置：
                     // 若按绝对时间，滑到 3 小时位置的电影里就会一路震个不停。

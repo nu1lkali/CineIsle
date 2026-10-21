@@ -561,9 +561,8 @@ fun PlaylistSheet(
             }
 
             // ── 悬浮层：被拎起来的那一条 ──
-            //
             // 画在 LazyColumn **外面**：列表内容会被 LazyColumn 裁掉，画在里面的话一旦被拖到
-            // 视口边缘整条就没了（用户反馈的「跳没了」）。画在外面则永远完整，而且它的位置
+            // 视口边缘整条就没了（「跳没了」）。画在外面则永远完整，而且它的位置
             // 只由手指决定 —— 这才是真正的「粘在手指下」。
             val liftedItem = reorder.liftedItem
             if (liftedItem != null) {
@@ -940,7 +939,6 @@ fun PlaylistTrackListItem(
 
   // Load thumbnail asynchronously
   // Skip thumbnail loading for M3U playlists (network streams)
-  //
   // ⚠️ skipThumbnail 也要进 key：拖拽期间被拎起来的那一条是「先跳过、松手后又回来」的，
   // 只按 videoPath 做 key 的话，跳过时协程不重启、回来时也不会补加载，缩略图就永远空了。
   // 另外缓存命中时要把值回填进 state —— 同一个视频可能刚被悬浮层那份实例加载过。

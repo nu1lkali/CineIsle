@@ -3,7 +3,7 @@ package app.marlboroadvance.mpvex.ui.browser.networkstreaming
 /**
  * 取一个网络路径的**显示名**（顶栏标题 / 照片查看器标题 / 收藏名共用这一份口径）。
  *
- * ⚠️⚠️ 这里有个极隐蔽的坑，v81 才修掉，**别再改回旧写法**：
+ * ⚠️ 这里有个极隐蔽的坑， 才修掉，**别再改回旧写法**：
  *
  * `substringAfterLast(delimiter, missingDelimiterValue = this)` 的第二个参数是
  * **「找不到分隔符时的返回值」**，Kotlin 的默认值是 `this`（整个字符串）。

@@ -19,7 +19,7 @@ import okio.FileSystem
 /**
  * 一张 Emby 照片的取图请求（Coil 的 `data`）。
  *
- * ⭐ 刻意用一个**自己的类型**而不是直接把 URL 当 String 传：String 会被 Coil 内置的
+ * 刻意用一个**自己的类型**而不是直接把 URL 当 String 传：String 会被 Coil 内置的
  * 网络 Fetcher 抢走（那条路不知道 Emby 的 `X-Emby-Token` 鉴权，
  * 也不会在「服务端缩放失败」时退回原图）。套一层壳之后，只有下面这个
  * [EmbyPhotoFetcher.Factory] 会接它。
@@ -29,7 +29,7 @@ data class EmbyPhotoUrl(val url: String)
 /**
  * 照片链路的图片加载器（Coil 3）。
  *
- * ⭐ **只服务照片**（浏览器 + 照片网格卡）。海报 / 横幅 / 宫格封面仍然走自研
+ * **只服务照片**（浏览器 + 照片网格卡）。海报 / 横幅 / 宫格封面仍然走自研
  * [EmbyImageLoader] —— 那条链路全项目在用，不动它。这里换 Coil 要的是成熟框架才有的东西：
  *  - **按请求尺寸采样**（不会因为「服务端缩放失败返回原图」就整张塞进内存）；
  *  - **内存缓存按字节上限自动淘汰**（[MEMORY_PERCENT]，超了自动丢最旧的）；
@@ -52,7 +52,7 @@ object EmbyPhotoImageLoader {
   /**
    * 磁盘缓存目录名（挂在系统临时目录 [FileSystem.SYSTEM_TEMPORARY_DIRECTORY] 下）。
    *
-   * ⭐⭐ 这一项是**必需**的：[DiskCache.Builder.build] 里是
+   * ⭐ 这一项是**必需**的：[DiskCache.Builder.build] 里是
    *    `checkNotNull(directory) { "directory == null" }`，而 `Builder()` 构造时
    *    **不会**给目录赋默认值（已 javap 核验 coil-core 3.6.3：`<init>` 只设了
    *    fileSystem / maxSizePercent / minimumMaxSizeBytes / maxSizeBytes，没有 directory）。
@@ -68,7 +68,7 @@ object EmbyPhotoImageLoader {
   /**
    * 内存缓存占可用堆的比例。
    *
-   * ⭐ 这是「预加载会不会炸内存」的答案：堆再大，照片缓存也不会超过这个上限，
+   * 这是「预加载会不会炸内存」的答案：堆再大，照片缓存也不会超过这个上限，
    * 超了 Coil 自动按 LRU 淘汰最旧的 —— 预取张数调大只是更容易把**别的**图挤掉，
    * 不会把进程撑爆。0.25 是 Coil 的默认值，不动。
    */

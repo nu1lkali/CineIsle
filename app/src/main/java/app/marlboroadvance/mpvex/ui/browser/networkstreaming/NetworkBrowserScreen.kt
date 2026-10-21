@@ -207,21 +207,18 @@ data class NetworkBrowserScreen(
     // UI State
     val isRefreshing = remember { mutableStateOf(false) }
 
-    // ⭐⭐ 滚动位置 state 提升到本页顶层持有（网格/列表各建一个，按视图模式选用）。
-    //
+    // ⭐ 滚动位置 state 提升到本页顶层持有（网格/列表各建一个，按视图模式选用）。
     //     为什么不放进 Grid/List 内部：保存要挂在「本页组合被销毁」上，恢复要等
     //     条目落位后由本页统一驱动 —— 两头都在这一层最稳，且两个视图能共用一套逻辑。
-    //
     //     `rememberLazyGridState()` 内部是 `rememberSaveable`，框架那条保存恢复链
-    //     （SaveableStateHolder + 异步 loadFiles）实测不稳，具体见
+    //     （SaveableStateHolder + 异步 loadFiles）不稳，具体见
     //     [NetworkBrowserViewModel.scrollPositions] 的 KDoc —— 所以这里自己做一份。
     val networkGridState = rememberLazyGridState()
     val networkListState = rememberLazyListState()
 
     // 保存：本页组合销毁时记下当前位置。
-    //
-    // ⭐ 什么时候会销毁：nav3 的 NavDisplay **只组合栈顶 entry** —— 进照片查看器 /
-    //    播放器时本页被盖住，组合即被销毁（用户实测「返回后位置丢了」的根因）。
+    // 什么时候会销毁：nav3 的 NavDisplay **只组合栈顶 entry** —— 进照片查看器 /
+    //    播放器时本页被盖住，组合即被销毁（用户「返回后位置丢了」的根因）。
     // ⚠️ 只在还留在返回栈里时才记：被 pop 意味着「离开这个目录」，下次从零进来
     //    应停在顶部；被盖住才需要「回来还在原位」。用实例身份（===）判，不用
     //    结构相等 —— data class 的 equals 会把同路径的不同 entry 判成相等。
@@ -266,10 +263,10 @@ data class NetworkBrowserScreen(
     // 排序一动就回到顶部：重排后若停在原位，用户看到的是「一片不相关的中段条目」，
     // 完全看不出排序结果长什么样。用户明确要求「改完排序就停在第一个项目」。
     // ⚠️ 键是「排序动作计数」而不是排序值 —— 随机换种子时值不变但列表重排了，
-    //    那也必须回顶（曾漏掉，用户实测反馈）。
-    // ⚠️⚠️ 必须和「已消费 tick」比对：`LaunchedEffect` 在**每次全新组合时都会启动一次**
+    //    那也必须回顶（曾漏掉，反馈）。
+    // ⚠️ 必须和「已消费 tick」比对：`LaunchedEffect` 在**每次全新组合时都会启动一次**
     //    （键不变也启动）。而返回查看器时本页正是全新组合 —— 不比对的话这个 effect
-    //    会立刻 scrollToItem(0)，把用户弹回顶端（用户实测：返回后停顶端）。
+    //    会立刻 scrollToItem(0)，把用户弹回顶端（用户返回后停顶端）。
     //    只有 tick 真的比上次消费的大（用户刚动过排序）才回顶。
     LaunchedEffect(sortChangeTick) {
       if (sortChangeTick == viewModel.consumedSortTick.value) return@LaunchedEffect
@@ -704,12 +701,10 @@ data class NetworkBrowserScreen(
       }
 
       // ── 长按条目的操作菜单（重命名 / 删除）──
-      //
       // **范式照抄 Emby 媒体库**：锚定在手指位置的浮动气泡菜单（`DropdownMenu`），
       // 不是居中的大卡片 —— AList 库与 Emby 媒体库除接口外结构一致，交互观感
       // 就该是同一套。（`EmbyItemActionsDialog` 也是这么写的：菜单本体是
       // DropdownMenu，需要输入 / 二次确认的动作才另开对话框。）
-      //
       // 与 Emby「扫描媒体库」同一原则：**写操作作用在服务器上、发出去撤不回来**，
       // 所以长按只弹菜单，删除还要再过一道确认，绝不直接执行。
       val target = actionTarget
@@ -1059,16 +1054,13 @@ private fun NetworkBrowserContent(
   val videos = remember(files) { files.filter { it.isVideoFile() } }
   val others = remember(files) { files.filter { it.type() == NetworkFileType.OTHER } }
   // 网格内容：与列表视图**同一口径** —— 直接沿用 files 的顺序，不再自己排一遍。
-  //
   // ⚠️ 这里原来写的是 `folders + (photos + videos).sortedBy { it.name.lowercase() }`，
   // 那是个隐蔽的 bug：`files` 从 ViewModel 出来时**已经**按用户选的排序键排过
   // （`networkFileComparator` = 文件夹恒在前 + 排序键 + 名称兜底），网格再按名称
   // 排一次 = 把用户的排序选择丢掉。表现就是「列表视图里排序生效、网格视图里没反应」。
-  //
   // 而纯目录的那一层（如 TOKYO 下全是 e0xx 子目录）整个走 `folders +`、没被重排，
   // 看起来「排序是好的」，于是很容易误判成「只有某些文件夹排序失效」——实际是
   // 「只有媒体被重排」，跟在哪一层无关。
-  //
   // 仍然排除 OTHER（字幕 / nfo 等）：网格只铺能渲染成卡片的条目（与空态文案一致）。
   // 照片与视频保持**混排**（不再按类型分屏），顺序仍由上面的排序键决定。
   val gridItems = remember(files) {

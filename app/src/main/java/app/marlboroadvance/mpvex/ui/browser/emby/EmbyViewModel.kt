@@ -749,7 +749,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * 表现就是「红心只能点亮、取消不了」。
    *
    * **成败以服务器回读的真实状态为准**：兼容服务端的回执（200 + UserData）并不可信 ——
-   * 实测会「回 200 但没落库」。这个回读最早只做在演员收藏上（那是最先踩坑的地方），
+   * 会「回 200 但没落库」。这个回读最早只做在演员收藏上（那是最先踩坑的地方），
    * 现在媒体条目的**取消收藏**也必须做（同一个坑，用户反馈「媒体详情页红心只能点亮
    * 不能取消」）。回执本身就与目标一致时走快路径、不回读；否则回读确认，
    * 确认下来没生效就换更用力的写法补一次（取消收藏会补标准 DELETE），再做最终确认。
@@ -769,7 +769,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       var authoritative = confirmed == target
 
       if (isPerson) {
-        // 演员收藏的回执在这类兼容服务端上不可信：实测返回 200、回执看似成功，
+        // 演员收藏的回执在这类兼容服务端上不可信：返回 200、回执看似成功，
         // 服务器却没落库（Emby Web 验证仍是未收藏）——用户碰到的「假成功」。
         // 所以 Person 一律回读，回执只作参考。
         // 部分服务端是「先回 200 再异步落库」，先等一拍再读，避免把刚提交的成功误判成失败
@@ -1015,12 +1015,10 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     val itemId = item.Id ?: return
     val engine = resolveEngine(reverseEngine)
 
-    // ⚠️⚠️ 容器类条目**绝不能**直接交给播放器。
-    //
+    // ⚠️ 容器类条目**绝不能**直接交给播放器。
     // `Series` / `Season` / 文件夹自身没有媒体文件，`/Videos/{id}/stream` 会回一个
     // 404 或空 body；播放器拿到「HTTP 成功但 0 字节」不会当场报错，而是一路推进到
     // mpv 初始化，最后在没有可解码帧那条路径上崩掉 —— 用户看到的就是「点播放闪退」。
-    //
     // 电视剧的正确行为是「点封面 = 从上一集没看完的地方接着看」：
     // 先取分集列表，优先挑有进度的第一集，其次挑第一集未看的，最后退回首集。
     val playTarget: EmbyItem = if (isContainerOnly(item) && item.Type == "Series") {
@@ -1079,7 +1077,6 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       )
     } else {
       // 单片播放。
-      //
       // ⚠️ ISO 探测**不能挂在 `resolveIfEnabled` 下面** ——
       // 「预解析直链」是个无关的优化开关（默认关，见 BrowserPreferences），
       // 挂在它底下等于「用户没开这个开关就永远用不到 ISO 播放」。
@@ -1314,7 +1311,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    *
    * 注意这里必须返回「默认内核」而不是 null：返回 null 的话调用方只会把 intent
    * 指向 mpv 播放页，「默认内核 = GSYVideoPlayer」这个设置就形同虚设
-   * （用户反馈的「设置里选了 GSY，播放起来还是 mpv」就是这个原因）。
+   * （「设置里选了 GSY，播放起来还是 mpv」就是这个原因）。
    */
   fun resolveEngine(reverse: Boolean): EngineKind {
     val preferred = EngineKind.from(playerPreferences.playbackEngine.get())
@@ -1389,7 +1386,6 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     if (!directUrl.startsWith("http://") && !directUrl.startsWith("https://")) return null
 
     // 预筛：能**确定**不是 ISO 就别发探测请求了。
-    //
     // 两个判据都必须是「否定式」的 —— 只要存在任何疑点就继续探测：
     // · 容器明确报了别的名字（mkv / mp4 / avi…）⇒ 肯定不是 ISO；
     // · URL 路径里没有 .iso ⇒ 只是「看不出来」，**不能**据此排除，
@@ -1610,7 +1606,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
   /**
    * 这个条目**自身**是否真的有视频文件可播。
    *
-   * ⚠️ 这是 v100 崩溃的直接原因：`Series` / `Season` / 文件夹 / 合集本身没有媒体文件，
+   * ⚠️ 这是 崩溃的直接原因：`Series` / `Season` / 文件夹 / 合集本身没有媒体文件，
    * 拿它们的 Id 去请求 `/Videos/{id}/stream`，服务端回 404 或一个空 body；
    * 播放器拿到「成功的 HTTP、0 字节」会一路走到 mpv 初始化，最后在
    * 「没有任何可解码帧」这条路径上崩掉 —— 现象就是「点播放 App 直接闪退」。
@@ -1642,7 +1638,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
    * 而 `/Items?Ids=a,b,c` 一次就能把它们连同 UserData（进度/已看）一起拿回来。
    *
    * ⚠️ 不用 `Recursive` 参数：`Ids` 查询本身就是精确命中，加 `Recursive=true`
-   * 在部分第三方服务端会把参数组合当成非法（实测某些版本直接回空）。
+   * 在部分第三方服务端会把参数组合当成非法。
    */
   suspend fun loadItemsByIds(server: EmbyServer, ids: List<String>): List<EmbyItem> =
     withContext(Dispatchers.IO) {
@@ -1715,7 +1711,6 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
   }
 
   // ── 照片（图集）──
-  //
   // 全部是薄封装（UI 不直接摸 EmbyClient），IO 线程执行。
   // 相册 / 照片两个查询的参数语义见 EmbyClient.getPhotoAlbums / getPhotos。
 
@@ -2028,7 +2023,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     includeItemTypes: List<String> = listOf("Movie", "Series", "Episode", "Video", "MusicVideo"),
   ): List<EmbyItem> = withContext(Dispatchers.IO) {
     runCatching {
-      // ⚠️ 必须分页拉全：高产演员能有几百部作品（实测有 200+ 的），只拉一页 60 条
+      // ⚠️ 必须分页拉全：高产演员能有几百部作品，只拉一页 60 条
       // 会让人以为「合并丢了一半作品」。TotalRecordCount 是服务端给的总数，
       // 循环到拉完为止；maxItems 是异常数据兜底，防止无限循环拖死设备。
       val out = ArrayList<EmbyItem>()
@@ -2115,7 +2110,6 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
 
   // ══════════════════════════════════════════════════════════════════════
   // 演职员合并（Person 去重）
-  //
   // 一条铁律：**判重是纯函数、执行顺序限速、账本必须落盘**。
   // 写服务器元数据是「影响全局、而且不报错」的操作 —— 一旦误合，
   // 别人的作品会挂到你名下，而且**你看不到任何异常**。
@@ -2514,7 +2508,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
   /**
    * 一次取回「当前这一屏所有文件夹」的宫格封面，按文件夹 Id 分组。
    *
-   * ⭐ 存在的理由 —— 给服务端减压：容器条目（Folder / BoxSet / CollectionFolder）自身没有封面，
+   * 存在的理由 —— 给服务端减压：容器条目（Folder / BoxSet / CollectionFolder）自身没有封面，
    * 只能拿内部子项的缩略图拼宫格。原先是**每个文件夹各发一次** /Items（见 [loadFolderCoverUrls]），
    * 一个「合集」列表摆 30 个合集就是 30 次请求。这里改成对当前父节点做 Recursive 查询、
    * 拿子项的 `ParentId` 当分组键 —— 一屏的封面共用这几次请求，请求数从 O(文件夹数) 降到 O(1~3)。
@@ -2532,7 +2526,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
    *      ⚠️ 随机模式千万别改成「按名称翻页 + 客户端洗牌」：那样每次拿到的是**同一批**条目，
    *      洗牌只换位置不换内容，用户看到的就是「没换图」（踩过这个坑）。
    *
-   * ⚠️⚠️ 返回的 map **只含「凑满 `perFolder` 张」的文件夹**。不足的一律交白卷，由调用方退回
+   * ⚠️ 返回的 map **只含「凑满 `perFolder` 张」的文件夹**。不足的一律交白卷，由调用方退回
    * 单文件夹请求去补齐 —— 这一条是**正确性要求**，不是优化：半成品（1~2 张）一旦交出去，
    * 卡片看到「已经有封面」就不再兜底，于是明明能凑四个的文件夹只显示 1~2 个宫格。
    * ⚠️ 与 [loadFolderCoverUrls] 一样会跳过没封面的条目、一路往后凑，所以「前几个没图就整张空白」
@@ -2597,9 +2591,9 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       // 服务端返回的条数少于请求条数 ⇒ 子树里就这么多、已经取全了，两种模式都该收工
       if (items.size < FOLDER_COVER_BATCH_PAGE_SIZE) break
     }
-    // ⚠️⚠️ 只交出**凑满 perFolder 张**的文件夹，不足的宁可交白卷，让卡片走单文件夹兜底去补齐。
+    // ⚠️ 只交出**凑满 perFolder 张**的文件夹，不足的宁可交白卷，让卡片走单文件夹兜底去补齐。
     //   以前把「这一批只扫到 1~2 张」的半成品也交出去，卡片看见 `cached != null` 就不再兜底，
-    //   于是明明能凑四个的文件夹只显示 1~2 个宫格（用户反馈的 bug）。
+    //   于是明明能凑四个的文件夹只显示 1~2 个宫格（ bug）。
     //   —— 交白卷的代价只是那一个文件夹多一次单文件夹请求，总次数仍远低于「每个文件夹各一次」。
     pools
       .filterValues { it.size >= perFolder }
@@ -2623,7 +2617,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
    * 优先 Thumb（横版缩略图，宫格排布更协调），没有则退回 Primary。
    *
    * ⚠️ 关键在于**凑足**：以前只取排序后的前 `count` 个，谁没封面就被滤掉 ——
-   * 于是「前四个恰好都没封面」时整个文件夹退回占位图标（用户反馈的空白问题），
+   * 于是「前四个恰好都没封面」时整个文件夹退回占位图标（空白问题），
    * 而且第 5 个之后哪怕有图也永远看不到。现在改成：从更大的候选池里**跳过没封面的**，
    * 一路往后凑，直到凑满 `count` 张或把文件夹翻完为止。
    *

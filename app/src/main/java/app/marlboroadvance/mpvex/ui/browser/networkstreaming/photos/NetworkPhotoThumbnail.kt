@@ -70,7 +70,7 @@ fun NetworkPhotoThumbnail(
   val imageLoader = remember(context) { NetworkPhotoImageLoader.get(context) }
 
   // ⚠️ 这里**不要**加「重载计数器 / nonce」之类的东西去换一个新 request。
-  //    v79 试过（`remember(connectionId, path, sign, retryNonce)`），是**无效功**：
+  // 试过（`remember(connectionId, path, sign, retryNonce)`），是**无效功**：
   //    coil3 3.6.3 的 `ImageRequest` 是 final class 且**重写了 equals**
   //    （已 javap 核验，构造器 25 个参数逐个比较），字段完全相同的新实例
   //    与旧实例 **相等**；`AsyncImagePainter$Input.equals` 又走
@@ -92,7 +92,6 @@ fun NetworkPhotoThumbnail(
   // 否则返回上一级时每张封面都会「闪一下」（painter 从 Loading 重新走一遍），
   // 而图其实一直在缓存里。
   // ⚠️ bucket 必须与上面 request 一致，否则永远查不到 ⇒ 白闪骨架屏。
-  //
   // 判据是「显示过」而不只是「内存缓存命中」：内存缓存必然会被 LRU 淘汰
   // （1000 张的目录放不下），但磁盘里还在，命中磁盘只要几十毫秒。这段空窗期
   // 如果画扫光骨架，观感就是「图丢了又重下」—— 详见 NetworkPhotoImageLoader.loadedKeys。
@@ -121,7 +120,7 @@ fun NetworkPhotoThumbnail(
    *    （`false` 时整个方法是空操作）—— 用户能看见并点到这个按钮，
    *    说明 item 正在组合里，必然是 true，所以这里是安全的。
    *
-   * ⭐ 真正让「重载刷不出来」的是**取流那一层**，不在这个按钮上：
+   * 真正让「重载刷不出来」的是**取流那一层**，不在这个按钮上：
    *    AList 的签名会过期，旧签名每次都 401，而 `fs/get` 对同一个文件
    *    返回同一个结果 ⇒ 重发多少次都撞同一堵墙（下拉刷新能好，是因为
    *    重新 `fs/list` 拿到了新签名）。修复见
@@ -185,11 +184,10 @@ fun NetworkPhotoThumbnail(
       }
 
       is AsyncImagePainter.State.Error -> {
-        // ⭐⭐ 这里**绝不能**给整块加 `clickable` —— 曾经的写法就是这样，
+        // ⭐ 这里**绝不能**给整块加 `clickable` —— 曾经的写法就是这样，
         //    结果整张封面（网格卡里是 1:1 的大图、几乎占满卡面）变成了一个巨大的
         //    「重试」热区，把外层卡片的 onClick（进入文件夹）和 onLongClick（长按菜单）
         //    **全部吃掉** ⇒ 用户反馈「一个文件夹封面没加载出来，这个文件夹就点都点不进去了」。
-        //
         //    ⚠️ 封面加载失败和「能不能进这个文件夹」是**两件完全无关的事**：
         //    用户点卡片绝大多数时候就是想进去，重试只是偶尔的次要意图。
         //    ⇒ 重试只占右下角一小块（[RETRY_TOUCH_SIZE]，Material 无障碍最小触控尺寸），

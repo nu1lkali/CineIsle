@@ -183,7 +183,7 @@ fun EpisodeListSection(
 
         // ── 批量操作行 ──
         // 「下载本季」单独一行、**左对齐**：和上面季节 chip 行、下面分集行
-        // 的 16dp 起始边距对齐，视觉上是一条竖线（v118 根据用户反馈从右对齐改过来）。
+        // 的 16dp 起始边距对齐，视觉上是一条竖线。
         // 单独成行的理由仍在：它是**作用于当前这一季**的动作，
         // 若和季 chip 放同一行最右，横向滚到末尾才会看见，长剧里等于藏起来了。
         // ⚠️ 做成**胶囊按钮**（tonal 底 + 圆角 50% + 下载图标）而不是一段带
@@ -428,8 +428,7 @@ private fun EpisodeCard(
   // 标题**至少**占两行高：实际只一行时也把位置占住，卡片才不会一张高一张矮
   // （横向分集行参差不齐）。行高取 bodySmall 的 lineHeight，缺省按 1.2×字号兜底；
   // sp→dp 要乘 fontScale —— 用户放大系统字号时，两行的高度跟着涨，不会挤爆。
-  //
-  // ⚠️⚠️ v118：这里必须给 **heightIn(min=…)** 而不是 `height(…)`。
+  // ⚠️ 这里必须给 **heightIn(min=…)** 而不是 `height(…)`。
   //   先前写死 `height(两行)`，算出来的高度一旦比文字真正要的两行**少一两个像素**
   //   （dp→px 取整 + 字体 fallback 的余量），第二行就被裁掉 ——
   //   用户看到的正是「标题被截断成一行，那还叫不影响标题显示吗」。
@@ -477,7 +476,7 @@ private fun EpisodeCard(
           color = MaterialTheme.colorScheme.onSurface,
           modifier = Modifier
             .weight(1f)
-            // ⚠️ v118：是 **heightIn(min=…)** 不是 `height(…)`。
+            // ⚠️ 是 **heightIn(min=…)** 不是 `height(…)`。
             //   `height()` 写死两行高，一旦算出来的高度比文字真正要的两行少一两个像素
             //   （sp→dp 取整、includeFontPadding 的余量），第二行就被裁掉
             //   ⇒ 用户看到的正是「标题被截断成一行」。
@@ -513,12 +512,12 @@ private fun EpisodeCard(
           )
         }
       }
-      // ⚠️⚠️ v119：卡片高度一共三个变量，三个都要治，治漏一个就是「有的高有的矮」：
+      // ⚠️ 卡片高度一共三个变量，三个都要治，治漏一个就是「有的高有的矮」：
       //   ① 标题 1 行 vs 2 行   → 上面 `heightIn(min = titleHeight)` 已治；
       //   ② 时长行在 `RunTimeTicks` 缺失时返回 null ⇒ 整行塌掉（±20dp）；
       //   ③ 进度条只在「看过一部分」时才存在（±9dp）。
       // ②③ 合并进**同一行**并给它**固定高度**：缺内容时留空而不塌缩。
-      // ⚠️ 不能写成两个 `if` —— 那正是 v118 只治了 ① 之后仍然参差的原因：
+      // ⚠️ 不能写成两个 `if` —— 那正是 只治了 ① 之后仍然参差的原因：
       //   卡高由「有没有内容」决定，而不是由「最高那张卡」决定。
       //   卡宽只有 150dp，进度条挤不下一整行，所以做成 32dp 跟在时长右边。
       val metaLineHeightSp = MaterialTheme.typography.labelSmall.let { style ->

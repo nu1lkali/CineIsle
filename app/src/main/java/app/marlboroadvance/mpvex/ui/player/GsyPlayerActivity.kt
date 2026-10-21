@@ -1921,7 +1921,7 @@ class GsyPlayerActivity : ComponentActivity() {
     // ⚠️ 暂停 / 恢复必须**成对�? View �?**（`onVideoPause` / `onVideoResume`）�?
     //  之前是底�? `GSYVideoManager.instance().pause()` �? View �? `onVideoResume()`�?
     //  两套混用会把 GSY 的状态机搞乱：`mCurrentState` 与内核实际状态不一致，
-    //  于是关掉面板后播�? / 暂停键点了都没反应（用户实测：「暂停不了也恢复不了」）�?
+    //  于是关掉面板后播�? / 暂停键点了都没反应（用户「暂停不了也恢复不了」）�?
     //  记下「是我们暂停的」：关面板时只恢复我们自己按下去的这一次�?
     pausedForCastSheet = GSYVideoManager.instance().isPlaying
     if (pausedForCastSheet) activePlayer?.onVideoPause()
@@ -2085,7 +2085,7 @@ class GsyPlayerActivity : ComponentActivity() {
         areaRatio = dmPrefs.areaRatio,
         maxOnScreen = dmPrefs.maxOnScreen,
         preventOverlapping = dmPrefs.preventOverlapping,
-        // v117：竖屏适配 —— GSY 的 AspectTextureView 同样居中留黑边，
+        // 竖屏适配 —— GSY 的 AspectTextureView 同样居中留黑边，
         // 弹幕层按视频宽高比约束到画面矩形内（拿不到尺寸时回退全屏）。
         videoAspectProvider = {
           val p = activePlayer
@@ -2338,7 +2338,7 @@ class GsyPlayerActivity : ComponentActivity() {
 
   /**
    * TrafficStats 兜底：内核自报的网速（IJK �? tcp_speed / Exo2 的估算）在部分设备�?
-   * 或走了本地代理缓存（ProxyCacheManager）的路径上会恒为 0 —�? 用户实测「一�? 0 B/s」�?
+   * 或走了本地代理缓存（ProxyCacheManager）的路径上会恒为 0 —�? 用户「一�? 0 B/s」�?
    * 此时改用**进程级接收字节增�?**近似当前下载速度：正在播放时视频流就是本 App �?
    * 主要流量，误差可接受；缓冲已�? / 停止下载时增量自然归 0，语义一致�?
    */

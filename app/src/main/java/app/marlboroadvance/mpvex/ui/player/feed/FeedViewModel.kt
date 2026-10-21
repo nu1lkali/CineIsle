@@ -101,7 +101,7 @@ class FeedViewModel(
   val hasNext: Boolean get() = index in 0 until items.lastIndex
   val hasPrev: Boolean get() = index > 0
 
-  // ⚠️⚠️ 这三个字段**必须声明在 `init` 之前**。
+  // ⚠️ 这三个字段**必须声明在 `init` 之前**。
   // Kotlin 的属性初始化与 `init` 块**严格按源码顺序**执行：
   // 之前它们写在文件末尾、而 `init` 在最前面，于是 `init` 里的 `syncDislike()`
   // 去写一个还没初始化的 `mutableStateOf` ⇒ 后台字段是 null ⇒
@@ -183,7 +183,6 @@ class FeedViewModel(
     // 「不喜欢」状态与换页**同帧**完成：按钮不会先亮后暗。
     syncDislike()
     // durationSec / buffered / paused **刻意不在这里归零**。
-    //
     // 归零会让底部进度条在一帧之内从「滑块」塌成「一条细线」，下一拍心跳再把它撑
     // 回来 —— 一缩一放就是用户看到的「每切一条进度条就闪一次」。这一条的真实状态
     // 往往就在旁边的实例上（相邻页早就 prepared 好了），由 Activity 在翻页的同一帧

@@ -71,7 +71,7 @@ object EmbyClient {
   /**
    * 收藏 / 已播放等开关型请求附带的客户端标识 query 参数。
    *
-   * 逐字对齐 Emby Web 抓包（用户服务端 Emby 4.10，2026-10 实测）：该服务端上
+   * 与 Emby Web 请求一致：该服务端上
    * 历史上出现过不带这几个参数时「回 200 但收藏没落库」的假成功 —— 请求形态与
    * Web 完全一致后写入才真正生效。X-Emby-* 是 Emby 的标准客户端标识参数，
    * 所有服务端都接受，带上没有副作用。
@@ -114,7 +114,7 @@ object EmbyClient {
   /**
    * [ITEM_FIELDS] + **本地排序要用的那几个键**：年份 / 评分 / 添加时间 / 首播日期。
    *
-   * ⚠️⚠️ 这几个字段 Emby **默认不回传**（实测：不带 Fields 的 `/Items` 只回
+   * ⚠️ 这几个字段 Emby **默认不回传**（不带 Fields 的 `/Items` 只回
    * Name / Id / Type / UserData / ImageTags，其余全是 null），而 [ITEM_FIELDS] 里也没有它们。
    * 于是「按年份 / 评分 / 最新添加排序」时每条的键都是 null，稳定排序退化为**原顺序** ——
    * 表现就是「排序只有名称（SortName 在 ITEM_FIELDS 里）和随机有效，其余点了没反应」。
@@ -421,7 +421,7 @@ object EmbyClient {
     /**
      * 按「类型 Id / 标签 Id」筛选（逗号分隔）。
      *
-     * ⭐ 优先用这两个，而不是按名字的 [genres] / [tags]：
+     * 优先用这两个，而不是按名字的 [genres] / [tags]：
      * Emby 官方自 2019 年起就推荐用 Id（[官方说明](https://emby.media/community/topic/74602-tagitems-filtering-by-tags/)：
      * 「All list api's now have a TagIds filter… You can still filter using the tag name
      * with the Tags param, but this should only be used in situations where you do not have the id」）。
@@ -899,7 +899,7 @@ object EmbyClient {
   /**
    * 按 Id 取单个人员（演员 / 导演），带 UserData.IsFavorite。演员作品页的收藏红心用。
    *
-   * ⚠️ 参数形状按 Emby Web 抓包实证校正（用户服务端 Emby 4.10，2026-10 实测）：
+   * ⚠️ 参数形状按 Emby Web 实际请求校正：
    *  · `/Persons` 的 `Ids` 与 `Recursive` **不能同时传** —— `Ids+Recursive` 会让服务端
    *    先展开整个库再过滤（本项目在 `getItems` 上已经踩过并规避，见那里的注释），
    *    第三方服务端上几千条的库能直接拖到超时；
@@ -968,10 +968,10 @@ object EmbyClient {
   /**
    * 读单个人员的**收藏真值**（true=已收藏 / false=未收藏 / null=读不到，无法确认）。
    *
-   * ⚠️⚠️ **两条路径的先后顺序在 2026-10-21 被对调过**，这是个踩出来的坑，别再调回去：
+   * ⚠️ **两条路径的先后顺序在 2026-10-21 被对调过**，这是个踩出来的坑，别再调回去：
    * 旧顺序是「单条轻量读 → 收藏列表扫描」，而单条读走的 `/Users/{uid}/Items/{id}`
    * 在用户的这台服务端上**对相当一部分人员会卡满 30 秒然后回 HTTP 500**
-   * （实测 1114461 / 1083309 / 1333172 / 1132405 全是 500，而 1031021、1081006 又 40ms 正常）。
+   * （如 1114461 / 1083309 / 1333172 / 1132405 全是 500，而 1031021、1081006 又 40ms 正常）。
    * 后果有两个：① 进演员页要先干等 30s+ 才轮到下一步；② 单条读抛异常后 `runCatching`
    * 返回 null，才轮到列表法 —— 而列表法其实 **54ms** 就能给出真值。
    * 更致命的是：演员作品页把「读收藏状态」挂在 [getPersonById] 的非空返回值后面，
@@ -979,7 +979,7 @@ object EmbyClient {
    * 在这台机上对演员**全部失败**返回 null，于是列表法**连执行的机会都没有** ——
    * 这就是「导演作品页红心正常、演员作品页红心永远置灰」的根因（导演刚好走通了单条读）。
    *
-   * 为什么敢把列表法放在第一步（用户服务端实测证据）：
+   * 为什么敢把列表法放在第一步：
    *  · `/Persons?UserId=<guid>&IsFavorite=true&EnableUserData=true` 54ms 返回，带 UserData；
    *  · `POST .../FavoriteItems/<id>` 收藏一个人之后**立刻**再查，列表马上多出这个人
    *    （不存在「按 URL 缓存、回读拿到旧值」的问题 —— 旧代码担心的缓存坑在这条 URL 上不成立）；
@@ -993,7 +993,7 @@ object EmbyClient {
    *  2. `/Persons` 的 `Ids` 参数在部分服务端上不被支持（见 [getPersonById] 注释）。
    */
   fun getPersonFavoriteState(server: EmbyServer, personId: String): Boolean? {
-    // 1) 收藏列表法（Emby Web 收藏页同款查询；实测最快、真值新鲜）—— 见上方注释，别调换顺序
+    // 1) 收藏列表法（Emby Web 收藏页同款查询；最快、真值新鲜）—— 见上方注释，别调换顺序
     readFavoriteFromPersonList(server, personId)?.let { return it }
     // 2) 单条轻量读兜底：列表法拿不到结论时才走。部分人员在这台服务端上会 30s 后 500，
     //    失败就放弃（返回 null = 无法确认），不再让红心为它干等。
@@ -1282,7 +1282,7 @@ object EmbyClient {
    *
    * ⚠️ **不要把 `TagItems` 加进这个清单**：它不在官方 OpenAPI 的 `ItemFields` 可选值里，
    * 而服务端对不认识的字段名有可能直接 400（见 [PHOTO_FIELDS] 的同一条告诫）。
-   * 好消息是它**不需要索取**：单条目查询默认就会带 `TagItems`（实测响应里有
+   * 好消息是它**不需要索取**：单条目查询默认就会带 `TagItems`（响应里有
    * `TagItems` 三条、却连 `Tags` 字段都没有）⇒ 详情页读标签用
    * 「优先 TagItems、为空再退回 Tags」的写法，两边都索取就是白搭风险。
    */
@@ -1567,7 +1567,6 @@ object EmbyClient {
   // ════════════════════════════════════════════════════════════════════════
   // 2.5 相似推荐 / 即混（Instant Mix）/ 续播（NextUp）
   // ════════════════════════════════════════════════════════════════════════
-  //
   // 这三个端点是**服务端算法**。客户端还另有一套本地打分算法（见
   // `ui/browser/emby/discover/LocalSimilarity.kt`），两者由
   // `SimilarAlgorithm` 偏好切换 —— 服务端没刮削或算法不产结果时，
@@ -1586,7 +1585,7 @@ object EmbyClient {
    * @param includeItemTypes 只要这些类型；不传表示不限。
    *   默认 `Movie,Series` —— 单集（Episode）混进来会把区块塞满同一部剧的几十集。
    * @param excludeIdList 要排除的条目 Id（例如种子自己）。
-   *   服务端通常自己会排除种子，但**实测第三方兼容实现不总是排除**，
+   *   服务端通常自己会排除种子，但**第三方兼容实现不总是排除**，
    *   所以客户端还会再滤一次（见 `SimilarRecommendationViewModel`）。
    */
   fun getSimilarItems(
@@ -1729,12 +1728,12 @@ object EmbyClient {
   /**
    * 收藏 / 已播放这类「开关型」接口的统一发送。
    *
-   * 请求形态照 Emby Web 端实测的两种（**不是**官方 OpenAPI 写的那种）：
+   * 请求形态照 Emby Web 的两种（**不是**官方 OpenAPI 写的那种）：
    *   打开：`POST /Users/{uid}/FavoriteItems/{id}`
    *   关闭：`POST /Users/{uid}/FavoriteItems/{id}/Delete` ← 是 POST 到 `/Delete`，不是 DELETE 方法
-   * 实测 SmartStrm 这类服务端只认后一种写法，用 DELETE 方法会被拒。
+   * SmartStrm 这类服务端只认后一种写法，用 DELETE 方法会被拒。
    *
-   * **请求细节向 Emby Web 的真实请求看齐**（用户抓包对比过）：
+   * **请求细节向 Emby Web 的真实请求看齐**（与 Web 端核对过）：
    *  · `X-Emby-Token` 同时放 **query 参数和 header** —— 个别兼容服务端的这条路由只认 query；
    *  · 带 `Accept: application/json`，避免内容协商返回非 JSON。
    *
@@ -1742,17 +1741,17 @@ object EmbyClient {
    * 直接解析它就能确认状态 —— 不用再回查一次条目：那台服务器的详情响应
    * `Content-Length` 比实际 body 长，OkHttp 读不满会抛 unexpected end of stream，
    * 回查失败就会把「其实已经成功了」误报成失败。
-   * 回执可能不干净（SmartStrm 实测会把 JSON 重复拼接），所以解析失败后还有一层
+   * 回执可能不干净（SmartStrm 会把 JSON 重复拼接），所以解析失败后还有一层
    * 字段级提取兜底，见 [parseUserData]。
    */
   private fun toggleUserState(server: EmbyServer, basePath: String, enable: Boolean): EmbyUserData? {
     val path = if (enable) basePath else "$basePath/Delete"
-    // 客户端标识 + token 一起进 query：逐字对齐 Emby Web 抓包（见 [WEB_CLIENT_QUERY]）
+    // 客户端标识 + token 一起进 query：与 Emby Web 请求一致（见 [WEB_CLIENT_QUERY]）
     val clientQuery: Map<String, String?> = buildMap {
       put("X-Emby-Token", server.apiToken.takeIf { it.isNotEmpty() })
       putAll(WEB_CLIENT_QUERY)
     }
-    // 请求构造：token 同时放 query 与 header + Accept: application/json（对齐 Web 抓包）
+    // 请求构造：token 同时放 query 与 header + Accept: application/json（对齐 Emby Web）
     val buildRequest: (okhttp3.RequestBody) -> Request = { body ->
       authedRequest(server, path, clientQuery)
         .header("Accept", "application/json")
@@ -1792,7 +1791,7 @@ object EmbyClient {
    */
   fun unfavoriteHard(server: EmbyServer, itemId: String): EmbyUserData? {
     val base = "/Users/${server.userId}/FavoriteItems/$itemId"
-    // 客户端标识 + token 一起进 query（同 [toggleUserState]，对齐 Web 抓包）
+    // 客户端标识 + token 一起进 query（同 [toggleUserState]，对齐 Emby Web）
     val clientQuery: Map<String, String?> = buildMap {
       put("X-Emby-Token", server.apiToken.takeIf { it.isNotEmpty() })
       putAll(WEB_CLIENT_QUERY)
@@ -1816,7 +1815,7 @@ object EmbyClient {
   /**
    * 解析响应体里的 UserData。
    *
-   * 先做严格 JSON 解析；失败后退回**字段级提取**——SmartStrm 实测会把回执 JSON
+   * 先做严格 JSON 解析；失败后退回**字段级提取**——SmartStrm 会把回执 JSON
    * 重复拼接成 `{...}{...}`（不是合法 JSON，但两条里的 IsFavorite 一致），
    * 这条回执只关心 IsFavorite，正则抠出真值即可。
    * 解析不了（空 body / 完全没有该字段）返回 null，由调用方回读确认。
@@ -1860,7 +1859,7 @@ object EmbyClient {
    * 用户最终看到的是「成功 N / 失败 M」而不是一句笼统的失败。
    *
    * 串行而非并发：Emby 的收藏写在部分兼容服务端上是「先回 200 再异步落库」，
-   * 并发几十条很容易触发它的写锁竞争（实测会随机丢几条），串行慢一点但结果可信。
+   * 并发几十条很容易触发它的写锁竞争，串行慢一点但结果可信。
    */
   fun setFavoriteMany(server: EmbyServer, itemIds: List<String>, favorite: Boolean): EmbyBatchResult =
     runBatch(itemIds) { id -> toggleUserState(server, "/Users/${server.userId}/FavoriteItems/$id", favorite) }
@@ -2007,11 +2006,11 @@ object EmbyClient {
           .get()
           .build()
         httpClient.newCall(req).execute().use { resp ->
-          // ⭐ 只有**确实取到了内容**才认这条直链。
+          // 只有**确实取到了内容**才认这条直链。
           // 早期版本只判断「有没有发生跳转」，于是服务端回 403 / 404 时照样把那条
           // 死链当成直链交给播放器 —— 播放器必然失败，且无从回退。
           // 这里一票否决：非 2xx 一律当解析失败，调用方回退到原始 Emby 地址
-          // （那条路径由播放器自己跟 302，实测可播）。
+          // （那条路径由播放器自己跟 302，可播）。
           if (!resp.isSuccessful) {
             android.util.Log.w(
               "EmbyClient",
@@ -2206,7 +2205,7 @@ object EmbyClient {
     itemId: String? = null,
   ): List<EmbyRemoteSearchResult> {
     val path = "/Items/RemoteSearch/$searchType"
-    // 主请求：ItemId 按字符串发（实测能拿到候选的形式）
+    // 主请求：ItemId 按字符串发
     val body = json.encodeToString(EmbyRemoteSearchQuery(SearchInfo = lookup, ItemId = itemId))
     val first = runCatching { postJson<List<EmbyRemoteSearchResult>>(server, path, body) }
     if (first.isSuccess) return first.getOrThrow()
@@ -2759,11 +2758,9 @@ object EmbyClient {
   // ════════════════════════════════════════════════════════════════════════
   // 5.5 播放列表（Emby 服务端）—— 实现在 EmbyPlaylists.kt，以下为转发
   // ════════════════════════════════════════════════════════════════════════
-  //
   // ⚠️ 与项目里**已有的本地播放列表**（Room 的 PlaylistEntity / PlaylistDao）完全是两回事：
   // 这里的 playlist 存在 Emby 服务器上，多端共享、网页端也能看。
   // 两者刻意不互相同步 —— 本地的是 M3U 导入 + 本地路径，Emby 的是 ItemId，两者无法可靠映射。
-  //
   // 下面这些转发函数刻意**不用 inline**：inline + reified 泛型会要求调用方
   // 直接依赖实现细节，而且网络调用被复制到每个调用点后更难排查。
   // 留一层薄转发的好处是 —— 以后要在这里加统一的限流/日志/重试，只改这一处。
@@ -2815,10 +2812,8 @@ object EmbyClient {
   // ════════════════════════════════════════════════════════════════════════
   // 5.6 字幕在线搜索（Emby 服务端）—— 实现在 EmbySubtitles.kt，以下为转发
   // ════════════════════════════════════════════════════════════════════════
-  //
   // ⚠️ 与 [subtitleUrl]（拼 URL 把**服务端已有**的字幕轨交给 mpv）是两回事：
   // 这里是「搜字幕提供方 → 下载到服务器 → 再取字节」的三段式流程。
-  //
   // 默认参数值必须与 EmbySubtitles 里的完全一致。
 
   fun searchRemoteSubtitles(
@@ -2850,12 +2845,9 @@ object EmbyClient {
   // ════════════════════════════════════════════════════════════════════════
   // 5.7 合集（Collection / 官方客户端叫 BoxSet）—— 媒体库结构管理
   // ════════════════════════════════════════════════════════════════════════
-  //
-  // ⚠️⚠️ **本节最容易踩的坑：REST 路径是 `/Collections`，不是 `/BoxSets`**
-  //
+  // ⚠️ **本节最容易踩的坑：REST 路径是 `/Collections`，不是 `/BoxSets`**
   // `/BoxSets` 是 **Jellyfin** 的命名。Emby 官方 Java 客户端里 BoxSet 走的是
   // `CollectionServiceApi` → `/Collections`。照着 Jellyfin 的文档 / 网上教程写必然 404。
-  //
   // 另一个要记的：**参数名是 `Ids` 不是 `EntryIds`**。
   // 口诀 —— BoxSet(Collection) 一律 `Ids`；只有 Playlist 增删条目才用 `EntryIds`。
   // 写错参数名服务端不报错，只是**静默不生效**（合集内容不变），极难排查。
@@ -3002,24 +2994,19 @@ object EmbyClient {
   // ════════════════════════════════════════════════════════════════════════
   // 5.8 显示偏好（DisplayPreferences）
   // ════════════════════════════════════════════════════════════════════════
-  //
   // ⚠️ 三条容易踩空的真相，实现前务必先读完：
-  //
   // 1. **粒度是「每个目标」而不是「每个用户」**。落点的Id 叫
   //    `DisplayPreferencesId`，来自 `BaseItemDto.DisplayPreferencesId`，
   //    媒体库和单条目各有一份。所以不存在「一个用户一份显示偏好」这种写法 ——
   //    想让整个 App 的偏好跟着走，就得遍历所有目标库逐个写（见 EmbyDisplayPrefsSync）。
-  //
   // 2. **`Client` 是必填的分区键**，不是可选的 UA。`GET` 时它是 query 参数
   //    （`POST` 时它只在 body 里，见下），取不同值就读到不同的偏好副本。
   //    本 App 用 [DISPLAY_PREFS_CLIENT] 作为一个**独立分区**，
   //    好处是绝不会把 Emby Web 的排版偏好冲掉；代价是**不与网页端互通**，
   //    这是有意取舍，不是没做完。
-  //
   // 3. **不要写到 `/Users/{Id}/Configuration`**。`UserConfiguration` 的 17 个字段
   //    （音频语言 / 字幕语言 / ProfilePin / 跳过片头 / 重播剩余秒数…）**全是播放类**，
   //    一个显示字段都没有，网格密度写不进去。
-  //
   // 参数位置逐条照抄 SDK（`DisplayPreferencesServiceApi`）：
   //   GET  /DisplayPreferences/{Id}?UserId&Client← 只有 {Id} 在路径里
   //   POST /DisplayPreferences/{DisplayPreferencesId}?UserId

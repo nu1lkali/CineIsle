@@ -375,7 +375,7 @@ open class PlayerActivity :
    * 用 `mutableStateOf` 暴露给 Compose：切集（playNext/playPrevious）改的是这个值，
    * 但上一集/下一集按钮的 enabled、悬浮切换件的显隐都是**组合期**读 `hasPrevious()/
    * hasNext()` 算出来的 —— 若它是普通 var，值变了不会触发重组，按钮就「卡」在旧状态
-   * （实测横屏尤其明显：切了下一集后上一集按钮仍是灰色、点不动）。改成可观察状态后，
+   * （横屏尤其明显：切了下一集后上一集按钮仍是灰色、点不动）。改成可观察状态后，
    * 位置一变 UI 立即刷新。所有非组合场景的读写照常当普通 Int 用，零影响。
    */
   internal var playlistIndex: Int by mutableStateOf(0)
@@ -524,13 +524,10 @@ open class PlayerActivity :
     volumeControlStream = AudioManager.STREAM_MUSIC
 
     // ── 内核初始化：必须同步完成，onCreate 返回前 mpv 句柄就要可用 ──
-    //
     // ## 这里曾经被改成异步，直接导致「点播放 → 闪退」（清单 #26 的由来）
-    //
     // 原来的写法是 `lifecycleScope.launch { withContext(IO) { … } ; setupMPV() }`，
     // 动机是「assets 拷贝 / SAF 读配置是纯 IO，别占住主线程」。但它破坏了一个
     // 硬性前提：**`onCreate` 返回时 mpv 必须已经 create**。
-    //
     // 原因在 `MPVView` 的继承链：`BaseMPVView extends SurfaceView`。
     // `setContentView` 一执行，首帧 traversal 就会回调 `surfaceCreated`，
     // 而它的实现是 `MPVLib.attachSurface(holder.surface)` —— 一个 native 调用。
@@ -538,23 +535,18 @@ open class PlayerActivity :
     // 在 create 之前调用 = 解引用空指针 = **SIGSEGV**。
     // 这类崩溃在 native 栈里，**JVM 的 try/catch 与 runCatching 都拦不住**，
     // 表现就是整个进程直接消失、且拿不到任何 Java 堆栈。
-    //
     // 时序上 IO 段要几百 ms 到几秒（首次进播放页要拷 scripts/shaders/fonts，
     // 还要读 SAF 同步用户自建 mpv 目录），而首帧只要一帧（~16ms）——
     // 异步化之后 `attachSurface` **必然**抢在内核 create 之前跑，100% 复现。
-    //
     // 同一窗口里还有第二条路：`onResume → updateVolume() → viewModel` 让
     // `PlayerViewModel` 构造，其字段初始化里的 `PlayerLib.propInt["volume-max"]`
     // 首次访问会触发 native `observeProperty`，同样是死路。
-    //
     // ## 现在的做法
-    //
     // 同步调用（回到改造前的行为），**但先把 IO 挪出主线程的那部分成果保留**：
     //  ① `Anime4KManager.prepareOnIoThread()` 自带 `.assets_copied` 标记文件的快路径，
     //     冷启动第二次起连 `assets.list()` 都不进；
     // ② [PlayerLib] 的内核就绪门禁作为第二道防线 ——
     //     万一将来又有人挪动初始化时机，最坏也只是「值读不到」而不是「进程崩掉」。
-    //
     // 想彻底去掉主线程 IO 的正确解法是**在 Application 启动时预热**拷贝，
     // 而不是把内核 create 推迟到 Activity 里 —— 那是另一件事，不在这里做。
     prepareMpvFilesOnIoThread()
@@ -589,7 +581,7 @@ open class PlayerActivity :
     setupAudio()
     setupBackPressHandler()
     setupPlayerControls()
-    // v118：弹幕层独立成 View 层，声明在 controls 之前（= 控件下面）。
+    // 弹幕层独立成 View 层，声明在 controls 之前（= 控件下面）。
     // 顺序无依赖：danmakuState 在 onCreate 更早处（L510）就建好了。
     mountDanmakuLayer()
     setupPipHelper()
@@ -622,7 +614,7 @@ open class PlayerActivity :
 
     // 与 playlist 一一对应的显示标题（由发起方写入，如 Emby 的「S01E05 剧集名」）。
     // 没有这个列表时只能从 URL 末段猜标题 —— Emby 的流地址末段固定是 "stream"，
-    // 于是从第二个视频起标题全变成 "stream"（用户反馈的 bug）。有它就优先用它。
+    // 于是从第二个视频起标题全变成 "stream"（ bug）。有它就优先用它。
     playlistTitles = intent.getStringArrayListExtra("playlist_titles") ?: emptyList()
     // 「记住每部剧的播放设置」的键，与 playlist 下标一一对应
     playlistSeriesKeys = intent.getStringArrayListExtra("playlist_series_keys") ?: emptyList()
@@ -856,14 +848,12 @@ open class PlayerActivity :
           // ── 「出画面前」的加载层 ────────────────────────────────
           // 从进入播放器到首帧真正上屏（MPV_EVENT_PLAYBACK_RESTART）之间，
           // 视频 Surface 是**纯黑**的 —— 原来这里什么都没有，只有一片黑。
-          //
           // ⚠️ 关键：它**必须挂在 PlayerControls 之外**。
           //   `PlayerControls` 内部的缓冲转圈被包在
           //   `AnimatedVisibility(visible = controlsShown)` 里（PlayerControls.kt:845），
           //   而 `controlsShown` 的**初值就是 false**（PlayerViewModel.kt:224）
           //   ⇒ 首帧前控件是收着的，那个转圈根本不显示。
           //   放在这里才不受控件显隐影响。
-          //
           // 复用播放器的「显示缓冲转圈」开关（`show_loading_circle`）：
           // 语义一致（都是「正在等画面」），而且设置页已经有这一项，不新增开关。
           PlayerFirstFrameLoading(
@@ -957,7 +947,7 @@ open class PlayerActivity :
   /**
    * 把弹幕叠层挂到**它自己的 ComposeView**（`binding.danmaku`）上。
    *
-   * ⚠️⚠️⚠️ V118：这是「点屏幕唤不出控制栏」的根因修复，别再挪回控件那棵 Compose 树里。
+   * ⚠️ V118：这是「点屏幕唤不出控制栏」的根因修复，别再挪回控件那棵 Compose 树里。
    *
    * 之前弹幕叠层是 `binding.controls` 那棵 Compose 树里**最靠后（= 最上层）的全屏
    * `AndroidView`**。Compose 的命中测试里，兄弟节点按 z 序**上面那个先收事件**；
@@ -965,7 +955,7 @@ open class PlayerActivity :
    * 宿主 View 问一句「你要不要」，一旦那句返回 true，整串手势就被它独占
    * （`suppressMovementConsumption`），排在它后面的 `GestureHandler` 一条都收不到
    * ⇒ 单击永远走不到「显/隐控件」那条分支。
-   * 用户实测完全对得上：**弹幕还没渲染出来时点屏幕正常，弹幕一出来就点不动了**
+   * 用户完全对得上：**弹幕还没渲染出来时点屏幕正常，弹幕一出来就点不动了**
    * （弹幕层进入组合的那一刻，DOWN 就被它先截走）。
    *
    * 修法是**改分层，不靠事件传递的运气**：弹幕层变成独立的 View 层，且在 XML 里
@@ -975,7 +965,7 @@ open class PlayerActivity :
    *
    * 顺带把叠放顺序也修正成注释里一直写的那样：**弹幕在画面之上、控制条之下**。
    *
-   * 与 GSY 播放页一致 —— 那边弹幕层同样是独立 ComposeView，实测点击正常。
+   * 与 GSY 播放页一致 —— 那边弹幕层同样是独立 ComposeView，点击正常。
    */
   private fun mountDanmakuLayer() {
     binding.danmaku.setViewCompositionStrategy(
@@ -1096,17 +1086,14 @@ open class PlayerActivity :
       // 存档协程正在读 mpv 属性并写 Room。原先这里 `runBlocking { job.join() }`
       // **无限等它在主线程跑完** —— 那是 ANR 级的卡顿（Room 首次建表 + WAL fsync
       // 可以到几百毫秒），而它要防的竞态其实有更省的办法：
-      //
       // 竞态的本质是「destroy() 之后 job 还去读 mpv 属性」。所以只要**先冻结 mpv**
       // （下面 cleanupMPV 里的 `player.isExiting = true` + `removeObserver`），
       // job 读到的是什么就已经不重要了 —— 它写的要么是完整快照，要么是半截快照，
       // 两种都不会让程序崩。
-      //
       // 真正需要保证的是「别丢进度」，而那个由 onPause 的 `isSync` 分支负责
       // （退出时那次是同步写的，见 saveVideoPlaybackState）。这里的 job 是
       // onPause 之后的**异步补写**，它和 onPause 那次写的是同一份数据，
       // 晚一点到账不会丢，只是时序上晚一点。
-      //
       // 所以这里仍然等一下，但**必须有上限**：万一它真的卡住（磁盘满 / 数据库锁），
       // 也不能让用户看着「退出应用」卡死在那儿。
       savePlaybackStateJob?.let { job ->
@@ -1130,7 +1117,6 @@ open class PlayerActivity :
       cleanupAudio()
       // PiP receiver 被 activity 强引用；「PiP 中划掉应用」这条路不会走
       // onPictureInPictureModeChanged(false)，所以必须在这里显式反注册（清单 #20）
-      //
       // `pipHelper` 是 `lateinit var`（非可空），所以判「有没有初始化过」而不是判 null ——
       // 转交 GSY / 文件已不存在这两种提前 return 的路径上它压根没被赋值，
       // 直接 `pipHelper.release()` 会抛 UninitializedPropertyAccessException。
@@ -2902,7 +2888,7 @@ private fun cancelAutoplayCountdown() {
       // If fileName was already set, but mediaIdentifier is missing, set it for safety
       mediaIdentifier = getMediaIdentifier(intent, fileName)
     } else if (networkFilePaths.isNotEmpty()) {
-      // ⭐ 网络队列连播：换片后必须按当前下标重算进度键（getMediaIdentifier 内部
+      // 网络队列连播：换片后必须按当前下标重算进度键（getMediaIdentifier 内部
       //    会取 networkFilePaths[playlistIndex]），否则第二片起存/取进度都落在
       //    第一片头上。单文件播放（networkFilePaths 为空）不走这里，行为不变。
       mediaIdentifier = getMediaIdentifier(intent, fileName)
@@ -2922,8 +2908,7 @@ private fun cancelAutoplayCountdown() {
     // 落盘缓存超限就先清一遍（清单 #18）。mpv 自己的 LRU 只管「单条流不超过
     // cache-persize」，**不管总量** —— 连看 10 部片子总占用早就撑爆了，
     // 到那时 mpv 写不进去，表现为「缓存开着但没效果」。
-    //
-    // ⚠️⚠️ 必须扔到后台线程：之前这行就在主线程上裸跑，而 [MpvDiskCache.trimIfNeeded]
+    // ⚠️ 必须扔到后台线程：之前这行就在主线程上裸跑，而 [MpvDiskCache.trimIfNeeded]
     // 会 `deleteRecursively()` 几百 MB ~ 2GB 的缓存目录 —— 这里是 handleFileLoaded，
     // 正好卡在「首帧要上屏」的时机上，删得越久画面越是定住不动。
     // 缓存容量越大越慢，所以开着大缓存播大文件时表现为「卡成幻灯片」。
@@ -2936,14 +2921,12 @@ private fun cancelAutoplayCountdown() {
     setIntentExtras(intent.extras)
 
     // ── 弹幕：文件真正加载完成时补一次「换集」通知 ──
-    //
-    // ⚠️⚠️ 首次起播**不走** [loadPlaylistItemInternal]：`onCreate` 里是直接
+    // ⚠️ 首次起播**不走** [loadPlaylistItemInternal]：`onCreate` 里是直接
     //   `player.playFile(uri)`（见 L695），那条路径不会通知弹幕状态机。
     //   于是 `pendingTitle` 一直是空串 —— 线上日志里 `setEnabled(true)：pending=""`、
     //   `弹幕灌数据：… key=` 就是这么来的：
     //   ① 自动匹配永远拿不到片名，弹幕只能靠手动搜番；
     //   ② 「打开开关时补拉」这条兜底路径永远死在「还没拿到片名」上。
-    //
     // 放在这里的理由：此刻 `fileName` 已经定稿（上面刚处理完）、`playlistIndex`
     // 指向正确的一条、intent 里的剧集键也都在。切集时 [loadPlaylistItemInternal]
     // 已经通知过一次，这里再通知一次是**幂等**的（同一 key 不会重新拉）——
@@ -3497,13 +3480,11 @@ private fun cancelAutoplayCountdown() {
       // 写成 `Dispatchers.IO` 只是让 `saveBlock` 在 IO 线程执行，
       // 主线程照样原地等到磁盘写完。按返回键退出时每次都卡一下，
       // 数据库慢一点（首次建表 / WAL fsync / 磁盘忙）就是 ANR。
-      //
       // 关键在于**该保住的东西已经保住了**：上面 `currentPos` / `currentDuration` /
       // `speed` / `sid` … 全都在**主线程同步从 mpv 读完了**（mpv 属性读取是纳秒级的
       // 内存读，不涉及 IO），`saveBlock` 内部只剩 `getVideoDataByTitle` + `upsert`
       // 两个 Room 调用。所以改成异步**不会丢任何数据** ——
       // 进度值已经以本地变量的形式被捕获进闭包了。
-      //
       // 那 `isSync` 这个参数还需要吗？需要，但要重新定义它：
       // 它的意义从「同步写库」变成「**持有这个 Job 引用**」——
       // 退出时把 job 记进 [savePlaybackStateJob]，onDestroy 里好去 join/取消。
@@ -3673,7 +3654,6 @@ private fun cancelAutoplayCountdown() {
     val audioDelay = state.audioDelay / DELAY_DIVISOR
 
     // Restore external subtitles first.
-    //
     // ⚠️ 这里必须**等轨道真正挂进 track-list** 再往下走：`sub-add` 是异步命令，
     // 命令返回时轨道还没建出来，紧接着设 `sid` 会被 mpv 当成「不存在的轨道」直接丢弃
     // —— 外挂字幕「重开 app 就没了」正是这个顺序造成的。
@@ -4346,10 +4326,8 @@ private fun cancelAutoplayCountdown() {
     // 原来这里是主线程同步 `grabThumbnail(1080)`：一次约 2.6MB，
     // 而且 `MPVLib.grabThumbnail` 内部会把当前帧从解码器拉出来做像素转换、跨 JNI 传回，
     // **同步阻塞调用方** —— 也就是说在 UI 线程上等一次硬解 + 一次大块内存分配。
-    //
     // 现在改成：先把服务起起来（通知先出来，封面可以晚几百毫秒），
     // 抓图丢后台，回来再挂上。
-    //
     // 用 `setStaticThumbnail` 而不是 `mediaPlaybackService?.setMediaInfo(...)`：
     // 此刻可能还没绑定上（`bindService` 是异步回调），拿不到实例。
     // 那个方法里判了 `!==`，所以「重新起服务时传的同一张」不会被误 recycle。
@@ -4986,9 +4964,9 @@ private fun cancelAutoplayCountdown() {
 
     if (networkFilePath != null && networkConnectionId != -1L) {
       // For network files via proxy: use connection ID + file path for stable identifier
-      // ⭐ 队列模式按当前下标取本片路径（networkFilePaths 与 playlist 同序）——
+      // 队列模式按当前下标取本片路径（networkFilePaths 与 playlist 同序）——
       //    只用单值 extra 的话，连播换片后进度键永远停留在第一片，看第二片存下的
-      //    进度会记到第一片头上（用户实测「连播后每集进度都一样」就是它）
+      //    进度会记到第一片头上（用户「连播后每集进度都一样」就是它）
       val pathForCurrentItem = networkFilePaths.getOrNull(playlistIndex) ?: networkFilePath
       val identifier = "network_${networkConnectionId}_${pathForCurrentItem.hashCode()}"
       Log.d(

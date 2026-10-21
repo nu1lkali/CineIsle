@@ -5,7 +5,6 @@ import kotlinx.serialization.json.JsonElement
 
 // ════════════════════════════════════════════════════════════════════════
 // 元数据编辑 / 图片管理 / 识别（Identify）用到的数据模型。
-//
 // 这些都是 Emby 的“管理类”接口（Web 端库菜单里的编辑元数据、编辑图片、识别）
 // 才需要的结构，播放链路用不到，所以单独放一个文件，不混进 EmbyClient 的播放模型里。
 // ════════════════════════════════════════════════════════════════════════
@@ -55,7 +54,7 @@ data class EmbyRemoteImageInfo(
 data class EmbyRemoteImageResult(
   val Images: List<EmbyRemoteImageInfo> = emptyList(),
   /**
-   * 参与本次搜索的图源。**这里刻意不解析成具体结构** —— 实测不同版本 / 插件
+   * 参与本次搜索的图源。**这里刻意不解析成具体结构** —— 不同版本 / 插件
    * 返回的形状不一样：有的给字符串数组 `["MetaTube"]`，有的给对象数组
    * `[{Name, SupportedImages}]`。写成 `List<EmbyImageProviderInfo>` 时，前一种
    * 会直接抛 `Expected start of the object '{', but had '"'`（发生在 `$.providers[0]`），
@@ -105,7 +104,7 @@ data class EmbyRemoteSearchQuery(
    * 条目 Id —— **按字符串发**。
    *
    * 这里有个坑：官方 OpenAPI 把 `ItemId` 标成 `integer/int64`，但 Emby 服务端
-   * `RemoteSearchQuery<T>.ItemId` 实际是 string。实测（直接用 python 打同一台服务器）
+   * `RemoteSearchQuery<T>.ItemId` 实际是 string。（直接用 python 打同一台服务器）
    * 传字符串能正常返回候选，传数字时部分版本会在反序列化阶段直接拒绝。
    * 所以主请求统一用字符串，[EmbyClient.remoteSearch] 里还留了一手数字兜底。
    */

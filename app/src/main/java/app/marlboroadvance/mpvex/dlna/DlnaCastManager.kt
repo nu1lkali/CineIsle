@@ -81,7 +81,7 @@ class DlnaCastManager(private val context: Application) {
       runCatching { DLNACast.search(timeout = SEARCH_TIMEOUT_MS) }
         .onSuccess { list ->
           // 兜底：万一这一轮一个都没收到（Wi-Fi 抖动 / 设备休眠），
-          // 保留上一轮已发现的设备，避免面板凭空变空。
+          // 保留此前已发现的设备，避免面板凭空变空。
           val merged = list.ifEmpty { _devices.value }
           _devices.value = merged
           _uiState.value =

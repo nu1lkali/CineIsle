@@ -122,7 +122,6 @@ class MPVView(
     // 2) target-colorspace-hint：HDR / DV 内容时让 libplacebo 按片源提示把显示切进
     //    HDR 色彩空间（Android 9+ 支持），避免 HDR 片被压到 SDR 亮度区间灰成一片。
     //    仅 gpu-next 有效；老设备不支持时 mpv 会忽略该提示，无副作用。
-    //
     // ⚠️ 这里**必须显式写 yes / no 两支**，不能只在开启时设一次：
     //   `setOptionString` 只对 mpv 内部的当前实例生效，而本项目每次进入播放页
     //   都新建 MPVView，理论上不会串味 —— 但用户中途改设置再进播放器时，
@@ -141,7 +140,6 @@ class MPVView(
     }
 
     // Set hwdec with fallback order: HW+ (mediacodec) -> HW (mediacodec-copy) -> SW (no)
-    //
     // 注：Android 上 `mediacodec`（零拷贝）要求 `--vo=mediacodec_embed`，本项目用的是
     // gpu / gpu-next，所以这一段实际会被跳过，真正生效的是 `mediacodec-copy`，
     // 最后兜到 `no`（ffmpeg 软解）。
@@ -150,13 +148,11 @@ class MPVView(
       if (decoderPreferences.tryHWDecoding.get()) "mediacodec,mediacodec-copy,no" else "no",
     )
     // 硬解白名单：**这里不能用 `all`**。
-    //
     // AVI 里那批老视频编码（Xvid / DivX / MPEG-4 ASP，fourCC 常见为 XVID / DIVX / MP42）
     // 就是被 `all` 坑得最狠的一类：AVI 容器不会把编码的 codec-specific data（VOL 头）
     // 放在容器头里，而是混在码流里，Android 的 MediaCodec 于是"解码器建起来了、却一帧
     // 也吐不出来"—— 表现就是**有声音、画面全黑**，而且换内核也不见得好，因为另一条路
     // （ExoPlayer）同样依赖设备的 `video/mp4v-es` 解码器，绝大多数手机根本没有。
-    //
     // 这类编码交给 ffmpeg 软解成本极低（480p / 720p 的 Xvid 轻松跑满），所以把
     // mpeg4 / msmpeg4 / wmv / mpeg1 这些统统留在名单外。
     // 名单本身 = mpv 自带的 hwdec-codecs 默认值，只做加法不做减法，不会削弱 H.264 / HEVC 的硬解。
@@ -167,7 +163,6 @@ class MPVView(
     }
     
     // Cap demuxer cache for mobile to prevent memory issues
-    //
     // ⚠️ **字节上限才是这里真正的闸门**（秒数只是另一个上限，谁先到算谁）。
     // 下面 64MB 这条线决定了「大文件播起来到底会不会卡」，原因是 mpv 的
     // `demuxer-max-bytes` 一旦被打满，主线程上的 demux 线程会**停下来等消费者**，
@@ -177,19 +172,16 @@ class MPVView(
     MPVLib.setOptionString("demuxer-max-back-bytes", "${cacheMegs * 1024 * 1024}")
 
     // ── 远程流（Emby 直连、strm 指向的远端地址…）的缓冲与重连 ──
-    //
     // 这些片子的瓶颈通常在「取数据」而不是「解码」：源是远端 AVI 时，
     // AVI 的索引在文件尾部，播放器要反复回头读；一旦中间那层（Emby 中转、远端服务器）
     // 抖动或断一下，画面就卡住甚至再也不动 —— 观感上就是「软解卡得动不了」。
     // 所以把预读和重连都拉起来：抖动能自愈，不要一路卡到用户重进页面。
-    //
-    // ⚠️⚠️ **单位是「秒」，但真正的上限是上面那 64MB 字节**。
+    // ⚠️ **单位是「秒」，但真正的上限是上面那 64MB 字节**。
     // 这两个 30 秒在 5Mbps 的番剧上只占 ~19MB（无害），而在用户那种
-    // **70GB / 4K 原盘（实测 6~15MB/s = 50~120Mbps）** 上，
+    // **70GB / 4K 原盘（如 6~15MB/s = 50~120Mbps）** 上，
     // 30 秒 ≈ 180MB ~ 450MB —— 远远超过 64MB 的字节闸门，
     // 于是 mpv 永远处于「缓存被打满」的状态：readahead 反复停等、
     // 播放位置一抖就整段重新取数据，观感就是**卡成幻灯片**。
-    //
     // 所以秒数要跟着字节上限一起收：8 秒 × 64MB 的字节闸门正好能容纳
     // 「码率高到 8MB/s 的 4K 原盘」，同时低码率流仍然拿到充足的抖动量。
     MPVLib.setOptionString("cache-secs", "8")
@@ -204,10 +196,8 @@ class MPVView(
     )
 
     // ── 落盘缓存（清单 #18）──
-    //
     // 上面那几项是**内存**缓冲：进程活着就有，退出就没了 ⇒ 同一片子第二次看
     // 仍然要从服务器重拉。这里补上落盘那一半。
-    //
     // 三条硬约束（少一条就是「开着但没效果」，而且 mpv **不报错**）：
     //  · `cache-dir` 必须是**绝对路径**，相对路径会被静默忽略；
     //  · 目录得**自己先建**，mpv 不会替我们 mkdirs；
@@ -253,14 +243,12 @@ class MPVView(
     MPVLib.setOptionString("speed", playerPreferences.defaultSpeed.get().toString())
 
     // ── 解码器侧的通用提速 ──
-    //
     // ① `vd-lavc-dr=yes`（direct rendering）：解码器直接把输出写进 GPU 可读的缓冲，
     //    少一次整帧拷贝。4K 一帧（YUV420 10bit）约 25MB，这一拷在低端 SoC 上是
     //    实实在在的十几毫秒 —— 掉帧就是这么来的。
     //    ⚠️ 它原本被误写在 `applyAnime4KShaders()` 里（只有开着 Anime4K 才生效），
     //    于是「不开着色器 ⇒ 每条片子都少一层优化」。挪到这里对所有播放生效。
     MPVLib.setOptionString("vd-lavc-dr", "yes")
-    //
     // ② `vd-lavc-film-grain`：ffmpeg 的胶片颗粒合成策略。
     //    `cpu` 让**每一帧**都在 CPU 上做一遍颗粒合成 —— 在 1080p 上几乎无感，
     //    但在 4K 高码率上是一笔很重的每帧开销（大文件卡顿的帮凶之一）。
@@ -294,7 +282,6 @@ class MPVView(
     // 已在清单 #19 移除。移除原因不是「统计没用」，而是**它变成了没有入口的功能**：
     // 设置页那六个 chip（关闭 + 第 1~5 页）被整块删掉之后，唯一还能让它出现的方式
     // 就是本地偏好里残留着旧值 —— 也就是「升级后凭空弹一个用户不知道怎么关掉的浮层」。
-    //
     // 想要统计浮层的人：写进自己的 `mpv.conf`
     // （`script-binding stats/display-stats-toggle`），本项目不拦配置。
     // 对应的 [EngineFeature.STATS] 枚举项也已一并删除（它本来就零读点）。

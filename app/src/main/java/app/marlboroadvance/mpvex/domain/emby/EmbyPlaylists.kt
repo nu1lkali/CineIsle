@@ -4,10 +4,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 // ════════════════════════════════════════════════════════════════════════
 // Emby 服务端播放列表（清单 1.5 拆分第 2 刀，从 EmbyClient.kt 独立出来）
-//
 // 零行为变更：EmbyClient 里保留了同名的转发函数，全项目 62 处
 // `EmbyClient.xxx` 调用与全部 UI 调用一行都不用改。
-//
 // 下面这段 KDoc 原本就写在 EmbyClient 里，一并搬过来了 —— 它解释的是
 // 「为什么这些方法长这样」，跟着代码走才不会失联。
 // ════════════════════════════════════════════════════════════════════════
@@ -26,7 +24,6 @@ object EmbyPlaylists {
   // ════════════════════════════════════════════════════════════════════════
   // 5.5 播放列表（Emby 服务端）
   // ════════════════════════════════════════════════════════════════════════
-  //
   // ⚠️ 与项目里**已有的本地播放列表**（Room 的 PlaylistEntity / PlaylistDao）完全是两回事：
   // 这里的 playlist 存在 Emby 服务器上，多端共享、网页端也能看。
   // 两者刻意不互相同步 —— 本地的是 M3U 导入 + 本地路径，Emby 的是 ItemId，两者无法可靠映射。
@@ -91,7 +88,7 @@ object EmbyPlaylists {
 
     // 服务端把 IncludeItemTypes 当空气处理了（见上方 KDoc）。换一条**反向**的路：
     // 明确排除所有媒体类型，剩下「非媒体」的那批里再按 Type 挑。
-    // ExcludeItemTypes 与 IncludeItemTypes 是同一族参数，但实测下来不少实现
+    // ExcludeItemTypes 与 IncludeItemTypes 是同一族参数，但下来不少实现
     // 只对 Exclude 生效 —— 这一招是纯兜底，最坏结果是多一次请求、列表仍然是空的。
     if (raw.Items.isEmpty()) return raw
 

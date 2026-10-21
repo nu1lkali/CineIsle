@@ -93,12 +93,12 @@ internal fun protocolAccent(protocol: NetworkProtocol): Color =
   }
 
 /**
- * 网络位置卡（SMB / WebDAV / FTP / AList 的已保存连接，v69 紧凑版）。
+ * 网络位置卡（SMB / WebDAV / FTP / AList 的已保存连接， 紧凑版）。
  *
  * ## 这一版为什么要重做
  *
  * 旧版是「全宽 + 4~5 段堆叠」（名称行、可选的 Path/User 行、错误行、自启勾选行、
- * 底部大按钮行），单卡实测接近 200dp 高。连接一多，一屏放不下两张，列表又长又花。
+ * 底部大按钮行），单卡接近 200dp 高。连接一多，一屏放不下两张，列表又长又花。
  *
  * ## 网络模块的设计语言（本文件与 `NetworkStreamingScreen` 共用）
  *
@@ -292,11 +292,9 @@ fun NetworkConnectionCard(
               text = { Text(stringResource(R.string.i18n_connect_on_launch)) },
               leadingIcon = {
                 // 「启动应用时自动连接」的开关态。
-                //
                 // 旧版用「有勾 / 空占位」表达开关：开态一个 ✓，关态一块 24dp 空白。
                 // 问题就出在那块空白上 —— 这一列其他项（置顶 / 连接 / 编辑 / 删除）
                 // 全都有图标，唯独它时有时无，看着像没画完。
-                //
                 // 现改为**恒显示**一个「自动」语义图标（闪电），开关态交给颜色：
                 // 开 = 主色（与卡片上「已连接」状态点同色，即本 App"激活"的颜色语言），
                 // 关 = onSurfaceVariant（与 ⋮ 图标同色，即"待机"灰）。

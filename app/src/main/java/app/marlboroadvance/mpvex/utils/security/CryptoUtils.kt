@@ -45,7 +45,7 @@ object CryptoUtils {
    * `Invalid operation handle … Call on finalized operation with outcome: Pruned`，
    * 后到的调用直接抛 IllegalBlockSizeException。
    *
-   * 实测踩坑路径（网络浏览「只有一部分文件夹封面能加载」的根因）：
+   * 踩坑路径（网络浏览「只有一部分文件夹封面能加载」的根因）：
    * 网格一屏可见十几个文件夹 ⇒ Coil 并发拉封面 ⇒ 每个 Fetcher 都走
    * `NetworkRepository.getConnectionById → withDecryptedPassword → decrypt`，
    * 十几个线程同时捅 Keystore，互相 prune，输的那个拿到**空密码**，

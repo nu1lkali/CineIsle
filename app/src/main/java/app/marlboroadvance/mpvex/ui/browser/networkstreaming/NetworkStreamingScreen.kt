@@ -121,7 +121,6 @@ object NetworkStreamingScreen : Screen {
     // 这一页原来的放大镜是被注释掉的（`// Search functionality disabled for production`），
     // 顶栏只剩一个设置图标 —— 典型的「半成品」痕迹。其实这里根本不需要任何服务端能力：
     // 连接列表本来就是全量装在内存里的，按名称 / 地址 / 协议做纯字符串过滤即可。
-    //
     // 搜索只针对**已保存的连接**：直链段、收藏目录段都不是「连接」，有关键词时
     // 一并收起（否则搜索结果里混着两段无关内容，反而看不出命中了什么）。
     var searchActive by remember { mutableStateOf(false) }
@@ -422,7 +421,7 @@ private fun SectionHeader(text: String) {
  * 「收藏的目录」快捷入口段：横排卡片，点一下直达该目录
  * （与在连接列表里一层层点进去等价，但省得每次找连接）。
  *
- * ## v69 版式（与 [NetworkConnectionCard] 同一套设计语言）
+ * ## 版式（与 [NetworkConnectionCard] 同一套设计语言）
  *
  * - **协议徽标代替通用文件夹图标**：徽标直接用所属连接的协议代号与强调色，
  *   和下面的连接卡视觉上串成一套 —— 同时一眼能看出这个目录是 SMB 还是 AList 上的；

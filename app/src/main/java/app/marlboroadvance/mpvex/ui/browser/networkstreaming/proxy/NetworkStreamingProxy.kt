@@ -717,7 +717,6 @@ companion object {
       // ⚠️ 客户端复用 [webDavRangeClient]（见其注释）：原来在这个方法体内每次都new 一个，
       // 而拖动进度条会高频调它—— 每次都新建连接池 + 线程池，
       // 是「拖动时卡顿 / 连接数暴涨」的直接原因。
-      //
       // Build the request
       val requestBuilder = okhttp3.Request.Builder()
         .url(url)

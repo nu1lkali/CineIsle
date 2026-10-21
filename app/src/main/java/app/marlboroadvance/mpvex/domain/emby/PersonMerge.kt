@@ -432,11 +432,11 @@ fun rewriteItemPeople(
  * 只留 `Name / Id / Type / Role / ProviderIds`，其余（`PrimaryImageTag`、图片 tag 等
  * 服务端下发时附带的东西）全部丢弃。
  *
- * 为什么必须削：Emby 官方论坛的社区实测与现成工具（emby-toolkit）都表明，
+ * 为什么必须削：Emby 官方论坛的社区反馈与现成工具（emby-toolkit）都表明，
  * `POST /Items/{id}` 的演员表更新对 People 条目里**多余的回传字段**非常敏感 ——
  * 原样回传 GET 拿到的条目，部分服务端会**回 200 但 People 原样不保存**；
  * 整个数组都换成这种最小结构就能正常落库。
- * （另：论坛实测还确认服务端保存时会按 Name 重新解析 Person、无视条目里的 Id ——
+ * （另：论坛反馈还确认服务端保存时会按 Name 重新解析 Person、无视条目里的 Id ——
  * 所以同名合并必须先把被并项改成唯一的临时名，见 PersonMerger。）
  */
 private fun sanitizePersonEntry(el: JsonElement): JsonElement {

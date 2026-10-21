@@ -370,7 +370,7 @@ fun PlayerSheets(
       val host = LocalActivity.current as? app.marlboroadvance.mpvex.ui.player.PlayerActivity
       val danmakuState = host?.danmakuState()
       if (danmakuState != null) {
-        // ⚠️ v117：面板每次打开都从偏好刷一次快照。`_sheet` 的初始值是
+        // ⚠️ 面板每次打开都从偏好刷一次快照。`_sheet` 的初始值是
         //    `DanmakuSheetState()`（enabled=false），而「设置-弹幕」页的开关
         //    是直接写 preference 的（不走本状态的 setter）—— 不刷的话，
         //    用户在设置里开了弹幕+自动匹配，播放时弹幕正常加载、画面正常渲染，

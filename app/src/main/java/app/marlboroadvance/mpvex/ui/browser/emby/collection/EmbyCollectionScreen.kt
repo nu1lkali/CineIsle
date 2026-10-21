@@ -504,7 +504,7 @@ private fun CollectionPickerDialog(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
           // 候选可能十几个，用 FlowRow 而不是 Row：Row 会把非 weight 子项压扁
-          // （项目红线：中文按钮排不下的真凶就是 Row 压缩非 weight 子项）
+          // （项目红线：中文按钮排不下的原因就是 Row 压缩非 weight 子项）
           androidx.compose.foundation.layout.FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),

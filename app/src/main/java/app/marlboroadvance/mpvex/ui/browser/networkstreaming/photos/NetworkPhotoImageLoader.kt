@@ -67,7 +67,7 @@ object NetworkPhotoImageLoader {
   /**
    * 磁盘缓存上限。
    *
-   * ⭐⭐ **这里存的是一张图的原始字节**（完整 JPEG，网络照片常见 3–8MB），
+   * ⭐ **这里存的是一张图的原始字节**（完整 JPEG，网络照片常见 3–8MB），
    *    不是解码后的缩略图 —— 因为本链路没有服务端缩放，只能整张拉下来再采样解码。
    *    所以这条缓存的**张数**约等于 `上限 ÷ 单张原图大小`：
    *    128MB 只够 20~40 张，用户滚过这一段之后，前面看过的图全被 LRU 挤掉，
@@ -81,7 +81,7 @@ object NetworkPhotoImageLoader {
   /**
    * 磁盘缓存目录名（挂在 [Context.getCacheDir] 下）。
    *
-   * ⭐⭐ 这一项是**必需**的：[DiskCache.Builder.build] 里是
+   * ⭐ 这一项是**必需**的：[DiskCache.Builder.build] 里是
    *    `checkNotNull(directory) { "directory == null" }`，`Builder()` 构造时
    *    **不会**给目录赋默认值（已 javap 核验 3.6.3：`<init>` 只设了
    *    fileSystem / maxSizePercent / min / max，没有 directory）。
@@ -156,7 +156,7 @@ object NetworkPhotoImageLoader {
         DiskCache.Builder()
           // 见 NET_IMAGE_CACHE_DIR：用应用私有 cacheDir，不用 java.io.tmpdir
           // ⚠️ `DiskCache.Builder.directory(...)` 只接受 okio 的 Path（不是 java.io.File），
-          //    必须 `toOkioPath()` 转换（v97 真实编译错误：Argument type mismatch）。
+          //    必须 `toOkioPath()` 转换（ 真实编译错误：Argument type mismatch）。
           .directory(context.cacheDir.resolve(NET_IMAGE_CACHE_DIR).toOkioPath())
           .maxSizeBytes(DISK_LIMIT_BYTES)
           .build()
@@ -185,7 +185,7 @@ object NetworkPhotoImageLoader {
   /**
    * 内存缓存 key = 磁盘 key + **尺寸分桶**。
    *
-   * ⭐⭐ 分桶是**必需**的，不分桶会连锁出一整串症状：
+   * ⭐ 分桶是**必需**的，不分桶会连锁出一整串症状：
    *
    * 内存缓存里存的是**解码后的 Bitmap**，而同一张照片在不同入口要的解码尺寸差了几个数量级：
    * 网格缩略图 ~360px（约 500KB）、列表行 64dp（约 150KB）、查看器大图
@@ -318,7 +318,7 @@ object NetworkPhotoImageLoader {
   /**
    * 把一张图的缓存条目**删掉**（内存 + 磁盘）。
    *
-   * ⭐ 用途：加载失败后的「重载」。之前那个重试按钮只调 `painter.restart()`，
+   * 用途：加载失败后的「重载」。之前那个重试按钮只调 `painter.restart()`，
    * 也就是**重走同一个请求** —— 而「网络抖了一下」往往在磁盘缓存里留下了
    * 半截 / 解不动的数据，或者 AList 的签名已经过期，于是每次重试都撞同一堵墙：
    * 状态从 Error 走一圈回到 Error，界面上就是「点了没反应」。
@@ -329,7 +329,7 @@ object NetworkPhotoImageLoader {
    *    只清调用方自己那个桶的话，切到另一个入口仍会拿到同一份坏字节解出来的图。
    * ⚠️ 有磁盘 IO，调用方放 IO 线程。
    *
-   * ⭐ **整段包在 `runCatching` 里**：这个方法是「用户点了重载」这种纯 UI 触发的路径，
+   * **整段包在 `runCatching` 里**：这个方法是「用户点了重载」这种纯 UI 触发的路径，
    *    它跑在普通协程里、**不在 Coil 的 try/catch 之内** —— 里面任何异常（典型如
    *    建 ImageLoader 时磁盘缓存目录不可用）都会直接冒泡成崩溃。清缓存失败最多是
    *    「这次重载没清干净」，绝不该把界面带崩，所以这里吞掉并记日志。
@@ -502,7 +502,7 @@ private class NetworkPhotoFetcher(
    * 采样边长的目标值（像素）。
    *
    * 这里**故意不用** Coil 的 `Options.size`：它的宽高是 `Dimension` 值类，
-   * 内部字段名随版本变过（v97 实测 `px` 也不存在），为了一个「缩略图存多大」
+   * 内部字段名随版本变过，为了一个「缩略图存多大」
    * 的决策去绑死第三方内部结构不划算。改用「按桶给固定上限」——
    * 桶的语义本来就稳定（网格 / 胶片条），尺寸上限跟着桶走即可。
    */

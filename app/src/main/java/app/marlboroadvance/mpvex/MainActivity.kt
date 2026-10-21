@@ -125,7 +125,7 @@ class MainActivity : ComponentActivity() {
   /**
    * 保存实例状态前的**体积闸门**。
    *
-   * ⚠️ 背景（v95 线上日志，`TransactionTooLargeException: data parcel size 2226748 bytes`）：
+   * ⚠️ 背景（ 线上日志，`TransactionTooLargeException: data parcel size 2226748 bytes`）：
    * 崩在 `activityStopped` → `IActivityClientController$Stub$Proxy.activityStopped` 的 Binder
    * 回传上。`Bundle stats` 里 2.2MB 几乎全部集中在 Compose 那一个 `SaveableStateRegistry:-1`
    * 条目下（两个各约 1.1MB 的子项），而 Binder 事务的硬上限是 1MB ⇒ 切后台/按 Home 时必崩，

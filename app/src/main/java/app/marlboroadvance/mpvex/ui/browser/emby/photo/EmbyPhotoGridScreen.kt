@@ -150,7 +150,7 @@ data class EmbyPhotoGridScreen(
     val gridState = rememberLazyGridState()
 
     // 「再洗一副牌」的计数器：点排序里的「随机」时 ++，把重拉的请求踢一脚。
-    // ⭐ 为什么需要它：换排序项 / 反转方向都会改 LaunchedEffect 的 key，从而重拉；
+    // 为什么需要它：换排序项 / 反转方向都会改 LaunchedEffect 的 key，从而重拉；
     //   但「已经是 Random 了、用户还想再洗一次」时 sortBy 与 sortOrder 都没变，
     //   key 不变 ⇒ 不会重拉 ⇒ 清了缓存也白清，看起来像点了没反应。
     var shuffleNonce by remember { mutableIntStateOf(0) }
@@ -184,8 +184,7 @@ data class EmbyPhotoGridScreen(
         loadingMore = true
       }
 
-      // ⭐ 随机排序：命中缓存就直接复用，不再问服务端。
-      //
+      // 随机排序：命中缓存就直接复用，不再问服务端。
       // 服务端 `SortBy=Random` 是**每次请求重新洗牌**的 —— 只要本页重新拉一次
       // （从大图返回、退回相册网格再进、甚至切走再回来），顺序就全变了，
       // 用户刚看过的那张再也找不回来（真机反馈：「返回上一级就重新随机了」）。
@@ -257,8 +256,7 @@ data class EmbyPhotoGridScreen(
     }
 
     // 换层级 / 换排序 ⇒ 重拉第一页
-    //
-    // ⭐ 换排序（或点「随机」再洗一次）之后回到顶部，首次进入除外：
+    // 换排序（或点「随机」再洗一次）之后回到顶部，首次进入除外：
     //   「随机」整副牌重洗、其它排序整体换序后，条目顺序全变了，而 LazyGrid 会**按 key**
     //   把「原来的第一条」重新定位到它在新顺序里的位置 ⇒ 画面停在列表中间（用户反馈
     //   「切到随机后停在中间」）。
@@ -294,15 +292,13 @@ data class EmbyPhotoGridScreen(
     }
 
     // ── 记住上次浏览位置 ──
-    //
     // 浏览器退出时会按 parentId 记下「看到第几张」，这里在**重新进入**相册时把网格
     // 滚到那一张 —— 不然每次点进相册都从第 1 张开始，看到第 200 张退出去再进来就得
     // 重新滑一遍。
-    //
-    // ⭐ 只做**一次**：续页会不断把 [items] 变长，而本 effect 的 key 里有 items.size，
+    // 只做**一次**：续页会不断把 [items] 变长，而本 effect 的 key 里有 items.size，
     // 没有 [restored] 闸门的话每续一页都会把用户重新拽回定位点（表现为「往下翻着翻着
     // 自己跳回去了」）。
-    // ⭐ 也只在 idx > 0 时滚：上次就停在第 1 张还要滚一次纯属多余动画。
+    // 也只在 idx > 0 时滚：上次就停在第 1 张还要滚一次纯属多余动画。
     val parentKey = album?.Id ?: libraryId
     val lastIndexPref = remember(parentKey) { browserPreferences.photoLastIndex(parentKey) }
     val lastOffsetPref = remember(parentKey) { browserPreferences.photoLastOffset(parentKey) }
@@ -321,11 +317,9 @@ data class EmbyPhotoGridScreen(
     }
 
     // ── 退出时记下滚动位置 ──
-    //
     // 光记「打开过第几张」不够：很多时候用户只是在网格里一路滚着看、一张都没点开，
     // 退出去再进来还是从第 1 张开始。所以这里把**网格自己的滚动位置**也存下来。
-    //
-    // ⭐ 与浏览器写的「当前第几张」谁生效：从大图返回后如果用户**没有再滚动**
+    // 与浏览器写的「当前第几张」谁生效：从大图返回后如果用户**没有再滚动**
     //   （可见位置还停在打开照片时的那格），就保留浏览器写的那张 —— 那才是他最后看的；
     //   一旦滚过，就以新的滚动位置为准。
     var indexWhenOpened by remember { mutableStateOf<Int?>(null) }
@@ -367,7 +361,7 @@ data class EmbyPhotoGridScreen(
           .padding(innerPadding),
       ) {
         // ── 工具行：数量 + 随机播放图片 + 列数 + 排序 ──
-        // ⭐ 它是 Column 的**第一行，占自己的高度**，图区从它下面开始 ——
+        // 它是 Column 的**第一行，占自己的高度**，图区从它下面开始 ——
         // 这样上滑时卡片不会压到按钮上（「安全区」的真做法）。
         // 以前它是叠在图区之上的悬浮条，靠网格自己留白让位：留白会跟着滚走，
         // 滚一段后卡片就跑到按钮底下了（真机反馈「卡片和工具栏叠在一起」）。
@@ -591,7 +585,7 @@ data class EmbyPhotoGridScreen(
  * ⚠️ 用 synchronizedMap：下拉续页在 IO 线程回调后回主线程写，而命中缓存的读发生在
  *    组合里，两端不是同一线程。
  *
- * ⚠️ 两层上限（百万张相册实测教训）：
+ * ⚠️ 两层上限（百万张相册教训）：
  *    · MAX_ITEMS —— 续页后 put 的是**全量 items**，不封顶的话一个百万张的相册
  *      翻到底就能把 Entry 撑爆（OOM）。只保前 2000 张「同一副牌」；
  *      totalCount 保留真实值，命中缓存后 consumed=2000 < totalCount 会自然
@@ -645,7 +639,7 @@ private val PHOTO_SORT_OPTIONS = listOf(
  * 照片网格本体。抽出来只是为了让 [EmbyPhotoGridScreen.Content] 的 when 分支短一点。
  *
  * ⚠️ 用**普通网格**而不是瀑布流：照片卡已经是统一等比（见 EmbyPhotoCard.aspectRatio），
- * 瀑布流在这种等高卡片下只会让相邻列错位、底部参差 —— 正好是用户反馈的
+ * 瀑布流在这种等高卡片下只会让相邻列错位、底部参差 —— 正好是
  * 「卡片大小不一」。等高卡片 + 普通网格才是齐整的那一种。
  *
  * @param displayUrl / fallbackUrl 按卡片需要的解码宽度现算（HEIC 兜底同参数）
@@ -664,7 +658,7 @@ private fun PhotoGrid(
   LazyVerticalGrid(
     columns = GridCells.Fixed(columnCount),
     state = gridState,
-    // ⭐ 顶部 12dp 就是普通留白 —— 工具行已经**占了自己的那一行**，
+    // 顶部 12dp 就是普通留白 —— 工具行已经**占了自己的那一行**，
     // 网格不用（也不能）再为它让位：contentPadding 会跟着内容滚走，
     // 靠它让位等于没让（v1.5.2 的「卡片压在工具行底下」就是这么来的）。
     contentPadding = PaddingValues(

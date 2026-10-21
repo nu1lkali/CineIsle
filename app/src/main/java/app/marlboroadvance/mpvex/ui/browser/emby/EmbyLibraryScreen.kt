@@ -307,14 +307,12 @@ data class EmbyLibraryScreen(
     var category by remember(libraryId) { mutableStateOf(savedCategory) }
 
     // ── 「照片视频混合库」的处置：内容原样铺开，不再让用户手选档位 ──
-    //
     // 家庭视频 / 照片这类库（collectionType = homevideos / mixed / 未知）里，同一个
     // 目录可能既有视频又有照片，也可能只有其中一种。以前的做法是在顶部摆一排
     // 「仅媒体 / 全部 / 仅照片」让用户先声明「我要看哪种」，两个硬伤：
     //   ① 默认档「仅媒体」= 只要视频，于是**一个只装照片的目录点进去是空的**
     //      （服务端被 MediaTypes=Video 滤光）—— 用户看到的就是「点进去什么都没有」；
     //   ② 用户得先知道这层装的是什么才能选对档位，而他要的恰恰是「点进去看看」。
-    //
     // 现在改成：这一层**真实装了什么就原样铺什么**（容器 / 视频 / 照片各用各自的卡片），
     // 与 Emby Web 的行为一致，也是唯一不需要用户先做判断的方案。
     // 纯视频库（movies / tvshows）与纯照片库（photos）不受影响，口径逐字节不变。
@@ -322,7 +320,6 @@ data class EmbyLibraryScreen(
       collectionType?.lowercase() in setOf(null, "mixed", "homevideos")
     // 「内容原样」只作用于「全部」分类 —— 其余分类（合集 / 收藏 / 文件夹 / 演员）
     // 各有自己的限定口径，不该被它改写。
-    //
     // 第二种进入「内容原样」的路径：本页是**点进真实文件夹**下钻来的（[isFolderDive]）。
     // 库类型管的是「库怎么分类」，管不了「这个文件夹里装了什么」——「电影」库里一个
     // 没被识别成 Movie 的子目录，里面可能全是 `Type=Video` 的视频；继续套库类型的
@@ -425,8 +422,7 @@ data class EmbyLibraryScreen(
     // 列表缓存 key：库 + 分类 + 排序 + 搜索词。
     // 从详情页 / 播放器返回时这个 key 不变，于是直接命中缓存、不再发请求；
     // 只有用户下拉刷新或改了筛选条件才会真正重新拉取。
-    // ⭐ 中文字幕模式下**不要**把搜索词算进 key。
-    //
+    // 中文字幕模式下**不要**把搜索词算进 key。
     // 中文字幕是按路径在客户端判的，扫描已经把整个库翻完，得到的就是完整的命中集。
     // 此时搜索只该在这份本地数据上做名字匹配（见下面的 localSearch），不该再问服务端。
     // 而一旦把搜索词算进 key，一敲字就换一个新桶，扫完那份数据在重组时就被丢掉了 ——
@@ -450,8 +446,7 @@ data class EmbyLibraryScreen(
 
     // 搜索路径不从这里起值：搜索的「退出再进」由上面的快照（词+结果+滚动位置）回放，
     // 不读 cacheKey 缓存 —— 历史竞态写进缓存的脏条目（如全库媒体）不会闪出来。
-    //
-    // ⭐ 中文字幕是例外：它的 key 里没有搜索词，cachedEntry 就是「扫完那份命中集」，
+    // 中文字幕是例外：它的 key 里没有搜索词，cachedEntry 就是「扫完那份命中集」，
     // 搜索要在这份上继续筛，所以这里必须照常起值（见下面的 localSearch）。
     val cachedItems =
       if (searchQuery.isBlank() || chineseSubsOnly) {
@@ -574,7 +569,6 @@ data class EmbyLibraryScreen(
     // 「内容原样」档的排除清单：**容器一个都不排**（文件夹与相册都要当卡片显示、
     // 点得进去），只排掉确实不是内容的那些（季 / 曲目 / 有声书 / 电子书）。
     // 这几类在服务端没传 MediaTypes 时会跟着漏回来，本地过滤还有一道兜底。
-    //
     // 文件夹下钻时**不能排 Season**：Season 也是「文件夹里真实存在的子目录」，
     // 排掉它就成了「点进剧集目录看不到季」——与「装什么铺什么」相悖。
     val contentAsIsExclude = if (isFolderDive) {
@@ -687,7 +681,7 @@ data class EmbyLibraryScreen(
           mediaTypes = if (searching) null else effectiveMediaTypes,
           isFolder = if (searching) null else effectiveIsFolder,
           filters = if (searching) null else effectiveFilters,
-          // ⭐ 搜索词交给服务端：扫的是「命中那批」而不是整库，
+          // 搜索词交给服务端：扫的是「命中那批」而不是整库，
           // 但扫描照样一页一页翻到底 —— 这才是「筛选有、搜索也有」的关键。
           searchTerm = searchQuery.takeIf { it.isNotBlank() },
           sortBy = sortBy,
@@ -766,11 +760,10 @@ data class EmbyLibraryScreen(
 
     // 加载代际计数：每次 load() 递增。响应回来时若代际已前进（期间用户又触发了别的加载），
     // 本次结果必须整批丢弃 —— 否则「退出搜索时遗留的全库媒体请求」会在用户进入搜索后
-    // 姗姗返回，把搜索结果覆盖成浏览列表（用户实测「恢复搜索却显示所有媒体」就是它）。
+    // 姗姗返回，把搜索结果覆盖成浏览列表（用户「恢复搜索却显示所有媒体」就是它）。
     var loadGeneration by remember { mutableStateOf(0) }
 
     // 归位标记：数据**落位之后**把网格滚回顶部。
-    //
     // 为什么不能在触发处直接滚：那时新数据还没到，LazyGrid 会先按旧内容记下第一屏的 key，
     // 等新数据落位后再把那条重新定位到它在新顺序里的位置 —— 当场归位会被抵掉。
     // 真正生效的那次归位在 [load] 的 onSuccess（数据已落位）里做。
@@ -793,16 +786,14 @@ data class EmbyLibraryScreen(
       // 两者都得把整个结果集拉完才准，所以统一走扫描那条路。
       val needClientFilter = chineseSubsOnly ||
         (hasGenreTagFilter && !supportsGenreIdFilter(current.id))
-      // ⭐ 这里**不再**要求 `searchQuery.isBlank()`。
-      //
+      // 这里**不再**要求 `searchQuery.isBlank()`。
       // 以前搜索走的是下面那条「一次性取回、不翻页」的分支（limit = PAGE_SIZE），
       // 于是客户端筛选（中文字幕 / 类型标签）只能在一个**被截断的样本**里筛 ——
       // 表现就是用户报的「筛选列表里有、在筛选基础上搜索却搜不到」。
       // 两条路看到的不是同一批数据，筛选翻完了整个库，搜索只看了第一页。
-      //
       // 现在搜索也走扫描：`EmbyScanQuery` 带上 SearchTerm，服务端只返回命中那批，
       // 扫描再一页一页把它翻到底，口径与纯筛选**完全一致** —— 筛得到的，搜就一定搜得到。
-      // ⭐ 中文字幕 + 搜索：命中集已经在本地扫完了（扫描翻完整个库 + 按路径筛过）。
+      // 中文字幕 + 搜索：命中集已经在本地扫完了（扫描翻完整个库 + 按路径筛过）。
       //   搜索只该在这份数据上做本地名字匹配（见下面的 localSearch）——
       //   **不要**再发请求、也不要重扫：那只会拿回一个被截断的样本，
       //   于是又回到「筛选里有、搜索却搜不到」。零请求，敲一个字就地筛。
@@ -828,7 +819,7 @@ data class EmbyLibraryScreen(
             filters = effectiveFilters,
             sortBy = sortBy,
             sortOrder = sortOrder,
-            // ⭐ 用 consumedCount（服务端实际给过多少条），不用 items.size ——
+            // 用 consumedCount（服务端实际给过多少条），不用 items.size ——
             // 后者被客户端过滤/去重削过，会让翻页窗口回退、同一页反复拉，
             // 「全新条目为 0」时更是直接把 items.size 冻住、无限重拉同一页。
             startIndex = if (reset) 0 else consumedCount,
@@ -861,7 +852,7 @@ data class EmbyLibraryScreen(
             term = searchQuery,
             itemTypes = EmbySearchFilter.toItemTypes(searchFilters),
             // 排序参数照旧传给服务端（它认就更好），但真正决定顺序的是下面的客户端排序：
-            // 服务端对 SearchTerm + SortBy 这个组合不保证生效，实测切了排序顺序不变。
+            // 服务端对 SearchTerm + SortBy 这个组合不保证生效，切了排序顺序不变。
             sortBy = sortBy,
             sortOrder = sortOrder,
             // 搜索不分页、整批返回，所以把上限提到一页的量，客户端排序才有足够样本
@@ -916,7 +907,7 @@ data class EmbyLibraryScreen(
           // 游标按**服务端给了多少**推进，与本地去重结果无关
           if (reset) consumedCount = page.items.size else consumedCount += page.items.size
           totalCount = page.totalCount
-          // ⭐ 这一页一条新的都没有（或服务端干脆返回空页）：它已经在我们见过的地方
+          // 这一页一条新的都没有（或服务端干脆返回空页）：它已经在我们见过的地方
           // 打转了 —— SmartStrm 兼容层忽略 StartIndex、或服务端重复条目被客户端
           // 去重削光时都会这样。把 totalCount 对齐已消耗，续页条件
           // （consumedCount < totalCount）自然失效；不拦的话同一个 StartIndex 会被
@@ -927,7 +918,6 @@ data class EmbyLibraryScreen(
         }
         cacheItems()
         // 整批替换（reset）之后要停在第一条。
-        //
         // 这一步放在数据落位**之后**才可靠：触发方的 LaunchedEffect 是在请求发出之前跑的，
         // 那时新数据还没到，归位会被 LazyGrid 的「按 key 把原第一条重新定位」抵掉 ——
         // 表现就是「切完排序 / 随机 / 下拉刷新后，列表停在中间」。
@@ -940,7 +930,7 @@ data class EmbyLibraryScreen(
       }.onFailure { e ->
         // 过期的失败同样丢弃：别用旧请求的错误盖掉新请求的结果
         if (gen != loadGeneration) return@onFailure
-        // ⭐ 降级：服务端用 GenreIds / TagIds 筛若返回 5xx（某些服务端的库表结构有残缺），
+        // 降级：服务端用 GenreIds / TagIds 筛若返回 5xx（某些服务端的库表结构有残缺），
         // 说明这台服务器连按 Id 筛也走不通 —— 记住它，并**立刻**改用客户端本地筛重试一次。
         // 之所以不等下次：偏好变更不触发重组，这里必须自己重跑，用户才不用手动再点一次。
         val serverError = (e as? EmbyApiException)?.code?.let { it >= 500 } == true
@@ -988,7 +978,6 @@ data class EmbyLibraryScreen(
       // （见 EmbyClient.getPersonWorkCounts 的说明），所以自己数一遍补上。
       // 放在 loading 结束之后 —— 头像网格先出来，数字随后补，不让首屏等这次统计。
       // 服务端哪天真的返回了 ChildCount，就跳过统计、直接用它。
-      //
       // 走 getPersonWorkCountsCached 而不是原始的 getPersonWorkCounts：自适应库规模
       // + 带10 分钟缓存，避免每次进「演员」分类都把整库逐页拉一遍（见 1.4 优化）。
       val list = loaded.getOrNull().orEmpty()
@@ -1107,7 +1096,7 @@ data class EmbyLibraryScreen(
     // 命中集已经扫完在本地，搜索只是它的子集筛选，全程零请求
     // （配套的三处：cacheKey 不含搜索词、load() 早退、下面这条名字过滤）
     val localSearch = chineseSubsOnly && searchQuery.isNotBlank()
-    // ⭐ 整份过滤链必须 remember：这是 5 遍 O(n)（含 distinctBy 建 HashSet），
+    // 整份过滤链必须 remember：这是 5 遍 O(n)（含 distinctBy 建 HashSet），
     // 不记忆的话**每次重组**（滚动、扫描进度文字、红心快照……都会触发）都对整个
     // items 重跑一遍 —— 大库翻深之后主线程全耗在这上面，界面发涩、像卡死。
     // 只列真正参与判断的依赖；items 引用每页都会变（该变时才重算）。
@@ -1126,7 +1115,7 @@ data class EmbyLibraryScreen(
         // 点进去还会崩。列表数量行用的是 totalCount（服务端给的），不在这里减，
         // 所以「共 41 个」这类数字仍以服务端为准。
         .filterNot { isGhostItem(it) }
-        // 服务端可能在结果里把**同一个条目返回两次**（SmartStrm 实测搜索「雲」时
+        // 服务端可能在结果里把**同一个条目返回两次**（SmartStrm 搜索「雲」时
         // 同一 Id 出现两条），而下面网格的 key 正是「Id ?: Name」—— 重复条目会直接
         // 把 LazyVerticalGrid 撞崩（IllegalArgumentException: Key was already used）。
         // 按同一口径去重：既修崩溃，「命中 N 项」的计数也变准了。
@@ -1139,7 +1128,6 @@ data class EmbyLibraryScreen(
           !localSearch || item.Name?.contains(searchQuery.trim(), ignoreCase = true) == true
         }
         // 本地再按同一口径剔一遍。
-        //
         // 为什么不能只靠服务端：MediaTypes / ExcludeItemTypes / IsFolder 这些参数
         // 在官方 Emby 上生效，但兼容层（SmartStrm 之类）未必全部支持 ——
         // 少了任何一个，库里混进来的音频、图片、电子书、Season 之类就会漏到列表里。
@@ -1147,12 +1135,10 @@ data class EmbyLibraryScreen(
         .filter { item ->
           val type = item.Type
           // 搜索命中的演员是**合法结果**，不能跟着媒体一起被剔掉。
-          //
           // 下面两条兜底都是按「媒体形态」判的（有没有 MediaType、在不在 PLAYABLE_TYPES 里），
           // 而 Person 两样都不占：它没有 MediaType，也不是可播放类型。于是无论库的类型白名单
           // 认不认得出来，演员都会被判为「非媒体」剔走 —— 这正是「同一句话在首页搜得到演员、
           // 在媒体库里一个人都搜不到」的原因（首页没有这层过滤）。
-          //
           // 只在搜索时放行：浏览路径服务端本来就不会返回 Person（`/Users/{id}/Items`
           // 那条端点拿不到人物），放行它没有副作用。
           val isPersonHit = searchQuery.isNotBlank() && type.equals("Person", ignoreCase = true)
@@ -1189,7 +1175,7 @@ data class EmbyLibraryScreen(
           }
           // 未知库（CollectionType 为空）拿不到类型白名单，此时只能靠 MediaType ——
           // 但 Genre / Tag / Studio 这类「非媒体实体」MediaType 也是空，上面漏得干干净净。
-          // 实测这类库会返回一堆名为 `"frames":2670` 的 Genre 条目（NFO 里塞了 JSON），
+          // 这类库会返回一堆名为 `"frames":2670` 的 Genre 条目（NFO 里塞了 JSON），
           // 所以这里再按「是否可播放」兜一次。
           if (type != null && want != null && effectiveTypes == null) {
             val playable = PLAYABLE_TYPES.any { it.equals(type, ignoreCase = true) }
@@ -1211,7 +1197,7 @@ data class EmbyLibraryScreen(
      *
      * 之前的实现只把请求发出去、**完全不动本地列表**：服务器那边收藏成功了，
      * 卡片上的红心却仍是旧样子（未收藏还是描边），要点进详情页再退回来才同步 ——
-     * 就是用户反馈的「能触发收藏但红心不更新」。
+     * 就是「能触发收藏但红心不更新」。
      *
      * 这里改成**乐观更新 + 失败回滚**：
      * 1. 先按取反把本地这一条（以及进程内缓存）改掉，红心立刻变，不用等网络往返；
@@ -1266,7 +1252,6 @@ data class EmbyLibraryScreen(
     }
 
     // 搜索联想候选：**结果里的片名 + 历史搜索词**，纯本地包含匹配。
-    //
     // 为什么不走服务端 `/Search/Hints`：每敲一个字都发一次请求太重，而且那个端点
     // 并非所有服务端实现（兼容层）都支持，失败时联想就整个没了。本地匹配在
     // 没网 / 服务端不支持时照样能用，代价只是「候选只覆盖已经拉到的那批结果」——
@@ -1571,7 +1556,6 @@ data class EmbyLibraryScreen(
           // 图标跟着搜索态走：没搜时是放大镜，进搜索后换成「放大镜 + 斜杠」。
           // 图标一直不变的话，用户进了搜索界面就找不到退出来的入口 ——
           // 同一个位置既是「进入」又是「退出」，长得却一模一样。
-          //
           // 这里用 SearchOff 而不是通用的 ✕：左边紧挨着就是返回键（←），
           // 再摆一个 ✕ 会让同一个工具栏上出现两个「离开」性质的图标，
           // 一个退搜索、一个退整个库，很容易点错。SearchOff 保留放大镜意象，
@@ -1633,7 +1617,6 @@ data class EmbyLibraryScreen(
       //  · 有非容器的可播放条目、**或者有子文件夹** ⇒ 给视频那套（随机播放 / 收藏随机 /
       //    视界流 / 筛选 / 视图）
       //  · 首屏还没加载出来 ⇒ 按「两种都给」处理，避免工具行先空一排、内容到了再跳出来
-      //
       // ⚠️ 「有子文件夹」必须算进来：随机播放 / 视界流默认**下钻**，纯目录页也是有效入口。
       //    以前只数 `!isFolderLike` 的条目，纯子文件夹目录（0 个直接媒体）会把整组按钮收掉，
       //    用户看到的就是「工具栏突然少了一半」。
@@ -1872,12 +1855,10 @@ data class EmbyLibraryScreen(
         )
         // 搜索的触发源不只是输入文字，还包括切排序、换类型筛选、开关「中文字幕」等 ——
         // 所以这里直接用 cacheKey 当 key：它已经聚合了所有会影响结果集的输入。
-        //
         // 修的是一个真实 bug：之前只用 (searchQuery, searchFilters) 当 key，
         // 于是「在搜索结果里切排序」时这个 effect 不重跑，而 cacheKey 变化已经把
         // `isLoading = remember(cacheKey) { ... }` 重置成 true → 界面永远停在转圈。
         // 用 cacheKey 之后，凡是结果会变的情况都必然重新加载，不可能再卡住。
-        //
         // 是否防抖按「变化来源」决定：打字等 400ms，其余离散操作（点排序 / 点筛选）立即重查，
         // 免得切个排序还要干等半秒。
         LaunchedEffect(cacheKey) {
@@ -1916,7 +1897,6 @@ data class EmbyLibraryScreen(
 
       // ── 4. 媒体网格 ──
       // 用下拉刷新包裹：返回页面不会自动刷新，只有用户主动下拉才重新拉取
-      //
       // ── 文件夹宫格封面：一次批量取，别让每个文件夹各发一次请求 ──
       // 容器条目自身没有封面，只能拿内部子项的缩略图拼。为了给服务端减压，这里对**当前父节点**
       // 发**一次** Recursive 查询、按子项 ParentId 分组（见 `EmbyViewModel.loadFolderCoverBatch`），
@@ -1940,16 +1920,15 @@ data class EmbyLibraryScreen(
       //    卡片不会抢在批量之前自己发一遍请求；
       // ② 让卡片的重取 key 变化：走**单文件夹兜底**的那些文件夹（批量覆盖不到的，比如合集）
       //    也会跟着重取 —— 少了这一条，只有批量覆盖到的那批会换图，兜底那批永远不变
-      //    （用户反馈的「下拉刷新换图失效」）。
+      //    （「下拉刷新换图失效」）。
       // ③ 传给 `EmbyFolderCoverCache`：同一代里已有值就不再取、换代后才允许再取
       //    ⇒ 刷新**不需要清缓存**，旧封面原地留着显示，等新封面回来再替换
-      //    （用户反馈的「空占位有点丑」）。
+      //    （「空占位有点丑」）。
       // 初值取自缓存而不是写死 0：页面重建时若从 0 数起，会和缓存里条目的代数对不上，
       // 变成每次进页面都白重取一遍、进程内缓存白做。
       var folderCoverGen by remember { mutableStateOf(EmbyFolderCoverCache.currentGeneration()) }
 
       // ── 合成策略：这次进库要不要把已经拼好的封面换一批 ──
-      //
       // 判据只看「距上次整体合成过了多久」（时间戳落盘，见 BrowserPreferences）。
       // ⚠️ 必须在下面那个批量取封面的 effect **之前**：换代后 mosaicSignature 会跟着变，
       //    批量 effect 自然重跑 —— 顺序反过来的话这一次进库会用旧代数取一遍、白费一轮请求。
@@ -1981,8 +1960,7 @@ data class EmbyLibraryScreen(
         val srv = server
         // 快照当前代数：写入时要带上它，这样「迟到的上一代结果」不会盖掉新代。
         val gen = folderCoverGen
-        // ⭐⭐ 只取「这一代里还没定下来」的文件夹 —— 已经拼好的**一律不重取**。
-        //
+        // ⭐ 只取「这一代里还没定下来」的文件夹 —— 已经拼好的**一律不重取**。
         //    这里是「滑动一下 → 返回上一级 → 再进这个文件夹，有些四宫格又重新生成」
         //    的主因：签名里带着 `mosaicFolderIds`（这一屏所有需要宫格的文件夹 Id），
         //    而无限加载会不断往里加新的 ⇒ 签名一变，这个 effect 就被**取消重跑**，
@@ -1990,7 +1968,6 @@ data class EmbyLibraryScreen(
         //    封面当场洗牌换脸。
         //    看着像「只有一部分在变、还挺随机」，是因为子项不超过 4 个的文件夹
         //    怎么抽都是同一批图（抽不出新花样），子项多的那些每次都不一样。
-        //
         // ⚠️ 换代（下拉刷新 / 「每次进入都重新合成」）时 `gen` 变了 ⇒ 缓存里条目的代
         //    都小于新代 ⇒ pending = 全部，行为与从前一致（整批换脸）。
         val pending =
@@ -2016,7 +1993,6 @@ data class EmbyLibraryScreen(
             }
         } finally {
           // ⚠️ 请求失败也必须放行：否则所有文件夹的封面都卡在「等批量」上，谁也不去取，整屏空白。
-          //
           // ⚠️ 但**只在自己没被取消时写**：签名变化会先取消老协程再起新的，老协程的
           //    finally 可能排在新协程**完成之后**才执行，那时写进去的是**旧签名**，
           //    直接把新签名覆盖掉 ⇒ `folderCoverBatchReady` 变成 false 且再没人来写，
@@ -2033,8 +2009,7 @@ data class EmbyLibraryScreen(
         isRefreshing = isRefreshing,
         // 演员分类下拉刷新要重拉演员，而不是去重拉媒体。
         // 媒体：顺带把这一屏的文件夹封面**换代**重取（批量覆盖到的与走兜底的都会换，见上）。
-        // ⭐ 刷新后回到顶部（下拉刷新的标准语义）。
-        //
+        // 刷新后回到顶部（下拉刷新的标准语义）。
         // 不显式归位的话，LazyGrid 会**按条目 key 锚定滚动位置**：一旦刷新后顺序变了，
         // 框架会把「刷新前第一屏的那条」重新定位到它在新列表里现在所在的位置 ——
         // 表现就是「下拉刷新后画面跳到列表中间」。
@@ -2048,7 +2023,7 @@ data class EmbyLibraryScreen(
             loadActors()
             gridState.scrollToItem(0)
           } else {
-            // ⭐ 只换代，**不清缓存、也不清 `folderCovers`** —— 缓存里的旧封面正是刷新期间要继续
+            // 只换代，**不清缓存、也不清 `folderCovers`** —— 缓存里的旧封面正是刷新期间要继续
             //   显示的东西；清掉就会露出一片空占位（用户反馈「空占位有点丑」）。
             //   老条目原地留着显示，新封面取回后按同键覆盖（宫格那边再淡入替换）。
             // ⚠️ 固定模式（关了「合成随机封面图」）结果是确定的，重取只会拿到同一批
@@ -2299,7 +2274,6 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
     // 标题用 stickyHeader —— 往下滚时它吸在网格顶部，
   // 随时告诉你「现在看的是哪一年」。这一点对「时间轴」这个视图模式是本质的：
        // 不吸顶的话它就和普通分组列表没区别了（清单 4.1）。
-     //
        // ⚠️ stickyHeader 里**不能**再写 `span` —— stickyHeader 本身就是整行占满的，
        // 给它 span 反而会报编译错。
   val grouped = displayItems
@@ -2346,7 +2320,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
          },
           onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
           titleMaxLines = titleLines,
-          // 「剩余时长」角标只在「继续播放」分类里给（用户反馈：别的分类里是噪音）
+          // 「剩余时长」角标只在「继续播放」分类里给（别的分类里是噪音）
           showRemaining = category == EmbyCategory.RESUMABLE,
           modifier = Modifier.animateItem(),
         )
@@ -2384,7 +2358,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                       },
                       onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
                       titleMaxLines = titleLines,
-                      // 「剩余时长」角标只在「继续播放」分类里给（用户反馈：别的分类里是噪音）
+                      // 「剩余时长」角标只在「继续播放」分类里给（别的分类里是噪音）
                       showRemaining = category == EmbyCategory.RESUMABLE,
                       modifier = Modifier.animateItem(),
                     )
@@ -2474,16 +2448,13 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
       }
 
     // ── 筛选面板（2026-10-09 改为「加号 + 复选对话框 + 圆角标签」版式）──
-    //
     // 版式：抽屉里每个「多选」类目一行 = 类目名 + 右侧 `+` 圆钮。
     // 点 `+` 弹一个复选框对话框（取消 / 确定），确定后把选中的项作为
     // **带叉号的圆角标签**追加到该类目下方；点标签上的叉即可单独移除。
-    //
     // 为什么改成这样：原先每个类目一个就地展开的下拉，12 个维度叠起来又长又乱，
     // 展开/收起还会引起「弹窗跳动」与「点选项没反应」等一串问题（见 2026-10-09 回退记录）。
     // 现在把「选什么」收进独立的对话框，抽屉只负责展示「已选了什么」，
     // 层次清楚、也不再有任何就地展开的重排。
-    //
     // 形态分工：
     // - 多选类目（类型 / 标签 / 年份 / 官方分级 / 评分）→ 加号 + 对话框 + 圆角标签
     // - 单选类目（播放状态 / 字幕）→ 保留下拉收缩框（语义上就是「从几项里挑一个」）
@@ -2731,7 +2702,6 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
 
 
     // 视图设置：**排布方式** + 卡片样式 + 每行个数 + 标题行数。
-    //
     // 设计约束（重做过一版）：**一屏放下、不滚动**。上一版每一项都铺成一整行
     // 带单选钮的列表，四个分区叠下来超出屏幕、必须滚动，既显得笨重又把
     // 「随手调一下」这件事变得很沉。现在改成：
@@ -2909,7 +2879,7 @@ private fun EmbyLibraryMediaCell(
    * 「封面代数」：下拉刷新时 +1，进 [LaunchedEffect] 的 key。
    *
    * 它保证**走单文件夹兜底**的那些文件夹（批量覆盖不到的，比如合集）也跟着重取 ——
-   * 否则刷新只有批量覆盖到的那批会换图，兜底那批永远不变（用户反馈的「刷新换图失效」）。
+   * 否则刷新只有批量覆盖到的那批会换图，兜底那批永远不变（「刷新换图失效」）。
    */
   folderCoverGen: Int,
   onClick: () -> Unit,
@@ -2974,7 +2944,7 @@ private fun EmbyLibraryMediaCell(
     fallbackImageUrl = viewModel.imageUrl(server, item, "Primary", 480),
     mosaicUrls = folderCover,
     // 左下角角标：演员是「作品数」（跟分类无关，一直显示）；
-    // 「剩余时长」**只在「继续播放」分类里给**（用户反馈：别的分类里它只是噪音）。
+    // 「剩余时长」**只在「继续播放」分类里给**（别的分类里它只是噪音）。
     badgeText = item.ChildCount?.takeIf { item.Type == "Person" && it > 0 }?.toString()
       ?: remainingLabel(item).takeIf { showRemaining },
     progress = playbackProgress(item),
@@ -3447,7 +3417,7 @@ private enum class EmbyCategory(
    * 文件夹。
    *
    * ⚠️ 必须带上 `PhotoAlbum`：Emby 把**相册**也当成一种容器条目（`Type=PhotoAlbum`），
-   * 而它不在 `Folder/CollectionFolder/UserView` 里。线上实测库 1133915（家庭视频）：
+   * 而它不在 `Folder/CollectionFolder/UserView` 里。线上库 1133915（家庭视频）：
    * 顶层 87 个「文件夹」= 84 个 PhotoAlbum + 3 个普通 Folder ——
    * 不带 PhotoAlbum 时这一档只显示 3 项，与 Web 端（87）严重不符。
    * 加进白名单后服务端返回 87，与 Web 一致（`IncludeItemTypes` 传的就是这四个）。
@@ -4070,7 +4040,7 @@ private fun applyClientSort(
       "CriticRating" -> compareBy { it.CriticRating ?: -1.0 }
       "Runtime" -> compareBy { it.RunTimeTicks ?: 0L }
       // 文件大小：顶层 Size 由 Fields=Size 带回；老服务端或详情类请求可能没有，
-      // 这时退回 MediaSources 里第一个源的大小（实测两者一致），都没有就按 0
+      // 这时退回 MediaSources 里第一个源的大小，都没有就按 0
       "Size" -> compareBy { it.Size ?: it.MediaSources?.firstOrNull()?.Size ?: 0L }
       "PlayCount" -> compareBy { it.UserData?.PlayCount ?: 0 }
       else -> null
@@ -4117,7 +4087,7 @@ private fun isFolderLike(item: EmbyItem): Boolean =
  *
  * 判定只有两条：是容器、且自己没有主图。
  *
- * ⚠️⚠️ **这里绝对不能加「有借来的预览图就不拼」这种豁免** —— 曾经有过一条
+ * ⚠️ **这里绝对不能加「有借来的预览图就不拼」这种豁免** —— 曾经有过一条
  * `!item.hasBorrowedPrimaryImage()`，在真机上造成的现象是「同是视频文件夹，有的四宫格、
  * 有的一整张缩略图」（用户反馈）。原因是：
  *
@@ -4199,7 +4169,7 @@ private suspend fun loadAndStoreFolderCover(
  * ⚠️ 键里带「随机 / 固定」模式：随机封面的结果每次都可能不同，
  * 若只按文件夹 Id 存，用户在设置里来回切开关就会看到串掉的旧图。
  *
- * ⭐ 「换代」而不是「清空」：缓存里的旧封面是**下拉刷新期间要继续显示**的东西
+ * 「换代」而不是「清空」：缓存里的旧封面是**下拉刷新期间要继续显示**的东西
  * （清空就会露出一片空占位，用户反馈「空占位有点丑」）。所以刷新只把 [generation] +1，
  * 老条目原地留着显示，重取回来再把同键的值换掉 —— 视觉上是「换脸」，不是「先变空再出现」。
  */
@@ -4207,7 +4177,7 @@ private object EmbyFolderCoverCache {
   /**
    * 最多留多少条合成结果。
    *
-   * ⭐ 一条只是「4 个图片地址字符串」，几百条的开销可以忽略 —— 定小了反而是坑：
+   * 一条只是「4 个图片地址字符串」，几百条的开销可以忽略 —— 定小了反而是坑：
    *    被淘汰的文件夹下次进来要**重新取样**，四宫格当场洗牌，用户看到的就是
    *    「有些封面又重新生成了一遍，还挺随机」。定大一点，正常翻库根本碰不到淘汰。
    */
@@ -4259,7 +4229,7 @@ private object EmbyFolderCoverCache {
    *
    * 批量预取用它筛掉已经拼好的文件夹，避免「整批重取一遍」。
    *
-   * ⭐ 用 `>=` 而不是 `==`：换代极快时可能出现「缓存里存的是更新的代」这种情况
+   * 用 `>=` 而不是 `==`：换代极快时可能出现「缓存里存的是更新的代」这种情况
    *    （比如连续两次下拉刷新），这时它对我们这一代**同样算已定**，不该再取；
    *    判成 `==` 就会把新代的结果又覆盖一次，画面白闪。
    */
@@ -4328,9 +4298,9 @@ private fun allItemTypesFor(collectionType: String?): List<String>? =
     "musicvideos" -> listOf("MusicVideo")
     "boxsets" -> listOf("BoxSet")
     // 家庭视频库不能按条目类型卡：Emby 把这类库的内容存成 Movie / Episode
-    // （MediaType=Video），库里根本没有 Type=Video 的条目 —— 线上实测 12741 条里
+    // （MediaType=Video），库里根本没有 Type=Video 的条目 —— 线上 12741 条里
     // Video 类型为 0，传 IncludeItemTypes=Video 一条都取不到，就是「骨架屏转不停」。
-    // 「只要视频」交给 mediaTypesFor 的 MediaTypes=Video（同一库实测返回 10615 条）。
+    // 「只要视频」交给 mediaTypesFor 的 MediaTypes=Video（同一库返回 10615 条）。
     "homevideos" -> null
     "photos" -> listOf("PhotoAlbum")
     "books" -> listOf("Book")

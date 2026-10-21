@@ -123,7 +123,7 @@ class PlayerDanmakuState(
    * 结果是面板上的 `enabled` 永远停在构造时的 `false`（`readSheetState()` 全项目零调用）。
    * 统一走这里，就不会再出现「某个 setter 忘了同步自己那个字段」。
    *
-   * ⚠️ v117：设为 public 是因为播放面板每次**打开**都要主动刷一次
+   * ⚠️ 设为 public 是因为播放面板每次**打开**都要主动刷一次
    *    （见 `PlayerSheets` 的 `Sheets.Danmaku` 分支）—— 偏好的真值可能被
    *    「设置-弹幕」页改过，而那个页的开关是**直接写 preference** 的，
    *    不走本类的 setter；`_sheet` 的初始值是 `DanmakuSheetState()`
@@ -166,7 +166,6 @@ class PlayerDanmakuState(
     refreshRenderParams()
 
     // ── 换剧的处理：手动选过的番、时间轴偏移都要跟着换 ──
-    //
     // ① 手动选番只在**同一部剧**内跨集沿用。换剧了必须作废 ——
     //    否则在看 A 剧时手动选了番，切到 B 剧还会拿 A 的番去匹配，
     //    用户看到的是完全无关的弹幕（比"没弹幕"更糟：错得毫无提示）。
@@ -176,7 +175,6 @@ class PlayerDanmakuState(
     if (seriesChanged) manualAnime = null
 
     // 片名变了 ⇒ 引擎必须重建（叠层靠 episodeKey 判断）。
-    //
     // ⚠️ 两样东西都缺（片名空、集号 0）时，**不能**把 key 定成 "|0"：
     //    那样「播放页重进一次」和「换了一部没有任何标识的片」拿到的是同一个 key，
     //    `LaunchedEffect` 认为没换集，于是不重建引擎 —— 新片沿用旧片的弹幕。
@@ -195,7 +193,6 @@ class PlayerDanmakuState(
       return
     }
     // ── 「记住手动选择」：手动选过的番，切集后沿用同一部番、只换集号 ──
-    //
     // ⚠️ 这一段必须在 autoMatch 判断**之前**：用户手动选番之后又把「自动匹配」关掉，
     // 是完全合理的选择（「我这季就固定用这一部番，别去搜了」）。放在后面的话，
     // 关掉自动匹配 = 连手动选的也一起没了，每集都得重新点。
@@ -470,11 +467,10 @@ class PlayerDanmakuState(
     // ⚠️ 不要写「值没变就直接 return」：这里不再是幂等 setter，而是用户的
     //    「打开它」这个意图。同一个值被点两次很常见（以为没生效又点了一下），
     //    直接 return 会让第二次点击彻底无响应 —— 正是「开关点不动」的观感来源。
-    //
-    // ⚠️⚠️ 落库之后**必须立刻刷 `_sheet`**（v109 修的线上问题）：
+    // ⚠️ 落库之后**必须立刻刷 `_sheet`**：
     //    面板读的是 `sheet` 这个 flow（`PlayerSheets.kt` 里 `danmakuState.sheet`），
     //    而 `_sheet` 初始值是 `DanmakuSheetState()`，`enabled` 默认 false。
-    //    而且 `readSheetState()` 在 v109 之前**全项目一次都没被调用过**
+    //    而且 `readSheetState()` 在此前**全项目一次都没被调用过**
     //    （它只是「写好了但没人接」）⇒ 面板上的开关永远读 false，用户点了立刻弹回，
     //    日志里连续 8 次都是「false → true」。
     //    偏好本身是对的，所以弹幕其实一直能拉到 —— 只是开关自己不亮，
@@ -539,7 +535,7 @@ class PlayerDanmakuState(
   //    - `_renderParams` 决定**叠层要不要画、字号多大**，走渲染路径；
   //    - `_sheet` 决定**抽屉里控件显示成什么样**，走面板路径。
   //    两个流口径不同，各自都得刷，别以为刷了一个另一个就跟着变。
-  //    原先只有前者，是 v109「开关点了弹回」的直接原因。
+  //    原先只有前者，是「开关点了弹回」的直接原因。
   fun setHost(v: String) { preferences.host.set(v.trim()); refreshSheet() }
 
   fun setAppId(v: String) { preferences.appId.set(v.trim()); refreshSheet() }
@@ -628,9 +624,9 @@ class PlayerDanmakuState(
   /**
    * 「防止弹幕重叠」开关。
    *
-   * ⚠️⚠️ v117：这个 setter 曾是全类**唯一不调 [refreshSheet]** 的（只刷了
+   * ⚠️ 这个 setter 曾是全类**唯一不调 [refreshSheet]** 的（只刷了
    *    `_renderParams`）。面板是 [DanmakuSheetState] 的一整个快照，不刷面板
-   *    就等于开关停在旧值上，用户实测两种症状：
+   *    就等于开关停在旧值上，用户两种症状：
    *    1. 「关了之后就再也打不开了」—— 点一下偏好已改、UI 没变，再点还是旧值；
    *    2. 「开这个同时那个就会关掉」—— 之后碰任何一个**会**刷面板的控件
    *       （自动匹配/记住选择/密度/滑杆……），这份旧值一次性追平，于是另一个

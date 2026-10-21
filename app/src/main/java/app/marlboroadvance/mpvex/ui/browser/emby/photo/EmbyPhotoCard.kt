@@ -25,7 +25,7 @@ import app.marlboroadvance.mpvex.ui.utils.pressDownScale
  *
  * 与视频卡片的区别，每条都是有意的：
  * - **缩略图裁切填满**（[ContentScale.Crop]）：照片卡是统一 1:1，用 Fit 的话
- *   竖图左右、横图上下都会露出底色，一屏看下去全是灰边（用户实测反馈）。
+ *   竖图左右、横图上下都会露出底色，一屏看下去全是灰边（反馈）。
  *   网格裁、单张不裁 —— 完整画面在**全屏浏览器**里看（那边是 Fit）。
  *   这也是 Google Photos / Emby Web 的做法。卡片底色仍用 surfaceVariant，
  *   图还没到时露出的就是它（现在被骨架屏盖住）。

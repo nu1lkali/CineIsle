@@ -206,7 +206,7 @@ fun SharedPhotoViewer(
   // ── 幻灯片 ──
   var slideshowPlaying by remember { mutableStateOf(autoPlaySlideshow) }
   val interval by browserPreferences.photoSlideshowInterval.collectAsState()
-  // 本轮还剩几秒（右下角按钮上的倒计时）。0 = 没在播 / 刚翻完页。
+  // 本次还剩几秒（右下角按钮上的倒计时）。0 = 没在播 / 刚翻完页。
   var slideshowRemaining by remember { mutableIntStateOf(0) }
   // 转场用的整页透明度：翻页前淡到 0、换完页再淡回来。
   // 用 Animatable 而不是 Compose State：值每帧都变，走 State 会把整屏重组一遍。
@@ -231,12 +231,10 @@ fun SharedPhotoViewer(
   val dismissThreshold = with(LocalDensity.current) { DISMISS_THRESHOLD_DP.dp.toPx() }
 
   // ── 幻灯片计时 ──
-  //
-  // ⭐⭐ **key 里绝不能有 currentPage**（这是「幻灯片只滑一半」的根因）：
+  // ⭐ **key 里绝不能有 currentPage**（这是「幻灯片只滑一半」的根因）：
   // currentPage 一变，这个协程被取消重建，而取消恰好发生在
   // `animateScrollToPage` 挂起等待动画的过程中 ⇒ 动画被腰斩，页面停在两张中间。
   // 改成「一个协程跑到底」：循环里自己 delay 到点、自己翻页。
-  //
   // 「手动滑页重置计时」在循环内部判（只有**用户**在滑才重置，幻灯片自己翻的不算）：
   // 滑一下只是「这张要多看一会儿」，不停止播放。
   LaunchedEffect(slideshowPlaying, interval) {
@@ -316,7 +314,7 @@ fun SharedPhotoViewer(
                 scope.launch { dismissOffset.animateTo(0f, spring()) }
               },
               onVerticalDrag = { _, dragAmount ->
-                // ⭐ 放大状态下竖向拖动是「平移画面」，不能抢 —— 那种情况 Telephoto
+                // 放大状态下竖向拖动是「平移画面」，不能抢 —— 那种情况 Telephoto
                 //    自己会消费掉，根本走不到这里；这里的判断是双保险（例如刚好
                 //    捏到边界、zoomable 这一帧放行了）。
                 if (zoomRegistry.zoomFractionOf(currentPage) <= 0.01f) {
@@ -387,7 +385,7 @@ fun SharedPhotoViewer(
             modifier = Modifier.weight(1f).padding(end = 8.dp),
           )
           if (entries.isNotEmpty()) {
-            // ⚠️ 顶栏**不再放「3 / 120」计数器**（v94）：信息栏右下角已经有同一个序号，
+            // ⚠️ 顶栏**不再放「3 / 120」计数器**：信息栏右下角已经有同一个序号，
             //    重复一遍只会把标题挤到只剩几个字（网络版顶栏 3 个钮 + 返回已经占满 192dp）。
             //    信息栏跟着沉浸态一起隐藏，所以「没计数器」不会出现死角。
             // ── 全屏（沉浸）──

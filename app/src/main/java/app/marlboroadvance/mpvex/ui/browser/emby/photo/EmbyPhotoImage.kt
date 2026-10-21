@@ -103,7 +103,7 @@ fun rememberEmbyPhotoPainter(
 /**
  * 照片网格里的缩略图：加载中给骨架屏，失败给占位图 + 重试。
  *
- * ⭐ [contentScale] 默认 **Crop（填满卡片，不留灰边）**：网格是「一屏看很多张」的场景，
+ * [contentScale] 默认 **Crop（填满卡片，不留灰边）**：网格是「一屏看很多张」的场景，
  * 缩略图有灰边会让整屏显得脏；完整画面在全屏浏览器里看（那边是 Fit 不裁切）。
  * 这也是 Google Photos / Emby Web 的做法 —— 网格裁、单张不裁。
  */

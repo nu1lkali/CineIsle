@@ -81,7 +81,7 @@ object EmbyPlaybackReporter {
     // ⚠️「不喜欢」同样必须**起播时就 bind**。
     //  之前只在 `reportProgressOnce()` 里、且仅当检测到切集时才 bind ——
     //  于是刚进播放页那一整段时间 `DislikePlayerActions.currentKey` 还是 null，
-    //  横屏点按钮只会提示「当前视频没有可标记的来源」（用户实测反馈）。
+    //  横屏点按钮只会提示「当前视频没有可标记的来源」（反馈）。
     //  切集时那次 bind 保留：它是「画面已经切到下一集」的权威时机。
     //  bind 对相同 key 幂等（直接 return，零查询），两处都调没有额外开销。
     app.marlboroadvance.mpvex.ui.player.DislikePlayerActions.bind(

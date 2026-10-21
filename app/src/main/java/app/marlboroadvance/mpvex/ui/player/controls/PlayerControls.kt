@@ -253,9 +253,8 @@ private fun CenterSeekButton(
         null
       },
   ) {
-    // ⭐ 时长可变（前进/后退还不一样）⇒ 不能用 Icons 的 Forward10/Replay30
+    // 时长可变（前进/后退还不一样）⇒ 不能用 Icons 的 Forward10/Replay30
     // 这类**固定档位**图标 —— 那套图标只覆盖 10/30/45/60，用户调到别的秒数就没有对应图标。
-    //
     // ⚠️ **不要叠在一起**：早前是 `Box(Alignment.Center)` 里 Icon(fillMaxSize) + Text
     //   居中重合，结果数字正好压在双箭头的两个三角之间，糊成一团（用户反馈「数字压在
     //   箭头上了」）。
@@ -365,7 +364,6 @@ fun PlayerControls(
   }
 
   // ── 「标记为不喜欢」：单击切换、长按写备注 ──
-  //
   // 弹框状态放在控制条这一层（而不是按钮的 when 分支里）是因为 Dialog 需要访问它：
   // 按钮那边拿不到这里的 state，也没法在保存时回调。
   var showDislikeRemark by remember { mutableStateOf(false) }
@@ -1341,7 +1339,7 @@ fun PlayerControls(
           )
         }
 
-        // ⭐ 系统时钟 / 电量：**按朝向锚到按钮簇上方**、右对齐。
+        // 系统时钟 / 电量：**按朝向锚到按钮簇上方**、右对齐。
         // 为什么是这个位置：
         // - 进度条那一行在竖屏是媒体标题（占满宽）、在横屏是含翻转按钮的右下簇，
         //   早前硬锚 `seekbar.top` 就会和它们重叠（用户反馈「叠在标题/翻转按钮下面」）。

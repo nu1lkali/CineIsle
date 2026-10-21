@@ -39,16 +39,16 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * Emby ģ��ĹǼ���������ʱ��Ŀ���ʽ˦���ҿ顣
+ * Emby 模块的骨架屏：加载时按目标版式甩出灰块。
  *
- * ȡ�����е�תȦ ���� תȦֻ˵�����ڼ��ء����Ǽ���˳���ѡ�����������ʲô��Ҳ�Ȱڳ�����
- * �б�����������ʱ�����������䣬�۸��ϸ��ӽ������ݱ������ڡ�ֻ�ǻ�û��Ӱ����
+ * 取代居中的转圈 —— 转圈只说明「在加载」，骨架屏顺带把「待会儿会出现什么」也先摆出来，
+ * 列表真正落下来时不会整屏跳变，观感上更接近「内容本来就在、只是还没显影」。
  *
- * @param columns ÿ�м�����Ӧ�����б�ʵ������һ�£�������ʱ�Ų���λ��
- * @param ratio ��Ƭ���߱ȣ����� 3:4������ͼ 16:9����
- * @param itemCount ռλ��������Ĭ�ϸպ�����һ����һ��
- * @param modifier �����ڲ��б���Scaffold �� `innerPadding` ���뿿����������
- *   ����Ǽܻᶥ������/�������£�`MainScreen` ���� innerPadding ���Ͽӣ��� ui-patterns��
+ * @param columns 每行几个，应当与列表实际列数一致，落下来时才不会位移
+ * @param ratio 卡片宽高比（海报 3:4、背景图 16:9…）
+ * @param itemCount 占位块数量，默认刚好铺满一屏多一点
+ * @param modifier 传给内部列表。Scaffold 的 `innerPadding` 必须靠它传进来，
+ *   否则骨架会顶到顶栏/底栏底下（`MainScreen` 忽略 innerPadding 的老坑，见 ui-patterns）
  */
 @Composable
 fun EmbySkeletonGrid(
@@ -65,7 +65,7 @@ fun EmbySkeletonGrid(
     contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 96.dp),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
-    // �Ǽ���ֻ�ǡ�Ԥ�桹�����û�����û�����壬�����ǰһ���Ĺ���λ�ô��
+    // 骨架屏只是「预告」，让用户滚它没有意义，还会跟前一屏的滚动位置打架
     userScrollEnabled = false,
   ) {
     items(itemCount) {
@@ -89,10 +89,10 @@ fun EmbySkeletonGrid(
 }
 
 /**
- * �����б��ĹǼ��������һ��С���� + �ұ��������֣������ `EmbyCompactRow` ���롣
+ * 紧凑列表的骨架屏：左边一块小海报 + 右边两行文字，规格与 `EmbyCompactRow` 对齐。
  *
- * @param modifier ͬ [EmbySkeletonGrid]���������� Column ���� LazyList��
- *   �Ž� LazyColumn �ﵱ item ʱ**��Ҫ**�� `fillMaxSize`���ᶥ�������б��߶ȣ�
+ * @param modifier 同 [EmbySkeletonGrid]；这个组件是 Column 不是 LazyList，
+ *   放进 LazyColumn 里当 item 时**不要**传 `fillMaxSize`（会顶掉整个列表高度）
  */
 @Composable
 fun EmbySkeletonList(
@@ -132,14 +132,14 @@ fun EmbySkeletonList(
 }
 
 /**
- * ��ҳ�Ǽܣ����顸С���� + һ�ſ��������������ҳ�ĺỬ��һ�¡�
+ * 首页骨架：几组「小标题 + 一排宽卡」，规格与首页的横滑行一致。
  *
- * ��ҳ�ǡ�ý��� / �����ۿ� / ���¼��롹������Ử��ƴ�����ģ��Ǽ�Ҳ������ṹ�ڣ�
- * �������ʱ�Ų����������䡣
+ * 首页是「媒体库 / 继续观看 / 最新加入」若干组横滑行拼起来的，骨架也按这个结构摆，
+ * 数据落地时才不会整屏跳变。
  *
- * @param cardRatio ��Ƭ���߱ȡ���ҳ�Ử���õ��� 16:9 ������
- *   �Ƽ� / ����ҳ�������溣����Ҫ�� `3f/4f`������Ǽܺ���صĿ�Ƭ��״��һ��
- * @param itemPerRow ÿ�м��ţ��� weight ����
+ * @param cardRatio 卡片宽高比。首页横滑行用的是 16:9 宽卡；
+ *   推荐 / 即混页那种竖版海报行要传 `3f/4f`，否则骨架和落地的卡片形状不一样
+ * @param itemPerRow 每行几张，用 weight 均分
  */
 @Composable
 fun EmbySkeletonHome(
@@ -155,8 +155,8 @@ fun EmbySkeletonHome(
       .verticalScroll(rememberScrollState())
       .padding(vertical = 10.dp),
   ) {
-    // �μ���� EmbySkeletonSection �Լ��� paddingBottom ���ƣ�ĩ��Ϊ 0����
-    // ���ﲻ�ٵ� Arrangement.spacedBy����������������
+    // 段间距由 EmbySkeletonSection 自己的 paddingBottom 控制（末段为 0），
+    // 这里不再叠 Arrangement.spacedBy，否则会变成两倍间距
     repeat(rowCount) {
       EmbySkeletonSection(
         shimmer = shimmer,
@@ -169,8 +169,8 @@ fun EmbySkeletonHome(
 }
 
 /**
- * ������ʷ�Ǽܣ�һ�š������ۿ������� + ������ʷ�б��С�
- * �� `EmbyHistoryScreen` ����ʵ�ṹһһ��Ӧ������ 16:9 + ListItem �У���
+ * 播放历史骨架：一排「继续观看」宽卡 + 几条历史列表行。
+ * 与 `EmbyHistoryScreen` 的真实结构一一对应（宽卡 16:9 + ListItem 行）。
  */
 @Composable
 fun EmbySkeletonHistory(modifier: Modifier = Modifier) {
@@ -231,10 +231,10 @@ fun EmbySkeletonHistory(modifier: Modifier = Modifier) {
 }
 
 /**
- * ����ҳ�Ǽܣ�������ͼ + ����/������ + һ�Ű�ť + ��鼸�� + һ���Ƽ�����
+ * 详情页骨架：顶部大图 + 标题/副标题 + 一排按钮 + 简介几行 + 一排推荐卡。
  *
- * ����ҳԭ�����������е�һȦתȦ����ĿԽ������Խ��������ʱ��Խ����
- * �����ʽ�Ȱںã��û�һ�۾�֪����ҳ���Ѿ����ˣ�������·�ϡ���
+ * 详情页原来是整屏居中的一圈转圈：条目越大、网络越慢，白屏时间越长。
+ * 按真版式先摆好，用户一眼就知道「页面已经开了，内容在路上」。
  */
 @Composable
 fun EmbySkeletonDetail(modifier: Modifier = Modifier) {
@@ -244,7 +244,7 @@ fun EmbySkeletonDetail(modifier: Modifier = Modifier) {
       .fillMaxSize()
       .verticalScroll(rememberScrollState()),
   ) {
-    // ����������ͼ
+    // 顶部背景大图
     Box(
       modifier = Modifier
         .fillMaxWidth()
@@ -257,7 +257,7 @@ fun EmbySkeletonDetail(modifier: Modifier = Modifier) {
       SkeletonLine(shimmer = shimmer, widthFraction = 0.34f, height = 10.dp)
 
       Spacer(modifier = Modifier.height(16.dp))
-      // ���� / ���� / �ղ� ��һ�Ŷ�����
+      // 播放 / 下载 / 收藏 那一排动作键
       Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         repeat(3) {
           Box(
@@ -285,7 +285,7 @@ fun EmbySkeletonDetail(modifier: Modifier = Modifier) {
           .shimmer(shimmer),
       )
       Spacer(modifier = Modifier.height(12.dp))
-      // ��ͬ�����Ƽ������ź���
+      // 「同类型推荐」那排海报
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         repeat(3) {
           Box(
@@ -302,13 +302,13 @@ fun EmbySkeletonDetail(modifier: Modifier = Modifier) {
 }
 
 /**
- * ��������ĹǼܣ���С���� + һ�ſ�Ƭ�����߶�ֻռ��һ�Ρ�
+ * 单个分组的骨架：「小标题 + 一排卡片」，高度只占这一段。
  *
- * �� [EmbySkeletonHome] ��������**���Դ�����** ���� ������������������� `LazyColumn`
- * ����ΪǶ��ͬ�����ֱ�����쳣������/�Ƽ����ࡸ��������һ�з��项��ҳ��Ҫ���������
+ * 和 [EmbySkeletonHome] 的区别是**不自带滚动** —— 后者是整屏组件，塞进 `LazyColumn`
+ * 会因为嵌套同向滚动直接抛异常。即混/推荐这类「本身就是一列分组」的页面要的是这个。
  *
- * @param cardRatio ��Ƭ���߱ȣ�16:9 ������Ĭ��ֵ�����溣���� `3f/4f`
- * @param itemPerRow ��һ�ΰڼ���
+ * @param cardRatio 卡片宽高比，16:9 宽卡传默认值，竖版海报传 `3f/4f`
+ * @param itemPerRow 这一段摆几张
  */
 @Composable
 fun EmbySkeletonSection(
@@ -342,13 +342,13 @@ fun EmbySkeletonSection(
 }
 
 /**
- * һ�顸��������ռλ�������ڵ���/�ײ��������С������
+ * 一组「行内文字占位」，用于弹窗/底部面板这类小容器。
  *
- * �ײ���壨��Ļ�����������б�ѡ�񡭣��ռ�С���� [EmbySkeletonGrid] �������
- * �� [EmbySkeletonList] ��̫�أ������һ���պú����ĸ߶ȡ�
+ * 底部面板（字幕搜索、播放列表选择…）空间小，上 [EmbySkeletonGrid] 会溢出、
+ * 上 [EmbySkeletonList] 又太重，这里给一个刚好合身的高度。
  *
- * @param lineCount ����
- * @param height ÿ�и߶�
+ * @param lineCount 几行
+ * @param height 每行高度
  */
 @Composable
 fun EmbySkeletonLines(
@@ -362,7 +362,7 @@ fun EmbySkeletonLines(
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     repeat(lineCount.coerceAtLeast(1)) { index ->
-      // ĩ�ж�һ�㣬ģ����ʵ�ı��Ĳβ��
+      // 末行短一点，模拟真实文本的参差感
       SkeletonLine(
         shimmer = shimmer,
         widthFraction = if (index == lineCount - 1) 0.55f else 1f,
@@ -372,7 +372,7 @@ fun EmbySkeletonLines(
   }
 }
 
-/** �Ǽ�����ķ���С���� */
+/** 骨架屏里的分组小标题 */
 @Composable
 private fun SkeletonSectionTitle(shimmer: Shimmer) {
   Box(
@@ -386,13 +386,13 @@ private fun SkeletonSectionTitle(shimmer: Shimmer) {
 }
 
 /**
- * �Ǽ������һ��������ռλ������
+ * 骨架屏里的一根「文字占位条」。
  *
- * [shimmer] ��**����**�������ڲ��Լ��� `rememberShimmer()`��
- * ���ڰ汾�ں�������������š�ÿ���������������ʵ����
- * `EmbySkeletonGrid` 12 �� �� 2 �� = **24 �������� rememberInfiniteTransition**��
- * ÿ������ÿ֡����һ�ζ�����ͬһ����ʮ�����޶������еͶ˻�����ʵ��ʵ�ķ���Դ��
- * �����ɸ���ȡһ�ݴ���������������һ������ʵ����
+ * [shimmer] 是**参数**而不是内部自己调 `rememberShimmer()`：
+ * 早期版本在函数体里调，看着「每个组件都独立」，实际上
+ * `EmbySkeletonGrid` 12 项 × 2 行 = **24 个独立的 rememberInfiniteTransition**，
+ * 每个都在每帧驱动一次动画。同一屏几十个无限动画在中低端机上是实打实的发热源。
+ * 现在由父级取一份传下来，整屏共用一个动画实例。
  */
 @Composable
 private fun SkeletonLine(
@@ -410,21 +410,21 @@ private fun SkeletonLine(
 }
 
 /**
- * �������õ�һ��ɨ�⽥�䡣
+ * 整屏共用的一条扫光渐变。
  *
- * ## Ϊʲô���ǡ�`rememberShimmerBrush()` ÿ����Ϸ���һ����Brush��
+ * ## 为什么不是「`rememberShimmerBrush()` 每次组合返回一个新Brush」
  *
- * �������Ļ�������ֵ����**�����**���������ģ�`animateFloat` �� `by` ί�У���
- * ����ÿһ֡���᣺����һ���� `Brush` �� ��������������ռλ��**��������**��
- * 24 �����������ǽ������ˣ������鿪��ԭ�ⲻ�� ���� ���Ǽ���ǡǡ�����
- * ����ĵط������Լ����ǡ��������项���Ӿ��źţ���
+ * 那样做的话，动画值是在**组合期**被读出来的（`animateFloat` 的 `by` 委托），
+ * 于是每一帧都会：产出一个新 `Brush` → 让所有拿着它的占位块**整棵重组**。
+ * 24 个独立动画是降下来了，但重组开销原封不动 —— 而骨架屏恰恰是最不该
+ * 重组的地方（它自己就是「正在重组」的视觉信号）。
  *
- * �ɼ��Ա����� public������ public �� [EmbySkeletonSection] ��Ĭ�ϲ�����Դ��
- * �ɼ��Ա����������ͻ�ֱ�ӱ���ʧ�ܡ�
+ * 可见性必须是 public：它是 public 的 [EmbySkeletonSection] 的默认参数来源，
+ * 可见性比宿主函数低会直接编译失败。
  *
- * ���ڸĳɣ�����ֵ��� [Shimmer]���� [shimmer] ��**������**��ȡ��
- * `drawBehind` �� lambda ���� draw scope��������ֻ����һ��**�ػ�**��
- * ���������顣������ͬһ�� [Shimmer] ���´���ȫ������һ�ݶ���״̬��
+ * 现在改成：动画值存进 [Shimmer]，由 [shimmer] 在**绘制期**读取。
+ * `drawBehind` 的 lambda 属于 draw scope，读动画只让这一项**重绘**，
+ * 不触发重组。父级把同一个 [Shimmer] 往下传，全屏共用一份动画状态。
  */
 @Composable
 fun rememberShimmer(): Shimmer {
@@ -444,12 +444,12 @@ fun rememberShimmer(): Shimmer {
 }
 
 /**
- * һ��ɨ�������[x] �� 0f..1f �Ľ��ȣ���**������**�������������� `() -> Float`
- * ������ `Float` ���� ���߻�ǿ���������ȡֵ����������Ҫ�ܿ����¡�
+ * 一份扫光参数。[x] 是 0f..1f 的进度，在**绘制期**被读，所以它是 `() -> Float`
+ * 而不是 `Float` —— 后者会强迫在组合期取值，正是上面要避开的事。
  *
- * �ɼ��Ա����� public������ private Ҳ���� internal����[EmbySkeletonSection] ��
- * public �����Ұ������������ͣ�Kotlin ������ public ������¶�����ɼ��Ը���/types ���͵�����
- * ���� private �� internal ���ᱨ "exposes its ... parameter type"��
+ * 可见性必须是 public（不是 private 也不是 internal）：[EmbySkeletonSection] 是
+ * public 函数且把它当参数类型，Kotlin 不允许 public 函数暴露比它可见性更低/types 更低的类型
+ * —— private 和 internal 都会报 "exposes its ... parameter type"。
  */
 class Shimmer(
   private val base: Color,
@@ -457,8 +457,8 @@ class Shimmer(
   private val x: () -> Float,
 ) {
   /**
-   * @param size ��ǰռλ��ĳߴ硣ɨ����������㣬������д������ ����
-   *   д���Ļ� 3x ����ɨ������1x ���ϴ��ʱ��ɨ�������ڡ�
+   * @param size 当前占位块的尺寸。扫光带按它换算，而不是写死像素 ——
+   *   写死的话 3x 屏上扫不到、1x 屏上大半时间扫不到块内。
    */
   fun brushFor(size: Size): Brush {
     val band = size.width * 0.6f
@@ -473,12 +473,12 @@ class Shimmer(
 }
 
 /**
- * ��ɨ�⽥������������������ڻ��ƽ׶Σ�����ֻʧЧ draw����ʧЧ��ϡ�
+ * 用扫光渐变填背景。读动画发生在绘制阶段，所以只失效 draw，不失效组合。
  *
- * �ȼ��� `background(Brush)`�����Ǹ� Brush ÿ֡����һ����
+ * 等价于 `background(Brush)`，但那个 Brush 每帧都不一样。
  */
-// ?? ������ public����Ƭ��·��ui/browser/emby/photo���ġ������йǼ�����ҲҪ������ɨ�⣬
-// �Ǳ߲���ͬһ�����������ñ��� photo ������дһ�ݸ��� ���� ɨ�����ֻ��һ�����壬
-// ȫ App �ĹǼ�������ͬһ���ʸУ�coding.md�����ڸ�������ͬһ���µ�ʵ�֣���
+// ?? 刻意是 public：照片链路（ui/browser/emby/photo）的「加载中骨架屏」也要用这套扫光，
+// 那边不在同一个包里。跨包复用比在 photo 包里另写一份更好 —— 扫光参数只有一处定义，
+// 全 App 的骨架屏才是同一种质感（coding.md：别在各处复制同一件事的实现）。
 fun Modifier.shimmer(shimmer: Shimmer): Modifier =
   this.drawBehind { drawRect(shimmer.brushFor(size)) }

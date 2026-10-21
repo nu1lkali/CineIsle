@@ -168,11 +168,9 @@ private fun rememberAppIconBitmap(packageName: String?): ImageBitmap? {
 
   // 回收上一张图（清单 #20 建议项）。图标是 96×96 ARGB_8888（每张约 36KB），
   // 播放器列表可能有几十个外部应用 —— 不回收就是几十张 native 图悬着等 GC。
-  //
   // ⚠️ 用 `DisposableEffect(bitmap)` 而不是 `produceState` 里写 `onDispose`：
   // 后者是 Compose 的顶层 API，只能在 composable 函数体里调；
   // `produceState` 的 lambda 是 `ProduceStateScope`（协程作用域），不是 composable 作用域。
-  //
   // key 用 `bitmap`（实例本身）：它每次加载都是新对象，
   // 所以 key 一变就意味着「旧的可以扔了」，正好是我们要的时机。
   DisposableEffect(bitmap) {

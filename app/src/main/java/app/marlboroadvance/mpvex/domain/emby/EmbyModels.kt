@@ -296,7 +296,7 @@ data class EmbyItem(
    * 媒体文件总大小（字节），供「按文件大小排序」使用。
    *
    * 只有请求时 [ITEM_FIELDS] 带上 `Size` 服务端才会返回；取不到时排序会退回
-   * [MediaSources] 里第一个源的大小（实测两者一致），两边都没有就按 0 处理。
+   * [MediaSources] 里第一个源的大小（两者一致），两边都没有就按 0 处理。
    */
   val Size: Long? = null,
   /**
@@ -386,7 +386,7 @@ data class EmbyItem(
   // ——— 主图「借用」字段（容器条目） ———
   // 普通条目（Movie/Series/Photo）的 Primary 图就在自己身上，tag 在 [ImageTags] 里。
   // 但**容器条目**（相册 PhotoAlbum、部分 Folder）自身没有 Primary 图，服务端会把
-  // 「借来的」那张图的归属单独写在这两个字段上。实测：
+  // 「借来的」那张图的归属单独写在这两个字段上：
   //   GET /Items/{相册Id}/Images/Primary            -> 404 "does not have an image of type Primary"
   //   GET /Items/{PrimaryImageItemId}/Images/Primary -> 200 image/jpeg
   // 两个字段是 BaseItemDto 的顶层属性（不受 Fields 白名单限制），任何查询都会返回。
@@ -402,7 +402,7 @@ data class EmbyItem(
    *
    * ⚠️ **和 [Tags] 是同一份数据的两种形态，但不是任何部署都给全**：
    * `Tags` 是纯名字数组，`TagItems` 每项带 `Name` + `Id`。有些服务端 / 元数据插件
-   * 只写 `TagItems` 而把 `Tags` 留空（实测用户环境就是这样：响应里有 `TagItems` 三条，
+   * 只写 `TagItems` 而把 `Tags` 留空（有部署就是这样：响应里有 `TagItems` 三条，
    * 却**完全没有 `Tags` 字段**），所以详情页读标签时必须
    * 「优先 [TagItems]，为空再退回 [Tags]」—— 只看 `Tags` 会一条都显示不出来。
    *

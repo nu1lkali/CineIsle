@@ -174,15 +174,12 @@ class PlayerViewModel(
 
   init {
     // Poll precise position only when playing
-    //
-    // ⚠️⚠️ **必须跑在 IO 线程上，不能留在 viewModelScope 默认的 Main。**
-    //
+    // ⚠️ **必须跑在 IO 线程上，不能留在 viewModelScope 默认的 Main。**
     // `MPVLib.getPropertyDouble` 是同步 JNI 调用，客户端线程会去抢 mpv 的
     // 播放线程锁（`mpctx->lock`）。而 demux / 解码线程每秒要持锁几十次，
     // **码率越高、单帧越大，持锁时间越长** —— 4K 原盘（70GB 那种）上主线程
     // 每 42ms 抢一次锁，抢不到就阻塞，直接和「渲染 + 触摸事件」抢同一个线程，
     // 观感就是**整个 App 卡成幻灯片**（不是视频卡，是 UI 卡）。
-    //
     // 挪到 `Dispatchers.Default` 之后：读不到锁只影响这个采样协程自己，
     // 位置稍晚一拍对进度条完全无感，但主线程再也不会被 JNI 卡住。
     viewModelScope.launch(Dispatchers.Default) {

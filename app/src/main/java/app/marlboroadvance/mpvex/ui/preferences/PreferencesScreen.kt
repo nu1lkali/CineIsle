@@ -292,7 +292,7 @@ object PreferencesScreen : Screen {
 
               // 弹幕独立设置页（开关 / 弹幕源 / 凭证 / 自动匹配）。
               // ⚠️ 原来这个入口挂在外观定制页里，但弹幕跟外观无关 ——
-              //    用户原话「把弹幕单独挪到设置页面，不要放在外观定制里面」。
+              //    ，不要放在外观定制里面」。
               //    它默认是关的，所以摘要里直接带开关状态：不显示状态的话，
               //    用户永远不知道有这东西、更不知道去哪开。
               val danmakuPrefs = koinInject<DanmakuPreferences>()
@@ -736,7 +736,6 @@ object PreferencesScreen : Screen {
             val clearProgressOnDownload by browserPreferences.embyClearProgressOnDownload.collectAsState()
             PreferenceCard {
               // ── 以下两项原在「Emby 服务器维护」页，现移到这里 ──────────
-              //
               // 移过来的理由：这两项**与具体哪台服务器无关**，是全局播放偏好。
               // 放在维护页里自相矛盾 —— 那页是加删服务器 / 查连接状态的地方，
               // 用户要在那里找一个「跟哪台服务器都无关」的开关。
@@ -787,10 +786,9 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               // ── 多版本优先选择 ────────────────────────────────────────
-              //
               // 同一影片有多个版本（4K/1080P/不同码率）时，播放前自动按这条规则挑，
               // 省掉每次都去点版本下拉框。
-              // ⭐ 优先级是「用户手动选 > 本规则」：在详情页下拉里选过的版本永远优先，
+              // 优先级是「用户手动选 > 本规则」：在详情页下拉里选过的版本永远优先，
               //   规则只在没选过时接管。
               // ⚠️ 用 DropDown 而非单选按钮组：条目有 7 个，单选组会把这个分区撑得很长。
               val sourcePrefKey by browserPreferences.embyMediaSourcePreference.collectAsState()
@@ -827,7 +825,6 @@ object PreferencesScreen : Screen {
             val browserPreferences = koinInject<BrowserPreferences>()
             PreferenceCard {
               // ── 照片预加载张数 ────────────────────────────────────────
-              //
               // 照片浏览器会提前把「当前这张前后各 N 张」拉进缓存，滑过去时不白屏。
               // 固定 1/2/3 三档：再大就是拿流量和内存换几乎感知不到的流畅度
               // （全屏图一张十几 MB，缓存封顶后多预取的会被后来者顶掉，等于白预取）。
@@ -857,7 +854,6 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               // ── 照片幻灯片间隔 ────────────────────────────────────────
-              //
               // 照片浏览器（图集）里「幻灯片播放」的翻页间隔。三档固定值，
               // 不用滑块：常用就 3 / 5 / 10 秒，拖出来的中间值没有意义。
               val slideshowInterval by browserPreferences.photoSlideshowInterval.collectAsState()
@@ -915,7 +911,6 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               // ── 底部胶片条 ────────────────────────────────────────────
-              //
               // 照片浏览器底部那条缩略图。默认**关**：它要吃掉约 56dp 的画面高度，
               // 而照片浏览器最值钱的就是画面面积；想要快速跳图的人自己打开。
               // ⚠️ 这一个开关**同时管两个照片浏览器**（Emby 媒体库 / 网络位置），
@@ -948,11 +943,9 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               // ── 照片保存位置 ──────────────────────────────────────────
-              //
               // 照片浏览器里「长按 → 保存原图 / 另存为 JPEG」落到哪里。默认进系统相册的
               // `Pictures/CineIsle`；想放自己的目录就点进来选一次。
-              //
-              // ⭐ v1.5.4 起弹的是 **App 自己的文件夹选择器**（FolderPickerDialog），
+              // v1.5.4 起弹的是 **App 自己的文件夹选择器**（FolderPickerDialog），
               //    不再是系统的 SAF `ACTION_OPEN_DOCUMENT_TREE` —— 系统那张界面是
               //    系统风格，跟本 App 的整体 UI 完全不搭。
               //    自研选择器给的是**绝对路径**（`/storage/emulated/0/DCIM/xxx`），
@@ -1380,7 +1373,6 @@ object PreferencesScreen : Screen {
           }
 
           // ── 网络浏览（SMB / WebDAV / FTP） ──────────────────────────
-          //
           // 这里放「网络」模块自己的观感项：文件夹封面是这一轮新增的大功能
           // （懒加载 + 两级缓存，关掉后零额外请求），标题行数是网格信息密度。
           // 排序维度 / 升降序不进设置 —— 那两个是「当前目录怎么看」的即时操作，

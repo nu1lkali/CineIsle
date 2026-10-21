@@ -147,7 +147,6 @@ internal class ChineseSubtitleRules(
     }
     if (cjkTokens.isNotEmpty()) {
       // ⚠️ 单字汉字**不进上面那个大正则**，由 [findMarker] 按「独立成段」单独判。
-      //
       // 原因：要判「整段只有这一个字」就得跨过分隔符往两边看，而**变长
       // lookbehind 是 Java 正则不支持的**。放进正则里只判紧邻字符会双向误判：
       //   `简.爱.2020.mkv` → 「简」后面紧邻 `.`（非汉字）⇒ 误判成简体标记
@@ -187,7 +186,6 @@ internal class ChineseSubtitleRules(
     if (main != null) return all.firstOrNull { it.equals(main, ignoreCase = true) } ?: main
 
     // 单字汉字标记：必须**独立成段，且右侧跨过分隔符后不是汉字**。
-    //
     // ⚠️ 「切段后整段等于该单字」这条不够 —— 它挡不住《简·爱》：
     //   `/m/简.爱.2020.mkv` 切成 [`m`, `简`, `爱`, `2020`, `mkv`]，
     //   `简` 那一段确实等于标记，可它其实是片名的一部分。

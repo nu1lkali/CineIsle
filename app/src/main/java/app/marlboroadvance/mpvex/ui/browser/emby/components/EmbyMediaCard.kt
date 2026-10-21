@@ -420,12 +420,11 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
           // 用 pointerInput 而不是 IconButton / clickable：前者会把触控区撑到 48dp 压住封面，
           // 后者要额外引一个 import；这里只需要「点一下别穿透到卡片」，detectTapGestures
           // 会消费掉事件，父层 Card 的单击就收不到了 —— 正是想要的。
-          //
           // ⚠️ 回调必须过一层 rememberUpdatedState：`pointerInput(Unit)` 的 key 是常量，
           // 手势协程只在卡片**第一次**组合时启动一次，直接捕获 onToggleFavorite 会把
           // 那一刻的 lambda 永久焊死 —— 而它闭包里是当时那一条 item（IsFavorite=false）。
           // 卡片按 Id 复用、组合不重启，于是之后每次点心形都还在按「收藏」算，
-          // **永远取消不掉**（用户反馈的「只能收藏不能取消收藏」）。与播放队列拖拽那个
+          // **永远取消不掉**（「只能收藏不能取消收藏」）。与播放队列拖拽那个
           // pointerInput 坑同源：常量 key 的手势里，任何会变的东西都得走最新值。
           val latestToggleFavorite by rememberUpdatedState(onToggleFavorite)
           Surface(
@@ -513,7 +512,6 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
         // 两者放进**同一个 Row**：文件夹图标永远排最左（用户要求「始终出现在左下角」），
         // 角标依次排在它右边，于是既不会互相遮挡，也不会被角标挤走位。
         // 贴在底部进度条（3dp）上方 8dp，避免压住进度条。
-        //
         // ⚠️ 文件夹图标**刻意不受 `showBadges` 控制**：那个开关管的是「播放进度 / 作品数」
         //    这类装饰信息；而文件夹图标是「点它是进入还是播放」的类型区分 ——
         //    关掉角标后两类条目就分不出来了，正是这次要解决的问题。
@@ -600,7 +598,7 @@ private const val MOSAIC_SWAP_FADE_MS = 260
  * Emby 的文件夹条目没有自己的封面图，这里用文件夹内前几项子媒体的缩略图拼成宫格，
  * 一眼能看出里面装的是什么，比一个纯灰色文件夹占位图标有用得多。
  *
- * ⭐ 换图（下拉刷新会换一批随机封面）时**不硬切**，按三步走：
+ * 换图（下拉刷新会换一批随机封面）时**不硬切**，按三步走：
  *  1. **先把新一批的图解码好**并放进内存缓存（命中缓存几乎瞬时，新图才需要下载）；
  *  2. 再把新一批从上一批**淡入**上来 —— 旧图全程原样压在下面，所以中间不会露出卡片底色，
  *     也不会出现「变暗一下」的中间态；
@@ -793,7 +791,6 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
       // 库名不再靠「整片渐变遮罩」压暗，而是直接给文字垫一块实心底色
       // —— 跟「继续观看」卡片左下角那个「剩余 XX分XX秒」角标同一套做法：
       // 深蓝底 + 圆角 + 半透明，只盖住文字那一小块。
-      //
       // 好处：遮罩面积从「半张卡片」降到「一小条」，封面主体完整露出来；
       // 文字一定落在实色底上，不会出现「上半截压在渐变半透明区」的问题。
       Box(
