@@ -1067,7 +1067,9 @@ data class EmbyLibraryScreen(
       }
     }
 
-    LaunchedEffect(gridState, items.size) {
+    // 触底预取距离：「预测性懒加载」开关（开 ≈ 一屏 / 关 ≈ 贴近末尾），全 App 分页列表统一
+    val prefetchDistance = rememberPredictivePreloadDistance(browserPreferences)
+    LaunchedEffect(gridState, items.size, prefetchDistance) {
       snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
         .collect { lastVisible ->
           // 客户端筛选走全量扫描，没有「下一页」可翻；扫描中也不要再触发普通分页。
@@ -1079,7 +1081,7 @@ data class EmbyLibraryScreen(
             (hasGenreTagFilter && serverSnapshot != null && !supportsGenreIdFilter(serverSnapshot.id))
           val canLoadMore = !isLoading && !isScanning && !scanningFilter && !isActorListMode &&
             !loadingMore && consumedCount < totalCount && lastVisible != null
-          if (canLoadMore && lastVisible >= items.size - 6) {
+          if (canLoadMore && lastVisible >= items.size - prefetchDistance) {
             load(reset = false)
           }
         }

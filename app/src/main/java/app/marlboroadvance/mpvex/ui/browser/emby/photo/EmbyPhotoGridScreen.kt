@@ -52,6 +52,7 @@ import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
+import app.marlboroadvance.mpvex.ui.browser.emby.rememberPredictivePreloadDistance
 import app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.Dispatchers
@@ -278,12 +279,14 @@ data class EmbyPhotoGridScreen(
       fetchPage(reset = true)
     }
 
-    // 滑到距末尾 4 个以内续页。consumed 进 key：每拉一页都要重新判一次
-    val nearEnd by remember {
+    // 滑到距末尾 prefetchDistance 个以内续页（「预测性懒加载」开关：开 ≈ 一屏 / 关 ≈ 贴近末尾）。
+    // consumed 进 key：每拉一页都要重新判一次
+    val prefetchDistance = rememberPredictivePreloadDistance(browserPreferences)
+    val nearEnd by remember(prefetchDistance) {
       derivedStateOf {
         val info = gridState.layoutInfo
         val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-        info.totalItemsCount > 0 && last >= info.totalItemsCount - 4
+        info.totalItemsCount > 0 && last >= info.totalItemsCount - prefetchDistance
       }
     }
     LaunchedEffect(nearEnd, consumed) {

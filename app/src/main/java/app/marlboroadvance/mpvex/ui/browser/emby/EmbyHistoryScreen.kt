@@ -38,12 +38,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMaintainButton
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySectionHeader
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonHistory
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyWideCard
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
 
 /** 播放历史一页拉多少条（清单 1.1：原来固定 100 条） */
@@ -64,6 +66,9 @@ fun EmbyHistoryScreen() {
     factory = EmbyViewModel.factory(context.applicationContext as Application),
   )
   val server by viewModel.currentServer.collectAsState()
+  val browserPreferences = koinInject<BrowserPreferences>()
+  // 触底预取距离走「预测性懒加载」开关（开 ≈ 一屏 / 关 ≈ 贴近末尾），全 App 分页列表统一
+  val prefetchDistance = rememberPredictivePreloadDistance(browserPreferences)
   val scope = rememberCoroutineScope()
 
   val resumeItems = remember { mutableStateListOf<EmbyItem>() }
@@ -112,10 +117,12 @@ fun EmbyHistoryScreen() {
 
   LaunchedEffect(server?.id) { load() }
 
-  // 触底自动续拉播放历史（继续观看是横向的，不参与）
+  // 触底自动续拉播放历史（继续观看是横向的，不参与）。
+  // 预取距离走「预测性懒加载」开关（开 ≈ 一屏 / 关 ≈ 贴近末尾）
   historyPage.AutoLoadMore(
     source = listSource,
     enabled = server != null && resumeItems.isNotEmpty(),
+    distance = prefetchDistance,
     loader = historyLoader,
   )
 

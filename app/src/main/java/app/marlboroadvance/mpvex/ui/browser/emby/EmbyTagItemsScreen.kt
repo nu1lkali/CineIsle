@@ -190,8 +190,9 @@ data class EmbyTagItemsScreen(
       facetItem = viewModel.loadFacetItem(current, kind, keyword, filterId)
     }
 
-    // 触底自动续拉
-    page.AutoLoadMore(source = gridSource, enabled = server != null, loader = loader)
+    // 触底自动续拉。预取距离走「预测性懒加载」开关（开 ≈ 一屏 / 关 ≈ 贴近末尾）
+    val prefetchDistance = rememberPredictivePreloadDistance(browserPreferences)
+    page.AutoLoadMore(source = gridSource, enabled = server != null, distance = prefetchDistance, loader = loader)
 
     Column(modifier = Modifier.fillMaxSize()) {
       TopAppBar(

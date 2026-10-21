@@ -425,6 +425,18 @@ class BrowserPreferences(
   val embyQuickFavorite = preferenceStore.getBoolean("emby_quick_favorite", true)
 
   /**
+   * **预测性懒加载**总开关（媒体库 / 聚合库 / 收藏 / 历史 / 标签结果 / 播放列表 /
+   * 照片网格 / 照片浏览器等所有分页列表通用）。
+   *
+   * 开（默认）= 距列表末尾约一屏（`PagedList.PREFETCH_DISTANCE`，3 列网格约 4 行）
+   * 就提前拉下一页，快速fling 也来得及；关 = 贴近末尾才拉（老行为，省请求）。
+   *
+   * 读取方统一走 `rememberPredictivePreloadDistance(browserPreferences)` 拿距离，
+   * 不要在各自页面里硬编码 —— 否则设置里关了某页还在预取。
+   */
+  val embyPredictivePreload = preferenceStore.getBoolean("emby_predictive_preload", true)
+
+  /**
    * 详情页是否显示推荐区（「推荐」+「同类型推荐」两个横向区块）。
    *
    * 关掉后媒体详情页只留影片信息与演职员，不再往下展示推荐内容 ——

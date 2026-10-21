@@ -31,7 +31,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -87,7 +86,7 @@ fun DangerConfirmDialog(
         title,
         style = MaterialTheme.typography.headlineSmall,
         fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.error,
+        color = DANGER_RED,
       )
     },
     text = {
@@ -121,9 +120,9 @@ fun DangerConfirmDialog(
           }
         }
 
-        // 简洁的交互说明
+        // 简洁的交互说明。秒数按 HOLD_TO_DELETE_MS 自动格式化（2.5 秒）。
         Text(
-          text = "按住下方红色按钮 ${HOLD_TO_DELETE_MS / 1000} 秒才会删除，中途松手即取消。" +
+          text = "按住下方红色按钮 ${formatSeconds(HOLD_TO_DELETE_MS)} 秒才会删除，中途松手即取消。" +
             "此操作物理删除服务器端文件，不可恢复。",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -137,13 +136,13 @@ fun DangerConfirmDialog(
               .fillMaxWidth()
               .height(48.dp)
               .clip(RoundedCornerShape(8.dp))
-              .background(MaterialTheme.colorScheme.error)
+              .background(DANGER_RED)
               .pointerInput(Unit) {
                 detectTapGestures(
-              onPress = {
-                // 长按开始：给一次"长按"触觉反馈，确认按压已被识别（与项目其余长按交互一致）。
-                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                // 按压推进协程：从 0 线性推进到 1；正常跑满才触发 onConfirm。
+                  onPress = {
+                    // 长按"刚开始"给一次触觉反馈：按压被立即确认，不必等进度条动。
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    // 按压推进协程：从 0 线性推进到 1；正常跑满才触发 onConfirm。
                     // 用外部 scope 启动，使其生命周期独立于 onPress —— 否则松手后 onPress
                     // 返回，内部协程会被一起取消，推进尚未完成就中断。
                     val holdJob =
@@ -154,7 +153,6 @@ fun DangerConfirmDialog(
                           animationSpec =
                             tween(HOLD_TO_DELETE_MS.toInt(), easing = LinearEasing),
                         )
-                        // 只有正常跑满（value == 1f）才确认；被取消时不会走到这里。
                         if (progress.value >= 1f) {
                           currentOnConfirm()
                         }
@@ -208,12 +206,12 @@ fun DangerConfirmDialog(
             // 后层：低幅、慢波、相位偏移，视觉上像更深的水
             drawPath(
               wavePath(ampScale = 0.85f, phaseOffset = PI.toFloat(), freq = 1f / 1.5f),
-              color = Color.White.copy(alpha = 0.20f),
+              color = Color.White.copy(alpha = 0.16f),
             )
             // 前层：高幅、快波，主体水面
             drawPath(
               wavePath(ampScale = 1f, phaseOffset = 0f, freq = 1f / 2f),
-              color = Color.White.copy(alpha = 0.30f),
+              color = Color.White.copy(alpha = 0.25f),
             )
           }
 
@@ -224,13 +222,10 @@ fun DangerConfirmDialog(
               } else {
                 "按住删除"
               },
-            style =
-              MaterialTheme.typography.labelLarge.copy(
-                // 水面上方加一点阴影，保证白字在水位较高时依然可读
-                shadow = Shadow(color = Color.Black.copy(alpha = 0.55f), blurRadius = 6f),
-              ),
+            // 纯白 + 加粗，不加任何阴影/模糊：保证字形锐利清晰。
+            style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onError,
+            color = Color.White,
           )
         }
 
@@ -251,11 +246,18 @@ fun DangerConfirmDialog(
   )
 }
 
-/** 按压保持达到该时长（毫秒）才解锁删除；中途松手即回退。当前为 3 秒。 */
-private const val HOLD_TO_DELETE_MS = 3000L
+/** 高饱和亮红，用于破坏性操作的标题与按钮底色。 */
+private val DANGER_RED = Color(0xFFFF2D2D)
+
+/** 按压保持达到该时长（毫秒）才解锁删除；中途松手即回退。当前为 2.5 秒。 */
+private const val HOLD_TO_DELETE_MS = 2500L
 
 /** 松手后进度回退到 0 的动画时长（毫秒）。 */
 private const val RESET_ANIM_MS = 350
 
 /** 清单里最多逐条列出多少个名字，超出部分收口成「等共 N 个」。 */
 private const val MAX_LISTED = 8
+
+/** 把毫秒格式化成一个简洁的秒数字符串：2500 → "2.5"，3000 → "3"。 */
+private fun formatSeconds(ms: Long): String =
+  if (ms % 1000L == 0L) (ms / 1000L).toString() else (ms / 1000.0).toString()

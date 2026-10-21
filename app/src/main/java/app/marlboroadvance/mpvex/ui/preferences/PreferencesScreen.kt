@@ -467,6 +467,31 @@ object PreferencesScreen : Screen {
 
           item {
             PreferenceCard {
+              // 预测性懒加载（所有分页列表通用）：开 = 距末尾约一屏就提前拉下一页，
+              // 快速fling 也来得及；关 = 贴近末尾才拉（老行为，最省请求）。
+              val browserPreferences = koinInject<BrowserPreferences>()
+              val predictivePreload by browserPreferences.embyPredictivePreload.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Memory,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = predictivePreload,
+                onValueChange = { browserPreferences.embyPredictivePreload.set(it) },
+                title = { Text(text = "预测性懒加载", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = "滑到距列表末尾约一屏时就提前加载下一页；关闭后贴近末尾才加载",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
               // ── 聚合库（配置入口）────────────────────────────────────
               // 把多个同类型媒体库合并成一个本地视图。新建 / 编辑 / 删除都在独立页，
               // 这里只做入口 —— 与播放列表、合集同一套分工：设置里给门，内容在专门页面管。

@@ -517,13 +517,15 @@ fun EmbyFavoritesScreen() {
   val gridState = rememberLazyGridState()
 
   // ── 触底自动续拉（清单 1.1）──
-  // 距末尾还剩 PagedList.PREFETCH_DISTANCE 格就预取下一页：数据到得比用户滚到得快，
+  // 预取距离走「预测性懒加载」开关（开 ≈ 一屏 / 关 ≈ 贴近末尾）：数据到得比用户滚到得快，
   // 感知不到等待。actor tab 不分页（一次拉完），所以只在 MOVIE tab 生效。
   val reachBottomServer = server
   val gridSource = gridState.pagingSource()
+  val prefetchDistance = rememberPredictivePreloadDistance(browserPreferences)
   moviePage.AutoLoadMore(
     source = gridSource,
     enabled = server != null && tab == FavoriteTab.MOVIE,
+    distance = prefetchDistance,
     loader = { s, l -> moviePageLoader(server!!)(s, l) },
   )
 

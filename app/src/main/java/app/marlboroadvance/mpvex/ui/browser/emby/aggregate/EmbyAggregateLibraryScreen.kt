@@ -67,6 +67,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
 import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoGridScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.playbackProgress
+import app.marlboroadvance.mpvex.ui.browser.emby.rememberPredictivePreloadDistance
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlin.math.roundToInt
@@ -137,12 +138,14 @@ data class EmbyAggregateLibraryScreen(
 
     LaunchedEffect(aggregateId) { vm.start(aggregateId) }
 
-    // 触底续拉：距底部 8 条就开始取。首屏未落位（last = -1）时不触发
-    LaunchedEffect(gridState, hasMore, isLoading, loadingMore) {
+    // 触底续拉：预取距离走「预测性懒加载」开关（开 ≈ 一屏 / 关 ≈ 贴近末尾）。
+    // 首屏未落位（last = -1）时不触发
+    val prefetchDistance = rememberPredictivePreloadDistance(browserPreferences)
+    LaunchedEffect(gridState, hasMore, isLoading, loadingMore, prefetchDistance) {
       if (!hasMore || isLoading || loadingMore) return@LaunchedEffect
       snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
         .collect { last ->
-          if (last >= 0 && last >= items.size - 8) vm.loadMore()
+          if (last >= 0 && last >= items.size - prefetchDistance) vm.loadMore()
         }
     }
 

@@ -49,6 +49,7 @@ import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
+import app.marlboroadvance.mpvex.ui.browser.emby.rememberPredictivePreloadDistance
 import app.marlboroadvance.mpvex.ui.browser.photo.PhotoViewerEntry
 import app.marlboroadvance.mpvex.ui.browser.photo.SharedPhotoViewer
 import app.marlboroadvance.mpvex.ui.browser.photo.formatPhotoFileSize
@@ -205,9 +206,10 @@ data class EmbyPhotoBrowserScreen(
       }
     }
 
-    // 滑到距末尾 3 张以内续页
-    LaunchedEffect(currentPage) {
-      if (queue.isNotEmpty() && currentPage >= queue.size - 3) loadMore()
+    // 滑到距末尾 prefetchDistance 张以内续页（「预测性懒加载」开关：开 ≈ 一屏 / 关 ≈ 贴近末尾）
+    val prefetchDistance = rememberPredictivePreloadDistance(browserPreferences)
+    LaunchedEffect(currentPage, prefetchDistance) {
+      if (queue.isNotEmpty() && currentPage >= queue.size - prefetchDistance) loadMore()
     }
 
     // ── 前后预加载（相邻 ±N 张）──

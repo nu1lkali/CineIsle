@@ -59,15 +59,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyEmptyState
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyServerManageScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonList
+import app.marlboroadvance.mpvex.ui.browser.emby.rememberPredictivePreloadDistance
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import org.koin.compose.koinInject
 
 /**
  * 单个 Emby 播放列表的条目页。
@@ -100,6 +103,7 @@ data class EmbyPlaylistDetailScreen(
     )
     val embyVm: EmbyViewModel = viewModel(factory = EmbyViewModel.factory(application))
     val server by embyVm.currentServer.collectAsState()
+    val browserPreferences = koinInject<BrowserPreferences>()
 
     val entries by vm.entries.collectAsState()
     val loading by vm.entriesLoading.collectAsState()
@@ -132,11 +136,13 @@ data class EmbyPlaylistDetailScreen(
       vm.consumeToast()
     }
 
-    // 触底续拉。派生 lastVisible 只在真正接近底部时才变，避免每滚一像素就重组
-    val shouldLoadMore by remember(entries.size) {
+    // 触底续拉。派生 lastVisible 只在真正接近底部时才变，避免每滚一像素就重组。
+    // 预取距离走「预测性懒加载」开关（开 ≈ 一屏 / 关 ≈ 贴近末尾）
+    val prefetchDistance = rememberPredictivePreloadDistance(browserPreferences)
+    val shouldLoadMore by remember(entries.size, prefetchDistance) {
       derivedStateOf {
         val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-        last >= 0 && last >= entries.size - 5
+        last >= 0 && last >= entries.size - prefetchDistance
       }
     }
     LaunchedEffect(shouldLoadMore, server?.id) {
