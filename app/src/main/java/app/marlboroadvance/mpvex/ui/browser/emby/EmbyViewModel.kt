@@ -2045,6 +2045,10 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
           recursive = true,
           startIndex = index,
           limit = limit,
+          // 作品页要按年份 / 评分 / 最新添加做**本地排序**：这几个字段 Emby 默认不回传，
+          // 必须显式索取，否则键值全是 null、排序退化成原顺序（用户反馈
+          // 「只有名称排序和随机排序有效果」就是这么来的）
+          fields = EmbyClient.ITEM_FIELDS_WITH_SORT_KEYS,
         )
         if (resp.Items.isEmpty()) break
         out += resp.Items

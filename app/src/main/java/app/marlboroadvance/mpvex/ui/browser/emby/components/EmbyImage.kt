@@ -8,9 +8,13 @@ import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -54,7 +58,25 @@ fun EmbyImage(
     key2 = fallbackUrl,
     key3 = maxWidth,
   ) {
+    // ⚠️⚠️ key 变化（= 换了一张图）时**必须先把上一张图清掉**。
+    // produceState 的 state 是 `remember` 住的，不会因为 key 变化而重建；留着旧值的话，
+    // Lazy 列表里**槽位被复用给另一个条目**时，会先画出**上一个条目的封面**、等新图
+    // 加载完才替换 —— 搜索 / 筛选时「搜索框下面有封面一闪而过」就是它。
+    // 这里立刻换成「新 url 的缓存快照」：命中就第一帧直接上图，没命中就回到占位，
+    // 绝不停留在别人的封面上。
+    value = cached
     value = loadWithFallback(url, fallbackUrl, maxWidth)
+  }
+
+  // 占位图标**延迟一会儿再露脸**：缓存命中 / 磁盘命中通常几十毫秒内就上图，
+  // 立刻画占位的话会「空 → 图标 → 图」闪两下。图在宽限期内到位就一次都不闪。
+  // url 变化时重新计时（remember 的 key = url）。
+  var placeholderReady by remember(url) { mutableStateOf(false) }
+  LaunchedEffect(url) {
+    if (bitmap == null) {
+      delay(PLACEHOLDER_GRACE_MS)
+      placeholderReady = true
+    }
   }
 
   if (bitmap != null) {
@@ -65,18 +87,29 @@ fun EmbyImage(
       contentScale = contentScale,
     )
   } else {
+    // 宽限期内：只铺卡片底色（与占位同色），不画图标 —— 图来了就当什么都没发生过
     Box(
       modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
       contentAlignment = Alignment.Center,
     ) {
-      Icon(
-        imageVector = placeholder,
-        contentDescription = contentDescription,
-        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-      )
+      if (placeholderReady) {
+        Icon(
+          imageVector = placeholder,
+          contentDescription = contentDescription,
+          tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+        )
+      }
     }
   }
 }
+
+/**
+ * 占位图标的宽限期（毫秒）。
+ *
+ * 内存 / 磁盘命中的封面基本都在这个时间内到位 —— 让它们「一次都不闪」；
+ * 真要走网络的（首次见到这张图）才在到期后露出占位图标。
+ */
+private const val PLACEHOLDER_GRACE_MS = 100L
 
 /** 先试主地址，失败再试备用地址；两者都失败返回 null。 */
 private suspend fun loadWithFallback(

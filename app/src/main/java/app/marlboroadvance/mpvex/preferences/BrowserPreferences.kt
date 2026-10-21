@@ -270,6 +270,13 @@ class BrowserPreferences(
   val embyFavoritesSort = preferenceStore.getString("emby_favorites_sort", "")
 
   /**
+   * 收藏页排序的**方向**（true = 升序），与 [embyPersonSortAsc] 同一套做法。
+   *
+   * 只存排序项、方向留在组合里的话，从详情页返回后「年份 ↓」会变回「年份 ↑」。
+   */
+  val embyFavoritesSortAsc = preferenceStore.getBoolean("emby_favorites_sort_asc", true)
+
+  /**
    * 演员 / 导演作品页的排序方式（存枚举名，空串 = 默认「名称」）。
    *
    * 与 [embyFavoritesSort] 同一套语义：作品是一次性拉全后本地排序，切换即时生效、不发请求。

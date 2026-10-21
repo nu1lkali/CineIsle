@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -157,6 +158,14 @@ data class EmbyPersonScreen(
     }
     val visibleItems = remember(filteredItems, sort, sortAsc, randomSeed) {
       sort.apply(filteredItems, sortAsc, randomSeed)
+    }
+
+    val gridState = rememberLazyGridState()
+    // 换了排序（换项 / 反转方向 / 随机换一批）就回到第一条：
+    // 原来翻到第一百部再切排序，视口还停在第 100 部的位置，看的完全是另一批片子，
+    // 用户会以为「排序没生效」。与媒体库页「排序一变就回顶」同一套行为。
+    LaunchedEffect(sort, sortAsc, randomSeed) {
+      gridState.scrollToItem(0)
     }
 
     // 「参与身份」只在**确实观察到**该身份时才提供对应 chip：
@@ -460,6 +469,7 @@ data class EmbyPersonScreen(
           // 只在上层叠一句提示（见网格后面那段）—— 见下面空态注释里为什么要这么做。
           else -> {
             LazyVerticalGrid(
+              state = gridState,
               // 与媒体库「演员」分类、收藏页同一套规格：列数跟随「每行个数」设置
               // （原先用 Adaptive(110dp)，与其它入口的卡片大小对不上，用户反馈已统一）
               columns = GridCells.Fixed(gridColumns.coerceIn(2, 6)),
@@ -598,20 +608,35 @@ private enum class PersonSort(
     // ⚠️ 随机必须用**固定种子**：直接 shuffled() 会在每次重组时洗出不同顺序，
     // 敲个搜索词列表就在手指底下乱跳。种子见调用方的 randomSeed。
     RANDOM -> list.shuffled(Random(seed))
-    else -> {
-      val comparator: Comparator<EmbyItem> = when (this) {
-        NAME -> compareBy { (it.SortName ?: it.Name ?: "").lowercase() }
-        YEAR -> compareBy { it.ProductionYear ?: 0 }
-        RATING -> compareBy { it.CommunityRating ?: 0.0 }
-        // DateCreated 是 ISO-8601 串，字典序即时间序（同格式下成立）
-        ADDED -> compareBy { it.DateCreated ?: "" }
-        RANDOM -> compareBy { 0 }
-      }
-      // 用 sortedWith 而不是「排完再 reversed()」：后者会把键值相同的那些条目的
-      // 相对顺序也翻过来（同一个年份的片子顺序变了，观感像列表自己动了一下）
-      if (asc) list.sortedWith(comparator) else list.sortedWith(comparator.reversed())
-    }
+    NAME -> sortByKey(list, asc) { (it.SortName ?: it.Name)?.lowercase() }
+    YEAR -> sortByKey(list, asc) { it.ProductionYear }
+    RATING -> sortByKey(list, asc) { it.CommunityRating }
+    // DateCreated 是 ISO-8601 串，字典序即时间序（同格式下成立）
+    ADDED -> sortByKey(list, asc) { it.DateCreated }
   }
+}
+
+/**
+ * 按可空键排序，**键值缺失的条目一律沉底**（无论升 / 降序）。
+ *
+ * 沉底而不是当 0 处理：用 `?: 0` 兜底的话，所有没有年份的片子会挤在「0 年」那一档，
+ * 选升序时它们全顶在最前面 —— 比排在最后更像「排序坏了」。
+ *
+ * ⚠️ 这也是为什么不能简单 `sortedWith(cmp.reversed())` 完事：反转会把「无值组」
+ * 一起翻到最前面。所以先把有值 / 无值分开，只排有值的那部分，无值的原样接在后面。
+ *
+ * @param key 取排序键；null 表示该条目没有这个值（服务端没回传 / 条目本身没有）
+ */
+private inline fun <T : Comparable<T>> sortByKey(
+  list: List<EmbyItem>,
+  asc: Boolean,
+  crossinline key: (EmbyItem) -> T?,
+): List<EmbyItem> {
+  val (withKey, withoutKey) = list.partition { key(it) != null }
+  val comparator = compareBy(key)
+  // sortedWith 是稳定排序：键值相同的条目保持原相对顺序（同年份的片子不会莫名换位）
+  val sorted = if (asc) withKey.sortedWith(comparator) else withKey.sortedWith(comparator.reversed())
+  return sorted + withoutKey
 }
 
 /**

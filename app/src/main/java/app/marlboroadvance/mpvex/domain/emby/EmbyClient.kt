@@ -112,6 +112,19 @@ object EmbyClient {
     "Tags,SortName,ProductionLocations,Path,Size"
 
   /**
+   * [ITEM_FIELDS] + **本地排序要用的那几个键**：年份 / 评分 / 添加时间 / 首播日期。
+   *
+   * ⚠️⚠️ 这几个字段 Emby **默认不回传**（实测：不带 Fields 的 `/Items` 只回
+   * Name / Id / Type / UserData / ImageTags，其余全是 null），而 [ITEM_FIELDS] 里也没有它们。
+   * 于是「按年份 / 评分 / 最新添加排序」时每条的键都是 null，稳定排序退化为**原顺序** ——
+   * 表现就是「排序只有名称（SortName 在 ITEM_FIELDS 里）和随机有效，其余点了没反应」。
+   *
+   * 凡是**要在客户端本地排序**的列表（收藏页、演员 / 导演作品页）都必须用这一份。
+   */
+  internal const val ITEM_FIELDS_WITH_SORT_KEYS =
+    "$ITEM_FIELDS,ProductionYear,CommunityRating,DateCreated,PremiereDate"
+
+  /**
    * 拉照片（Photo）列表时索要的扩展字段。
    *
    * 只用 OpenAPI 文档列出的合法 Fields 名（Overview/Genres/Taglines/SortName/
@@ -1481,6 +1494,9 @@ object EmbyClient {
     mediaTypes = mediaTypes,
     startIndex = startIndex,
     limit = limit,
+    // 收藏页要按年份 / 评分 / 添加时间做**本地排序**，这几个字段必须显式索取
+    // （见 [ITEM_FIELDS_WITH_SORT_KEYS] 的说明：不索取就全是 null，排序等于没排）
+    fields = ITEM_FIELDS_WITH_SORT_KEYS,
   )
 
   /**

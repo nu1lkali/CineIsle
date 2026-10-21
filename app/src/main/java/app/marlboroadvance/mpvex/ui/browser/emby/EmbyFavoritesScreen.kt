@@ -23,7 +23,9 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
@@ -35,6 +37,7 @@ import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -59,6 +62,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,6 +76,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyBatchResult
@@ -88,6 +93,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 import org.koin.compose.koinInject
 
 /**
@@ -215,11 +221,23 @@ fun EmbyFavoritesScreen() {
         ?: FavoriteSort.NAME,
     )
   }
-  val visibleItems = items
-    .filter {
+  // 方向（true = 升序）同样落盘：只存排序项的话，从详情页返回后方向会被打回默认，
+  // 同一屏上「名称 ↓」悄悄变「名称 ↑」比整体重置更让人困惑。
+  var sortAsc by remember { mutableStateOf(browserPreferences.embyFavoritesSortAsc.get()) }
+  // 随机排序的种子：只在「切到随机 / 再点一次随机」时变。
+  // ⚠️ 不能每次重组现洗 —— 敲一个搜索字都会重组，列表会在手指底下乱跳。
+  var randomSeed by rememberSaveable { mutableIntStateOf(Random.nextInt()) }
+
+  val filteredItems = remember(items, searchQuery) {
+    items.filter {
       searchQuery.isBlank() || it.Name?.contains(searchQuery.trim(), ignoreCase = true) == true
     }
-    .let { sort.apply(it) }
+  }
+  val visibleItems = remember(filteredItems, sort, sortAsc, randomSeed) {
+    sort.apply(filteredItems, sortAsc, randomSeed)
+  }
+
+  // 「排序一变就回顶」放在 gridState 声明之后（见下方）
 
   // ── 多选模式（批量操作）──
   // 长按任意卡片进入；选中集合存条目 Id；退出时清空。
@@ -516,6 +534,13 @@ fun EmbyFavoritesScreen() {
   val isRefreshing = remember { mutableStateOf(false) }
   val gridState = rememberLazyGridState()
 
+  // 换了排序（换项 / 反转方向 / 随机换一批）就回到第一条：
+  // 翻到第一百部再切排序，视口还停在原处的话看到的完全是另一批内容，
+  // 会让人以为「排序没生效」。与媒体库页「排序一变就回顶」同一套行为。
+  LaunchedEffect(sort, sortAsc, randomSeed) {
+    gridState.scrollToItem(0)
+  }
+
   // ── 触底自动续拉（清单 1.1）──
   // 预取距离走「预测性懒加载」开关（开 ≈ 一屏 / 关 ≈ 贴近末尾）：数据到得比用户滚到得快，
   // 感知不到等待。actor tab 不分页（一次拉完），所以只在 MOVIE tab 生效。
@@ -609,10 +634,16 @@ fun EmbyFavoritesScreen() {
         query = searchQuery,
         onQueryChange = { searchQuery = it },
         sort = sort,
-        onSortChange = {
-          sort = it
-          browserPreferences.embyFavoritesSort.set(it.name)
+        asc = sortAsc,
+        onSortChange = { newSort, newAsc ->
+          sort = newSort
+          sortAsc = newAsc
+          browserPreferences.embyFavoritesSort.set(newSort.name)
+          browserPreferences.embyFavoritesSortAsc.set(newAsc)
+          // 切到随机时给一个新种子：不然沿用旧种子洗出来的还是眼熟的那一批
+          if (newSort == FavoriteSort.RANDOM) randomSeed = Random.nextInt()
         },
+        onReshuffle = { randomSeed = Random.nextInt() },
       )
       PullRefreshGridBox(
         isRefreshing = isRefreshing,
@@ -655,13 +686,8 @@ fun EmbyFavoritesScreen() {
           modifier = Modifier.align(Alignment.Center),
         )
 
-        // 有收藏但被搜索框滤空：给一句提示，别让用户以为收藏丢了
-        visibleItems.isEmpty() -> EmbyEmptyState(
-          message = "没有匹配「${searchQuery.trim()}」的收藏",
-          buttonText = "清空搜索",
-          onAction = { searchQuery = "" },
-          modifier = Modifier.align(Alignment.Center),
-        )
+        // 有收藏但被搜索框滤空：**不在这里判**（见下面网格后的空态叠加）——
+        // 让网格常驻，否则每敲一个字都可能把整个网格卸载重建、封面集体重载。
 
         tab == FavoriteTab.MOVIE -> LazyVerticalGrid(
           // 与媒体库页同口径：跟随「每行个数」设置（2~6）
@@ -805,6 +831,19 @@ fun EmbyFavoritesScreen() {
           }
         }
       }
+
+        // ── 搜索滤空的提示：**叠在网格上层**，不参与上面的 when 二选一 ──
+        // ⚠️ 原来是 when 的一个分支、与网格互斥：敲一个字只要中间态滤出 0 条，
+        // 整个 LazyVerticalGrid 就被卸载，再敲一个字又整体重建 ⇒ 卡片全部重新组合、
+        // 封面全部重新加载 ⇒ 「搜索时封面闪一下」。网格常驻后只剩列表内容在变。
+        if (visibleItems.isEmpty() && items.isNotEmpty() && error == null && server != null) {
+          EmbyEmptyState(
+            message = "没有匹配「${searchQuery.trim()}」的收藏",
+            buttonText = "清空搜索",
+            onAction = { searchQuery = "" },
+            modifier = Modifier.align(Alignment.Center),
+          )
+        }
       }
     }
     }
@@ -975,22 +1014,54 @@ private fun itemProgressOf(item: EmbyItem): Float? {
  */
 private enum class FavoriteSort(
   val label: String,
-  /** 排序方向提示：菜单里作为副标题显示，避免「勾了但不知道是升还是降」 */
-  val hint: String,
+  /** 升序时的方向提示 */
+  val ascHint: String,
+  /** 降序时的方向提示 */
+  val descHint: String,
+  /** 没手动切过方向时的自然方向（与媒体库页同一套规则） */
+  val naturalAsc: Boolean,
 ) {
-  NAME("名称", "A → Z"),
-  YEAR("年份", "新 → 旧"),
-  RATING("评分", "高 → 低"),
-  ADDED("最新添加", "新 → 旧"),
+  NAME("名称", "A → Z", "Z → A", naturalAsc = true),
+  YEAR("年份", "旧 → 新", "新 → 旧", naturalAsc = false),
+  RATING("评分", "低 → 高", "高 → 低", naturalAsc = false),
+  ADDED("最新添加", "旧 → 新", "新 → 旧", naturalAsc = false),
+  // 随机：不分升降序，再点一次换一批
+  RANDOM("随机", "再点一次换一批", "再点一次换一批", naturalAsc = true),
   ;
 
-  fun apply(list: List<EmbyItem>): List<EmbyItem> = when (this) {
-    NAME -> list.sortedBy { (it.SortName ?: it.Name ?: "").lowercase() }
-    YEAR -> list.sortedByDescending { it.ProductionYear ?: 0 }
-    RATING -> list.sortedByDescending { it.CommunityRating ?: 0.0 }
+  /** 是否带方向（随机没有） */
+  val hasDirection: Boolean get() = this != RANDOM
+
+  fun apply(list: List<EmbyItem>, asc: Boolean, seed: Int = 0): List<EmbyItem> = when (this) {
+    // ⚠️ 随机必须用**固定种子**：直接 shuffled() 会在每次重组时洗出不同顺序
+    RANDOM -> list.shuffled(Random(seed))
+    NAME -> sortByKey(list, asc) { (it.SortName ?: it.Name)?.lowercase() }
+    YEAR -> sortByKey(list, asc) { it.ProductionYear }
+    RATING -> sortByKey(list, asc) { it.CommunityRating }
     // DateCreated 是 ISO-8601 串，字典序即时间序（同格式下成立）
-    ADDED -> list.sortedByDescending { it.DateCreated ?: "" }
+    ADDED -> sortByKey(list, asc) { it.DateCreated }
   }
+}
+
+/**
+ * 按可空键排序，**键值缺失的条目一律沉底**（无论升 / 降序）。
+ *
+ * 沉底而不是当 0 处理：没有年份的片子挤在「0 年」那一档、升序时全顶在最前面，
+ * 比排在最后更像「排序坏了」。也不能简单 `sortedWith(cmp.reversed())` 完事 ——
+ * 反转会把「无值组」一起翻到最前面，所以先partition 出有值 / 无值两段，只排有值的。
+ *
+ * @param key 取排序键；null 表示该条目没有这个值（服务端没回传 / 条目本身没有）
+ */
+private inline fun <T : Comparable<T>> sortByKey(
+  list: List<EmbyItem>,
+  asc: Boolean,
+  crossinline key: (EmbyItem) -> T?,
+): List<EmbyItem> {
+  val (withKey, withoutKey) = list.partition { key(it) != null }
+  val comparator = compareBy(key)
+  // sortedWith 是稳定排序：键值相同的条目保持原相对顺序
+  val sorted = if (asc) withKey.sortedWith(comparator) else withKey.sortedWith(comparator.reversed())
+  return sorted + withoutKey
 }
 
 /**
@@ -1005,9 +1076,14 @@ private fun FavoriteSearchSortRow(
   query: String,
   onQueryChange: (String) -> Unit,
   sort: FavoriteSort,
-  onSortChange: (FavoriteSort) -> Unit,
+  asc: Boolean,
+  /** 选了某个排序项 + 方向（重复点当前项被本函数判定为「反转方向」，不会走到这里） */
+  onSortChange: (FavoriteSort, Boolean) -> Unit,
+  /** 已经是随机排序时再点一次：换一批 */
+  onReshuffle: () -> Unit,
 ) {
   var sortMenu by remember { mutableStateOf(false) }
+  val focusManager = LocalFocusManager.current
   Row(
     modifier = Modifier
       .fillMaxWidth()
@@ -1034,7 +1110,12 @@ private fun FavoriteSearchSortRow(
     Box {
       // 触发区直接标出「当前按什么排序」，不用点开就知道现在的排序方式
       Surface(
-        modifier = Modifier.clickable { sortMenu = true },
+        modifier = Modifier.clickable {
+          // ⚠️ 展开前先收掉输入框焦点：搜索态下焦点还在输入框上，菜单关闭会把焦点
+          // 「还」给它 ⇒ 每切一次排序弹一次软键盘（媒体库 SortMenu 同一个坑）
+          focusManager.clearFocus()
+          sortMenu = true
+        },
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
       ) {
@@ -1049,6 +1130,18 @@ private fun FavoriteSearchSortRow(
           )
           Spacer(modifier = Modifier.width(6.dp))
           Text(text = sort.label, style = MaterialTheme.typography.labelLarge)
+          // 触发器上也带方向：不看菜单就知道现在是升还是降（随机没有方向，给骰子图标）
+          Icon(
+            imageVector = if (!sort.hasDirection) {
+              Icons.Default.Shuffle
+            } else if (asc) {
+              Icons.Default.ArrowUpward
+            } else {
+              Icons.Default.ArrowDownward
+            },
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+          )
           Icon(
             imageVector = Icons.Default.ArrowDropDown,
             contentDescription = null,
@@ -1063,16 +1156,31 @@ private fun FavoriteSearchSortRow(
             text = {
               Column {
                 Text(
-                  text = option.label,
+                  // 与首页 / 媒体库同一套：选中项**直接标出当前方向**（↑ 升 / ↓ 降），
+                  // 不单列「升序 / 降序」两个选项 —— 菜单短一半，方向也一眼可见
+                  text = buildString {
+                    append(option.label)
+                    if (selected && option.hasDirection) {
+                      append(if (asc) " ↑" else " ↓")
+                    }
+                  },
                   color = if (selected) {
                     MaterialTheme.colorScheme.primary
                   } else {
                     MaterialTheme.colorScheme.onSurface
                   },
                 )
-                // 方向副标题：让「名称 / 年份 / 评分」到底怎么排一目了然
+                // 方向副标题：让「名称 / 年份 / 评分」在这个方向下到底怎么排一目了然
                 Text(
-                  text = option.hint,
+                  text = if (!option.hasDirection) {
+                    option.ascHint
+                  } else if (selected) {
+                    // 已选中：副标题跟着当前方向走
+                    if (asc) option.ascHint else option.descHint
+                  } else {
+                    // 未选中：预告「点下去会变成哪个方向」（= 该项的自然方向）
+                    if (option.naturalAsc) option.ascHint else option.descHint
+                  },
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.outline,
                 )
@@ -1091,7 +1199,13 @@ private fun FavoriteSearchSortRow(
             },
             onClick = {
               sortMenu = false
-              onSortChange(option)
+              when {
+                // 再点一次已选中的项 = 只反转方向（随机则是换一批），不换排序项
+                selected && option.hasDirection -> onSortChange(option, !asc)
+                selected -> onReshuffle()
+                // 换排序项：方向重置为该项的自然方向（名称升序、年份降序…）
+                else -> onSortChange(option, option.naturalAsc)
+              }
             },
           )
         }
