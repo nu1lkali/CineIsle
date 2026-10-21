@@ -10,6 +10,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -41,8 +42,14 @@ fun EmbyImage(
   maxWidth: Int = 720,
   fallbackUrl: String? = null,
 ) {
+  // ⚠️ 起始值**先同步看一眼内存缓存**，不要一律从 null 开始。
+  // 原来 `initialValue = null` ⇒ 卡片第一次组合（列表筛选 / 搜索后重新出现、滚动复用槽位）
+  // 时第一帧一定是占位图标，要等协程调度到 IO 线程再回来才上图，看着就是「封面闪一下」
+  // —— 哪怕这张图内存里就有。命中缓存时这里直接拿到 Bitmap，第一帧就是成品图。
+  // 用 remember 包一层：缓存查询不该在每次重组时重复做（LruCache.get 带锁）。
+  val cached = remember(url) { EmbyImageLoader.peek(url) }
   val bitmap by produceState<android.graphics.Bitmap?>(
-    initialValue = null,
+    initialValue = cached,
     key1 = url,
     key2 = fallbackUrl,
     key3 = maxWidth,

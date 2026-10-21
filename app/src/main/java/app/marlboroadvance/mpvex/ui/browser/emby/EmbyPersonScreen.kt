@@ -23,7 +23,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
@@ -45,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -72,6 +75,7 @@ import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import app.marlboroadvance.mpvex.ui.utils.longPressToCopy
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlin.random.Random
 import org.koin.compose.koinInject
 
 /**
@@ -134,10 +138,26 @@ data class EmbyPersonScreen(
           ?: PersonSort.NAME,
       )
     }
-    val visibleItems = items
-      .filter { itemTab.matches(it) && roleFilter.matches(it, personId) }
-      .filter { searchQuery.isBlank() || it.matchesKeyword(searchQuery.trim()) }
-      .let { sort.apply(it) }
+    // 排序方向（true = 升序）同样落盘：只存排序项的话，返回后「名称 ↓」会变成「名称 ↑」，
+    // 同一屏上方向悄悄翻转比整体重置更让人困惑。
+    var sortAsc by remember { mutableStateOf(browserPreferences.embyPersonSortAsc.get()) }
+    // ── 随机排序的种子 ──
+    // ⚠️ 随机**不能每次重组都重洗**：搜索框敲一个字、切一次筛选都会触发重组，
+    // 若直接 `shuffled()`，列表会在手指底下不停跳动（看着就是列表自己在抽搐）。
+    // 种子只在「切到随机 / 再点一次随机」时变，其余时刻顺序是稳定的。
+    // 用 rememberSaveable：旋转屏幕后不该换一批顺序。
+    var randomSeed by rememberSaveable { mutableIntStateOf(Random.nextInt()) }
+
+    // 过滤与排序分开两步、各自 remember：过滤只跟筛选条件有关，排序只跟排序设置有关，
+    // 于是「敲搜索词」不会白跑排序、「换排序」也不会白跑过滤。
+    val filteredItems = remember(items, itemTab, roleFilter, personId, searchQuery) {
+      items
+        .filter { itemTab.matches(it) && roleFilter.matches(it, personId) }
+        .filter { searchQuery.isBlank() || it.matchesKeyword(searchQuery.trim()) }
+    }
+    val visibleItems = remember(filteredItems, sort, sortAsc, randomSeed) {
+      sort.apply(filteredItems, sortAsc, randomSeed)
+    }
 
     // 「参与身份」只在**确实观察到**该身份时才提供对应 chip：
     // 一个只演戏、从不导也不写的人，作品页再挂「导演 / 编剧」两个 chip，点下去永远是空 ——
@@ -406,10 +426,16 @@ data class EmbyPersonScreen(
         query = searchQuery,
         onQueryChange = { searchQuery = it },
         sort = sort,
-        onSortChange = {
-          sort = it
-          browserPreferences.embyPersonSort.set(it.name)
+        asc = sortAsc,
+        onSortChange = { newSort, newAsc ->
+          sort = newSort
+          sortAsc = newAsc
+          browserPreferences.embyPersonSort.set(newSort.name)
+          browserPreferences.embyPersonSortAsc.set(newAsc)
+          // 切到随机时给一个新种子：不然沿用旧种子洗出来的还是看得眼熟的那一批
+          if (newSort == PersonSort.RANDOM) randomSeed = Random.nextInt()
         },
+        onReshuffle = { randomSeed = Random.nextInt() },
       )
 
       Box(modifier = Modifier.fillMaxSize()) {
@@ -430,25 +456,8 @@ data class EmbyPersonScreen(
             )
           }
 
-          // 有数据但被当前筛选条件滤空：给一句提示，别让用户以为加载失败。
-          // 搜索词命中不到时把词说出来 —— 「没有匹配『xxx』的作品」比笼统的「没有作品」
-          // 能让人一眼看出是自己的词有问题（打错字 / 记错片名），而不是功能坏了。
-          visibleItems.isEmpty() -> {
-            val keyword = searchQuery.trim()
-            Text(
-              text = if (keyword.isEmpty()) {
-                "这个筛选条件下没有作品"
-              } else {
-                "没有匹配「$keyword」的作品"
-              },
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier
-                .align(Alignment.Center)
-                .padding(24.dp),
-            )
-          }
-
+          // 有数据时一律进网格分支：被筛空（搜索词 / 类型 / 身份）也**保持网格挂载**，
+          // 只在上层叠一句提示（见网格后面那段）—— 见下面空态注释里为什么要这么做。
           else -> {
             LazyVerticalGrid(
               // 与媒体库「演员」分类、收藏页同一套规格：列数跟随「每行个数」设置
@@ -475,6 +484,30 @@ data class EmbyPersonScreen(
                   },
                 )
               }
+            }
+
+            // ── 空态：叠在网格**上层**，网格照常挂载 ──
+            // ⚠️ 原来是 when 的第三个分支、和网格二选一：只要中间态筛出 0 条，
+            // 整个 LazyVerticalGrid 就被卸载，再敲一个字（或删一个字）又整体重建，
+            // 于是所有卡片重新组合、封面全部重新走一遍加载 —— 观感就是
+            // 「搜索框下面的封面闪一下」（用户反馈）。网格常驻后，筛空 → 筛出结果
+            // 只是列表内容在变，已经在屏上的卡片留在原槽位，不会再整批重来。
+            // 搜索词命中不到时把词说出来 —— 「没有匹配『xxx』的作品」比笼统的
+            // 「没有作品」能让人一眼看出是自己的词有问题，而不是功能坏了。
+            if (visibleItems.isEmpty() && !isLoading) {
+              val keyword = searchQuery.trim()
+              Text(
+                text = if (keyword.isEmpty()) {
+                  "这个筛选条件下没有作品"
+                } else {
+                  "没有匹配「$keyword」的作品"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                  .align(Alignment.Center)
+                  .padding(24.dp),
+              )
             }
           }
         }
@@ -534,24 +567,50 @@ private enum class PersonRoleFilter(val label: String, val apiType: String?) {
  * 与收藏页的 `FavoriteSort` 同一套口径：选「名称」时用 [EmbyItem.SortName]（Emby 内部的
  * 排序名，已剥离 "The/A" 这类前缀）而不是 Name —— 服务端返回的顺序本来就是按 SortName 排的，
  * 本地沿用同一个键才不会「切一下排序突然乱序」。
+ *
+ * 方向（升 / 降）由调用方传入 [apply]，菜单里**再点一次已选中的项就反转方向**
+ * （与媒体库页 / 首页的排序菜单同一套交互，不单列「升序 / 降序」两个选项）。
  */
 private enum class PersonSort(
   val label: String,
-  /** 排序方向提示：菜单里作为副标题显示，避免「勾了但不知道是升还是降」 */
-  val hint: String,
+  /** 升序时的方向提示 */
+  val ascHint: String,
+  /** 降序时的方向提示 */
+  val descHint: String,
+  /**
+   * 没手动切过方向时的自然方向：名称升序，其余（年份 / 评分 / 添加时间）降序。
+   * 与媒体库页同一套规则 —— 两边不一致会出现「库里按名称升序、这里按名称降序」。
+   */
+  val naturalAsc: Boolean,
 ) {
-  NAME("名称", "A → Z"),
-  YEAR("年份", "新 → 旧"),
-  RATING("评分", "高 → 低"),
-  ADDED("最新添加", "新 → 旧"),
+  NAME("名称", "A → Z", "Z → A", naturalAsc = true),
+  YEAR("年份", "旧 → 新", "新 → 旧", naturalAsc = false),
+  RATING("评分", "低 → 高", "高 → 低", naturalAsc = false),
+  ADDED("最新添加", "旧 → 新", "新 → 旧", naturalAsc = false),
+  // 随机：不分升降序（那两个箭头对它没意义），**再点一次就换一批**（重新洗牌）
+  RANDOM("随机", "再点一次换一批", "再点一次换一批", naturalAsc = true),
   ;
 
-  fun apply(list: List<EmbyItem>): List<EmbyItem> = when (this) {
-    NAME -> list.sortedBy { (it.SortName ?: it.Name ?: "").lowercase() }
-    YEAR -> list.sortedByDescending { it.ProductionYear ?: 0 }
-    RATING -> list.sortedByDescending { it.CommunityRating ?: 0.0 }
-    // DateCreated 是 ISO-8601 串，字典序即时间序（同格式下成立）
-    ADDED -> list.sortedByDescending { it.DateCreated ?: "" }
+  /** 是否带方向（随机没有） */
+  val hasDirection: Boolean get() = this != RANDOM
+
+  fun apply(list: List<EmbyItem>, asc: Boolean, seed: Int = 0): List<EmbyItem> = when (this) {
+    // ⚠️ 随机必须用**固定种子**：直接 shuffled() 会在每次重组时洗出不同顺序，
+    // 敲个搜索词列表就在手指底下乱跳。种子见调用方的 randomSeed。
+    RANDOM -> list.shuffled(Random(seed))
+    else -> {
+      val comparator: Comparator<EmbyItem> = when (this) {
+        NAME -> compareBy { (it.SortName ?: it.Name ?: "").lowercase() }
+        YEAR -> compareBy { it.ProductionYear ?: 0 }
+        RATING -> compareBy { it.CommunityRating ?: 0.0 }
+        // DateCreated 是 ISO-8601 串，字典序即时间序（同格式下成立）
+        ADDED -> compareBy { it.DateCreated ?: "" }
+        RANDOM -> compareBy { 0 }
+      }
+      // 用 sortedWith 而不是「排完再 reversed()」：后者会把键值相同的那些条目的
+      // 相对顺序也翻过来（同一个年份的片子顺序变了，观感像列表自己动了一下）
+      if (asc) list.sortedWith(comparator) else list.sortedWith(comparator.reversed())
+    }
   }
 }
 
@@ -576,7 +635,11 @@ private fun PersonSearchSortRow(
   query: String,
   onQueryChange: (String) -> Unit,
   sort: PersonSort,
-  onSortChange: (PersonSort) -> Unit,
+  asc: Boolean,
+  /** 选了某个排序项 + 方向（重复点当前项被本函数判定为「反转方向」，不会走到这里） */
+  onSortChange: (PersonSort, Boolean) -> Unit,
+  /** 已经是随机排序时再点一次：换一批（重新洗牌） */
+  onReshuffle: () -> Unit,
 ) {
   var sortMenu by remember { mutableStateOf(false) }
   val focusManager = LocalFocusManager.current
@@ -626,6 +689,18 @@ private fun PersonSearchSortRow(
           )
           Spacer(modifier = Modifier.width(6.dp))
           Text(text = sort.label, style = MaterialTheme.typography.labelLarge)
+          // 触发器上也带方向：不看菜单就知道现在是升还是降（随机没有方向，给骰子图标）
+          Icon(
+            imageVector = if (!sort.hasDirection) {
+              Icons.Default.Shuffle
+            } else if (asc) {
+              Icons.Default.ArrowUpward
+            } else {
+              Icons.Default.ArrowDownward
+            },
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+          )
           Icon(
             imageVector = Icons.Default.ArrowDropDown,
             contentDescription = null,
@@ -639,17 +714,34 @@ private fun PersonSearchSortRow(
           DropdownMenuItem(
             text = {
               Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Text(
+                    // 与首页 / 媒体库同一套：选中的那一项**直接标出当前方向**（↑ 升 / ↓ 降），
+                    // 不单列「升序 / 降序」两个选项 —— 菜单短一半，方向也一眼可见
+                    text = buildString {
+                      append(option.label)
+                      if (selected && option.hasDirection) {
+                        append(if (asc) " ↑" else " ↓")
+                      }
+                    },
+                    color = if (selected) {
+                      MaterialTheme.colorScheme.primary
+                    } else {
+                      MaterialTheme.colorScheme.onSurface
+                    },
+                  )
+                }
+                // 方向副标题：让「名称 / 年份 / 评分」在这个方向下到底怎么排一目了然
                 Text(
-                  text = option.label,
-                  color = if (selected) {
-                    MaterialTheme.colorScheme.primary
+                  text = if (!option.hasDirection) {
+                    option.ascHint
+                  } else if (selected) {
+                    // 已选中：副标题跟着当前方向走（现在到底是怎么排的）
+                    if (asc) option.ascHint else option.descHint
                   } else {
-                    MaterialTheme.colorScheme.onSurface
+                    // 未选中：副标题预告「点下去会变成哪个方向」（= 该项的自然方向）
+                    if (option.naturalAsc) option.ascHint else option.descHint
                   },
-                )
-                // 方向副标题：让「名称 / 年份 / 评分」到底怎么排一目了然
-                Text(
-                  text = option.hint,
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.outline,
                 )
@@ -657,7 +749,13 @@ private fun PersonSearchSortRow(
             },
             onClick = {
               sortMenu = false
-              onSortChange(option)
+              when {
+                // 再点一次已选中的项 = 只反转方向（随机则是换一批），不换排序项
+                selected && option.hasDirection -> onSortChange(option, !asc)
+                selected -> onReshuffle()
+                // 换排序项：方向重置为该项的自然方向（名称升序、年份降序…）
+                else -> onSortChange(option, option.naturalAsc)
+              }
             },
           )
         }

@@ -180,6 +180,22 @@ object EmbyImageLoader {
   }
 
   /**
+   * **同步**取内存缓存里的位图（没有就返回 null，不碰磁盘、不发请求）。
+   *
+   * 存在的意义是消除「封面闪一下」：图片组件（[app.marlboroadvance.mpvex.ui.browser
+   * .emby.components.EmbyImage]）以往第一帧永远是占位图标，要等一次协程调度 +
+   * `withContext(IO)` 才拿到图 —— 哪怕这张图就在内存缓存里（筛选 / 搜索后卡片重新
+   * 组合是最典型的场景）。组合时先同步看一眼缓存，命中就**第一帧直接上图**，
+   * 中间那帧占位图标没有了，闪也就没有了。
+   *
+   * ⚠️ 只查内存层：磁盘 / 网络都涉及 IO，绝不能在组合阶段同步做。
+   */
+  fun peek(url: String?): Bitmap? {
+    if (url.isNullOrBlank()) return null
+    return runCatching { cache.get(url) }.getOrNull()
+  }
+
+  /**
    * 取图片字节（带节流）：同一 URL 合并为一次下载，下载数受 [downloadGate] 限制。
    *
    * 等待者**不占**信号量（先在 [inFlight] 等，等不到才自己去下载）——

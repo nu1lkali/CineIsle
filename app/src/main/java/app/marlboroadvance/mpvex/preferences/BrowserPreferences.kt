@@ -279,6 +279,14 @@ class BrowserPreferences(
   val embyPersonSort = preferenceStore.getString("emby_person_sort", "")
 
   /**
+   * 演员 / 导演作品页排序的**方向**（true = 升序）。
+   *
+   * 与 [embyPersonSort] 成对落盘：只存排序项、方向留在组合里的话，从详情页返回时
+   * 排序项还在、方向却被打回默认 —— 同一屏上「名称 ↑」变「名称 ↓」比整体重置更让人困惑。
+   */
+  val embyPersonSortAsc = preferenceStore.getBoolean("emby_person_sort_asc", true)
+
+  /**
    * 「预解析直链（302）」开关。
    *
    * 打开后，播放前先把 `/Videos/{id}/stream` 背后跳转到的真实直链取出来再交给播放器。
