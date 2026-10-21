@@ -832,6 +832,82 @@ val MIGRATION_17_18 = object : Migration(17, 18) {
 }
 
 
+/**
+ * v18 → v19：搜索历史按「服务器 + 用户」隔离（主键 (serverId, keyword)）。
+ *
+ * ## 旧数据去哪了（兼容策略）
+ *
+ * v18 及以前的 search_history 没有归属列，一份历史全库混用。升级时把这些
+ * 旧行整体挂到**默认服务器**名下：
+ *
+ * - 默认服务器 = `emby_servers` 里**已登录**（有 apiToken + userId）且
+ *   **最近连接过**（lastConnected 最新）的那一条 —— 用户最常用的就是它，
+ *   历史挂过去之后老用户升级完无感。
+ * - 一台已登录服务器都没有（纯本地播放用户）时挂 serverId = 0。
+ *   这一段没有任何界面会去读（搜索只在有服务器的 Emby 页面发生），
+ *   但**不删**：万一用户以后又加了服务器，旧词不会和任何账号串。
+ *
+ * ## 为什么必须重建表
+ *
+ * SQLite 改不了主键，只能「建新表 → 搬数据 → 删旧表 → 改名」四步。
+ * 新表结构与 [app.marlboroadvance.mpvex.database.entities.SearchHistoryEntity]
+ * **逐字对应**（列名 / 类型 / 复合主键），否则 Room 启动时的 schema 校验会抛异常。
+ *
+ * 一次 `record` 只写当前服务器；trim 按服务器各自封顶 ⇒ 总量有界
+ * （服务器数 × 20），重建时的数据量不是问题。
+ */
+val MIGRATION_18_19 = object : Migration(18, 19) {
+  override fun migrate(db: SupportSQLiteDatabase) {
+    try {
+      android.util.Log.d("Migration_18_19", "Isolating search_history by serverId")
+
+      // 1) 定默认服务器：已登录 + 最近连接。取不到就 0（见 KDoc 的兼容策略）
+      var defaultServerId = 0L
+      val cursor = db.query(
+        "SELECT id FROM emby_servers " +
+          "WHERE apiToken <> '' AND userId <> '' " +
+          "ORDER BY lastConnected DESC, id DESC LIMIT 1",
+      )
+      if (cursor.moveToFirst()) {
+        defaultServerId = cursor.getLong(0)
+      }
+      cursor.close()
+      android.util.Log.d("Migration_18_19", "Default server for legacy rows: $defaultServerId")
+
+      // 2) 建新表（结构与 SearchHistoryEntity 一致）
+      db.execSQL("DROP TABLE IF EXISTS `search_history_new`")
+      db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `search_history_new` (
+          `serverId` INTEGER NOT NULL,
+          `keyword` TEXT NOT NULL,
+          `lastUsedAt` INTEGER NOT NULL,
+          `useCount` INTEGER NOT NULL,
+          PRIMARY KEY(`serverId`, `keyword`)
+        )
+        """.trimIndent(),
+      )
+
+      // 3) 搬旧数据：全部挂到默认服务器名下（参数化绑定，避免注入/转义问题）
+      db.execSQL(
+        "INSERT INTO `search_history_new` (`serverId`, `keyword`, `lastUsedAt`, `useCount`) " +
+          "SELECT ?, `keyword`, `lastUsedAt`, `useCount` FROM `search_history`",
+        arrayOf<Any?>(defaultServerId),
+      )
+
+      // 4) 旧表换新表
+      db.execSQL("DROP TABLE `search_history`")
+      db.execSQL("ALTER TABLE `search_history_new` RENAME TO `search_history`")
+
+      android.util.Log.d("Migration_18_19", "Migration completed successfully")
+    } catch (e: Exception) {
+      android.util.Log.e("Migration_18_19", "Migration failed", e)
+      throw e
+    }
+  }
+}
+
+
 val DatabaseModule =
   module {
     single<Json> {
@@ -846,7 +922,7 @@ val DatabaseModule =
       Room
         .databaseBuilder(context, MpvExDatabase::class.java, "mpvex.db")
         .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-        // ⚠️ 迁移链必须**逐段连续**（1→2→…→18），少一段就会退化成
+        // ⚠️ 迁移链必须**逐段连续**（1→2→…→19），少一段就会退化成
         // fallbackToDestructiveMigration = 整库删表重建（服务器配置 / 播放列表 / 播放进度全丢）。
         // 任何一次改 @Database version 都要在这里补一对新的 Migration，别指望 Room 兜底。
         .addMigrations(
@@ -867,6 +943,7 @@ val DatabaseModule =
           MIGRATION_15_16,
           MIGRATION_16_17,
           MIGRATION_17_18,
+          MIGRATION_18_19,
         )
         .fallbackToDestructiveMigration(true) // 最后兜底：迁移链有洞时至少不崩 App
         .build()

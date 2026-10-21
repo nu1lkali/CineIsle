@@ -57,7 +57,7 @@ import app.marlboroadvance.mpvex.domain.network.NetworkFavorite
     // 只一张小表：名字 + 逗号分隔的成员库 Id + 排序位，见 AggregateLibraryEntity 的 KDoc
     AggregateLibraryEntity::class,
   ],
-  version = 18,
+  version = 19,
   exportSchema = true,
 )
 @TypeConverters(NetworkProtocolConverter::class)

@@ -244,9 +244,13 @@ data class EmbyLibraryScreen(
     var lastTypedQuery by remember { mutableStateOf("") }
     var showStyleDialog by remember { mutableStateOf(false) }
 
-    // 搜索历史：与首页全库搜索共用同一张表 / 同一份历史
+    // 搜索历史：与首页全库搜索共用同一张表 / 同一份历史 —— 共用范围限同一服务器
     val searchHistoryRepository = koinInject<SearchHistoryRepository>()
-    val searchHistoryFlow = remember { searchHistoryRepository.observe() }
+    // 按当前服务器隔离：remember key 带上服务器，切换后 Flow 重建、面板即时换历史
+    val searchHistoryServerId = server?.id
+    val searchHistoryFlow = remember(searchHistoryServerId) {
+      searchHistoryRepository.observe(searchHistoryServerId)
+    }
     val searchHistory by searchHistoryFlow.collectAsState(initial = emptyList())
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -879,8 +883,12 @@ data class EmbyLibraryScreen(
         if (gen != loadGeneration) return@onSuccess
         // 搜索命中才记历史：一个字都没查到的词记下来只会污染列表；
         // 键盘上显式按「搜索」的那次在上面的 keyboardActions 里已经记过了。
+        // 记进当前服务器名下（server 为空时本次搜索根本不会发起，这里防御性跳过）
         if (searchQuery.isNotBlank() && page.items.isNotEmpty()) {
-          searchHistoryRepository.record(searchQuery)
+          val historyServerId = server?.id
+          if (historyServerId != null) {
+            searchHistoryRepository.record(historyServerId, searchQuery)
+          }
         }
         if (chineseSubsOnly) {
           // 搜索结果本身就是完整的一批（/Items?SearchTerm 一次性给完），直接筛。
@@ -1822,7 +1830,10 @@ data class EmbyLibraryScreen(
             // 键盘上按「搜索」= 用户明确表态要搜这个词，直接落一条历史
             onSearch = {
               keyboardController?.hide()
-              scope.launch { searchHistoryRepository.record(searchQuery) }
+              scope.launch {
+                val id = server?.id ?: return@launch
+                searchHistoryRepository.record(id, searchQuery)
+              }
             },
           ),
           trailingIcon = {
@@ -1853,7 +1864,10 @@ data class EmbyLibraryScreen(
           onPick = { keyword ->
             searchQuery = keyword
             keyboardController?.hide()
-            scope.launch { searchHistoryRepository.record(keyword) }
+            scope.launch {
+              val id = server?.id ?: return@launch
+              searchHistoryRepository.record(id, keyword)
+            }
           },
         )
         // 搜索的触发源不只是输入文字，还包括切排序、换类型筛选、开关「中文字幕」等 ——
@@ -2134,8 +2148,18 @@ data class EmbyLibraryScreen(
           searchActive && searchQuery.isBlank() -> SearchHistoryPanel(
             history = searchHistory,
             onPick = { keyword -> searchQuery = keyword },
-            onRemove = { keyword -> scope.launch { searchHistoryRepository.remove(keyword) } },
-            onClearAll = { scope.launch { searchHistoryRepository.clear() } },
+            onRemove = { keyword ->
+              scope.launch {
+                val id = server?.id ?: return@launch
+                searchHistoryRepository.remove(id, keyword)
+              }
+            },
+            onClearAll = {
+              scope.launch {
+                val id = server?.id ?: return@launch
+                searchHistoryRepository.clear(id)
+              }
+            },
             modifier = Modifier
               .align(Alignment.TopStart)
               .fillMaxWidth(),

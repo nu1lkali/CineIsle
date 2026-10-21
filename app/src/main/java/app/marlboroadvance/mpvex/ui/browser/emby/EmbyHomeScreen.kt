@@ -293,9 +293,14 @@ fun EmbyHomeScreen(
   var searchTab by rememberSaveable { mutableStateOf(EmbySearchTab.ALL) }
 
   // 搜索历史：与媒体库内搜索共用同一张表，在哪儿搜过的词换个地方也能点到
-  val searchHistoryRepository = koinInject<SearchHistoryRepository>()
-  val searchHistoryFlow = remember { searchHistoryRepository.observe() }
-  val searchHistory by searchHistoryFlow.collectAsState(initial = emptyList())
+    val searchHistoryRepository = koinInject<SearchHistoryRepository>()
+    // 搜索历史按「服务器 + 用户」隔离：remember key 带上当前服务器，
+    // 切换服务器后 Flow 重建，历史面板即时换成新服务器的（见 SearchHistoryRepository）
+    val searchHistoryServerId = server?.id
+    val searchHistoryFlow = remember(searchHistoryServerId) {
+      searchHistoryRepository.observe(searchHistoryServerId)
+    }
+    val searchHistory by searchHistoryFlow.collectAsState(initial = emptyList())
   val historyScope = rememberCoroutineScope()
   val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -606,7 +611,10 @@ fun EmbyHomeScreen(
           // 键盘上按「搜索」= 用户明确表态「我就搜这个词」，直接落一条历史并立刻出结果
           onSearch = {
             keyboardController?.hide()
-            historyScope.launch { searchHistoryRepository.record(searchQuery) }
+            historyScope.launch {
+              val id = server?.id ?: return@launch
+              searchHistoryRepository.record(id, searchQuery)
+            }
           },
         ),
         trailingIcon = {
@@ -652,9 +660,10 @@ fun EmbyHomeScreen(
       )
       searchResults = result.items
       searchTruncated = result.truncated
-      // 有结果才记历史：一个字都没命中的多半是打字打岔了，记下来只会污染列表
+      // 有结果才记历史：一个字都没命中的多半是打字打岔了，记下来只会污染列表。
+      // 记进当前服务器名下（643 行已确认 server 非空）
       if (result.items.isNotEmpty()) {
-        searchHistoryRepository.record(finishedQuery)
+        searchHistoryRepository.record(current.id, finishedQuery)
       }
       isSearching = false
     }
@@ -674,8 +683,18 @@ fun EmbyHomeScreen(
           SearchHistoryPanel(
             history = searchHistory,
             onPick = { keyword -> searchQuery = keyword },
-            onRemove = { keyword -> historyScope.launch { searchHistoryRepository.remove(keyword) } },
-            onClearAll = { historyScope.launch { searchHistoryRepository.clear() } },
+            onRemove = { keyword ->
+              historyScope.launch {
+                val id = server?.id ?: return@launch
+                searchHistoryRepository.remove(id, keyword)
+              }
+            },
+            onClearAll = {
+              historyScope.launch {
+                val id = server?.id ?: return@launch
+                searchHistoryRepository.clear(id)
+              }
+            },
             modifier = Modifier.fillMaxSize(),
             emptyHint = "输入关键词，搜索全部媒体库",
           )
