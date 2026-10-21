@@ -69,6 +69,22 @@ object EmbyClient {
   private val EMPTY_BODY = "".toRequestBody(null)
 
   /**
+   * 收藏 / 已播放等开关型请求附带的客户端标识 query 参数。
+   *
+   * 逐字对齐 Emby Web 抓包（用户服务端 Emby 4.10，2026-10 实测）：该服务端上
+   * 历史上出现过不带这几个参数时「回 200 但收藏没落库」的假成功 —— 请求形态与
+   * Web 完全一致后写入才真正生效。X-Emby-* 是 Emby 的标准客户端标识参数，
+   * 所有服务端都接受，带上没有副作用。
+   */
+  private val WEB_CLIENT_QUERY: Map<String, String> = mapOf(
+    "X-Emby-Client" to "Emby Web",
+    "X-Emby-Device-Name" to "Chrome Windows",
+    "X-Emby-Device-Id" to "ca3b0a8f-2ff0-46ea-aa02-a6abf72f0061",
+    "X-Emby-Client-Version" to "4.10.1.0",
+    "X-Emby-Language" to "zh-cn",
+  )
+
+  /**
    * 拉流时统一使用的 User-Agent。
    *
    * 「预解析直链（302）」探测与播放器真正拉流**必须用同一个 UA**：
@@ -870,17 +886,31 @@ object EmbyClient {
   /**
    * 按 Id 取单个人员（演员 / 导演），带 UserData.IsFavorite。演员作品页的收藏红心用。
    *
-   * 主路径与媒体页取条目同款：`/Persons?Ids=` + `EnableUserData=true`（列表式查询），
-   * 保证回传的 UserData 与收藏接口的口径一致；`/Users/{uid}/Items/{Id}` 虽是 Emby Web
-   * 人员详情页在用的通用端点，但在部分兼容服务端上对 Person 的回传不一定带 UserData，
-   * 所以只作兜底。
+   * ⚠️ 参数形状按 Emby Web 抓包实证校正（用户服务端 Emby 4.10，2026-10 实测）：
+   *  · `/Persons` 的 `Ids` 与 `Recursive` **不能同时传** —— `Ids+Recursive` 会让服务端
+   *    先展开整个库再过滤（本项目在 `getItems` 上已经踩过并规避，见那里的注释），
+   *    第三方服务端上几千条的库能直接拖到超时；
+   *  · `Ids` 本身在部分服务端的 `/Persons` 上**不被支持**（Emby Web 自己也不用它，
+   *    人员列表走 `PersonTypes` / `IsFavorite` 过滤），被忽略时这条查询会退化成
+   *    「未过滤的人员第一页」—— 演员大多不在第一页，于是红心永远读不到状态；
+   *  · 补 `PersonTypes=Actor,Director,Writer`：部分服务端不传它就返回空；
+   *  · `/Users/{uid}/Items/{id}` 是 Emby Web 人员详情页的同款端点，显式带
+   *    `EnableUserData`，防服务端在该路径上默认不回传 UserData。
+   *
+   * 三条路径的结果**合并**而非早退：谁带 UserData 用谁（IsFavorite 是红心的唯一数据源），
+   * 都不带就返回任意一个非空结果（至少保证条目可点、状态按「未收藏」兜底）。
    */
   fun getPersonById(server: EmbyServer, personId: String): EmbyItem? {
-    val listQuery = runCatching {
+    val candidates = ArrayList<EmbyItem>()
+
+    // 路径 1：/Persons + Ids（关掉 Recursive，见上方说明）
+    runCatching {
       val q = LinkedHashMap<String, String?>()
       q["UserId"] = server.userId
       q["Ids"] = personId
-      q["Recursive"] = "true"
+      q["Recursive"] = "false"
+      q["PersonTypes"] = "Actor,Director,Writer"
+      q["SortBy"] = "SortName"
       q["EnableUserData"] = "true"
       q["EnableImages"] = "true"
       q["ImageTypeLimit"] = "1"
@@ -888,13 +918,161 @@ object EmbyClient {
         .Items
         .firstOrNull { it.Id == personId }
         ?.copy(Type = "Person")
-    }.getOrNull()
-    if (listQuery != null) return listQuery
+    }.onFailure {
+      EmbyLog.warn("getPersonById 路径1(/Persons?Ids) 对 $personId 失败：${it.message}", it)
+    }.getOrNull()?.let { candidates += it }
 
-    return runCatching { getItem(server, personId) }
+    // 路径 2：/Users/{uid}/Items/{id}（Emby Web 人员详情页同款端点；轻量 Fields + EnableUserData）
+    runCatching {
+      getJson<EmbyItem>(
+        server,
+        "/Users/${server.userId}/Items/$personId",
+        mapOf(
+          "EnableUserData" to "true",
+          "Fields" to "BasicSyncInfo,CanDelete,CanDownload,PrimaryImageAspectRatio",
+        ),
+      )
+        .takeIf { it.Id == personId }
+        ?.let { item -> item.copy(Type = item.Type ?: "Person") }
+    }.onFailure {
+      EmbyLog.warn("getPersonById 路径2(/Users/{uid}/Items/{id}) 对 $personId 失败：${it.message}", it)
+    }.getOrNull()?.let { candidates += it }
+
+    // 路径 3：原有兜底（getItem 的重 fields 组合）
+    runCatching { getItem(server, personId) }
       .getOrNull()
       ?.takeIf { it.Id == personId }
       ?.let { person -> person.copy(Type = person.Type ?: "Person") }
+      ?.let { candidates += it }
+
+    if (candidates.isEmpty()) {
+      EmbyLog.warn("getPersonById($personId) 三条路径全部失败 —— 红心按「未收藏」兜底，仍可点击")
+      return null
+    }
+    return candidates.firstOrNull { it.UserData != null } ?: candidates.first()
+  }
+
+  /**
+   * 读单个人员的**收藏真值**（true=已收藏 / false=未收藏 / null=读不到，无法确认）。
+   *
+   * ⚠️⚠️ **两条路径的先后顺序在 2026-10-21 被对调过**，这是个踩出来的坑，别再调回去：
+   * 旧顺序是「单条轻量读 → 收藏列表扫描」，而单条读走的 `/Users/{uid}/Items/{id}`
+   * 在用户的这台服务端上**对相当一部分人员会卡满 30 秒然后回 HTTP 500**
+   * （实测 1114461 / 1083309 / 1333172 / 1132405 全是 500，而 1031021、1081006 又 40ms 正常）。
+   * 后果有两个：① 进演员页要先干等 30s+ 才轮到下一步；② 单条读抛异常后 `runCatching`
+   * 返回 null，才轮到列表法 —— 而列表法其实 **54ms** 就能给出真值。
+   * 更致命的是：演员作品页把「读收藏状态」挂在 [getPersonById] 的非空返回值后面，
+   * 而 [getPersonById] 的三条路径（`/Persons?Ids` 不支持 → 空；`/Users/{uid}/Items/{id}` → 500）
+   * 在这台机上对演员**全部失败**返回 null，于是列表法**连执行的机会都没有** ——
+   * 这就是「导演作品页红心正常、演员作品页红心永远置灰」的根因（导演刚好走通了单条读）。
+   *
+   * 为什么敢把列表法放在第一步（用户服务端实测证据）：
+   *  · `/Persons?UserId=<guid>&IsFavorite=true&EnableUserData=true` 54ms 返回，带 UserData；
+   *  · `POST .../FavoriteItems/<id>` 收藏一个人之后**立刻**再查，列表马上多出这个人
+   *    （不存在「按 URL 缓存、回读拿到旧值」的问题 —— 旧代码担心的缓存坑在这条 URL 上不成立）；
+   *  · `DELETE` 取消收藏后同样立刻消失。
+   * 所以它可以同时承担「进页面取初值」和「收藏后回读确认」两个职责。
+   *
+   * 为什么不能只靠 [getPersonById]：演员红心历史上最顽固的表现是「收藏明明成功、
+   * 回读却说没收藏，红心被回滚成灰色，怎么点都点不亮」。成因对上过两条：
+   *  1. 服务端（或中间层）按 URL 缓存响应 —— 加载时读一次 `/Persons?Ids=X`，
+   *     收藏成功后**同一个 URL** 再读还是缓存里的旧 UserData，于是把成功误判成失败；
+   *  2. `/Persons` 的 `Ids` 参数在部分服务端上不被支持（见 [getPersonById] 注释）。
+   */
+  fun getPersonFavoriteState(server: EmbyServer, personId: String): Boolean? {
+    // 1) 收藏列表法（Emby Web 收藏页同款查询；实测最快、真值新鲜）—— 见上方注释，别调换顺序
+    readFavoriteFromPersonList(server, personId)?.let { return it }
+    // 2) 单条轻量读兜底：列表法拿不到结论时才走。部分人员在这台服务端上会 30s 后 500，
+    //    失败就放弃（返回 null = 无法确认），不再让红心为它干等。
+    return runCatching {
+      getJson<EmbyItem>(
+        server,
+        "/Users/${server.userId}/Items/$personId",
+        mapOf("EnableUserData" to "true"),
+      )
+        .takeIf { it.Id == personId }
+        ?.UserData?.IsFavorite
+    }.onFailure {
+      EmbyLog.warn("getPersonFavoriteState 单条读 $personId 失败：${it.message}", it)
+    }.getOrNull()
+  }
+
+  /**
+   * 翻 `/Persons?IsFavorite=true` 找这个人：true=已收藏 / false=不在收藏列表里 / null=下不了结论。
+   *
+   * [isFavoriteFilterHonored] 只在「人找到了但没带 UserData」这一个歧义分支上被调用 ——
+   * 那种情况下「出现在列表里」到底是"它被过滤出来的"还是"服务端忽略过滤返回了全量人员"，
+   * 必须靠总数对比才能定，否则会把所有人的红心都点亮成已收藏。
+   */
+  private fun readFavoriteFromPersonList(server: EmbyServer, personId: String): Boolean? =
+    runCatching {
+      var start = 0
+      val limit = 100
+      var favTotal = 0
+      var found: EmbyItem? = null
+      while (found == null) {
+        val q = LinkedHashMap<String, String?>()
+        q["UserId"] = server.userId
+        q["IsFavorite"] = "true"
+        q["Recursive"] = "true"
+        q["SortBy"] = "SortName"
+        q["SortOrder"] = "Ascending"
+        q["EnableUserData"] = "true"
+        q["EnableTotalRecordCount"] = "true"
+        q["StartIndex"] = start.toString()
+        q["Limit"] = limit.toString()
+        val page = getJson<EmbyItemsResult>(server, "/Persons", q)
+        favTotal = page.TotalRecordCount
+        found = page.Items.firstOrNull { it.Id == personId }
+        if (found == null) {
+          if (page.Items.isEmpty()) break
+          // 终止条件两条腿走路：TotalRecordCount 说了算（服务端若忽略 Limit、按自己的
+          // 默认上限分页时，「页不满」不代表拉完，会漏掉后面页里的人）；拿不到总数
+          // （服务端不回传）才退化看页是否不满
+          val total = page.TotalRecordCount.takeIf { it > 0 }
+          if (total != null) {
+            if (start + page.Items.size >= total) break
+          } else if (page.Items.size < limit) {
+            break
+          }
+          start += page.Items.size
+          // 兜底防无限翻页：收藏的人员不可能有这个量级
+          if (start >= 10_000) break
+        }
+      }
+      val hit = found
+      val hitFavorite = hit?.UserData?.IsFavorite
+      when {
+        // 翻完没找到 → 未收藏（能确认）
+        hit == null -> false
+        // 找到了且自带 UserData.IsFavorite → 直接信它（EnableUserData 生效时最准）
+        hitFavorite != null -> hitFavorite
+        // 找到了但拿不到 UserData.IsFavorite → 只有确认过滤真生效了，才敢把「在列表里」当成已收藏
+        isFavoriteFilterHonored(server, favTotal) -> true
+        else -> null
+      }
+    }.onFailure {
+      EmbyLog.warn("readFavoriteFromPersonList($personId) 失败：${it.message}", it)
+    }.getOrNull()
+
+  /**
+   * 判断这台服务端的 `/Persons` 是否真的认 `IsFavorite=true` 过滤：
+   * 「收藏人员总数」明显少于「全部人员总数」就是生效了。
+   *
+   * 代价只是一次 `Limit=1` 的轻量请求，而且只在 [readFavoriteFromPersonList]
+   * 撞上「找得到人、却没有 UserData」这个罕见分支时才发。
+   */
+  private fun isFavoriteFilterHonored(server: EmbyServer, favTotal: Int): Boolean {
+    if (favTotal <= 0) return false
+    val q = LinkedHashMap<String, String?>()
+    q["UserId"] = server.userId
+    q["Recursive"] = "true"
+    q["EnableTotalRecordCount"] = "true"
+    q["Limit"] = "1"
+    val allTotal = runCatching {
+      getJson<EmbyItemsResult>(server, "/Persons", q).TotalRecordCount
+    }.getOrNull() ?: return false
+    return allTotal > favTotal
   }
 
   /**
@@ -1553,9 +1731,14 @@ object EmbyClient {
    */
   private fun toggleUserState(server: EmbyServer, basePath: String, enable: Boolean): EmbyUserData? {
     val path = if (enable) basePath else "$basePath/Delete"
+    // 客户端标识 + token 一起进 query：逐字对齐 Emby Web 抓包（见 [WEB_CLIENT_QUERY]）
+    val clientQuery: Map<String, String?> = buildMap {
+      put("X-Emby-Token", server.apiToken.takeIf { it.isNotEmpty() })
+      putAll(WEB_CLIENT_QUERY)
+    }
     // 请求构造：token 同时放 query 与 header + Accept: application/json（对齐 Web 抓包）
     val buildRequest: (okhttp3.RequestBody) -> Request = { body ->
-      authedRequest(server, path, mapOf("X-Emby-Token" to server.apiToken.takeIf { it.isNotEmpty() }))
+      authedRequest(server, path, clientQuery)
         .header("Accept", "application/json")
         .post(body)
         .build()
@@ -1567,7 +1750,7 @@ object EmbyClient {
       ?: runCatching { execString(buildRequest(EMPTY_JSON_BODY.toRequestBody(jsonMedia))) }.getOrNull()
       // 3) 关闭再兜底：老版本只认 DELETE 方法
       ?: if (!enable) {
-        runCatching { execString(authedRequest(server, basePath).delete().build()) }.getOrNull()
+        runCatching { execString(authedRequest(server, basePath, clientQuery).delete().build()) }.getOrNull()
       } else {
         null
       }
@@ -1593,13 +1776,18 @@ object EmbyClient {
    */
   fun unfavoriteHard(server: EmbyServer, itemId: String): EmbyUserData? {
     val base = "/Users/${server.userId}/FavoriteItems/$itemId"
+    // 客户端标识 + token 一起进 query（同 [toggleUserState]，对齐 Web 抓包）
+    val clientQuery: Map<String, String?> = buildMap {
+      put("X-Emby-Token", server.apiToken.takeIf { it.isNotEmpty() })
+      putAll(WEB_CLIENT_QUERY)
+    }
     // 1) 兼容服务端认的写法（POST 到 /Delete）
     val viaPost = runCatching { toggleUserState(server, base, false) }
     // 2) 官方标准写法：DELETE 方法
     val viaDelete =
       runCatching {
         execString(
-          authedRequest(server, base, mapOf("X-Emby-Token" to server.apiToken.takeIf { it.isNotEmpty() }))
+          authedRequest(server, base, clientQuery)
             .delete()
             .build(),
         )

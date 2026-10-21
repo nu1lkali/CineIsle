@@ -831,7 +831,13 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   /**
    * 收藏后回读真实状态（true=已收藏 / false=未收藏 / null=读不到，无法确认）。
    *
-   * Person 走 [getPersonById]（通用条目端点 + /Persons 双路径）；媒体走 [getItem]。
+   * Person 走 [loadPersonFavoriteState]（单条轻量读 + `IsFavorite=true` 列表查询的
+   * 多路径真值读取）；媒体走 [getItem]。
+   *
+   * ⚠️ Person 不能再走 [getPersonById] 那条 `/Persons?Ids=`：它与进页面时的加载请求
+   * 是**同一个 URL**，服务端（或中间层）按 URL 缓存响应，收藏成功后回读拿到的还是
+   * 缓存里的旧 UserData（IsFavorite=false）—— 于是「明明收藏成功」被误判成
+   * 「服务器未接受」，红心回滚成灰色，体感就是点不动。换 URL 形态是对症药。
    */
   private suspend fun readbackFavoriteState(
     server: EmbyServer,
@@ -841,7 +847,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     withContext(Dispatchers.IO) {
       runCatching {
         if (item.Type?.equals("Person", ignoreCase = true) == true) {
-          repository.getPersonById(server, itemId)?.UserData?.IsFavorite
+          repository.getPersonFavoriteState(server, itemId)
         } else {
           repository.getItem(server, itemId).UserData?.IsFavorite
         }
@@ -2057,6 +2063,16 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
    */
   suspend fun loadPersonById(server: EmbyServer, personId: String): EmbyItem? =
     withContext(Dispatchers.IO) { EmbyClient.getPersonById(server, personId) }
+
+  /**
+   * 读单个人员的收藏真值（true=已收藏 / false=未收藏 / null=读不到）。
+   *
+   * 两个用途：① 演员作品页红心的**初值兜底** —— [loadPersonById] 没带回 UserData 时
+   * （服务端不回传 / `Ids` 不被支持）用它补一次，否则已收藏的演员进来红心是灰的；
+   * ② [toggleFavorite] 收藏后的**回读**（见 [readbackFavoriteState]）。
+   */
+  suspend fun loadPersonFavoriteState(server: EmbyServer, personId: String): Boolean? =
+    withContext(Dispatchers.IO) { EmbyClient.getPersonFavoriteState(server, personId) }
 
   /**
    * 加载「类型 / 标签 / 工作室」结果页顶栏收藏红心所需的条目。

@@ -181,14 +181,33 @@ data class EmbyPersonScreen(
     }
 
     LaunchedEffect(personId, server) {
-      load()
-      // 红心状态单独拉。**必须保证拿到可点击的条目**：查询失败（服务端不支持等）
-      // 就用 Id + 名字拼一个最小条目顶上 —— 否则红心永远禁用，点了没任何反馈。
-      // UserData 未知时按「未收藏」处理，第一次点击会执行收藏，语义无损。
+      // ⚠️ 第一件事：用最小条目把 personItem 顶上，红心**不等任何网络请求立即可点**。
+      // 红心是 `enabled = personItem != null`，赋值晚一步，用户看到的就是「置灰点不了」。
+      // UserData 未知时按「未收藏」处理：此时点击发的是「收藏」POST，对已收藏的人
+      // 是幂等的，随后的回读会给出真实状态，语义无损。
+      personItem = EmbyItem(Id = personId, Name = personName, Type = "Person")
       val current = server ?: return@LaunchedEffect
-      personItem =
-        viewModel.loadPersonById(current, personId)
-          ?: EmbyItem(Id = personId, Name = personName, Type = "Person")
+
+      // ── 收藏状态：**先读状态，再拉作品** ──
+      // ⚠️⚠️ 旧写法是 `val loaded = loadPersonById(...) ?: return@LaunchedEffect`，
+      // 把「读收藏状态」挂在 loadPersonById 的非空返回值后面。而 loadPersonById 的三条路径
+      // 在这类兼容服务端上对**演员会全部失败**：`/Persons?Ids` 不被支持（永远返回空）、
+      // `/Users/{uid}/Items/{id}` 卡满 30 秒后回 HTTP 500（实测 1114461 就是）。
+      // 于是它返回 null → 整个 LaunchedEffect 提前 return → **唯一可靠的收藏列表法
+      // 一次都没执行** → 红心永远是灰的。而导演恰好走通了单条读（40ms 带 UserData），
+      // 所以现象是「导演页红心正常、演员页红心置灰」。
+      // 修法：收藏状态独立读、不再以条目读取为前提；列表法（54ms）打头，条目读取降级为兜底。
+      val fav = viewModel.loadPersonFavoriteState(current, personId)
+      // 列表法也给不出结论时，才退回按 Id 读条目（它可能自带 UserData）
+      val loaded = if (fav == null) viewModel.loadPersonById(current, personId) else null
+      val base = loaded ?: EmbyItem(Id = personId, Name = personName, Type = "Person")
+      personItem = when (fav) {
+        null -> base
+        else -> base.copy(UserData = (base.UserData ?: EmbyUserData()).copy(IsFavorite = fav))
+      }
+
+      // 作品列表放最后：高产人物要翻好几页，别让它挡着红心出状态
+      load()
     }
 
     // 回到本页时刷新列表：从「演职员合并」工具页 / 详情页返回时，本页只是从返回栈恢复，

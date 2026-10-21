@@ -532,6 +532,16 @@ class EmbyRepository(
     withContext(Dispatchers.IO) { EmbyClient.getPersonById(server, personId) }
 
   /**
+   * 读单个人员的收藏真值（true=已收藏 / false=未收藏 / null=读不到）。
+   *
+   * 与 [getPersonById] 的分工：那个返回**条目**（给 UI 拼可点状态用），这个只关心
+   * **IsFavorite 布尔值**，且走与加载时不同的 URL 形态（单条轻量读 + Web 收藏页同款的
+   * `IsFavorite=true` 列表查询），专门绕开「按 URL 缓存导致回读拿到旧值」的坑。
+   */
+  suspend fun getPersonFavoriteState(server: EmbyServer, personId: String): Boolean? =
+    withContext(Dispatchers.IO) { EmbyClient.getPersonFavoriteState(server, personId) }
+
+  /**
    * 随机播放：返回 [limit] 个随机项。可指定 [includeItemTypes]
    * 例如 listOf("Movie") / listOf("Episode")。
    */
