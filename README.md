@@ -296,3 +296,14 @@
 | [mpvKt](https://github.com/abdallahmehiz/mpvKt) · [Next player](https://github.com/anilbeesetti/nextplayer) · [Gramophone](https://github.com/FoedusProgramme/Gramophone) | 界面参考 |
 
 > 上游项目的开源许可（见 [LICENSE](LICENSE)）继续适用。
+
+---
+
+## 支持
+
+影屿是业余时间维护的独立项目。如果它对你有所帮助，欢迎扫码赞赏 —— 完全自愿，不影响任何功能。
+
+<p align="center">
+  <img src=".github/assets/wechat-reward.png" width="320" alt="微信赞赏码" />
+</p>
+
