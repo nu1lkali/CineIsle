@@ -585,7 +585,7 @@ data class EmbyPhotoGridScreen(
  * ⚠️ 用 synchronizedMap：下拉续页在 IO 线程回调后回主线程写，而命中缓存的读发生在
  *    组合里，两端不是同一线程。
  *
- * ⚠️ 两层上限（百万张相册教训）：
+ * ⚠️ 两层上限（百万张相册的教训）：
  *    · MAX_ITEMS —— 续页后 put 的是**全量 items**，不封顶的话一个百万张的相册
  *      翻到底就能把 Entry 撑爆（OOM）。只保前 2000 张「同一副牌」；
  *      totalCount 保留真实值，命中缓存后 consumed=2000 < totalCount 会自然

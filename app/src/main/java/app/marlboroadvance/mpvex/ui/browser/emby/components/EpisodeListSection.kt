@@ -517,7 +517,7 @@ private fun EpisodeCard(
       //   ② 时长行在 `RunTimeTicks` 缺失时返回 null ⇒ 整行塌掉（±20dp）；
       //   ③ 进度条只在「看过一部分」时才存在（±9dp）。
       // ②③ 合并进**同一行**并给它**固定高度**：缺内容时留空而不塌缩。
-      // ⚠️ 不能写成两个 `if` —— 那正是 只治了 ① 之后仍然参差的原因：
+      // ⚠️ 不能写成两个 `if` —— 那正是只治了 ① 之后仍然参差的原因：
       //   卡高由「有没有内容」决定，而不是由「最高那张卡」决定。
       //   卡宽只有 150dp，进度条挤不下一整行，所以做成 32dp 跟在时长右边。
       val metaLineHeightSp = MaterialTheme.typography.labelSmall.let { style ->

@@ -142,7 +142,7 @@ data class EmbyPhotoBrowserScreen(
     val autoPlaySlideshow = remember { browserPreferences.photoAutoSlideshow.get() }
 
     // 交给共享外壳的最小信息：稳定 key + 标题 + 附注（大小 · 日期）。
-    // 附注是 补的：信息栏现在两个入口都显示，Emby 这边不能留一行空白
+    // 附注是后来补的：信息栏现在两个入口都显示，Emby 这边不能留一行空白
     //   —— 同一套外壳，数据各填各的。日期取 DateCreated（拍摄/入库时间）前 10 位。
     val entries = remember(queue) {
       queue.map { item ->

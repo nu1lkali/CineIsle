@@ -96,7 +96,7 @@ data class EmbyCollectionCreationResult(
  *
  * 三个布尔字段在参考客户端里 Java getter 叫 `isIsHashMatch()`（双 is，很难看），
  * 但 `@SerializedName` 上写的是 **`IsHashMatch`** —— 也就是说**服务端 JSON 里的键
- * 就是 `IsHashMatch`**，照抄布尔 gette名会让 `ignoreUnknownKeys` 直接把整个字段丢掉，
+ * 就是 `IsHashMatch`**，照抄布尔 getter 命名会让 `ignoreUnknownKeys` 直接把整个字段丢掉，
  * 而丢掉 `IsHashMatch` 就丢掉了最重要的一条信息（这条字幕是不是精确匹配本片）。
  *
  * @param Id 提供方内部的字幕 ID —— **不是文件地址**。要下载必须经

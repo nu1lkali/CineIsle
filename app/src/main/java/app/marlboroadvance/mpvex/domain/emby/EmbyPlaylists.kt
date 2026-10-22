@@ -88,7 +88,7 @@ object EmbyPlaylists {
 
     // 服务端把 IncludeItemTypes 当空气处理了（见上方 KDoc）。换一条**反向**的路：
     // 明确排除所有媒体类型，剩下「非媒体」的那批里再按 Type 挑。
-    // ExcludeItemTypes 与 IncludeItemTypes 是同一族参数，但下来不少实现
+    // ExcludeItemTypes 与 IncludeItemTypes 是同一族参数，但实际用下来不少实现
     // 只对 Exclude 生效 —— 这一招是纯兜底，最坏结果是多一次请求、列表仍然是空的。
     if (raw.Items.isEmpty()) return raw
 

@@ -188,7 +188,7 @@ class PagedList<T>(
     // 服务端在同一页里返回了重复项时，去重会让本页看起来不满，用它判断会**提前截断**。
     // ⚠️ 两个比较对象必须分清：
     //   hasMore   比 [items]（用户真正看到的条数）与服务端总数
-    //   到底判断  比 [PagedResult.items]（服务端原始返回条数）与 pageSize
+    //   到底判断比 [PagedResult.items]（服务端原始返回条数）与 pageSize
     // ⚠️ 「这一页一条新的都没有」也判到底：那是服务端在原地打转
     // （SmartStrm 忽略 StartIndex 时就会这样），再翻下去也是白翻。
     hasMore = when {

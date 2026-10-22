@@ -45,7 +45,7 @@ object EmbyClient {
   /**
    * 走 [EmbyHttp.shared]（共享连接池 + 统一 UA + 指数退避重试 + 401 自动重登）。
    *
-   * 原来是这里自己 `OkHttpClient.Builder()` 造一个，与另外5 个客户端各建各的连接池，
+   * 原来是这里自己 `OkHttpClient.Builder()` 造一个，与另外 5 个客户端各建各的连接池，
    * 详见 [EmbyHttp] 的说明。
    *
    * `internal` 而非 `private`：拆出去的 [EmbySubtitles] 需要它 —— 字幕下载要拿

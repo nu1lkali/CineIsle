@@ -1606,7 +1606,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
   /**
    * 这个条目**自身**是否真的有视频文件可播。
    *
-   * ⚠️ 这是 崩溃的直接原因：`Series` / `Season` / 文件夹 / 合集本身没有媒体文件，
+   * ⚠️ 这正是一次线上闪退的直接原因：`Series` / `Season` / 文件夹 / 合集本身没有媒体文件，
    * 拿它们的 Id 去请求 `/Videos/{id}/stream`，服务端回 404 或一个空 body；
    * 播放器拿到「成功的 HTTP、0 字节」会一路走到 mpv 初始化，最后在
    * 「没有任何可解码帧」这条路径上崩掉 —— 现象就是「点播放 App 直接闪退」。

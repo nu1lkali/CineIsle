@@ -979,7 +979,7 @@ data class EmbyLibraryScreen(
       // 放在 loading 结束之后 —— 头像网格先出来，数字随后补，不让首屏等这次统计。
       // 服务端哪天真的返回了 ChildCount，就跳过统计、直接用它。
       // 走 getPersonWorkCountsCached 而不是原始的 getPersonWorkCounts：自适应库规模
-      // + 带10 分钟缓存，避免每次进「演员」分类都把整库逐页拉一遍（见 1.4 优化）。
+      // + 带 10 分钟缓存，避免每次进「演员」分类都把整库逐页拉一遍。
       val list = loaded.getOrNull().orEmpty()
       if (list.isEmpty() || list.any { it.ChildCount != null }) return
       val ids = list.mapNotNull { it.Id }

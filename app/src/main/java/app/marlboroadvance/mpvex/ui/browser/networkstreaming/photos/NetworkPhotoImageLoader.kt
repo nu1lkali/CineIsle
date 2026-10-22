@@ -156,7 +156,7 @@ object NetworkPhotoImageLoader {
         DiskCache.Builder()
           // 见 NET_IMAGE_CACHE_DIR：用应用私有 cacheDir，不用 java.io.tmpdir
           // ⚠️ `DiskCache.Builder.directory(...)` 只接受 okio 的 Path（不是 java.io.File），
-          //    必须 `toOkioPath()` 转换（ 真实编译错误：Argument type mismatch）。
+          //    必须 `toOkioPath()` 转换（真实编译错误：Argument type mismatch）。
           .directory(context.cacheDir.resolve(NET_IMAGE_CACHE_DIR).toOkioPath())
           .maxSizeBytes(DISK_LIMIT_BYTES)
           .build()

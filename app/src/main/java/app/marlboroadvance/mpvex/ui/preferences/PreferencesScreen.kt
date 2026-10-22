@@ -291,8 +291,7 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               // 弹幕独立设置页（开关 / 弹幕源 / 凭证 / 自动匹配）。
-              // ⚠️ 原来这个入口挂在外观定制页里，但弹幕跟外观无关 ——
-              //    ，不要放在外观定制里面」。
+              // ⚠️ 原来这个入口挂在外观定制页里，但弹幕跟外观无关，所以单独拆了一页。
               //    它默认是关的，所以摘要里直接带开关状态：不显示状态的话，
               //    用户永远不知道有这东西、更不知道去哪开。
               val danmakuPrefs = koinInject<DanmakuPreferences>()

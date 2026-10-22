@@ -433,7 +433,7 @@ private fun applyDisplayConfig(
   // ⚠️ DFM 的 factor 方向和直觉相反，而且它直接乘在寿命上：
   //   `setScrollSpeedFactor(f)` → `value = mInitialDuration * f`
   //   ⇒ **f 越大 duration 越长、弹幕越慢**。而偏好文案写的是「>1 更快」，
-  //   直接传下去会让「想调快」的用户把弹幕调慢（调到 1.6 ⇒ duration 被乘成 16 秒）。
+  //   把它直接传下去会让「想调快」的用户把弹幕调慢（调到 1.6 ⇒ duration 被乘成 16 秒）。
   // ⇒ 这里取倒数：默认 1.0 时 factor=1.0（框架默认行为）；调到 2.0 ⇒ factor=0.5 ⇒ 更快。
   context.setScrollSpeedFactor(1f / speedScale.coerceIn(0.5f, 2f))
   // 同屏条数：0 = 无限制，-1 = 按绘制耗时自动调整（低配机的安全档）。
