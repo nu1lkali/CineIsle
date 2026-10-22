@@ -145,16 +145,16 @@ import kotlin.math.abs
 val LocalPlayerButtonsClickEvent = staticCompositionLocalOf { {} }
 
 /**
- * 绔栧睆椤舵爮鍙充晶鐨勩€屽揩鎹峰紑鍏炽€嶉泦鍚堛€?
+ * 竖屏顶栏右侧的「快捷开关」集合。
  *
- * 杩欏嚑涓兘鏄€岃涓€娆″氨涓嶇敤鍐嶇銆嶇殑浣庨椤癸細瑙ｇ爜鍣?/ 闊宠建 / 瀛楀箷 / 鏀惰棌 / 鏇村銆?
- * 鏀惧彸涓婅鏃笉鍗犲簳閮ㄧ┖闂达紝涔熶笉褰卞搷甯哥敤鎿嶄綔銆?
+ * 这几个都是「设一次就不用再碰」的低频项：解码器 / 音轨 / 字幕 / 收藏 / 更多。
+ * 放右上角既不占底部空间，也不影响常用操作。
  *
- * 鍒绘剰鍙繚鐣?5 涓細5 脳 40dp + 闂磋窛 鈮?220dp锛岀珫灞忛《鏍忚繕鑳界粰鏍囬鐣欏嚭鍙瀹藉害锛?
- * 鍐嶅浼氭妸鏍囬鍘嬫垚鐪佺暐鍙枫€傜珷鑺傜被鎸夐挳涓嶅湪杩欓噷锛堝畠浠惤鍒板乏绨囷級锛岄伩鍏嶉《鏍忚鎾戞弧銆?
+ * 刻意只保留 5 个：5 × 40dp + 间距 ≈ 220dp，竖屏顶栏还能给标题留出可读宽度；
+ * 再多会把标题压成省略号。章节类按钮不在这里（它们落到左簇），避免顶栏被撑满。
  *
- * 鐢ㄦ埛浠嶇劧鍙互鍦ㄣ€屾挱鏀惧櫒鎺т欢銆嶈缃噷鑷敱澧炲垹 鈥斺€?杩欓噷鍙喅瀹氥€屾樉绀哄湪鍝釜鍖哄煙銆嶏紝
- * 涓嶆槸纭€ц闃咃紱鎶婃煇涓€椤圭Щ鍑虹珫灞忓垪琛紝椤舵爮鑷劧涔熶笉浼氬嚭鐜板畠銆?
+ * 用户仍然可以在「播放器控件」设置里自由增删 —— 这里只决定「显示在哪个区域」，
+ * 不是硬性订阅；把某一项移出竖屏列表，顶栏自然也不会出现它。
  */
 private val PORTRAIT_TOP_SHORTCUTS =
   setOf(
@@ -166,14 +166,14 @@ private val PORTRAIT_TOP_SHORTCUTS =
   )
 
 /**
- * 绔栧睆搴曢儴鐨?*鎺掑垪椤哄簭**鍒嗙粍锛氱敾闈㈢被宸ュ叿鎺掑湪鎸夐挳鏉＄殑鍙冲崐杈广€?
+ * 竖屏底部的**排列顺序**分组：画面类工具排在按钮条的右半边。
  *
- * 绔栧睆搴曢儴宸茬粡鍚堝苟鎴愪竴鏉¤繛缁寜閽潯锛堣 [CenteredBottomPlayerControlsPortrait]锛夛紝
- * 杩欓噷涓嶅啀鍐冲畾銆屽乏鍙崇皣銆嶇殑鍧愭爣锛岃€屾槸鍐冲畾**璋佹帓鍦ㄥ彸杈?*锛?
- * 杩欎竴缁勯噷鐨勬帓鍦ㄦ寜閽潯鏈熬锛屽叾浣欐寜鐢ㄦ埛閰嶇疆鐨勫厛鍚庨『搴忔帓鍦ㄥ墠闈€?
+ * 竖屏底部已经合并成一条连续按钮条（见 [CenteredBottomPlayerControlsPortrait]），
+ * 这里不再决定「左右簇」的坐标，而是决定**谁排在右边**：
+ * 这一组里的排在按钮条末尾，其余按用户配置的先后顺序排在前面。
  *
- * 灞忓箷鏃嬭浆鐨勬寜閽寜鐢ㄦ埛鍙嶉鎸埌浜嗗彸杈癸紙鍘熸潵鐢讳腑鐢荤殑浣嶇疆锛夛紝鐢讳腑鐢诲垯鍥炲埌宸﹁竟锛?
- * 涓よ€呬綅缃璋?鈥斺€?鏃嬭浆鏄€屾崲涓€涓瑙掔湅銆嶇殑鍔ㄤ綔锛屽拰姣斾緥/缂╂斁杩欑被鐢婚潰宸ュ叿鏀句竴璧锋洿椤恒€?
+ * 屏幕旋转的按钮挪到了右边（原来画中画的位置），画中画则回到左边，
+ * 两者位置对调 —— 旋转是「换一个视角看」的动作，和比例/缩放这类画面工具放一起更顺。
  */
 private val PORTRAIT_RIGHT_CLUSTER =
   setOf(
@@ -196,10 +196,10 @@ fun <T> playerControlsEnterAnimationSpec(): FiniteAnimationSpec<T> =
   )
 
 /**
- * 姝ｄ腑鎺т欢缁勪袱渚х殑銆屽悗閫€ / 鍓嶈繘 10 绉掋€嶉敭銆?
+ * 正中控件组两侧的「后退 / 前进 10 秒」键。
  *
- * 澶栬涓庝笂/涓嬩竴闆嗗悓娆撅紙鐜荤拑鍦嗗簳锛夛紝灏哄鐣ュ皬涓€妗ｏ紙44dp锛屾涓挱鏀鹃敭 64dp銆?
- * 涓?涓嬩竴闆?56dp锛夛紝鎺掑竷椤哄簭锛歔鍚庨€€10s 路 涓婁竴闆?路 鎾斁 路 涓嬩竴闆?路 鍓嶈繘10s]銆?
+ * 外观与上/下一集同款（玻璃圆底），尺寸略小一档（44dp，正中播放键 64dp、
+ * 上/下一集 56dp），排布顺序：[后退10s · 上一集 · 播放 · 下一集 · 前进10s]。
  */
 @Composable
 private fun CenterSeekButton(
@@ -209,7 +209,7 @@ private fun CenterSeekButton(
   val hideBackground by koinInject<AppearancePreferences>()
     .hidePlayerButtonsBackground.collectAsState()
   // 步长跟着偏好走 ⇒ 改完设置立刻反映在按钮上，无需重启播放器。
-  // collectAsState 而不是 .get()：后者在 Composable 里读一次就不变了（红线 14）。
+  // 用 collectAsState 而不是 .get()：后者在 Composable 里读一次就不会再更新。
   // 前进/后退是两个独立值（跳片头要 10s、跳过场可能要 30s，合成一个两边都别扭）。
   val playerPrefs = koinInject<PlayerPreferences>()
   val stepSeconds by
@@ -256,8 +256,7 @@ private fun CenterSeekButton(
     // 时长可变（前进/后退还不一样）⇒ 不能用 Icons 的 Forward10/Replay30
     // 这类**固定档位**图标 —— 那套图标只覆盖 10/30/45/60，用户调到别的秒数就没有对应图标。
     // ⚠️ **不要叠在一起**：早前是 `Box(Alignment.Center)` 里 Icon(fillMaxSize) + Text
-    //   居中重合，结果数字正好压在双箭头的两个三角之间，糊成一团（用户反馈「数字压在
-    //   箭头上了」）。
+    //   居中重合，数字正好压在双箭头的两个三角之间，糊成一团。
     // ⇒ 改成**上下排布**：箭头像小尺寸的标题图标在上、秒数在下。
     //   箭头保持全不透明（它现在是方向主体，不再是「半透明背景」）；
     //   秒数用 labelSmall 避免 3 位数时撑破 44dp。
@@ -420,18 +419,18 @@ fun PlayerControls(
       listOf(topR, bottomR, bottomL)
     }.map { buttons -> buttons.filter { engineKind.supportsButton(it) } }
 
-  // 绔栧睆鎺т欢鍒楄〃鎸夌敤閫旀媶寮€锛?
-  //   鈶?椤舵爮鍙充晶蹇嵎寮€鍏筹細瑙ｇ爜鍣?/ 闊宠建 / 瀛楀箷 / 鏀惰棌 / 鏇村锛?
-  //   鈶?搴曢儴鎸夐挳鏉★細鍓╀笅鐨勫叏閮紝鎸夈€屾挱鏀剧姸鎬佺被 鈫?鐢婚潰绫汇€嶆帓鎴愪竴鏉★紝灞呬腑鏄剧ず銆?
-  // 涓婁竴鐗堟槸宸﹀彸涓ょ皣鍒嗗埆璐磋竟锛屼腑闂寸┖鍑轰竴澶у潡锛岀湅璧锋潵鍍忚涓€鏉″垎鍓茬嚎鍒囧紑锛?
-  // 鐜板湪鍚堝苟鎴愪竴鏉¤繛缁紙蹇呰鏃跺彲妯悜婊氬姩锛夌殑鎸夐挳鏉★紝鏍囬鍗曠嫭涓€琛屽帇鍦ㄨ繘搴︽潯涓婃柟銆?
+  // 竖屏控件列表按用途拆开：
+  //   ① 顶栏右侧快捷开关：解码器 / 音轨 / 字幕 / 收藏 / 更多；
+  //   ② 底部按钮条：剩下的全部，按「播放状态类 → 画面类」排成一条，居中显示。
+  // 上一版是左右两簇分别贴边，中间空出一大块，看起来像被一条分割线切开；
+  // 现在合并成一条连续（必要时可横向滚动）的按钮条，标题单独一行压在进度条上方。
   val (portraitTopButtons, portraitSideButtons) = remember(portraitBottomControlsPref) {
     appearancePreferences
       .parseButtons(portraitBottomControlsPref, mutableSetOf())
       .partition { it in PORTRAIT_TOP_SHORTCUTS }
   }
-  // 涓?涓嬩竴闆嗗浐瀹氭樉绀哄湪灞忓箷姝ｄ腑鐨勬挱鏀鹃敭涓や晶锛屼粠搴曢儴鎸夐挳鏉￠噷鍓旈櫎锛岄伩鍏嶉噸澶嶅嚭鐜帮紱
-  // 鍚屾椂鎶娿€岀敾闈㈢被銆嶇粺涓€鎸埌鎸夐挳鏉℃湯灏撅紝淇濊瘉瀹冧滑濮嬬粓鍦ㄥ彸鍗婅竟銆?
+  // 上/下一集固定显示在屏幕正中的播放键两侧，从底部按钮条里剔除，避免重复出现；
+  // 同时把「画面类」统一挪到按钮条末尾，保证它们始终在右半边。
   val portraitBottomButtons = remember(portraitSideButtons, engineKind) {
     val playState = portraitSideButtons.filter { it !in PORTRAIT_RIGHT_CLUSTER }
     val displayState = portraitSideButtons.filter { it in PORTRAIT_RIGHT_CLUSTER }
@@ -512,7 +511,7 @@ fun PlayerControls(
         // ⇒ 现在分别锚到**那一行控件的上方**：竖屏锚按钮簇上方、横屏锚右下簇上方，
         //   那一带本来就是留白，不与任何控件冲突。
         val statusIndicators = createRef()
-        // 绔栧睆锛氭爣棰樻斁鍦ㄨ繘搴︽潯涓婃柟锛屽崟鐙竴鏉＄害鏉燂紙妯睆涓嶄娇鐢級
+        // 竖屏：标题放在进度条上方，单独一条约束（横屏不使用）
         val portraitBottomTitle = createRef()
         val (playerUpdates) = createRefs()
 
@@ -702,11 +701,11 @@ fun PlayerControls(
                   // Simple compact indicator
                   CompactSpeedIndicator(currentSpeed = currentSpeed)
                 } else {
-                  // Full speed control slider 鈥斺€?甯︿笂 0.05 姝ヨ繘鐨勫井璋冩寜閽?
+                  // Full speed control slider —— 带上 0.05 步进的微调按钮
                   SpeedControlSlider(
                     currentSpeed = currentSpeed,
                     onSpeedChange = { raw ->
-                      // 澶栭儴浼犲叆鐨勫凡缁忔槸 0.05 鐨勬暣鏁板€嶏紝杩欓噷鍐嶅厹涓€娆￠槻姝㈡诞鐐圭疮绉宸?
+                      // 外部传入的已经是 0.05 的整数倍，这里再兜一次防止浮点累积误差
                       val snapped = Math.round(raw * 20) / 20f
                       PlayerLib.setPropertyFloat("speed", snapped)
                       PlaybackMemory.saveSpeed(playerPreferences, viewModel.seriesKey, snapped)
@@ -848,7 +847,7 @@ fun PlayerControls(
             Modifier.constrainAs(playerPauseButton) {
               end.linkTo(parent.absoluteRight)
               start.linkTo(parent.absoluteLeft)
-              // 绔栧睆涓庢í灞忎竴鑷达細鎾斁閿紙鍚笂/涓嬩竴闆嗭級鍘嬪湪灞忓箷鍨傜洿涓嚎涓?
+              // 竖屏与横屏一致：播放键（含上/下一集）压在屏幕垂直中线上
               top.linkTo(parent.top)
               bottom.linkTo(parent.bottom)
             },
@@ -1137,8 +1136,8 @@ fun PlayerControls(
                 }
               )
               .constrainAs(seekbar) {
-                // 绔栧睆涓庢í灞忎竴鑷达細杩涘害鏉¤创灞忓箷鏈€搴曪紙宸﹀彸涓ょ鏄凡鎾?鎬绘椂闀匡級锛?
-                // 鎸夐挳绨囧帇鍦ㄥ畠涓婃柟 鈥斺€?涓庡弬鑰冪増寮忕浉鍚岋紝鎸夐挳涓嶄細璺熻繘搴︽潯鎶綅缃€?
+                // 竖屏与横屏一致：进度条贴屏幕最底（左右两端是已播/总时长），
+                // 按钮簇压在它上方 —— 与参考版式相同，按钮不会跟进度条抢位置。
                 bottom.linkTo(parent.bottom, spacing.small)
                 start.linkTo(parent.start, spacing.large)
                 end.linkTo(parent.end, spacing.large)
@@ -1235,13 +1234,13 @@ fun PlayerControls(
               },
         ) {
           if (isPortrait) {
-            // 绔栧睆椤舵爮鍙湁銆岃繑鍥?+ 蹇嵎寮€鍏炽€嶄袱娈碉細鏍囬鎸埌杩涘害鏉′笂鏂瑰崟鐙竴琛岋紙瑙佷笅鏂?portraitBottomTitle锛夛紝
-            // 杩欐牱椤舵爮涓嶄細鍥犱负鏍囬鍜?5 涓紑鍏虫姠瀹藉害鑰屾妸鏍囬鍘嬫垚鐪佺暐鍙枫€?
+            // 竖屏顶栏只有「返回 + 快捷开关」两段：标题挪到进度条上方单独一行（见下方 portraitBottomTitle），
+            // 这样顶栏不会因为标题和 5 个开关抢宽度而把标题压成省略号。
             TopPlayerControlsPortrait(
               hideBackground = hideBackground,
               onBackPress = onBackPress,
-              // 椤舵爮鍙充晶鎸傚揩鎹峰紑鍏筹紙瑙ｇ爜鍣?/ 闊宠建 / 瀛楀箷 / 鏀惰棌 / 鏇村锛夛紝
-              // 澶嶇敤妯睆閭ｄ竴琛岀殑娓叉煋锛屽彧鏄缉鍒?40dp 閫傞厤绔栧睆椤舵爮楂樺害
+              // 顶栏右侧挂快捷开关（解码器 / 音轨 / 字幕 / 收藏 / 更多），
+              // 复用横屏那一行的渲染，只是缩到 40dp 适配竖屏顶栏高度
               trailing = {
                 if (portraitTopButtons.isNotEmpty()) {
                   TopRightPlayerControlsLandscape(
@@ -1342,7 +1341,7 @@ fun PlayerControls(
         // 系统时钟 / 电量：**按朝向锚到按钮簇上方**、右对齐。
         // 为什么是这个位置：
         // - 进度条那一行在竖屏是媒体标题（占满宽）、在横屏是含翻转按钮的右下簇，
-        //   早前硬锚 `seekbar.top` 就会和它们重叠（用户反馈「叠在标题/翻转按钮下面」）。
+        //   早前硬锚 `seekbar.top` 就会和它们重叠。
         // - 按钮簇**上方**那一带两种朝向都是留白，且属于「控件区」而不是画面主体 ——
         //   白字 + 阴影都成立，且不会被字幕区抢走。
         // 两个开关都关时**整块不创建**（不进 composition），避免无谓的重排。
@@ -1383,7 +1382,7 @@ fun PlayerControls(
         }
 
         if (isPortrait) {
-          // 鈹€鈹€ 绔栧睆搴曢儴锛氭爣棰橈紙杩涘害鏉′笂鏂癸紝鍗犳弧鏁磋锛?鈹€鈹€
+          // ── 竖屏底部：标题（进度条上方，占满整行） ──
           AnimatedVisibility(
             visible = controlsShown && !areControlsLocked,
             enter =
@@ -1423,7 +1422,7 @@ fun PlayerControls(
               mediaTitle = mediaTitle,
               playlistInfo = viewModel.getPlaylistInfo(),
               hideBackground = hideBackground,
-              // 鏈夋挱鏀鹃槦鍒楁椂鐐规爣棰樻墦寮€闃熷垪锛堜笌妯睆椤舵爮閭ｆ灇鏍囬鑳跺泭琛屼负涓€鑷达級
+              // 有播放队列时点标题打开队列（与横屏顶栏那枚标题胶囊行为一致）
               clickable = playlistMode && viewModel.hasPlaylistSupport(),
               onClick = {
                 resetControlsTimestamp = System.currentTimeMillis()
@@ -1432,7 +1431,7 @@ fun PlayerControls(
             )
           }
 
-          // 鈹€鈹€ 绔栧睆搴曢儴鎸夐挳鏉★細鍘熸潵鐨勫乏鍙充袱绨囧悎骞舵垚涓€鏉¤繛缁寜閽潯锛屾暣浣撳眳涓?鈹€鈹€
+          // ── 竖屏底部按钮条：原来的左右两簇合并成一条连续按钮条，整体居中 ──
           AnimatedVisibility(
             visible = controlsShown && !areControlsLocked && !areSlidersShown,
             enter =
@@ -1520,7 +1519,7 @@ fun PlayerControls(
                   }
                 )
                 .constrainAs(bottomRightControls) {
-                  // 妯睆淇濇寔鍘熸湁鍒嗗尯锛氬彸绨囧帇鍦ㄨ繘搴︽潯涔嬩笂銆佽创灞忓箷鍙崇紭锛堝搴﹂殢鍐呭锛屼笉鎷夋弧锛?
+                  // 横屏保持原有分区：右簇压在进度条之上、贴屏幕右缘（宽度随内容，不拉满）
                   bottom.linkTo(seekbar.top, spacing.medium)
                   end.linkTo(parent.end, spacing.large)
                 },
@@ -1575,9 +1574,9 @@ fun PlayerControls(
                   }
                 )
               .constrainAs(bottomLeftControls) {
-                // 妯睆淇濇寔鍘熸湁鍒嗗尯锛氬乏绨囧帇鍦ㄨ繘搴︽潯涔嬩笂锛屼絾**宸︾紭鍙崇Щ**锛?
-                // 缁欏乏涓嬭甯搁┗鐨勩€屼笂涓€鏉?涓嬩竴鏉°€嶆偓娴欢锛坰tart=14dp锛屽绾?84dp锛?
-                // 璁╁嚭绌洪棿 鈥斺€?鍚﹀垯涓よ€呬細鍙犲湪宸︿笅瑙掋€傚彸绨囦笉鍙橈紝瀹藉害鍚冩弧鍒板畠鐨勫乏渚с€?
+                // 横屏保持原有分区：左簇压在进度条之上，但**左缘右移**，
+                // 给左下角常驻的「上一条/下一条」悬浮件（start=14dp，宽约 84dp）
+                // 让出空间 —— 否则两者会叠在左下角。右簇不变，宽度吃满到它的左侧。
                 bottom.linkTo(seekbar.top, spacing.medium)
                 start.linkTo(parent.start, 96.dp)
                 width = Dimension.fillToConstraints
@@ -1608,9 +1607,9 @@ fun PlayerControls(
       }
     }
 
-    // 鍐呮牳鍒囨崲瑕佷氦缁欐壙杞介〉锛坢pv 鎾斁椤?PlayerActivity锛夋潵鍋氥€?
-    // 杩欓噷鍏堝彇涓€娆?Activity锛氫笅闈紶缁欓潰鏉跨殑 lambda 涓嶆槸 @Composable 涓婁笅鏂囷紝
-    // 涓嶈兘鍦ㄩ噷闈㈣皟 LocalActivity.current銆?
+    // 内核切换要交给承载页（mpv 播放页 PlayerActivity）来做。
+    // 这里先取一次 Activity：下面传给面板的 lambda 不是 @Composable 上下文，
+    // 不能在里面调 LocalActivity.current。
     val hostActivity = LocalActivity.current
 
     val sheetShown by viewModel.sheetShown.collectAsState()
@@ -1643,7 +1642,7 @@ fun PlayerControls(
           PlayerLib.setPropertyBoolean("aid", false)
         } else {
           PlayerLib.setPropertyInt("aid", it.id)
-          // 璁颁綇杩欐潯闊宠建锛堟寚绾瑰尮閰嶏級锛屼笅涓€闆嗙浉鍚岄煶杞ㄨ嚜鍔ㄩ€変腑锛涘紑鍏冲叧闂椂鍐呴儴鐩存帴蹇界暐
+          // 记住这条音轨（指纹匹配），下一集相同音轨自动选中；开关关闭时内部直接忽略
           PlaybackMemory.saveAudioTrack(playerPreferences, viewModel.seriesKey, it)
         }
       },
@@ -1658,7 +1657,7 @@ fun PlayerControls(
       speed = playbackSpeed ?: playerPreferences.defaultSpeed.get(),
       onSpeedChange = {
         PlayerLib.setPropertyFloat("speed", it.toFixed(2))
-        // 璁颁綇杩欎釜鍊嶉€燂紝鍚屽墽涓嬩竴闆嗘部鐢紱寮€鍏冲叧闂椂鍐呴儴鐩存帴蹇界暐
+        // 记住这个倍速，同剧下一集沿用；开关关闭时内部直接忽略
         PlaybackMemory.saveSpeed(playerPreferences, viewModel.seriesKey, it.toFixed(2))
         // b4 global speed memory: cross-episode, cross-restart. Ignored internally when off.
         if (playerPreferences.rememberGlobalSpeed.get()) {
