@@ -1524,8 +1524,9 @@ dependencies {
 
     // ── Emby Java SDK (OpenAPI 生成) ──
     // 源码 `app/src/main/java/embyclient/` 已从 sourceSet 排除（见上方 android{} 里的说明），
-    // 它原本带来的 OkHttp2 + Gson + gson-fire + swagger-annotations 依赖**全部移除**：
-    //   - OkHttp2 (com.squareup.okhttp) 早已 EOL，且与主用的 OkHttp3 (okhttp3.*) 并存；
+    // 它原本带来的 OkHttp 2 + Gson + gson-fire + swagger-annotations 依赖**全部移除**：
+    //   - OkHttp 2 (`com.squareup.okhttp`) 早已 EOL，且与主用的 OkHttp 5 并存
+    //     （OkHttp 5 的 Maven 坐标仍是 `com.squareup.okhttp3`，包名也仍是 `okhttp3.*`）；
     //   - Gson 同理，主项目统一用 kotlinx.serialization；
     //   - 主项目源码里 grep 不到 gson / swagger / javax.annotation 的任何引用。
     // 端点路径与参数仍可查 embyclient/ 源码（不参与编译，只作参考）。
@@ -1557,13 +1558,13 @@ dependencies {
  * ── 关于 Emby Java SDK（OpenAPI 生成）目录 `app/src/main/java/embyclient/` ──
  *
  * 它**已从源码目录移出**到 `app/embyclient-reference/`，故不再参与编译，
- * 上面那批 OkHttp2 + Gson + gson-fire + swagger-annotations 依赖才能全部移除。
+ * 上面那批 OkHttp 2 + Gson + gson-fire + swagger-annotations 依赖才能全部移除。
  *
  * 移出理由（全部已核实，不是猜测）：
  *   - 全项目零引用：`Grep "^import embyclient"` 在 mpvex 下无命中。实际请求全部走
- *     `domain/emby/EmbyClient.kt` 手写的 OkHttp3 + kotlinx.serialization。
- *   - OkHttp2 (`com.squareup.okhttp`) 早已 EOL，却和主用的 OkHttp3 (okhttp3.*) 并存 ——
- *     包体、混淆、依赖冲突三重风险。
+ *     `domain/emby/EmbyClient.kt` 手写的 OkHttp 5 + kotlinx.serialization。
+ *   - OkHttp 2 (`com.squareup.okhttp`) 早已 EOL，却和主用的 OkHttp 5 并存 ——
+ *     后者坐标仍是 `com.squareup.okhttp3`，包体、混淆、依赖冲突三重风险。
  *   - Gson 与主项目统一的 kotlinx.serialization 重复；主项目源码里 grep 不到
  *     gson / swagger / javax.annotation 的任何引用。
  *

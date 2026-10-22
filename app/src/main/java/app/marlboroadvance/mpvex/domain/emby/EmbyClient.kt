@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit
 // ════════════════════════════════════════════════════════════════════════
 
 /**
- * Emby REST API 客户端。基于 OkHttp3 + kotlinx.serialization。
+ * Emby REST API 客户端。基于 OkHttp 5 + kotlinx.serialization。
  *
  * 用法：
  * ```

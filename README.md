@@ -97,7 +97,7 @@
 
 | 模块 | 职责 |
 | :-- | :-- |
-| `domain/emby` | Emby 客户端核心：手写 OkHttp3 + kotlinx.serialization，覆盖条目 / 媒体库 / 搜索 / 播放列表 / 会话 / 演职员等端点，含分页游标、直链预解析、筛选与排序 |
+| `domain/emby` | Emby 客户端核心：手写 OkHttp 5 + kotlinx.serialization，覆盖条目 / 媒体库 / 搜索 / 播放列表 / 会话 / 演职员等端点，含分页游标、直链预解析、筛选与排序 |
 | `domain/iso` | 远程 ISO 原盘播放：ISO9660 解析、蓝光 `mpls` 解析、段映射、HTTP Range 读取与本地代理 |
 | `domain/dislike` | 「标记为不喜欢」的领域逻辑与持久化 |
 | `domain/media` · `network` · `thumbnail` · `playbackstate` · `recentlyplayed` · `anime4k` | 媒体信息解析、网络存储、缩略图、播放进度、最近播放、Anime4K |
