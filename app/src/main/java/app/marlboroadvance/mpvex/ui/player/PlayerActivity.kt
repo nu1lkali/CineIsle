@@ -711,8 +711,14 @@ open class PlayerActivity :
       return
     }
 
-    getPlayableUri(intent)?.let { uri ->
-      playAfterProbe(uri)
+    // 起播前已被 Emby 侧判定为死链（403 / 404 / 登录失效）：
+    // 地址**根本没交给 mpv** ⇒ 不会 native 崩溃，直接把原因显示成卡片。
+    // 见 EmbyViewModel.play() 里对 StreamProbe.Denied 的处理。
+    val preflightError = intent.getStringExtra("play_error")
+    if (preflightError != null) {
+      viewModel.showPlaybackError(preflightError)
+    } else {
+      getPlayableUri(intent)?.let { uri -> startPlayback(uri) }
     }
 
     // Only set orientation immediately if NOT in Video mode
@@ -729,23 +735,33 @@ open class PlayerActivity :
   }
 
   /**
-   * 探测网络流地址可达性之后，再交给 mpv。
+   * 把地址直接交给 mpv 起播，**不再探测**。
    *
-   * ## 为什么必须先探一下，而不是直接 playFile
+   * ## 为什么这里不再发探测请求（v128）
    *
-   * 403 / 404 的死链（网盘直链过期、文件被移走、STRM 指向失效）交给 mpv 之后，
-   * libmpv 会在 **native 层**崩掉 —— 现象是「点播放 → 整个 App 直接消失回桌面」，
-   * 连 App 的崩溃页都出不来（[GlobalExceptionHandler] 只能收到 Java 异常，native 崩溃
-   * 收不到任何堆栈）。这种崩溃 `try/catch`、`runCatching` 一律无效，
-   * **唯一可靠的防线是在把地址交出去之前确认它能取到数据**。
+   * v127 曾在这里对每条 http(s) 地址发一次 `Range: bytes=0-0`，用来把死链挡在 mpv 之外。
+   * 代价是**每次起播多打一次 CDN** —— 对网盘/CDN 来说这就是一条会被风控记下的请求，
+   * 而 Emby 侧「预解析直链」本来就会发同样的一次请求（`EmbyClient.resolveStreamUrl`）。
    *
-   * ## 为什么不拦「慢」
+   * 现在判定合并到那次已有的请求里，结论通过 `play_error` extra 带进本页
+   * （见 onCreate 里的 preflightError）。所以正常起播路径**零额外请求**。
    *
-   * 探测只等 ~2.5 秒（见 [EmbyClient.probeStreamUrl]）；超时、DNS 失败、连接被重置
-   * 一律是 [StreamProbe.Unknown]，照旧播放 —— 本地网络抖一下不该把用户挡在播放器外面。
-   * 只有服务端**明确拒绝**（4xx / 5xx）才转成错误卡片。
+   * 探测能力没有丢，只是挪到了「重试」—— 见 [retryPlayback]。
    */
-  private fun playAfterProbe(uri: String) {
+  private fun startPlayback(uri: String) {
+    player.playFile(uri)
+  }
+
+  /**
+   * 用户点「重试」：地址可能只是临时过期，重新探一次再播。
+   *
+   * 这是**用户主动触发**的请求，最多 1 次，不会在正常起播路径上反复发生 ——
+   * 这正是「既要能判死链、又不能每次都白打 CDN」的折中点。
+   *
+   * 判定口径与 [EmbyClient.probeStreamUrl] 一致：只有服务端明确拒绝（4xx）才拦，
+   * 超时 / DNS 失败 / 连接重置一律照旧播放，本地网络抖一下不该把用户挡在门外。
+   */
+  private fun retryPlayback(uri: String) {
     // 本地文件 / content:// / 本地 ISO 代理（127.0.0.1）：不需要探测，直接播
     if (!uri.startsWith("http://") && !uri.startsWith("https://")) {
       player.playFile(uri)
@@ -786,6 +802,11 @@ open class PlayerActivity :
    * @return true 表示已完成转交并收摊，调用方应当直接返回
    */
   private fun redirectToPreferredEngine(): Boolean {
+    // 起播前已被判定为死链：这次**没有可播内容**，别转交。
+    // GSY 页不认识 `play_error`，转过去只会拿同一条死链再失败一次，
+    // 而错误卡片在本页就能显示 —— 让用户看到原因比换个播放器重要。
+    if (intent.getStringExtra("play_error") != null) return false
+
     if (intent.data == null &&
       !intent.hasExtra("playlist") &&
       !intent.hasExtra("playlist_id")
@@ -983,7 +1004,8 @@ open class PlayerActivity :
               .padding(end = 16.dp, bottom = 184.dp),
           )
           // ── 播放失败卡片（声明在最后 = 最上层）──
-          // 服务端明确拒绝（403 / 404 / 5xx）时由 [playAfterProbe] 写入状态，
+          // 服务端明确拒绝（401 / 403 / 404）时，由 Emby 侧预解析经
+          // `play_error` extra 写入，或「重试」时由 [retryPlayback] 写入 ——
           // 替代原来的「native 崩溃、整个 App 消失」。必须排在所有浮层之后，
           // 否则会被悬停卡 / 倒计时胶囊盖住，用户点不到「重试」。
           PlaybackErrorCard(
@@ -995,7 +1017,7 @@ open class PlayerActivity :
             onRetry = {
               // 重试 = 清掉错误、重新探测一次（地址可能只是临时过期，重取就好了）
               viewModel.clearPlaybackError()
-              getPlayableUri(intent)?.let { uri -> playAfterProbe(uri) }
+              getPlayableUri(intent)?.let { uri -> retryPlayback(uri) }
             },
             modifier = Modifier.align(Alignment.Center),
           )
@@ -5446,7 +5468,7 @@ private fun PlayerFirstFrameLoading(
       )
       // ── 文字提示（原来只有转圈）──
       // 只有动画时用户分不清「在加载」和「卡死了」，尤其网络播放要等好几秒。
-      // 第二行是**兜底说明**：死链在播放前已被拦掉（见 playAfterProbe），
+      // 第二行是**兜底说明**：死链在起播前已被拦掉（见 EmbyClient.resolveStreamUrl），
       // 但「地址有效却极慢」还是会长时间停在这一屏，得给用户一句能对应上的话。
       Spacer(Modifier.height(14.dp))
       Text(

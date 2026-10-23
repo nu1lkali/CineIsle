@@ -25,6 +25,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyScanChunk
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.domain.emby.StreamProbe
 import app.marlboroadvance.mpvex.domain.emby.DuplicateGroup
 import app.marlboroadvance.mpvex.domain.emby.MergeItemRef
 import app.marlboroadvance.mpvex.domain.emby.MergeOutcome
@@ -969,9 +970,10 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     static: Boolean = true,
     /** 多版本媒体要指定的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
     mediaSourceId: String? = null,
-  ): String? = withContext(Dispatchers.IO) {
-    runCatching { EmbyClient.resolveStreamUrl(server, itemId, static, mediaSourceId = mediaSourceId) }
-      .getOrNull()
+  ): StreamProbe = withContext(Dispatchers.IO) {
+    runCatching {
+      EmbyClient.resolveStreamUrl(server, itemId, static, mediaSourceId = mediaSourceId)
+    }.getOrElse { StreamProbe.Unknown }
   }
 
   /** 是否开启「预解析直链」（设置项）。播放路径据此决定要不要多走一次解析。 */
@@ -1058,12 +1060,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     if (playlist.size > 1) {
       // 「预解析直链」开关打开时，先逐条把 302 背后的真实地址取出来（见 resolveIfEnabled）。
       // 解析失败/未发生跳转返回 null，播放列表里对应位置回退到原始地址。
+      // ⚠️ 连播列表里只取「拿到的地址」，被拒（Denied）的集不回退也不报错 ——
+      //    不能因为某一集死链就把整场播放拦下来，那一集播到时会由播放器自己报错。
       // ⚠️ 版本选择只作用于「用户当前点播的这一集」：后面自动连播的集仍是各自的默认版本。
       val directUrls = playlist
         .mapNotNull { it.Id }
         .mapNotNull { id ->
           val sourceForThisItem = if (id == itemIdToPlay) mediaSourceId else null
-          resolveIfEnabled(server, id, sourceForThisItem)?.let { id to it }
+          resolveIfEnabled(server, id, sourceForThisItem)?.urlOrNull?.let { id to it }
         }
         .toMap()
       launchPlaylist(
@@ -1094,33 +1098,72 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       } else {
         null
       }
-      val direct = versionUrl ?: resolveIfEnabled(server, itemIdToPlay, mediaSourceId)
-      // 独立再解析一次给 ISO 探测用（上面那次可能因为开关关着而没解）。
-      val isoSource = direct ?: resolveDirectUrl(server, itemIdToPlay, mediaSourceId = mediaSourceId)
-      // ISO 容器要用**选中版本**的容器名，否则多版本下（4K 是 ISO、1080P 是 mkv）
-      // 会拿错容器的预筛结论，把真 ISO 拦在探测之前。
+      // ① 预解析（仅在「预解析直链」开关打开时才发请求）。
+      //    返回值现在一并带出「能不能播」的结论 —— 用的是**本来就会发的那一次请求**。
+      val directProbe = versionUrl?.let { StreamProbe.Ok(it) }
+        ?: resolveIfEnabled(server, itemIdToPlay, mediaSourceId)
+
+      // 明确被拒（401 / 403 / 404 / 410）⇒ 起播前就拦下，改成播放页里的错误卡片。
+      // 把死链交给 mpv 会让 libmpv 在 native 层崩掉（整个 App 消失、Java 层拦不到），
+      // 而这次判定没有额外打 CDN —— 请求是「预解析」本来就有的那一次。
+      (directProbe as? StreamProbe.Denied)?.let { denial ->
+        launchSingle(
+          server = server,
+          item = playItem,
+          resumeSeconds = effectiveResume,
+          engine = engine,
+          mediaSourceId = mediaSourceId,
+          mediaSourceLabel = mediaSourceLabel,
+          playbackError = denial.message,
+        )
+        return
+      }
+      val directUrl = directProbe?.urlOrNull
+
+      // ② ISO 探测：只有容器**可能**是原盘 / STRM 时才值得发这次解析请求。
+      //    v127 及以前不管 mkv 还是 mp4 都会为它白发一次 302 解析（请求在容器预筛
+      //    之前就发出去了）；v128 起按容器先筛，普通片源直接零请求。
+      //    ISO 容器要用**选中版本**的容器名，否则多版本下（4K 是 ISO、1080P 是 mkv）
+      //    会拿错容器的预筛结论，把真 ISO 拦在探测之前。
       val selectedContainer = playItem.MediaSources
         ?.firstOrNull { it.Id == mediaSourceId }
         ?.Container
         ?: playItem.MediaSources?.firstOrNull()?.Container
-      val isoUrl =
-        isoSource?.let {
-          prepareRemoteIso(
-            directUrl = it,
-            container = selectedContainer,
-            renewDirect = {
-              // 直链中途过期 → 重新走一次 302 解析换新的。
-              // ⚠️ 与探测必须同一套 UA，resolveDirectUrl 内部已经保证了。
-              resolveDirectUrl(server, itemIdToPlay, mediaSourceId = mediaSourceId)
-            },
+      var isoSourceUrl: String? = null
+      if (mayBeIsoContainer(selectedContainer)) {
+        val isoProbe = directProbe
+          ?: resolveDirectUrl(server, itemIdToPlay, mediaSourceId = mediaSourceId)
+        (isoProbe as? StreamProbe.Denied)?.let { denial ->
+          launchSingle(
+            server = server,
+            item = playItem,
+            resumeSeconds = effectiveResume,
+            engine = engine,
+            mediaSourceId = mediaSourceId,
+            mediaSourceLabel = mediaSourceLabel,
+            playbackError = denial.message,
           )
+          return
         }
+        isoSourceUrl = isoProbe.urlOrNull
+      }
+      val isoUrl = isoSourceUrl?.let {
+        prepareRemoteIso(
+          directUrl = it,
+          container = selectedContainer,
+          renewDirect = {
+            // 直链中途过期 → 重新走一次 302 解析换新的。
+            // ⚠️ 与探测必须同一套 UA，resolveDirectUrl 内部已经保证了。
+            resolveDirectUrl(server, itemIdToPlay, mediaSourceId = mediaSourceId).urlOrNull
+          },
+        )
+      }
       launchSingle(
         server = server,
         item = playItem,
         resumeSeconds = effectiveResume,
         engine = engine,
-        overrideUrl = isoUrl ?: direct,
+        overrideUrl = isoUrl ?: directUrl,
         mediaSourceId = mediaSourceId,
         mediaSourceLabel = mediaSourceLabel,
       )
@@ -1377,6 +1420,21 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
    *   这样一部两小时的电影中途链接过期也不会断。
    * @return 代理地址；不是 ISO / 探测失败返回 null。
    */
+  /**
+   * 容器名是否**可能**是原盘 / STRM —— 决定要不要为 ISO 探测发那次 302 解析请求。
+   *
+   * 只有明确报出 `iso` / `strm`（或服务器根本没给容器名）才值得探。
+   * 明确是 mkv / mp4 / avi 的直接跳过：以前这些片源每次起播都会**白发一次**解析请求
+   * （请求在 `prepareRemoteIso` 的容器预筛之前就发出去了），v128 起省掉。
+   *
+   * STRM 必须留下：它指向的可能是 ISO，而且它本来就是最需要探测死链的一类
+   * （网盘直链过期后交给 mpv 会 native 崩溃）。
+   */
+  private fun mayBeIsoContainer(container: String?): Boolean {
+    val c = container?.trim()?.lowercase() ?: return true
+    return c == "iso" || c == "strm"
+  }
+
   private suspend fun prepareRemoteIso(
     directUrl: String,
     renewDirect: (suspend () -> String?)? = null,
@@ -1420,6 +1478,11 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     mediaSourceId: String? = null,
     /** 多版本媒体：本次播放的版本显示名（播放页顶栏会追加在片名后面） */
     mediaSourceLabel: String? = null,
+    /**
+     * 起播前就被判定为不可播（死链）的原因。非 null 时播放页**不会调 playFile**，
+     * 而是直接把这句话显示成错误卡片 —— 用来替代「把死链交给 mpv → native 崩溃」。
+     */
+    playbackError: String? = null,
   ) {
     val itemId = item.Id ?: return
     val url = overrideUrl
@@ -1428,6 +1491,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       setClass(getApplication(), PlayerActivity::class.java)
       putExtra("internal_launch", true)
       putExtra("launch_source", "emby")
+      if (playbackError != null) putExtra("play_error", playbackError)
       putExtra("title", displayTitle(item))
       putExtra("filename", item.Name ?: displayTitle(item))
       if (resumeSeconds > 0) {
@@ -1479,13 +1543,16 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
 
   /**
    * 「预解析开关打开」时才去解析直链；关闭 → 直接返回 null（用原始流地址，零额外开销）。
-   * 解析不出真实跳转地址时也返回 null，调用方一律回退原始地址。
+   *
+   * 返回的是 [StreamProbe] 而不是地址，因为这次请求顺带就能判定死链（见
+   * [EmbyClient.resolveStreamUrl]）。调用方取地址用 [StreamProbe.urlOrNull]，
+   * 想拦死链就判 [StreamProbe.Denied]。
    */
   private suspend fun resolveIfEnabled(
     server: EmbyServer,
     itemId: String,
     mediaSourceId: String? = null,
-  ): String? =
+  ): StreamProbe? =
     if (shouldResolveDirectLink()) resolveDirectUrl(server, itemId, mediaSourceId = mediaSourceId)
     else null
 

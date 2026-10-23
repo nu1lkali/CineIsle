@@ -291,8 +291,9 @@ class PlayerViewModel(
    * 播放失败原因（非空 ⇒ 界面上显示错误卡片）。
    *
    * 与 [firstFrameRendered] 是两回事：那个管「还在等画面」，这个管「画面永远不会来了」。
-   * 目前唯一的写入方是 [PlayerActivity.playAfterProbe] —— 服务端明确拒绝（403 / 404 / 5xx）
-   * 时**不调 playFile**，改成这个提示。
+   * 写入方有两个，都发生在**播放之前**：
+   * · Emby 侧预解析判定死链 ⇒ 通过 `play_error` extra 带进播放页；
+   * · 用户点「重试」时重新探测仍被拒（见 [PlayerActivity.retryPlayback]）。
    *
    * 为什么不靠 mpv 的 `end-file` 事件兜底：死链会让 libmpv 在 native 层直接崩掉
    * （整个 App 消失），`end-file` 根本来不及发出。所以判断必须发生在播放之前。

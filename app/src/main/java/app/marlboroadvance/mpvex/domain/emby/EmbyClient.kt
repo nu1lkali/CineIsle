@@ -1989,6 +1989,31 @@ object EmbyClient {
    *
    * @return 最终直链；未发生跳转 / 解析失败均为 null
    */
+  /**
+   * 预解析「302 直链」：拿 `/Videos/{id}/stream` 背后跳转到的真实地址，
+   * **同时**把这次的 HTTP 状态码翻译成「能不能播」的结论。
+   *
+   * ## 为什么要带出状态码（v128）
+   *
+   * 这个方法本来就会发一次 `Range: bytes=0-0`。以前它只把结果当「直链」用，
+   * 被拒（403 / 404）时静默返回 null、让调用方回退原始地址 —— 于是死链照样被交给
+   * mpv，而 mpv 遇到死链会在 native 层崩掉（整个 App 消失，Java 层拦不到）。
+   *
+   * 现在把**本来就已经拿到手**的 `resp.code` 一并翻译出来：调用方据此在起播前拦下死链。
+   * **不额外发任何请求** —— 防崩能力是白捡的，这是刻意的设计约束。
+   *
+   * ## 判定口径
+   *
+   * · 2xx → [StreamProbe.Ok]，`finalUrl` 是跟完跳转后的地址（没跳转就是原地址）；
+   * · 401 / 403 / 404 / 410 → [StreamProbe.Denied]，**立即返回不再重试**
+   *   （这些码重试没有意义，每多试一次就多打一次 CDN —— 网盘/CDN 会记风控）；
+   * · 5xx / 416 / 400 / 405 之类 → [StreamProbe.Unknown]，不下死结论
+   *   （服务端临时抽风或对 Range 处理特殊，交给调用方回退原始地址，别误拦用户）；
+   * · 网络异常 / 超时 → [StreamProbe.Unknown]，按可播处理。
+   *
+   * @return [StreamProbe.Ok] 可播（含最终直链）；[StreamProbe.Denied] 明确不可播；
+   *         [StreamProbe.Unknown] 探不出来，调用方回退原始地址
+   */
   fun resolveStreamUrl(
     server: EmbyServer,
     itemId: String,
@@ -1999,10 +2024,10 @@ object EmbyClient {
      * 探测直链与真正拉流必须是同一个版本，否则「解析出来的是 4K、播的却是 1080P」。
      */
     mediaSourceId: String? = null,
-  ): String? {
+  ): StreamProbe {
     val original = videoStreamUrl(server, itemId, static = static, mediaSourceId = mediaSourceId)
     repeat(attempts.coerceAtLeast(1)) {
-      val direct = runCatching {
+      val outcome = runCatching {
         val req = Request.Builder()
           .url(original)
           // 只取 1 个字节：既让服务端走完整跳转链，又不真的下载内容
@@ -2014,28 +2039,52 @@ object EmbyClient {
           .get()
           .build()
         httpClient.newCall(req).execute().use { resp ->
-          // 只有**确实取到了内容**才认这条直链。
-          // 早期版本只判断「有没有发生跳转」，于是服务端回 403 / 404 时照样把那条
-          // 死链当成直链交给播放器 —— 播放器必然失败，且无从回退。
-          // 这里一票否决：非 2xx 一律当解析失败，调用方回退到原始 Emby 地址
-          // （那条路径由播放器自己跟 302，可播）。
-          if (!resp.isSuccessful) {
-            android.util.Log.w(
-              "EmbyClient",
-              "预解析直链被拒（HTTP ${resp.code} @ ${resp.request.url.host}），回退原始地址",
-            )
-            return@runCatching null
-          }
-          // response.request 是「跟完跳转后的最后一个请求」，它的 URL 就是直链
-          val finalUrl = resp.request.url.toString()
-          finalUrl.takeIf {
-            it != original && (it.startsWith("http://") || it.startsWith("https://"))
+          when {
+            resp.isSuccessful -> {
+              // response.request 是「跟完跳转后的最后一个请求」，它的 URL 就是直链
+              val finalUrl = resp.request.url.toString()
+              StreamProbe.Ok(
+                finalUrl.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+                  ?: original
+              )
+            }
+            resp.code in DENIED_STREAM_CODES -> {
+              android.util.Log.w(
+                "EmbyClient",
+                "直链被拒（HTTP ${resp.code} @ ${resp.request.url.host}）—— 判定不可播",
+              )
+              StreamProbe.Denied(streamDeniedMessage(resp.code))
+            }
+            else -> {
+              // 416 / 400 / 405…：不下死结论，交给调用方回退原始地址
+              android.util.Log.i(
+                "EmbyClient",
+                "直链探测返回 HTTP ${resp.code} @ ${resp.request.url.host}，按未知处理",
+              )
+              null
+            }
           }
         }
       }.getOrNull()
-      if (direct != null) return direct
+
+      // Ok / Denied 都是明确结论，立即返回。
+      // Denied 不重试是关键：4xx 重试注定还是 4xx，只会多打一次 CDN。
+      if (outcome != null) return outcome
     }
-    return null
+    return StreamProbe.Unknown
+  }
+
+  /** 能把一条流地址判死的 HTTP 状态码（见 [resolveStreamUrl] 的判定口径）。 */
+  private val DENIED_STREAM_CODES = setOf(401, 403, 404, 410)
+
+  /** 把「判死」的状态码翻成可直接给用户看的中文原因。 */
+  private fun streamDeniedMessage(code: Int): String = when {
+    code == 401 -> "登录状态已失效（HTTP 401），请重新登录这台服务器"
+    code == 403 -> "服务器拒绝访问（HTTP 403）—— 直链可能已过期，或这个文件没有访问权限"
+    code == 404 -> "服务器找不到这个文件（HTTP 404）—— 它可能已被移动、重命名或删除"
+    code == 410 -> "这个文件已从服务器移除（HTTP 410）"
+    code in 500..599 -> "服务器出错了（HTTP $code），请稍后重试"
+    else -> "服务器返回 HTTP $code，无法播放"
   }
 
   /**
@@ -3189,6 +3238,15 @@ sealed interface StreamProbe {
 
   /** 探不出来（超时 / 网络异常 / 不支持探测）。调用方按「可播」处理，别挡着用户。 */
   object Unknown : StreamProbe
+
+  /**
+   * 可直接交给播放器的地址。
+   *
+   * [Denied] / [Unknown] 都是 null —— 注意 null 的语义是「不知道」，不是「不能播」，
+   * 调用方应当回退到原始流地址，而不是当成失败。
+   */
+  val urlOrNull: String?
+    get() = (this as? Ok)?.finalUrl
 }
 
 /** 错误归类（见 [EmbyApiException.errorKind]）。 */
