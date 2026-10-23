@@ -38,13 +38,18 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.koin.compose.koinInject
 import kotlin.math.ceil
 import androidx.core.net.toUri
@@ -54,6 +59,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import app.marlboroadvance.mpvex.database.entities.PlaybackStateEntity
 import app.marlboroadvance.mpvex.databinding.PlayerLayoutBinding
+import app.marlboroadvance.mpvex.domain.emby.EmbyClient
+import app.marlboroadvance.mpvex.domain.emby.StreamProbe
 import app.marlboroadvance.mpvex.domain.playbackstate.repository.PlaybackStateRepository
 import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
@@ -705,7 +712,7 @@ open class PlayerActivity :
     }
 
     getPlayableUri(intent)?.let { uri ->
-      player.playFile(uri)
+      playAfterProbe(uri)
     }
 
     // Only set orientation immediately if NOT in Video mode
@@ -719,6 +726,42 @@ open class PlayerActivity :
 
     window.attributes.layoutInDisplayCutoutMode =
       WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+  }
+
+  /**
+   * 探测网络流地址可达性之后，再交给 mpv。
+   *
+   * ## 为什么必须先探一下，而不是直接 playFile
+   *
+   * 403 / 404 的死链（网盘直链过期、文件被移走、STRM 指向失效）交给 mpv 之后，
+   * libmpv 会在 **native 层**崩掉 —— 现象是「点播放 → 整个 App 直接消失回桌面」，
+   * 连 App 的崩溃页都出不来（[GlobalExceptionHandler] 只能收到 Java 异常，native 崩溃
+   * 收不到任何堆栈）。这种崩溃 `try/catch`、`runCatching` 一律无效，
+   * **唯一可靠的防线是在把地址交出去之前确认它能取到数据**。
+   *
+   * ## 为什么不拦「慢」
+   *
+   * 探测只等 ~2.5 秒（见 [EmbyClient.probeStreamUrl]）；超时、DNS 失败、连接被重置
+   * 一律是 [StreamProbe.Unknown]，照旧播放 —— 本地网络抖一下不该把用户挡在播放器外面。
+   * 只有服务端**明确拒绝**（4xx / 5xx）才转成错误卡片。
+   */
+  private fun playAfterProbe(uri: String) {
+    // 本地文件 / content:// / 本地 ISO 代理（127.0.0.1）：不需要探测，直接播
+    if (!uri.startsWith("http://") && !uri.startsWith("https://")) {
+      player.playFile(uri)
+      return
+    }
+    lifecycleScope.launch {
+      val probe = withContext(Dispatchers.IO) { EmbyClient.probeStreamUrl(uri) }
+      when (probe) {
+        // 用探测跟完 302 后的最终地址：省得内核自己再跳一次，也避免「内核不跟 302」
+        is StreamProbe.Ok -> player.playFile(probe.finalUrl)
+        // 明确不可播：不调 playFile ⇒ mpv 不会去碰死链 ⇒ 不会 native 崩溃，
+        // 改成界面上的一张错误卡片（用户能看到原因，而不是整个 App 消失）。
+        is StreamProbe.Denied -> viewModel.showPlaybackError(probe.message)
+        StreamProbe.Unknown -> player.playFile(uri)
+      }
+    }
   }
 
   /**
@@ -938,6 +981,23 @@ open class PlayerActivity :
             modifier = Modifier
               .align(Alignment.BottomEnd)
               .padding(end = 16.dp, bottom = 184.dp),
+          )
+          // ── 播放失败卡片（声明在最后 = 最上层）──
+          // 服务端明确拒绝（403 / 404 / 5xx）时由 [playAfterProbe] 写入状态，
+          // 替代原来的「native 崩溃、整个 App 消失」。必须排在所有浮层之后，
+          // 否则会被悬停卡 / 倒计时胶囊盖住，用户点不到「重试」。
+          PlaybackErrorCard(
+            viewModel = viewModel,
+            onBack = {
+              isUserFinishing = true
+              finish()
+            },
+            onRetry = {
+              // 重试 = 清掉错误、重新探测一次（地址可能只是临时过期，重取就好了）
+              viewModel.clearPlaybackError()
+              getPlayableUri(intent)?.let { uri -> playAfterProbe(uri) }
+            },
+            modifier = Modifier.align(Alignment.Center),
           )
           // 弹幕层**不在这里**了（V118）：它已挪到 `binding.danmaku` 这一独立图层，
           // 声明在 controls **之前**（= 画在它下面、触摸也让给它）。
@@ -2890,6 +2950,9 @@ private fun cancelAutoplayCountdown() {
    * applies user preferences, and sets up metadata and media session.
    */
   private fun handleFileLoaded() {
+    // 文件真的起来了 ⇒ 之前那次「无法播放」的判定作废（可能是地址临时过期，
+    // 重试后拿到了新的直链）。不清的话错误卡片会一直压在画面上。
+    viewModel.clearPlaybackError()
     // Extract fileName from intent only if not already set
     // This preserves fileName set in onNewIntent or onCreate
     if (fileName.isBlank()) {
@@ -5372,13 +5435,31 @@ private fun PlayerFirstFrameLoading(
     exit = fadeOut(tween(260)),
     modifier = modifier,
   ) {
-    // 96dp 是**基准**尺寸（还会乘用户设的缩放系数，默认 1.1×）—— 与缓冲转圈
-    // （PlayerControls.kt:866）同基准 ⇒ 首帧层与缓冲层接力时画面不跳。
-    // ⚠️ 用 size 参数而不是 Modifier.size，否则「加载动画大小」缩放对它不生效。
-    // 压在画面上，所以固定白色半透明（主题色在视频上基本看不见）。
-    app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
-      size = 96.dp,
-      tint = Color.White.copy(alpha = 0.85f),
-    )
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+      // 96dp 是**基准**尺寸（还会乘用户设的缩放系数，默认 1.1×）—— 与缓冲转圈
+      // （PlayerControls.kt:866）同基准 ⇒ 首帧层与缓冲层接力时画面不跳。
+      // ⚠️ 用 size 参数而不是 Modifier.size，否则「加载动画大小」缩放对它不生效。
+      // 压在画面上，所以固定白色半透明（主题色在视频上基本看不见）。
+      app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
+        size = 96.dp,
+        tint = Color.White.copy(alpha = 0.85f),
+      )
+      // ── 文字提示（原来只有转圈）──
+      // 只有动画时用户分不清「在加载」和「卡死了」，尤其网络播放要等好几秒。
+      // 第二行是**兜底说明**：死链在播放前已被拦掉（见 playAfterProbe），
+      // 但「地址有效却极慢」还是会长时间停在这一屏，得给用户一句能对应上的话。
+      Spacer(Modifier.height(14.dp))
+      Text(
+        text = "正在加载…",
+        color = Color.White.copy(alpha = 0.75f),
+        fontSize = 13.sp,
+      )
+      Spacer(Modifier.height(4.dp))
+      Text(
+        text = "若长时间停在这里，可能是网络不稳或直链已过期",
+        color = Color.White.copy(alpha = 0.42f),
+        fontSize = 11.sp,
+      )
+    }
   }
 }

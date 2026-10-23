@@ -105,6 +105,14 @@ object EmbyClient {
    */
   private const val SLOW_REQUEST_MS = 1_500L
 
+  /**
+   * [probeStreamUrl] 的单次探测超时（毫秒）。
+   *
+   * 探测是为了「别把死链交给 mpv」，属于顺手确认，不能拖慢起播 ——
+   * 2.5 秒还没拿到响应头，说明链路本身就不确定，按 [StreamProbe.Unknown] 放行。
+   */
+  private const val PROBE_TIMEOUT_MS = 2_500L
+
   /** 请求 Emby 时统一附加的扩展字段 */
   internal const val ITEM_FIELDS =
     "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources," +
@@ -2030,6 +2038,58 @@ object EmbyClient {
     return null
   }
 
+  /**
+   * 播放前探测一条**已经拼好的**流地址能不能真的取到数据。
+   *
+   * ## 为什么必须探在播放之前
+   *
+   * 403 / 404 的死链（网盘直链过期、文件被移走、STRM 指向失效）一旦交给 mpv，
+   * libmpv 会在 **native 层**崩掉 —— 现象是「点播放 → 整个 App 直接消失回桌面」，
+   * 而且拿不到任何 Java 堆栈（`GlobalExceptionHandler` 收不到，崩溃页也不会出现）。
+   * 这类崩溃发生在 native 栈里，`try/catch` / `runCatching` 一律无效，
+   * **唯一可靠的防线就是在把地址交出去之前确认它能取到数据**。
+   *
+   * ## 判定口径
+   *
+   * · 与 [resolveStreamUrl] 一致：`Range: bytes=0-0` 只取一个字节，
+   *   并带 `STREAM_USER_AGENT`（网盘签名常把 UA 算进去，换 UA 就 403）；
+   * · 单次 2.5 秒超时，用 per-call timeout，不动共享 client 的全局口径；
+   * · **只有服务端明确拒绝（4xx / 5xx）才算不可播**。超时、DNS 失败、连接被重置
+   *   一律返回 [StreamProbe.Unknown] 并按可播处理 —— 本地网络抖一下不该被拦在门外。
+   *
+   * @return [StreamProbe.Ok] 可播（含跟完跳转后的最终地址，可直接交给播放器）；
+   *         [StreamProbe.Denied] 明确不可播，`message` 是可直接展示给用户的中文原因；
+   *         [StreamProbe.Unknown] 探不出来，调用方照旧播放
+   */
+  fun probeStreamUrl(url: String): StreamProbe {
+    // 本地文件 / content:// / 本地 ISO 代理不需要探测，直接放行
+    if (!url.startsWith("http://") && !url.startsWith("https://")) return StreamProbe.Ok(url)
+    return runCatching {
+      val req =
+        Request.Builder()
+          .url(url)
+          .header("Range", "bytes=0-0")
+          .header("User-Agent", STREAM_USER_AGENT)
+          .get()
+          .build()
+      val call = httpClient.newCall(req)
+      call.timeout().timeout(PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+      call.execute().use { resp ->
+        val code = resp.code
+        when {
+          resp.isSuccessful -> StreamProbe.Ok(resp.request.url.toString())
+          code == 401 -> StreamProbe.Denied("登录状态已失效（HTTP 401），请重新登录这台服务器")
+          code == 403 ->
+            StreamProbe.Denied("服务器拒绝访问（HTTP 403）—— 网盘直链可能已过期，或这个文件没有访问权限")
+          code == 404 ->
+            StreamProbe.Denied("服务器找不到这个文件（HTTP 404）—— 它可能已被移动、重命名或删除")
+          code in 500..599 -> StreamProbe.Denied("服务器出错了（HTTP $code），请稍后重试")
+          else -> StreamProbe.Denied("服务器返回 HTTP $code，无法播放")
+        }
+      }
+    }.getOrElse { StreamProbe.Unknown }
+  }
+
   // ════════════════════════════════════════════════════════════════════════
   // 3.5 元数据操作（编辑 / 刮削 / 刷新）
   // ════════════════════════════════════════════════════════════════════════
@@ -3106,6 +3166,29 @@ class EmbyApiException(val code: Int, val body: String) :
   /** 归类后的错误种类，供 UI 决定提示文案 */
   val errorKind: EmbyErrorKind
     get() = EmbyErrorKind.of(code)
+}
+
+/**
+ * [EmbyClient.probeStreamUrl] 的探测结果。
+ *
+ * 三态而不是布尔，是因为「探不出来」和「明确不可播」必须分开：
+ * 前者（超时、DNS 失败）要照旧放行播放，后者（403 / 404）要在进播放器之前就拦住 ——
+ * 把死链交给 mpv 会 native 崩溃（整个 App 消失，Java 层拦不住）。
+ */
+sealed interface StreamProbe {
+  /**
+   * 可以播。
+   *
+   * [finalUrl] 是**跟完 302 跳转之后**的最终地址；没发生跳转时就是传进来的原地址。
+   * 播放器直接用它即可（也顺手解决了「内核不跟 302」那类问题）。
+   */
+  data class Ok(val finalUrl: String) : StreamProbe
+
+  /** 明确不可播。[message] 是可直接展示给用户的中文原因。 */
+  data class Denied(val message: String) : StreamProbe
+
+  /** 探不出来（超时 / 网络异常 / 不支持探测）。调用方按「可播」处理，别挡着用户。 */
+  object Unknown : StreamProbe
 }
 
 /** 错误归类（见 [EmbyApiException.errorKind]）。 */

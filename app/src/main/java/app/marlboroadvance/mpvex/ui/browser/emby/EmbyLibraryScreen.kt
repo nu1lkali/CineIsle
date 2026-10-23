@@ -538,8 +538,13 @@ data class EmbyLibraryScreen(
       val key = "$sortBy|$sortOrder"
       if (key != lastSortKey) {
         lastSortKey = key
-        // 不带动画：整批内容都换了，滑动过去毫无意义还显得卡
-        gridState.scrollToItem(0)
+        // 不带动画：整批内容都换了，滑动过去毫无意义还显得卡。
+        // ⚠️ 必须用 requestScrollToItem 而不是 scrollToItem：后者会把「滚到 0」这个位置
+        //    落在**旧数据**上执行完，等新数据落位时 LazyGrid 又按 `lastKnownFirstItemKey`
+        //    把原来那一屏的条目重新定位到它在新顺序里的位置（随机排序时被洗到中段）——
+        //    表现就是「切了随机、画面停在列表中间」。requestScrollToItem 把定位请求挂到
+        //    下一次 measure 上并弃用旧 key，新数据一布局就停在第一条。
+        gridState.requestScrollToItem(0)
       }
     }
 
@@ -555,10 +560,18 @@ data class EmbyLibraryScreen(
       else -> null
     }
     val effectiveFilters: List<String>? = if (includeItemTypes == null) category.filters else null
+    // ── 文件夹「穿透」模式（用户需求）──
+    // 进入某个真实文件夹后，「全部」不再只铺这一层，而是把**该文件夹下所有后代内容**
+    // 递归铺开：例如「这个文件夹里有 4 个子目录」时，看到的是这 4 个子目录里的全部视频，
+    // 而不是孤零零 4 张目录卡片。想逐层点进去看目录结构 —— 切「文件夹」分类，
+    // 那一档仍然是不递归的一层（recursive=false），语义不变。
+    val folderDiveRecursive = isFolderDive && category == EmbyCategory.ALL
     // 「内容原样」档**不递归**：这一层装了什么就铺什么（文件夹是文件夹、照片是照片），
     // 和 Emby Web 一样一层一层点进去。递归会把这层和它下面所有层级的东西混在一起，
     // 既看不出一层里有几个目录，也让分页失去意义。
-    val recursive: Boolean = category != EmbyCategory.FOLDER && !contentAsIs
+    // 唯一例外就是上面的穿透模式 —— 那正是用户要的「全部 = 整个子树」。
+    val recursive: Boolean =
+      category != EmbyCategory.FOLDER && (!contentAsIs || folderDiveRecursive)
     // Emby 的 Recursive 查询默认会把文件夹一并返回。
     // 用户期望「全部」直接铺媒体，只有切到「文件夹」分类才看到文件夹，所以这里显式排除。
     // 「全部」只保留媒体本体：合集（BoxSet）单独放到「合集」分类里看，这里排除掉。
@@ -576,10 +589,21 @@ data class EmbyLibraryScreen(
     } else {
       listOf("Season", "MusicAlbum", "MusicTrack", "AudioBook", "Book")
     }
+    // 穿透模式要额外把**容器**排掉：递归查询会把每个子目录本身也返回，
+    // 不排的话一屏里就是「4 个文件夹 + 它们下面几百个视频」混排 ——
+    // 目录已经就地展开成内容了，再摆一张点进去还是同一批东西的卡片纯属重复。
+    // 目录本身仍可在「文件夹」分类里看到并逐层下钻。
+    val folderDiveRecursiveExclude =
+      FOLDER_TYPES + listOf("Series", "Season", "PhotoAlbum", "BoxSet")
     val effectiveExclude: List<String>? = when {
       includeItemTypes != null -> null
       category == EmbyCategory.FOLDER -> null
-      contentAsIs -> contentAsIsExclude
+      contentAsIs ->
+        if (folderDiveRecursive) {
+          (contentAsIsExclude + folderDiveRecursiveExclude).distinct()
+        } else {
+          contentAsIsExclude
+        }
       excludeBoxSet -> FOLDER_TYPES + "BoxSet"
       else -> FOLDER_TYPES
     }
@@ -925,7 +949,13 @@ data class EmbyLibraryScreen(
         //  · searchQuery 非空：搜索结果每批都是整批替换，同样要停第一条。
         if (reset && (pendingScrollTop || searchQuery.isNotBlank())) {
           pendingScrollTop = false
-          gridState.scrollToItem(0)
+          // ⚠️ 必须是 requestScrollToItem（挂到下一次 measure、且丢弃旧锚点 key），
+          //    不是 scrollToItem。这里只是把 items 赋值了，重组/布局还没发生：
+          //    scrollToItem 会把位置落在**旧列表**上执行完，随后新数据 measure 时
+          //    LazyGrid 按 lastKnownFirstItemKey 找到「刷新前那一条」并滚到它的新位置
+          //    ⇒ 随机排序下拉刷新后停在中间（用户反馈）。requestScrollToItem 让
+          //    新数据第一次布局就直接落到第一条，不受 key 锚定影响。
+          gridState.requestScrollToItem(0)
         }
       }.onFailure { e ->
         // 过期的失败同样丢弃：别用旧请求的错误盖掉新请求的结果
@@ -1027,7 +1057,10 @@ data class EmbyLibraryScreen(
         //   立刻滚一次只为点击后即时反馈，落位后那次才是真正生效的那次。
         else -> {
           pendingScrollTop = true
-          gridState.scrollToItem(0)
+          // 点击后即时反馈（真正的归位在 load() 数据落位那次）。
+          // 同样用 requestScrollToItem：此刻新数据还没到，scrollToItem 会白滚一次旧列表，
+          // 反而给 LazyGrid 记下一个旧锚点 key。
+          gridState.requestScrollToItem(0)
         }
       }
       // 「演员」分类：走独立的演员加载，跳过媒体那套分页 / 缓存 / 扫描
@@ -1109,6 +1142,8 @@ data class EmbyLibraryScreen(
       effectiveTypes,
       effectiveMediaTypes,
       contentAsIs,
+      // 穿透模式下容器要整体滤掉（见下），换模式必须重算
+      folderDiveRecursive,
     ) {
       (if (lastRemovedItemId != null) items.filterNot { it.Id == lastRemovedItemId } else items)
         // 顺手剔掉服务端混进来的幽灵条目（详见 isGhostItem）：它与官方客户端的条目数对不上，
@@ -1167,6 +1202,11 @@ data class EmbyLibraryScreen(
               type.equals("PhotoAlbum", ignoreCase = true) ||
               (isFolderDive && (type.equals("Series", ignoreCase = true) ||
                 type.equals("Season", ignoreCase = true)))
+            // 穿透模式（「全部」+ 文件夹下钻）：子目录已经就地展平成内容了，
+            // 容器本身不再作为卡片出现 —— 否则「4 个文件夹 + 它们下面全部视频」混排，
+            // 用户看到的仍是一堆重复入口。要浏览目录结构请切「文件夹」分类。
+            // 服务端也传了 ExcludeItemTypes 做同一件事，这里是兼容层不认参数时的兜底。
+            if (folderDiveRecursive && isContainer) return@filter false
             val isPhoto = type.equals("Photo", ignoreCase = true) ||
               mediaType?.equals("Photo", ignoreCase = true) == true
             val isVideoLike = mediaType?.equals("Video", ignoreCase = true) == true ||
@@ -2021,7 +2061,8 @@ data class EmbyLibraryScreen(
         onRefresh = {
           if (isActorListMode) {
             loadActors()
-            gridState.scrollToItem(0)
+            // 演员网格同样有 key 锚定问题（演员顺序会变，刷新后原来的首位演员可能被排到后面）
+            gridState.requestScrollToItem(0)
           } else {
             // 只换代，**不清缓存、也不清 `folderCovers`** —— 缓存里的旧封面正是刷新期间要继续
             //   显示的东西；清掉就会露出一片空占位（用户反馈「空占位有点丑」）。
@@ -2187,8 +2228,14 @@ data class EmbyLibraryScreen(
           items.isEmpty() && !isLoading -> EmbyEmptyState(
             message = when {
               // 「内容原样」档的空库：这一层确实什么都没有（不是被口径滤空了），
-              // 措辞说清楚「空」，别让用户以为加载失败
-              contentAsIs -> "这个目录是空的"
+              // 措辞说清楚「空」，别让用户以为加载失败。
+              // 穿透模式要说明「含子目录」—— 否则用户会以为只看了一层
+              //（这种目录多半是「只装目录、没装媒体」，内容还得切「文件夹」逐层看）。
+              contentAsIs -> if (folderDiveRecursive) {
+                "这个目录连同子目录里都没有可播放的内容，切到「文件夹」可以逐层浏览"
+              } else {
+                "这个目录是空的"
+              }
               chineseSubsOnly -> "没有匹配「中文字幕」标记的媒体"
               else -> "没有找到媒体"
             },

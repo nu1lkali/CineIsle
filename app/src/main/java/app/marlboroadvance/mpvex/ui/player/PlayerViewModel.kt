@@ -287,6 +287,29 @@ class PlayerViewModel(
     _firstFrameRendered.value = true
   }
 
+  /**
+   * 播放失败原因（非空 ⇒ 界面上显示错误卡片）。
+   *
+   * 与 [firstFrameRendered] 是两回事：那个管「还在等画面」，这个管「画面永远不会来了」。
+   * 目前唯一的写入方是 [PlayerActivity.playAfterProbe] —— 服务端明确拒绝（403 / 404 / 5xx）
+   * 时**不调 playFile**，改成这个提示。
+   *
+   * 为什么不靠 mpv 的 `end-file` 事件兜底：死链会让 libmpv 在 native 层直接崩掉
+   * （整个 App 消失），`end-file` 根本来不及发出。所以判断必须发生在播放之前。
+   */
+  private val _playbackError = MutableStateFlow<String?>(null)
+  val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
+
+  /** 显示播放错误卡片（`message` 是已经写好的人话，直接展示）。 */
+  fun showPlaybackError(message: String) {
+    _playbackError.value = message
+  }
+
+  /** 关掉错误卡片（重试 / 换片前调用）。 */
+  fun clearPlaybackError() {
+    _playbackError.value = null
+  }
+
   private val _seekBarShown = MutableStateFlow(false)
   val seekBarShown: StateFlow<Boolean> = _seekBarShown.asStateFlow()
 
