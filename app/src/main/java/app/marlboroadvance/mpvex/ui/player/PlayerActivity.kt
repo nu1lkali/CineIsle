@@ -871,8 +871,11 @@ open class PlayerActivity :
               playNext()
             },
             onDismiss = {
-              // 收起只是「这次别再提示了」：本集播完仍然按原逻辑自动连播，
+              // 收起 = 「本集别再提示了」：本集内不再弹出，本集播完仍按原逻辑自动连播，
               // 与倒计时胶囊上的 ×（那是取消连播）语义**不同**，别合并。
+              // ⚠️ 只把 visible 置 false 没用：盯梢每 500ms 复算窗口会重新推开，
+              //    必须打上 nextUpDismissed 让它彻底不再弹出（下一集开播时清零）。
+              nextUpDismissed = true
               viewModel.nextUpVisible.value = false
               viewModel.nextUpTitle.value = null
             },
@@ -2206,6 +2209,16 @@ open class PlayerActivity :
    */
   private var autoplayCancelled = false
 
+  /**
+   * 用户在本集点过「下一集」悬停卡上的 ×：本集内不再弹这张卡。
+   *
+   * ⚠️ 必须有这个标记，不能只把 `nextUpVisible` 置 false ——
+   * 片尾盯梢每 500ms 复算一次出现窗口，只要剩余时长还在窗口内就会把 visible 重新置 true，
+   * 于是「叉掉半秒后又弹出来」⇒ × 形同虚设。只在每集开播时清零（见 loadFile 里
+   * `startAutoplayCountdownWatcher()` 的调用点），因此语义是「这一集别再烦我，下一集照常提示」。
+   */
+  private var nextUpDismissed = false
+
   // ==================== 片头片尾跳过（b2+a1） ====================
 
   /**
@@ -2366,13 +2379,15 @@ open class PlayerActivity :
         prefetched = true
         peekNextIndex()?.let { warmUpNextEpisode(it) }
       }
-      // 下一集卡片：比倒计时早 nextUpTotal 秒出现
-      if (nextUpTotal > 0 && left in 0.1..nextUpTotal.toDouble()) {
+      // 下一集卡片：比倒计时早 nextUpTotal 秒出现。
+      // 用户点过 × ⇒ 本集不再进入这个分支，交给下面的 else 分支确保它保持收起。
+      if (nextUpTotal > 0 && !nextUpDismissed && left in 0.1..nextUpTotal.toDouble()) {
         if (viewModel.nextUpTitle.value == null) {
           viewModel.nextUpTitle.value = nextIdx?.let { playlistTitles.getOrNull(it) }
         }
         viewModel.nextUpVisible.value = true
-      } else if (left > nextUpTotal && viewModel.nextUpVisible.value) {
+      } else if (viewModel.nextUpVisible.value) {
+        // 三种情况都收起来：用户叉掉了 / 往后拖出了窗口 / 设置里关了这一项
         viewModel.nextUpVisible.value = false
         viewModel.nextUpTitle.value = null
       }
@@ -2968,6 +2983,8 @@ private fun cancelAutoplayCountdown() {
 
       // 起一个盯梢协程：片尾倒数阶段把「下一集」卡片推出来
       autoplayCancelled = false
+      // 新的一集 ⇒ 用户上一集叉掉「下一集」卡片的决定作废，重新给一次提示机会
+      nextUpDismissed = false
       withContext(Dispatchers.Main) { startAutoplayCountdownWatcher() }
 
       // 起片头片尾盯梢（b2+a1）：拉精准分段 + 自动跳 / 手动胶囊
