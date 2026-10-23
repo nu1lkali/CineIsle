@@ -15,6 +15,7 @@ import app.marlboroadvance.mpvex.preferences.preference.getEnum
 import app.marlboroadvance.mpvex.ui.theme.AppTheme
 import app.marlboroadvance.mpvex.ui.theme.DarkMode
 import app.marlboroadvance.mpvex.ui.theme.spacing
+import app.marlboroadvance.mpvex.ui.cine.UiStyle
 import kotlinx.collections.immutable.ImmutableList
 
 class AppearancePreferences(
@@ -22,6 +23,19 @@ class AppearancePreferences(
 ) {
   val darkMode = preferenceStore.getEnum("dark_mode", DarkMode.System)
   val appTheme = preferenceStore.getEnum("app_theme", AppTheme.Dynamic)
+
+  /**
+   * 界面风格（`Classic` = 现有界面，`Cine` = 新的图像优先界面）。
+   *
+   * ⚠️ 默认必须是 [UiStyle.Classic]：老用户升级后界面一像素都不能变。
+   * 也不能做成「首次启动让用户选」—— 新界面目前只覆盖首页，直接甩给所有人
+   * 会得到「怎么一半新一半旧」的困惑，得让用户主动去外观设置里切。
+   *
+   * ⚠️ `getEnum` 存的是枚举 `name`（`Classic` / `Cine`），发布后不可改名，
+   * 否则老用户的选择会静默失效、退回默认值。
+   */
+  val uiStyle = preferenceStore.getEnum("ui_style", UiStyle.Classic)
+
   val amoledMode = preferenceStore.getBoolean("amoled_mode", false)
   val unlimitedNameLines = preferenceStore.getBoolean("unlimited_name_lines", false)
   val hidePlayerButtonsBackground = preferenceStore.getBoolean("hide_player_buttons_background", false)

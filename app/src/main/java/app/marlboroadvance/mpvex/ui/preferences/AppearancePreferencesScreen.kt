@@ -37,8 +37,10 @@ import app.marlboroadvance.mpvex.preferences.GesturePreferences
 import app.marlboroadvance.mpvex.preferences.MultiChoiceSegmentedButton
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
+import app.marlboroadvance.mpvex.ui.cine.UiStyle
 import app.marlboroadvance.mpvex.ui.preferences.components.ThemePicker
 import app.marlboroadvance.mpvex.ui.theme.DarkMode
+import app.marlboroadvance.mpvex.ui.theme.spacing
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
@@ -154,6 +156,36 @@ object AppearancePreferencesScreen : Screen {
                                     )
                                 },
                                 enabled = darkMode != DarkMode.Light
+                            )
+                        }
+                    }
+
+                    item {
+                        PreferenceSectionHeader(title = stringResource(id = R.string.pref_appearance_category_ui_style))
+                    }
+
+                    item {
+                        PreferenceCard {
+                            val uiStyle by preferences.uiStyle.collectAsState()
+                            MultiChoiceSegmentedButton(
+                                choices = persistentListOf(
+                                    stringResource(id = R.string.pref_appearance_ui_style_classic),
+                                    stringResource(id = R.string.pref_appearance_ui_style_cine),
+                                ),
+                                selectedIndices = persistentListOf(UiStyle.entries.indexOf(uiStyle)),
+                                onClick = { preferences.uiStyle.set(UiStyle.entries[it]) },
+                            )
+                            // 说明放在选择器下面而不是标题里：换风格是个「有代价」的开关
+                            // （首页换了、其余页暂时还是老样式），得让用户切之前就知道
+                            Text(
+                                text = stringResource(id = R.string.pref_appearance_ui_style_summary),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.padding(
+                                    start = MaterialTheme.spacing.medium,
+                                    end = MaterialTheme.spacing.medium,
+                                    bottom = MaterialTheme.spacing.medium,
+                                ),
                             )
                         }
                     }

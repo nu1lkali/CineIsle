@@ -1075,4 +1075,41 @@
   <string name="loading_anim_cine_spin_arcs">双弧旋转（自研）</string>
   <string name="loading_anim_cine_bars">均衡器（自研）</string>
   <string name="loading_anim_cine_halo">光晕呼吸（自研）</string>
+
+  <!-- 界面风格（经典 / Cine） -->
+  <string name="pref_appearance_category_ui_style">界面风格</string>
+  <string name="pref_appearance_ui_style_classic">经典</string>
+  <string name="pref_appearance_ui_style_cine">Cine</string>
+  <string name="pref_appearance_ui_style_summary">Cine 使用新的图像优先首页（大图 Hero + 分区横滑）；收藏、历史、本地、网络四个页面暂时沿用经典布局，可随时切回。</string>
+
+  <!-- Cine 界面文案 -->
+  <string name="cine_nav_home">首页</string>
+  <string name="cine_nav_favorites">收藏</string>
+  <string name="cine_nav_history">历史</string>
+  <string name="cine_nav_local">本地</string>
+  <string name="cine_nav_network">网络</string>
+  <string name="cine_search_hint">搜索影片、演员、合集</string>
+  <string name="cine_search_prompt_title">搜索全部媒体库</string>
+  <string name="cine_search_prompt_desc">电影、剧集、单集与演员，跨所有媒体库检索</string>
+  <string name="cine_search_empty_title">没有匹配的内容</string>
+  <string name="cine_search_empty_desc">没有找到与「%1$s」相关的内容</string>
+  <string name="cine_search_no_server">还没有连接服务器</string>
+  <string name="cine_section_libraries">媒体库</string>
+  <string name="cine_section_resume">继续观看</string>
+  <string name="cine_section_latest">最新加入</string>
+  <string name="cine_section_mix">随便看看</string>
+  <string name="cine_action_all">全部</string>
+  <string name="cine_action_shuffle">换一批</string>
+  <string name="cine_action_play">播放</string>
+  <string name="cine_action_resume">继续观看</string>
+  <string name="cine_action_detail">详情</string>
+  <string name="cine_state_no_server_title">还没有连接服务器</string>
+  <string name="cine_state_no_server_desc">添加一台 Emby 服务器，即可开始浏览你的媒体库</string>
+  <string name="cine_state_no_server_action">添加服务器</string>
+  <string name="cine_state_empty_title">这里还没有内容</string>
+  <string name="cine_state_empty_desc">服务器上还没有扫描到媒体</string>
+  <string name="cine_state_error_title">加载失败</string>
+  <string name="cine_state_error_action">重试</string>
+  <string name="cine_play_failed">无法开始播放</string>
+  <string name="cine_favorite_failed">收藏操作失败</string>
 </resources>

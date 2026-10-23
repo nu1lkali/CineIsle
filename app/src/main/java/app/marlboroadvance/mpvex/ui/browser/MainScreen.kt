@@ -45,6 +45,10 @@ import app.marlboroadvance.mpvex.ui.browser.folderlist.FolderListScreen
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.NetworkStreamingScreen
 import app.marlboroadvance.mpvex.ui.browser.playlist.PlaylistScreen
 import app.marlboroadvance.mpvex.ui.browser.recentlyplayed.RecentlyPlayedScreen
+import app.marlboroadvance.mpvex.ui.cine.CineRoot
+import app.marlboroadvance.mpvex.ui.cine.CineTheme
+import app.marlboroadvance.mpvex.ui.cine.LocalUiStyle
+import app.marlboroadvance.mpvex.ui.cine.UiStyle
 import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -105,6 +109,16 @@ object MainScreen : Screen {
   @Composable
   @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
   override fun Content() {
+    // ── 界面风格分流（新老 UI 共存的**唯一**入口） ──
+    // Cine 有自己的根容器（Dock/Rail + 首页 + 搜索/网格覆盖层），
+    // 老界面完全没有进来 —— 不是「在老界面里藏几块」，所以不存在错位风险。
+    // ⚠️ 切换是响应式的、不需要重启：用户在外观设置里改完返回时，本页面会重新组合
+    //    （nav3 只组合栈顶 entry ⇒ 在设置页时这里根本没在跑，返回即重新走一遍）。
+    if (LocalUiStyle.current == UiStyle.Cine) {
+      CineTheme { CineRoot() }
+      return
+    }
+
     var selectedTab by remember {
       mutableIntStateOf(persistentSelectedTab)
     }

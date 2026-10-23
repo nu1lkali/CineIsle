@@ -1,0 +1,2516 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="teal">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>影屿 · Cine UI 高保真稿（M1）</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   0. 稿件外壳（不属于 App，仅用于展示）
+   ══════════════════════════════════════════════════════════════ */
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:#07080A;
+  color:#E8EAED;
+  font-family:"Inter","SF Pro Text","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  font-size:14px;
+  line-height:1.65;
+}
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(900px 500px at 12% -8%, rgba(99,214,190,.10), transparent 60%),
+    radial-gradient(800px 460px at 92% 4%, rgba(240,182,92,.07), transparent 62%);
+}
+.wrap{position:relative;z-index:1;max-width:1560px;margin:0 auto;padding:0 32px 140px}
+
+/* ---- 页头 ---- */
+.masthead{padding:56px 0 26px;border-bottom:1px solid #1B2028}
+.masthead .eyebrow{
+  font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;
+  color:#63D6BE;margin-bottom:14px;display:flex;align-items:center;gap:10px;
+}
+.masthead .eyebrow::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,#2A3A38,transparent)}
+h1.pagetitle{
+  margin:0;font-size:38px;line-height:1.15;font-weight:700;letter-spacing:-.9px;
+  background:linear-gradient(96deg,#FFFFFF 18%,#9FB3AE 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.masthead p.lede{margin:14px 0 0;max-width:820px;color:#8C97A3;font-size:14.5px}
+.masthead p.lede b{color:#C8D2DC;font-weight:600}
+
+/* ---- 控制台 ---- */
+.console{
+  position:sticky;top:0;z-index:60;margin:0 -32px;padding:12px 32px;
+  display:flex;align-items:center;gap:26px;flex-wrap:wrap;
+  background:rgba(7,8,10,.82);backdrop-filter:blur(18px);border-bottom:1px solid #171B21;
+}
+.ctl{display:flex;align-items:center;gap:9px}
+.ctl > .lab{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#6C7683}
+.seg{display:flex;background:#11151A;border:1px solid #1E242C;border-radius:9px;padding:3px;gap:2px}
+.seg button{
+  appearance:none;border:0;background:transparent;color:#8A95A1;cursor:pointer;
+  font:600 12px/1 inherit;padding:7px 12px;border-radius:6px;transition:.15s;
+  font-family:inherit;
+}
+.seg button:hover{color:#D3DBE3}
+.seg button[aria-pressed="true"]{background:#26303A;color:#EAF1F6;box-shadow:0 1px 0 rgba(255,255,255,.06) inset}
+.swatches{display:flex;gap:6px}
+.sw{
+  width:26px;height:26px;border-radius:50%;border:2px solid transparent;cursor:pointer;
+  padding:0;appearance:none;position:relative;transition:.15s;
+}
+.sw:hover{transform:scale(1.08)}
+.sw[aria-pressed="true"]{border-color:#E8EDF2;box-shadow:0 0 0 3px rgba(232,237,242,.12)}
+.ctl .hint{font-size:11.5px;color:#5B6571}
+.jumplinks{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+.jumplinks a{
+  color:#7C8794;text-decoration:none;font:600 11.5px/1 inherit;padding:7px 9px;border-radius:6px;
+}
+.jumplinks a:hover{background:#141A20;color:#D6DEE6}
+
+/* ══════════════════════════════════════════════════════════════
+   1. Cine Token 层
+   ──────────────────────────────────────────────────────────────
+   色相由“主题”决定（--pri-*/--ter-*），明暗由“外观”决定。
+   App 里这两层都从 colorScheme 派生，此处为可视化还原。
+   ══════════════════════════════════════════════════════════════ */
+
+/* --- 主题色相：青瓷（默认） --- */
+html[data-theme="teal"]{
+  --pri-d:#63D6BE; --onpri-d:#06201B; --pric-d:#13453C; --onpric-d:#B6F0E1;
+  --ter-d:#F0B65C; --onter-d:#2A1B00; --terc-d:#4A3413; --onterc-d:#FFDEA8;
+  --pri-l:#0F6A5C; --onpri-l:#FFFFFF; --pric-l:#BEEFE5; --onpric-l:#04322B;
+  --ter-l:#7A5210; --onter-l:#FFFFFF; --terc-l:#FFDFAF; --onterc-l:#3A2500;
+}
+/* --- 主题色相：琥珀 --- */
+html[data-theme="amber"]{
+  --pri-d:#F5B24E; --onpri-d:#2A1A00; --pric-d:#4C3614; --onpric-d:#FFE0AE;
+  --ter-d:#6FD3E0; --onter-d:#00272B; --terc-d:#11444A; --onterc-d:#B4EDF5;
+  --pri-l:#8A5610; --onpri-l:#FFFFFF; --pric-l:#FFDDB0; --onpric-l:#2C1A00;
+  --ter-l:#0E6470; --onter-l:#FFFFFF; --terc-l:#B4EBF3; --onterc-l:#00262C;
+}
+/* --- 主题色相：靛蓝 --- */
+html[data-theme="indigo"]{
+  --pri-d:#A9BCFF; --onpri-d:#101F4E; --pric-d:#2C3E77; --onpric-d:#DCE3FF;
+  --ter-d:#E9A6C8; --onter-d:#3A0A22; --terc-d:#4E2440; --onterc-d:#FFD6E8;
+  --pri-l:#3A56C4; --onpri-l:#FFFFFF; --pric-l:#DBE1FF; --onpric-l:#0A1B4E;
+  --ter-l:#8A3D62; --onter-l:#FFFFFF; --terc-l:#FFD8E6; --onterc-l:#38001E;
+}
+
+/* --- 外观：深色 --- */
+[data-appearance="dark"]{
+  --bg:#090B0E;
+  --surface:#0D1014;
+  --surf1:#12161C;
+  --surf2:#171D25;
+  --surf3:#1E252F;
+  --on:#E9ECEF;
+  --onvar:#98A2AE;
+  --outline-var:#2A323D;
+  --outline:#4B5867;
+  --primary:var(--pri-d);
+  --on-primary:var(--onpri-d);
+  --primary-container:var(--pric-d);
+  --on-primary-container:var(--onpric-d);
+  --tertiary:var(--ter-d);
+  --on-tertiary:var(--onter-d);
+  --tertiary-container:var(--terc-d);
+  --on-tertiary-container:var(--onterc-d);
+  --error:#FF8A80; --error-container:#45191A; --on-error-container:#FFD9D6;
+  --glass:rgba(23,29,37,.72);
+  --glass-border:rgba(150,170,190,.20);
+  --track:rgba(255,255,255,.22);
+  --scrim-mid:rgba(9,11,14,.80);
+  --shadow:0 18px 46px rgba(0,0,0,.55);
+}
+/* --- 外观：浅色 --- */
+[data-appearance="light"]{
+  --bg:#F5F6F8;
+  --surface:#FFFFFF;
+  --surf1:#F1F3F7;
+  --surf2:#E9EDF2;
+  --surf3:#DFE4EB;
+  --on:#12151A;
+  --onvar:#5C6674;
+  --outline-var:#D3DAE2;
+  --outline:#98A2AE;
+  --primary:var(--pri-l);
+  --on-primary:var(--onpri-l);
+  --primary-container:var(--pric-l);
+  --on-primary-container:var(--onpric-l);
+  --tertiary:var(--ter-l);
+  --on-tertiary:var(--onter-l);
+  --tertiary-container:var(--terc-l);
+  --on-tertiary-container:var(--onterc-l);
+  --error:#B3261E; --error-container:#F9DEDC; --on-error-container:#410E0B;
+  --glass:rgba(255,255,255,.76);
+  --glass-border:rgba(15,25,40,.10);
+  --track:rgba(18,21,26,.16);
+  --scrim-mid:rgba(245,246,248,.84);
+  --shadow:0 18px 46px rgba(20,30,45,.16);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   2. 字阶（CineTypography）
+   ══════════════════════════════════════════════════════════════ */
+.t-display{font-size:40px;line-height:1.08;font-weight:700;letter-spacing:-1.2px}
+.t-headline{font-size:26px;line-height:1.18;font-weight:600;letter-spacing:-.6px}
+.t-title-lg{font-size:20px;line-height:1.25;font-weight:600;letter-spacing:-.2px}
+.t-title-md{font-size:15px;line-height:1.28;font-weight:600;letter-spacing:0}
+.t-body{font-size:13.5px;line-height:1.55;font-weight:400;letter-spacing:0}
+.t-label{font-size:12px;line-height:1.3;font-weight:500;letter-spacing:.2px}
+.t-cap{font-size:10.5px;line-height:1.2;font-weight:700;letter-spacing:.6px;text-transform:uppercase}
+
+/* ══════════════════════════════════════════════════════════════
+   3. 手机 / 平板 外框
+   ══════════════════════════════════════════════════════════════ */
+.frame{margin:0;display:flex;flex-direction:column;align-items:flex-start;gap:14px}
+/* 单机位：把规格块挪到机身右侧，避免大片留白 */
+.frame.split{
+  display:grid;grid-template-columns:393px minmax(340px,520px);
+  column-gap:40px;row-gap:14px;align-items:start;
+}
+.frame.split > .cap{grid-column:1 / -1}
+.frame.split > .spec{
+  width:auto;align-self:center;padding:22px 24px;
+  background:#0B0F13;border:1px solid #1A222A;border-radius:14px;
+}
+.frame.split > .spec dl{grid-template-columns:auto 1fr;gap:9px 16px}
+.frame.split > .spec dt{padding-top:2px}
+.frame.split > .spec dd{font-size:13px}
+.cap{display:flex;align-items:center;gap:10px;font-size:12.5px;font-weight:600;color:#9AA5B1;padding-left:2px}
+.cap-n{
+  display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:20px;padding:0 6px;
+  border-radius:5px;background:#171D24;border:1px solid #242C35;color:#7C8794;
+  font:700 10.5px/1 inherit;letter-spacing:.06em;
+}
+.phone{
+  position:relative;width:393px;height:852px;border-radius:42px;
+  background:var(--bg);color:var(--on);overflow:hidden;
+  box-shadow:var(--shadow),0 0 0 1px rgba(255,255,255,.055);
+  isolation:isolate;
+}
+.phone table{border-collapse:collapse}
+.screen{
+  position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;
+  scrollbar-width:none;-ms-overflow-style:none;
+  overscroll-behavior:contain;
+}
+.screen::-webkit-scrollbar{display:none}
+.statusbar{
+  position:absolute;top:0;left:0;right:0;height:30px;z-index:30;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 26px;font:600 12.5px/1 inherit;letter-spacing:.2px;color:var(--on);
+  pointer-events:none;
+}
+.statusbar.onplatese{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.4)}
+.sb-right{display:flex;align-items:center;gap:5px}
+.sb-right svg{display:block}
+.gesturebar{
+  position:absolute;bottom:7px;left:50%;transform:translateX(-50%);
+  width:126px;height:4px;border-radius:2px;background:var(--on);opacity:.30;z-index:30;pointer-events:none;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   4. 组件：玻璃顶栏 / 搜索胶囊 / Dock / Rail
+   ══════════════════════════════════════════════════════════════ */
+.glass-top{
+  position:absolute;top:0;left:0;right:0;z-index:20;
+  padding:34px 20px 14px;
+  background:linear-gradient(180deg,rgba(6,8,10,.52),rgba(6,8,10,.16) 62%,transparent);
+}
+.phone[data-appearance="light"] .glass-top{
+  background:linear-gradient(180deg,rgba(20,26,34,.42),rgba(20,26,34,.10) 62%,transparent);
+}
+.gt-row{display:flex;align-items:center;justify-content:space-between;height:24px}
+.brand{display:flex;align-items:center;gap:8px;color:#fff}
+.brand .mark{
+  width:18px;height:18px;border-radius:5px;
+  background:linear-gradient(140deg,#7FE0C9,#2C8F7B);
+  box-shadow:0 0 14px rgba(99,214,190,.5);
+}
+.brand b{font-size:15px;font-weight:700;letter-spacing:-.2px}
+.gt-actions{display:flex;align-items:center;gap:12px;color:rgba(255,255,255,.9)}
+.avatar{
+  width:26px;height:26px;border-radius:50%;
+  background:linear-gradient(140deg,#5C6B7A,#2C3540);
+  border:1px solid rgba(255,255,255,.35);
+}
+.searchpill{
+  margin-top:12px;height:44px;border-radius:999px;
+  display:flex;align-items:center;gap:10px;padding:0 16px;
+  background:rgba(255,255,255,.14);backdrop-filter:blur(16px) saturate(1.3);
+  border:1px solid rgba(255,255,255,.22);color:rgba(255,255,255,.86);
+  font:500 13.5px/1 inherit;
+}
+.searchpill.filled{justify-content:space-between}
+.searchpill .ph{opacity:.78}
+.searchpill .kbd{
+  font:600 10.5px/1 inherit;letter-spacing:.06em;padding:3px 6px;border-radius:5px;
+  background:rgba(255,255,255,.16);color:rgba(255,255,255,.8);
+}
+
+/* Dock（手机） */
+.dock{
+  position:absolute;left:16px;right:16px;bottom:14px;height:64px;z-index:40;
+  border-radius:32px;background:var(--glass);backdrop-filter:blur(22px) saturate(1.5);
+  border:1px solid var(--glass-border);
+  box-shadow:0 14px 34px rgba(0,0,0,.42),0 1px 0 rgba(255,255,255,.05) inset;
+  display:flex;align-items:center;justify-content:space-between;padding:0 10px;
+}
+.dock-i{
+  display:flex;align-items:center;gap:7px;height:44px;padding:0 13px;border-radius:22px;
+  color:var(--onvar);transition:.18s;
+}
+.dock-i svg{display:block}
+.dock-i .dlabel{
+  font:600 13px/1 inherit;white-space:nowrap;max-width:0;overflow:hidden;opacity:0;
+  transition:max-width .22s cubic-bezier(.2,.8,.2,1),opacity .16s;
+}
+.dock-i.is-active{background:var(--primary-container);color:var(--on-primary-container)}
+.dock-i.is-active .dlabel{max-width:64px;opacity:1}
+.dock.hidden{transform:translateY(86px);opacity:0}
+
+/* Rail（≥600dp） */
+.rail{
+  position:absolute;left:0;top:30px;bottom:0;width:88px;z-index:40;
+  background:var(--glass);backdrop-filter:blur(20px) saturate(1.4);
+  border-right:1px solid var(--outline-var);
+  display:flex;flex-direction:column;align-items:center;padding:14px 0 20px;gap:6px;
+}
+.rail-i{
+  width:64px;height:62px;border-radius:16px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:5px;color:var(--onvar);
+}
+.rail-i .rlabel{font:600 10px/1 inherit}
+.rail-i.is-active{background:var(--primary-container);color:var(--on-primary-container)}
+.rail-spacer{flex:1}
+
+/* ══════════════════════════════════════════════════════════════
+   5. 组件：Hero
+   ══════════════════════════════════════════════════════════════ */
+.hero{position:relative;height:532px;overflow:hidden;background:#0A0C0F}
+.hero-img{
+  position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:58% 34%;
+  transform:scale(1.02);
+}
+.hero-scrim-top{
+  position:absolute;inset:0 0 auto 0;height:200px;
+  background:linear-gradient(180deg,rgba(4,6,8,.72),rgba(4,6,8,.30) 46%,transparent);
+}
+.hero-scrim{
+  position:absolute;left:0;right:0;bottom:0;height:260px;
+  background:linear-gradient(180deg,transparent 0%,var(--scrim-mid) 62%,var(--bg) 97%);
+}
+.hero-body{
+  position:absolute;left:0;right:0;bottom:0;padding:0 20px 22px;color:#fff;
+}
+.hero-badges{display:flex;align-items:center;gap:6px;margin-bottom:11px}
+.hb{
+  height:20px;padding:0 8px;border-radius:999px;display:inline-flex;align-items:center;
+  font:700 10px/1 inherit;letter-spacing:.7px;text-transform:uppercase;
+  background:var(--tertiary-container);color:var(--on-tertiary-container);
+}
+.hb.ghost{background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.26);backdrop-filter:blur(8px)}
+.hero-title{color:#fff;margin:0 0 8px;text-shadow:0 2px 20px rgba(0,0,0,.55)}
+.hero-meta{display:flex;align-items:center;gap:8px;color:rgba(255,255,255,.78);margin-bottom:16px}
+.dot{width:3px;height:3px;border-radius:50%;background:currentColor;opacity:.6}
+.hero-actions{display:flex;align-items:center;gap:10px}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;height:46px;
+  padding:0 22px;border-radius:999px;font:600 14.5px/1 inherit;letter-spacing:0;
+}
+.btn-fill{background:var(--primary);color:var(--on-primary);box-shadow:0 8px 22px rgba(0,0,0,.32)}
+.btn-tonal{background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.24);backdrop-filter:blur(14px)}
+.btn-icon{
+  width:46px;height:46px;padding:0;border-radius:50%;
+  background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+  color:#fff;display:inline-flex;align-items:center;justify-content:center;backdrop-filter:blur(14px);
+}
+.hero-dots{display:flex;gap:5px;margin-left:auto;align-items:center}
+.hero-dots i{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.34)}
+.hero-dots i.on{width:16px;border-radius:3px;background:#fff}
+
+/* ══════════════════════════════════════════════════════════════
+   6. 组件：分区 / 海报卡
+   ══════════════════════════════════════════════════════════════ */
+.rail-x{padding:0 20px}
+.section{padding:0 0 36px}
+.section:first-of-type{padding-top:26px}
+.sec-head{display:flex;align-items:baseline;justify-content:space-between;padding:0 20px 12px}
+.sec-head h2{margin:0;color:var(--on)}
+.sec-all{
+  font:600 12.5px/1 inherit;color:var(--primary);display:inline-flex;align-items:center;gap:3px;
+}
+.hscroll{
+  display:flex;gap:12px;overflow-x:auto;padding:0 20px 2px;
+  scrollbar-width:none;
+}
+.hscroll::-webkit-scrollbar{display:none}
+
+.pcard{flex:0 0 auto;width:132px;position:relative}
+.art{
+  position:relative;width:132px;height:198px;overflow:hidden;
+  border-radius:var(--r-card,12px);background:var(--surf2);
+  box-shadow:0 6px 18px rgba(0,0,0,.34);
+}
+.art img{width:100%;height:100%;object-fit:cover;display:block}
+.art::after{
+  content:"";position:absolute;left:0;right:0;bottom:0;height:58%;
+  background:linear-gradient(180deg,transparent,rgba(4,6,8,.62) 58%,rgba(4,6,8,.90));
+}
+.p-title{
+  position:absolute;left:9px;right:9px;bottom:9px;z-index:2;color:#fff;
+  font:600 12.5px/1.24 inherit;letter-spacing:0;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  text-shadow:0 1px 6px rgba(0,0,0,.6);
+}
+.p-title.one{-webkit-line-clamp:1}
+.p-badge{
+  position:absolute;top:7px;right:7px;z-index:2;height:17px;padding:0 6px;border-radius:999px;
+  display:inline-flex;align-items:center;font:700 9px/1 inherit;letter-spacing:.6px;
+  background:var(--tertiary-container);color:var(--on-tertiary-container);
+  box-shadow:0 2px 8px rgba(0,0,0,.3);
+}
+.p-badge.soft{background:rgba(8,10,14,.62);color:#fff;border:1px solid rgba(255,255,255,.24);backdrop-filter:blur(6px)}
+.p-heart{
+  position:absolute;top:6px;left:6px;z-index:2;width:22px;height:22px;border-radius:50%;
+  background:rgba(8,10,14,.5);display:flex;align-items:center;justify-content:center;
+  backdrop-filter:blur(6px);color:#fff;
+}
+.p-progress{
+  position:absolute;left:8px;right:8px;bottom:6px;z-index:3;height:3px;border-radius:2px;
+  background:var(--track);overflow:hidden;
+}
+.p-progress i{display:block;height:100%;border-radius:2px;background:var(--primary)}
+.pcard.hasprog .p-title{bottom:15px}
+.p-meta{
+  margin-top:8px;color:var(--onvar);font:500 11.5px/1.3 inherit;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.p-meta.two{white-space:normal;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+
+/* 继续观看 卡片：更宽（16:9 缩略图） */
+.wcard{flex:0 0 auto;width:212px}
+.wart{position:relative;width:212px;height:120px;border-radius:var(--r-card,12px);overflow:hidden;background:var(--surf2);box-shadow:0 6px 18px rgba(0,0,0,.34)}
+.wart img{width:100%;height:100%;object-fit:cover}
+.wart::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 40%,rgba(4,6,8,.55))}
+.w-resume{
+  position:absolute;left:8px;bottom:8px;z-index:2;display:flex;align-items:center;gap:6px;
+  color:#fff;font:600 11px/1 inherit;
+}
+.w-ep{position:absolute;top:7px;left:7px;z-index:2;font:700 9.5px/1 inherit;letter-spacing:.5px;color:#fff;background:rgba(8,10,14,.55);padding:4px 6px;border-radius:5px;backdrop-filter:blur(6px)}
+.w-progress{position:absolute;left:0;right:0;bottom:0;z-index:3;height:3px;background:rgba(255,255,255,.22)}
+.w-progress i{display:block;height:100%;background:var(--primary)}
+
+/* ══════════════════════════════════════════════════════════════
+   7. 状态页：搜索 / 空 / 错 / 骨架
+   ══════════════════════════════════════════════════════════════ */
+.page-head{
+  padding:34px 20px 8px;display:flex;align-items:center;gap:12px;
+}
+.page-head h2{margin:0;color:var(--on)}
+.icon-btn{
+  width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:var(--surf2);color:var(--on);
+}
+.statebox{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+  padding:78px 34px;gap:6px;
+}
+.state-ico{
+  width:76px;height:76px;border-radius:24px;display:flex;align-items:center;justify-content:center;
+  background:var(--surf2);color:var(--onvar);margin-bottom:14px;
+}
+.statebox h3{margin:0;color:var(--on)}
+.statebox p{margin:0;color:var(--onvar);max-width:250px}
+.statebox .btn{margin-top:18px;height:42px;font-size:13.5px}
+.btn-outline{background:transparent;color:var(--primary);border:1px solid var(--outline)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:22px}
+.chip{
+  height:32px;padding:0 14px;border-radius:999px;display:inline-flex;align-items:center;
+  font:500 12.5px/1 inherit;background:var(--surf2);color:var(--onvar);border:1px solid var(--outline-var);
+}
+.chip.on{background:var(--primary-container);color:var(--on-primary-container);border-color:transparent}
+
+/* 骨架 */
+.sk{background:var(--surf2);border-radius:var(--r-card,12px);position:relative;overflow:hidden}
+.sk::after{
+  content:"";position:absolute;inset:0;
+  background:linear-gradient(100deg,transparent 20%,rgba(255,255,255,.09) 48%,transparent 76%);
+  animation:shimmer 1.5s infinite;
+}
+.phone[data-appearance="light"] .sk::after{background:linear-gradient(100deg,transparent 20%,rgba(255,255,255,.75) 48%,transparent 76%)}
+@keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+.sk-line{height:11px;border-radius:5px}
+
+/* ══════════════════════════════════════════════════════════════
+   8. 说明块（规格标注）
+   ══════════════════════════════════════════════════════════════ */
+.spec{width:393px;max-width:100%}
+.spec dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:7px 14px}
+.spec dt{
+  font:700 10.5px/1.7 inherit;letter-spacing:.09em;text-transform:uppercase;color:#5F6B78;white-space:nowrap;
+  padding-top:1px;
+}
+.spec dd{margin:0;font-size:12.5px;line-height:1.6;color:#96A1AE}
+.spec dd b{color:#D3DCE5;font-weight:600}
+.spec code{
+  font:500 11.5px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  background:#141A21;border:1px solid #1F2831;border-radius:4px;padding:2px 5px;color:#9FD8C8;
+}
+.tablet .spec{width:834px}
+
+/* ══════════════════════════════════════════════════════════════
+   9. 分节标题 / 排布
+   ══════════════════════════════════════════════════════════════ */
+.sect{padding-top:74px}
+.sect-head{display:flex;align-items:flex-end;gap:16px;margin-bottom:26px;flex-wrap:wrap}
+.sect-num{
+  font:700 12px/1 inherit;letter-spacing:.14em;color:#4E5A66;
+  border:1px solid #232C36;border-radius:6px;padding:6px 9px;
+}
+.sect-head h2{margin:0;font-size:21px;font-weight:700;letter-spacing:-.3px;color:#E6EBF0}
+.sect-head .sub{color:#7A8593;font-size:13px;margin:0}
+.rule{flex:1;height:1px;background:linear-gradient(90deg,#1E252D,transparent);min-width:40px;margin-bottom:9px}
+.row{display:flex;gap:34px;flex-wrap:wrap;align-items:flex-start}
+.grid2{display:grid;grid-template-columns:repeat(2,393px);gap:34px 34px}
+.note{
+  width:100%;max-width:1120px;border-left:2px solid #22303A;padding:2px 0 2px 16px;
+  color:#8593A0;font-size:13px;margin:0 0 26px;
+}
+.note b{color:#C7D2DB;font-weight:600}
+.note code{font:500 11.5px/1 ui-monospace,monospace;background:#141A21;border:1px solid #1F2831;border-radius:4px;padding:2px 5px;color:#9FD8C8}
+.badge-tag{
+  display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px;border-radius:6px;
+  font:700 10.5px/1 inherit;letter-spacing:.07em;text-transform:uppercase;
+}
+.badge-tag.todo{background:#3A2A12;color:#F0C079;border:1px solid #55401E}
+.badge-tag.ok{background:#123A32;color:#7FE0C9;border:1px solid #1D5449}
+
+/* 组件明细表 */
+.sheet{
+  background:var(--surface);border:1px solid var(--outline-var);border-radius:16px;padding:26px;width:100%;
+}
+.sheet-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:22px}
+.cell{display:flex;flex-direction:column;gap:10px}
+.cell .clab{font:600 11.5px/1.3 inherit;color:var(--onvar)}
+.cell .csub{font:500 10.5px/1.4 inherit;color:var(--onvar);opacity:.66;letter-spacing:.02em}
+.demo-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+/* 圆角对照 */
+.r3{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;width:100%}
+.r3 .box{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.r3 .box .k{font:600 12px/1 inherit;color:#9AA6B2}
+.r3 .box .k span{color:#5F6B78;font-weight:500}
+.r3 .pair{width:132px}
+
+/* 平板内容网格 */
+.gridposter{display:grid;grid-template-columns:repeat(6,132px);gap:14px 14px}
+.tablet{
+  position:relative;width:834px;height:1000px;border-radius:30px;overflow:hidden;
+  background:var(--bg);color:var(--on);box-shadow:var(--shadow),0 0 0 1px rgba(255,255,255,.055);
+}
+.tablet .screen{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden}
+.tablet .statusbar{padding:0 30px}
+.tablet-content{margin-left:88px}
+
+/* ══════════════════════════════════════════════════════════════
+   10. 折叠顶栏 / 搜索结果网格 / 缺图 / 演示件
+   ══════════════════════════════════════════════════════════════ */
+.topbar-mini{
+  position:absolute;top:32px;left:14px;right:14px;height:52px;z-index:25;
+  border-radius:18px;background:var(--glass);backdrop-filter:blur(20px) saturate(1.45);
+  border:1px solid var(--glass-border);box-shadow:0 8px 26px rgba(0,0,0,.30);
+  display:flex;align-items:center;gap:10px;padding:0 8px 0 16px;
+}
+.topbar-mini .tm-title{font:600 15px/1 inherit;color:var(--on);flex:1}
+.topbar-mini .tm-ico{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--onvar)}
+
+.searchbar{
+  display:flex;align-items:center;gap:10px;height:46px;margin:0 20px;
+  border-radius:14px;background:var(--surf2);padding:0 14px;color:var(--on);
+  border:1px solid var(--primary);
+}
+.searchbar .q{flex:1;font:500 14px/1 inherit}
+.caret{display:inline-block;width:1.5px;height:16px;background:var(--primary);vertical-align:-3px;animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.searchbar .clear{width:18px;height:18px;border-radius:50%;background:var(--onvar);color:var(--bg);display:flex;align-items:center;justify-content:center;font:700 11px/1 inherit}
+.cancel{font:600 13.5px/1 inherit;color:var(--primary);padding-right:4px}
+
+.recent{margin:18px 20px 0}
+.recent .rh{font:600 12px/1 inherit;color:var(--onvar);letter-spacing:.04em;margin-bottom:11px}
+.recent .rchips{display:flex;gap:8px;flex-wrap:wrap}
+
+.grid2p{display:grid;grid-template-columns:repeat(2,1fr);gap:14px 12px;padding:0 20px}
+.grid2p .pcard{width:auto}
+.grid2p .art{width:100%;height:auto;aspect-ratio:2 / 3}
+.grid2p .p-title{font-size:13px}
+.grid3p{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 10px;padding:0 20px}
+.grid3p .art{width:100%;height:auto;aspect-ratio:2 / 3}
+.grid3p .p-title{font-size:11px;left:7px;right:7px;bottom:7px}
+
+.art.missing{
+  background:linear-gradient(155deg,var(--surf3),var(--surf1));
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;
+  color:var(--onvar);
+}
+.art.missing::after{display:none}
+.art.missing .mtxt{font:500 10px/1 inherit;letter-spacing:.06em;opacity:.75}
+
+.dock.demo{position:relative;left:auto;right:auto;bottom:auto;width:100%;max-width:344px}
+.rail-demo{display:flex;gap:8px;align-items:center;background:var(--surf1);padding:10px;border-radius:14px}
+.rail-demo .rail-i{border-radius:12px;width:58px;height:56px}
+
+.skcard{width:132px}
+.skcard .sk{width:132px;height:198px}
+.skcard .sk-line{width:104px;margin-top:9px}
+.skcard .sk-line.s2{width:70px;margin-top:6px}
+
+/* 详情页（M2 概念稿） */
+.backdrop{position:relative;height:386px;overflow:hidden;background:#0A0C0F}
+.backdrop img{width:100%;height:100%;object-fit:cover;object-position:56% 30%}
+.backdrop .bd-top{position:absolute;inset:0 0 auto 0;height:150px;background:linear-gradient(180deg,rgba(4,6,8,.66),transparent)}
+.backdrop .bd-bot{position:absolute;left:0;right:0;bottom:0;height:200px;background:linear-gradient(180deg,transparent,var(--scrim-mid) 60%,var(--bg) 98%)}
+.bd-nav{position:absolute;top:32px;left:16px;right:16px;display:flex;justify-content:space-between;z-index:5}
+.bd-btn{
+  width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:rgba(8,10,14,.46);border:1px solid rgba(255,255,255,.22);color:#fff;backdrop-filter:blur(12px);
+}
+.bd-actions{position:absolute;left:20px;right:20px;bottom:16px;z-index:5;display:flex;gap:10px;align-items:center}
+.sheet-panel{
+  margin:-18px 12px 0;border-radius:26px 26px 0 0;background:var(--surface);
+  padding:8px 20px 24px;position:relative;z-index:6;border-top:1px solid var(--outline-var);
+}
+.handle{width:36px;height:4px;border-radius:2px;background:var(--outline);margin:0 auto 16px;opacity:.7}
+.dt-title{color:var(--on);margin:0 0 8px}
+.dt-meta{display:flex;align-items:center;gap:8px;color:var(--onvar);margin-bottom:14px;flex-wrap:wrap}
+.dt-tags{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:18px}
+.dt-label{font:600 11px/1 inherit;letter-spacing:.1em;text-transform:uppercase;color:var(--onvar);margin:22px 0 10px}
+.castrow{display:flex;gap:14px;overflow:hidden}
+.cast{width:62px;text-align:center}
+.cast .cav{width:62px;height:62px;border-radius:50%;background:linear-gradient(140deg,var(--surf3),var(--surf2));border:1px solid var(--outline-var);overflow:hidden}
+.cast .cav img{width:100%;height:100%;object-fit:cover}
+.cast .cname{font:500 10.5px/1.3 inherit;color:var(--onvar);margin-top:6px}
+.eprow{display:flex;gap:12px;padding:9px 0;align-items:center;border-bottom:1px solid var(--outline-var)}
+.epthumb{position:relative;width:104px;height:58px;border-radius:8px;overflow:hidden;background:var(--surf2);flex:0 0 auto}
+.epthumb img{width:100%;height:100%;object-fit:cover}
+.epinfo{flex:1;min-width:0}
+.epinfo .epn{font:600 12.5px/1.3 inherit;color:var(--on);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.epinfo .epd{font:500 11px/1.3 inherit;color:var(--onvar);margin-top:3px}
+
+/* ══════════════════════════════════════════════════════════════
+   11. 浅色下 Hero 的反转处理
+   ──────────────────────────────────────────────────────────────
+   scrimBottom 由 surface 派生 ⇒ 浅色时它是白色渐变，
+   所以压图文字必须换成 onSurface，否则白字压白雾。
+   ══════════════════════════════════════════════════════════════ */
+[data-appearance="light"] .hero-body{color:var(--on)}
+[data-appearance="light"] .hero-title{color:var(--on);text-shadow:none}
+[data-appearance="light"] .hero-meta{color:var(--onvar)}
+[data-appearance="light"] .hb{box-shadow:0 1px 4px rgba(10,20,30,.10)}
+[data-appearance="light"] .hb.ghost{background:var(--surf2);color:var(--onvar);border-color:var(--outline-var)}
+[data-appearance="light"] .btn-tonal{background:var(--surf2);color:var(--on);border-color:var(--outline-var)}
+[data-appearance="light"] .btn-icon{background:var(--surf2);border-color:var(--outline-var);color:var(--on)}
+[data-appearance="light"] .hero-dots i{background:var(--on);opacity:.22}
+[data-appearance="light"] .hero-dots i.on{background:var(--primary);opacity:1}
+[data-appearance="light"] .p-heart{background:rgba(255,255,255,.86);color:var(--on)}
+[data-appearance="light"] .bd-btn{background:rgba(255,255,255,.82);border-color:rgba(255,255,255,.5);color:var(--on)}
+
+/* 组件表 / 附录表在浅色下的补偿（覆盖稿内联的深色字色） */
+[data-appearance="light"] .sheet code{
+  color:#0B5A4E !important;background:var(--surf1) !important;border-color:var(--outline-var) !important;
+}
+[data-appearance="light"] .sheet tbody{color:var(--on) !important}
+[data-appearance="light"] .sheet thead th{color:var(--onvar) !important}
+[data-appearance="light"] .sheet .t-cap{color:var(--onvar) !important}
+[data-appearance="light"] .sheet .csub{opacity:.7}
+[data-appearance="light"] .sheet .r3 .k{color:var(--on) !important}
+[data-appearance="light"] .sheet .r3 .k span{color:var(--onvar) !important}
+
+/* 布局标尺（可开关） */
+body[data-guides="on"] .phone .rail-x,
+body[data-guides="on"] .tablet .rail-x{outline:1px dashed rgba(99,214,190,.55);outline-offset:-1px}
+body[data-guides="on"] .section{outline:1px dashed rgba(240,182,92,.42);outline-offset:-2px}
+body[data-guides="on"] .hscroll{outline:1px dashed rgba(169,188,255,.38);outline-offset:-2px}
+</style>
+</head>
+<body data-guides="off">
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">CineIsle · UI 2.0 · M1 视觉稿</div>
+    <h1 class="pagetitle">Cine —— 把内容推到最前</h1>
+    <p class="lede">
+      按已确认的 M1 范围出稿：<b>框架 + 首页</b>。所有配色取自 <code>colorScheme</code> 派生，
+      未新增任何硬编码色值；海报圆角跟随「卡片圆角」偏好（默认 <b>12dp</b>）。
+      右下角可切换主题色相、明暗、圆角，以及叠加布局标尺。
+    </p>
+  </header>
+
+  <div class="console">
+    <div class="ctl">
+      <span class="lab">主题</span>
+      <div class="swatches">
+        <button class="sw" data-set-theme="teal" aria-pressed="true" title="青瓷" style="background:linear-gradient(140deg,#7FE0C9,#0F6A5C)"></button>
+        <button class="sw" data-set-theme="amber" aria-pressed="false" title="琥珀" style="background:linear-gradient(140deg,#F7C878,#8A5610)"></button>
+        <button class="sw" data-set-theme="indigo" aria-pressed="false" title="靛蓝" style="background:linear-gradient(140deg,#B9C8FF,#3A56C4)"></button>
+      </div>
+    </div>
+    <div class="ctl">
+      <span class="lab">外观</span>
+      <div class="seg" data-ctl="appearance">
+        <button data-v="auto" aria-pressed="true">跟随各屏</button>
+        <button data-v="dark" aria-pressed="false">全深色</button>
+        <button data-v="light" aria-pressed="false">全浅色</button>
+      </div>
+    </div>
+    <div class="ctl">
+      <span class="lab">圆角</span>
+      <div class="seg" data-ctl="radius">
+        <button data-v="0" aria-pressed="false">0</button>
+        <button data-v="12" aria-pressed="true">12</button>
+        <button data-v="24" aria-pressed="false">24</button>
+      </div>
+    </div>
+    <div class="ctl">
+      <span class="lab">标尺</span>
+      <div class="seg" data-ctl="guides">
+        <button data-v="off" aria-pressed="true">关</button>
+        <button data-v="on" aria-pressed="false">开</button>
+      </div>
+    </div>
+    <nav class="jumplinks">
+      <a href="#s1">01 首页深色</a>
+      <a href="#s2">02 首页浅色</a>
+      <a href="#s3">03 宽屏</a>
+      <a href="#s4">04 状态</a>
+      <a href="#s5">05 滚动</a>
+      <a href="#s6">06 组件</a>
+      <a href="#s7">07 圆角</a>
+      <a href="#s8">08 M2</a>
+    </nav>
+  </div>
+
+  <!-- ══════════════════ 01 首页 · 深色 ══════════════════ -->
+  <section class="sect" id="s1">
+    <div class="sect-head">
+      <span class="sect-num">01</span>
+      <h2>首页 · 手机 · 深色</h2>
+      <span class="badge-tag ok">M1</span>
+      <span class="rule"></span>
+      <p class="sub">Hero 视差 + scrim + 三个分区 + 悬浮 Dock</p>
+    </div>
+
+    <p class="note">
+      一屏只有一个焦点：<b>Hero 占 532dp</b>（约屏高 62%），把「今晚看什么」直接回答掉。
+      往下才是选片区。Classic 的四个 carousel 权重相同，正是这里要拉开层级的地方。<br>
+      Hero 底部 260dp 的 <code>scrimBottom</code> 从 0 渐变到 <code>surface 0.92</code>，
+      与页面底色无缝接上 —— 换任意主题时都不会出现一条硬边。
+    </p>
+
+    <div class="row">
+      <figure class="frame split">
+        <figcaption class="cap"><span class="cap-n">1.1</span> 首页 · 默认滚动位置</figcaption>
+        <div class="phone" data-appearance="dark" data-default="dark">
+          <div class="screen">
+            <div class="hero">
+              <img class="hero-img" src="mockup-assets/hero-wide.jpg" alt="" />
+              <div class="hero-scrim-top"></div>
+              <div class="hero-scrim"></div>
+              <div class="hero-body">
+                <div class="hero-badges">
+                  <span class="hb">4K HDR</span>
+                  <span class="hb ghost">杜比全景声</span>
+                  <span class="hb ghost">S2 · 已更 6 集</span>
+                </div>
+                <h3 class="hero-title t-display">雨之城</h3>
+                <div class="hero-meta t-label">
+                  <span>2024</span><i class="dot"></i>
+                  <span>科幻 · 悬疑</span><i class="dot"></i>
+                  <span>2h 12m</span><i class="dot"></i>
+                  <span>9.1</span>
+                </div>
+                <div class="hero-actions">
+                  <span class="btn btn-fill">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72L19 12z"/></svg>
+                    继续观看
+                  </span>
+                  <span class="btn btn-tonal">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                    详情
+                  </span>
+                  <span class="btn-icon">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.5-1.4 2.5-3.2 2.5-5A4.5 4.5 0 0 0 12 6.5 4.5 4.5 0 0 0 2.5 9c0 1.8 1 3.6 2.5 5l7 6.5z"/></svg>
+                  </span>
+                  <span class="hero-dots"><i class="on"></i><i></i><i></i><i></i></span>
+                </div>
+              </div>
+              <div class="glass-top">
+                <div class="gt-row">
+                  <div class="brand"><span class="mark"></span><b>影屿</b></div>
+                  <div class="gt-actions">
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/></svg>
+                    <span class="avatar"></span>
+                  </div>
+                </div>
+                <div class="searchpill">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/></svg>
+                  <span class="ph">搜索影片、演员、合集</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 继续观看 -->
+            <div class="section">
+              <div class="sec-head">
+                <h2 class="t-title-lg">继续观看</h2>
+                <span class="sec-all">全部
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg>
+                </span>
+              </div>
+              <div class="hscroll">
+                <div class="wcard">
+                  <div class="wart">
+                    <img src="mockup-assets/poster-neon.jpg" alt="" style="object-position:50% 40%" />
+                    <span class="w-ep">S1 · E4</span>
+                    <div class="w-resume"><svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.1v13.8L19 12z"/></svg>剩 38 分钟</div>
+                    <div class="w-progress"><i style="width:71%"></i></div>
+                  </div>
+                  <div class="t-title-md" style="margin-top:9px;color:var(--on)">雨之城</div>
+                  <div class="p-meta">第 4 集 · 雨中的证词</div>
+                </div>
+                <div class="wcard">
+                  <div class="wart">
+                    <img src="mockup-assets/poster-space.jpg" alt="" style="object-position:50% 45%" />
+                    <span class="w-ep">S2 · E1</span>
+                    <div class="w-resume"><svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.1v13.8L19 12z"/></svg>剩 1 小时 2 分</div>
+                    <div class="w-progress"><i style="width:34%"></i></div>
+                  </div>
+                  <div class="t-title-md" style="margin-top:9px;color:var(--on)">静默轨道</div>
+                  <div class="p-meta">第 2 季第 1 集 · 远地点</div>
+                </div>
+                <div class="wcard">
+                  <div class="wart">
+                    <img src="mockup-assets/poster-forest.jpg" alt="" />
+                    <span class="w-ep">影片</span>
+                    <div class="w-resume"><svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.1v13.8L19 12z"/></svg>剩 22 分钟</div>
+                    <div class="w-progress"><i style="width:83%"></i></div>
+                  </div>
+                  <div class="t-title-md" style="margin-top:9px;color:var(--on)">林间雾</div>
+                  <div class="p-meta">1h 47m</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 最新加入 -->
+            <div class="section">
+              <div class="sec-head">
+                <h2 class="t-title-lg">最新加入</h2>
+                <span class="sec-all">全部
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg>
+                </span>
+              </div>
+              <div class="hscroll">
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-desert.jpg" alt="" />
+                    <span class="p-badge">4K</span>
+                    <span class="p-title">沙丘之外</span>
+                  </div>
+                  <div class="p-meta">2023 · 剧情 / 冒险</div>
+                </div>
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-lighthouse.jpg" alt="" />
+                    <span class="p-badge soft">HDR</span>
+                    <span class="p-heart">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 20.5l-1.5-1.35C5.2 14.4 2.5 11.95 2.5 8.9 2.5 6.4 4.4 4.5 6.9 4.5c1.4 0 2.8.65 3.6 1.7.8-1.05 2.2-1.7 3.6-1.7 2.5 0 4.4 1.9 4.4 4.4 0 3.05-2.7 5.5-8 10.25z"/></svg>
+                    </span>
+                    <span class="p-title">灯塔</span>
+                  </div>
+                  <div class="p-meta">2021 · 剧情 / 悬疑</div>
+                </div>
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-anime.jpg" alt="" />
+                    <span class="p-badge">12 集</span>
+                    <span class="p-title">屋顶上的夏天</span>
+                  </div>
+                  <div class="p-meta">2024 · 动画 / 青春</div>
+                </div>
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-space.jpg" alt="" />
+                    <span class="p-badge">S2</span>
+                    <span class="p-title">静默轨道</span>
+                  </div>
+                  <div class="p-meta">2025 · 科幻 / 惊悚</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 随便看看 -->
+            <div class="section">
+              <div class="sec-head">
+                <h2 class="t-title-lg">随便看看</h2>
+                <span class="sec-all">换一批
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.5-6.2M21 12a9 9 0 0 1-15.5 6.2"/><path d="M18 2v4h-4M6 22v-4h4"/></svg>
+                </span>
+              </div>
+              <div class="hscroll">
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-forest.jpg" alt="" />
+                    <span class="p-title">林间雾</span>
+                  </div>
+                  <div class="p-meta">2022 · 惊悚</div>
+                </div>
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-neon.jpg" alt="" />
+                    <span class="p-badge">9.1</span>
+                    <span class="p-title">雨之城</span>
+                  </div>
+                  <div class="p-meta">2024 · 科幻</div>
+                </div>
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-desert.jpg" alt="" />
+                    <span class="p-title">沙丘之外</span>
+                  </div>
+                  <div class="p-meta">2023 · 冒险</div>
+                </div>
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-anime.jpg" alt="" />
+                    <span class="p-title">屋顶上的夏天</span>
+                  </div>
+                  <div class="p-meta">2024 · 动画</div>
+                </div>
+              </div>
+            </div>
+
+            <div style="height:96px"></div>
+          </div>
+
+          <div class="statusbar onplatese">
+            <span>21:40</span>
+            <span class="sb-right">
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx="1"/><rect x="4.2" y="5" width="2.6" height="6" rx="1"/><rect x="8.4" y="2.6" width="2.6" height="8.4" rx="1"/><rect x="12.6" y="0" width="2.6" height="11" rx="1"/></svg>
+              <svg width="15" height="11" viewBox="0 0 15 11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 4.2a9.4 9.4 0 0 1 13 0"/><path d="M3.6 6.8a5.8 5.8 0 0 1 7.8 0"/><circle cx="7.5" cy="9.6" r="1" fill="currentColor" stroke="none"/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x=".6" y=".6" width="19" height="9.8" rx="2.6" stroke="currentColor" stroke-opacity=".5"/><rect x="2.2" y="2.2" width="14" height="6.6" rx="1.4" fill="currentColor"/><path d="M21.4 3.6v3.8a2.1 2.1 0 0 0 0-3.8z" fill="currentColor" fill-opacity=".5"/></svg>
+            </span>
+          </div>
+          <div class="gesturebar"></div>
+          <nav class="dock">
+            <span class="dock-i is-active">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg>
+              <span class="dlabel">首页</span>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4.5L5 20V5a1 1 0 0 1 1-1z"/></svg>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3.2 1.9"/></svg>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.4h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5z"/></svg>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.4-7.98A5.4 5.4 0 0 1 17.3 9.4 3.9 3.9 0 0 1 17 18z"/></svg>
+            </span>
+          </nav>
+        </div>
+
+        <div class="spec">
+          <dl>
+            <dt>布局</dt>
+            <dd>Hero <b>532dp</b> 满宽出血（<code>heroBleed = -20dp</code>）→ 分区 ×3，<code>sectionGap 36dp</code>；内容区底部留 <b>96dp</b> 让 Dock 不压住最后一行</dd>
+            <dt>海报</dt>
+            <dd>宽 <b>132dp</b> / 高 198dp（2:3），<code>posterGap 12dp</code>；353dp 可视宽恰好露出 <b>2.4 张</b>，第三张只露边缘暗示可滑</dd>
+            <dt>颜色</dt>
+            <dd><code>scrimBottom</code> 0→0.92（底 260dp）· <code>glassSurface</code> 0.72 + <code>glassBorder</code> 1dp · <code>badgeStrong</code> = tertiaryContainer · <code>progressFill</code> = primary</dd>
+            <dt>字号</dt>
+            <dd>片名 displaySmall <b>40/700/-1.2</b> · 分区标题 titleLarge <b>20/600</b> · 卡片标题 titleMedium <b>15/600</b> · 元信息 labelMedium <b>12/500</b> · 角标 labelSmall <b>10.5/700/+0.6</b></dd>
+            <dt>动效</dt>
+            <dd>滚动 0→1 时 Hero <code>scale 1.00→1.08</code>、scrim alpha 0.7→0.95；Dock 下滚隐藏 / 上滚出现，<b>120ms</b> FastOutSlowIn；卡片按压 <code>scale .96</code> / 100ms</dd>
+            <dt>交互</dt>
+            <dd>点 Hero → 详情（共享元素：Hero 图放大为 Backdrop，<b>280ms</b>）；点搜索胶囊 → 全库搜索页；左右滑分区 → 惯性滚动，松手吸附到卡片边界</dd>
+          </dl>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ══════════════════ 02 首页 · 浅色 ══════════════════ -->
+  <section class="sect" id="s2">
+    <div class="sect-head">
+      <span class="sect-num">02</span>
+      <h2>首页 · 手机 · 浅色</h2>
+      <span class="badge-tag ok">M1</span>
+      <span class="rule"></span>
+      <p class="sub">同一布局的浅色对照，验证语义色在亮底下的对比度</p>
+    </div>
+
+    <p class="note">
+      浅色不是把深色反相。三处必须单独处理：<b>Hero 的 scrim 仍然用暗色</b>（图是暗的，压不住字就白搭）；
+      海报底部的 <code>posterOverlay</code> 也仍是暗色渐变（图本身暗）；
+      而 <b>玻璃层改白</b>（<code>glassSurface</code> 走 <code>surface</code> 而不是 <code>surfaceContainer</code>，否则在浅底上发灰）。
+      Dock 的投影也要从 0.42 降到 0.16，否则浅色下会像一块脏污。
+    </p>
+
+    <div class="row">
+      <figure class="frame split">
+        <figcaption class="cap"><span class="cap-n">2.1</span> 首页 · 浅色外观</figcaption>
+        <div class="phone" data-appearance="light" data-default="light">
+          <div class="screen">
+            <div class="hero">
+              <img class="hero-img" src="mockup-assets/hero-wide.jpg" alt="" />
+              <div class="hero-scrim-top"></div>
+              <div class="hero-scrim"></div>
+              <div class="hero-body">
+                <div class="hero-badges">
+                  <span class="hb">4K HDR</span>
+                  <span class="hb ghost">杜比全景声</span>
+                  <span class="hb ghost">S2 · 已更 6 集</span>
+                </div>
+                <h3 class="hero-title t-display">雨之城</h3>
+                <div class="hero-meta t-label">
+                  <span>2024</span><i class="dot"></i>
+                  <span>科幻 · 悬疑</span><i class="dot"></i>
+                  <span>2h 12m</span><i class="dot"></i>
+                  <span>9.1</span>
+                </div>
+                <div class="hero-actions">
+                  <span class="btn btn-fill">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72L19 12z"/></svg>
+                    继续观看
+                  </span>
+                  <span class="btn btn-tonal">详情</span>
+                  <span class="btn-icon">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.5-1.4 2.5-3.2 2.5-5A4.5 4.5 0 0 0 12 6.5 4.5 4.5 0 0 0 2.5 9c0 1.8 1 3.6 2.5 5l7 6.5z"/></svg>
+                  </span>
+                  <span class="hero-dots"><i class="on"></i><i></i><i></i><i></i></span>
+                </div>
+              </div>
+              <div class="glass-top">
+                <div class="gt-row">
+                  <div class="brand"><span class="mark"></span><b>影屿</b></div>
+                  <div class="gt-actions">
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/></svg>
+                    <span class="avatar"></span>
+                  </div>
+                </div>
+                <div class="searchpill">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/></svg>
+                  <span class="ph">搜索影片、演员、合集</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="sec-head">
+                <h2 class="t-title-lg">继续观看</h2>
+                <span class="sec-all">全部
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg>
+                </span>
+              </div>
+              <div class="hscroll">
+                <div class="wcard">
+                  <div class="wart">
+                    <img src="mockup-assets/poster-neon.jpg" alt="" style="object-position:50% 40%" />
+                    <span class="w-ep">S1 · E4</span>
+                    <div class="w-resume"><svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.1v13.8L19 12z"/></svg>剩 38 分钟</div>
+                    <div class="w-progress"><i style="width:71%"></i></div>
+                  </div>
+                  <div class="t-title-md" style="margin-top:9px;color:var(--on)">雨之城</div>
+                  <div class="p-meta">第 4 集 · 雨中的证词</div>
+                </div>
+                <div class="wcard">
+                  <div class="wart">
+                    <img src="mockup-assets/poster-space.jpg" alt="" style="object-position:50% 45%" />
+                    <span class="w-ep">S2 · E1</span>
+                    <div class="w-resume"><svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.1v13.8L19 12z"/></svg>剩 1 小时 2 分</div>
+                    <div class="w-progress"><i style="width:34%"></i></div>
+                  </div>
+                  <div class="t-title-md" style="margin-top:9px;color:var(--on)">静默轨道</div>
+                  <div class="p-meta">第 2 季第 1 集 · 远地点</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="sec-head">
+                <h2 class="t-title-lg">最新加入</h2>
+                <span class="sec-all">全部
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg>
+                </span>
+              </div>
+              <div class="hscroll">
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-desert.jpg" alt="" />
+                    <span class="p-badge">4K</span>
+                    <span class="p-title">沙丘之外</span>
+                  </div>
+                  <div class="p-meta">2023 · 剧情 / 冒险</div>
+                </div>
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-lighthouse.jpg" alt="" />
+                    <span class="p-badge soft">HDR</span>
+                    <span class="p-heart">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 20.5l-1.5-1.35C5.2 14.4 2.5 11.95 2.5 8.9 2.5 6.4 4.4 4.5 6.9 4.5c1.4 0 2.8.65 3.6 1.7.8-1.05 2.2-1.7 3.6-1.7 2.5 0 4.4 1.9 4.4 4.4 0 3.05-2.7 5.5-8 10.25z"/></svg>
+                    </span>
+                    <span class="p-title">灯塔</span>
+                  </div>
+                  <div class="p-meta">2021 · 剧情 / 悬疑</div>
+                </div>
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-anime.jpg" alt="" />
+                    <span class="p-badge">12 集</span>
+                    <span class="p-title">屋顶上的夏天</span>
+                  </div>
+                  <div class="p-meta">2024 · 动画 / 青春</div>
+                </div>
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-space.jpg" alt="" />
+                    <span class="p-badge">S2</span>
+                    <span class="p-title">静默轨道</span>
+                  </div>
+                  <div class="p-meta">2025 · 科幻 / 惊悚</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="sec-head">
+                <h2 class="t-title-lg">随便看看</h2>
+                <span class="sec-all">换一批
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.5-6.2M21 12a9 9 0 0 1-15.5 6.2"/><path d="M18 2v4h-4M6 22v-4h4"/></svg>
+                </span>
+              </div>
+              <div class="hscroll">
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-forest.jpg" alt="" />
+                    <span class="p-title">林间雾</span>
+                  </div>
+                  <div class="p-meta">2022 · 惊悚</div>
+                </div>
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-neon.jpg" alt="" />
+                    <span class="p-badge">9.1</span>
+                    <span class="p-title">雨之城</span>
+                  </div>
+                  <div class="p-meta">2024 · 科幻</div>
+                </div>
+                <div class="pcard">
+                  <div class="art">
+                    <img src="mockup-assets/poster-desert.jpg" alt="" />
+                    <span class="p-title">沙丘之外</span>
+                  </div>
+                  <div class="p-meta">2023 · 冒险</div>
+                </div>
+              </div>
+            </div>
+            <div style="height:96px"></div>
+          </div>
+
+          <div class="statusbar onplatese">
+            <span>21:40</span>
+            <span class="sb-right">
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx="1"/><rect x="4.2" y="5" width="2.6" height="6" rx="1"/><rect x="8.4" y="2.6" width="2.6" height="8.4" rx="1"/><rect x="12.6" y="0" width="2.6" height="11" rx="1"/></svg>
+              <svg width="15" height="11" viewBox="0 0 15 11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 4.2a9.4 9.4 0 0 1 13 0"/><path d="M3.6 6.8a5.8 5.8 0 0 1 7.8 0"/><circle cx="7.5" cy="9.6" r="1" fill="currentColor" stroke="none"/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x=".6" y=".6" width="19" height="9.8" rx="2.6" stroke="currentColor" stroke-opacity=".45"/><rect x="2.2" y="2.2" width="14" height="6.6" rx="1.4" fill="currentColor"/><path d="M21.4 3.6v3.8a2.1 2.1 0 0 0 0-3.8z" fill="currentColor" fill-opacity=".45"/></svg>
+            </span>
+          </div>
+          <div class="gesturebar"></div>
+          <nav class="dock">
+            <span class="dock-i is-active">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg>
+              <span class="dlabel">首页</span>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4.5L5 20V5a1 1 0 0 1 1-1z"/></svg>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3.2 1.9"/></svg>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.4h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5z"/></svg>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.4-7.98A5.4 5.4 0 0 1 17.3 9.4 3.9 3.9 0 0 1 17 18z"/></svg>
+            </span>
+          </nav>
+        </div>
+
+        <div class="spec">
+          <dl>
+            <dt>布局</dt>
+            <dd>与 01 <b>完全同构</b>，仅 token 不同 —— 这是验证「一套布局、两套明暗」的关键：不允许为浅色另写一套间距</dd>
+            <dt>颜色</dt>
+            <dd>Hero scrim 仍是暗色（<code>#04060A</code> 起）· <code>glassSurface</code> 走 <code>surface</code> 0.76（<b>不是</b> surfaceContainer，否则发灰）· Dock 投影 <code>0.16</code>（深色下 0.42）</dd>
+            <dt>对比度</dt>
+            <dd>Hero 白字压暗图 → ≥ <b>7:1</b>；正文 <code>onSurfaceVariant</code> 于 <code>surface</code> → <b>5.2:1</b>；Dock 选中项 <code>onPrimaryContainer</code> 于 <code>primaryContainer</code> → <b>6.8:1</b>（全部过 WCAG AA）</dd>
+            <dt>字号</dt>
+            <dd>同 01，<b>不因明暗调整</b>。若浅色下需要靠加粗补偿，说明色选错了，应改 token 而非字重</dd>
+            <dt>动效</dt>
+            <dd>同 01；唯一差异是骨架屏的微光用 <b>白色 0.75</b>（深色下 0.09），否则在浅底上看不见</dd>
+            <dt>交互</dt>
+            <dd>同 01。切明暗不重启、不重进页面：<code>MpvexTheme</code> 重组即可，Hero 图不重新请求</dd>
+          </dl>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ══════════════════ 03 宽屏 ══════════════════ -->
+  <section class="sect" id="s3">
+    <div class="sect-head">
+      <span class="sect-num">03</span>
+      <h2>首页 · 宽屏 ≥600dp</h2>
+      <span class="badge-tag ok">M1</span>
+      <span class="rule"></span>
+      <p class="sub">底部 Dock → 左侧 Rail，内容区列数变化</p>
+    </div>
+
+    <p class="note">
+      只做 <b>Dock / Rail 二分</b>，不做横屏双栏（这是本期确认的范围）。判定用 <code>WindowSizeClass</code> 的
+      <code>widthSizeClass</code>，阈值 600dp。<b>不是</b>把手机布局等比放大 —— 海报从 132dp 长到 160dp、
+      分区从横向滑动变成固定 4 列，因为宽屏上「露出半张暗示可滑」没有意义了。
+      Rail 宽 88dp，用 <code>glassSurface</code> + 右侧 1dp <code>outlineVariant</code> 分隔。
+    </p>
+
+    <div class="row tablet">
+      <figure class="frame">
+        <figcaption class="cap"><span class="cap-n">3.1</span> 首页 · 834dp · Rail 布局</figcaption>
+        <div class="tablet" data-appearance="dark" data-default="dark">
+          <div class="screen">
+            <div class="tablet-content">
+              <!-- 顶栏 -->
+              <div style="display:flex;align-items:center;gap:16px;padding:38px 24px 18px">
+                <div class="brand" style="color:var(--on)">
+                  <span class="mark"></span><b class="t-title-lg">影屿</b>
+                </div>
+                <div class="searchpill" style="margin:0;flex:1;max-width:420px;height:42px;background:var(--surf2);border-color:var(--outline-var);color:var(--onvar)">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/></svg>
+                  <span class="ph">搜索影片、演员、合集</span>
+                </div>
+                <div style="margin-left:auto;display:flex;align-items:center;gap:14px;color:var(--onvar)">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+                  <span class="avatar" style="width:30px;height:30px"></span>
+                </div>
+              </div>
+
+              <!-- Hero -->
+              <div class="hero" style="height:392px">
+                <img class="hero-img" src="mockup-assets/hero-wide.jpg" alt="" style="object-position:52% 32%" />
+                <div class="hero-scrim"></div>
+                <div class="hero-body" style="padding:0 24px 26px">
+                  <div class="hero-badges">
+                    <span class="hb">4K HDR</span>
+                    <span class="hb ghost">杜比全景声</span>
+                  </div>
+                  <h3 class="hero-title t-display" style="font-size:44px">雨之城</h3>
+                  <div class="hero-meta t-label">
+                    <span>2024</span><i class="dot"></i>
+                    <span>科幻 · 悬疑</span><i class="dot"></i>
+                    <span>2h 12m</span><i class="dot"></i>
+                    <span>9.1</span>
+                  </div>
+                  <div class="hero-actions">
+                    <span class="btn btn-fill">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72L19 12z"/></svg>
+                      继续观看
+                    </span>
+                    <span class="btn btn-tonal">详情</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 继续观看 -->
+              <div class="section" style="padding-top:30px">
+                <div class="sec-head" style="padding:0 24px 12px">
+                  <h2 class="t-title-lg">继续观看</h2>
+                  <span class="sec-all">全部
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg>
+                  </span>
+                </div>
+                <div class="hscroll" style="padding:0 24px">
+                  <div class="wcard" style="width:244px">
+                    <div class="wart" style="width:244px;height:138px">
+                      <img src="mockup-assets/poster-neon.jpg" alt="" style="object-position:50% 40%" />
+                      <span class="w-ep">S1 · E4</span>
+                      <div class="w-resume">剩 38 分钟</div>
+                      <div class="w-progress"><i style="width:71%"></i></div>
+                    </div>
+                    <div class="t-title-md" style="margin-top:9px;color:var(--on)">雨之城</div>
+                    <div class="p-meta">第 4 集 · 雨中的证词</div>
+                  </div>
+                  <div class="wcard" style="width:244px">
+                    <div class="wart" style="width:244px;height:138px">
+                      <img src="mockup-assets/poster-space.jpg" alt="" style="object-position:50% 45%" />
+                      <span class="w-ep">S2 · E1</span>
+                      <div class="w-resume">剩 1 小时 2 分</div>
+                      <div class="w-progress"><i style="width:34%"></i></div>
+                    </div>
+                    <div class="t-title-md" style="margin-top:9px;color:var(--on)">静默轨道</div>
+                    <div class="p-meta">第 2 季第 1 集</div>
+                  </div>
+                  <div class="wcard" style="width:244px">
+                    <div class="wart" style="width:244px;height:138px">
+                      <img src="mockup-assets/poster-forest.jpg" alt="" />
+                      <span class="w-ep">影片</span>
+                      <div class="w-resume">剩 22 分钟</div>
+                      <div class="w-progress"><i style="width:83%"></i></div>
+                    </div>
+                    <div class="t-title-md" style="margin-top:9px;color:var(--on)">林间雾</div>
+                    <div class="p-meta">1h 47m</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 最新加入（4 列固定网格） -->
+              <div class="section" style="padding-bottom:30px">
+                <div class="sec-head" style="padding:0 24px 12px">
+                  <h2 class="t-title-lg">最新加入</h2>
+                  <span class="sec-all">全部
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg>
+                  </span>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(4,160px);gap:14px;padding:0 24px">
+                  <div class="pcard" style="width:160px">
+                    <div class="art" style="width:160px;height:240px"><img src="mockup-assets/poster-desert.jpg" alt="" /><span class="p-badge">4K</span><span class="p-title" style="font-size:13.5px">沙丘之外</span></div>
+                    <div class="p-meta">2023 · 剧情 / 冒险</div>
+                  </div>
+                  <div class="pcard" style="width:160px">
+                    <div class="art" style="width:160px;height:240px"><img src="mockup-assets/poster-lighthouse.jpg" alt="" /><span class="p-badge soft">HDR</span><span class="p-title" style="font-size:13.5px">灯塔</span></div>
+                    <div class="p-meta">2021 · 剧情 / 悬疑</div>
+                  </div>
+                  <div class="pcard" style="width:160px">
+                    <div class="art" style="width:160px;height:240px"><img src="mockup-assets/poster-anime.jpg" alt="" /><span class="p-badge">12 集</span><span class="p-title" style="font-size:13.5px">屋顶上的夏天</span></div>
+                    <div class="p-meta">2024 · 动画 / 青春</div>
+                  </div>
+                  <div class="pcard" style="width:160px">
+                    <div class="art" style="width:160px;height:240px"><img src="mockup-assets/poster-space.jpg" alt="" /><span class="p-badge">S2</span><span class="p-title" style="font-size:13.5px">静默轨道</span></div>
+                    <div class="p-meta">2025 · 科幻 / 惊悚</div>
+                  </div>
+                </div>
+              </div>
+              <div style="height:40px"></div>
+            </div>
+          </div>
+
+          <nav class="rail">
+            <div class="rail-i is-active">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg>
+              <span class="rlabel">首页</span>
+            </div>
+            <div class="rail-i">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4.5L5 20V5a1 1 0 0 1 1-1z"/></svg>
+              <span class="rlabel">收藏</span>
+            </div>
+            <div class="rail-i">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3.2 1.9"/></svg>
+              <span class="rlabel">历史</span>
+            </div>
+            <div class="rail-i">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.4h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5z"/></svg>
+              <span class="rlabel">本地</span>
+            </div>
+            <div class="rail-i">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.4-7.98A5.4 5.4 0 0 1 17.3 9.4 3.9 3.9 0 0 1 17 18z"/></svg>
+              <span class="rlabel">网络</span>
+            </div>
+            <div class="rail-spacer"></div>
+            <div class="rail-i">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
+              <span class="rlabel">设置</span>
+            </div>
+          </nav>
+
+          <div class="statusbar">
+            <span>21:40</span>
+            <span class="sb-right">
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx="1"/><rect x="4.2" y="5" width="2.6" height="6" rx="1"/><rect x="8.4" y="2.6" width="2.6" height="8.4" rx="1"/><rect x="12.6" y="0" width="2.6" height="11" rx="1"/></svg>
+              <svg width="15" height="11" viewBox="0 0 15 11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 4.2a9.4 9.4 0 0 1 13 0"/><path d="M3.6 6.8a5.8 5.8 0 0 1 7.8 0"/><circle cx="7.5" cy="9.6" r="1" fill="currentColor" stroke="none"/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x=".6" y=".6" width="19" height="9.8" rx="2.6" stroke="currentColor" stroke-opacity=".5"/><rect x="2.2" y="2.2" width="14" height="6.6" rx="1.4" fill="currentColor"/><path d="M21.4 3.6v3.8a2.1 2.1 0 0 0 0-3.8z" fill="currentColor" fill-opacity=".5"/></svg>
+            </span>
+          </div>
+        </div>
+
+        <div class="spec">
+          <dl>
+            <dt>断点</dt>
+            <dd><code>widthSizeClass == Compact</code> → Dock；<code>≥ Medium（600dp）</code> → Rail。<b>只有二分</b>，不存在第三档</dd>
+            <dt>尺寸</dt>
+            <dd>Rail <b>88dp</b>（项 64×62，圆角 16）· 内容区左右 padding <b>24dp</b> · 海报 <b>160dp</b>（高 240）· 继续观看卡 <b>244×138</b></dd>
+            <dt>列数</dt>
+            <dd>最新加入由「横向滑动」改为 <b>固定 4 列</b>。理由：宽屏上露出半张的暗示失效，且固定网格更易扫读</dd>
+            <dt>颜色</dt>
+            <dd>Rail 同 <code>glassSurface</code>，右侧 <code>outlineVariant 1dp</code>；选中项 <code>primaryContainer</code> 圆角 16（比 Dock 的胶囊更方 —— 侧栏用胶囊会显得软）</dd>
+            <dt>字号</dt>
+            <dd>同手机，唯 Hero displaySmall 提到 <b>44sp</b>（视距更远）；Rail 标签 labelSmall <b>10/700</b></dd>
+            <dt>交互</dt>
+            <dd>Rail 项切换不重建内容区（`NavDisplay` 同一实例）；Hero 视差在宽屏下减弱为 <code>1.00→1.04</code>，因为位移幅度大时显得晃</dd>
+          </dl>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ══════════════════ 04 状态页 ══════════════════ -->
+  <section class="sect" id="s4">
+    <div class="sect-head">
+      <span class="sect-num">04</span>
+      <h2>首页 · 四种状态</h2>
+      <span class="badge-tag ok">M1</span>
+      <span class="rule"></span>
+      <p class="sub">搜索胶囊展开 / 空态 / 错误态 / 骨架屏</p>
+    </div>
+
+    <p class="note">
+      状态页是「新 UI 是否可信」的分水岭。Classic 的空态是一行居中文字，Cine 要求：<b>图标容器 + 一句解释「为什么空」+ 一个出口动作</b>。
+      错误态必须区分「连不上」与「连上了但没权限」——前者给重试，后者给改配置。
+    </p>
+
+    <div class="grid2">
+      <!-- 4.1 搜索态 -->
+      <figure class="frame">
+        <figcaption class="cap"><span class="cap-n">4.1</span> 搜索胶囊展开（输入中）</figcaption>
+        <div class="phone" data-appearance="dark" data-default="dark">
+          <div class="screen" style="padding-top:34px">
+            <div style="display:flex;align-items:center;gap:10px;padding:6px 20px 0">
+              <div class="searchbar" style="margin:0;flex:1">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/></svg>
+                <span class="q">雨</span><span class="caret"></span>
+                <span class="clear">✕</span>
+              </div>
+              <span class="cancel">取消</span>
+            </div>
+
+            <div class="recent">
+              <div class="rh">最近搜索</div>
+              <div class="rchips">
+                <span class="chip">静默轨道</span>
+                <span class="chip">沙丘</span>
+                <span class="chip">宫崎</span>
+              </div>
+            </div>
+
+            <div class="sec-head" style="padding:26px 20px 12px">
+              <h2 class="t-title-lg">影片 <span style="color:var(--onvar);font-weight:500">· 4</span></h2>
+              <span class="sec-all">全部结果</span>
+            </div>
+            <div class="grid3p">
+              <div class="pcard">
+                <div class="art"><img src="mockup-assets/poster-neon.jpg" alt="" /><span class="p-title"><mark style="background:var(--primary);color:var(--on-primary);border-radius:2px">雨</mark>之城</span></div>
+              </div>
+              <div class="pcard">
+                <div class="art"><img src="mockup-assets/poster-forest.jpg" alt="" /><span class="p-title"><mark style="background:var(--primary);color:var(--on-primary);border-radius:2px">雨</mark>季</span></div>
+              </div>
+              <div class="pcard">
+                <div class="art"><img src="mockup-assets/poster-lighthouse.jpg" alt="" /><span class="p-title">暴<mark style="background:var(--primary);color:var(--on-primary);border-radius:2px">雨</mark>夜</span></div>
+              </div>
+              <div class="pcard">
+                <div class="art"><img src="mockup-assets/poster-space.jpg" alt="" /><span class="p-title">星<mark style="background:var(--primary);color:var(--on-primary);border-radius:2px">雨</mark></span></div>
+              </div>
+            </div>
+
+            <div class="sec-head" style="padding:24px 20px 10px">
+              <h2 class="t-title-lg">演员 <span style="color:var(--onvar);font-weight:500">· 1</span></h2>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:0 20px">
+              <span style="width:44px;height:44px;border-radius:50%;background:linear-gradient(140deg,var(--surf3),var(--surf2));border:1px solid var(--outline-var)"></span>
+              <div>
+                <div class="t-title-md" style="color:var(--on)">雨宫 透</div>
+                <div class="p-meta">演员 · 参演 12 部</div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar">
+            <span>21:41</span>
+            <span class="sb-right">
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx="1"/><rect x="4.2" y="5" width="2.6" height="6" rx="1"/><rect x="8.4" y="2.6" width="2.6" height="8.4" rx="1"/><rect x="12.6" y="0" width="2.6" height="11" rx="1"/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x=".6" y=".6" width="19" height="9.8" rx="2.6" stroke="currentColor" stroke-opacity=".5"/><rect x="2.2" y="2.2" width="14" height="6.6" rx="1.4" fill="currentColor"/></svg>
+            </span>
+          </div>
+          <div class="gesturebar"></div>
+        </div>
+        <div class="spec">
+          <dl>
+            <dt>布局</dt>
+            <dd>搜索条高 <b>46dp</b>，圆角 14，聚焦时描边 <code>primary 1dp</code>；结果用 <b>3 列</b>（比首页的 2.4 张更密，这是"在找具体东西"的语境）</dd>
+            <dt>颜色</dt>
+            <dd>命中片段用 <code>primary</code> 底 + <code>onPrimary</code> 字（实心高亮，不做下划线）；分区计数用 <code>onSurfaceVariant</code>，不与标题争重</dd>
+            <dt>字号</dt>
+            <dd>输入 <b>14/500</b>；分区标题 titleLarge；结果标题 11/600；演员名 15/600</dd>
+            <dt>动效</dt>
+            <dd>点击搜索胶囊 → 输入框由胶囊<b>展开成全宽</b>（宽度动画 220ms），同时 Hero 上移让位；输入 <b>300ms 防抖</b>后请求</dd>
+            <dt>交互</dt>
+            <dd>回车 = 全库搜索页（带全部结果）；点「取消」回到首页并<b>保留滚动位置</b>；结果按类型分组，演员行可直接进人物页</dd>
+          </dl>
+        </div>
+      </figure>
+
+      <!-- 4.2 空态 -->
+      <figure class="frame">
+        <figcaption class="cap"><span class="cap-n">4.2</span> 空态 · 收藏为空</figcaption>
+        <div class="phone" data-appearance="dark" data-default="dark">
+          <div class="screen">
+            <div class="page-head" style="justify-content:space-between">
+              <h2 class="t-headline">我的收藏</h2>
+              <span class="icon-btn">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+              </span>
+            </div>
+            <div class="chips" style="justify-content:flex-start;padding:6px 20px 0;margin-top:0">
+              <span class="chip on">全部</span>
+              <span class="chip">电影</span>
+              <span class="chip">剧集</span>
+              <span class="chip">动画</span>
+            </div>
+
+            <div class="statebox" style="padding-top:150px">
+              <span class="state-ico">
+                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.5-1.4 2.5-3.2 2.5-5A4.5 4.5 0 0 0 12 6.5 4.5 4.5 0 0 0 2.5 9c0 1.8 1 3.6 2.5 5l7 6.5z"/></svg>
+              </span>
+              <h3 class="t-title-lg">还没有收藏</h3>
+              <p class="t-body">在任意作品上点一下红心，它就会出现在这里。</p>
+              <span class="btn btn-outline">去逛逛首页</span>
+            </div>
+          </div>
+          <div class="statusbar">
+            <span>21:42</span>
+            <span class="sb-right">
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx="1"/><rect x="4.2" y="5" width="2.6" height="6" rx="1"/><rect x="8.4" y="2.6" width="2.6" height="8.4" rx="1"/><rect x="12.6" y="0" width="2.6" height="11" rx="1"/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x=".6" y=".6" width="19" height="9.8" rx="2.6" stroke="currentColor" stroke-opacity=".5"/><rect x="2.2" y="2.2" width="14" height="6.6" rx="1.4" fill="currentColor"/></svg>
+            </span>
+          </div>
+          <div class="gesturebar"></div>
+          <nav class="dock">
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg>
+            </span>
+            <span class="dock-i is-active">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4.5L5 20V5a1 1 0 0 1 1-1z"/></svg>
+              <span class="dlabel">收藏</span>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3.2 1.9"/></svg>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.4h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5z"/></svg>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.4-7.98A5.4 5.4 0 0 1 17.3 9.4 3.9 3.9 0 0 1 17 18z"/></svg>
+            </span>
+          </nav>
+        </div>
+        <div class="spec">
+          <dl>
+            <dt>布局</dt>
+            <dd>图标容器 <b>76×76</b> 圆角 24，距标题 14；说明限宽 <b>250dp</b>（超过就换行难看）；出口按钮距说明 <b>18dp</b></dd>
+            <dt>颜色</dt>
+            <dd>图标容器 <code>surfaceContainer</code> + <code>onSurfaceVariant</code> 图标（<b>不用</b> primary，空态不该抢戏）；按钮走 <code>outline</code> 描边</dd>
+            <dt>字号</dt>
+            <dd>标题 titleLarge <b>20/600</b>；说明 bodyMedium <b>13.5/400</b>；按钮 13.5/600</dd>
+            <dt>动效</dt>
+            <dd>从「有数据」切到「空」时，内容<b>淡出 120ms</b>、空态<b>淡入 + 上移 8dp</b>，避免硬切造成"闪一下没了"的错觉</dd>
+            <dt>交互</dt>
+            <dd>「去逛逛首页」→ 直接切到 Dock 第一项，<b>不进返回栈</b>（否则返回会回到空收藏页，形成死循环感）</dd>
+          </dl>
+        </div>
+      </figure>
+
+      <!-- 4.3 错误态 -->
+      <figure class="frame">
+        <figcaption class="cap"><span class="cap-n">4.3</span> 错误态 · 连不上服务器</figcaption>
+        <div class="phone" data-appearance="dark" data-default="dark">
+          <div class="screen" style="display:flex;flex-direction:column">
+            <div class="page-head">
+              <h2 class="t-headline">影屿</h2>
+            </div>
+            <div class="statebox" style="padding-top:120px">
+              <span class="state-ico" style="background:var(--error-container);color:var(--on-error-container)">
+                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/><path d="M3.6 9h16.8M3.6 15h16.8"/><path d="M12 3c2.4 2.4 3.6 5.4 3.6 9s-1.2 6.6-3.6 9c-2.4-2.4-3.6-5.4-3.6-9S9.6 5.4 12 3z"/></svg>
+              </span>
+              <h3 class="t-title-lg">连不上这台服务器</h3>
+              <p class="t-body">192.168.1.20:8096 已连续 3 次超时。检查一下服务器是否开机，或地址是否变了。</p>
+              <div style="display:flex;gap:10px;margin-top:18px">
+                <span class="btn btn-fill" style="height:42px;font-size:13.5px">重试</span>
+                <span class="btn btn-outline" style="height:42px;font-size:13.5px">切换服务器</span>
+              </div>
+              <div style="margin-top:26px;padding:12px 14px;border-radius:12px;background:var(--surf1);border:1px solid var(--outline-var);text-align:left;max-width:300px">
+                <div class="t-cap" style="color:var(--onvar);margin-bottom:6px">诊断信息</div>
+                <div style="font:500 11.5px/1.6 ui-monospace,monospace;color:var(--onvar)">
+                  GET /Users → timeout 15000ms<br>
+                  ping 192.168.1.20 → 无响应
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar">
+            <span>21:43</span>
+            <span class="sb-right">
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx="1"/><rect x="4.2" y="5" width="2.6" height="6" rx="1"/><rect x="8.4" y="2.6" width="2.6" height="8.4" rx="1"/><rect x="12.6" y="0" width="2.6" height="11" rx="1"/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x=".6" y=".6" width="19" height="9.8" rx="2.6" stroke="currentColor" stroke-opacity=".5"/><rect x="2.2" y="2.2" width="14" height="6.6" rx="1.4" fill="currentColor"/></svg>
+            </span>
+          </div>
+          <div class="gesturebar"></div>
+        </div>
+        <div class="spec">
+          <dl>
+            <dt>布局</dt>
+            <dd>与空态同骨架（图标 / 标题 / 说明 / 动作），仅图标容器换色 —— <b>共用同一个 state 组件</b>，否则两处各自漂移</dd>
+            <dt>颜色</dt>
+            <dd>图标容器 <code>errorContainer</code> + <code>onErrorContainer</code>；诊断块 <code>surfaceContainerLow</code> + <code>outlineVariant</code></dd>
+            <dt>字号</dt>
+            <dd>同 4.2；诊断用等宽 <b>11.5/500</b>，行高 1.6（可复制排查）</dd>
+            <dt>动效</dt>
+            <dd>重试点击后按钮内图标转 <b>800ms</b>（<code>LinearEasing</code> 循环），失败不再弹 Toast，只把诊断信息最后一行改成新的时间</dd>
+            <dt>交互</dt>
+            <dd>「重试」只重跑失败的请求，不整页刷新（保留已加载的分区）；诊断块<b>默认折叠</b>，点开才展开 —— 稿中为展示而展开</dd>
+          </dl>
+        </div>
+      </figure>
+
+      <!-- 4.4 骨架屏 -->
+      <figure class="frame">
+        <figcaption class="cap"><span class="cap-n">4.4</span> 骨架屏 · 首屏加载</figcaption>
+        <div class="phone" data-appearance="dark" data-default="dark">
+          <div class="screen">
+            <div class="sk" style="height:532px;border-radius:0"></div>
+            <div class="section" style="padding-top:26px">
+              <div style="display:flex;justify-content:space-between;padding:0 20px 12px;align-items:center">
+                <div class="sk sk-line" style="width:96px;height:16px"></div>
+                <div class="sk sk-line" style="width:38px;height:11px"></div>
+              </div>
+              <div style="display:flex;gap:12px;padding:0 20px;overflow:hidden">
+                <div class="skcard"><div class="sk" style="height:120px;width:212px"></div><div class="sk sk-line"></div><div class="sk sk-line s2"></div></div>
+                <div class="skcard"><div class="sk" style="height:120px;width:212px"></div><div class="sk sk-line"></div><div class="sk sk-line s2"></div></div>
+              </div>
+            </div>
+            <div class="section">
+              <div style="display:flex;justify-content:space-between;padding:0 20px 12px;align-items:center">
+                <div class="sk sk-line" style="width:78px;height:16px"></div>
+                <div class="sk sk-line" style="width:38px;height:11px"></div>
+              </div>
+              <div style="display:flex;gap:12px;padding:0 20px;overflow:hidden">
+                <div class="skcard"><div class="sk"></div><div class="sk sk-line"></div></div>
+                <div class="skcard"><div class="sk"></div><div class="sk sk-line"></div></div>
+                <div class="skcard"><div class="sk"></div><div class="sk sk-line"></div></div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar">
+            <span>21:44</span>
+            <span class="sb-right">
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx="1"/><rect x="4.2" y="5" width="2.6" height="6" rx="1"/><rect x="8.4" y="2.6" width="2.6" height="8.4" rx="1"/><rect x="12.6" y="0" width="2.6" height="11" rx="1"/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x=".6" y=".6" width="19" height="9.8" rx="2.6" stroke="currentColor" stroke-opacity=".5"/><rect x="2.2" y="2.2" width="14" height="6.6" rx="1.4" fill="currentColor"/></svg>
+            </span>
+          </div>
+          <div class="gesturebar"></div>
+        </div>
+        <div class="spec">
+          <dl>
+            <dt>布局</dt>
+            <dd><b>骨架必须与真实布局同尺寸</b>：Hero 532、卡片 132×198、继续观看 212×120。尺寸不一致会导致数据到位时"跳一下"</dd>
+            <dt>颜色</dt>
+            <dd>块体 <code>surfaceContainer</code>；微光 = 白色 <b>0.09</b> 线性渐变（浅色下 0.75），<b>1.5s 循环</b> —— 沿用 Classic 的 <code>BrowserSkeleton</code> 语言，只是重画</dd>
+            <dt>字号</dt>
+            <dd>无文字。骨架里不放大标题占位 —— 未命中缓存时不知道片名的长度，硬造反而错</dd>
+            <dt>动效</dt>
+            <dd>微光扫过 <b>1.5s</b>，<code>linear</code>；<b>超过 3s 未到数据</b>则骨架整体降透明度到 0.6，暗示"慢但没死"</dd>
+            <dt>交互</dt>
+            <dd>骨架期间 Dock <b>可用</b>（可切到收藏/历史，那些已缓存）；再次进入首页若命中 Hero 缓存，则 <b>Hero 直出</b>、只有下方分区走骨架</dd>
+          </dl>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ══════════════════ 05 滚动行为 ══════════════════ -->
+  <section class="sect" id="s5">
+    <div class="sect-head">
+      <span class="sect-num">05</span>
+      <h2>滚动行为 · 顶栏折叠与 Dock 避让</h2>
+      <span class="badge-tag ok">M1</span>
+      <span class="rule"></span>
+      <p class="sub">同一页面的两个滚动帧</p>
+    </div>
+
+    <p class="note">
+      这两帧是同一个页面的不同滚动位置，说明<b>常驻控件如何随滚动让出空间</b>。
+      关键取舍：搜索胶囊在滚动后<b>收进顶栏图标</b>而不是留着 —— 留着会让折叠顶栏变成两行、失去"轻"的意义；
+      但它变成图标后仍然一键可达，不是消失。
+    </p>
+
+    <div class="row">
+      <!-- 5.1 -->
+      <figure class="frame">
+        <figcaption class="cap"><span class="cap-n">5.1</span> 滚动中 · 顶栏收拢，Dock 仍在</figcaption>
+        <div class="phone" data-appearance="dark" data-default="dark">
+          <div class="screen">
+            <div style="margin-top:-170px">
+              <div class="hero" style="height:532px">
+                <img class="hero-img" src="mockup-assets/hero-wide.jpg" alt="" />
+                <div class="hero-scrim"></div>
+                <div class="hero-body">
+                  <h3 class="hero-title t-display">雨之城</h3>
+                  <div class="hero-meta t-label">
+                    <span>2024</span><i class="dot"></i><span>科幻 · 悬疑</span><i class="dot"></i><span>9.1</span>
+                  </div>
+                  <div class="hero-actions">
+                    <span class="btn btn-fill">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72L19 12z"/></svg>
+                      继续观看
+                    </span>
+                    <span class="btn btn-tonal">详情</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="section" style="padding-top:22px">
+                <div class="sec-head">
+                  <h2 class="t-title-lg">继续观看</h2>
+                  <span class="sec-all">全部</span>
+                </div>
+                <div class="hscroll">
+                  <div class="wcard">
+                    <div class="wart">
+                      <img src="mockup-assets/poster-neon.jpg" alt="" style="object-position:50% 40%" />
+                      <span class="w-ep">S1 · E4</span>
+                      <div class="w-resume">剩 38 分钟</div>
+                      <div class="w-progress"><i style="width:71%"></i></div>
+                    </div>
+                    <div class="t-title-md" style="margin-top:9px;color:var(--on)">雨之城</div>
+                    <div class="p-meta">第 4 集 · 雨中的证词</div>
+                  </div>
+                  <div class="wcard">
+                    <div class="wart">
+                      <img src="mockup-assets/poster-space.jpg" alt="" style="object-position:50% 45%" />
+                      <span class="w-ep">S2 · E1</span>
+                      <div class="w-resume">剩 1 小时 2 分</div>
+                      <div class="w-progress"><i style="width:34%"></i></div>
+                    </div>
+                    <div class="t-title-md" style="margin-top:9px;color:var(--on)">静默轨道</div>
+                    <div class="p-meta">第 2 季第 1 集</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="section">
+                <div class="sec-head">
+                  <h2 class="t-title-lg">最新加入</h2>
+                  <span class="sec-all">全部</span>
+                </div>
+                <div class="hscroll">
+                  <div class="pcard">
+                    <div class="art"><img src="mockup-assets/poster-desert.jpg" alt="" /><span class="p-badge">4K</span><span class="p-title">沙丘之外</span></div>
+                    <div class="p-meta">2023 · 剧情 / 冒险</div>
+                  </div>
+                  <div class="pcard">
+                    <div class="art"><img src="mockup-assets/poster-lighthouse.jpg" alt="" /><span class="p-title">灯塔</span></div>
+                    <div class="p-meta">2021 · 剧情 / 悬疑</div>
+                  </div>
+                  <div class="pcard">
+                    <div class="art"><img src="mockup-assets/poster-anime.jpg" alt="" /><span class="p-badge">12 集</span><span class="p-title">屋顶上的夏天</span></div>
+                    <div class="p-meta">2024 · 动画 / 青春</div>
+                  </div>
+                </div>
+              </div>
+              <div style="height:96px"></div>
+            </div>
+          </div>
+
+          <div class="topbar-mini">
+            <span class="tm-title">影屿</span>
+            <span class="tm-ico">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/></svg>
+            </span>
+            <span class="avatar" style="width:26px;height:26px"></span>
+          </div>
+
+          <div class="statusbar">
+            <span>21:45</span>
+            <span class="sb-right">
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx="1"/><rect x="4.2" y="5" width="2.6" height="6" rx="1"/><rect x="8.4" y="2.6" width="2.6" height="8.4" rx="1"/><rect x="12.6" y="0" width="2.6" height="11" rx="1"/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x=".6" y=".6" width="19" height="9.8" rx="2.6" stroke="currentColor" stroke-opacity=".5"/><rect x="2.2" y="2.2" width="14" height="6.6" rx="1.4" fill="currentColor"/></svg>
+            </span>
+          </div>
+          <div class="gesturebar"></div>
+          <nav class="dock">
+            <span class="dock-i is-active">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg>
+              <span class="dlabel">首页</span>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4.5L5 20V5a1 1 0 0 1 1-1z"/></svg>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3.2 1.9"/></svg>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.4h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5z"/></svg>
+            </span>
+            <span class="dock-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.4-7.98A5.4 5.4 0 0 1 17.3 9.4 3.9 3.9 0 0 1 17 18z"/></svg>
+            </span>
+          </nav>
+        </div>
+        <div class="spec">
+          <dl>
+            <dt>触发</dt>
+            <dd>Hero 滚出 <b>56dp</b>（顶栏高度）后开始折叠；折叠进度 = <code>heroOffset / 120</code> 并 clamp 0..1，避免一滚到底</dd>
+            <dt>变化</dt>
+            <dd>① 品牌 + 搜索胶囊（两行，透明底）<b>淡出</b> → ② 玻璃顶栏<b>从 -52dp 落到 32dp</b>并浮起 → ③ Hero 视差 <code>scale→1.08</code>、scrim 加深</dd>
+            <dt>颜色</dt>
+            <dd>折叠顶栏 <code>glassSurface</code> 0.72 + <code>glassBorder</code>；投影 <code>0 8px 26px rgba(0,0,0,.30)</code> —— 比 Dock 浅，避免两个悬浮层抢</dd>
+            <dt>字号</dt>
+            <dd>顶栏标题 <b>15/600</b>（不是 titleLarge：折叠栏要克制）；搜索降级为 18px 图标</dd>
+            <dt>动效</dt>
+            <dd>折叠/展开 <b>120ms FastOutSlowIn</b>，只动 <code>translateY</code> 与 <code>alpha</code>，<b>不动高度</b>（改高度会触发重排、掉帧）</dd>
+            <dt>交互</dt>
+            <dd>点折叠顶栏任意空白 → <b>滚回顶部</b>（一次性）；点搜索图标 → 直接展开搜索态，不需要先滚回</dd>
+          </dl>
+        </div>
+      </figure>
+
+      <!-- 5.2 -->
+      <figure class="frame">
+        <figcaption class="cap"><span class="cap-n">5.2</span> 继续下滚 · Dock 避让隐藏</figcaption>
+        <div class="phone" data-appearance="dark" data-default="dark">
+          <div class="screen">
+            <div style="margin-top:-462px">
+              <div class="hero" style="height:532px">
+                <img class="hero-img" src="mockup-assets/hero-wide.jpg" alt="" />
+                <div class="hero-scrim"></div>
+                
+              </div>
+              <div class="section" style="padding-top:22px">
+                <div class="sec-head"><h2 class="t-title-lg">继续观看</h2><span class="sec-all">全部</span></div>
+                <div class="hscroll">
+                  <div class="wcard">
+                    <div class="wart"><img src="mockup-assets/poster-neon.jpg" alt="" style="object-position:50% 40%" /><span class="w-ep">S1 · E4</span><div class="w-progress"><i style="width:71%"></i></div></div>
+                    <div class="t-title-md" style="margin-top:9px;color:var(--on)">雨之城</div>
+                  </div>
+                  <div class="wcard">
+                    <div class="wart"><img src="mockup-assets/poster-space.jpg" alt="" /><span class="w-ep">S2 · E1</span><div class="w-progress"><i style="width:34%"></i></div></div>
+                    <div class="t-title-md" style="margin-top:9px;color:var(--on)">静默轨道</div>
+                  </div>
+                </div>
+              </div>
+              <div class="section">
+                <div class="sec-head"><h2 class="t-title-lg">最新加入</h2><span class="sec-all">全部</span></div>
+                <div class="hscroll">
+                  <div class="pcard"><div class="art"><img src="mockup-assets/poster-desert.jpg" alt="" /><span class="p-badge">4K</span><span class="p-title">沙丘之外</span></div><div class="p-meta">2023 · 剧情 / 冒险</div></div>
+                  <div class="pcard"><div class="art"><img src="mockup-assets/poster-lighthouse.jpg" alt="" /><span class="p-title">灯塔</span></div><div class="p-meta">2021 · 剧情 / 悬疑</div></div>
+                  <div class="pcard"><div class="art"><img src="mockup-assets/poster-anime.jpg" alt="" /><span class="p-badge">12 集</span><span class="p-title">屋顶上的夏天</span></div><div class="p-meta">2024 · 动画 / 青春</div></div>
+                </div>
+              </div>
+              <div class="section">
+                <div class="sec-head"><h2 class="t-title-lg">随便看看</h2><span class="sec-all">换一批</span></div>
+                <div class="hscroll">
+                  <div class="pcard"><div class="art"><img src="mockup-assets/poster-forest.jpg" alt="" /><span class="p-title">林间雾</span></div><div class="p-meta">2022 · 惊悚</div></div>
+                  <div class="pcard"><div class="art"><img src="mockup-assets/poster-neon.jpg" alt="" /><span class="p-title">雨之城</span></div><div class="p-meta">2024 · 科幻</div></div>
+                </div>
+              </div>
+              <div style="height:40px"></div>
+            </div>
+          </div>
+
+          <div class="topbar-mini" style="top:30px">
+            <span class="tm-title">影屿</span>
+            <span class="tm-ico">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/></svg>
+            </span>
+            <span class="avatar" style="width:26px;height:26px"></span>
+          </div>
+
+          <div class="statusbar">
+            <span>21:45</span>
+            <span class="sb-right">
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx="1"/><rect x="4.2" y="5" width="2.6" height="6" rx="1"/><rect x="8.4" y="2.6" width="2.6" height="8.4" rx="1"/><rect x="12.6" y="0" width="2.6" height="11" rx="1"/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x=".6" y=".6" width="19" height="9.8" rx="2.6" stroke="currentColor" stroke-opacity=".5"/><rect x="2.2" y="2.2" width="14" height="6.6" rx="1.4" fill="currentColor"/></svg>
+            </span>
+          </div>
+          <div class="gesturebar"></div>
+          <nav class="dock hidden">
+            <span class="dock-i is-active"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg><span class="dlabel">首页</span></span>
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4.5L5 20V5a1 1 0 0 1 1-1z"/></svg></span>
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3.2 1.9"/></svg></span>
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.4h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5z"/></svg></span>
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.4-7.98A5.4 5.4 0 0 1 17.3 9.4 3.9 3.9 0 0 1 17 18z"/></svg></span>
+          </nav>
+        </div>
+        <div class="spec">
+          <dl>
+            <dt>触发</dt>
+            <dd>向下滚动 > <b>24dp</b> 隐藏，向上滚动 > <b>8dp</b> 立刻出现（不对称：出现要"更快更灵敏"，否则用户找不到导航）</dd>
+            <dt>位移</dt>
+            <dd><code>translateY(+height + 16dp)</code>，同时 <code>alpha → 0</code>；<b>不做缩放</b>，缩放会让人以为 Dock 在远离</dd>
+            <dt>颜色</dt>
+            <dd>隐藏态不变色、不降透明度到 0 再动 —— <b>透明度与位移同时进行</b>，单靠其中一个都会显得"卡一下"</dd>
+            <dt>字号</dt>
+            <dd>无变化</dd>
+            <dt>动效</dt>
+            <dd><b>120ms FastOutSlowIn</b>，隐藏 <code>FastOutLinearIn</code>、出现 <code>LinearOutSlowIn</code>（M3 的非对称曲线）</dd>
+            <dt>交互</dt>
+            <dd>滚到底部时 Dock <b>强制出现</b>（不隐藏），因为此时用户大概率要找导航；这个判定在 <code>scrollState.canScrollForward == false</code> 时生效</dd>
+          </dl>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ══════════════════ 06 组件明细 ══════════════════ -->
+  <section class="sect" id="s6">
+    <div class="sect-head">
+      <span class="sect-num">06</span>
+      <h2>组件明细</h2>
+      <span class="badge-tag ok">M1</span>
+      <span class="rule"></span>
+      <p class="sub">海报卡五态 / Dock / Rail / Chip / 分区标题 / 角标 / 骨架</p>
+    </div>
+
+    <p class="note">
+      这是给实现的对照表：每个组件都标注了<b>真实尺寸</b>与<b>它在哪种状态下长什么样</b>。
+      海报卡的五态是重点 —— 尤其是「缺图」和「已收藏」，前者决定弱网下的观感，后者决定用户能不能相信收藏生效了。
+    </p>
+
+    <div class="sheet" data-appearance="dark" data-default="dark" style="--r-card:12px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:22px">
+        <span class="t-cap" style="color:#6E7A87">组件对照 · 1:1 尺寸</span>
+        <span style="flex:1;height:1px;background:#191F26"></span>
+        <span style="font:500 11px/1 inherit;color:#566270">圆角随偏好联动 ↑ 上方控制台</span>
+      </div>
+
+      <div class="sheet-grid">
+        <!-- 普通 -->
+        <div class="cell">
+          <span class="clab">海报卡 · 普通</span>
+          <div class="pcard">
+            <div class="art"><img src="mockup-assets/poster-desert.jpg" alt="" /><span class="p-title">沙丘之外</span></div>
+            <div class="p-meta">2023 · 剧情 / 冒险</div>
+          </div>
+          <span class="csub">132×198 · 标题压图 2 行 · 图下仅元信息</span>
+        </div>
+
+        <!-- 进度 -->
+        <div class="cell">
+          <span class="clab">海报卡 · 观看进度</span>
+          <div class="pcard hasprog">
+            <div class="art"><img src="mockup-assets/poster-neon.jpg" alt="" /><span class="p-title">雨之城</span><div class="p-progress"><i style="width:62%"></i></div></div>
+            <div class="p-meta">剩 3 集</div>
+          </div>
+          <span class="csub">进度条高 3 · 贴底 6 · 标题上移 6</span>
+        </div>
+
+        <!-- 角标 -->
+        <div class="cell">
+          <span class="clab">海报卡 · 角标</span>
+          <div class="pcard">
+            <div class="art"><img src="mockup-assets/poster-space.jpg" alt="" /><span class="p-badge">4K</span><span class="p-title">静默轨道</span></div>
+            <div class="p-meta">2025 · 科幻</div>
+          </div>
+          <span class="csub">高 17 · labelSmall · tertiaryContainer</span>
+        </div>
+
+        <!-- 收藏 -->
+        <div class="cell">
+          <span class="clab">海报卡 · 已收藏</span>
+          <div class="pcard">
+            <div class="art">
+              <img src="mockup-assets/poster-lighthouse.jpg" alt="" />
+              <span class="p-heart" style="background:var(--primary);color:var(--on-primary)">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 20.5l-1.5-1.35C5.2 14.4 2.5 11.95 2.5 8.9 2.5 6.4 4.4 4.5 6.9 4.5c1.4 0 2.8.65 3.6 1.7.8-1.05 2.2-1.7 3.6-1.7 2.5 0 4.4 1.9 4.4 4.4 0 3.05-2.7 5.5-8 10.25z"/></svg>
+              </span>
+              <span class="p-title">灯塔</span>
+            </div>
+            <div class="p-meta">2021 · 剧情 / 悬疑</div>
+          </div>
+          <span class="csub">收藏态：实心 primary 底，未收藏为暗玻璃</span>
+        </div>
+
+        <!-- 缺图 -->
+        <div class="cell">
+          <span class="clab">海报卡 · 缺图</span>
+          <div class="pcard">
+            <div class="art missing">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.6" cy="9.8" r="1.5"/><path d="M3.6 17.5l4.6-4.2 3.4 3 3.2-2.6 5.6 5"/></svg>
+              <span class="mtxt">无海报</span>
+            </div>
+            <div class="p-meta">档案 · 未曾上映</div>
+          </div>
+          <span class="csub">占位不显示标题 —— 免得空图上糊一行字</span>
+        </div>
+
+        <!-- 继续观看 -->
+        <div class="cell" style="grid-column:span 2">
+          <span class="clab">继续观看卡（首页专用，16:9）</span>
+          <div class="wcard">
+            <div class="wart">
+              <img src="mockup-assets/poster-space.jpg" alt="" style="object-position:50% 45%" />
+              <span class="w-ep">S2 · E1</span>
+              <div class="w-resume">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.1v13.8L19 12z"/></svg>
+                剩 1 小时 2 分
+              </div>
+              <div class="w-progress"><i style="width:34%"></i></div>
+            </div>
+            <div class="t-title-md" style="margin-top:9px;color:var(--on)">静默轨道</div>
+            <div class="p-meta">第 2 季第 1 集 · 远地点</div>
+          </div>
+          <span class="csub">212×120 · 左上集号 · 左下剩余时长 · 底部 3dp 进度 —— 为什么不用竖版：横版更贴近"剧集"的辨识习惯</span>
+        </div>
+
+        <!-- Dock -->
+        <div class="cell" style="grid-column:span 2">
+          <span class="clab">Dock（手机）</span>
+          <div style="background:var(--surf1);border-radius:16px;padding:12px 8px;width:100%;max-width:372px">
+          <nav class="dock demo">
+            <span class="dock-i is-active">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg>
+              <span class="dlabel">首页</span>
+            </span>
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4.5L5 20V5a1 1 0 0 1 1-1z"/></svg></span>
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3.2 1.9"/></svg></span>
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.4h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5z"/></svg></span>
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.4-7.98A5.4 5.4 0 0 1 17.3 9.4 3.9 3.9 0 0 1 17 18z"/></svg></span>
+          </nav>
+          </div>
+          <span class="csub">高 64 · 圆角 32 · 左右 16 / 底 14 · 选中项展开文字（图标位不位移，用 padding 让位）</span>
+        </div>
+
+        <!-- Rail -->
+        <div class="cell" style="grid-column:span 2">
+          <span class="clab">Rail 项（宽屏）</span>
+          <div class="rail-demo">
+            <div class="rail-i is-active">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg>
+              <span class="rlabel">首页</span>
+            </div>
+            <div class="rail-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4.5L5 20V5a1 1 0 0 1 1-1z"/></svg>
+              <span class="rlabel">收藏</span>
+            </div>
+            <div class="rail-i">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3.2 1.9"/></svg>
+              <span class="rlabel">历史</span>
+            </div>
+          </div>
+          <span class="csub">64×62 · 圆角 16（非胶囊）· 图标 20 + 标签 10 —— 侧栏用胶囊会显得软塌</span>
+        </div>
+
+        <!-- Chip -->
+        <div class="cell">
+          <span class="clab">Chip</span>
+          <div class="demo-line">
+            <span class="chip on">电影</span>
+            <span class="chip">剧集</span>
+          </div>
+          <span class="csub">高 32 · 全圆 · 选中 primaryContainer</span>
+        </div>
+
+        <!-- 分区标题 -->
+        <div class="cell" style="grid-column:span 2">
+          <span class="clab">分区标题</span>
+          <div class="sec-head" style="padding:0">
+            <h2 class="t-title-lg">继续观看</h2>
+            <span class="sec-all">全部
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg>
+            </span>
+          </div>
+          <span class="csub">titleLarge 20/600 + 「全部」12.5/600 primary（不用 Button，太宽）· 上下留白 12</span>
+        </div>
+
+        <!-- 角标 -->
+        <div class="cell">
+          <span class="clab">角标 / 徽章</span>
+          <div class="demo-line">
+            <span class="hb">4K HDR</span>
+            <span class="hb ghost" style="background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.26);color:#fff;backdrop-filter:blur(8px)">杜比全景声</span>
+          </div>
+          <span class="csub">高 20 · 10/700/+0.7 · 强(tertiaryContainer) / 弱(白 16% + 描边)</span>
+        </div>
+
+        <!-- 骨架 -->
+        <div class="cell">
+          <span class="clab">骨架卡</span>
+          <div class="skcard">
+            <div class="sk"></div>
+            <div class="sk sk-line"></div>
+          </div>
+          <span class="csub">尺寸与真卡一致 · 微光 1.5s</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════ 07 圆角对照 ══════════════════ -->
+  <section class="sect" id="s7">
+    <div class="sect-head">
+      <span class="sect-num">07</span>
+      <h2>圆角三档对照</h2>
+      <span class="badge-tag ok">M1</span>
+      <span class="rule"></span>
+      <p class="sub">12dp 默认 / 0dp 直角 / 24dp 全圆 —— 验证极端值下层次是否仍成立</p>
+    </div>
+
+    <p class="note">
+      Cine 不覆写 <code>LocalCardCorner</code>，用户在设置里调到 0 或 24，这里立刻跟着变。
+      我把三个值都画出来是为了确认一件事：<b>圆角调到 0 时影院感会不会塌</b>。
+      结论是<b>不会塌，但会从「海报」变成「相框」</b> —— 边缘硬了以后，压图标题的柔和度需求上升，
+      所以 0dp 下我在标题下加了一层更重的 scrim（见 7.2 的第二组）。这不是改设计，是同一个组件在不同圆角下的自适应。
+    </p>
+
+    <div class="sheet" data-appearance="dark" data-default="dark">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
+        <span class="t-cap" style="color:#6E7A87">同一张卡 · 三个圆角</span>
+        <span style="flex:1;height:1px;background:#191F26"></span>
+      </div>
+
+      <div class="r3">
+        <div class="box">
+          <div class="pair" style="--r-card:12px">
+            <div class="art"><img src="mockup-assets/poster-desert.jpg" alt="" /><span class="p-badge">4K</span><span class="p-title">沙丘之外</span></div>
+            <div class="p-meta">2023 · 剧情 / 冒险</div>
+          </div>
+          <span class="k">12dp <span>· 默认，推荐</span></span>
+        </div>
+        <div class="box">
+          <div class="pair" style="--r-card:0px">
+            <div class="art"><img src="mockup-assets/poster-desert.jpg" alt="" /><span class="p-badge" style="border-radius:0">4K</span><span class="p-title">沙丘之外</span></div>
+            <div class="p-meta">2023 · 剧情 / 冒险</div>
+          </div>
+          <span class="k">0dp <span>· 直角，层次偏硬</span></span>
+        </div>
+        <div class="box">
+          <div class="pair" style="--r-card:24px">
+            <div class="art"><img src="mockup-assets/poster-desert.jpg" alt="" /><span class="p-badge">4K</span><span class="p-title">沙丘之外</span></div>
+            <div class="p-meta">2023 · 剧情 / 冒险</div>
+          </div>
+          <span class="k">24dp <span>· 全圆，偏软但可接受</span></span>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:10px;margin:34px 0 20px">
+        <span class="t-cap" style="color:#6E7A87">层叠场景 · 圆角对「悬浮感」的影响</span>
+        <span style="flex:1;height:1px;background:#191F26"></span>
+      </div>
+
+      <div style="display:flex;gap:52px;flex-wrap:wrap">
+        <!-- 0dp -->
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div style="position:relative;width:300px;height:186px">
+            <div style="position:absolute;inset:0;border-radius:0;overflow:hidden;background:var(--surf2)">
+              <img src="mockup-assets/hero-wide.jpg" alt="" style="width:100%;height:100%;object-fit:cover" />
+              <div style="position:absolute;inset:0;background:linear-gradient(180deg,transparent 34%,rgba(4,6,8,.86))"></div>
+              <div style="position:absolute;left:14px;right:14px;bottom:12px;color:#fff;font:600 15px/1.25 inherit">雨之城</div>
+            </div>
+            <div style="position:absolute;right:-22px;top:52px;width:74px;height:110px;border-radius:0;overflow:hidden;border:2px solid var(--surface);box-shadow:0 10px 26px rgba(0,0,0,.6)">
+              <img src="mockup-assets/poster-anime.jpg" alt="" style="width:100%;height:100%;object-fit:cover" />
+            </div>
+          </div>
+          <span class="k" style="font:600 12px/1 inherit;color:#9AA6B2">0dp <span style="color:#5F6B78;font-weight:500">· 两张卡像贴纸叠在一起，边界清楚但没有「浮起」</span></span>
+        </div>
+
+        <!-- 12dp -->
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div style="position:relative;width:300px;height:186px">
+            <div style="position:absolute;inset:0;border-radius:12px;overflow:hidden;background:var(--surf2)">
+              <img src="mockup-assets/hero-wide.jpg" alt="" style="width:100%;height:100%;object-fit:cover" />
+              <div style="position:absolute;inset:0;background:linear-gradient(180deg,transparent 34%,rgba(4,6,8,.86))"></div>
+              <div style="position:absolute;left:14px;right:14px;bottom:12px;color:#fff;font:600 15px/1.25 inherit">雨之城</div>
+            </div>
+            <div style="position:absolute;right:-22px;top:52px;width:74px;height:110px;border-radius:12px;overflow:hidden;border:2px solid var(--surface);box-shadow:0 10px 26px rgba(0,0,0,.6)">
+              <img src="mockup-assets/poster-anime.jpg" alt="" style="width:100%;height:100%;object-fit:cover" />
+            </div>
+          </div>
+          <span class="k" style="font:600 12px/1 inherit;color:#9AA6B2">12dp <span style="color:#5F6B78;font-weight:500">· 后卡压在前卡上，读作"两张纸"而不是"一块板"</span></span>
+        </div>
+      </div>
+
+      <div style="margin-top:26px;padding:14px 16px;border-radius:10px;background:var(--surf1);border:1px solid #1D242C;max-width:900px">
+        <div style="font:600 12px/1.5 inherit;color:#C3CDD7;margin-bottom:6px">实现备注（不需要额外分支）</div>
+        <div style="font:500 12.5px/1.75 inherit;color:#8593A0">
+          圆角只作用于 <code style="font:500 11.5px/1 ui-monospace,monospace;background:#161D24;border:1px solid #222B34;border-radius:4px;padding:2px 5px;color:#9FD8C8">Modifier.clip(RoundedCornerShape(corner))</code>，
+          <b style="color:#C3CDD7">不用为 0dp 写单独分支</b>：当 <code style="font:500 11.5px/1 ui-monospace,monospace;background:#161D24;border:1px solid #222B34;border-radius:4px;padding:2px 5px;color:#9FD8C8">corner = 0</code> 时
+          压图渐变本来就贴边，视觉自然变成"相框"。稿中看到的差异来自图片本身的明暗，不是额外样式。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════ 08 M2 概念稿 ══════════════════ -->
+  <section class="sect" id="s8">
+    <div class="sect-head">
+      <span class="sect-num">08</span>
+      <h2>M2 概念稿</h2>
+      <span class="badge-tag todo">未实现 · 仅方向预览</span>
+      <span class="rule"></span>
+      <p class="sub">媒体库海报流 / 详情 Backdrop</p>
+    </div>
+
+    <p class="note">
+      这两屏属于 <b>M2</b>，不在 M1 的实现范围内，放在这里只为对齐方向 ——
+      尤其是详情页：它决定了「共享元素过渡」到底成不成立。看完再动 M2，避免先写两千行再发现方向不对。
+    </p>
+
+    <div class="grid2">
+      <!-- 8.1 媒体库 -->
+      <figure class="frame">
+        <figcaption class="cap">
+          <span class="cap-n">8.1</span> 媒体库 · 海报流 + 分类 Chip
+          <span class="badge-tag todo" style="height:18px;font-size:9.5px">M2</span>
+        </figcaption>
+        <div class="phone" data-appearance="dark" data-default="dark">
+          <div class="screen">
+            <div style="display:flex;align-items:center;gap:12px;padding:38px 20px 10px">
+              <span class="icon-btn" style="background:transparent">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+              </span>
+              <h2 class="t-headline" style="margin:0;flex:1">媒体库</h2>
+              <span class="icon-btn" style="background:transparent">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/></svg>
+              </span>
+              <span class="icon-btn" style="background:transparent">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/></svg>
+              </span>
+            </div>
+
+            <div style="display:flex;gap:8px;padding:6px 20px 4px;overflow:hidden">
+              <span class="chip on">全部</span>
+              <span class="chip">电影</span>
+              <span class="chip">剧集</span>
+              <span class="chip">动画</span>
+              <span class="chip">纪录片</span>
+            </div>
+
+            <div style="display:flex;align-items:baseline;gap:8px;padding:16px 20px 12px">
+              <span class="t-title-lg">全部</span>
+              <span class="t-label" style="color:var(--onvar)">1,284 部 · 按最近加入</span>
+              <span style="margin-left:auto;display:flex;align-items:center;gap:5px;color:var(--primary);font:600 12.5px/1 inherit">
+                排序
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+              </span>
+            </div>
+
+            <div class="grid2p">
+              <div class="pcard">
+                <div class="art"><img src="mockup-assets/poster-desert.jpg" alt="" /><span class="p-badge">4K</span><span class="p-title">沙丘之外</span></div>
+                <div class="p-meta">2023 · 剧情 / 冒险</div>
+              </div>
+              <div class="pcard hasprog">
+                <div class="art"><img src="mockup-assets/poster-neon.jpg" alt="" /><span class="p-heart"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 20.5l-1.5-1.35C5.2 14.4 2.5 11.95 2.5 8.9 2.5 6.4 4.4 4.5 6.9 4.5c1.4 0 2.8.65 3.6 1.7.8-1.05 2.2-1.7 3.6-1.7 2.5 0 4.4 1.9 4.4 4.4 0 3.05-2.7 5.5-8 10.25z"/></svg></span><span class="p-title">雨之城</span><div class="p-progress"><i style="width:62%"></i></div></div>
+                <div class="p-meta">已看 62% · 剩 3 集</div>
+              </div>
+              <div class="pcard">
+                <div class="art"><img src="mockup-assets/poster-lighthouse.jpg" alt="" /><span class="p-title">灯塔</span></div>
+                <div class="p-meta">2021 · 剧情 / 悬疑</div>
+              </div>
+              <div class="pcard">
+                <div class="art"><img src="mockup-assets/poster-anime.jpg" alt="" /><span class="p-badge">12 集</span><span class="p-title">屋顶上的夏天</span></div>
+                <div class="p-meta">2024 · 动画 / 青春</div>
+              </div>
+              <div class="pcard">
+                <div class="art"><img src="mockup-assets/poster-space.jpg" alt="" /><span class="p-badge soft">HDR</span><span class="p-title">静默轨道</span></div>
+                <div class="p-meta">2025 · 科幻 / 惊悚</div>
+              </div>
+              <div class="pcard">
+                <div class="art missing">
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.6" cy="9.8" r="1.5"/><path d="M3.6 17.5l4.6-4.2 3.4 3 3.2-2.6 5.6 5"/></svg>
+                  <span class="mtxt">无海报</span>
+                </div>
+                <div class="p-meta">家庭录像 · 2009</div>
+              </div>
+            </div>
+            <div style="height:100px"></div>
+          </div>
+
+          <div class="statusbar">
+            <span>21:46</span>
+            <span class="sb-right">
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx="1"/><rect x="4.2" y="5" width="2.6" height="6" rx="1"/><rect x="8.4" y="2.6" width="2.6" height="8.4" rx="1"/><rect x="12.6" y="0" width="2.6" height="11" rx="1"/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x=".6" y=".6" width="19" height="9.8" rx="2.6" stroke="currentColor" stroke-opacity=".5"/><rect x="2.2" y="2.2" width="14" height="6.6" rx="1.4" fill="currentColor"/></svg>
+            </span>
+          </div>
+          <div class="gesturebar"></div>
+          <nav class="dock">
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg></span>
+            <span class="dock-i is-active"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4.5L5 20V5a1 1 0 0 1 1-1z"/></svg><span class="dlabel">收藏</span></span>
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3.2 1.9"/></svg></span>
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.4h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5z"/></svg></span>
+            <span class="dock-i"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.4-7.98A5.4 5.4 0 0 1 17.3 9.4 3.9 3.9 0 0 1 17 18z"/></svg></span>
+          </nav>
+        </div>
+        <div class="spec">
+          <dl>
+            <dt>布局</dt>
+            <dd>顶栏 44（返回 / 标题 / 搜索 / 视图切换）· Chip 行横向滚动 · <b>统计行</b>（数量 + 排序入口）· 2 列网格（每张 170×255）</dd>
+            <dt>相对 Classic</dt>
+            <dd>Classic 是「顶栏 + 分类树 + 长列表」；Cine 把分类压成一行 Chip，<b>把"文件夹"变成"筛选"</b>，一屏能看的片子从 3 张到 4 张</dd>
+            <dt>颜色</dt>
+            <dd>无 Hero，所以<b>不需要 scrim</b>，页面直接 <code>background</code>；排序入口用 <code>primary</code> 文字而非按钮</dd>
+            <dt>字号</dt>
+            <dd>页面标题 headlineMedium <b>26/600</b>；统计行 12/500；卡片标题 13/600（比首页略小，因为一屏更多）</dd>
+            <dt>动效</dt>
+            <dd>切换 Chip → 网格 <b>淡出 100ms / 淡入 180ms</b>，不整页刷新骨架（用旧数据占位到新数据到）；滚动 <b>300dp</b> 后顶栏标题淡出</dd>
+            <dt>交互</dt>
+            <dd>点海报 → 详情（<b>共享元素</b>：海报放大成 Backdrop）；长按 → 上下文菜单（收藏 / 标记已看 / 播放）；右上视图切换 → 列表模式（一行一张，带简介）</dd>
+          </dl>
+        </div>
+      </figure>
+
+      <!-- 8.2 详情 -->
+      <figure class="frame">
+        <figcaption class="cap">
+          <span class="cap-n">8.2</span> 详情 · Backdrop + 上滑面板
+          <span class="badge-tag todo" style="height:18px;font-size:9.5px">M2</span>
+        </figcaption>
+        <div class="phone" data-appearance="dark" data-default="dark">
+          <div class="screen">
+            <div class="backdrop">
+              <img src="mockup-assets/hero-wide.jpg" alt="" />
+              <div class="bd-top"></div>
+              <div class="bd-bot"></div>
+              <div class="bd-nav">
+                <span class="bd-btn">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+                </span>
+                <span style="display:flex;gap:8px">
+                  <span class="bd-btn">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5l-1.5-1.35C5.2 14.4 2.5 11.95 2.5 8.9 2.5 6.4 4.4 4.5 6.9 4.5c1.4 0 2.8.65 3.6 1.7.8-1.05 2.2-1.7 3.6-1.7 2.5 0 4.4 1.9 4.4 4.4 0 3.05-2.7 5.5-8 10.25z"/></svg>
+                  </span>
+                  <span class="bd-btn">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
+                  </span>
+                </span>
+              </div>
+              <div class="bd-actions">
+                <span class="btn btn-fill" style="flex:1">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72L19 12z"/></svg>
+                  从第 4 集继续
+                </span>
+                <span class="btn-icon" style="width:44px;height:44px">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                </span>
+              </div>
+            </div>
+
+            <div class="sheet-panel">
+              <div class="handle"></div>
+              <h2 class="dt-title t-headline">雨之城</h2>
+              <div class="dt-meta t-label">
+                <span>2024</span><i class="dot"></i>
+                <span>科幻 · 悬疑</span><i class="dot"></i>
+                <span>2h 12m</span><i class="dot"></i>
+                <span style="color:var(--tertiary);font-weight:700">9.1</span>
+              </div>
+              <div class="dt-tags">
+                <span class="hb">4K HDR</span>
+                <span class="hb">杜比全景声</span>
+                <span class="chip" style="height:22px;font-size:11px;padding:0 10px">PG-13</span>
+              </div>
+
+              <p class="t-body" style="color:var(--onvar);margin:0">
+                连续四十天的雨没有停过。一名负责清洗霓虹招牌的工人，在第九区的积水里捞起一枚仍在录像的镜头盖 ——
+                里面拍的，是三年前那桩被判定为意外的坠落。
+              </p>
+
+              <div class="dt-label">演职员</div>
+              <div class="castrow">
+                <div class="cast">
+                  <div class="cav"><img src="mockup-assets/poster-neon.jpg" alt="" style="object-position:50% 22%" /></div>
+                  <div class="cname">雨宫 透</div>
+                </div>
+                <div class="cast">
+                  <div class="cav"><img src="mockup-assets/poster-lighthouse.jpg" alt="" style="object-position:50% 28%" /></div>
+                  <div class="cname">陈 亦</div>
+                </div>
+                <div class="cast">
+                  <div class="cav"><img src="mockup-assets/poster-forest.jpg" alt="" style="object-position:50% 30%" /></div>
+                  <div class="cname">李 岸</div>
+                </div>
+                <div class="cast">
+                  <div class="cav"><img src="mockup-assets/poster-desert.jpg" alt="" style="object-position:50% 32%" /></div>
+                  <div class="cname">A. Reyes</div>
+                </div>
+                <div class="cast">
+                  <div class="cav" style="display:flex;align-items:center;justify-content:center;color:var(--onvar);font:600 11px/1 inherit">全部</div>
+                  <div class="cname">24 人</div>
+                </div>
+              </div>
+
+              <div class="dt-label" style="display:flex;justify-content:space-between;align-items:center">
+                <span>剧集 · 第 2 季</span>
+                <span style="color:var(--primary);text-transform:none;letter-spacing:0;font-size:12px">全部 6 集</span>
+              </div>
+              <div class="eprow">
+                <div class="epthumb"><img src="mockup-assets/poster-neon.jpg" alt="" style="object-position:50% 40%" /><div class="w-progress"><i style="width:71%"></i></div></div>
+                <div class="epinfo">
+                  <div class="epn">E4 · 雨中的证词</div>
+                  <div class="epd">剩 38 分钟 · 48m</div>
+                </div>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--primary)"><path d="M8 5.14v13.72L19 12z"/></svg>
+              </div>
+              <div class="eprow" style="border-bottom:0">
+                <div class="epthumb"><img src="mockup-assets/poster-space.jpg" alt="" style="object-position:50% 45%" /></div>
+                <div class="epinfo">
+                  <div class="epn">E5 · 第九区</div>
+                  <div class="epd">46m</div>
+                </div>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--onvar)" opacity=".5"><path d="M8 5.14v13.72L19 12z"/></svg>
+              </div>
+            </div>
+            <div style="height:24px"></div>
+          </div>
+
+          <div class="statusbar onplatese">
+            <span>21:47</span>
+            <span class="sb-right">
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx="1"/><rect x="4.2" y="5" width="2.6" height="6" rx="1"/><rect x="8.4" y="2.6" width="2.6" height="8.4" rx="1"/><rect x="12.6" y="0" width="2.6" height="11" rx="1"/></svg>
+              <svg width="24" height="11" viewBox="0 0 24 11" fill="none"><rect x=".6" y=".6" width="19" height="9.8" rx="2.6" stroke="currentColor" stroke-opacity=".5"/><rect x="2.2" y="2.2" width="14" height="6.6" rx="1.4" fill="currentColor"/></svg>
+            </span>
+          </div>
+          <div class="gesturebar"></div>
+        </div>
+        <div class="spec">
+          <dl>
+            <dt>布局</dt>
+            <dd>Backdrop <b>386dp</b>（约屏高 45%）· 信息面板<b>上压 18dp</b>、圆角 26 上沿 · 面板内 padding 20 · 剧集行高 76</dd>
+            <dt>层级</dt>
+            <dd>Backdrop 底部 scrim 收进 <code>surface</code>，面板从 <code>surface</code> 起 —— 两者同色，靠<b>圆角与 18dp 负边距</b>形成"滑上来一张纸"的关系</dd>
+            <dt>颜色</dt>
+            <dd>评分用 <code>tertiary</code>（和角标同族）；已看集数进度 <code>primary</code>；未播集数图标 <code>onSurfaceVariant 50%</code></dd>
+            <dt>字号</dt>
+            <dd>片名 headlineMedium <b>26/600/-0.6</b>；简介 bodyMedium 13.5/1.55；演职员名 10.5/500；集名 12.5/600</dd>
+            <dt>动效</dt>
+            <dd>从列表进入：海报 → Backdrop <b>共享元素 280ms</b>；面板在 280ms 内从 <code>+24dp</code> 滑入；返回时反向，<b>Backdrop 回到被点的那个卡片位置</b></dd>
+            <dt>交互</dt>
+            <dd>面板上滑 → 展开全屏简介（Backdrop 收成顶栏缩略）；点集 → 直接播；长按集 → 选集详情</dd>
+          </dl>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ══════════════════ 附录：Token 表 ══════════════════ -->
+  <section class="sect" id="s9">
+    <div class="sect-head">
+      <span class="sect-num">附</span>
+      <h2>Cine 设计 Token 一览</h2>
+      <span class="rule"></span>
+      <p class="sub">实现时按此表落到 ui/cine/tokens/</p>
+    </div>
+
+    <div class="sheet" data-appearance="dark" data-default="dark" style="padding:0;overflow:hidden">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="background:var(--surf1)">
+            <th style="text-align:left;padding:14px 18px;font:700 10.5px/1 inherit;letter-spacing:.09em;text-transform:uppercase;color:#6E7A87;border-bottom:1px solid var(--outline-var)">Token</th>
+            <th style="text-align:left;padding:14px 18px;font:700 10.5px/1 inherit;letter-spacing:.09em;text-transform:uppercase;color:#6E7A87;border-bottom:1px solid var(--outline-var)">派生规则</th>
+            <th style="text-align:left;padding:14px 18px;font:700 10.5px/1 inherit;letter-spacing:.09em;text-transform:uppercase;color:#6E7A87;border-bottom:1px solid var(--outline-var)">用在哪</th>
+          </tr>
+        </thead>
+        <tbody style="color:#A7B2BD">
+          <tr><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)"><code style="font:500 11.5px/1 ui-monospace,monospace;color:#9FD8C8">scrimBottom</code></td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">surface 线性渐变 0 → 0.92（底 240dp）</td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">Hero、Backdrop 标题压图区</td></tr>
+          <tr><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)"><code style="font:500 11.5px/1 ui-monospace,monospace;color:#9FD8C8">glassSurface</code></td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">surfaceContainer 0.72（浅色下 surface 0.76）</td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">Dock、Rail、折叠顶栏</td></tr>
+          <tr><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)"><code style="font:500 11.5px/1 ui-monospace,monospace;color:#9FD8C8">glassBorder</code></td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">outlineVariant 0.35</td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">玻璃层 1dp 描边</td></tr>
+          <tr><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)"><code style="font:500 11.5px/1 ui-monospace,monospace;color:#9FD8C8">posterOverlay</code></td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">surface 0.55（暗图上也用暗，不随明暗翻转）</td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">海报底部信息层</td></tr>
+          <tr><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)"><code style="font:500 11.5px/1 ui-monospace,monospace;color:#9FD8C8">progressTrack / Fill</code></td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">onSurface 0.24 / primary</td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">观看进度</td></tr>
+          <tr><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)"><code style="font:500 11.5px/1 ui-monospace,monospace;color:#9FD8C8">badgeStrong</code></td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">tertiaryContainer / onTertiaryContainer</td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">4K / HDR / 集数角标</td></tr>
+          <tr><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)"><code style="font:500 11.5px/1 ui-monospace,monospace;color:#9FD8C8">screenH</code></td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">20dp（Classic 为 16）</td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">页面水平边距</td></tr>
+          <tr><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)"><code style="font:500 11.5px/1 ui-monospace,monospace;color:#9FD8C8">sectionGap</code></td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">36dp（Classic 为 16）</td><td style="padding:12px 18px;border-bottom:1px solid var(--outline-var)">区块之间</td></tr>
+          <tr><td style="padding:12px 18px"><code style="font:500 11.5px/1 ui-monospace,monospace;color:#9FD8C8">heroBleed</code></td><td style="padding:12px 18px">-20dp</td><td style="padding:12px 18px">Hero 满宽出血</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:26px;max-width:1120px">
+      <div style="flex:1;min-width:280px;background:#0C1014;border:1px solid #1B222A;border-radius:12px;padding:20px 22px">
+        <div style="font:700 11px/1 inherit;letter-spacing:.12em;text-transform:uppercase;color:#7FE0C9;margin-bottom:10px">这份稿子没做的事</div>
+        <ul style="margin:0;padding-left:18px;color:#8C97A3;font-size:13px;line-height:1.85">
+          <li>没有为 Cine 新增任何色值 —— 色相全部走主题，明暗走外观</li>
+          <li>没有画播放器 —— <code style="font:500 11.5px/1 ui-monospace,monospace;background:#141A21;border:1px solid #1F2831;border-radius:4px;padding:2px 5px;color:#9FD8C8">ui/player/**</code> 一行不动</li>
+          <li>没有画 M3 之后的页面（设置/演员/播放列表）</li>
+          <li>没有做横屏双栏 —— 按决策 4 只做 Rail/Dock 二分</li>
+        </ul>
+      </div>
+      <div style="flex:1;min-width:280px;background:#0C1014;border:1px solid #1B222A;border-radius:12px;padding:20px 22px">
+        <div style="font:700 11px/1 inherit;letter-spacing:.12em;text-transform:uppercase;color:#F0C079;margin-bottom:10px">确认后我按这个顺序落地</div>
+        <ol style="margin:0;padding-left:18px;color:#8C97A3;font-size:13px;line-height:1.85">
+          <li><code style="font:500 11.5px/1 ui-monospace,monospace;background:#141A21;border:1px solid #1F2831;border-radius:4px;padding:2px 5px;color:#9FD8C8">ui/cine/tokens/*</code> + <code style="font:500 11.5px/1 ui-monospace,monospace;background:#141A21;border:1px solid #1F2831;border-radius:4px;padding:2px 5px;color:#9FD8C8">CineTheme</code>（纯新增，零风险）</li>
+          <li><code style="font:500 11.5px/1 ui-monospace,monospace;background:#141A21;border:1px solid #1F2831;border-radius:4px;padding:2px 5px;color:#9FD8C8">UiStyle</code> + 偏好 + <code style="font:500 11.5px/1 ui-monospace,monospace;background:#141A21;border:1px solid #1F2831;border-radius:4px;padding:2px 5px;color:#9FD8C8">CineRoutes</code> 空壳 → 先验证分流与回落</li>
+          <li><code style="font:500 11.5px/1 ui-monospace,monospace;background:#141A21;border:1px solid #1F2831;border-radius:4px;padding:2px 5px;color:#9FD8C8">CineRoot</code>（Dock/Rail）+ 玻璃顶栏</li>
+          <li><code style="font:500 11.5px/1 ui-monospace,monospace;background:#141A21;border:1px solid #1F2831;border-radius:4px;padding:2px 5px;color:#9FD8C8">CineHomeScreen</code> + 组件</li>
+          <li>设置页「界面风格」入口 + 切换重启</li>
+          <li>冒烟：切换 → 五入口遍历 → 进播放器 → 返回 → 切回 Classic</li>
+        </ol>
+      </div>
+    </div>
+
+    <p style="color:#4E5A66;font-size:12px;margin-top:40px">
+      影屿 · CineIsle &nbsp;|&nbsp; Cine UI M1 视觉稿 &nbsp;|&nbsp; 与 <code style="font:500 11.5px/1 ui-monospace,monospace">docs/design/ui-2.0-proposal.md</code> 配套 &nbsp;|&nbsp; 2026-10-23
+    </p>
+  </section>
+
+
+</div>
+
+<script>
+(function(){
+  var root = document.documentElement;
+  var body = document.body;
+  var phones = function(){ return document.querySelectorAll('.phone'); };
+
+  // 主题色相
+  document.querySelectorAll('[data-set-theme]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      root.setAttribute('data-theme', btn.dataset.setTheme);
+      document.querySelectorAll('[data-set-theme]').forEach(function(b){
+        b.setAttribute('aria-pressed', String(b === btn));
+      });
+    });
+  });
+
+  // 分段控件通用处理
+  function wire(name, apply){
+    var seg = document.querySelector('[data-ctl="'+name+'"]');
+    if(!seg) return;
+    seg.querySelectorAll('button').forEach(function(b){
+      b.addEventListener('click', function(){
+        seg.querySelectorAll('button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });
+        apply(b.dataset.v);
+      });
+    });
+  }
+
+  wire('appearance', function(v){
+    document.querySelectorAll('.phone,.tablet,.sheet').forEach(function(p){
+      p.setAttribute('data-appearance', v === 'auto' ? p.dataset.default : v);
+    });
+  });
+
+  wire('radius', function(v){
+    document.querySelectorAll('.phone,.tablet,.sheet').forEach(function(p){
+      p.style.setProperty('--r-card', v + 'px');
+    });
+    document.documentElement.style.setProperty('--r-card', v + 'px');
+  });
+
+  wire('guides', function(v){ body.setAttribute('data-guides', v); });
+})();
+</script>
+</body>
+</html>

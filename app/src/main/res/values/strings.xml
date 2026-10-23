@@ -1075,4 +1075,41 @@
   <string name="loading_anim_cine_spin_arcs">Spinning arcs (built-in)</string>
   <string name="loading_anim_cine_bars">Equalizer (built-in)</string>
   <string name="loading_anim_cine_halo">Halo (built-in)</string>
+
+  <!-- Interface style (Classic / Cine) -->
+  <string name="pref_appearance_category_ui_style">Interface</string>
+  <string name="pref_appearance_ui_style_classic">Classic</string>
+  <string name="pref_appearance_ui_style_cine">Cine</string>
+  <string name="pref_appearance_ui_style_summary">Cine adds an image-first home page with a hero banner. Favorites, history, local and network keep the classic layout for now; switch back at any time.</string>
+
+  <!-- Cine interface -->
+  <string name="cine_nav_home">Home</string>
+  <string name="cine_nav_favorites">Favorites</string>
+  <string name="cine_nav_history">History</string>
+  <string name="cine_nav_local">Local</string>
+  <string name="cine_nav_network">Network</string>
+  <string name="cine_search_hint">Search movies, actors, collections</string>
+  <string name="cine_search_prompt_title">Search your library</string>
+  <string name="cine_search_prompt_desc">Movies, series, episodes and actors across every library</string>
+  <string name="cine_search_empty_title">No matches</string>
+  <string name="cine_search_empty_desc">Nothing found for \"%1$s\"</string>
+  <string name="cine_search_no_server">No server connected</string>
+  <string name="cine_section_libraries">Libraries</string>
+  <string name="cine_section_resume">Continue Watching</string>
+  <string name="cine_section_latest">Recently Added</string>
+  <string name="cine_section_mix">Discover</string>
+  <string name="cine_action_all">All</string>
+  <string name="cine_action_shuffle">Shuffle</string>
+  <string name="cine_action_play">Play</string>
+  <string name="cine_action_resume">Continue</string>
+  <string name="cine_action_detail">Details</string>
+  <string name="cine_state_no_server_title">No server connected</string>
+  <string name="cine_state_no_server_desc">Add an Emby server to start browsing your library</string>
+  <string name="cine_state_no_server_action">Add server</string>
+  <string name="cine_state_empty_title">Nothing here yet</string>
+  <string name="cine_state_empty_desc">No media has been scanned on this server yet</string>
+  <string name="cine_state_error_title">Could not load</string>
+  <string name="cine_state_error_action">Retry</string>
+  <string name="cine_play_failed">Could not start playback</string>
+  <string name="cine_favorite_failed">Could not update favorites</string>
 </resources>

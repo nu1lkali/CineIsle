@@ -25,18 +25,32 @@ internal fun playbackProgress(item: EmbyItem): Float? {
 }
 
 /**
+ * 剩余秒数。
+ *
+ * 与 [playbackProgress] 用**同一套判据**：没有总时长 / 没开始看 / 已经看完
+ * 一律返回 null，调用方据此决定「不画剩余时长角标」。
+ *
+ * 抽出来是因为不同界面要不同的文案格式（老卡片「剩余 12分30秒」、
+ * Cine 的继续观看卡「剩 38 分钟」），但**算多少秒必须只有一处**——
+ * 两个地方各算一次，迟早会出现「同一张卡进度条 71%、剩余时长对不上」。
+ */
+internal fun remainingSeconds(item: EmbyItem): Long? {
+  val total = item.RunTimeTicks ?: return null
+  if (total <= 0) return null
+  val position = item.UserData?.PlaybackPositionTicks ?: 0L
+  if (position <= 0) return null
+  val remain = EmbyTicks.ticksToSeconds(total - position)
+  return if (remain > 0) remain else null
+}
+
+/**
  * 剩余时长文案：「剩余 12分30秒」。
  *
  * 只有「已开始播放且尚未看完」的条目才返回非空；
  * 超过 1 小时的用「剩余 X小时XX分」，避免数字太长撑破角标。
  */
 internal fun remainingLabel(item: EmbyItem): String? {
-  val total = item.RunTimeTicks ?: return null
-  if (total <= 0) return null
-  val position = item.UserData?.PlaybackPositionTicks ?: 0L
-  if (position <= 0) return null
-  val remain = EmbyTicks.ticksToSeconds(total - position)
-  if (remain <= 0) return null
+  val remain = remainingSeconds(item) ?: return null
   return if (remain >= 3600) {
     "剩余 ${remain / 3600}小时${(remain % 3600) / 60}分"
   } else {

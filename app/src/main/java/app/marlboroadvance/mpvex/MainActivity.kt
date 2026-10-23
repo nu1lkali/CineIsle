@@ -72,6 +72,7 @@ import app.marlboroadvance.mpvex.repository.NetworkRepository
 import app.marlboroadvance.mpvex.utils.update.UpdateDialog
 import app.marlboroadvance.mpvex.utils.update.UpdateViewModel
 import app.marlboroadvance.mpvex.ui.browser.MainScreen
+import app.marlboroadvance.mpvex.ui.cine.LocalUiStyle
 import app.marlboroadvance.mpvex.ui.lock.AppLockGate
 import app.marlboroadvance.mpvex.ui.theme.DarkMode
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
@@ -485,9 +486,15 @@ class MainActivity : ComponentActivity() {
     val isDownloading by (updateViewModel?.isDownloading ?: MutableStateFlow(false)).collectAsState()
     val downloadProgress by (updateViewModel?.downloadProgress ?: MutableStateFlow(0f)).collectAsState()
 
+    // 界面风格（经典 / Cine）：由根页面 MainScreen 读取后决定渲染哪套外壳。
+    // 在这里下发而不是在 MainScreen 里直接读偏好：保证「读一次、全树一致」——
+    // 若各处自己订阅，切换风格的瞬间可能出现半秒的混搭。
+    val uiStyle by appearancePreferences.uiStyle.collectAsState()
+
     // Provide both LocalBackStack and the LazyList/Grid states to all screens
     CompositionLocalProvider(
-      LocalBackStack provides typedBackstack
+      LocalBackStack provides typedBackstack,
+      LocalUiStyle provides uiStyle,
     ) {
       NavDisplay(
         backStack = typedBackstack,
