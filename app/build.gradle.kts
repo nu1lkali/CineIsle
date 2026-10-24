@@ -1282,8 +1282,33 @@ android {
     //       整页实现，不会把自己标成 Haze 模糊源，玻璃层取不到底就退化成半透明平涂。
     //       在 CineRoot 里用 CineHazeBacked 给回落页补一层 cineHazeSource，老页面零改动。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 135
-    versionName = "1.6.3"
+    //  ── v136（versionCode 136，versionName 涨到 1.6.4）：Cine 第三阶段，六个页面全部迁完 ──
+    //     · 演员 / 导演作品页 → `CinePersonScreen`：玻璃顶栏 + 头像圆章 + 类型/身份两行
+    //       Chip + 排序抽屉（名称/年份/评分/最新/随机，再点反转）；收藏红心仍走
+    //       `loadPersonFavoriteState` 的三层兜底，数据口径零改动。
+    //     · 直播电视 → `CineLiveTvScreen` + `CineLiveTvGuideScreen`：频道瓦片（16:9 台标 +
+    //       频道号 + 右上角节目单圆钮）、24 小时节目单按「今天/明天」分组、正在播出
+    //       带主色底与细进度条，「现在」每 30 秒自走一步。
+    //     · 下载管理 → `CineDownloadScreen`：玻璃任务卡 + 自绘进度条（未知总量走来回扫），
+    //       暂停/继续/置顶/取消/清除已完成与 Classic 同一套 `EmbyDownloadViewModel`。
+    //     · 服务器管理 → `CineServerManageScreen`：玻璃卡 + 三态状态徽章 + 玻璃上划表单，
+    //       保留「添加时先登录成功才落库」与「加用户锁地址」两道闸门。
+    //     · 本地 → `CineLocalScreen`：相册视图改 Cine 文件夹瓦片/行（新增计数角标、搜索、
+    //       排序抽屉、网格/列表切换、长按隐藏文件夹）；树形文件管理器模式整页沿用 Classic
+    //       （另一套导航范式），外套一层模糊源。Classic FAB 的「打开文件/最近播放/打开链接」
+    //       收进顶栏「更多」抽屉。
+    //     · 网络 → `CineNetworkScreen`：直链面板 + 收藏目录横排卡 + 连接卡（协议徽标/状态/
+    //       连接·断开·置顶·编辑·删除）；目录浏览仍走 `NetworkBrowserScreen`（协议栈不动）。
+    //     · `CineRoutes` 现在登记 7 条路由：详情 / 媒体库 / 演员作品 / 直播列表 / 节目单 /
+    //       下载 / 服务器管理。回落只剩合集、播放列表、发现、离线、照片、网络目录浏览。
+    //     · 新增共享组件 `components/CineFileTiles.kt`（玻璃面板 / 图下标题瓦片 / 横排行 /
+    //       胶囊搜索框 / Dock 占位），四个非 Emby 页面共用，不再各写一套。
+    //     ⚠️ 坑记录：`ui/cine/**` 这种写法在 KDoc 里会**再开一层块注释**（Kotlin 块注释可
+    //        嵌套）⇒ 报「Syntax error: Unclosed comment」在文件末尾，连带该文件所有符号
+    //        Unresolved。注释里不要出现 `/**`。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 136
+    versionName = "1.6.4"
 
     vectorDrawables {
       useSupportLibrary = true

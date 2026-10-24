@@ -3,9 +3,19 @@ package app.marlboroadvance.mpvex.ui.cine
 import androidx.compose.runtime.Composable
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyDetailScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbyDownloadScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyLibraryScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbyLiveTvChannelScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbyLiveTvScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbyPersonScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbyServerManageScreen
 import app.marlboroadvance.mpvex.ui.cine.detail.CineDetailScreen
+import app.marlboroadvance.mpvex.ui.cine.download.CineDownloadScreen
 import app.marlboroadvance.mpvex.ui.cine.library.CineLibraryScreen
+import app.marlboroadvance.mpvex.ui.cine.livetv.CineLiveTvGuideScreen
+import app.marlboroadvance.mpvex.ui.cine.livetv.CineLiveTvScreen
+import app.marlboroadvance.mpvex.ui.cine.person.CinePersonScreen
+import app.marlboroadvance.mpvex.ui.cine.servers.CineServerManageScreen
 
 /**
  * Cine 路由表：**只登记已经重做过的页面**，没登记的一律回落 Classic。
@@ -16,10 +26,15 @@ import app.marlboroadvance.mpvex.ui.cine.library.CineLibraryScreen
  * 之后每重做一个页面，只需要在下面加一行 —— **不需要改任何老页面**，
  * 也不会出现「某条路由没人画」的黑屏。
  *
+ * ## 已经迁到 Cine 的页面
+ * 详情、媒体库、演员作品、直播频道/节目单、下载管理、服务器管理、本地、网络。
+ * 本地与网络是 tab，不走路由表，见 `CineRoot.CineTabContent`。
+ *
  * ## 哪些刻意仍然回落
- * - 演员作品页（`EmbyLibraryScreen.personId != null`）：它带 PersonIds 预置筛选，
- *   与媒体库的参数口径不同，硬塞进 [CineLibraryScreen] 会显示成全库；
- * - 服务器管理 / 聚合库 / 直播 / 合集 / 照片：低频页，重做收益低于风险（方案第 12、13 类）；
+ * - 聚合库 / 合集 / 播放列表 / 发现 / 离线内容 / 照片：结构与媒体库不同，
+ *   要么有自己的一套聚合口径，要么（照片）是独立的查看器壳子，逐个重做收益低于风险；
+ * - 网络目录浏览（`NetworkBrowserScreen`）：协议栈 + 面包屑 + 多选，属于另一个页面，
+ *   根页（连接列表）已 Cine 化，浏览页后续再迁；
  * - 播放器相关页面：本方案完全不涉及。
  *
  * 回落到 Classic 是**设计内的行为**：功能一个不少，只是外观沿用老样式。
@@ -43,8 +58,13 @@ fun CineRoute(
     }
 
     is EmbyLibraryScreen -> when {
-      // 演员作品页：参数口径不同，回落
-      route.personId != null -> fallback()
+      // 演员作品页：带 PersonIds 预置筛选，走人员页而不是媒体库页
+      route.personId != null -> CineTheme {
+        CinePersonScreen(
+          personId = route.personId,
+          personName = route.personName ?: route.title,
+        )
+      }
 
       else -> CineTheme {
         CineLibraryScreen(
@@ -56,6 +76,22 @@ fun CineRoute(
         )
       }
     }
+
+    is EmbyPersonScreen -> CineTheme {
+      CinePersonScreen(
+        personId = route.personId,
+        personName = route.personName,
+        personImageTag = route.personImageTag,
+      )
+    }
+
+    is EmbyLiveTvScreen -> CineTheme { CineLiveTvScreen() }
+
+    is EmbyLiveTvChannelScreen -> CineTheme { CineLiveTvGuideScreen(route.channel) }
+
+    is EmbyDownloadScreen -> CineTheme { CineDownloadScreen() }
+
+    is EmbyServerManageScreen -> CineTheme { CineServerManageScreen() }
 
     else -> fallback()
   }

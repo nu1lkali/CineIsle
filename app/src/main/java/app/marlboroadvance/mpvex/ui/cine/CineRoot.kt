@@ -28,17 +28,15 @@ import app.marlboroadvance.mpvex.ui.browser.emby.collection.EmbyCollectionScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.EmbyDiscoverScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoGridScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.playlist.EmbyPlaylistScreen
-import app.marlboroadvance.mpvex.ui.browser.folderlist.FolderListScreen
-import app.marlboroadvance.mpvex.ui.browser.networkstreaming.NetworkStreamingScreen
 import app.marlboroadvance.mpvex.ui.cine.components.CineDock
 import app.marlboroadvance.mpvex.ui.cine.components.CineDrawerEntry
 import app.marlboroadvance.mpvex.ui.cine.components.CineDrawerOverlay
 import app.marlboroadvance.mpvex.ui.cine.components.CineRail
 import app.marlboroadvance.mpvex.ui.cine.components.CineTab
-import app.marlboroadvance.mpvex.ui.cine.components.LocalCineHaze
-import app.marlboroadvance.mpvex.ui.cine.components.cineHazeSource
 import app.marlboroadvance.mpvex.ui.cine.list.CineFavoritesScreen
 import app.marlboroadvance.mpvex.ui.cine.list.CineHistoryScreen
+import app.marlboroadvance.mpvex.ui.cine.local.CineLocalScreen
+import app.marlboroadvance.mpvex.ui.cine.network.CineNetworkScreen
 import app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 
@@ -50,13 +48,13 @@ import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
  * 2. 叠在 tab 之上的三层覆盖：侧边抽屉、全屏搜索、分区「全部」网格；
  * 3. 把 `LocalNavigationBarHeight` 下发给**回落进 Cine 外壳的 Classic 页面**。
  *
- * 它**不碰数据**：首页与覆盖层各自取 ViewModel，其余四个 tab 直接复用 Classic 的整页实现。
+ * 它**不碰数据**：五个 tab 各自取自己的 ViewModel 与偏好。
  *
- * ## 为什么只有首页是新的
- * 新 UI 的第一版只覆盖首页 —— 收藏 / 历史 / 本地 / 网络这四页的交互复杂（多选、排序、
- * 长按菜单、批量操作），在没有对应设计稿的情况下重画只会做出一个「像 Cine 但少功能」的
- * 半成品。所以这里直接调 Classic 的实现：**功能一个不少**，只是外观沿用老样式。
- * 这正是「新老共存」的意义 —— 逐步替换，而不是一次性推翻。
+ * ## 五个 tab 都是 Cine 实现
+ * 首页 / 收藏 / 历史 / 本地 / 网络全部是 `ui/cine` 目录里的新页面，
+ * 本地与网络仍然复用 Classic 的 ViewModel 与偏好键（数据口径不变），只换外观。
+ * 回落到 Classic 的是**其它整页路由**（合集、播放列表、照片、网络目录浏览等），
+ * 见 [CineRoute]。
  *
  * ## 底部留空的传递
  * Classic 的这四个页面用 `LocalNavigationBarHeight` 给列表底部留出导航条的空间。
@@ -256,38 +254,13 @@ private fun CineTabContent(
       onDockHiddenChange = onDockHiddenChange,
     )
 
-    // 收藏 / 历史已重做（M3）；本地与网络仍是文件系统页面，暂时回落 Classic 整页实现。
-    // ⚠️ 回落页必须过一层 [CineHazeBacked]：Classic 页面不会把自己标成模糊源，
-    // 缺了它浮起的 Dock 在「本地 / 网络」两个 tab 上就退化成一条实色带（v135 用户反馈）
+    // 收藏 / 历史 / 本地 / 网络四页已全部 Cine 化。
+    // ⚠️ 本地 / 网络的两套页面各自内部声明了模糊源（`cineHazeSource`）：
+    // 缺了它，浮起的 Dock 在这两个 tab 上会退化成一条实色带（v135 用户反馈）。
     CineTab.Favorites -> CineFavoritesScreen()
     CineTab.History -> CineHistoryScreen()
-    CineTab.Local -> CineHazeBacked { FolderListScreen.Content() }
-    CineTab.Network -> CineHazeBacked { NetworkStreamingScreen.Content() }
-  }
-}
-
-/**
- * 给**回落进 Cine 外壳的 Classic 整页**补一个模糊源。
- *
- * ## 为什么需要这一层
- * Cine 的玻璃（[app.marlboroadvance.mpvex.ui.cine.components.cineGlass]）靠
- * `LocalCineHaze` 取样，而模糊源要由**内容自己**用 `Modifier.cineHazeSource` 声明 ——
- * Cine 的几个页面都声明了，Classic 的 `FolderListScreen` / `NetworkStreamingScreen` 没有。
- * 于是同一个浮起 Dock：首页 / 收藏 / 历史有底可糊，切到本地 / 网络就只剩「半透明平涂」，
- * 看着像玻璃掉了。
- *
- * ## 为什么包一层 Box 而不是改 Classic 页面
- * `ui/browser/` 目录是老界面的地盘，「只影响新 UI」是这套方案的硬约束。
- * 在 Cine 的壳里补声明，老页面一个字节不动。
- */
-@Composable
-private fun CineHazeBacked(content: @Composable () -> Unit) {
-  Box(
-    modifier = Modifier
-      .fillMaxSize()
-      .cineHazeSource(LocalCineHaze.current),
-  ) {
-    content()
+    CineTab.Local -> CineLocalScreen()
+    CineTab.Network -> CineNetworkScreen()
   }
 }
 
