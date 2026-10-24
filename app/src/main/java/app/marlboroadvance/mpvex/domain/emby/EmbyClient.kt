@@ -2024,6 +2024,18 @@ object EmbyClient {
      * 探测直链与真正拉流必须是同一个版本，否则「解析出来的是 4K、播的却是 1080P」。
      */
     mediaSourceId: String? = null,
+    /**
+     * **单次调用的硬上限**（毫秒）。
+     *
+     * ⚠️ 这条请求挂在**起播关键路径**上：`EmbyViewModel.play()` 拿到结果之前不会拉起
+     * 播放器。共享 client 的 `readTimeout` 是 60 秒，而 strm 条目在服务端还没 probe
+     * 过源文件时（详情页「没有媒体信息」正是这个状态），`/Videos/{id}/stream` 会先
+     * 让服务端去读远端文件、把大小/时长写库，这一次能挂到分钟级（× [attempts] 次重试）。
+     * 现象就是「第一次点播放一直卡在加载中，返回再进详情页点播放立马就能播」——
+     * 第二次服务端已经 probe 完、有缓存了。所以这里必须自己带上限，超时按
+     * [StreamProbe.Unknown] 处理、把地址原样交给播放器，绝不久等。
+     */
+    callTimeoutMs: Long = STREAM_PROBE_CALL_TIMEOUT_MS,
   ): StreamProbe {
     val original = videoStreamUrl(server, itemId, static = static, mediaSourceId = mediaSourceId)
     repeat(attempts.coerceAtLeast(1)) {
@@ -2038,7 +2050,10 @@ object EmbyClient {
           .header("User-Agent", STREAM_USER_AGENT)
           .get()
           .build()
-        httpClient.newCall(req).execute().use { resp ->
+        val call = httpClient.newCall(req)
+        // per-call 超时：不动共享 client 的全局口径（下载 / 图片那些档位不受影响）
+        call.timeout().timeout(callTimeoutMs, TimeUnit.MILLISECONDS)
+        call.execute().use { resp ->
           when {
             resp.isSuccessful -> {
               // response.request 是「跟完跳转后的最后一个请求」，它的 URL 就是直链
@@ -2076,6 +2091,15 @@ object EmbyClient {
 
   /** 能把一条流地址判死的 HTTP 状态码（见 [resolveStreamUrl] 的判定口径）。 */
   private val DENIED_STREAM_CODES = setOf(401, 403, 404, 410)
+
+  /**
+   * 302 预解析的**单次调用上限**（毫秒）。
+   *
+   * 2 秒是刻意选的：4xx 死链基本都在百毫秒内回来（判死链的能力不受影响），
+   * 而「服务端要先 probe 远端文件」这种慢路径一秒都不该让用户等 ——
+   * 超时按 [StreamProbe.Unknown] 放行，地址照样交给播放器，它自己会跟 302。
+   */
+  private const val STREAM_PROBE_CALL_TIMEOUT_MS = 2_000L
 
   /** 把「判死」的状态码翻成可直接给用户看的中文原因。 */
   private fun streamDeniedMessage(code: Int): String = when {

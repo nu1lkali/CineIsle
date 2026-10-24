@@ -98,6 +98,20 @@ private val CONTAINER_TYPES = setOf(
 )
 
 /**
+ * 远程 ISO 探测的总预算（毫秒）—— 见 [EmbyViewModel.prepareRemoteIso]。
+ *
+ * 判据只是「读 2KB 的 PVD」，正常几十毫秒就回来了。给 2.5 秒是因为第一跳可能要走
+ * 服务端 / 网盘的 302 + 建连；再慢就没有探测价值：strm 指向的绝大多数是普通视频
+ * （wmv / mp4），为了确认「它不是 ISO」让用户干等几分钟是纯亏。
+ *
+ * ⚠️ 这条预算与「302 预解析」的 2 秒（`EmbyClient` 里的
+ * `STREAM_PROBE_CALL_TIMEOUT_MS`）一起构成**起播前的总等待上限**：
+ * 两者都是阻塞在 `play()` 里、播放器要等它们返回才拉起 —— 少任何一道闸，
+ * 「第一次点播放一直卡在加载中」就会回来。
+ */
+private const val ISO_PROBE_BUDGET_MS = 2_500L
+
+/**
  * 「演职员合并」的运行态快照。
  *
  * 进度**必须是 ViewModel 上的状态**而不是页面里的 `remember`：
@@ -963,6 +977,21 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * 预解析「302 直链」：拿 `/Videos/{id}/stream` 背后跳转到的真实地址。
    *
    * 失败返回 null，调用方回退到原始流地址 —— 解析失败绝不挡播放。
+   *
+   * ## 为什么必须限时（v139 修的「第一次播放卡在加载中」）
+   *
+   * 调用方是 [play]，它**拿到本函数的返回值之后才拉起播放器** —— 这条请求因此
+   * 直接决定「点播放到播放页出现」要等多久。而 strm 条目在服务端还没 probe 过
+   * 源文件时（详情页「没有媒体信息」正是这个状态），`/Videos/{id}/stream` 会先让
+   * 服务端去读远端文件、把大小/时长写库，这一次能挂到分钟级。
+   *
+   * 于是有了那个典型现象：
+   * · **第一次**点播放 → 卡在这里，播放器一直不出现；
+   * · 返回上一级重新进详情页 → 服务端 probe 已完成、媒体信息补上了，探测秒回 → 立马能播。
+   *
+   * 两道闸：单次调用 3 秒（[EmbyClient.resolveStreamUrl] 的 `callTimeoutMs`），
+   * 且**只发一次不重试** —— 慢路径重试注定还是慢，只是把等待翻倍。
+   * 超时按 [StreamProbe.Unknown] 处理，地址原样交给播放器去跟 302。
    */
   suspend fun resolveDirectUrl(
     server: EmbyServer,
@@ -972,7 +1001,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     mediaSourceId: String? = null,
   ): StreamProbe = withContext(Dispatchers.IO) {
     runCatching {
-      EmbyClient.resolveStreamUrl(server, itemId, static, mediaSourceId = mediaSourceId)
+      EmbyClient.resolveStreamUrl(
+        server = server,
+        itemId = itemId,
+        static = static,
+        // 起播路径上不重试：见上面的说明。
+        attempts = 1,
+        mediaSourceId = mediaSourceId,
+      )
     }.getOrElse { StreamProbe.Unknown }
   }
 
@@ -1454,9 +1490,18 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       val pathLooksIso = Uri.parse(directUrl).path.orEmpty().lowercase().contains(".iso")
       if (!isStrm && !pathLooksIso) return null
     }
+    // ⚠️ 这一段同样在**起播关键路径**上（`play()` 要等它才拉起播放器），所以给硬预算。
+    // 探测本身只是「读 2KB 看是不是 CD001」，正常几十毫秒；慢的一律当「不是 ISO」，
+    // 立刻回退普通播放 —— 远程 ISO 是增强功能，宁可播得普通，也不能让用户对着转圈等。
+    // 超时后底层 OkHttp 线程会自己跑到它自己的超时，注册出来的代理路由由
+    // IsoRangeProxy 按「30 分钟没人用」回收，不用这里操心。
     val prepared =
-      withContext(Dispatchers.IO) {
-        RemoteIsoPlayback.prepareFromDirectUrl(directUrl, onUrlExpired = renewDirect)
+      withTimeoutOrNull(ISO_PROBE_BUDGET_MS) {
+        runCatching {
+          withContext(Dispatchers.IO) {
+            RemoteIsoPlayback.prepareFromDirectUrl(directUrl, onUrlExpired = renewDirect)
+          }
+        }.getOrNull()
       }
     return prepared?.playbackUrl
   }
