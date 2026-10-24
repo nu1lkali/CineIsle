@@ -373,6 +373,41 @@ class NetworkBrowserViewModel(
   }
 
   /**
+   * 新建文件夹（`fs/mkdir`）。
+   *
+   * 与 [renameFile] / [deleteFile] 同一套回执约定：写操作作用在服务器上，
+   * 成败必须有明确结果，UI 拿它弹 toast。
+   *
+   * @param name 新文件夹名（只做最基本的合法性校验，重名的判据在服务端）
+   */
+  fun createFolder(name: String, onResult: (Boolean, String?) -> Unit) {
+    viewModelScope.launch {
+      val client = writeClient()
+      if (client == null) {
+        onResult(false, "当前协议不支持新建文件夹")
+        return@launch
+      }
+      val trimmed = name.trim()
+      if (trimmed.isEmpty()) {
+        onResult(false, "名称不能为空")
+        return@launch
+      }
+      if (trimmed.contains('/')) {
+        onResult(false, "名称不能包含 /")
+        return@launch
+      }
+      val dir = currentPath.trim('/')
+      val target = if (dir.isEmpty()) trimmed else "$dir/$trimmed"
+      client.mkdir(target)
+        .onSuccess {
+          loadFiles()
+          onResult(true, null)
+        }
+        .onFailure { onResult(false, it.message ?: "新建文件夹失败") }
+    }
+  }
+
+  /**
    * Load files in the current directory
    *
    * @param invalidateCovers 是否顺带失效子文件夹的封面缓存。**只有下拉刷新才传 true**。

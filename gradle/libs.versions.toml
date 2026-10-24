@@ -166,6 +166,9 @@ lottie-compose = { module = "com.airbnb.android:lottie-compose", version.ref = "
 # 照片的字节走项目自己的 EmbyImageLoader（见 EmbyPhotoFetcher），
 # 官方那套不知道 Emby 鉴权，也不该和自研 Fetcher 抢请求。
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+# 视频首帧解码（上传选择器的相册网格要显示视频缩略图）。
+# 只有 `VideoFrameDecoder` 一个类有用，它底层是 MediaMetadataRetriever，无额外传递依赖。
+coil-video = { module = "io.coil-kt.coil3:coil-video", version.ref = "coil" }
 
 # ── Telephoto：照片浏览器的缩放/平移手势 ──
 # Android artifact 带 `-android` 后缀（telephoto 是 KMP 项目，-android 是它的 Android 发布变体）。

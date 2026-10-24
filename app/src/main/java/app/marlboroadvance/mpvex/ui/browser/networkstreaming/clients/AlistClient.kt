@@ -15,11 +15,15 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.BufferedSink
 import java.io.IOException
 import java.io.InputStream
 import java.time.LocalDateTime
@@ -109,6 +113,20 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
      * 不值得为它维护一套淘汰逻辑。
      */
     private const val SIGN_CACHE_CAP = 4000
+
+    /**
+     * `fs/put` 的路径头。服务端读它时会先 `url.QueryUnescape`，
+     * 所以发出去的值必须已编码（见 [AlistClient.upload]）。
+     */
+    private const val FILE_PATH_HEADER = "File-Path"
+
+    /**
+     * 上传时的写块大小。
+     *
+     * 64KB 是 okio 内部 segment 的整数倍（8KB），既不会让 sink 频繁小块 flush，
+     * 也不至于让进度回调一次跨太多（进度要看起来是「连续在动」）。
+     */
+    private const val UPLOAD_CHUNK = 64 * 1024
 
     /**
      * 进程内共享的 HTTP 客户端。
@@ -508,6 +526,125 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
       }
     }
 
+  /**
+   * `PUT /api/fs/put`：**流式上传**一个文件。
+   *
+   * ## 契约（容易踩的两点）
+   *
+   * 1. **路径放在 `File-Path` 头里，而且必须百分号编码**。
+   *    服务端 `handles.FsPut` 第一件事就是 `url.QueryUnescape(header)` —— 也就是说
+   *    它**假定你编过**。不编码时文件名里的 `+` 会被解成空格、`%` 会被当成转义前缀，
+   *    症状是「文件传上去了但名字变了 / 传一半报 404」。这里按 `/` 切段逐段编码
+   *    （与 [directUrl] 同一套拼法），斜杠保持字面量，最稳。
+   * 2. **必须给 `Content-Length`**（由 [RequestBody.contentLength] 提供）。AList 用它
+   *    做进度与总量判断，走 chunked（长度未知）在部分驱动上会直接 500。所以
+   *    [length] 传 `-1` 只用于「真的不知道大小」的场景，调用方最好先落临时文件。
+   *
+   * ## 为什么不用 `As-Task: true`
+   *
+   * 那是「交给服务端后台任务队列」，`fs/put` 会**立刻**返回 200。上传进度与成败
+   * 都拿不到，只能去 `task/…` 轮询 —— 为了一个进度条引入一条任务查询链不划算。
+   * 同步上传时响应体返回即代表落盘完成，正是我们要的语义。
+   *
+   * @param targetDir 目标**目录**（相对 base path，如 `电影` 或空串表示根）
+   * @param name 目标文件名（不含路径）
+   * @param length 字节数；未知传 `-1`（退化为 chunked，见上）
+   * @param open 打开数据源。**会被调用多次**：401 重登后要能重新读一遍，
+   *   所以必须返回一个**全新**的流，不能是已经消费过的那个。
+   * @param onProgress 已发送字节数回调。⚠️ 在 OkHttp 的写线程上调用，
+   *   实现里只该更新状态，别做重活（见 `NetworkUploadCenter` 的节流）。
+   * @param isCancelled 每次写块前询问一次。返回 true 即抛异常中止 ——
+   *   这是**唯一**能打断阻塞读的手段（协程取消打断不了 `InputStream.read`）。
+   */
+  suspend fun upload(
+    targetDir: String,
+    name: String,
+    length: Long,
+    contentType: String?,
+    open: () -> InputStream,
+    onProgress: (sent: Long) -> Unit = {},
+    isCancelled: () -> Boolean = { false },
+  ): Result<Unit> =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        require(name.isNotBlank()) { "文件名不能为空" }
+        val fullPath = joinPath(targetDir, name)
+        var retried = false
+        while (true) {
+          try {
+            putOnce(fullPath, length, contentType, open, onProgress, isCancelled)
+            break
+          } catch (e: AlistApiException) {
+            // 与 withAuthRetry 同一套自愈：token 过期（默认 48h）就重登一次。
+            // ⚠️ 不能直接复用 withAuthRetry：它的 block 是不可重放的普通 lambda，
+            //    而这里重试必须重新 open() 一遍数据源 —— 第一次的流已经写光了。
+            if (e.code == 401 && !retried && token != null) {
+              retried = true
+              Log.w(TAG, "上传 token 失效，重新登录后重试一次: $fullPath")
+              token = null
+              if (connection.username.isNotBlank() || connection.password.isNotBlank()) {
+                runCatching { login() }
+              }
+              continue
+            }
+            throw e
+          }
+        }
+        Unit
+      }
+    }
+
+  /** 真正发一次 `fs/put`，并校验业务码（HTTP 200 但 `code != 200` 是 AList 的常见失败形态） */
+  private fun putOnce(
+    fullPath: String,
+    length: Long,
+    contentType: String?,
+    open: () -> InputStream,
+    onProgress: (sent: Long) -> Unit,
+    isCancelled: () -> Boolean,
+  ) {
+    val request =
+      Request.Builder()
+        .url(api("fs/put"))
+        // 见 upload 的 KDoc：这个头服务端会 QueryUnescape，所以必须编码后再发
+        .header(FILE_PATH_HEADER, encodePathHeader(fullPath))
+        .put(StreamRequestBody(length, contentType, open, onProgress, isCancelled))
+        .apply { authHeader()?.let { header("Authorization", it) } }
+        .build()
+    execute(request).use { response ->
+      // 正常返回是一个 JSON（code/message）。空体也不该判失败：少数反代 / 旧版本
+      // 会直接回 200 + 空体，此时「HTTP 成功」就是唯一信号。
+      val raw = response.body?.string().orEmpty()
+      if (raw.isBlank()) return
+      // 不是 JSON（比如前端页面兜底）也不判失败 —— 2xx 已说明写成功了；
+      // 解析失败只可能是服务端返回了别的格式，不该因此把成功的上传判成失败。
+      val parsed = runCatching { json.decodeFromString<AlistSimpleResp>(raw) }.getOrNull() ?: return
+      if (parsed.code != CODE_OK) {
+        throw AlistApiException(
+          parsed.code,
+          parsed.message.ifBlank { "上传失败（code=${parsed.code}）" },
+        )
+      }
+    }
+  }
+
+  /** `dir` + `name` → 相对路径（无首尾斜杠，`dir` 为空时就是 `name`） */
+  private fun joinPath(dir: String, name: String): String {
+    val base = dir.trim('/')
+    return if (base.isEmpty()) name else "$base/$name"
+  }
+
+  /**
+   * 把相对路径转成可以直接塞进 `File-Path` 头的字符串：前导 `/` + 逐段 [Uri.encode]。
+   *
+   * 与 [directUrl] 同一套拼法（按 `/` 切段而不是整段编码），区别只是这里不带
+   * 服务器根域名 —— `fs/put` 的路径永远是「挂载点内的路径」。
+   */
+  private fun encodePathHeader(relPath: String): String {
+    val segments = relPath.trim('/').split('/').filter { it.isNotEmpty() }
+    return "/" + segments.joinToString("/") { Uri.encode(it) }
+  }
+
   // ── 接口调用 ──
 
   /**
@@ -809,3 +946,54 @@ private data class AlistFsGet(
   val type: Int = 0,
   @SerialName("raw_url") val rawUrl: String = "",
 )
+
+/**
+ * 上传用的请求体：**边读边写**，不把文件读进内存。
+ *
+ * 三个细节都是有原因的：
+ *
+ * 1. **`contentLength()` 必须给真值**（见 [AlistClient.upload] 的 KDoc）。
+ *    长度未知时返回 `-1`，OkHttp 会退化成 `Transfer-Encoding: chunked`。
+ * 2. **每次写块前问一次 [isCancelled]**。协程取消不会打断 `InputStream.read`
+ *    —— 用户在进度条上点「取消」时，只有这个检查能真正把上传停下来，
+ *    否则那个协程会一直挂在网络上，界面上「取消成功了但流量还在跑」。
+ * 3. **`open().use {}`**：不论正常结束还是抛异常，流都会关（SMB / FTP 的会话
+ *    泄漏几次之后整台服务器就打不开文件了）。
+ */
+private class StreamRequestBody(
+  private val length: Long,
+  contentType: String?,
+  private val open: () -> java.io.InputStream,
+  private val onProgress: (sent: Long) -> Unit,
+  private val isCancelled: () -> Boolean,
+) : RequestBody() {
+  private val mediaType: MediaType? =
+    (contentType ?: "application/octet-stream").toMediaTypeOrNull()
+
+  override fun contentType(): MediaType? = mediaType
+
+  override fun contentLength(): Long = if (length < 0) -1L else length
+
+  override fun writeTo(sink: BufferedSink) {
+    val buffer = ByteArray(UPLOAD_CHUNK)
+    var sent = 0L
+    open().use { input ->
+      while (true) {
+        if (isCancelled()) throw IOException("上传已取消")
+        val read = input.read(buffer)
+        if (read == -1) break
+        sink.write(buffer, 0, read)
+        sent += read
+        onProgress(sent)
+      }
+      // 显式 flush：body 结束时 okio 也会 flush，但这里先刷掉能更早把尾部推出去
+      sink.flush()
+    }
+  }
+
+  private companion object {
+    /** 与 [AlistClient] 的 `UPLOAD_CHUNK` 同值；文件级 private 互相读不到，各写一份 */
+    const val UPLOAD_CHUNK = 64 * 1024
+  }
+}
+

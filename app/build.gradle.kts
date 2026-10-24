@@ -1331,8 +1331,8 @@ android {
     //   · 网盘视界流不绑 Emby 条目（libraryId = null）⇒ 收藏 / 不喜欢按钮不显示
     //     （`FeedViewModel.embyBound`），点了必然失败的按钮不该摆着。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 138
-    versionName = "1.6.6"
+    versionCode = 139
+    versionName = "1.6.7"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -1667,6 +1667,9 @@ dependencies {
   // ⚠️ 刻意**没有**引官方的 coil-network-okhttp：那套网络实现不知道 Emby 的鉴权，
   //    引了还要跟我们自己的 Fetcher 抢 String 类型的请求。
   implementation(libs.coil.compose)
+  // Coil 的视频首帧解码器：上传选择器的相册网格要显示视频缩略图。
+  // 没有它，`content://media/external/video/...` 会被当普通图片交给 BitmapFactory，必然失败。
+  implementation(libs.coil.video)
   // DLNA 投屏：UPnPCast 源码内置在 app/src/main/java/com/yinnho/upnpcast/ 下（同 embyclient 的做法），
   // 版本为上游 master / v1.3.0。
   // 为什么不用 Maven Central 的 com.yinnho.upnpcast:upnpcast:1.1.2：

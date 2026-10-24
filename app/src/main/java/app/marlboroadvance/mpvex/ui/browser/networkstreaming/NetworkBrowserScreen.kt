@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
@@ -49,6 +50,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -118,6 +120,8 @@ import app.marlboroadvance.mpvex.ui.browser.cards.NetworkVideoCard
 import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
 import app.marlboroadvance.mpvex.ui.browser.emby.components.VideoFeedIcon
 import app.marlboroadvance.mpvex.ui.browser.states.EmptyState
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.NetworkUploadCenter
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.NetworkUploadSheet
 import app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen
 import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar
@@ -303,6 +307,12 @@ data class NetworkBrowserScreen(
     // 并修掉它几处边界问题，见 [PathNavigatorSheet] 的 KDoc。
     var showPathNavigator by remember { mutableStateOf(false) }
 
+    // 上传面板（本地文件 / 文件夹 → AList 当前目录）。只有支持写操作的协议给入口。
+    var showUpload by remember { mutableStateOf(false) }
+
+    // 新建文件夹的输入框（与「重命名」同一套：输入框 + 确认）
+    var showNewFolder by remember { mutableStateOf(false) }
+
     // 本地搜索（关键词过滤，纯内存 —— 目录列表本来就是全量一次拉完的）
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -385,6 +395,15 @@ data class NetworkBrowserScreen(
     // Load files when connectionId or currentPath changes
     LaunchedEffect(connectionId, currentPath) {
       viewModel.loadFiles()
+    }
+
+    // 上传成功 → 重新列一次当前目录。
+    // 不这么做的话用户传完关掉面板，列表里什么都没有，会以为没传上去再点一次。
+    // ⚠️ 只认本连接的批次：回到首页再进别的连接时，别把别人的完成事件当自己的。
+    LaunchedEffect(connectionId) {
+      NetworkUploadCenter.completed.collect { uploadedConnectionId ->
+        if (uploadedConnectionId == connectionId) viewModel.loadFiles()
+      }
     }
 
     // 返回键：搜索态先退搜索（清词 + 收键盘），再退出页面 —— 与 Emby 媒体库同一手势
@@ -545,6 +564,36 @@ data class NetworkBrowserScreen(
                     }
                   },
                 )
+
+                // ── 上传（本地 → 当前目录）──
+                // 只有 AList 有写接口（fs/put），其余协议的 supportsWrite 为 false，
+                // 压根不显示 —— 弹出来点了报错不如不给入口（与长按菜单同一原则）。
+                if (supportsWrite) {
+                  DropdownMenuItem(
+                    text = { Text("上传文件…") },
+                    leadingIcon = { Icon(Icons.Default.UploadFile, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      // 没有「所有文件访问权限」也照开：面板自己有授权引导，
+                      // 直接把用户送进面板比先弹一句 toast 再让他重进一次顺。
+                      showUpload = true
+                    },
+                  )
+                }
+
+                // ── 新建文件夹（同样只有 AList 有 fs/mkdir）──
+                if (supportsWrite) {
+                  DropdownMenuItem(
+                    text = { Text("新建文件夹") },
+                    leadingIcon = {
+                      Icon(Icons.Default.CreateNewFolder, contentDescription = null)
+                    },
+                    onClick = {
+                      showOverflowMenu = false
+                      showNewFolder = true
+                    },
+                  )
+                }
 
                 // ── 随机播放（视频 / 图片） ──
                 // 目录经常是混合的，两项都给，用户想要哪个随机哪个。
@@ -893,6 +942,45 @@ data class NetworkBrowserScreen(
         )
       }
 
+      // ── 新建文件夹 ──
+      // 与「重命名」同一套外观（一个输入框 + 确认），空名时确认键直接禁用 ——
+      // 比点完再弹「名称不能为空」少一次往返。
+      if (showNewFolder) {
+        var folderName by remember { mutableStateOf("") }
+        AlertDialog(
+          onDismissRequest = { showNewFolder = false },
+          title = { Text("新建文件夹") },
+          text = {
+            OutlinedTextField(
+              value = folderName,
+              onValueChange = { folderName = it },
+              label = { Text(stringResource(R.string.i18n_new_name)) },
+              modifier = Modifier.fillMaxWidth(),
+              singleLine = true,
+            )
+          },
+          confirmButton = {
+            TextButton(
+              enabled = folderName.isNotBlank(),
+              onClick = {
+                val name = folderName.trim()
+                showNewFolder = false
+                viewModel.createFolder(name) { _, message ->
+                  toast(message ?: "已新建「$name」")
+                }
+              },
+            ) {
+              Text(stringResource(R.string.i18n_confirm))
+            }
+          },
+          dismissButton = {
+            TextButton(onClick = { showNewFolder = false }) {
+              Text(stringResource(R.string.i18n_cancel))
+            }
+          },
+        )
+      }
+
       // ── 「跳转到」导航弹窗 ──
       if (showPathNavigator) {
         PathNavigatorSheet(
@@ -905,6 +993,18 @@ data class NetworkBrowserScreen(
             showPathNavigator = false
             navigateToPath(path)
           },
+        )
+      }
+
+      // ── 上传面板（本地文件 / 文件夹 → 当前目录）──
+      // 放在这里而不是顶栏菜单内部：菜单一旦收起就会被移出组合，
+      // 挂在里面的 ModalBottomSheet 会跟着消失（菜单点击的第一帧就崩）。
+      if (showUpload) {
+        NetworkUploadSheet(
+          connectionId = connectionId,
+          targetDir = currentPath,
+          targetLabel = dirTitle,
+          onDismiss = { showUpload = false },
         )
       }
     }
