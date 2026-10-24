@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="126" height="20" role="img" aria-label="Release: v1.6.7">
+<title>Release: v1.6.7</title>
+<linearGradient id="s" x2="0" y2="100%">
+<stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+<stop offset="1" stop-opacity=".1"/>
+</linearGradient>
+<clipPath id="r"><rect width="126" height="20" rx="3" fill="#fff"/></clipPath>
+<g clip-path="url(#r)">
+<rect width="67" height="20" fill="#555555"/>
+<rect x="67" width="59" height="20" fill="#2EA44F"/>
+<rect width="126" height="20" fill="url(#s)"/>
+</g>
+<g fill="#fff" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11">
+<text x="34" y="15" fill="#010101" fill-opacity=".3" textLength="57" lengthAdjust="spacingAndGlyphs">Release</text>
+<text x="34" y="14" textLength="57" lengthAdjust="spacingAndGlyphs">Release</text>
+<text x="96" y="15" fill="#010101" fill-opacity=".3" textLength="49" lengthAdjust="spacingAndGlyphs">v1.6.7</text>
+<text x="96" y="14" textLength="49" lengthAdjust="spacingAndGlyphs">v1.6.7</text>
+</g>
+</svg>
