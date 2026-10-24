@@ -484,6 +484,31 @@ data class NetworkBrowserScreen(
                   },
                 )
 
+                // ── 随机进入一个子文件夹 ──
+                // 大库里「随便翻一个」比逐层点进去快得多；跟下面两个「随机播放」是同一族操作。
+                // 没有子文件夹时明确 Toast —— 与随机播放同一口径，不静默失败。
+                DropdownMenuItem(
+                  text = { Text("随机进入一个文件夹") },
+                  leadingIcon = { Icon(Icons.Default.Shuffle, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    // 用未过滤的 files：类型筛选决定「这屏显示什么」，不该限制随机跳到哪
+                    val folders = files.filter { it.isDirectory }
+                    if (folders.isEmpty()) {
+                      toast("当前目录没有子文件夹")
+                    } else {
+                      // 与点击文件夹同一个压栈方式（onFolderClick），返回键即回本层
+                      backstack.add(
+                        NetworkBrowserScreen(
+                          connectionId = connectionId,
+                          connectionName = connectionName,
+                          currentPath = folders.random().path,
+                        ),
+                      )
+                    }
+                  },
+                )
+
                 // ── 收藏当前目录 ──
                 // 状态来自 ViewModel（loadFiles 时同源刷新），主界面「收藏的目录」
                 // section 与这里永远一致。切完弹 toast：一屏那么多条目，

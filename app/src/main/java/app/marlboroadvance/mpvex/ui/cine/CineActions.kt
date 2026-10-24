@@ -16,6 +16,52 @@ import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
 import kotlinx.coroutines.launch
 
 /**
+ * 播放操作的控制器：详情页需要「播放 / 从头播放」两种语义，首页只需要前者。
+ *
+ * ## 为什么不是两个独立的 composable
+ * 两套实现意味着两套 Toast、两套错误文案 —— 迟早出现「首页点播报错、详情页静默」。
+ * 这里把「发起 + 失败提示」收成一份，[play] 与 [playFromStart] 只是参数不同。
+ *
+ * `fromStart` 传的是 [EmbyViewModel.play] 的**同名参数**，语义见那边的 KDoc
+ * （剧集 = 强制第一集开头，忽略进度）。
+ */
+class CinePlayController internal constructor(
+  private val invoke: (item: EmbyItem, resumeSeconds: Long, fromStart: Boolean) -> Unit,
+) {
+  /** 有进度就续播（[resumeSeconds] > 0），否则从头 */
+  fun play(item: EmbyItem, resumeSeconds: Long = 0L) = invoke(item, resumeSeconds, false)
+
+  /** 剧集「从头播放」：第一集开头，哪怕第 1 集已经看完 */
+  fun playFromStart(item: EmbyItem) = invoke(item, 0L, true)
+}
+
+/** 带「从头播放」能力的播放控制器（详情页用） */
+@Composable
+fun rememberCinePlayController(): CinePlayController {
+  val context = LocalContext.current
+  val app = context.applicationContext as Application
+  val viewModel: EmbyViewModel = viewModel(factory = EmbyViewModel.factory(app))
+  val server by viewModel.currentServer.collectAsState()
+  val scope = rememberCoroutineScope()
+  val failedText = stringResource(R.string.cine_play_failed)
+
+  return remember(viewModel, server, context, failedText) {
+    CinePlayController { item, resumeSeconds, fromStart ->
+      val current = server
+      if (current != null) {
+        scope.launch {
+          runCatching {
+            viewModel.play(current, item, resumeSeconds = resumeSeconds, fromStart = fromStart)
+          }.onFailure { error ->
+            Toast.makeText(context, error.message ?: failedText, Toast.LENGTH_SHORT).show()
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
  * 「点一下就开始播」的统一实现。
  *
  * ## 为什么抽出来
@@ -30,29 +76,6 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun rememberCinePlay(): (EmbyItem, Long) -> Unit {
-  val context = LocalContext.current
-  val app = context.applicationContext as Application
-  val viewModel: EmbyViewModel = viewModel(factory = EmbyViewModel.factory(app))
-  val server by viewModel.currentServer.collectAsState()
-  val scope = rememberCoroutineScope()
-  val failedText = stringResource(R.string.cine_play_failed)
-
-  return remember(viewModel, server, context, failedText) {
-    { item, resumeSeconds ->
-      val current = server
-      if (current != null) {
-        scope.launch {
-          runCatching { viewModel.play(current, item, resumeSeconds = resumeSeconds) }
-            .onFailure { error ->
-              Toast.makeText(
-                context,
-                error.message ?: failedText,
-                Toast.LENGTH_SHORT,
-              ).show()
-            }
-        }
-      }
-      // 没有服务器时静默返回：能走到这里的界面本来就只在有服务器时才显示
-    }
-  }
+  val controller = rememberCinePlayController()
+  return { item, resumeSeconds -> controller.play(item, resumeSeconds) }
 }

@@ -48,6 +48,12 @@ data class CineSpacing(
   val contentBottomInset: Dp = 96.dp,
   /** 折叠顶栏高度 */
   val topBarHeight: Dp = 52.dp,
+  /**
+   * 二级页顶栏高度（媒体库 / 收藏 / 历史）。
+   *
+   * 比首页折叠态矮 8dp：这些页面没有 Hero，顶栏每多占 1dp 就少一行海报。
+   */
+  val secondaryBarHeight: Dp = 44.dp,
   /** 宽屏固定顶栏高度（内容靠它算下移量，改这里两处一起变） */
   val wideHeaderHeight: Dp = 64.dp,
 ) {

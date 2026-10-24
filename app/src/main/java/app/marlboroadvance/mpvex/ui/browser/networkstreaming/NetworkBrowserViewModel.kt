@@ -388,6 +388,15 @@ class NetworkBrowserViewModel(
    *   现在只有用户显式下拉刷新（= 我要最新）才失效；正常进入 / 返回走缓存，零请求。
    */
   fun loadFiles(invalidateCovers: Boolean = false) {
+    // 随机排序下「刷新」必须连顺序一起换：排序流是
+    // `combine(原始列表, 排序项, 方向, 随机种子)`，种子不变 ⇒ 同一份列表洗出来的
+    // 顺序逐项一致，用户看到的就是「下拉刷新了但一个都没动」，像是刷新没生效。
+    // ⚠️ 只在下拉刷新（invalidateCovers = true）时换种子：
+    //    进目录 / 返回上一级不要换，否则同一个文件夹每次进出都换一批顺序，
+    //    「刚才那张在第三行」这种位置记忆会彻底失效。
+    if (invalidateCovers && _sortType.value == NetworkSortType.Random) {
+      _randomSeed.value = System.currentTimeMillis()
+    }
     viewModelScope.launch {
       _isLoading.value = true
       _error.value = null

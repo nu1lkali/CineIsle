@@ -61,6 +61,8 @@ import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarRecommendationViewModel
+import app.marlboroadvance.mpvex.ui.cine.actions.CineActionSheetHost
+import app.marlboroadvance.mpvex.ui.cine.actions.rememberCineActionSheetState
 import app.marlboroadvance.mpvex.ui.cine.components.CineHeroBanner
 import app.marlboroadvance.mpvex.ui.cine.components.CineHomeSkeleton
 import app.marlboroadvance.mpvex.ui.cine.components.CineLibraryChip
@@ -71,6 +73,8 @@ import app.marlboroadvance.mpvex.ui.cine.components.CineStatePanel
 import app.marlboroadvance.mpvex.ui.cine.components.CineTopBar
 import app.marlboroadvance.mpvex.ui.cine.components.CineWideHeader
 import app.marlboroadvance.mpvex.ui.cine.components.CineWideRow
+import app.marlboroadvance.mpvex.ui.cine.components.LocalCineHaze
+import app.marlboroadvance.mpvex.ui.cine.components.cineHazeSource
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -97,7 +101,7 @@ fun CineHomeScreen(
   onOpenDetail: (EmbyItem) -> Unit,
   onOpenLibrary: (EmbyItem) -> Unit,
   onOpenSearch: () -> Unit,
-  onOpenSettings: () -> Unit,
+  onOpenDrawer: () -> Unit,
   onOpenServerManage: () -> Unit,
   onOpenAll: (String, List<CineMediaUi>) -> Unit,
   onDockHiddenChange: (Boolean) -> Unit,
@@ -182,6 +186,9 @@ fun CineHomeScreen(
 
   // 播放统一走 rememberCinePlay（发起 + 失败提示只有一份实现）
   val play = rememberCinePlay()
+  // 长按菜单：状态放在页面这一层，Host 就挂在页面根 Box 末尾
+  val playController = rememberCinePlayController()
+  val actionSheet = rememberCineActionSheetState()
 
   // 分区标题与「全部」既要用在头部、又要当作网格页的标题传出去 ⇒ 在组合里取一次字符串，
   // 不要在 item 的 lambda 里再调 stringResource（那里拿不到组合上下文，也编译不过）
@@ -345,6 +352,9 @@ fun CineHomeScreen(
             state = listState,
             modifier = Modifier
               .fillMaxSize()
+              // 玻璃 Dock / 顶栏 / 搜索胶囊都从这里取模糊底。必须挂在**滚动容器**上：
+              // 挂在 item 上时，滚出屏幕的部分就取不到了（Dock 会突然变回纯色）
+              .cineHazeSource(LocalCineHaze.current)
               .navigationBarsPadding()
               // 宽屏的顶栏是**不吃在 Hero 上**的实体条（见 CineWideHeader），
               // 内容必须整体下移一个「状态栏 + 64dp」；手机端 Hero 顶到屏幕最上面，
@@ -441,8 +451,10 @@ fun CineHomeScreen(
                   items = resumeUi,
                   cardWidth = wideCardWidth,
                   wide = wide,
+                  // 继续观看：单击就续播 —— 这一行存在的意义就是「接着看」，
+                  // 要详情走长按菜单里的「详情」（与 Classic 首页同一套语义）
                   onClick = { play(it.item, it.resumeSeconds) },
-                  onLongClick = { onOpenDetail(it.item) },
+                  onLongClick = { actionSheet.show(it) },
                 )
               }
             }
@@ -462,8 +474,9 @@ fun CineHomeScreen(
                   items = latestUi,
                   cardWidth = posterWidth,
                   wide = wide,
-                  onClick = { play(it.item, it.resumeSeconds) },
-                  onLongClick = { onOpenDetail(it.item) },
+                  // 单击进详情（与 Classic 一致），长按弹玻璃菜单
+                  onClick = { onOpenDetail(it.item) },
+                  onLongClick = { actionSheet.show(it) },
                 )
               }
             }
@@ -486,8 +499,9 @@ fun CineHomeScreen(
                   items = mixUi,
                   cardWidth = posterWidth,
                   wide = wide,
-                  onClick = { play(it.item, it.resumeSeconds) },
-                  onLongClick = { onOpenDetail(it.item) },
+                  // 单击进详情（与 Classic 一致），长按弹玻璃菜单
+                  onClick = { onOpenDetail(it.item) },
+                  onLongClick = { actionSheet.show(it) },
                 )
               }
             }
@@ -500,8 +514,8 @@ fun CineHomeScreen(
       // 宽屏顶栏固定在内容区顶部（不压在 Hero 上，也不折叠）
       CineWideHeader(
         title = stringResource(R.string.app_name),
+        onOpenDrawer = onOpenDrawer,
         onSearch = onOpenSearch,
-        onOpenSettings = onOpenSettings,
         modifier = Modifier.align(Alignment.TopCenter),
       )
     } else {
@@ -509,11 +523,24 @@ fun CineHomeScreen(
         // 没有 Hero 时直接落在折叠态：白色图标压在纯色底上会看不见
         collapse = if (heroUi != null) collapse else 1f,
         title = stringResource(R.string.app_name),
+        onOpenDrawer = onOpenDrawer,
         onSearch = onOpenSearch,
-        onOpenSettings = onOpenSettings,
         modifier = Modifier.align(Alignment.TopCenter),
       )
     }
+
+    // 长按玻璃菜单（功能对齐 Classic：播放 / 收藏 / 已看 / 演职员 / 维护 / 删除）
+    CineActionSheetHost(
+      state = actionSheet,
+      server = server,
+      viewModel = viewModel,
+      playController = playController,
+      onOpenDetail = { media -> onOpenDetail(media.item) },
+      // 收藏 / 已看 / 元数据改完都重拉首页三份数据：服务端回读才是真值，
+      // 靠本地覆盖迟早出现「换了设备又变回去」
+      onChanged = { viewModel.refreshHome() },
+      onDeleted = { viewModel.refreshHome() },
+    )
   }
 }
 

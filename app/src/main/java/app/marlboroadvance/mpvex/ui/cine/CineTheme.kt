@@ -6,14 +6,17 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
+import app.marlboroadvance.mpvex.ui.cine.components.LocalCineHaze
 import app.marlboroadvance.mpvex.ui.cine.tokens.CineColors
 import app.marlboroadvance.mpvex.ui.cine.tokens.CineSpacing
 import app.marlboroadvance.mpvex.ui.cine.tokens.CineTypographySet
 import app.marlboroadvance.mpvex.ui.cine.tokens.LocalCineColors
 import app.marlboroadvance.mpvex.ui.cine.tokens.LocalCineSpacing
 import app.marlboroadvance.mpvex.ui.cine.tokens.LocalCineTypography
+import app.marlboroadvance.mpvex.ui.cine.tokens.cineColorScheme
 import app.marlboroadvance.mpvex.ui.cine.tokens.cineMaterialTypography
 import app.marlboroadvance.mpvex.ui.cine.tokens.rememberCineColors
+import dev.chrisbanes.haze.rememberHazeState
 
 /**
  * Cine 子树的主题壳。
@@ -25,29 +28,45 @@ import app.marlboroadvance.mpvex.ui.cine.tokens.rememberCineColors
  *    因为 M3 组件（BottomSheet / AlertDialog）内部读的是 `MaterialTheme.typography`，
  *    不覆盖它们会按 M3 默认字阶渲染，和周围 Cine 文字差一号。
  *
- * ## 为什么这里不重新提供 colorScheme
- * 配色必须与老界面**同一套**（30 套主题 + 动态取色）。Cine 只加语义层，不改色相 ——
- * 用户换主题时两套界面的质感是连着的，不会出现「换了主题但新界面不理你」。
+ * ## 为什么这里**要**重新提供 colorScheme（v132 改口）
+ * v126 的写法是不动色相、只加语义层，理由是「换主题时两套界面质感要连着」。
+ * 实测下来这条在**动态取色**下是错的：动态取色的 `surface` 会被壁纸染成淡紫 / 灰绿，
+ * 且 `surface` 与 `surfaceContainer*` 的明度差被压得很平 —— 设计稿那套
+ * 「近黑底 + 四档容器层级」的观感直接消失，用户看到的就是「发灰、发平」。
+ * 现在改成：中性阶梯（surface / onSurface / outline）取设计稿定值，
+ * **primary / tertiary / error 仍然跟随用户主题** —— 强调色还是他的，
+ * 只是底色不再被壁纸污染。详见 `cineColorScheme` 的说明。
  *
  * ## ⚠️ 老页面落在 Cine 子树里怎么办
- * `MaterialTheme` 的 typography 覆盖会顺带作用于**回落进 Cine 外壳的 Classic 页面**
- * （如媒体库、设置）。这些页面的字号都是角色值（titleLarge / bodyMedium…），
- * 覆盖后仍在同一梯队，不会破版；这也是我们**没有**改 colorScheme 的原因 ——
- * 那才会真正让老页面配色错乱。
+ * `MaterialTheme` 的 typography / colorScheme 覆盖会顺带作用于**回落进 Cine 外壳的
+ * Classic 页面**。但 v130 之后 `CineTheme` 已经收进 `CineRoute` 的 Cine 分支里，
+ * 回落分支（`fallback()`）**不包 CineTheme**，所以 Classic 页面根本拿不到这套覆盖 ——
+ * 老 UI 一个像素都不变。
  */
 @Composable
 fun CineTheme(content: @Composable () -> Unit) {
-  val colors = rememberCineColors()
+  // 顺序很重要：先由「用户主题」算出一套中性影院基底，再让 CineColors 从**这套基底**派生。
+  // 反过来（先派生颜色再换 scheme）会让 onSurface / glassBorder 仍然带着壁纸的染色。
+  val base = MaterialTheme.colorScheme
+  val scheme = remember(base) { cineColorScheme(base) }
+  val colors = rememberCineColors(scheme)
   val typography = remember { CineTypographySet() }
   val spacing = remember { CineSpacing() }
   val materialTypography = remember { cineMaterialTypography() }
+  // 模糊源：每个 Cine 路由一份。页面把滚动容器标成 cineHazeSource，玻璃层取它做底
+  val hazeState = rememberHazeState()
 
   CompositionLocalProvider(
     LocalCineColors provides colors,
     LocalCineTypography provides typography,
     LocalCineSpacing provides spacing,
+    LocalCineHaze provides hazeState,
   ) {
-    MaterialTheme(typography = materialTypography, content = content)
+    MaterialTheme(
+      colorScheme = scheme,
+      typography = materialTypography,
+      content = content,
+    )
   }
 }
 

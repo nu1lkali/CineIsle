@@ -72,7 +72,9 @@ import app.marlboroadvance.mpvex.repository.NetworkRepository
 import app.marlboroadvance.mpvex.utils.update.UpdateDialog
 import app.marlboroadvance.mpvex.utils.update.UpdateViewModel
 import app.marlboroadvance.mpvex.ui.browser.MainScreen
+import app.marlboroadvance.mpvex.ui.cine.CineRoute
 import app.marlboroadvance.mpvex.ui.cine.LocalUiStyle
+import app.marlboroadvance.mpvex.ui.cine.UiStyle
 import app.marlboroadvance.mpvex.ui.lock.AppLockGate
 import app.marlboroadvance.mpvex.ui.theme.DarkMode
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
@@ -499,7 +501,17 @@ class MainActivity : ComponentActivity() {
       NavDisplay(
         backStack = typedBackstack,
         onBack = { typedBackstack.removeLastOrNull() },
-        entryProvider = { route -> NavEntry(route) { route.Content() } },
+        // 渲染分流：Cine 只接管登记过的路由（见 `CineRoute`），其余原样走老实现 ——
+        // 这样「新界面」可以分期上线，任何一条没重做的路由都不会变成空白页。
+        entryProvider = { route ->
+          NavEntry(route) {
+            if (uiStyle == UiStyle.Cine) {
+              CineRoute(route) { route.Content() }
+            } else {
+              route.Content()
+            }
+          }
+        },
         popTransitionSpec = {
           (
             fadeIn(animationSpec = tween(220)) +

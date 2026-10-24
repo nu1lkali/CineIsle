@@ -4,6 +4,13 @@ commonsNet = "3.13.0"
 smbj = "0.14.0"
 kotlin = "2.3.20"
 composeBom = "2026.03.00"
+# Haze：Compose 里唯一成熟的「背景模糊（backdrop blur）」实现。
+# Cine 新界面的玻璃 Dock / 顶栏 / 长按菜单全靠它 —— Compose 官方只有
+# `Modifier.blur()`（模糊自己），没有 CSS 的 `backdrop-filter`。
+# ⚠️ 只被 ui/cine/** 使用，Classic 界面完全不经过它（红线：新 UI 不影响老 UI）。
+# 停在 1.7.3：2.x 把 API 重写成 HazeEffectFactory/HazeInput 那套，
+# 调用方要自己实现渲染器，成本远超收益。
+haze = "1.7.3"
 activityCompose = "1.13.0"
 koin = "4.2.0"
 lazycolumnscrollbar = "2.2.0"
@@ -73,6 +80,8 @@ androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version
 androidx-material3-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version = "1.7.8" }
 androidx-compose-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout-compose", version = "1.1.1" }
 androidx-compose-animation-graphics = { group = "androidx.compose.animation", name = "animation-graphics-android" }
+# 背景模糊（玻璃层）。见 [versions].haze 的说明。
+haze = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
 mediasession = { group = "androidx.media", name = "media", version = "1.7.1" }
 androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "navigation3" }
 androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "navigation3" }

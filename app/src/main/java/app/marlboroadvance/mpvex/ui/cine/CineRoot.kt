@@ -18,17 +18,27 @@ import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyDetailScreen
-import app.marlboroadvance.mpvex.ui.browser.emby.EmbyFavoritesScreen
-import app.marlboroadvance.mpvex.ui.browser.emby.EmbyHistoryScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbyDownloadScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyLibraryScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbyLiveTvScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbyOfflineScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyPersonScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyServerManageScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.collection.EmbyCollectionScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.discover.EmbyDiscoverScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoGridScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.playlist.EmbyPlaylistScreen
 import app.marlboroadvance.mpvex.ui.browser.folderlist.FolderListScreen
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.NetworkStreamingScreen
 import app.marlboroadvance.mpvex.ui.cine.components.CineDock
+import app.marlboroadvance.mpvex.ui.cine.components.CineDrawerEntry
+import app.marlboroadvance.mpvex.ui.cine.components.CineDrawerOverlay
 import app.marlboroadvance.mpvex.ui.cine.components.CineRail
 import app.marlboroadvance.mpvex.ui.cine.components.CineTab
+import app.marlboroadvance.mpvex.ui.cine.components.LocalCineHaze
+import app.marlboroadvance.mpvex.ui.cine.components.cineHazeSource
+import app.marlboroadvance.mpvex.ui.cine.list.CineFavoritesScreen
+import app.marlboroadvance.mpvex.ui.cine.list.CineHistoryScreen
 import app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 
@@ -37,7 +47,7 @@ import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
  *
  * ## 职责边界（很重要）
  * 1. 五个 tab 的**选中态**与导航（Dock / Rail 二选一）；
- * 2. 叠在 tab 之上的两层覆盖：全屏搜索、分区「全部」网格；
+ * 2. 叠在 tab 之上的三层覆盖：侧边抽屉、全屏搜索、分区「全部」网格；
  * 3. 把 `LocalNavigationBarHeight` 下发给**回落进 Cine 外壳的 Classic 页面**。
  *
  * 它**不碰数据**：首页与覆盖层各自取 ViewModel，其余四个 tab 直接复用 Classic 的整页实现。
@@ -65,6 +75,9 @@ fun CineRoot(modifier: Modifier = Modifier) {
   var tabIndex by rememberSaveable { mutableStateOf(0) }
   var dockHidden by remember { mutableStateOf(false) }
   var searchOpen by remember { mutableStateOf(false) }
+  // 侧边抽屉（老 UI AppBar 功能的收纳处）。⚠️ CineDrawerOverlay 要求常驻组合播进出场动画，
+  // 所以这个状态驱动的是 overlay 的 visible 参数，不是 if 包不包它。
+  var drawerOpen by remember { mutableStateOf(false) }
   // 「全部」网格：标题 + 当时那一批数据。**存快照而不是存个 id 再重查** ——
   // 网格只是「把这一行展开」，没必要再打一次服务端。
   var grid by remember { mutableStateOf<CineGridPayload?>(null) }
@@ -108,6 +121,21 @@ fun CineRoot(modifier: Modifier = Modifier) {
     }
   }
 
+  /** 抽屉功能项 → 跳转。全是 Classic 的整页实现（回落是设计内行为），跳完收抽屉 */
+  fun openDrawerEntry(entry: CineDrawerEntry) {
+    drawerOpen = false
+    when (entry) {
+      CineDrawerEntry.Downloads -> backStack.add(EmbyDownloadScreen)
+      CineDrawerEntry.Offline -> backStack.add(EmbyOfflineScreen)
+      CineDrawerEntry.LiveTv -> backStack.add(EmbyLiveTvScreen)
+      CineDrawerEntry.Playlists -> backStack.add(EmbyPlaylistScreen)
+      CineDrawerEntry.Discover -> backStack.add(EmbyDiscoverScreen)
+      CineDrawerEntry.Collections -> backStack.add(EmbyCollectionScreen)
+      CineDrawerEntry.ServerManage -> backStack.add(EmbyServerManageScreen)
+      CineDrawerEntry.Settings -> backStack.add(PreferencesScreen)
+    }
+  }
+
   // 非首页 tab 上按返回 → 回首页，而不是直接退出 App。
   // 与经典底部导航的行为一致（经典那边切 tab，不参与返回栈）。
   BackHandler(enabled = tabIndex != 0 && !searchOpen && grid == null) {
@@ -135,7 +163,7 @@ fun CineRoot(modifier: Modifier = Modifier) {
               onOpenDetail = ::openDetail,
               onOpenLibrary = ::openLibrary,
               onOpenSearch = { searchOpen = true },
-              onOpenSettings = { backStack.add(PreferencesScreen) },
+              onOpenDrawer = { drawerOpen = true },
               onOpenServerManage = { backStack.add(EmbyServerManageScreen) },
               onOpenAll = { title, items -> grid = CineGridPayload(title, items) },
               onDockHiddenChange = { dockHidden = it },
@@ -148,7 +176,7 @@ fun CineRoot(modifier: Modifier = Modifier) {
           onOpenDetail = ::openDetail,
           onOpenLibrary = ::openLibrary,
           onOpenSearch = { searchOpen = true },
-          onOpenSettings = { backStack.add(PreferencesScreen) },
+          onOpenDrawer = { drawerOpen = true },
           onOpenServerManage = { backStack.add(EmbyServerManageScreen) },
           onOpenAll = { title, items -> grid = CineGridPayload(title, items) },
           onDockHiddenChange = { dockHidden = it },
@@ -188,6 +216,14 @@ fun CineRoot(modifier: Modifier = Modifier) {
           onOpenDetail = ::openDetail,
         )
       }
+
+      // 侧边抽屉最后画（盖住 Dock 与内容）。⚠️ 常驻组合、visible 驱动进出场动画，
+      // 不要改成 `if (drawerOpen)` 包裹 —— 关闭时组合直接消失，滑出动画永远不会播
+      CineDrawerOverlay(
+        visible = drawerOpen,
+        onDismiss = { drawerOpen = false },
+        onNavigate = ::openDrawerEntry,
+      )
     }
   }
 }
@@ -204,7 +240,7 @@ private fun CineTabContent(
   onOpenDetail: (EmbyItem) -> Unit,
   onOpenLibrary: (EmbyItem) -> Unit,
   onOpenSearch: () -> Unit,
-  onOpenSettings: () -> Unit,
+  onOpenDrawer: () -> Unit,
   onOpenServerManage: () -> Unit,
   onOpenAll: (String, List<CineMediaUi>) -> Unit,
   onDockHiddenChange: (Boolean) -> Unit,
@@ -214,17 +250,44 @@ private fun CineTabContent(
       onOpenDetail = onOpenDetail,
       onOpenLibrary = onOpenLibrary,
       onOpenSearch = onOpenSearch,
-      onOpenSettings = onOpenSettings,
+      onOpenDrawer = onOpenDrawer,
       onOpenServerManage = onOpenServerManage,
       onOpenAll = onOpenAll,
       onDockHiddenChange = onDockHiddenChange,
     )
 
-    // 以下四页暂时复用 Classic 的整页实现（见 CineRoot 的 KDoc）
-    CineTab.Favorites -> EmbyFavoritesScreen()
-    CineTab.History -> EmbyHistoryScreen()
-    CineTab.Local -> FolderListScreen.Content()
-    CineTab.Network -> NetworkStreamingScreen.Content()
+    // 收藏 / 历史已重做（M3）；本地与网络仍是文件系统页面，暂时回落 Classic 整页实现。
+    // ⚠️ 回落页必须过一层 [CineHazeBacked]：Classic 页面不会把自己标成模糊源，
+    // 缺了它浮起的 Dock 在「本地 / 网络」两个 tab 上就退化成一条实色带（v135 用户反馈）
+    CineTab.Favorites -> CineFavoritesScreen()
+    CineTab.History -> CineHistoryScreen()
+    CineTab.Local -> CineHazeBacked { FolderListScreen.Content() }
+    CineTab.Network -> CineHazeBacked { NetworkStreamingScreen.Content() }
+  }
+}
+
+/**
+ * 给**回落进 Cine 外壳的 Classic 整页**补一个模糊源。
+ *
+ * ## 为什么需要这一层
+ * Cine 的玻璃（[app.marlboroadvance.mpvex.ui.cine.components.cineGlass]）靠
+ * `LocalCineHaze` 取样，而模糊源要由**内容自己**用 `Modifier.cineHazeSource` 声明 ——
+ * Cine 的几个页面都声明了，Classic 的 `FolderListScreen` / `NetworkStreamingScreen` 没有。
+ * 于是同一个浮起 Dock：首页 / 收藏 / 历史有底可糊，切到本地 / 网络就只剩「半透明平涂」，
+ * 看着像玻璃掉了。
+ *
+ * ## 为什么包一层 Box 而不是改 Classic 页面
+ * `ui/browser/` 目录是老界面的地盘，「只影响新 UI」是这套方案的硬约束。
+ * 在 Cine 的壳里补声明，老页面一个字节不动。
+ */
+@Composable
+private fun CineHazeBacked(content: @Composable () -> Unit) {
+  Box(
+    modifier = Modifier
+      .fillMaxSize()
+      .cineHazeSource(LocalCineHaze.current),
+  ) {
+    content()
   }
 }
 

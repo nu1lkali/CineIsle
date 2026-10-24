@@ -1185,8 +1185,105 @@ android {
     //       `play_error` extra 带进播放页显示成错误卡片。探测能力只保留给「重试」
     //       （`retryPlayback`，用户主动触发最多 1 次）。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 128
-    versionName = "1.6.1"
+    // ────────────────────────────────────────────────────────────────────────
+    // v129（versionCode 129，versionName 仍为 1.6.1）—— Cine 界面 M2 + M3（媒体页）。
+    //     M1 只重做了首页，其余四个 tab 全回落 Classic。这一版把「媒体」相关的页面
+    //     全部换成 Cine：「首页 → 媒体库 → 详情 → 播放」主流程全程新界面。
+    //     · 新增 `CineRoutes.kt`：在 `MainActivity` 的 `entryProvider` 里做渲染分流，
+    //       **只登记已重做的路由**，其余原样 `route.Content()` 回落 —— 这是分期发版的根。
+    //     · 媒体库（`ui/cine/library`）：分类 Chip（全部 / 类型 / 收藏）+ 统计与排序行 +
+    //       2 列海报流 / 列表模式 + 分页 + 文件夹下钻 + 长按操作单。
+    //     · 详情（`ui/cine/detail`）：Backdrop（屏高 45%）+ 上滑信息面板（压 18dp、
+    //       上沿 26dp）→ 标题 / 元信息 / 角标 / 评分（tertiary）/ 播放与续播 /
+    //       收藏 / 简介 / 演职员 / 按季分集 / 相似推荐。
+    //     · 收藏 / 历史（`ui/cine/list`）：影片与演员两栏收藏、历史海报墙带进度。
+    //     · token 补 `secondaryBarHeight`、`pageBarTitle`、`detailScrim`、`ratingAccent`。
+    //     · 本地 / 网络仍回落 Classic：它们是文件系统页面（连接表单、协议浏览），
+    //       重画收益低于风险，按方案第 12 类处理。
+    // ────────────────────────────────────────────────────────────────────────
+    // ────────────────────────────────────────────────────────────────────────
+    // v130（versionCode 130，versionName 仍为 1.6.1）—— v129 详情页崩溃修复。
+    //     现象：Cine 模式下点开任何条目，详情页第一帧就闪退。
+    //     堆栈：`IllegalStateException: CineColors 未提供：Cine 组件必须包在 CineTheme { } 内`，
+    //     帧上依次是 `CineRoute → CineDetailScreen`。
+    //     真因：`CineTheme` 在 `MainScreen` 里**只包住了底部 tab 的 `CineRoot`**；
+    //     详情页 / 媒体库页是独立导航 entry，由 `NavDisplay` 直接渲染，不在 `CineRoot` 子树内，
+    //     所以拿不到 `LocalCineColors` / `LocalCineTypography` / `LocalCineSpacing`。
+    //     修法：把 `CineTheme` 收进 `CineRoute` 的每个 Cine 分支（路由表是唯一渲染入口，
+    //     以后新增 Cine 页也自动带上主题）；Classic 回落分支**不包**主题，保持原字阶。
+    //     · 媒体库页同一个坑（同样走 `CineRoute`），一并修好。
+    // ────────────────────────────────────────────────────────────────────────
+    // ────────────────────────────────────────────────────────────────────────
+    // v131（versionCode 131，versionName 仍为 1.6.1）—— 单击进详情 + 玻璃长按菜单。
+    //     用户要求：保留 Cine 的玻璃质感，把老 UI 的长按弹窗以玻璃形式移植过来；
+    //     单击改为进详情页，不再直接播放。**老 UI 一个文件都不动**（只新增 cine 文件与文案）。
+    //     · 新增 `ui/cine/actions/CineActionSheet.kt`：玻璃底 ModalBottomSheet
+    //       （containerColor = glassSurface + 顶角 26dp + 自绘拖拽条），头部是
+    //       「缩略图 + 标题 + 元信息」，动作按「播放 / 收藏与状态 / 相关 / 维护 / 危险」分组；
+    //       二级表单（刮削 / 刷新 / 编辑元数据 / 编辑图片）直接复用 Classic 的四个公开对话框，
+    //       删除保留居中确认框（不可逆操作需要阻断式确认）。
+    //     · 状态与渲染分离：`CineActionSheetState`（页面 remember 一份）+ `CineActionSheetHost`。
+    //     · 接线：首页「最新加入 / 随便看看」、媒体库（网格 + 列表）、收藏、历史 ——
+    //       单击一律进详情，长按弹菜单；文件夹单击仍是下钻。
+    //     · 继续观看（16:9 卡）例外：单击=续播（这一行的意义就是接着看），详情走长按菜单。
+    //     · `CineMediaListRow` 之前把 `onLongClick` 收下了却没用（只挂了 clickable），
+    //       这版改 combinedClickable，列表模式长按才真的出菜单。
+    //     · 写服务器的动作统一挂 `viewModel.viewModelScope`（菜单关掉界面作用域就没了，
+    //       用 rememberCoroutineScope 会把「服务端已生效」误报成失败）。
+    // ────────────────────────────────────────────────────────────────────────
+    // ────────────────────────────────────────────────────────────────────────
+    // v132（versionCode 132，versionName 仍为 1.6.1）—— Cine 观感对齐设计稿。
+    //     用户反馈：真机上「跟设计稿感觉差很大」，点名「配色和氛围不对」+「排版密度和字号」。
+    //     逐条比对 docs/design/ui-2.0-mockup.html 的 CSS 后发现三处**实打实的缺失**：
+    //     1) 玻璃没有模糊。设计稿 `.dock{backdrop-filter:blur(22px) saturate(1.5)}`，
+    //        全稿共 13 处 backdrop-filter；v126~v131 只做了半透明色 + 1dp 描边，
+    //        Compose 没有 backdrop-filter 等价物，于是「玻璃」退化成一条色带。
+    //        → 引入 `dev.chrisbanes.haze:haze:1.7.3`（**只被 ui/cine 使用**），
+    //          新增 `ui/cine/components/CineGlass.kt`：`Modifier.cineGlass(shape, elevation, blur, tint)`
+    //          = Haze 真模糊 + 投影 + 顶边渐隐高光 + 1dp 描边，一处实现、全局复用。
+    //          ⚠️ 2.x 把 API 重写成 HazeEffectFactory/HazeInput，调用方要实现渲染器，故停在 1.7.3。
+    //     2) 没有投影。设计稿 Dock 是 `0 14px 34px rgba(0,0,0,.42)` + `0 1px 0 rgba(255,255,255,.05) inset`，
+    //        折叠顶栏 `0 8px 26px`，主按钮 `0 8px 22px`。v131 的 Dock / Rail / 顶栏 / 搜索胶囊
+    //        **一个 elevation 都没有**，所以浮层是「贴」在内容上的。
+    //     3) 配色被动态取色污染。Cine 之前完全从 colorScheme 派生，动态取色会把 surface
+    //        染成壁纸色、且把 surface 与 surfaceContainer 的明度差压平 ——
+    //        设计稿「近黑底 + 四档容器」的质感直接消失。现在 `CineTheme` 局部提供
+    //        `cineColorScheme()`：中性阶梯取设计稿定值（#0D1014 / #12161C / #171D25 / #1E252F…），
+    //        **primary / tertiary / error 仍跟随用户主题**。回落 Classic 的分支不包主题，
+    //        老 UI 一个像素不变。
+    //     · 排版密度按设计稿逐项校正：搜索胶囊 40→44dp、Dock 选中文字 12.5→13sp、
+    //       Rail 间距 4→6dp 且项高 62dp、Hero 主按钮补 8dp 投影。
+    //     · 折叠顶栏从「满宽贴边栏」改成设计稿的**浮起 18dp 圆角条**（左右 14dp、`0 8 26` 投影）。
+    //
+    //  ── v133 ──────────────────────────────────────────────────────────────
+    //     · 侧边抽屉（CineDrawer）：老 UI AppBar 里的下载 / 离线 / 直播 / 播放列表 /
+    //       猜你喜欢 / 合集 / Emby 维护 / 设置全部收进玻璃抽屉，首页顶栏左上角菜单图标弹出。
+    //       下载项带活跃任务角标（与 Classic 顶栏同一份任务队列）。顶栏只留「菜单 + 搜索」。
+    //
+    //  ── v134 ──────────────────────────────────────────────────────────────
+    //     · 详情页版式重做（CineDetailHero / CineEpisodeRail）：剧照底部渐隐融入底色、
+    //       去掉 26dp 圆角纸片；标题（ClearLogo 优先 / 退文字）、评分+分级、技术规格、
+    //       类型行全部居中；主按钮改「反相实心全宽胶囊」（onSurface 底 + 内高光 + 投影）；
+    //       已看/收藏降为两个居中玻璃描边圆钮；简介 3 行。
+    //     · 技术规格行新增数据源：MediaSources 的帧率 / 文件大小 / SDR 兜底，PremiereDate 格式化。
+    //     · 分集区重做：季下拉 + 正/倒序切换 + 集号胶囊条（自动滚到续播集）+
+    //       横滑 16:9 大卡（描边 / 进度条 / 已看角标）。替代原竖向长列表（376 集滑不动）。
+    //     · 详情页「更多」补齐 Classic 全部功能：下载（含状态/暂停/继续）、标记为不喜欢、
+    //       外部播放器，复用 CineActionSheetHost（fromDetail 隐藏「详情」项）。
+    //     · 投屏搬到详情页：Hero 第三颗玻璃圆钮（Cast），抽屉是新写的 CineCastSheet
+    //       （半透明玻璃面板 + 压暗 scrim），状态与动作共用 DlnaCastManager 单例。
+    //
+    //  ── v135（versionCode 135，versionName 涨到 1.6.3）────────────────────
+    //     · 详情页「更多」菜单**文字颜色不齐**：收藏 / 标记为不喜欢 在未激活时
+    //       把 `onSurfaceVariant` 当 tint 传下去，而 tint 是「文字 + 图标」共用的一档色，
+    //       于是这两行的字比别的行灰一档。改成未激活传 null（文字回到 onSurface，
+    //       只有图标自己降一档）。
+    //     · 本地 / 网络 两个 tab 上浮起的 Dock **没有模糊**：这两个 tab 仍是 Classic
+    //       整页实现，不会把自己标成 Haze 模糊源，玻璃层取不到底就退化成半透明平涂。
+    //       在 CineRoot 里用 CineHazeBacked 给回落页补一层 cineHazeSource，老页面零改动。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 135
+    versionName = "1.6.3"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -1474,6 +1571,11 @@ dependencies {
   // foundation 显式声明是为了 VerticalPager —— 原来它是靠 ui 传递进来的，
   // 现在翻页是视界流的核心路径，不该依赖传递关系。
   implementation(libs.androidx.compose.foundation)
+  // 背景模糊（Cine 玻璃层）。Compose 官方只有 `Modifier.blur()`（模糊自己），
+  // 没有 CSS `backdrop-filter` 的等价物 —— 设计稿里 Dock / 顶栏 / 长按菜单那种
+  // 「透出下面内容并磨砂」的效果只能靠它。
+  // ⚠️ 只在 ui/cine/** 里用；Classic 界面零引用，所以对老 UI 的实际影响为 0。
+  implementation(libs.haze)
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.ui)
   implementation(libs.mediasession)

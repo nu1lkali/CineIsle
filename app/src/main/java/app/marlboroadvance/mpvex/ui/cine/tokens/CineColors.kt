@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.cine.tokens
 
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -78,6 +79,26 @@ data class CineColors(
   val posterScrim: Brush,
   /** 继续观看卡（16:9）的压暗：只需压住左上角集号与左下角剩余时长 */
   val wideScrim: Brush,
+  /**
+   * 详情页 Backdrop 的底部压暗：透明 → surface。
+   *
+   * 与 [heroScrimBottom] 的区别是**更短更陡**：详情页的剧照只有 386dp 高，
+   * 渐变铺满 260dp 会把整张图压成一片灰，只剩顶上一点画面。
+   */
+  val detailScrim: Brush,
+  /** 评分色（设计稿 8.2：评分用 tertiary，与角标同族） */
+  val ratingAccent: Color,
+  /**
+   * 玻璃层压在内容上的**模糊后着色**（Haze 的 tint）。
+   *
+   * 与 [glassSurface] 的区别：那是「不模糊时的平涂替代」，alpha 要给到 0.72~0.78 才遮得住；
+   * 真模糊之后同样的 alpha 会把底下的内容全糊成一片色块，看不出「透」。所以这里低一档。
+   */
+  val glassTint: Color,
+  /** 玻璃顶边 1dp 内高光（设计稿 `0 1px 0 rgba(255,255,255,.05) inset`） */
+  val glassHighlight: Color,
+  /** 玻璃投影色（浅色主题下要淡得多，否则一条黑边压在浅底上像污渍） */
+  val glassShadow: Color,
 )
 
 /**
@@ -86,8 +107,7 @@ data class CineColors(
  * `remember(scheme)` 包住：派生本身有十几个对象分配，没必要每次重组都重算。
  */
 @Composable
-fun rememberCineColors(): CineColors {
-  val scheme = MaterialTheme.colorScheme
+fun rememberCineColors(scheme: ColorScheme = MaterialTheme.colorScheme): CineColors {
   return remember(scheme) {
     val isLight = scheme.surface.luminance() > 0.5f
     CineColors(
@@ -144,6 +164,77 @@ fun rememberCineColors(): CineColors {
         0.66f to Color.Transparent,
         1f to Color.Black.copy(alpha = 0.62f),
       ),
+      detailScrim = Brush.verticalGradient(
+        0f to Color.Transparent,
+        0.5f to scheme.surface.copy(alpha = 0.55f),
+        1f to scheme.surface,
+      ),
+      ratingAccent = scheme.tertiary,
+      glassTint = scheme.surface.copy(alpha = if (isLight) 0.68f else 0.58f),
+      glassHighlight = if (isLight) {
+        Color.White.copy(alpha = 0.55f)
+      } else {
+        Color.White.copy(alpha = 0.06f)
+      },
+      glassShadow = Color.Black.copy(alpha = if (isLight) 0.16f else 0.55f),
+    )
+  }
+}
+
+/**
+ * Cine 的**影院基底配色**。
+ *
+ * ## 为什么不能直接用 `colorScheme`
+ * 用户的主题可能是「动态取色」—— 那套 `surface` 会被壁纸染成淡紫 / 淡青 / 灰绿，
+ * 而且明度被拉得很平（`surface` 与 `surfaceContainer*` 之间只差一点点）。
+ * 设计稿的观感恰恰建立在**两极**上：底色接近纯黑（`#090B0E`），
+ * 容器层级靠 4~6 个亮度档位一层层推开。动态取色把这两条同时破坏掉，
+ * 于是玻璃没有对比可浮、卡片也没有层次可退 —— 用户看到的就是"发灰、发平"。
+ *
+ * ## 做法：只换中性阶梯，不动色相
+ * - `surface` / `surfaceContainer*` / `onSurface` / `outlineVariant` 一律换成设计稿 2.1 的
+ *   定值（浅深各一套，与 `docs/design/ui-2.0-mockup.html` 的 `--surface`…`--surf3` 一一对应）；
+ * - **primary / tertiary / error 全部保留** —— 强调色仍然跟用户的主题走，
+ *   换主题时 Cine 的高亮色会跟着变，只是底色不再被壁纸污染。
+ *
+ * ## 作用范围
+ * 由 [app.marlboroadvance.mpvex.ui.cine.CineTheme] 局部覆盖，只作用于 Cine 子树。
+ * 回落进 Cine 外壳的 Classic 页面（如设置）**已经在 `CineRoute` 的回落分支外**，
+ * 不会经过这里 —— 这是 v130 把 `CineTheme` 收进路由表带来的额外好处。
+ */
+fun cineColorScheme(base: ColorScheme): ColorScheme {
+  val isLight = base.surface.luminance() > 0.5f
+  return if (isLight) {
+    base.copy(
+      surface = Color(0xFFFFFFFF),
+      surfaceDim = Color(0xFFF5F6F8),
+      surfaceBright = Color(0xFFFFFFFF),
+      surfaceContainerLowest = Color(0xFFFFFFFF),
+      surfaceContainerLow = Color(0xFFF1F3F7),
+      surfaceContainer = Color(0xFFE9EDF2),
+      surfaceContainerHigh = Color(0xFFDFE4EB),
+      surfaceContainerHighest = Color(0xFFD6DCE4),
+      onSurface = Color(0xFF12151A),
+      onSurfaceVariant = Color(0xFF5C6674),
+      outline = Color(0xFF98A2AE),
+      outlineVariant = Color(0xFFD3DAE2),
+      scrim = Color(0xFF0A0C10),
+    )
+  } else {
+    base.copy(
+      surface = Color(0xFF0D1014),
+      surfaceDim = Color(0xFF090B0E),
+      surfaceBright = Color(0xFF232830),
+      surfaceContainerLowest = Color(0xFF07080B),
+      surfaceContainerLow = Color(0xFF12161C),
+      surfaceContainer = Color(0xFF171D25),
+      surfaceContainerHigh = Color(0xFF1E252F),
+      surfaceContainerHighest = Color(0xFF262E3A),
+      onSurface = Color(0xFFE9ECEF),
+      onSurfaceVariant = Color(0xFF98A2AE),
+      outline = Color(0xFF4B5867),
+      outlineVariant = Color(0xFF2A323D),
+      scrim = Color(0xFF000000),
     )
   }
 }

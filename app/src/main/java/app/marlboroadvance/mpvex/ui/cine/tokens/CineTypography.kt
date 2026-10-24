@@ -45,6 +45,18 @@ data class CineTypographySet(
     fontWeight = FontWeight.W600,
     letterSpacing = (-0.2).sp,
   ),
+  /**
+   * 二级页顶栏里的页面标题 17/600。
+   *
+   * 不直接用 [pageTitle]（26sp）：44dp 高的顶栏塞 26sp 会顶满上下边距，
+   * 视觉上比内容还重 —— 二级页的主角是海报，不是标题。
+   */
+  val pageBarTitle: TextStyle = TextStyle(
+    fontSize = 17.sp,
+    lineHeight = 22.sp,
+    fontWeight = FontWeight.W600,
+    letterSpacing = (-0.2).sp,
+  ),
   /** 列表主标题 15/600（继续观看卡的图下标题） */
   val itemTitle: TextStyle = TextStyle(
     fontSize = 15.sp,

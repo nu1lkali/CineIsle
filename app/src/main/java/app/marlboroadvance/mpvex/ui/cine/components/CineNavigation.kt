@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bookmark
@@ -94,7 +95,6 @@ fun CineDock(
   hidden: Boolean,
   modifier: Modifier = Modifier,
 ) {
-  val colors = CineTheme.colors
   val space = CineTheme.space
   val capsule = remember { RoundedCornerShape(32.dp) }
   val shift by animateFloatAsState(
@@ -118,9 +118,9 @@ fun CineDock(
       modifier = Modifier
         .fillMaxWidth()
         .height(space.dockHeight)
-        .clip(capsule)
-        .background(colors.glassSurface)
-        .border(1.dp, colors.glassBorder, capsule)
+        // 真模糊 + 14dp 投影（设计稿 .dock 的 box-shadow）。v131 之前只有半透明色，
+        // 所以「玻璃」看起来只是一条色带 —— 这一条是 v132 观感修正的核心
+        .cineGlass(shape = capsule, elevation = 14.dp, blurRadius = 22.dp)
         .padding(horizontal = 10.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.SpaceEvenly,
@@ -171,7 +171,8 @@ private fun DockItem(
         Spacer(Modifier.width(7.dp))
         Text(
           text = label,
-          style = type.cardMeta.copy(fontSize = 12.5.sp, fontWeight = FontWeight.W600),
+          // 设计稿 .dlabel 是 13px/600（v131 用的 12.5，比设计稿小半档）
+          style = type.cardMeta.copy(fontSize = 13.sp, fontWeight = FontWeight.W600),
           color = colors.onChipSelected,
           maxLines = 1,
           // Ellipsis 而不是 Clip：英文（Favorites / Network）比中文长得多，
@@ -204,7 +205,8 @@ fun CineRail(
     modifier = modifier
       .width(space.railWidth)
       .fillMaxHeight()
-      .background(colors.glassSurface)
+      // 贴边栏不投外影（右侧就是屏幕边），但同样要真模糊 —— 设计稿 .rail 是 blur(20px)
+      .cineGlass(shape = RectangleShape, elevation = 0.dp, blurRadius = 20.dp, border = false)
       .drawBehind {
         val x = size.width - 1.dp.toPx()
         drawLine(
@@ -215,9 +217,10 @@ fun CineRail(
         )
       }
       .statusBarsPadding()
-      .padding(vertical = 12.dp),
+      .padding(vertical = 14.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.spacedBy(4.dp),
+    // 设计稿 .rail：padding 14 0 20 + gap 6
+    verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
     CineTab.entries.forEach { tab ->
       RailItem(
@@ -243,12 +246,13 @@ private fun RailItem(
   Column(
     modifier = Modifier
       .width(64.dp)
+      .height(62.dp)
       .clip(shape)
       .background(if (selected) colors.chipSelected else androidx.compose.ui.graphics.Color.Transparent)
       .clickable(onClick = onClick)
       .padding(vertical = 9.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.spacedBy(4.dp),
+    verticalArrangement = Arrangement.spacedBy(5.dp),
   ) {
     Icon(
       imageVector = tab.icon,

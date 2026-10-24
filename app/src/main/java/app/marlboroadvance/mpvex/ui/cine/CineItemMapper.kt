@@ -57,6 +57,25 @@ data class CineMediaUi(
   val heroMetaParts: List<String>,
   /** Hero 主按钮文案依据：有进度 = 继续观看 */
   val hasProgress: Boolean,
+  /**
+   * 标题艺术字（Emby `ClearLogo`，透明 PNG）。
+   *
+   * 详情页标题区的**首选**表现：剧集/电影的海报艺术字带字体设计，比任何系统字体都准。
+   * `null` 表示这一条没有 Logo —— 此时退回居中文字标题（不能既没有图又没有字，
+   * 用户会不知道自己在看什么片子）。
+   */
+  val logoUrl: String?,
+  /**
+   * 详情页信息区的第一行：`12 分钟` / `2026年9月12日` / `4K` / `SDR` / `25FPS` / `679M`。
+   *
+   * 全部来自 `MediaSources` 的客观字段，**拿不到就不进列表**（不写「未知」占位）。
+   * Series 没有 MediaSources，所以这一行退化成「N 季 · 年份」。
+   */
+  val techSpecs: List<String>,
+  /** 详情页信息区的类型行：`动画 · 动作冒险 · 科幻奇幻`（最多 3 个） */
+  val genresLine: String?,
+  /** 已看（详情页次操作圆钮的选中态） */
+  val isPlayed: Boolean,
 )
 
 /** 角标：[ghost] = 压图半透明白（弱），否则走 `tertiaryContainer`（强） */
@@ -74,6 +93,9 @@ private const val THUMB_DECODE_WIDTH = 720
 
 /** Hero 解码宽度：满宽 393dp@3x ≈ 1179px */
 private const val HERO_DECODE_WIDTH = 1280
+
+/** 标题 Logo（ClearLogo，透明 PNG）解码宽度：显示上限 220dp@3x ≈ 660px */
+private const val LOGO_DECODE_WIDTH = 660
 
 /**
  * 把一条 Emby 条目映射成 Cine 各处的展示模型。
@@ -159,6 +181,14 @@ internal fun EmbyViewModel.toCineMedia(server: EmbyServer, item: EmbyItem): Cine
 
   val heroMetaParts = listOfNotNull(year, genres, duration, rating)
 
+  // 标题艺术字：必须先看 ImageTags 里到底有没有 Logo 再拼 URL ——
+  // imageUrl 对非 Primary 类型不检查 tag 是否存在，没图也会给出一条 404 的地址
+  val logoUrl = if (item.ImageTags["Logo"] != null) {
+    imageUrl(server, item, "Logo", LOGO_DECODE_WIDTH)
+  } else {
+    null
+  }
+
   return CineMediaUi(
     id = item.Id.orEmpty(),
     item = item,
@@ -179,6 +209,16 @@ internal fun EmbyViewModel.toCineMedia(server: EmbyServer, item: EmbyItem): Cine
     heroBadges = heroBadges,
     heroMetaParts = heroMetaParts,
     hasProgress = (item.UserData?.PlaybackPositionTicks ?: 0L) > 0L,
+    logoUrl = logoUrl,
+    techSpecs = item.techSpecs(),
+    genresLine = item.Genres
+      .asSequence()
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .take(3)
+      .joinToString(" · ")
+      .takeUnless { it.isBlank() },
+    isPlayed = item.UserData?.Played == true,
   )
 }
 
@@ -246,6 +286,9 @@ private fun EmbyItem.typeLabel(): String = when (Type?.lowercase()) {
 /** 音视频流里能拿到的客观事实（拿不到就是 null，不做推测） */
 private data class MediaFacts(
   val height: Int?,
+  val fps: Double?,
+  val sizeBytes: Long?,
+  val hasVideoStream: Boolean,
   val hdrLabel: String?,
   val audioLabel: String?,
 ) {
@@ -258,20 +301,110 @@ private data class MediaFacts(
       else -> null
     }
   }
+
+  /**
+   * 色域标签：**有视频流但非 HDR 时明确写 `SDR`**。
+   *
+   * 与 [hdrLabel] 的区别：后者回答「是不是 HDR」，不是就 null；
+   * 详情页那一行是「规格陈述」，前面写了 4K、后面写了 25FPS，中间唯独缺色域
+   * 会让人以为字段没取到。所以这里把「非 HDR」显式表达出来。
+   */
+  fun rangeLabel(): String? = hdrLabel ?: if (hasVideoStream) "SDR" else null
+
+  fun fpsLabel(): String? {
+    val value = fps ?: return null
+    val rounded = value.toInt()
+    // 0 / 缺失会变成 "0FPS"；大于 240 的是异常值（Emby 偶有 1000fps 的损坏元数据）
+    return if (rounded in 1..240) "${rounded}FPS" else null
+  }
+
+  fun sizeLabel(): String? {
+    val bytes = sizeBytes ?: return null
+    if (bytes <= 0L) return null
+    val gb = bytes / 1024.0 / 1024.0 / 1024.0
+    return if (gb >= 1.0) "%.1fG".format(gb) else "${(bytes / 1024.0 / 1024.0).toLong()}M"
+  }
 }
 
 private fun EmbyItem.mediaFacts(): MediaFacts {
-  val streams = MediaSources?.asSequence()
-    ?.flatMap { source -> source.MediaStreams?.asSequence() ?: emptySequence() }
-    ?.toList()
-    ?: return MediaFacts(null, null, null)
+  val sources = MediaSources.orEmpty()
+  val streams = sources.asSequence()
+    .flatMap { source -> source.MediaStreams?.asSequence() ?: emptySequence() }
+    .toList()
+  // 文件大小挂在 MediaSource 上，即使 MediaStreams 被服务端裁掉也还在
+  val size = sources.firstOrNull()?.Size
+  if (streams.isEmpty()) {
+    return MediaFacts(null, null, size, false, null, null)
+  }
   val video = streams.firstOrNull { it.Type.equals("Video", ignoreCase = true) }
   val audio = streams.firstOrNull { it.Type.equals("Audio", ignoreCase = true) }
   return MediaFacts(
     height = video?.Height,
+    fps = video?.FrameRate,
+    sizeBytes = size,
+    hasVideoStream = video != null,
     hdrLabel = video?.hdrLabel(),
     audioLabel = audio.audioLabel(),
   )
+}
+
+/**
+ * 详情页信息行（结构参考：`12 分钟  2026年9月12日  4K  SDR  25FPS  679M`）。
+ *
+ * 顺序固定「时长 → 日期 → 画质 → 色域 → 帧率 → 大小」：用户扫这一行时先关心
+ * 「多长、什么时候的」，再看技术规格。任一项拿不到就跳过，不留空位。
+ *
+ * Series 没有 `MediaSources`（Emby 只给单集和影片），所以剧集退化成「N 季 · 年份」——
+ * 硬凑画质会显示成「4K」，而实际每一集的画质都可能不同，那是假信息。
+ */
+private fun EmbyItem.techSpecs(): List<String> {
+  val facts = mediaFacts()
+  val isSeries = Type.equals("Series", ignoreCase = true)
+  return buildList {
+    if (isSeries) {
+      (ChildCount ?: 0).takeIf { it > 0 }?.let { add("$it 季") }
+    } else {
+      runtimeHuman(RunTimeTicks)?.let { add(it) }
+    }
+    premiereDateLabel()?.let { add(it) }
+    if (!isSeries) {
+      facts.resolutionLabel()?.let { add(it) }
+      facts.rangeLabel()?.let { add(it) }
+      facts.fpsLabel()?.let { add(it) }
+    }
+    facts.sizeLabel()?.let { add(it) }
+  }
+}
+
+/** `12 分钟` / `1 小时 47 分`（详情页用完整中文；Hero 塞得紧，那边用 `1h 47m`） */
+private fun runtimeHuman(ticks: Long?): String? {
+  val totalMinutes = EmbyTicks.ticksToSeconds(ticks ?: 0L) / 60
+  if (totalMinutes <= 0) return null
+  val hours = totalMinutes / 60
+  val minutes = totalMinutes % 60
+  return when {
+    hours > 0 && minutes > 0 -> "$hours 小时 $minutes 分"
+    hours > 0 -> "$hours 小时"
+    else -> "$minutes 分钟"
+  }
+}
+
+/**
+ * `2026年9月12日`。
+ *
+ * `PremiereDate` 是 `2026-09-12T00:00:00.0000000Z` 这样的 ISO 串，这里只取前 10 位自己拆。
+ * 不走 `SimpleDateFormat` 有两个原因：映射层是高频纯函数，多一个 formatter 实例不值得；
+ * 带时区解析还会把「9 月 12 日首播」在东八区显示成 9 月 11 日。
+ */
+private fun EmbyItem.premiereDateLabel(): String? {
+  val raw = PremiereDate?.take(10) ?: return null
+  val parts = raw.split('-')
+  if (parts.size != 3) return null
+  val year = parts[0].toIntOrNull() ?: return null
+  val month = parts[1].toIntOrNull() ?: return null
+  val day = parts[2].toIntOrNull() ?: return null
+  if (month !in 1..12 || day !in 1..31) return null
+  return "${year}年${month}月${day}日"
 }
 
 private fun EmbyMediaStream.hdrLabel(): String? {

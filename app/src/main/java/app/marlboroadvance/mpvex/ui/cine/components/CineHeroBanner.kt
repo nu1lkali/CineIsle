@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -285,6 +286,9 @@ private fun HeroPrimaryButton(
   Row(
     modifier = Modifier
       .height(46.dp)
+      // 设计稿 .btn-fill 的投影（`0 8px 22px rgba(0,0,0,.32)`）：
+      // 主按钮压在剧照上，没有投影就和画面糊在一起，看不出这是可点的按钮
+      .shadow(elevation = 8.dp, shape = shape)
       .clip(shape)
       .background(colors.progressFill)
       .clickable(onClick = onClick)
