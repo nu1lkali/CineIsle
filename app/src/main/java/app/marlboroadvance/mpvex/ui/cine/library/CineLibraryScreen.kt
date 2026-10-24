@@ -83,6 +83,7 @@ import app.marlboroadvance.mpvex.ui.cine.rememberCinePlayController
 import app.marlboroadvance.mpvex.ui.cine.rememberCineWide
 import app.marlboroadvance.mpvex.ui.cine.toCineMedia
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.ScrollToTopOnOrderChange
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -146,6 +147,16 @@ fun CineLibraryScreen(
   val gridState: LazyGridState = rememberLazyGridState()
   val listState = rememberLazyListState()
   val preloadDistance = rememberPredictivePreloadDistance(prefs)
+
+  // 换库 / 换分类 / 换排序 / 刷新 = 整批替换，必须回顶：停在上一批的中段会让人以为
+  // 「排序没生效」，随机排序时更明显。统一走 ScrollToTopOnOrderChange
+  // （内部 requestScrollToItem，直接 scrollToItem 会被 LazyGrid 的 key 锚定抵掉，
+  //  规矩见 ui/utils/ScrollToTop.kt）。
+  ScrollToTopOnOrderChange(
+    key = listOf<Any?>(libraryId, categoryIndex, sortBy, reloadTicket),
+    gridState = gridState,
+    listState = listState,
+  )
 
   suspend fun loadPage(startIndex: Int, limit: Int): PagedResult<EmbyItem>? {
     val current = server ?: return null

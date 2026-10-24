@@ -94,7 +94,9 @@ class NetworkBrowserViewModel(
    *    UI 用值变化做回顶的触发条件，这一种就永远不触发，用户停在原来那一段，
    *    「换了一批」完全看不出来（反馈）。
    * 用一个专门的计数器当「动作发生了」的信号，与值是否变化解耦。
-   * 下拉刷新 / 翻页 / 换目录都不碰它，所以不会误抢滚动位置。
+   * 具体「+1」的时机只有两处：① [setSortType] / [setSortOrder]（切维度、翻方向、
+   *    重复点随机换批）；② [loadFiles] 里**随机排序下的下拉刷新**（种子换了 ⇒ 整副牌
+   *    重洗，等同于换了一批顺序）。翻页 / 换目录 / 普通刷新都不碰它，所以不会误抢滚动位置。
    */
   private val _sortChangeTick = MutableStateFlow(0)
 
@@ -124,21 +126,17 @@ class NetworkBrowserViewModel(
   }
 
   /**
-   * 已经被 UI「消费」过的 [sortChangeTick] —— UI 拿它防止回顶误触发。
+   * 注：「回顶时不要误触发」这件事**不再由 ViewModel 记账**。
    *
-   * 没有它会出一个隐蔽的回归：`LaunchedEffect(sortChangeTick)` 在**每次全新组合时
-   *    都会启动一次**（键不变也启动，这就是 LaunchedEffect 的语义）。而 nav3 只组合
-   *    栈顶 entry —— 从照片查看器/播放器返回时浏览页是**重新组合**的，这个 effect
-   *    立刻 `scrollToItem(0)`，用户就被弹回顶端（用户返回后停顶端）。
-   *    加上「消费位」后：只有 tick 真的比上次消费的值大（用户刚动过排序）才回顶。
+   * 曾经这里有一对 `consumedSortTick` / `consumeSortTick()`：因为
+   * `LaunchedEffect(tick)` 在**每次全新组合时都会启动一次**（键不变也启动），而 nav3 只
+   * 组合栈顶 entry —— 从查看器 / 播放器返回时本页是重新组合的，那个 effect 会立刻把
+   * 用户弹回顶端。当时的解法是让 UI 记住「已消费到哪个 tick」。
+   *
+   * v137 起这套逻辑收进 `ui/utils/ScrollToTop.kt#ScrollToTopOnOrderChange`（用
+   * `remember` 存住首次组合时的 key，天然不误触发），页面只需把 [sortChangeTick]
+   * 当作信号传进去。ViewModel 只负责「顺序确实变了就 +1」，不必知道 UI 怎么消费。
    */
-  private val _consumedSortTick = MutableStateFlow(0)
-  val consumedSortTick: StateFlow<Int> = _consumedSortTick.asStateFlow()
-
-  /** 标记当前 tick 已被 UI 处理（回顶做完后调用） */
-  fun consumeSortTick() {
-    _consumedSortTick.value = _sortChangeTick.value
-  }
 
   /**
    * 当前目录内容（已排序）。
@@ -394,7 +392,8 @@ class NetworkBrowserViewModel(
     // ⚠️ 只在下拉刷新（invalidateCovers = true）时换种子：
     //    进目录 / 返回上一级不要换，否则同一个文件夹每次进出都换一批顺序，
     //    「刚才那张在第三行」这种位置记忆会彻底失效。
-    if (invalidateCovers && _sortType.value == NetworkSortType.Random) {
+    val reshuffled = invalidateCovers && _sortType.value == NetworkSortType.Random
+    if (reshuffled) {
       _randomSeed.value = System.currentTimeMillis()
     }
     viewModelScope.launch {
@@ -434,6 +433,13 @@ class NetworkBrowserViewModel(
                 seenFolders.forEach { ensureFolderCover(it) }
               }
             }
+            // 随机排序 + 下拉刷新 = 整副牌重洗 ⇒ 与「切排序」一样必须回顶。
+            // ⚠️ 信号只能在这里发（新列表已经落到 [_rawFiles] 之后）。
+            //    在 `loadFiles()` 开头发的话，UI 收到 tick 时数据还是旧的：
+            //    `requestScrollToItem(0)` 会落在旧列表上，等新数据 measure 时
+            //    又按 `lastKnownFirstItemKey` 把「刷新前那一条」定位回中段 ——
+            //    正是用户报的那个症状（网络位置随机排序 + 下拉）。
+            if (reshuffled) _sortChangeTick.value += 1
           }
           .onFailure { e ->
             _error.value = e.message ?: "未知错误"

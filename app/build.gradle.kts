@@ -1307,8 +1307,20 @@ android {
     //        嵌套）⇒ 报「Syntax error: Unclosed comment」在文件末尾，连带该文件所有符号
     //        Unresolved。注释里不要出现 `/**`。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 136
-    versionName = "1.6.4"
+    //  ── v137（versionCode 137，versionName 涨到 1.6.5）：网络位置随机排序回顶 ─────────
+    //     · 用户：「网络位置随机排序下拉又出现那个 item(0) 的问题了」。v127 的
+    //       `requestScrollToItem(0)` 只补了 `EmbyLibraryScreen`，网络目录浏览页
+    //       （`NetworkBrowserScreen`）还留着 `scrollToItem(0)` ⇒ 切随机 / 换一批
+    //       之后画面停在列表中间（同一类 LazyGrid 按 key 重锚定）。
+    //     · 随机排序下**下拉刷新**从来没有回顶：`loadFiles` 只换了随机种子（重洗
+    //       整副牌），滚动位置原样保留。现在新列表落地之后给排序计数 +1，UI 用
+    //       `requestScrollToItem(0)` 回顶（信号必须在数据落地之后发，否则定位请求
+    //       落在旧列表上、随后又被 key 锚回中段）。
+    //     · 顺手修 Cine 演员作品页同款：`CinePersonScreen` 的排序 effect 也是
+    //       `scrollToItem(0)`，切随机同样停在中段。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 137
+    versionName = "1.6.5"
 
     vectorDrawables {
       useSupportLibrary = true

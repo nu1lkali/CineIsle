@@ -55,6 +55,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
 import app.marlboroadvance.mpvex.ui.browser.emby.rememberPredictivePreloadDistance
 import app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.scrollToTop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -237,9 +238,11 @@ data class EmbyPhotoGridScreen(
             // 已经看过的那部分顺序不动，只是队尾多了一批（比「整副牌重洗」温和得多）
             if (random) PhotoRandomQueue.put(parentId(), items, totalCount)
             // 换排序 / 重洗后的归位：新数据已经落位，此刻滚才真正生效（见 pendingScrollTop 说明）
+            // ⚠️ 必须 scrollToTop()（内部 requestScrollToItem）：scrollToItem(0) 会被
+            //    LazyGrid 的 key 锚定抵掉，随机排序后停在中间 —— 见 ui/utils/ScrollToTop.kt
             if (reset && pendingScrollTop) {
               pendingScrollTop = false
-              gridState.scrollToItem(0)
+              gridState.scrollToTop()
             }
           }.onFailure { e ->
             if (reset) errorMessage = "加载照片失败：${e.message}"

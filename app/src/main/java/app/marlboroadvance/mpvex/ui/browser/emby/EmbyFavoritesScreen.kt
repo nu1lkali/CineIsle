@@ -92,6 +92,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMaintainButton
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.ScrollToTopOnOrderChange
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 import org.koin.compose.koinInject
@@ -486,9 +487,12 @@ fun EmbyFavoritesScreen() {
 
   // 换排序（换项 / 反转 / 随机换一批）就回顶：视口停在原处会看到完全另一批内容，
   // 让人以为排序没生效。与媒体库页行为一致。
-  LaunchedEffect(sort, sortAsc, randomSeed) {
-    gridState.scrollToItem(0)
-  }
+  // ⚠️ 统一走 ScrollToTopOnOrderChange（内部 requestScrollToItem），直接 scrollToItem(0)
+  //    会被 LazyGrid 的 key 锚定抵掉、停在列表中间 —— 见 ui/utils/ScrollToTop.kt。
+  ScrollToTopOnOrderChange(
+    key = Triple(sort, sortAsc, randomSeed),
+    gridState = gridState,
+  )
 
   // ── 触底自动续拉 ──
   // 预取距离跟随「预测性懒加载」开关；演员等 tab 不分页，只在 MOVIE 生效。

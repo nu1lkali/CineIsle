@@ -120,6 +120,7 @@ import app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen
 import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.ScrollToTopOnOrderChange
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 import org.koin.compose.koinInject
@@ -264,19 +265,17 @@ data class NetworkBrowserScreen(
     // 完全看不出排序结果长什么样。用户明确要求「改完排序就停在第一个项目」。
     // ⚠️ 键是「排序动作计数」而不是排序值 —— 随机换种子时值不变但列表重排了，
     //    那也必须回顶（曾漏掉，反馈）。
-    // ⚠️ 必须和「已消费 tick」比对：`LaunchedEffect` 在**每次全新组合时都会启动一次**
-    //    （键不变也启动）。而返回查看器时本页正是全新组合 —— 不比对的话这个 effect
-    //    会立刻 scrollToItem(0)，把用户弹回顶端（用户返回后停顶端）。
-    //    只有 tick 真的比上次消费的大（用户刚动过排序）才回顶。
-    LaunchedEffect(sortChangeTick) {
-      if (sortChangeTick == viewModel.consumedSortTick.value) return@LaunchedEffect
-      if (isGridView) {
-        networkGridState.scrollToItem(0)
-      } else {
-        networkListState.scrollToItem(0)
-      }
-      viewModel.consumeSortTick()
-    }
+    // ⚠️ 回顶**一律**走 [ScrollToTopOnOrderChange]（内部是 requestScrollToItem）：
+    //    直接写 `scrollToItem(0)` 会被 LazyGrid/LazyList 的 key 锚定抵掉，画面停在
+    //    列表中间 —— 即用户三次反馈的「item(0) 问题」。完整根因与规矩见
+    //    `ui/utils/ScrollToTop.kt`。
+    //    它同时自带「首次组合不触发」，所以从查看器 / 播放器返回时不会再被弹回顶端
+    //    （这就是原先那套「已消费 tick」记账在做的事，现在收进封装里了）。
+    ScrollToTopOnOrderChange(
+      key = sortChangeTick,
+      gridState = networkGridState,
+      listState = networkListState,
+    )
 
     // 随机播放下拉菜单（视频 / 图片）
     // 顶栏竖三点「更多」菜单：收藏 / 随机播放 / 视图切换 全收在这里（见下方 additionalActions）

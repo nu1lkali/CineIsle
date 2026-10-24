@@ -69,6 +69,7 @@ import app.marlboroadvance.mpvex.ui.cine.components.LocalCineHaze
 import app.marlboroadvance.mpvex.ui.cine.components.cineHazeSource
 import app.marlboroadvance.mpvex.ui.cine.toCineMedia
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.ScrollToTopOnOrderChange
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import kotlin.random.Random
@@ -239,7 +240,13 @@ fun CinePersonScreen(
   }
 
   val gridState = rememberLazyGridState()
-  LaunchedEffect(sortIndex, sortAsc, randomSeed) { gridState.scrollToItem(0) }
+  // 换排序 / 反转 / 随机换一批就回顶 —— 统一走 ScrollToTopOnOrderChange
+  // （内部 requestScrollToItem；直接 scrollToItem(0) 会被 LazyGrid 的 key 锚定抵掉，
+  //  切随机后停在列表中间。规矩见 ui/utils/ScrollToTop.kt）。
+  ScrollToTopOnOrderChange(
+    key = Triple(sortIndex, sortAsc, randomSeed),
+    gridState = gridState,
+  )
 
   val mediaUi: List<CineMediaUi> = remember(server?.id, sorted) {
     val current = server ?: return@remember emptyList()

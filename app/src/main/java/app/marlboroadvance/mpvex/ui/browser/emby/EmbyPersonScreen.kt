@@ -73,6 +73,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.ScrollToTopOnOrderChange
 import app.marlboroadvance.mpvex.ui.utils.longPressToCopy
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -149,9 +150,12 @@ data class EmbyPersonScreen(
     val gridState = rememberLazyGridState()
     // 换了排序就回到第一条：翻到第一百部再切排序，视口还停在原处的话看到的完全是
     // 另一批内容，会让人以为「排序没生效」。与媒体库页「排序一变就回顶」同一套行为。
-    LaunchedEffect(sort, sortAsc, randomSeed) {
-      gridState.scrollToItem(0)
-    }
+    // ⚠️ 统一走 ScrollToTopOnOrderChange（内部 requestScrollToItem），直接 scrollToItem(0)
+    //    会被 LazyGrid 的 key 锚定抵掉 —— 见 ui/utils/ScrollToTop.kt。
+    ScrollToTopOnOrderChange(
+      key = Triple(sort, sortAsc, randomSeed),
+      gridState = gridState,
+    )
 
     // 「参与身份」只在**确实观察到**该身份时才提供对应 chip：只演戏的人再挂
     // 「导演 / 编剧」chip，点下去永远是空。完全拿不到 People 数据时（部分服务端

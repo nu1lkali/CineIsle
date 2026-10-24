@@ -55,6 +55,7 @@ import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.scrollToTop
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyDetailScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyEmptyState
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyLibraryScreen
@@ -219,7 +220,10 @@ data class EmbyAggregateLibraryScreen(
             currentOrder = sortOrder,
             onSortChange = { by, order ->
               vm.applySort(by, order)
-              scope.launch { gridState.scrollToItem(0) }
+              // ⚠️ 回顶只能走 scrollToTop()（内部 requestScrollToItem）：
+              //    直接 scrollToItem(0) 落在旧列表上，新顺序 measure 时又被 key 锚回中段
+              //    —— 见 ui/utils/ScrollToTop.kt。
+              gridState.scrollToTop()
             },
           )
         }

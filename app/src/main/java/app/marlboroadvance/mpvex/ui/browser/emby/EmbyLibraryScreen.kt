@@ -154,6 +154,7 @@ import app.marlboroadvance.mpvex.ui.player.feed.FeedItem
 import app.marlboroadvance.mpvex.ui.player.feed.VerticalFeedActivity
 import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.scrollToTop
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
@@ -539,12 +540,12 @@ data class EmbyLibraryScreen(
       if (key != lastSortKey) {
         lastSortKey = key
         // 不带动画：整批内容都换了，滑动过去毫无意义还显得卡。
-        // ⚠️ 必须用 requestScrollToItem 而不是 scrollToItem：后者会把「滚到 0」这个位置
-        //    落在**旧数据**上执行完，等新数据落位时 LazyGrid 又按 `lastKnownFirstItemKey`
-        //    把原来那一屏的条目重新定位到它在新顺序里的位置（随机排序时被洗到中段）——
-        //    表现就是「切了随机、画面停在列表中间」。requestScrollToItem 把定位请求挂到
-        //    下一次 measure 上并弃用旧 key，新数据一布局就停在第一条。
-        gridState.requestScrollToItem(0)
+        // ⚠️ 回顶只能走 scrollToTop()（内部就是 requestScrollToItem）：`scrollToItem(0)`
+        //    会把「滚到 0」落在**旧数据**上执行完，等新数据落位时 LazyGrid 又按
+        //    `lastKnownFirstItemKey` 把原来那一屏的条目重新定位到它在新顺序里的位置
+        //    （随机排序时被洗到中段）—— 表现就是「切了随机、画面停在列表中间」。
+        //    规矩与根因见 ui/utils/ScrollToTop.kt。
+        gridState.scrollToTop()
       }
     }
 
@@ -949,13 +950,12 @@ data class EmbyLibraryScreen(
         //  · searchQuery 非空：搜索结果每批都是整批替换，同样要停第一条。
         if (reset && (pendingScrollTop || searchQuery.isNotBlank())) {
           pendingScrollTop = false
-          // ⚠️ 必须是 requestScrollToItem（挂到下一次 measure、且丢弃旧锚点 key），
-          //    不是 scrollToItem。这里只是把 items 赋值了，重组/布局还没发生：
+          // ⚠️ 必须是 scrollToTop()（= requestScrollToItem，挂到下一次 measure 且丢弃旧
+          //    锚点 key），不是 scrollToItem。这里只是把 items 赋值了，重组/布局还没发生：
           //    scrollToItem 会把位置落在**旧列表**上执行完，随后新数据 measure 时
           //    LazyGrid 按 lastKnownFirstItemKey 找到「刷新前那一条」并滚到它的新位置
-          //    ⇒ 随机排序下拉刷新后停在中间（用户反馈）。requestScrollToItem 让
-          //    新数据第一次布局就直接落到第一条，不受 key 锚定影响。
-          gridState.requestScrollToItem(0)
+          //    ⇒ 随机排序下拉刷新后停在中间（用户反馈）。见 ui/utils/ScrollToTop.kt。
+          gridState.scrollToTop()
         }
       }.onFailure { e ->
         // 过期的失败同样丢弃：别用旧请求的错误盖掉新请求的结果
@@ -1058,9 +1058,9 @@ data class EmbyLibraryScreen(
         else -> {
           pendingScrollTop = true
           // 点击后即时反馈（真正的归位在 load() 数据落位那次）。
-          // 同样用 requestScrollToItem：此刻新数据还没到，scrollToItem 会白滚一次旧列表，
-          // 反而给 LazyGrid 记下一个旧锚点 key。
-          gridState.requestScrollToItem(0)
+          // 同样用 scrollToTop()（= requestScrollToItem）：此刻新数据还没到，
+          // scrollToItem 会白滚一次旧列表，反而给 LazyGrid 记下一个旧锚点 key。
+          gridState.scrollToTop()
         }
       }
       // 「演员」分类：走独立的演员加载，跳过媒体那套分页 / 缓存 / 扫描
@@ -2062,7 +2062,7 @@ data class EmbyLibraryScreen(
           if (isActorListMode) {
             loadActors()
             // 演员网格同样有 key 锚定问题（演员顺序会变，刷新后原来的首位演员可能被排到后面）
-            gridState.requestScrollToItem(0)
+            gridState.scrollToTop()
           } else {
             // 只换代，**不清缓存、也不清 `folderCovers`** —— 缓存里的旧封面正是刷新期间要继续
             //   显示的东西；清掉就会露出一片空占位（用户反馈「空占位有点丑」）。
