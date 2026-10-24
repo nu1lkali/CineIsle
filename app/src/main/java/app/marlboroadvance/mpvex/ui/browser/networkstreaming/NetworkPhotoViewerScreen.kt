@@ -48,6 +48,7 @@ import app.marlboroadvance.mpvex.ui.browser.photo.formatPhotoFileSize
 import app.marlboroadvance.mpvex.ui.browser.photo.rememberPhotoRotationState
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -67,7 +68,8 @@ import org.koin.compose.koinInject
  * - 顶栏「更多菜单」→ 保存原图（[NetworkPhotoSaver]）/ 图片信息（含路径与连接名）；
  *   保存位置与 Emby 照片同一项设置：自研目录 > 老 SAF 树 > 系统相册 `Pictures/CineIsle`；
  * - 前后 ±N 张预加载（N 走「照片预加载张数」1~3，默认 1），拉的是
- *   [coil3.size.Size.ORIGINAL] 全图，二次浏览命中磁盘缓存。
+ *   [NetworkPhotoImageLoader.FULL_SIZE]（与真正显示同一个尺寸、同一个桶，命中才是真命中），
+ *   二次浏览命中磁盘缓存。
  *
  * ⚠️ 全屏 / 旋转**不再由本文件画**——它们和 Emby 版共用外壳那一份，
  * 以前各画一份的结果就是「那边有、这边没有」。
@@ -165,22 +167,39 @@ data class NetworkPhotoViewerScreen(
     }
 
     // ── 前后预加载（相邻 ±N 张） ──
-    // ⚠️ 用页面级 scope 发射，不在本 effect 里直接挂起下载：本 effect 的 key 含
-    //    currentPage，翻页会取消它，取消会把在途下载前功尽弃（恰好滑到那张就白一下）。
+    // 用页面级 scope 发射而不是让本 effect 直接挂起：effect 的 key 含 currentPage，
+    // 一旦直接挂起，翻页就等于把下载砍掉。这里改成「自己持有 Job、翻页时主动取消
+    // 上一条」—— 取消是刻意的：串行跑完 6 张要几十秒，不取消的话快速连滑会堆成
+    // 一串同时在下 10MB 的任务，把「当前这张」的带宽挤没（大图一直转圈的形态）。
+    // Coil 对同一个 key 的请求会合并，当前这张由 painter 发起的请求优先级更高，
+    // 取消旧的预加载不会牵连它。
+    // ⚠️⚠️ **必须串行**（一个 launch 里 for 循环，不要每张一个 launch）：
+    //    网络照片走的是同一个连接 / SMB 会话，几张 10MB 的图**并发**读会互相抢带宽，
+    //    结果连「当前这一张」都读不完 —— 用户看到的就是「大图一直加载中」
+    //    （小图几百 KB，抢起来也瞬间完成，所以只有大图才显形）。
+    // ⚠️ 桶与尺寸必须和真正显示那次一致（BUCKET_FULL + FULL_SIZE），
+    //    否则预热的是内存缓存里另一个 key，等于白下载一遍。
     val preloadCount by browserPreferences.photoPreloadCount.collectAsState()
     val preload = preloadCount.coerceIn(1, MAX_PRELOAD)
+    var preloadJob by remember { mutableStateOf<Job?>(null) }
     LaunchedEffect(currentPage, preload) {
-      for (offset in -preload..preload) {
-        if (offset == 0) continue
-        val item = queue.getOrNull(currentPage + offset) ?: continue
-        scope.launch {
+      // 上一条预加载先取消：串行 job 跑完 6 张要几十秒，快速连滑会堆成一串
+      // 同时在下 10MB 的任务，把「当前这张」的带宽挤没（正是大图一直转圈的形态）。
+      // 取消只会损失上一次的首张预取，而那张正好是用户此刻看到的 —— 它的请求
+      // 由 painter 自己发起，优先级更高。
+      preloadJob?.cancel()
+      preloadJob = scope.launch {
+        // 顺序：后一张 → 前一张 → ±2 ……（往后翻是主路径，先备它）
+        for (offset in PRELOAD_ORDER.take(preload * 2)) {
+          val item = queue.getOrNull(currentPage + offset) ?: continue
           withContext(Dispatchers.IO) {
             NetworkPhotoImageLoader.preload(
               context,
               connectionId,
               item.path,
-              size = coil3.size.Size.ORIGINAL,
+              size = NetworkPhotoImageLoader.FULL_SIZE,
               sign = item.sign,
+              bucket = NetworkPhotoImageLoader.BUCKET_FULL,
             )
           }
         }
@@ -222,7 +241,7 @@ data class NetworkPhotoViewerScreen(
           }
         }
       },
-      renderPage = { index, zoomRegistry, rotationDegrees, onTap ->
+      renderPage = { index, zoomRegistry, loadRegistry, rotationDegrees, onTap ->
         val item = queue.getOrNull(index)
         if (item != null) {
           NetworkPhotoPageImage(
@@ -236,6 +255,9 @@ data class NetworkPhotoViewerScreen(
             modifier = Modifier.fillMaxSize(),
             page = index,
             zoomRegistry = zoomRegistry,
+            // 回填加载状态：原图还在流式拉取时，幻灯片不该开始倒数
+            // （一张 SMB 上的几十 MB 原图要好几秒，先数完再翻页等于这张没看）
+            loadRegistry = loadRegistry,
             sign = item.sign,
           )
         }
@@ -325,3 +347,11 @@ private fun formatPhotoDateTime(timestamp: Long): String {
 
 /** 预加载张数上限（设置项 1~3 的护栏） */
 private const val MAX_PRELOAD = 3
+
+/**
+ * 预加载的偏移顺序：**先下一张，再上一张**，然后 ±2、±3。
+ *
+ * 用固定序列而不是 `-N..N` 是为了让 `take(preload * 2)` 就能拿到「按优先级排好的
+ * 前后各 N 张」—— 往后翻是浏览与幻灯片的默认方向，带宽有限时先备它。
+ */
+private val PRELOAD_ORDER = listOf(1, -1, 2, -2, 3, -3)

@@ -54,6 +54,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.ui.browser.emby.components.VideoFeedIcon
 import app.marlboroadvance.mpvex.ui.theme.LocalCardCorner
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
@@ -128,6 +129,8 @@ fun NetworkConnectionCard(
   onBrowse: (NetworkConnection) -> Unit,
   onAutoConnectChange: (NetworkConnection, Boolean) -> Unit,
   onTogglePin: (NetworkConnection) -> Unit,
+  /** 视界流播放：从这台存储（根目录起，递归）随机抽一批视频进竖屏连播 */
+  onFeedPlay: (NetworkConnection) -> Unit,
   modifier: Modifier = Modifier,
   isConnected: Boolean = false,
   isConnecting: Boolean = false,
@@ -314,6 +317,18 @@ fun NetworkConnectionCard(
               onClick = {
                 menuOpen = false
                 onAutoConnectChange(connection, !connection.autoConnect)
+              },
+            )
+
+            // ── 视界流播放 ──
+            // 不用先连接：抽片链路（NetworkFeedLauncher）自己会按需建客户端。
+            // 从这个存储的根目录**递归**抽一批 —— 根目录通常没有视频，不递归等于死入口。
+            DropdownMenuItem(
+              text = { Text("视界流播放") },
+              leadingIcon = { Icon(VideoFeedIcon, contentDescription = null) },
+              onClick = {
+                menuOpen = false
+                onFeedPlay(connection)
               },
             )
 

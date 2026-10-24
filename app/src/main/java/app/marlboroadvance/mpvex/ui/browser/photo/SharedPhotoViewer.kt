@@ -53,9 +53,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -142,6 +144,44 @@ class PhotoRotationState {
 fun rememberPhotoRotationState(): PhotoRotationState = remember { PhotoRotationState() }
 
 /**
+ * 一页大图的加载结果 —— **只区分「还要不要等」**，不区分进度。
+ *
+ * 幻灯片真正需要的判断只有一个：这张现在能不能看？所以三态就够：
+ * Loading 等它、Ready 直接开始、Failed 也别等（等下去只会卡死在一张坏图上）。
+ * 「已解码到百分之几」这种信息对倒计时没有意义，收在这里只会多一份要维护的状态。
+ */
+enum class PhotoLoadState { Loading, Ready, Failed }
+
+/**
+ * 每页大图的加载状态登记处（幻灯片靠它决定**什么时候才开始倒数**）。
+ *
+ * ## 为什么需要
+ * 幻灯片是「一张图停 N 秒」，从**页面进入**那一刻开始数。但网络版拉的是原图
+ * （SMB / WebDAV 几十 MB 很常见），Emby 版遇到 HEIC 还要先失败再换 JPEG 兜底 ——
+ * 图还在转圈，右下角已经数到 0 并翻页了，用户看到的就是「刚进来就被切走」。
+ * 直白说：**倒计时的分母是「看图的时间」，不是「等图的时间」**。
+ *
+ * ## 为什么是独立一份、按页码存
+ * 与 [app.marlboroadvance.mpvex.ui.browser.emby.photo.PhotoZoomRegistry] 同一套形状
+ * （外壳持有、页面在 `DisposableEffect` / `SideEffect` 里登记）：外壳不认识
+ * Coil 的 painter，页面也不认识「当前页是谁」，只有这个中间层两边都够得着。
+ *
+ * ⚠️ 按**页码**而不是条目 key 存：页面组件拿到的就是页码（它本来就在按页码登记缩放），
+ *    而 HorizontalPager 的条目有 key，同一页的位置不会被别的照片顶掉。
+ *    未知页码一律当 [PhotoLoadState.Loading] —— 宁可多等一个 tick，也不能抢跑。
+ */
+@Stable
+class PhotoLoadRegistry {
+  private val states = mutableStateMapOf<Int, PhotoLoadState>()
+
+  fun bind(page: Int, state: PhotoLoadState) {
+    if (states[page] != state) states[page] = state
+  }
+
+  fun stateOf(page: Int): PhotoLoadState = states[page] ?: PhotoLoadState.Loading
+}
+
+/**
  * 照片全屏浏览器的**共享外壳**：Emby 媒体库与网络位置共用这一份。
  *
  * 为什么合并（用户要求）：「那边改了这边没改」是这个项目最常踩的坑 ——
@@ -156,7 +196,7 @@ fun rememberPhotoRotationState(): PhotoRotationState = remember { PhotoRotationS
  * - 横向翻页（[HorizontalPager]）+ 沉浸模式（点画面切换、顶栏钮、返回键先退沉浸）；
  * - 下拉关闭（未放大时跟手位移 + 缩小 + 变暗，过阈值松手退出）；
  * - 幻灯片（间隔读「幻灯片间隔」设置、淡出→换页→淡入、倒计时圆环、播到最后自动停、
- *   播放期间 keepScreenOn、手动滑页只重置计时不停止播放）；
+ *   播放期间 keepScreenOn、手动滑页只重置计时不停止播放、**当前这张加载完成前不倒数**）；
  * - 底部胶片条（开关两个入口共用 `photoFilmstrip`，当前页自动滚入可见）；
  * - 左下「上一张 / 下一张」、右下幻灯片钮、**底部信息栏**（文件名 + 大小日期 + 序号，
  *   两个入口都有 —— 以前只有网络版有，用户直接指出这是无谓的分叉）；
@@ -185,10 +225,14 @@ fun SharedPhotoViewer(
    * 画某一页。`onTap` 交给页面内部的手势（zoomable 的 tap）调用 ——
    * 外层不要再挂一套 tap 检测，那会跟「双击放大」抢事件。
    * `rotation` 是这一张当前的旋转角，页面自己应用（`.`rotate(deg)`）。
+   * `loadRegistry` 是**必须回填**的：页面把 Coil 的加载状态 `bind(index, ...)` 进去，
+   * 幻灯片才知道什么时候这张能看了、可以开始倒数（不回填 = 永远当加载中，见
+   * [PhotoLoadRegistry]）。
    */
   renderPage: @Composable (
     index: Int,
     zoomRegistry: PhotoZoomRegistry,
+    loadRegistry: PhotoLoadRegistry,
     rotation: Int,
     onTap: () -> Unit,
   ) -> Unit,
@@ -198,6 +242,10 @@ fun SharedPhotoViewer(
   val browserPreferences = koinInject<BrowserPreferences>()
   val scope = rememberCoroutineScope()
   val currentPage = pagerState.currentPage
+  // 下面的计时循环是「一个协程跑到底」（key 里不能带 currentPage），所以它闭包捕获的
+  // entries 会一直停留在启动那一刻 —— Emby 版续页追加、网络版换队列时就读到旧表。
+  // 过一层 rememberUpdatedState：循环里永远读到最新的一版。
+  val latestEntries by rememberUpdatedState(entries)
 
   // 胶片条：**两个入口共用同一个偏好**（设置 → Emby 照片浏览与保存 → 照片浏览器）
   val filmstrip by browserPreferences.photoFilmstrip.collectAsState()
@@ -228,6 +276,7 @@ fun SharedPhotoViewer(
   // 读 State 只会让绘制失效，不会触发重组；放到组合里读就是每帧重组整屏。
   val dismissOffset = remember { Animatable(0f) }
   val zoomRegistry = remember { PhotoZoomRegistry() }
+  val loadRegistry = remember { PhotoLoadRegistry() }
   val dismissThreshold = with(LocalDensity.current) { DISMISS_THRESHOLD_DP.dp.toPx() }
 
   // ── 幻灯片计时 ──
@@ -252,8 +301,16 @@ fun SharedPhotoViewer(
       slideshowRemaining = interval.seconds
       while (elapsed < totalMs) {
         delay(TICK_MS)
-        if (!autoScrolling && pagerState.isScrollInProgress) {
-          // 用户在自己滑：这张重新开始计时（不停止播放）
+        // ⭐ 当前这张还没就绪 ⇒ 计时归零、停在满格（不倒计时、不翻页）。
+        //    网络版拉的是原图（SMB 上几十 MB 很常见），Emby 版遇到 HEIC 还要先失败
+        //    再换 JPEG 兜底 —— 图还在转圈就数到 0 并翻页，等于这张根本没看过。
+        //    与「用户正在滑页」共用同一条归零分支：手动滑到一张没加载完的，同样继续等。
+        //    Failed 不算「等」：坏图解不出来，等下去只会卡死在这里。
+        val page = pagerState.currentPage
+        val ready = latestEntries.getOrNull(page) == null ||
+          loadRegistry.stateOf(page) != PhotoLoadState.Loading
+        if (!autoScrolling && (pagerState.isScrollInProgress || !ready)) {
+          // 用户在自己滑 / 图还没出来：这张重新开始计时（不停止播放）
           elapsed = 0
           slideshowRemaining = interval.seconds
         } else {
@@ -263,7 +320,7 @@ fun SharedPhotoViewer(
         }
       }
       val next = pagerState.currentPage + 1
-      if (next >= entries.size) {
+      if (next >= latestEntries.size) {
         slideshowPlaying = false // 播到最后一张自动停
         slideshowRemaining = 0
         break
@@ -346,7 +403,8 @@ fun SharedPhotoViewer(
             // 旋转角由外壳按 key 取出、交给页面自己应用（`.rotate(deg)` 放在 zoomable 之前，
             // 手势方向才与所见一致）。点一下画面 = 进出沉浸；长按的语义两边不同，由页面自己绑定
             val rotationDegrees = rotation.of(entries[page].key)
-            renderPage(page, zoomRegistry, rotationDegrees) { immersive = !immersive }
+            // loadRegistry 必须一起传下去：页面回填「这张好没好」，幻灯片才敢开始倒数
+            renderPage(page, zoomRegistry, loadRegistry, rotationDegrees) { immersive = !immersive }
           }
         }
       }

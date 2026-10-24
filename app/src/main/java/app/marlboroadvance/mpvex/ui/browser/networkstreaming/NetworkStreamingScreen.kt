@@ -365,6 +365,40 @@ object NetworkStreamingScreen : Screen {
                 onTogglePin = { conn ->
                   viewModel.setPinned(conn.id, !conn.pinned)
                 },
+                // 视界流：从这台存储的根目录递归抽一批视频，进仿抖音竖屏连播页。
+                // 不需要先连接 —— 抽片链路自己会按需建客户端；数量读统一的 randomPlayCount。
+                onFeedPlay = { conn ->
+                  android.widget.Toast
+                    .makeText(context, "正在抽取视频…", android.widget.Toast.LENGTH_SHORT)
+                    .show()
+                  coroutineScope.launch {
+                    val limit = browserPreferences.randomPlayCount.get().coerceIn(1, 500)
+                    val videos = NetworkFeedLauncher.collectVideos(
+                      repository = repository,
+                      connection = conn,
+                      startPath = "/",
+                      want = limit,
+                      drillDown = true,
+                    )
+                    val started = NetworkFeedLauncher.launch(
+                      context = context,
+                      application = context.applicationContext as android.app.Application,
+                      repository = repository,
+                      connection = conn,
+                      videos = videos,
+                      want = limit,
+                    )
+                    if (!started) {
+                      android.widget.Toast
+                        .makeText(
+                          context,
+                          "「${conn.name}」里没有找到视频",
+                          android.widget.Toast.LENGTH_SHORT,
+                        )
+                        .show()
+                    }
+                  }
+                },
                 isConnected = status?.isConnected ?: false,
                 isConnecting = status?.isConnecting ?: false,
                 error = status?.error,

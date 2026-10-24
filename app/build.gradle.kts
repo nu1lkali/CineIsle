@@ -1319,8 +1319,20 @@ android {
     //     · 顺手修 Cine 演员作品页同款：`CinePersonScreen` 的排序 effect 也是
     //       `scrollToItem(0)`，切随机同样停在中段。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 137
-    versionName = "1.6.5"
+    // v138 / 1.6.6
+    // 网络位置 → 视界流播放（两个 UI 都有入口）
+    //   · 新增 `NetworkFeedLauncher`：递归抽片 + 地址解析，与主播放器队列共用
+    //     `NetworkVideoUriBuilder`（原 `playVideos` 内联的三分支提取出来，不留两份）。
+    //   · 经典：连接卡 ⋮ 菜单加「视界流播放」；目录浏览页 ⋮ 菜单加「视界流播放」。
+    //     新 UI：Cine 连接卡动作行加一枚视界流图标（Cine 卡没有 ⋮ 菜单）。
+    //   · ⋮ 菜单加勾选项「穿透子文件夹」（`networkRandomDrillDown`，默认关）——
+    //     同时作用于「随机播放视频」与「视界流播放」，只影响网络模块。
+    //   · 数量沿用统一的 `randomPlayCount`，不新增配置项。
+    //   · 网盘视界流不绑 Emby 条目（libraryId = null）⇒ 收藏 / 不喜欢按钮不显示
+    //     （`FeedViewModel.embyBound`），点了必然失败的按钮不该摆着。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 138
+    versionName = "1.6.6"
 
     vectorDrawables {
       useSupportLibrary = true

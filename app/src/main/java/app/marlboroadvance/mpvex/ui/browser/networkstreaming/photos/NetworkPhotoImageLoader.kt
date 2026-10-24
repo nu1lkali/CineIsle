@@ -213,8 +213,38 @@ object NetworkPhotoImageLoader {
   /** 查看器底部胶片条（44dp 见方，比网格更小）。 */
   const val BUCKET_FILM = "film"
 
-  /** 全屏查看（`Size.ORIGINAL`，同一张图最大的一份解码结果）。 */
+  /** 全屏查看（同一张图最大的一份解码结果，尺寸见 [FULL_SIZE]）。 */
   const val BUCKET_FULL = "full"
+
+  /**
+   * 全屏查看的解码边长上限（像素）。
+   *
+   * 2560 ≈ 1080p 屏宽的 2.4 倍：4× 放大还看得出细节，再往上人眼也分不出来。
+   */
+  const val FULL_MAX_EDGE_PX = 2560
+
+  /**
+   * 全屏查看的请求尺寸 —— **不要改回 [Size.ORIGINAL]**。
+   *
+   * ⭐ 用户反馈「10MB 左右的大图一直加载中」，根因就是原图直解：
+   *
+   * 1. **内存**：一张 6000×4000 的 10MB JPEG，ARGB_8888 要 **96MB** 一个 Bitmap。
+   *    查看器还会按「照片预加载张数」拉前后几张（同一口径也是原图），2~4 张
+   *    一起就是 200~400MB —— 撞 OOM，或者把内存缓存（上限 256MB）来回挤爆，
+   *    表现就是解码不停、缩略图全被淘汰、界面一直转圈。
+   * 2. **磁盘**：Coil 拿到的是**不可回退的流**，做边界探测 / EXIF 时必须先
+   *    `SourceImageSource.file()` 把整个流复制成一个临时文件（已 javap 核验），
+   *    10MB 的图等于白写两遍磁盘再解码。
+   *
+   * 换成有界框后：单张解码降到约 17MB、不再有「几张 96MB 并发解码」的尖峰，
+   * 几百毫秒就能出图。（Coil 对不可回退的流仍会临时落一份文件做边界探测，
+   * 那是 10MB 级的磁盘写，跟 96MB 的内存峰值不是一个量级，可以接受。）
+   *
+   * ⚠️ 它只是**上限**，Coil 不会放大 —— 小图仍按原尺寸解码，画质一点没变。
+   * ⚠️ 预加载必须用**同一个尺寸 + 同一个桶**，否则预热的是别的 key，等于白下载
+   *    （见 [preload] 的 bucket 参数）。
+   */
+  val FULL_SIZE: Size = Size(FULL_MAX_EDGE_PX, FULL_MAX_EDGE_PX)
 
   /**
    * 二级缩略图磁盘缓存的 key（供 [NetworkPhotoFetcher] 用）。
@@ -230,7 +260,7 @@ object NetworkPhotoImageLoader {
    * 构造图片请求。
    *
    * @param size 网格缩略图传组件尺寸（默认，走采样解码省内存）；
-   *   全屏查看器传 [Size.ORIGINAL]（要放大看细节）。**不传 ORIGINAL 就是对大图采样**，
+   *   全屏查看器传 [FULL_SIZE]（有界框，见那里的推导）。**不传就是对大图采样**，
    *   这正是没有服务端缩放时唯一的内存闸门。
    * @param sign AList 下载签名（[app.marlboroadvance.mpvex.domain.network.NetworkFile.sign]）；
    *   其他协议传 null。⚠️ **不进缓存 key**（见 [NetworkPhotoRequest]）。
@@ -251,7 +281,18 @@ object NetworkPhotoImageLoader {
       .data(NetworkPhotoRequest(connectionId, path, sign, bucket))
       .memoryCacheKey(memoryKey(connectionId, path, bucket))
       .diskCacheKey(diskKey)
-      .apply { if (size != null) size(size) }
+      .apply {
+        if (size != null) {
+          size(size)
+          // ⚠️⚠️ 必须显式 INEXACT：Coil 3 的 `ImageRequest.Defaults.precision` 默认是
+          //    **EXACT**（已 javap 核实：Defaults 构造里 `getstatic Precision.EXACT`），
+          //    意思是「输出必须正好是你给的尺寸，不够就放大」。我们给的尺寸一律是
+          //    **上限**（[FULL_SIZE] / 缩略图边长），配上 EXACT 就会把 800×600 的小图
+          //    插值放大成 2560×1920 —— 白吃 17MB 内存，画质还更差。
+          //    INEXACT = 允许结果小于请求尺寸（即「绝不放大」），缩图该缩还是缩。
+          precision(coil3.size.Precision.INEXACT)
+        }
+      }
       .build()
   }
 
@@ -347,17 +388,24 @@ object NetworkPhotoImageLoader {
   /**
    * 预取：把图拉进缓存，等真滑到那张时直接命中。
    *
-   * ⚠️ 必须在 IO 线程调用（内部有网络 + 解码）。
+   * ⚠️ **必须在 IO 线程调用**（内部有网络 + 解码）。
+   * ⚠️ [bucket] 故意**没有默认值**：以前默认 `BUCKET_THUMB`，而查看器要的是
+   *    `BUCKET_FULL` ⇒ 预热的是另一个 key，查看器照样得重新下载 + 重新解码，
+   *    白花一次网络（一张 10MB 的图就是白读 10MB），还占满缩略图那份内存缓存。
+   *    这类「参数默认值悄悄写错」的 bug 编译期查不出来，只能靠不给默认值逼调用方表态。
+   * ⚠️ 尺寸也必须与真正显示那次**完全一致**（[request] 的 size 进 ImageRequest，
+   *    内存 key 里只有桶没有尺寸 —— 不一致就是命中不了）。
    */
   suspend fun preload(
     context: Context,
     connectionId: Long,
     path: String,
-    size: Size? = null,
-    sign: String? = null,
+    size: Size?,
+    sign: String?,
+    bucket: String,
   ) {
     val loader = get(context)
-    runCatching { loader.execute(request(context, connectionId, path, size, sign)) }
+    runCatching { loader.execute(request(context, connectionId, path, size, sign, bucket)) }
   }
 }
 
@@ -372,7 +420,8 @@ object NetworkPhotoImageLoader {
  *    于是「滚回来」命中的是几十 KB 的缩略图，而不是重新下几 MB 的原图 ——
  *    这才是「滚多了缩略图就丢」的真正解法，单靠调大原图缓存只能治标。
  *
- * 2. **全屏桶（[NetworkPhotoImageLoader.BUCKET_FULL]）** —— 原流式直通，要原图细节。
+ * 2. **全屏桶（[NetworkPhotoImageLoader.BUCKET_FULL]）** —— 原流式直通，
+ *    解码尺寸由请求的 [NetworkPhotoImageLoader.FULL_SIZE] 卡在 2560 有界框内。
  *
  * ⚠️ **不整读进内存**：单张可能是 20MB+ 的 TIFF/HEIC。缩略图路径走
  *    「流 → 临时文件 → 采样解码」，内存里只留采样后的 Bitmap。
@@ -401,7 +450,12 @@ private class NetworkPhotoFetcher(
     return fetchAndBuildThumbnail(cacheKey)
   }
 
-  /** 全屏：原流式直通（要原图细节，不采样、不进缩略图缓存）。 */
+  /**
+   * 全屏：原流式直通（不预缩放、不进缩略图缓存）。
+   *
+   * 采样交给 Coil 在解码阶段按 [NetworkPhotoImageLoader.FULL_SIZE] 做 ——
+   * 这里**不要**自己读进内存再缩，那会在 Coil 之外多一份整图缓冲。
+   */
   private suspend fun fetchOriginal(): FetchResult {
     val inputStream = openStream()
     // Coil 会消费这个 Source；无论成败，流都由我们关

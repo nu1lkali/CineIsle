@@ -62,7 +62,9 @@ import app.marlboroadvance.mpvex.ui.browser.cards.protocolAccent
 import app.marlboroadvance.mpvex.ui.browser.cards.protocolBadge
 import app.marlboroadvance.mpvex.ui.browser.dialogs.AddConnectionSheet
 import app.marlboroadvance.mpvex.ui.browser.dialogs.EditConnectionSheet
+import app.marlboroadvance.mpvex.ui.browser.emby.components.VideoFeedIcon
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.NetworkBrowserScreen
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.NetworkFeedLauncher
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.NetworkStreamingViewModel
 import app.marlboroadvance.mpvex.ui.cine.CineTheme
 import app.marlboroadvance.mpvex.ui.cine.actions.CineSheetFrame
@@ -106,6 +108,7 @@ fun CineNetworkScreen(modifier: Modifier = Modifier) {
     factory = NetworkStreamingViewModel.factory(context.applicationContext as Application),
   )
   val repository = koinInject<app.marlboroadvance.mpvex.repository.NetworkRepository>()
+  val browserPreferences = koinInject<app.marlboroadvance.mpvex.preferences.BrowserPreferences>()
   val connections by viewModel.connections.collectAsState()
   val statuses by viewModel.connectionStatuses.collectAsState()
   val favorites by repository.getAllFavorites().collectAsState(initial = emptyList())
@@ -289,6 +292,34 @@ fun CineNetworkScreen(modifier: Modifier = Modifier) {
             onTogglePin = { viewModel.setPinned(connection.id, !connection.pinned) },
             onEdit = { editing = connection },
             onDelete = { pendingDelete = connection },
+            onFeedPlay = {
+              Toast.makeText(context, "正在抽取视频…", Toast.LENGTH_SHORT).show()
+              scope.launch {
+                val limit = browserPreferences.randomPlayCount.get().coerceIn(1, 500)
+                val videos = NetworkFeedLauncher.collectVideos(
+                  repository = repository,
+                  connection = connection,
+                  startPath = "/",
+                  want = limit,
+                  drillDown = true,
+                )
+                val started = NetworkFeedLauncher.launch(
+                  context = context,
+                  application = context.applicationContext as Application,
+                  repository = repository,
+                  connection = connection,
+                  videos = videos,
+                  want = limit,
+                )
+                if (!started) {
+                  Toast.makeText(
+                    context,
+                    "「${connection.name}」里没有找到视频",
+                    Toast.LENGTH_SHORT,
+                  ).show()
+                }
+              }
+            },
           )
         }
       }
@@ -493,6 +524,8 @@ private fun CineConnectionCard(
   onTogglePin: () -> Unit,
   onEdit: () -> Unit,
   onDelete: () -> Unit,
+  /** 视界流播放：从这台存储的根目录递归抽一批视频进竖屏连播 */
+  onFeedPlay: () -> Unit,
 ) {
   val colors = CineTheme.colors
   val type = CineTheme.type
@@ -584,6 +617,16 @@ private fun CineConnectionCard(
           )
         }
         Spacer(Modifier.weight(1f))
+        // 视界流：与「浏览」同级的一次性动作，但语义是「播放」而非「导航」，
+        // 所以只给图标、放在置顶左边 —— 与经典版把它收在 ⋮ 里的层级一致。
+        CineIconButton(
+          icon = VideoFeedIcon,
+          contentDescription = "视界流播放",
+          tint = colors.onSurfaceVariant,
+          onClick = onFeedPlay,
+          size = 34.dp,
+          iconSize = 18.dp,
+        )
         CineIconButton(
           icon = Icons.Filled.PushPin,
           contentDescription = if (connection.pinned) "取消置顶" else "置顶",

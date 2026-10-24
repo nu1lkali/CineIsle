@@ -532,38 +532,18 @@ class NetworkBrowserViewModel(
         val connection = repository.getConnectionById(connectionId)
           ?: throw Exception("Connection not found")
 
-        // 播放地址三选一：
-        // - SMB / FTP / WebDAV：走本地代理（会话不能给播放器用，代理支持 Range ⇒ 能拖动）
-        // - AList：服务端直出签名直链 / raw_url，mpv 原生支持 Range ⇒ **直连**，
-        //   既不过代理也不过 ContentProvider 管道（管道是单向流，拖不了进度）
-        // - 其余：ContentProvider 管道兜底
-        val useProxy = connection.protocol in PROXY_PROTOCOLS
-        val directUriClient =
-          if (connection.protocol == NetworkProtocol.ALIST) repository.clientFor(connection) else null
+        // 播放地址三选一（SMB/FTP/WebDAV 走本地代理、AList 直连签名链、其余 ContentProvider）
+        // 统一由 [NetworkVideoUriBuilder] 决定 —— 视界流（[NetworkFeedLauncher]）共用同一份，
+        // 两条链路不会各自演化出「一边能拖进度、一边不能」这种差异。
+        val useProxy = connection.protocol in NetworkVideoUriBuilder.PROXY_PROTOCOLS
+        val uriBuilder = NetworkVideoUriBuilder(application, repository, connection)
         val stamp = System.currentTimeMillis()
 
         val uris = ArrayList<android.net.Uri>(videos.size)
         val titles = ArrayList<String>(videos.size)
         val networkPaths = ArrayList<String>(videos.size)
         videos.forEachIndexed { index, file ->
-          val uri = if (directUriClient != null) {
-            directUriClient.getFileUri(file.path).getOrThrow()
-          } else if (useProxy) {
-            val proxy = app.marlboroadvance.mpvex.ui.browser.networkstreaming.proxy.NetworkStreamingProxy.getInstance()
-            val streamId = "${connectionId}_${stamp}_$index"
-            val proxyUrl = proxy.registerStream(
-              streamId = streamId,
-              connection = connection,
-              filePath = file.path,
-              fileSize = file.size,
-              mimeType = file.mimeType ?: "video/mp4",
-            )
-            android.net.Uri.parse(proxyUrl)
-          } else {
-            NetworkStreamingProvider.setConnection(connectionId, connection)
-            NetworkStreamingProvider.getUri(application, connectionId, file.path)
-          }
-          uris.add(uri)
+          uris.add(uriBuilder.uriFor(file, "${connectionId}_${stamp}_$index"))
           titles.add(file.name)
           networkPaths.add(file.path)
         }
@@ -597,18 +577,98 @@ class NetworkBrowserViewModel(
   }
 
   /**
-   * 随机播放当前目录的视频：洗牌后按「随机播放数量」设置截断（1~500 条护栏）。
+   * 随机播放视频：洗牌后按「随机播放数量」设置截断（1~500 条护栏）。
    *
-   * 与 Emby 媒体库工具行的随机播放同一口径（同一个设置项）。没有可播视频时
-   * 由调用方给 toast 提示，这里静默返回。
+   * 与 Emby 媒体库工具行的随机播放同一口径（同一个设置项）。
+   *
+   * @param drillDown true = 穿透子文件夹（勾了「穿透子文件夹」），从当前目录逐层下钻累积；
+   *   false = 只播当前目录（默认，与旧行为一致）
+   * @param onEmpty 一条都没抽到时回调 —— 调用方据此给 toast。递归模式下调用方
+   *   事先不知道有多少视频，只能**等抽完**才知道，所以结果必须回传而不是让它静默返回。
    */
-  fun playRandomVideos() {
+  fun playRandomVideos(drillDown: Boolean = false, onEmpty: () -> Unit = {}) {
     viewModelScope.launch {
-      val pool = _rawFiles.value.filter { it.isVideoFile() }
-      if (pool.isEmpty()) return@launch
       val limit = browserPreferences.randomPlayCount.randomPlayLimit()
-      val picked = pool.shuffled().take(limit)
-      playVideos(picked, 0)
+      val pool = if (drillDown) {
+        val connection = repository.getConnectionById(connectionId) ?: return@launch
+        NetworkFeedLauncher.collectVideos(
+          repository = repository,
+          connection = connection,
+          startPath = currentPath,
+          want = limit,
+          drillDown = true,
+        )
+      } else {
+        _rawFiles.value.filter { it.isVideoFile() }
+      }
+      if (pool.isEmpty()) {
+        onEmpty()
+        return@launch
+      }
+      playVideos(pool.shuffled().take(limit), 0)
+    }
+  }
+
+  /**
+   * 收集「随机播放图片」的队列（UI 拿它去开 `NetworkPhotoViewerScreen`）。
+   *
+   * ## 两种模式
+   * - `drillDown = false`：当前目录的图片，原样返回（调用方自己洗牌 + 按
+   *   `randomPlayCount` 截断，与旧行为逐字节一致）；
+   * - `drillDown = true`：穿透子文件夹，**本级 + 每个子目录的各层**图片整层收下
+   *   （不抽不截断，总量上限 [NetworkFeedLauncher.MAX_PHOTO_QUEUE]）。
+   *   本级也算 —— 勾穿透不是「只看子文件夹」。
+   *
+   * ## 顺序：组间洗牌、组内保序
+   * 目录来自 [NetworkFeedLauncher.collectPhotoGroups]，一组 = 一个目录的那一级图片。
+   * 先看哪个相册是随机的（否则永远从第一个相册开头看），但同一相册内部保持
+   * 目录里的原始顺序 —— 同一次拍摄的照片被洗散只会让幻灯片变成噪音。
+   */
+  suspend fun collectRandomPhotos(drillDown: Boolean = false): List<NetworkFile> {
+    if (!drillDown) return _rawFiles.value.filter { it.isPhoto() }
+    val connection = repository.getConnectionById(connectionId) ?: return emptyList()
+    val groups = NetworkFeedLauncher.collectPhotoGroups(
+      repository = repository,
+      connection = connection,
+      startPath = currentPath,
+      drillDown = true,
+    )
+    return if (groups.size <= 1) groups.flatten() else groups.shuffled().flatten()
+  }
+
+  /**
+   * 视界流播放（当前目录 / 含子文件夹）：随机抽一批交给仿抖音竖屏连播页。
+   *
+   * 与「随机播放」的区别只在最后一步 —— 不是丢给主播放器排队播，而是把整批地址
+   * 交给 `VerticalFeedActivity` 自己管「滑到哪放哪」。取片范围、数量口径与
+   * [playRandomVideos] 完全共用（同一个 `randomPlayCount` 设置项）。
+   *
+   * @param onEmpty 抽不到视频时回调，调用方负责 toast
+   */
+  fun startFeedPlayback(drillDown: Boolean = false, onEmpty: () -> Unit = {}) {
+    viewModelScope.launch {
+      val limit = browserPreferences.randomPlayCount.randomPlayLimit()
+      val connection = repository.getConnectionById(connectionId)
+      if (connection == null) {
+        onEmpty()
+        return@launch
+      }
+      val videos = NetworkFeedLauncher.collectVideos(
+        repository = repository,
+        connection = connection,
+        startPath = currentPath,
+        want = limit,
+        drillDown = drillDown,
+      )
+      val started = NetworkFeedLauncher.launch(
+        context = application,
+        application = application,
+        repository = repository,
+        connection = connection,
+        videos = videos,
+        want = limit,
+      )
+      if (!started) onEmpty()
     }
   }
 
@@ -641,17 +701,10 @@ class NetworkBrowserViewModel(
     private const val COVER_MAX_PAGE_ATTEMPTS = 2
 
     /**
-     * 需要走本地代理才能**拖动进度**的协议。
-     *
-     * ⚠️ AList **刻意不在**这里：它的 `/d/...?sign=` 与 `raw_url` 本身就是支持
-     * Range 的 http 直链，播放器直连即可（见 [playVideos] 里的 `directUriClient`
-     * 分支）。把它加进来只会白绕一层本地代理。
+     * 需要走本地代理才能**拖动进度**的协议 —— 已挪到
+     * [NetworkVideoUriBuilder.PROXY_PROTOCOLS]（播放队列与视界流共用同一份，
+     * 见 `NetworkFeedLauncher.kt`）。这里不再保留第二份定义。
      */
-    private val PROXY_PROTOCOLS = setOf(
-      NetworkProtocol.SMB,
-      NetworkProtocol.FTP,
-      NetworkProtocol.WEBDAV,
-    )
 
     fun factory(
       application: Application,

@@ -73,6 +73,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -115,6 +116,7 @@ import app.marlboroadvance.mpvex.ui.browser.cards.NetworkOtherFileRow
 import app.marlboroadvance.mpvex.ui.browser.cards.NetworkPhotoRow
 import app.marlboroadvance.mpvex.ui.browser.cards.NetworkVideoCard
 import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
+import app.marlboroadvance.mpvex.ui.browser.emby.components.VideoFeedIcon
 import app.marlboroadvance.mpvex.ui.browser.states.EmptyState
 import app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen
 import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
@@ -122,6 +124,7 @@ import app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import app.marlboroadvance.mpvex.ui.utils.ScrollToTopOnOrderChange
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.koin.compose.koinInject
 import kotlin.math.roundToInt
@@ -155,7 +158,9 @@ import kotlin.math.roundToInt
  * - **点标题 → 「跳转到」导航弹窗**（[PathNavigatorSheet]）：列出 根目录 → 当前目录
  *   的全部层级，点任意一层直达；当前层打勾。**点标题不再切换深浅色**（该页让位给导航）。
  * - **顶栏「更多」菜单**（[BrowserTopBar.additionalActions]）：回到首页（一键回网络模块首页）、
- *   收藏当前目录（切完弹 toast）、随机播放（视频 / 图片二选一）、视图切换，全部收在竖三点里
+ *   收藏当前目录（切完弹 toast）、随机播放（视频 / 图片二选一）、**视界流播放**（仿抖音竖屏
+ *   连播）、**穿透子文件夹**（勾选项，作用于随机播放视频、视界流、随机播放图片三项）、
+ *   视图切换，全部收在竖三点里
  *   —— 顶栏常驻图标只有「更多 / 搜索 / 设置」，宽度留给文件夹标题。
  * - **视频点击即播**：不起详情页，直接走 mpv 队列播放（[NetworkBrowserViewModel.playVideos]）。
  * - **照片点击进查看器**：[NetworkPhotoViewerScreen]（缩放 / 保存 / 幻灯片）。
@@ -171,6 +176,8 @@ data class NetworkBrowserScreen(
   override fun Content() {
     val backstack = LocalBackStack.current
     val context = LocalContext.current
+    // 穿透模式抽图片要逐层列目录（异步），菜单点击只是发起点
+    val scope = rememberCoroutineScope()
 
     val viewModel: NetworkBrowserViewModel =
       viewModel(
@@ -199,6 +206,8 @@ data class NetworkBrowserScreen(
     val browserPreferences = koinInject<BrowserPreferences>()
     val folderViewMode by browserPreferences.folderViewMode.collectAsState()
     val isGridView = folderViewMode == FolderViewMode.AlbumView
+    // 「随机播放视频 / 视界流」是否穿透子文件夹（⋮ 菜单里的勾选项，持久化）
+    val drillDown by browserPreferences.networkRandomDrillDown.collectAsState()
 
     // 文件夹封面开关 + 网格标题行数（设置 → 网络浏览）
     val folderCoverEnabled by browserPreferences.folderCoverEnabled.collectAsState()
@@ -545,10 +554,31 @@ data class NetworkBrowserScreen(
                   leadingIcon = { Icon(Icons.Default.Movie, contentDescription = null) },
                   onClick = {
                     showOverflowMenu = false
-                    if (files.none { it.isVideoFile() }) {
+                    // 递归模式事先不知道子文件夹里有没有视频，只能抽完再报「没有」；
+                    // 只播当前层时列表就在内存里，直接判即可。
+                    if (!drillDown && files.none { it.isVideoFile() }) {
                       toast("当前目录没有视频")
                     } else {
-                      viewModel.playRandomVideos()
+                      if (drillDown) toast("正在抽取视频…")
+                      viewModel.playRandomVideos(drillDown = drillDown) {
+                        toast(if (drillDown) "当前目录及其子文件夹里没有视频" else "当前目录没有视频")
+                      }
+                    }
+                  },
+                )
+                // ── 视界流（仿抖音竖屏上下滑连播）──
+                // 与「随机播放视频」同源同范围：同一次抽片、同一个 randomPlayCount 数量口径，
+                // 差别只在最后一步 —— 交给 VerticalFeedActivity 自己管「滑到哪放哪」。
+                // 网盘内容不绑 Emby 库（libraryId = null），所以视界流里不会出现
+                // 收藏 / 不喜欢那两个按钮（点了必然失败，见 FeedViewModel.embyBound）。
+                DropdownMenuItem(
+                  text = { Text("视界流播放") },
+                  leadingIcon = { Icon(VideoFeedIcon, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    if (drillDown) toast("正在抽取视频…")
+                    viewModel.startFeedPlayback(drillDown = drillDown) {
+                      toast(if (drillDown) "当前目录及其子文件夹里没有视频" else "当前目录没有视频")
                     }
                   },
                 )
@@ -557,26 +587,63 @@ data class NetworkBrowserScreen(
                   leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
                   onClick = {
                     showOverflowMenu = false
-                    val photos = files.filter { it.isPhoto() }
-                    if (photos.isEmpty()) {
-                      toast("当前目录没有图片")
+                    if (!drillDown) {
+                      // 只播当前层：列表已在内存里，同步打开查看器
+                      val photos = files.filter { it.isPhoto() }
+                      if (photos.isEmpty()) {
+                        toast("当前目录没有图片")
+                      } else {
+                        // 与视频随机播放同一数量口径（1~500 护栏）
+                        val limit =
+                          browserPreferences.randomPlayCount.get().coerceIn(1, 500)
+                        backstack.add(
+                          NetworkPhotoViewerScreen(
+                            connectionId = connectionId,
+                            connectionName = connectionName,
+                            dirPath = currentPath,
+                            photos = photos.shuffled().take(limit),
+                            initialIndex = 0,
+                            title = dirTitle,
+                            autoSlideshow = true,
+                          ),
+                        )
+                      }
                     } else {
-                      // 与视频随机播放同一数量口径（1~500 护栏）
-                      val limit =
-                        browserPreferences.randomPlayCount.get().coerceIn(1, 500)
-                      backstack.add(
-                        NetworkPhotoViewerScreen(
-                          connectionId = connectionId,
-                          connectionName = connectionName,
-                          dirPath = currentPath,
-                          photos = photos.shuffled().take(limit),
-                          initialIndex = 0,
-                          title = dirTitle,
-                          autoSlideshow = true,
-                        ),
-                      )
+                      // 穿透模式：每到一个子目录就把**该级图片整层**收进队列
+                      // （不按 randomPlayCount 抽，用户要求「都加到队列去」）。
+                      // 要逐层列目录 ⇒ 先把菜单收掉、给一句反应，再等结果。
+                      toast("正在抽取图片…")
+                      scope.launch {
+                        val queue = viewModel.collectRandomPhotos(drillDown = true)
+                        if (queue.isEmpty()) {
+                          toast("当前目录及其子文件夹里没有图片")
+                        } else {
+                          backstack.add(
+                            NetworkPhotoViewerScreen(
+                              connectionId = connectionId,
+                              connectionName = connectionName,
+                              dirPath = currentPath,
+                              // 组间已洗牌、组内保序（见 VM.collectRandomPhotos）
+                              photos = queue,
+                              initialIndex = 0,
+                              title = dirTitle,
+                              autoSlideshow = true,
+                            ),
+                          )
+                        }
+                      }
                     }
                   },
+                )
+                // ── 穿透子文件夹（开关项，作用于上面三项：随机视频 / 视界流 / 随机图片）──
+                // ⚠️ 点它**不关菜单**：关了的话用户看不到勾有没有打上，得再点开确认一次。
+                // 状态存偏好（networkRandomDrillDown），下次进来还记得上次的选择。
+                // ⚠️ 位置在三个播放项**之后**：它是个修饰前三项的开关，先摆「随机什么」
+                //    再摆「范围到哪」，读下来才顺。
+                DropdownMenuItem(
+                  text = { Text("穿透子文件夹") },
+                  leadingIcon = { Checkbox(checked = drillDown, onCheckedChange = null) },
+                  onClick = { browserPreferences.networkRandomDrillDown.set(!drillDown) },
                 )
 
                 // ── 视图切换 ──

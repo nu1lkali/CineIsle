@@ -166,15 +166,19 @@ internal fun FeedScreen(
       // 收藏：动效与 Emby 详情页是同一个组件（弹跳 → 红心径向渐变 + 外发光 →
       // 一圈红色光环 + 8 颗金色四角星扩散淡出）。它是**状态驱动**的，所以
       // toggleFavorite 的乐观更新一翻转，动效立刻开始，不用等服务器回包。
-      FeedToolButton(
-        icon = { FavoriteHeartIcon(isFavorite = item.isFavorite, isToggling = false, iconSize = 24.dp) },
-        onClick = { vm.toggleFavorite() },
-      )
+      // ⚠️ 网盘内容不绑 Emby 条目（vm.embyBound = false）—— 收藏要回写服务器，
+      //    没有条目 Id 点了只会弹「操作失败」，所以整颗按钮不显示。
+      if (vm.embyBound) {
+        FeedToolButton(
+          icon = { FavoriteHeartIcon(isFavorite = item.isFavorite, isToggling = false, iconSize = 24.dp) },
+          onClick = { vm.toggleFavorite() },
+        )
+      }
       // 「不喜欢」：单击切换、长按写备注。与 mpv / GSY 用同一枚**心碎**图标 ——
       // 原先的「拇指向下」用户反馈看不懂（易被读成"点踩/差评"），
       // 而这里表达的是「不想再看到这部」，与收藏（心形）是一对。
       // 选中态用**亮红**：视界流整体是黑底大图标，红得清清楚楚。
-      if (vm.showDislike) {
+      if (vm.showDislike && vm.embyBound) {
         FeedToolButton(
           icon = {
             Icon(

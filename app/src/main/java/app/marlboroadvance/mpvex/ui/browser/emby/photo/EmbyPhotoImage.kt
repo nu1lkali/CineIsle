@@ -35,6 +35,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.ui.browser.emby.components.rememberShimmer
 import app.marlboroadvance.mpvex.ui.browser.emby.components.shimmer
+import app.marlboroadvance.mpvex.ui.browser.photo.PhotoLoadRegistry
+import app.marlboroadvance.mpvex.ui.browser.photo.PhotoLoadState
 import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
 import me.saket.telephoto.zoomable.OverzoomEffect
@@ -221,6 +223,12 @@ fun EmbyPhotoPageImage(
   /** 页码：与 [zoomRegistry] 配套，用于「下拉关闭」查这张有没有被放大 */
   page: Int = 0,
   zoomRegistry: PhotoZoomRegistry? = null,
+  /**
+   * 加载状态登记处：把 Coil 的状态回填进去，共享外壳的幻灯片才知道
+   * 「这张能看了」——图还在转圈时不倒计时、不翻页。
+   * HEIC 兜底（Error → 换 JPEG）会让状态回到 Loading，正好等于「再等一会儿」。
+   */
+  loadRegistry: PhotoLoadRegistry? = null,
 ) {
   val holder = rememberEmbyPhotoPainter(url, fallbackUrl, ContentScale.Fit)
   val shimmer = rememberShimmer()
@@ -241,6 +249,17 @@ fun EmbyPhotoPageImage(
       zoomRegistry.bind(page, zoomableState)
       onDispose { zoomRegistry.unbind(page, zoomableState) }
     }
+  }
+
+  // 把「这张好没好」回填给共享外壳（幻灯片据此决定什么时候开始倒数）。
+  // ⚠️ `Empty`（请求还没发出）也算 Loading：那时候画面只有骨架屏，不能开始计时。
+  if (loadRegistry != null) {
+    val loadState = when (holder.state) {
+      is AsyncImagePainter.State.Success -> PhotoLoadState.Ready
+      is AsyncImagePainter.State.Error -> PhotoLoadState.Failed
+      else -> PhotoLoadState.Loading
+    }
+    LaunchedEffect(page, loadState) { loadRegistry.bind(page, loadState) }
   }
 
   Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

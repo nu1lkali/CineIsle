@@ -92,6 +92,16 @@ class BrowserPreferences(
    */
   val networkSortOrder = preferenceStore.getEnum("network_sort_order", SortOrder.Ascending)
 
+  /**
+   * 网络目录里「随机播放视频 / 视界流播放」是否**穿透子文件夹**。
+   *
+   * 默认 false：这两颗按钮长期以来的语义就是「只播这一层」，改成递归会悄悄改变
+   * 老用户的预期。勾上后从当前目录逐层下钻累积（见 `NetworkFeedLauncher.collectVideos`），
+   * 连接卡上的视界流入口则恒为递归 —— 存储根目录通常一个视频都没有，
+   * 不递归等于入口摆着点不动。
+   */
+  val networkRandomDrillDown = preferenceStore.getBoolean("network_random_drill_down", false)
+
   // Visibility preferences for video card chips
   val showVideoThumbnails = preferenceStore.getBoolean("show_video_thumbnails", true)
   val showSizeChip = preferenceStore.getBoolean("show_size_chip", true)

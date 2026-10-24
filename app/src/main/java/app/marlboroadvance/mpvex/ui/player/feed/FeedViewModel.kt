@@ -116,6 +116,15 @@ class FeedViewModel(
   var showDislike by mutableStateOf(true)
     private set
 
+  /**
+   * 本批条目是否绑定 Emby 条目。
+   *
+   * 收藏与「不喜欢」都要拿 `itemId` 回服务器读改写，没有库 Id 就无从下手。
+   * 网盘视界流（[libraryId] == null，见 `NetworkFeedLauncher.launch`）不绑定 ——
+   * 那两个按钮点了只会弹「操作失败」，与其留着不如不显示。
+   */
+  val embyBound: Boolean get() = libraryId != null
+
   /** 当前条目的 key。null = 拿不到 serverId ⇒ 按钮隐藏。 */
   private var dislikeKey: DislikeKey? = null
 

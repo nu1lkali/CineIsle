@@ -353,7 +353,7 @@ data class EmbyPhotoBrowserScreen(
           }
         }
       },
-      renderPage = { index, zoomRegistry, rotationDegrees, onTap ->
+      renderPage = { index, zoomRegistry, loadRegistry, rotationDegrees, onTap ->
         val item = queue.getOrNull(index)
         if (item != null) {
           val current = server
@@ -373,6 +373,8 @@ data class EmbyPhotoBrowserScreen(
             modifier = Modifier.fillMaxSize(),
             page = index,
             zoomRegistry = zoomRegistry,
+            // 回填加载状态：图没出来之前幻灯片不倒数（见 PhotoLoadRegistry）
+            loadRegistry = loadRegistry,
           )
         }
       },
