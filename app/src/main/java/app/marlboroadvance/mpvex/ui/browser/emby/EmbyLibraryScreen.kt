@@ -1446,8 +1446,10 @@ data class EmbyLibraryScreen(
         // 进播放器**之前**提示：这次到底是「含子文件夹」还是「只播当前目录」。
         // 两种手势都弹 —— 用户反馈只给下钻弹、长按静悄悄，反而更像没生效。
         showGestureHint(if (favoritesOnly) "随机播放收藏" else "随机播放", drillDown)
-        // 随机列表里可能混着看过的剧，切过去若恢复进度会直接跳到片尾，所以每个视频都从头放
-        viewModel.launchPlaylist(current, random, playFromStartAll = true)
+        // 随机列表里可能混着看过的剧，切过去若恢复进度会直接跳到片尾，所以每个视频都从头放。
+        // 走 launchRandomPlayback 而不是 launchPlaylist：起播前会用硬预算替首条探一次直链，
+        // 否则 strm 条目会在服务端 probe 上干等（见该方法注释）。
+        viewModel.launchRandomPlayback(current, random)
       }
     }
 

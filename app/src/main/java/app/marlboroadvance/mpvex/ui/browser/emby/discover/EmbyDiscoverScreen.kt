@@ -296,9 +296,10 @@ object EmbyDiscoverScreen : Screen {
                 TextButton(
                   onClick = {
                     val current = server ?: return@TextButton
-                    // playFromStartAll = true：即混列表常混着看过的剧，
-                    // 切到下一部时恢复续播会直接跳到片尾就结束
-                    embyVm.launchPlaylist(current, mix, playFromStartAll = true)
+                    // playFromStartAll 的语义由 launchRandomPlayback 内部固定：
+                    // 即有混列表常混着看过的剧，切到下一部时恢复续播会直接跳到片尾就结束；
+                    // 它同时会在起播前替首条探一次直链（strm 条目的首次 probe 很慢）。
+                    embyVm.launchRandomPlayback(current, mix)
                   },
                 ) {
                   Icon(Icons.Default.PlayArrow, contentDescription = null, Modifier.size(18.dp))

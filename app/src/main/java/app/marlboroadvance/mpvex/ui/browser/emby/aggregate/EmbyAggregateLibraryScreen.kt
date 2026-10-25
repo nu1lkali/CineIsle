@@ -208,8 +208,9 @@ data class EmbyAggregateLibraryScreen(
                   Toast.makeText(context, "没有可随机播放的内容", Toast.LENGTH_SHORT).show()
                   return@launch
                 }
-                // 随机列表里可能混着看过的剧，整场从头放（与媒体库页同口径）
-                embyVm.launchPlaylist(current, batch, playFromStartAll = true)
+                // 随机列表里可能混着看过的剧，整场从头放（与媒体库页同口径）；
+                // 起播前会替首条探一次直链，避免 strm 条目卡在服务端 probe 上
+                embyVm.launchRandomPlayback(current, batch)
               }
             },
           ) {

@@ -15,7 +15,10 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -67,7 +70,14 @@ import kotlin.math.roundToInt
  */
 internal class ExoPlayerPool(
   private val context: Context,
-  private val onError: (index: Int, reason: String) -> Unit,
+  /**
+   * 某一条出错。[decoderRelated] 表示「换解码器可能救回来」—— 调用方据此决定
+   * 要不要先拿软解重试一次（[beginSoftwareRetry]），而不是直接把错误摆给用户。
+   *
+   * 网络类错误（连不上 / 403 / 404）换软解毫无意义，所以必须区分开：
+   * 只看 [reason] 的中文文案来猜是不可靠的。
+   */
+  private val onError: (index: Int, reason: String, decoderRelated: Boolean) -> Unit,
   /**
    * `index` 这一条的**帧真的画到了屏幕上**时回调一次（同一个 index 只回调一次）。
    *
@@ -161,8 +171,45 @@ internal class ExoPlayerPool(
    */
   private val revealFallbacks = HashMap<Int, Runnable>()
 
+  /**
+   * index → 已经判定过「有声音、没画面」并上报了。
+   *
+   * 去重是必须的：判定逻辑由 250ms 心跳驱动，不去重就是每秒报四次同样的错，
+   * 错误卡片会一直闪。它在 [forgetFrameLedgers] 里随实例一起清 —— 换了实例
+   * （软解重试 / 重载）就该重新判一次。
+   */
+  private val noVideoReported = HashSet<Int>()
+
+  /**
+   * index → 已经试过「只准软解」这一次重建。
+   *
+   * 只试一次是刻意的：软解也不行的时候必须收手，否则「硬解失败 → 软解也失败 →
+   * 再重试」会变成无限重建，用户看到的是画面一直闪。
+   */
+  private val softRetried = HashSet<Int>()
+
+  /**
+   * index → 下次建实例时**只准用软件解码器**（硬解已经被证明出不了画面）。
+   *
+   * 与 [softRetried] 分开：前者是「允许试一次」的闸门，后者是「已经试过、从此只用软解」
+   * 的状态。合并成一个的话，重试请求与重建之间就没有先后关系了。
+   */
+  private val forceSoftware = HashSet<Int>()
+
   /** 兜底定时器跑在主线程 —— 账本和回调本来就都约定在主线程上碰 */
   private val mainHandler = Handler(Looper.getMainLooper())
+
+  /**
+   * 已经**交给别的内核**（mpv）接管的条目下标。
+   *
+   * 视界流默认每条都走 ExoPlayer，但内置内核解不了的文件（wmv / asf / rmvb、本机
+   * 没有对应解码器的编码）只能交给 mpv。这一条一旦交出去，池子就不该再为它建实例 ——
+   * 建了也是白占一个解码器，还会在它滑回窗口时重建一次失败实例、把画面再黑一下。
+   *
+   * ⚠️ 与「窗口裁剪」是两回事：裁剪是临时的，滑回来还要接着用；这里是**永久的**，
+   * 本次页面生命周期内这条都由 mpv 负责。
+   */
+  private val skipped = HashSet<Int>()
 
   /** 当前真正出声出画面的那一条 */
   private var activeIndex = -1
@@ -178,10 +225,13 @@ internal class ExoPlayerPool(
    * 取到 [index] 对应的实例；没有就现建一个并开始 prepare。
    *
    * 幂等：同一个 index 反复调用不会重复创建，也不会打断已经准备好的缓冲。
+   *
+   * 返回 null = 这一条已经交给别的内核（见 [skipped]），池子不为它建实例。
    */
-  private fun acquire(index: Int, url: String): ExoPlayer {
+  private fun acquire(index: Int, url: String): ExoPlayer? {
+    if (index in skipped) return null
     players[index]?.let { return it }
-    val player = build(url)
+    val player = build(url, softOnly = index in forceSoftware)
     val listener = listenerFor(index)
     player.addListener(listener)
     // 记下这一对，释放时成对摘掉（清单 #20 建议项）。
@@ -193,8 +243,22 @@ internal class ExoPlayerPool(
     return player
   }
 
-  private fun build(url: String): ExoPlayer {
+  private fun build(url: String, softOnly: Boolean = false): ExoPlayer {
     val builder = ExoPlayer.Builder(context)
+      .setRenderersFactory(
+        DefaultRenderersFactory(context)
+          // ── 解码能力的第一项：允许解码器回退 ──
+          // ⚠️ 这一项**默认是 false**（media3 的 `DefaultRenderersFactory` 里
+          // `enableDecoderFallback = false`）⇒ 首选解码器（通常是硬解）建不起来时
+          // 直接抛 `DECODER_INIT_FAILED`，**不会**再试列表里后面的候选，其中就包括
+          // 软件解码器。打开之后才会逐个回退 —— 这一类「本机没有可用的解码器」
+          // 其实还有软解可用，只是从来没被尝试过。
+          .setEnableDecoderFallback(true)
+          // ── 解码能力的第二项：硬解失败后只准软解重建一次 ──
+          // 见 [beginSoftwareRetry]。硬解「建得起来但吐不出帧」（AVI 里的 Xvid、
+          // 部分 10bit HEVC）不会报错，只会黑屏有声 —— 那种场景换软解往往就好了。
+          .apply { if (softOnly) setMediaCodecSelector(SoftwareOnlyCodecSelector) },
+      )
     // 请求头必须挂在这里（DefaultHttpDataSource），而不是 `MediaItem` 的
     // `MediaItem.LocalConfiguration`—— 那些 header 只对**本地文件**的
     // `setDataSource(path, headers)` 有意义，http(s) 走的是 DataSource 层，
@@ -252,7 +316,7 @@ internal class ExoPlayerPool(
     }
 
     override fun onPlayerError(error: PlaybackException) {
-      onError(index, describeError(error))
+      onError(index, describeError(error), isDecoderError(error))
     }
   }
 
@@ -365,6 +429,11 @@ internal class ExoPlayerPool(
   private fun forgetFrameLedgers(index: Int) {
     firstFrameRendered.remove(index)
     frameOnScreen.remove(index)
+    // 「这条没有画面」的结论同样跟着实例走：换了实例（软解重试 / 重载）就要重新判，
+    // 否则第一次的判决会一直压着，软解成功了却还挂着错误卡片。
+    // ⚠️ 刻意**不**清 softRetried：那个是「已经给过一次软解机会」的闸门，
+    //    清了就等于允许无限重试。
+    noVideoReported.remove(index)
     revealFallbacks.remove(index)?.let { mainHandler.removeCallbacks(it) }
   }
 
@@ -424,11 +493,39 @@ internal class ExoPlayerPool(
 
   // ══════════════════ 接线 ══════════════════
 
+  /**
+   * 这个错误是不是「换解码器/换内核可能救回来」的那一类。
+   *
+   * 只有解码层与容器层的失败算 —— IO / 网络 / DRM 那些换什么都没用，
+   * 硬要重试只会让用户多等一轮。
+   */
+  private fun isDecoderError(error: PlaybackException): Boolean =
+    error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+      error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+      error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
+      error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
+      error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
+      error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED
+
   private fun describeError(error: PlaybackException): String =
     when {
+      // 容器层面就不认识（wmv / asf / rmvb / 某些 avi 变种…）——
+      // ExoPlayer 只自带 mp4 / mkv / webm / ts / flv 这一批解复用器，
+      // 剩下全靠 ffmpeg 扩展（本构建没打包）⇒ 只能换内核（mpv）。
+      error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
+        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ||
+        error.errorCode == PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED ->
+        "无法播放：这个容器格式内置内核不认识"
+      // 有容器、但找不到能解这条视频轨的解码器
+      error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
+        error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ->
+        "无法播放：本机没有能解这个视频编码的解码器"
       error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
         error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ->
         "无法播放：本机没有可用的解码器"
+      // 有解码器、但它自报「这个规格超出我的能力」（4K 10bit / 高 profile 常见）
+      error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ->
+        "无法播放：规格超出本机解码能力"
       error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
         error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
         "无法播放：网络连不上媒体服务器"
@@ -481,7 +578,7 @@ internal class ExoPlayerPool(
       }
     }
 
-    if (inWindow(index)) bind(index, acquire(index, url))
+    if (inWindow(index)) acquire(index, url)?.let { bind(index, it) }
     // 尺寸可能先于 attach 到达（相邻那条在用户滑过来之前就已经 prepare 完），这里补一次
     applyVideoLayout(index)
   }
@@ -507,6 +604,61 @@ internal class ExoPlayerPool(
 
   /** 当前活动页的帧是否已经真的画到了屏幕上（加载态的判据） */
   fun activeFrameVisible(): Boolean = activeIndex in frameOnScreen
+
+  // ══════════════════ 解码兜底 ══════════════════
+
+  /**
+   * 判一次「有声音、没画面」：返回非空表示**这一条**已经确定出不了画面。
+   *
+   * ## 为什么需要这个判据
+   *
+   * 硬解不支持的编码分两种表现，只有一半会被 `onPlayerError` 抓到：
+   * · **建不起解码器** → `DECODER_INIT_FAILED`，有回调，走错误卡片；
+   * · **建得起来但吐不出帧** → **一声不响**，音频正常播放、进度条正常走、画面全黑。
+   *   典型就是 AVI 里的 Xvid / DivX（AVI 容器不放 codec-specific data，MediaCodec
+   *   拿不到 VOL 头，于是「解码器在跑、一帧都不出」），以及部分 10bit HEVC。
+   *
+   * 后者在视界流里的表现是**加载圈永远在转**（[frameOnScreen] 一直等不到），
+   * 或者用户切到别的界面才发现「刚才那条只有声音」。
+   *
+   * ## 判据为什么是「位置在走 + 零帧上屏」
+   *
+   * 位置能往前走说明容器与音频链路都是好的（拉流没问题、时间轴在推进），
+   * 此时一帧都没画上屏，只可能是视频轨解不出来。所以它不会误伤「网络慢还在缓冲」
+   * （那种情况位置不走，且 `playbackState` 是 BUFFERING）。
+   *
+   * @return 首次判定时返回 [NoVideoStall]；同一个 index 只返回一次（去重见
+   *   [noVideoReported]），已出过画面 / 还没播到阈值 / 没有实例都返回 null。
+   */
+  fun detectNoVideoStall(): NoVideoStall? {
+    val idx = activeIndex
+    if (idx < 0 || idx in frameOnScreen || idx in noVideoReported) return null
+    val player = players[idx] ?: return null
+    // 只有「已经就绪且在推进」才作数：BUFFERING 说明还在等数据，不是解码问题
+    if (player.playbackState != Player.STATE_READY) return null
+    if (player.currentPosition < NO_VIDEO_STALL_MS) return null
+    val hasVideoTrack =
+      runCatching {
+        player.currentTracks.groups.any { it.type == C.TRACK_TYPE_VIDEO }
+      }.getOrDefault(true)
+    noVideoReported.add(idx)
+    return NoVideoStall(idx, hasVideoTrack)
+  }
+
+  /**
+   * 允许「当前这条」用**纯软件解码**重建一次。返回 false = 已经试过，别再试了。
+   *
+   * 调用方（Activity）拿到 true 之后走 `reloadCurrent(url)` 重建实例 ——
+   * [acquire] 会看到 [forceSoftware] 并换用软解选择器。同一 index 只放行一次，
+   * 所以「软解也不行」的最终结论一定能落到错误卡片上，不会无限重建。
+   */
+  fun beginSoftwareRetry(): Boolean {
+    val idx = activeIndex
+    if (idx < 0) return false
+    if (!softRetried.add(idx)) return false
+    forceSoftware.add(idx)
+    return true
+  }
 
   /**
    * 抄一份 [index] 实例此刻的播放状态。
@@ -591,7 +743,7 @@ internal class ExoPlayerPool(
     //    这就是「滑了几下之后某页黑屏」的正解。
     (center - 1..center + 1).forEach { idx ->
       val url = urlOf(idx) ?: return@forEach
-      bind(idx, acquire(idx, url))
+      acquire(idx, url)?.let { bind(idx, it) }
       applyVideoLayout(idx)
     }
     applyPlaybackState()
@@ -610,7 +762,7 @@ internal class ExoPlayerPool(
     if (idx < 0) return
     val texture = surfaces[idx]
     releaseSlot(idx)
-    val player = acquire(idx, url)
+    val player = acquire(idx, url) ?: return
     if (texture != null) {
       // surfaces 里那份是页面的登记，releaseSlot 不碰它；这里把接线接回去即可
       boundTextures.remove(idx)
@@ -618,6 +770,23 @@ internal class ExoPlayerPool(
     }
     applyVideoLayout(idx)
     applyPlaybackState()
+  }
+
+  /**
+   * 把 [index] 交给**别的内核**（mpv）接管。
+   *
+   * 两件事一起做，缺一条都会留下「两边都以为自己在负责」的乱账：
+   * ① 记进 [skipped]，此后窗口裁剪 / 翻页回补都不会再替它建 ExoPlayer；
+   * ② 立刻释放它现有的实例 —— 解码器是系统级稀缺资源，mpv 那边马上要建自己的
+   *    软解上下文，这边还攥着不放，低端机上就会出现「切过去也放不出来」。
+   *
+   * 画面登记（[surfaces]）**不动**：那一页的 View 还在，只是以后由 mpv 的另一层
+   * SurfaceView 出画面。
+   */
+  fun handOffToOtherEngine(index: Int) {
+    if (index < 0) return
+    skipped.add(index)
+    releaseSlot(index)
   }
 
   /**
@@ -660,6 +829,10 @@ internal class ExoPlayerPool(
     firstFrameRendered.clear()
     frameOnScreen.clear()
     revealFallbacks.clear()
+    noVideoReported.clear()
+    softRetried.clear()
+    forceSoftware.clear()
+    skipped.clear()
     mainHandler.removeCallbacksAndMessages(null)
     players.clear()
     activeIndex = -1
@@ -692,3 +865,51 @@ internal data class FeedPlaybackSnapshot(
  * 的前提下仍不至于卡死。
  */
 private const val REVEAL_FALLBACK_MS = 1200L
+
+/**
+ * 播放位置推进到这个值、画面还一帧都没上屏，就判定「视频轨出不了画面」。
+ *
+ * 4 秒是权衡：太短会把「网络慢、音频先到、视频还在缓冲」误判成解码失败
+ * （视界流直接给人切软解，反而更慢）；太长用户已经对着黑屏听了好几秒声音。
+ * 判据里还额外要求 `playbackState == STATE_READY`，所以真实缓冲中不会走到这里。
+ */
+private const val NO_VIDEO_STALL_MS = 4_000L
+
+/**
+ * 「有声音、没画面」的一次判定结果。
+ *
+ * @param index 出问题的那一条
+ * @param hasVideoTrack 容器里到底有没有视频轨。true = 有轨但解不出（换软解可能救回来），
+ *   false = 文件本身就是纯音频（换什么内核都没有画面）
+ */
+internal data class NoVideoStall(
+  val index: Int,
+  val hasVideoTrack: Boolean,
+)
+
+/**
+ * 只用**软件解码器**的选择器 —— 硬解已经被证明「建得起来但吐不出帧」时的第二次机会。
+ *
+ * 过滤后为空就退回完整列表（原样交给上层）：有的编码在部分机型上压根没有软解
+ * （比如某些 AV1 / HEVC 10bit），这时宁可再试一次硬解，也不能直接判死 ——
+ * 「没有解码器」这个错误比「可能还是黑屏」更糟，它连一帧都不给。
+ *
+ * ⚠️ 为什么不是「禁用硬解」的开关：media3 没有这种开关，能改的只有「挑哪个
+ * MediaCodec」这一步，所以只能靠选择器表达。
+ */
+private object SoftwareOnlyCodecSelector : MediaCodecSelector {
+  override fun getDecoderInfos(
+    mimeType: String,
+    requiresSecureDecoder: Boolean,
+    requiresTunnelingDecoder: Boolean,
+  ): List<MediaCodecInfo> {
+    val all =
+      MediaCodecSelector.DEFAULT.getDecoderInfos(
+        mimeType,
+        requiresSecureDecoder,
+        requiresTunnelingDecoder,
+      )
+    val software = all.filter { it.softwareOnly }
+    return software.ifEmpty { all }
+  }
+}

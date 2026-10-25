@@ -112,6 +112,15 @@ private val CONTAINER_TYPES = setOf(
 private const val ISO_PROBE_BUDGET_MS = 2_500L
 
 /**
+ * 随机播放入口「起播前预解析」的总预算（毫秒）。
+ *
+ * 本次解析**只为一件事**：给服务端一个「现在去 probe 这个远端文件」的机会，顺便拿到
+ * 302 直链。它挡在拉起播放器之前，所以必须比 [ISO_PROBE_BUDGET_MS] 更短 —— 探不出来
+ * 就按原地址播，让用户在播放器里等，而不是在列表页对着不动的一屏等。
+ */
+private const val RANDOM_PREWARM_BUDGET_MS = 2_000L
+
+/**
  * 「演职员合并」的运行态快照。
  *
  * 进度**必须是 ViewModel 上的状态**而不是页面里的 `remember`：
@@ -1602,6 +1611,76 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     else null
 
   /** 播放一组媒体（剧集连播 / 随机播放） */
+  /**
+   * 「随机播放 / 随机播放收藏 / 混合推荐连播 / 演员作品连播」的统一启动入口。
+   *
+   * 与直接调 [launchPlaylist] 的唯一区别：**起播前先把首条的直链探一次**（带硬预算）。
+   *
+   * ## 为什么必须探（v141）
+   *
+   * 随机列表里可能有 strm 条目，而服务端还没 probe 过它的远端源文件（详情页「什么都
+   * 不显示」就是这个状态）。这时候 `/Videos/{id}/stream` 会先让服务端去读远端文件、
+   * 把大小/时长写库，一次能挂到分钟级；播放器要等它返回才有第一个字节 ⇒ 用户看到
+   * 「一直卡在加载中」。
+   *
+   * 详情页那条路（`play()`）本来就有这道预解析 + 超时放行，所以同一个文件第一次点播
+   * 只是稍等一下、退出重进就秒开；而随机播放入口原先**完全不走探测**，播放器拿着原始
+   * 地址直接撞上去 —— 这就是「详情页修好了、随机播放还是卡」的原因。
+   *
+   * 这里复用的正是同一个 [resolveDirectUrl]（单次 2 秒、不重试，超时返回 [StreamProbe.Unknown]），
+   * 再套一层总预算：探不出来就按原地址起播，绝不为了「探」再拖一轮。
+   *
+   * ⚠️ 只在**首条**上做：后面自动连播的条目由播放器自己处理，逐条探测会让等待线性叠加
+   * （剧集连播那条路也一样只探首条，见 `play()` 里的 `directUrls`）。
+   */
+  fun launchRandomPlayback(
+    server: EmbyServer,
+    items: List<EmbyItem>,
+    engine: EngineKind? = resolveEngine(false),
+  ) {
+    if (items.isEmpty()) return
+    viewModelScope.launch {
+      val firstId = items.firstOrNull()?.Id
+      // ── 起播前只处理**首条**，而且**不跟 302**（v142）──
+      //
+      // 这套服务器的形态是「Emby 只存 .strm，真实文件在网盘 CDN 上」。所以口径必须
+      // 分得很清：**凡是跟随 302 的请求，都等于往网盘 CDN 打一次**，批量预取会直接
+      // 触发网盘风控。于是这里只用 [EmbyClient.warmStream]：
+      //
+      // · `followRedirects=false` ⇒ 请求**只到我们自己的 Emby 服务器**，拿到那个
+      //   302 就结束，客户端**一个字节都不打网盘 CDN**；
+      // · 而「服务端读远端文件把大小时长写库」这一步照样会发生 —— 这正是起播慢的
+      //   根因（v140），也就被提前掉了；
+      // · 它不取直链，所以这里**不再**产出 `directUrls`。即使用户开了「预解析直链」，
+      //   随机入口也不为了一个地址去多打一次 CDN —— 播放器自己跟 302 只需要一次，
+      //   而预解析会变成两次（解析一次 + 播放一次）。想看直链的场景（详情页点播）
+      //   仍然走原来那条 opt-in 的路。
+      //
+      // 只发**一次**、只针对**首条**、2 秒硬预算（超时按原地址起播）。后面的条目一律
+      // 不在这里探测 —— 由播放器按「播这条时预热下一条」串行处理
+      // （见 EmbyPlaybackReporter.warmNextItem）。
+      if (firstId != null) {
+        withTimeoutOrNull(RANDOM_PREWARM_BUDGET_MS) {
+          withContext(Dispatchers.IO) {
+            // 阻塞调用，所以把上限交给 OkHttp 自己（2 秒），别指望协程超时能打断它
+            EmbyClient.warmStream(
+              server = server,
+              itemId = firstId,
+              callTimeoutMs = RANDOM_PREWARM_BUDGET_MS,
+            )
+          }
+        }
+      }
+      launchPlaylist(
+        server = server,
+        items = items,
+        // 随机列表常混着看过的剧，切到下一条时恢复续播会直接跳到片尾就结束
+        playFromStartAll = true,
+        engine = engine,
+      )
+    }
+  }
+
   fun launchPlaylist(
     server: EmbyServer,
     items: List<EmbyItem>,

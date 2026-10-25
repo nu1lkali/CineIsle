@@ -2093,6 +2093,89 @@ object EmbyClient {
   private val DENIED_STREAM_CODES = setOf(401, 403, 404, 410)
 
   /**
+   * 预热专用 client：**不跟 302**。
+   *
+   * 这一点是本类最关键的取舍，见 [warmStream]。
+   */
+  private val streamWarmClient: OkHttpClient by lazy {
+    httpClient.newBuilder()
+      .followRedirects(false)
+      .followSslRedirects(false)
+      .build()
+  }
+
+  /**
+   * 后台「预热」一条 stream 地址：让**服务端**先把 strm 的远端源 probe 完并写库。
+   *
+   * ## 它解决的是什么
+   *
+   * strm 条目在服务端还没 probe 过源文件时，`/Videos/{id}/stream` 会先让服务端去读
+   * 远端文件、把大小/时长写进库 —— 这一次能挂到分钟级（v140 的根因）。起播前的
+   * 2 秒探测只能保证「别把播放器界面卡住」，改变不了服务端本来就慢这件事。
+   *
+   * 唯一真正能让「切到下一个」变快的办法，是**在用户还没切之前**把下一条预热掉：
+   * 等用户切过去时服务端已经有缓存，请求秒回。
+   *
+   * ## 为什么不跟 302（这条决定了会不会触发 CDN 风控）
+   *
+   * `followRedirects=false` ⇒ 本次请求**只到我们自己的 Emby 服务器**，拿到那个 302
+   * 就结束。服务端要 probe 远端文件，那是服务端去读网盘/CDN，跟客户端打多少请求无关。
+   * 客户端因此**一个字节都不会打到网盘 CDN 上** —— 这正是「预热不能引发 CDN 风控」
+   * 的硬保证。
+   *
+   * 反过来 [resolveStreamUrl] 必须跟 302（它的目的就是取直链），所以那条路会碰到
+   * CDN，只允许在**起播关键路径、单条、单次**上用（见调用方）。
+   *
+   * ## 使用约束（调用方必须遵守）
+   *
+   * · **串行**：同一时刻只允许一条预热在飞（调用方用单个 Job 控制）；
+   * · **单条**：只预热「下一条」，不做整列表批量预取；
+   * · **可失败**：返回 false 就算了，绝不影响播放（预热是纯优化）。
+   *
+   * @param mediaSourceId 多版本条目要指定与播放一致的版本，否则预热的是另一个版本
+   *   （白打一次，也不会出错）
+   * @return true = 服务端已经应答（含 302），预热完成
+   */
+  fun warmStream(
+    server: EmbyServer,
+    itemId: String,
+    mediaSourceId: String? = null,
+    /**
+     * 预热是后台行为，不占起播关键路径，所以给的预算比探测宽松得多：
+     * 服务端第一次 probe 远端文件可能十几秒，这里让它跑完才有意义。
+     */
+    callTimeoutMs: Long = STREAM_WARM_CALL_TIMEOUT_MS,
+  ): Boolean {
+    val original = videoStreamUrl(server, itemId, static = true, mediaSourceId = mediaSourceId)
+    return runCatching {
+      val req = Request.Builder()
+        .url(original)
+        // 只取 1 个字节：服务端只要开始应答，probe 就已经发生了
+        .header("Range", "bytes=0-0")
+        // 与播放器、与 [resolveStreamUrl] 同一套 UA（理由见那两处注释）
+        .header("User-Agent", STREAM_USER_AGENT)
+        .get()
+        .build()
+      streamWarmClient.newCall(req).apply {
+        timeout().timeout(callTimeoutMs, TimeUnit.MILLISECONDS)
+      }.execute().use { resp ->
+        // 2xx / 3xx 都算预热成功：3xx 就是正常情况下服务端 probe 完给的跳转，
+        // 我们**故意**不跟过去（见上面的说明）。
+        resp.isSuccessful || resp.code in 300..399
+      }
+    }.getOrDefault(false)
+  }
+
+  /**
+   * 预热请求的超时（毫秒）。
+   *
+   * 比 [STREAM_PROBE_CALL_TIMEOUT_MS] 宽得多 —— 它不在任何用户等待路径上，
+   * 给得松才能让「服务端真的把 probe 跑完」这件事发生；超时也只是这一次预热白做，
+   * 下次切到该条时播放器自己再请求一次即可（行为与没有预热时一致）。
+   */
+  private const val STREAM_WARM_CALL_TIMEOUT_MS = 25_000L
+
+  /**
    * 302 预解析的**单次调用上限**（毫秒）。
    *
    * 2 秒是刻意选的：4xx 死链基本都在百毫秒内回来（判死链的能力不受影响），

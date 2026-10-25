@@ -1331,6 +1331,57 @@ android {
     //   · 网盘视界流不绑 Emby 条目（libraryId = null）⇒ 收藏 / 不喜欢按钮不显示
     //     （`FeedViewModel.embyBound`），点了必然失败的按钮不该摆着。
     // ────────────────────────────────────────────────────────────────────────
+    //  ── v141（versionCode 141，versionName 涨到 1.6.8）──────────────────────
+    //     视界流（仿抖音竖屏连播，ExoPlayer 多实例版）解码能力增强 ——
+    //     用户报「有些视频无法播放，或者黑屏但有声音」。两类失败分开治：
+    //     · 黑屏有声（硬解建得起来但一帧都不吐：AVI 里的 Xvid/DivX、部分 10bit
+    //       HEVC）**不会报错**，旧版只能永远转圈。新增判据
+    //       `ExoPlayerPool.detectNoVideoStall`：`STATE_READY` + 位置已过 4 秒 +
+    //       零帧上屏 ⇒ 判定视频轨出不了画面（判据不含 BUFFERING，网络慢不误伤）。
+    //     · 无法播放（`DECODER_INIT_FAILED` 等）根因是 media3 的
+    //       `enableDecoderFallback` **默认 false** —— 首选解码器（通常硬解）建不起来
+    //       就直接抛错，列表里后面的候选（含软解）从没被试过。
+    //     · 三级兜底链：① 打开解码器回退，逐候选试；② 仍失败就
+    //       `SoftwareOnlyCodecSelector` 只准软解重建一次（`beginSoftwareRetry`，
+    //       同一 index 只放行一次，避免无限重建把画面刷成闪屏）；③ 软解也不行，
+    //       或容器本就不认识（wmv/asf/rmvb —— ExoPlayer 自带解复用器就那几个），
+    //       换 mpv 内核续播（`VerticalFeedActivity.switchToMpv`）。
+    //     · mpv 兜底**不跳出视界流**（用户明确要求：不要用播放页那套 UI）。做法是在
+    //       当前条上叠一层 mpv 的画面（`FeedMpvEngine` + `view_feed_mpv.xml`），控件
+    //       仍由 FeedScreen 画 —— 界面与走 ExoPlayer 时一模一样。三条硬约束：
+    //       ① 画面层排在 Pager 之后、FeedScreen 之前（画面盖 Pager、控件盖画面）；
+    //       ② 根容器 `InertTouchFrameLayout` 短路触摸（全屏 AndroidView 会吃掉 DOWN，
+    //          翻页/音量亮度/单击唤控件全废）；③ `playFile` 必须等 Surface 有效
+    //          （`pump()` 在心跳里轮询），否则 vo 建不起来 ⇒ 有声音黑屏。
+    //       mpv 是进程级单例 ⇒ 只服务当前这一条：滑走 `stop()`、滑回重新 `play` 并
+    //       seek 回原位，其余条目照旧走 ExoPlayer；该条在池里被标记 skipped 并释放实例。
+    //     · 错误卡片补第二颗按钮「用 mpv 播放」（`FeedPlayerController.playInMpv`）：
+    //       自动兜底只覆盖解码类失败，网络类失败仍由用户自己决定换不换内核。
+    //     · 错误文案按失败原因分开：容器不认识 / 没有该编码解码器 / 规格超能力 /
+    //       网络连不上 / 服务器拒绝，不再一律「无法播放：错误码」。
+    //     · 随机播放入口同样卡（用户反馈）：那 5 个入口原先完全不探直链，播放器拿着
+    //       原始地址直接撞服务端 probe。新增 `launchRandomPlayback`，起播前只探**首条**、
+    //       一次、2 秒硬预算（`RANDOM_PREWARM_BUDGET_MS`），超时按原地址起播。
+    // ────────────────────────────────────────────────────────────────────────
+    //  ── v142（versionCode 142，versionName 涨到 1.6.9）—— 三项真机反馈 ────────
+    //     ① 视界流快滑时「视频已经在放、加载圈还没消失」：
+    //        撤圈判据原先按 `viewModel.index` 读帧账本，而快滑时它落后于 Pager 当前页
+    //        （要等 settledPage 回填）⇒ 读到相邻页的 false。改成读
+    //        `ExoPlayerPool.activeFrameVisible()`（= Pager 当前页），并每 250ms 重算
+    //        一次（不再「一旦置真就不回头」），任何一处把 buffered 写错下一拍自愈。
+    //        翻页瞬间给 400ms 宽限（`LOADING_GRACE_MS`），避免圈闪一下。
+    //     ② 随机播放的请求量（用户担心网盘 CDN 风控：Emby 只存 .strm，真实文件在网盘）：
+    //        口径定死为「**客户端不跟 302**」—— 凡是跟随 302 的请求都等于往 CDN 打一次。
+    //        起播前只预热首条、只发一次、2 秒硬预算，走新增的 `EmbyClient.warmStream`
+    //        （`followRedirects=false`，请求只到自家 Emby 服务器），因此随机入口
+    //        客户端对 CDN 的请求数 = **0**；真正的 CDN 请求只有播放那一次。
+    //        也不再用它产出 `directUrls`（预解析会变成「解析一次 + 播放一次」两次 CDN 命中）。
+    //     ③ 播放页「切到下一个视频还是卡住」：卡的是服务端还没 probe 过那条 strm。
+    //        新增 `EmbyPlaybackReporter.warmNextItem`：当前这条放起来 6 秒后，把
+    //        **下一条**预热掉（切集被轮询识别到时同理预热再下一条）。三条硬约束 ——
+    //        只预热下一条、单槽串行（上一个没回来不起新的）、不跟 302（不碰 CDN）。
+    //        它不增加 CDN 总量，只是把「切过去才发生的那次服务端 probe」提前到当前这条
+    //        还在播的时候；请求数因此恒等于「条目数 × 1」，不存在并发风暴。
     // ────────────────────────────────────────────────────────────────────────
     //  ── v140（versionCode 140，修复轮不涨名，versionName 仍为 1.6.7）──────────
     //     strm + wmv「第一次点播放一直卡在加载中，退出重进详情页才好」。
@@ -1346,8 +1397,8 @@ android {
     //       超时一律按「探不出来」放行，地址原样交给 mpv，让它自己跟 302。
     //       4xx 死链仍在百毫秒内判定，判死能力不受影响。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 140
-    versionName = "1.6.7"
+    versionCode = 142
+    versionName = "1.6.9"
 
     vectorDrawables {
       useSupportLibrary = true

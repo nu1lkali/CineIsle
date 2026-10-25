@@ -177,7 +177,7 @@ data class EmbyTagItemsScreen(
           Toast.makeText(context, "该${kindLabel}下没有可随机播放的内容", Toast.LENGTH_SHORT).show()
           return@launch
         }
-        viewModel.launchPlaylist(current, result.items, playFromStartAll = true)
+        viewModel.launchRandomPlayback(current, result.items)
       }
     }
 

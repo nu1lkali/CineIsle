@@ -84,6 +84,15 @@ interface FeedPlayerController {
 
   fun toggleOrientation()
 
+  /**
+   * 换 mpv 内核接着播当前这条。
+   *
+   * 内置内核（ExoPlayer）的解复用器只认 mp4 / mkv / ts / flv 这一批，解码也只走
+   * 系统 MediaCodec —— 撞上 wmv / asf / rmvb，或者设备没有对应硬解且没打包软解的编码，
+   * 换几次解码器都救不回来。mpv 自带整套 ffmpeg（解复用 + 软件解码），是这条路的终点。
+   */
+  fun playInMpv()
+
   fun exit()
 }
 
@@ -276,16 +285,31 @@ internal fun FeedScreen(
       ) {
         Text(text = err, color = Color.White, fontSize = 13.sp, textAlign = TextAlign.Center)
         Spacer(modifier = Modifier.height(12.dp))
-        Surface(
-          onClick = { vm.requestReload() },
-          shape = RoundedCornerShape(20),
-          color = Color.White.copy(alpha = 0.16f),
-        ) {
-          Text(
-            text = "重试",
-            color = Color.White,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-          )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+          Surface(
+            onClick = { vm.requestReload() },
+            shape = RoundedCornerShape(20),
+            color = Color.White.copy(alpha = 0.16f),
+          ) {
+            Text(
+              text = "重试",
+              color = Color.White,
+              modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            )
+          }
+          // 「换 mpv」不是重试的同义词：它换的是**内核**（解复用器 + 解码器全换）。
+          // 编码/容器本机解不了这类失败，点多少次「重试」都还是同一句话，只有这条路能过。
+          Surface(
+            onClick = { controller.playInMpv() },
+            shape = RoundedCornerShape(20),
+            color = Color.White.copy(alpha = 0.16f),
+          ) {
+            Text(
+              text = "用 mpv 播放",
+              color = Color.White,
+              modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            )
+          }
         }
       }
     } else {

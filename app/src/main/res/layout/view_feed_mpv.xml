@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  视界流的「mpv 备用画面层」。
+
+  ── 为什么需要这一层 ──
+  视界流默认用 ExoPlayer（一页一个实例，滑过去就有画面）。但 ExoPlayer 自带的解复用器
+  只有 mp4 / mkv / ts / flv 那一批，解码又只能走系统 MediaCodec —— 撞上 wmv / asf / rmvb，
+  或者设备压根没有对应编码的解码器（且本构建没打包 ffmpeg 扩展），换多少次软解都救不回来。
+  这类文件只有 mpv（自带完整 ffmpeg）能放。
+
+  ── 为什么不直接跳进 mpv 播放页 ──
+  那会把视界流「一屏一条、上下滑」的简洁界面整个换掉：控制栏、弹幕、进度条、顶栏全都冒出来，
+  用户只是想接着往下刷，结果被丢进另一个功能齐全的播放器里。
+  所以这里只在**当前这一条**上叠一层 mpv 的画面，控件仍然由 FeedScreen（Compose）画 ——
+  界面与走 ExoPlayer 时**一模一样**。
+
+  ── 为什么是 SurfaceView 而不是 TextureView ──
+  `BaseMPVView extends SurfaceView`（见 mpv-android 的 AAR），渲染目标是它自己的 Surface，
+  没有可换的 TextureView 形态。代价是这一层拿不到像素 ⇒ mpv 播放期间截图改走
+  `screenshot-to-file`（见 FeedMpvEngine.screenshot），而不是 feedTexture.getBitmap()。
+
+  ── 图层关系（这段是重点）──
+  这块 Surface 由系统单独合成，位置跟它在 Compose 里声明的位置一致：
+  · 声明在 Pager **之后**、FeedScreen **之前** ⇒ 画面盖住 Pager，控件盖住画面；
+  · 声明在最前面的黑背景（VerticalFeedActivity 根 Box 的 background）在它下面，
+    Surface 打洞显示时不会把背景色当画面 —— 这是 SurfaceView 的标准行为，播放页
+    （player_layout.xml 里 MPVView + 两个 ComposeView）用的就是同一套结构。
+  · 根容器**故意不设 android:background**：mpv 的 vo 自己会画黑边（保持画面比例），
+    再叠一层不透明背景只会多一次「黑屏」的嫌疑。
+
+  ── 触摸 ──
+  根节点是 InertTouchFrameLayout：dispatchTouchEvent 直接返回 false，整层不参与触摸。
+  否则这块**全屏** AndroidView 会在 Compose 命中链上先接住 DOWN，翻页 / 亮度音量 /
+  单击唤控件全部失灵（播放页的弹幕层踩过同一个坑）。
+-->
+<app.marlboroadvance.mpvex.ui.player.feed.InertTouchFrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/feedMpvRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <app.marlboroadvance.mpvex.ui.player.MPVView
+        android:id="@+id/feedMpv"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center" />
+
+</app.marlboroadvance.mpvex.ui.player.feed.InertTouchFrameLayout>

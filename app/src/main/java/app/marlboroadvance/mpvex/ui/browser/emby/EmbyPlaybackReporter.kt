@@ -4,6 +4,7 @@ import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 import android.content.Intent
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
@@ -44,6 +45,34 @@ object EmbyPlaybackReporter {
   private var playSessionId: String = ""
   private var lastReportedTicks: Long = 0L
 
+  /** 与 [itemIds] **同序同长**的媒体源 Id（多版本条目预热时要用与播放一致的那个） */
+  private var mediaSourceIds: List<String> = emptyList()
+
+  /**
+   * 已经预热过的 `"服务器Id:条目Id"`。
+   *
+   * 服务端 probe 完就写库了，同一条**没必要再打一次**；这份记录让「同一场播放里
+   * 来回切集」不会重复预热，也让本类对服务器的请求总数 = 条目数（每条最多一次）。
+   */
+  private val warmedKeys = HashSet<String>()
+
+  /**
+   * 预热任务（单槽）。
+   *
+   * ⚠️ 必须串行：用户明确要求「不能同时向 CDN 发大量请求」。这里用**一个 Job 槽**
+   * 保证同一时刻最多一条预热在飞 —— 上一个还没回来（服务端 probe 慢时可能十几秒）
+   * 就直接放弃新的预热，而不是排队堆起来。预热是纯优化，少做一次没有后果。
+   */
+  private var warmJob: Job? = null
+
+  /**
+   * 排队中的下一条预热（`itemId` / 媒体源 Id）。
+   *
+   * 只保留**最新**一个：切集是往前走的，排一队旧的没有意义；同时保证「永远只有一个
+   * 预热在飞」这条硬约束 —— 用户在意的是网盘 CDN 的风控，并发请求是大忌。
+   */
+  private var pendingWarm: Pair<String, String?>? = null
+
   /**
    * 播放页创建时调用：上报开始并启动轮询。
    *
@@ -58,6 +87,8 @@ object EmbyPlaybackReporter {
     itemIds = ids
     currentItemId = ids.firstOrNull()
     lastReportedTicks = 0L
+    mediaSourceIds =
+      intent.getStringArrayListExtra(EXTRA_MEDIA_SOURCE_ID)?.toList() ?: emptyList()
 
     val repository = runCatching { get<EmbyRepository>(EmbyRepository::class.java) }.getOrNull()
       ?: return false
@@ -93,6 +124,8 @@ object EmbyPlaybackReporter {
     )
 
     startPolling()
+    // 第一条已经在放了 ⇒ 顺手把**下一条**预热掉（服务端 probe 完，切过去就秒开）。
+    warmNextItem(firstId)
     return true
   }
 
@@ -100,6 +133,10 @@ object EmbyPlaybackReporter {
   fun stop() {
     pollingJob?.cancel()
     pollingJob = null
+    // 预热只是优化：用户已经离开播放页了，没必要再占着一条请求
+    warmJob?.cancel()
+    warmJob = null
+    pendingWarm = null
     EmbyPlayerActions.release()
 
     val itemId = currentItemId ?: return
@@ -120,6 +157,78 @@ object EmbyPlaybackReporter {
       }
     }
   }
+
+  /**
+   * 预热「[currentId] 的下一条」。
+   *
+   * ## 为什么需要它（v142）
+   *
+   * 随机播放 / 连播都是「起播才去请求这一条」。strm 条目在服务端还没 probe 过源文件时，
+   * 那次请求要先让服务端读远端文件、把大小时长写库 —— 能挂到分钟级。用户在播放页
+   * 点「下一个」，看到的就是又卡住了；同一部片第二次播就快了，因为服务端已经有缓存。
+   *
+   * 所以这里提前一条：当前这条放起来之后（[WARM_DELAY_MS] 之后，别跟它抢带宽），
+   * 用 [EmbyClient.warmStream] 让服务端先把下一条 probe 完。
+   *
+   * ## 三条硬约束（都是「别把服务器打爆」）
+   *
+   * · **只预热下一条**：不做整列表预取，请求数 = 条目数 × 1；
+   * · **串行**：单槽 [warmJob]，上一个没回来就不起新的；期间新的请求只**记成待办**
+   *   （[pendingWarm]），当前这条跑完再接着做 —— 不排队堆积、不并发；
+   * · **不跟 302**：[EmbyClient.warmStream] 内部 `followRedirects=false`，
+   *   请求只到我们自己的 Emby 服务器，**一个字节都不打网盘 CDN**。
+   *
+   * ⚠️ 本服务器的形态是「Emby 只存 .strm，真实文件在网盘 CDN 上」，所以这一条尤其要紧：
+   * 预热**不增加** CDN 的总请求量（那次服务端读远端文件的 probe 本来就要在切播时发生），
+   * 只是把它从「用户等待时」提前到「当前这条还在播时」。
+   *
+   * 预热失败 / 超时都没有后果：切到那一条时播放器自己再请求一次，行为与没有预热时一致。
+   */
+  private fun warmNextItem(currentId: String) {
+    val idx = itemIds.indexOf(currentId)
+    if (idx < 0 || idx + 1 >= itemIds.size) return
+    val nextId = itemIds[idx + 1]
+    val key = "$serverId:$nextId"
+    if (key in warmedKeys) return
+    val sourceId = mediaSourceIds.getOrNull(idx + 1)?.takeIf { it.isNotBlank() }
+
+    // ⚠️ 顺序要紧：先判「有没有在飞」，再记账。反过来的话，被跳过的那条会被误记成
+    //    「已预热」，之后就再也不会真的预热它了。
+    if (warmJob?.isActive == true) {
+      // 串行但不丢：只保留**最新**一个待办（旧的已经过时了，没必要排一队）
+      pendingWarm = nextId to sourceId
+      return
+    }
+    startWarm(nextId, sourceId)
+  }
+
+  /** 真正发一条预热（调用方保证同一时刻只有一个在飞） */
+  private fun startWarm(itemId: String, mediaSourceId: String?) {
+    val key = "$serverId:$itemId"
+    if (key in warmedKeys) return
+    warmedKeys.add(key)
+    // 记录别无限长：一场播放的条目数有限，真到几千条时清一次（服务端本来就已缓存）
+    if (warmedKeys.size > 512) warmedKeys.clear()
+    warmJob = scope.launch {
+      // 先让当前这条自己的缓冲跑起来，别跟它抢链路
+      delay(WARM_DELAY_MS)
+      runCatching {
+        val repository = get<EmbyRepository>(EmbyRepository::class.java)
+        val server = repository.getServer(serverId) ?: return@launch
+        EmbyClient.warmStream(server, itemId, mediaSourceId = mediaSourceId)
+      }
+      // 跑完再看有没有排队的：有就接着做（仍然只有一个在飞）
+      val queued = pendingWarm
+      pendingWarm = null
+      if (queued != null) startWarm(queued.first, queued.second)
+    }
+  }
+
+  /**
+   * 预热前的等待：当前这条刚起播时链路最紧张（拉容器头 + 首帧 + 缓冲），
+   * 这时候再压一条预热上去，帮倒忙的概率比帮忙大。6 秒后当前这条基本已经稳住。
+   */
+  private const val WARM_DELAY_MS = 6_000L
 
   private fun startPolling() {
     pollingJob?.cancel()
@@ -179,6 +288,9 @@ object EmbyPlaybackReporter {
         )
       }
       lastReportedTicks = 0
+      // 切到下一条了 ⇒ 立刻把「再下一条」预热掉。这就是 v142 修「随机播放切下一个
+      // 还是卡住」的那一刀：卡的不是客户端，是服务端还没 probe 过那条 strm 的远端源。
+      warmNextItem(playingItemId)
       return
     }
 
