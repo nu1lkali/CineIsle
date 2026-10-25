@@ -569,10 +569,10 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     // 抓到之后走同一套兜底链：先软解重建一次，还不行就换 mpv 内核。
     pool.detectNoVideoStall()?.let { stall ->
       if (stall.hasVideoTrack) {
-        handleDecodeFailure(stall.index, "画面出不来：本机解码器吐不出帧")
+        handleDecodeFailure(stall.index, "无法显示画面：本机解码器未能输出视频帧")
       } else {
         // 纯音频文件：换内核也不会有画面，别白切一次
-        viewModel.errors[stall.index] = "这个文件里没有可显示的图像"
+        viewModel.errors[stall.index] = "此文件不包含可显示的视频画面"
       }
     }
 
@@ -615,7 +615,7 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
       SystemClock.elapsedRealtime() - loadStartedAt > LOAD_TIMEOUT_MS
     ) {
       loadStartedAt = 0L
-      viewModel.errors[idx] = "加载失败：源不可用"
+      viewModel.errors[idx] = "加载失败：视频源不可用"
     }
   }
 
@@ -640,7 +640,7 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     if (index in mpvServed) return
     if (pool.beginSoftwareRetry()) {
       viewModel.errors.remove(index)
-      viewModel.showHint("硬解不支持，已改用软件解码重试")
+      viewModel.showHint("当前视频无法使用硬件解码，正在尝试软件解码")
       viewModel.requestReload()
       return
     }
@@ -695,8 +695,11 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     // ③ 接管
     mpvIndex = index
     mpvVisible = true
+    // 换内核那一刻重置加载计时：mpv 要重新 create/init、再走一遍取流，这套开销与
+    // ExoPlayer 那一轮无关。沿用旧起点会让看门狗在内核还没起来时就判「源不可用」。
+    loadStartedAt = SystemClock.elapsedRealtime()
     mpvEngine.play(item.url)
-    viewModel.showHint("这条视频内置内核解不了，已切到 mpv 内核")
+    viewModel.showHint("当前视频无法由内置解码器播放，已切换至 mpv 内核")
   }
 
   /**
@@ -718,6 +721,7 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
       mpvIndex = index
       mpvVisible = true
       endHandled = false
+      loadStartedAt = SystemClock.elapsedRealtime()
       mpvEngine.play(item.url)
       mpvResumeSec[index]?.takeIf { it > 1.0 }?.let { resumeMpvAt(it) }
       return
@@ -740,7 +744,7 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
   }
 
   /**
-   * 刚 `playFile` 完就 seek 会被 mpv 丢掉（时长还没解析出来），所以等到拿到时长再跳。
+   * 刚 `loadfile` 完就 seek 会被 mpv 丢掉（时长还没解析出来），所以等到拿到时长再跳。
    * 与 ExoPlayer 那条路的 [restoreSeek] 同一个道理、同一套节拍。
    */
   private fun resumeMpvAt(targetSec: Double) {
@@ -833,21 +837,21 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
 
     val texture = pool.textureOf(viewModel.index)
     if (texture == null) {
-      viewModel.showHint("截图失败：画面还没准备好")
+      viewModel.showHint("截图失败：当前画面暂不可用")
       return
     }
     if (!texture.isAvailable) {
-      viewModel.showHint("截图失败：画面尚未就绪，稍等一下再试")
+      viewModel.showHint("截图失败：画面尚未就绪，请稍后重试")
       return
     }
     val bitmap = runCatching { texture.bitmap }.getOrNull()
     if (bitmap == null) {
-      viewModel.showHint("截图失败：还没渲染出画面")
+      viewModel.showHint("截图失败：当前尚无渲染完成的画面")
       return
     }
     lifecycleScope.launch {
       val ok = saveBitmapToGallery(bitmap, name)
-      viewModel.showHint(if (ok) "截图已保存到相册" else "截图失败")
+      viewModel.showHint(if (ok) "截图已保存到相册" else "截图失败：未能写入相册")
     }
   }
 
@@ -860,7 +864,7 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
   private fun shootMpvFrame(displayName: String) {
     val temp = File(cacheDir, "feed_shot.png")
     if (!mpvEngine.screenshot(temp)) {
-      viewModel.showHint("截图失败：mpv 写不出这一帧")
+      viewModel.showHint("截图失败：当前画面帧无法导出")
       return
     }
     lifecycleScope.launch {
@@ -869,7 +873,7 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
         bitmap != null && saveBitmapToGallery(bitmap, displayName)
       }.getOrDefault(false)
       temp.delete()
-      viewModel.showHint(if (ok) "截图已保存到相册" else "截图失败")
+      viewModel.showHint(if (ok) "截图已保存到相册" else "截图失败：未能写入相册")
     }
   }
 
@@ -911,7 +915,7 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     // 两侧却凭空多出两条黑边 —— 除了把画面挤小没有任何收益，只会让人以为按钮坏了。
     // 直接拦住并说明原因，比默默转过去更好解释。
     if (pool.activeIsPortrait()) {
-      viewModel.showHint("竖屏视频无需旋转")
+      viewModel.showHint("竖屏内容无需旋转")
       return
     }
     val next = !viewModel.landscape

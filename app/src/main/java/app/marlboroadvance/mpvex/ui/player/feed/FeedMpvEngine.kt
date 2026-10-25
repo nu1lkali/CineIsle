@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.player.feed
 
 import android.content.Context
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import app.marlboroadvance.mpvex.R
@@ -57,12 +58,21 @@ internal class FeedMpvEngine(
   /**
    * 已经点名、但**还没送进 mpv** 的地址。
    *
-   * 为什么要攒一下：`vo=gpu-next` 的视频输出是在「第一次有画面要渲染」时按当前
-   * Surface 建起来的。如果 Surface 还没 attach 就先 `playFile`，mpv 会拿不到窗口，
-   * 这一次 vo 创建直接失败 —— 声音照出、画面永远黑着（和「硬解吐不出帧」一模一样的
-   * 表象，但根因完全不同）。所以 [play] 只登记、[pump] 负责在 Surface 就绪后真正打开。
+   * 为什么要攒一下：`SurfaceHolder.surface.isValid` 为 false 时 mpv 没有输出窗口，
+   * 这时候把文件塞进去，`vo` 建不起来 ⇒ 有声音、画面全黑。所以 [play] 只登记，
+   * 由 [pump] 在 Surface 真正就绪之后才执行 `loadfile`。
    */
   private var pendingUrl: String? = null
+
+  /**
+   * `initOptions` 选定的视频输出（`gpu` 或 `gpu-next`）。
+   *
+   * ⚠️ 必须自己记：`BaseMPVView.surfaceDestroyed()` 会把 `vo` 置成 `null`，
+   * 而只有在「没有待加载文件」时它才会在 `surfaceCreated` 里恢复 —— 我们总会带着
+   * 待加载文件，于是恢复这一步被跳过，重挂载后 `vo=null` ⇒ 界面黑着但有声音。
+   * 这里在建层时就把它记下来，[pump] 每次挂好表面都核对一遍。
+   */
+  private var voName: String? = null
 
   /** 是否已经成功初始化（之后才允许碰任何 `MPVLib` 属性） */
   val ready: Boolean get() = mpvView != null
@@ -105,6 +115,9 @@ internal class FeedMpvEngine(
 
     mpvView = view
     host = root
+    // 记下 initOptions 选定的输出（见 [voName] 的说明）：surfaceDestroyed 会把它
+    // 置成 null，而我们不会走 AAR 那条「无待加载文件才恢复」的分支。
+    voName = runCatching { MPVLib.getPropertyString("vo") }.getOrNull()
 
     // ④ `keep-open` 保持 MPVView.initOptions 里的 true（不要改成 false）：
     //    到片尾时 mpv 停在最后一帧、`eof-reached` 一直为真，[reachedEnd] 才有稳定的
@@ -148,22 +161,72 @@ internal class FeedMpvEngine(
   /**
    * 把「已点名但还没打开」的地址真正送进 mpv —— Surface 没就绪就继续等。
    *
-   * 为什么不在 `play` 里死等：Surface 的 attach 是系统回调（surfaceCreated），
-   * 调用方（`switchToMpv`）是在 Compose 那一帧里设的标志，同一帧内 Surface 一定还
-   * 没建好。所以这里采用**轮询**：由调用方 250ms 一次的心跳顺带调 [pump]，
-   * 一旦 Surface 有效就立刻打开 —— 既不需要猜时序，也不会漏掉。
+   * ## 为什么不用 `BaseMPVView.playFile()`（这是 v143 黑屏的根因）
+   *
+   * 反编译 AAR 可以看到，`playFile()` 的实现只有一句 `this.filePath = path`；
+   * 真正的 `command("loadfile", …)` 写在 `surfaceCreated()` 里，而且读一次就把
+   * `filePath` 清空。也就是说：
+   *
+   * · 只有在 **Surface 还没创建**时调用它，文件才会被加载；
+   * · Surface 已经就绪之后再调 ⇒ 只是把路径存进一个再也没人读的字段，
+   *   mpv 那边**什么都没发生**（没有 path、没有 duration、没有画面）。
+   *
+   * 我们的画面层在切到 mpv 时早就 attach 过了（滑回来、重载都是同一层），
+   * 走 `playFile` 就是那个「什么都没发生」的分支 —— 现象正是「黑屏 + 一直加载中」。
+   * 所以这里一律走 `MPVLib.command("loadfile", …, "replace")`：它不看 Surface 状态，
+   * 就绪后立刻生效。
    */
   fun pump() {
     val view = mpvView ?: return
     val url = pendingUrl ?: return
-    // BaseMPVView 继承自 SurfaceView：holder.surface 有效 = 已经 attach 上去，
-    // mpv 建 vo 的时候能拿到窗口。
     val surfaceReady = runCatching { view.holder?.surface?.isValid == true }.getOrDefault(false)
     if (!surfaceReady) return
+    // ① 先把 vo 恢复回来：surfaceDestroyed 会把 vo 与 force-window 一起关掉，
+    //    不恢复就是「挂上了 Surface 也不出画面」—— 有声音、全黑。
+    ensureVo(view)
     pendingUrl = null
-    runCatching { view.playFile(url) }
+    // ② `replace` 而不是默认的追加：这里是「一屏一条」的语义，不留队列
+    runCatching { MPVLib.command("loadfile", url, "replace") }
     runCatching { MPVLib.setPropertyBoolean("pause", false) }
+    Log.w("FeedMpv", "loadfile: $url")
   }
+
+  /**
+   * 把视频输出恢复成可用状态。
+   *
+   * 三条路径都要走对，少一条就是黑屏：
+   * · `vo` 读写口径 —— 建层时 `initOptions` 里用的是 `setOptionString`（初始化**前**才
+   *   生效），而运行期改 `vo` 只有 `setPropertyString` 管用；AAR 的 `surfaceDestroyed`
+   *   也正是用 `setPropertyString("vo", "null")` 把它关掉的，对称着写回来。
+   * · AAR 内部的 `voInUse` —— `setVo` 会更新它，之后 AAR 自己的 `surfaceCreated`
+   *   恢复分支（`filePath == null` 时 `setPropertyString("vo", voInUse)`）才拿得到正确值。
+   * · `force-window` —— `surfaceDestroyed` 顺手把它置成 `no`，重挂表面后不还原，
+   *   mpv 会认为「没有窗口要画」。
+   */
+  private fun ensureVo(view: MPVView) {
+    val current = runCatching { MPVLib.getPropertyString("vo") }.getOrNull()
+    val usable = !current.isNullOrBlank() && current != "null" && current != "no"
+    if (usable) {
+      // 第一次成功出画面时把真实生效的 vo 记下来：`initOptions` 之后立刻读，mpv 可能
+      // 还没建 VO（返回 null），那时 [voName] 是空的，这里补一次自愈。
+      if (voName == null) voName = current
+      runCatching { MPVLib.setPropertyString("force-window", "yes") }
+      return
+    }
+    val target = voName ?: return
+    runCatching { view.setVo(target) } // 同步 AAR 内部的 voInUse
+    runCatching { MPVLib.setPropertyString("vo", target) } // 运行期真正恢复输出
+    runCatching { MPVLib.setPropertyString("force-window", "yes") }
+  }
+
+  /**
+   * 画面表面是否已经就绪。
+   *
+   * 调用方用它区分两种「一直加载中」：表面没就绪是**渲染链路**没起来（View 没挂上 /
+   * 被裁掉），表面就绪却拿不到时长才是**源**的问题。两者的错误文案不该一样。
+   */
+  fun surfaceReady(): Boolean =
+    runCatching { mpvView?.holder?.surface?.isValid == true }.getOrDefault(false)
 
   /** 停止播放并把内核置回空闲（滑走时调用：声音必须立刻停） */
   fun stop() {

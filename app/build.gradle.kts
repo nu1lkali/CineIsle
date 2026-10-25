@@ -1397,8 +1397,23 @@ android {
     //       超时一律按「探不出来」放行，地址原样交给 mpv，让它自己跟 302。
     //       4xx 死链仍在百毫秒内判定，判死能力不受影响。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 142
-    versionName = "1.6.9"
+    //  ── v143（versionCode 143，versionName 涨到 1.6.10）—— 视界流 mpv 兜底黑屏 ──
+    //     用户报「视界流切到 mpv 兜底也是黑屏加载中」。反汇编 AAR 定位到根因：
+    //     `BaseMPVView.playFile()` 的实现只有 `this.filePath = path` 一句，真正的
+    //     `command("loadfile", …)` 写在 `surfaceCreated()` 里，且读一次就清空 ——
+    //     即**只有在 Surface 还没创建时调用才有效**。我们的画面层切到 mpv 时早 attach
+    //     过了（滑回来、重载都是同一层）⇒ 走的是「只存路径、永远不加载」的死分支，
+    //     mpv 侧没有 path / 没有 duration / 没有画面 = 黑屏 + 一直加载。
+    //     修法：一律改用 `MPVLib.command(arrayOf("loadfile", url, "replace"))`，
+    //     由 `FeedMpvEngine.pump()` 在 `holder.surface.isValid` 后执行。
+    //     同批修掉的第二个坑：`surfaceDestroyed()` 会把 `vo` 置成 `null`，而只有
+    //     「没有待加载文件」时 `surfaceCreated()` 才会恢复它 —— 我们总带着待加载文件，
+    //     于是重挂载后 `vo=null`（有声音、黑屏）。现在建层时记下 `initOptions` 选的
+    //     vo，每次 `pump()` 前核对并 `setVo()` 恢复。
+    //     另：Toast / 错误文案统一改成书面语（「内置内核解不了」「吐不出帧」这类去掉）。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 143
+    versionName = "1.6.10"
 
     vectorDrawables {
       useSupportLibrary = true
