@@ -174,6 +174,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   /** 某台服务器配的备用服务器 id（null = 没配） */
   fun failoverBackupId(serverId: Long): Long? = repository.failover.backupIdFor(serverId)
 
+  /**
+   * 「主 → 备」映射，UI 用它渲染「备用：XXX」那一行。
+   *
+   * ⚠️ 不要在组合里直接调 [failoverBackupId]：那是普通函数，读的是快照，
+   * 设置完不会触发重组（v146 的「设好了但还显示未设置」就是这么来的）。
+   */
+  val failoverBackups: StateFlow<Map<Long, Long>> = repository.failover.backups
+
   fun setFailoverBackup(serverId: Long, backupId: Long?) =
     repository.failover.setBackup(serverId, backupId)
 

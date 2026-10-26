@@ -74,6 +74,18 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
 /**
+ * 列表底部留白：必须避开右下角的 FAB。
+ *
+ * Scaffold 的 FAB 是**浮在内容之上**的（不占 `innerPadding`），所以给它 16dp 的
+ * contentPadding 时，滚到底的那一张卡片右侧的「备用 / 更多」按钮正好躺在 FAB
+ * 底下 —— 而且列表已经到底，滚不开，那个按钮就成了死区。
+ *
+ * 遮挡带 = FAB 本体 56dp + Scaffold 默认底边距 16dp = 72dp；再留一档卡片间距
+ * （12dp）和一点余量 ⇒ 96dp，滚到底时最后一张卡完整浮在 FAB 之上。
+ */
+private val LIST_BOTTOM_CLEARANCE = 96.dp
+
+/**
  * Emby 服务器管理页：新增、编辑、删除、切换服务器。
  */
 @Serializable
@@ -90,6 +102,8 @@ object EmbyServerManageScreen : Screen {
     val currentServer by viewModel.currentServer.collectAsState()
     val failoverEnabled by viewModel.failoverEnabled.collectAsState()
     val failoverState by viewModel.failoverState.collectAsState()
+    // 主 → 备映射：必须 collect（设完备用要立刻反映到卡片上）
+    val failoverBackups by viewModel.failoverBackups.collectAsState()
 
     var editing by remember { mutableStateOf<EmbyServer?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -144,7 +158,12 @@ object EmbyServerManageScreen : Screen {
           modifier = Modifier
             .fillMaxSize()
             .padding(padding),
-          contentPadding = PaddingValues(16.dp),
+          contentPadding = PaddingValues(
+            start = 16.dp,
+            top = 16.dp,
+            end = 16.dp,
+            bottom = LIST_BOTTOM_CLEARANCE,
+          ),
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
           // 主备自动接管：只有两台以上才有意义（一台连备用都没得切），
@@ -163,7 +182,7 @@ object EmbyServerManageScreen : Screen {
               server = server,
               isCurrent = server.id == currentServer?.id,
               // 这台配的备用（null = 没配）：直接显示名字，不用点进去才知道配没配
-              backupName = viewModel.failoverBackupId(server.id)
+              backupName = failoverBackups[server.id]
                 ?.let { id -> servers.firstOrNull { it.id == id }?.name },
               onSelect = { viewModel.switchServer(server) },
               onEdit = { editing = server },
@@ -249,7 +268,7 @@ object EmbyServerManageScreen : Screen {
       BackupPickerDialog(
         primary = primary,
         candidates = servers.filter { it.id != primary.id },
-        selectedId = viewModel.failoverBackupId(primary.id),
+        selectedId = failoverBackups[primary.id],
         onPick = { id ->
           viewModel.setFailoverBackup(primary.id, id)
           backupPicker = null

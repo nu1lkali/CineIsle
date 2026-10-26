@@ -90,6 +90,8 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
   val currentServer by viewModel.currentServer.collectAsState()
   val failoverEnabled by viewModel.failoverEnabled.collectAsState()
   val failoverState by viewModel.failoverState.collectAsState()
+  // 主 → 备映射：必须 collect（设完备用要立刻反映到卡片上）
+  val failoverBackups by viewModel.failoverBackups.collectAsState()
   val scope = rememberCoroutineScope()
 
   val colors = CineTheme.colors
@@ -164,7 +166,7 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
           CineServerCard(
             server = server,
             isCurrent = server.id == currentServer?.id,
-            backupName = viewModel.failoverBackupId(server.id)
+            backupName = failoverBackups[server.id]
               ?.let { id -> servers.firstOrNull { it.id == id }?.name },
             onSelect = { viewModel.switchServer(server) },
             onAddUser = { addUserOn = server },
@@ -272,7 +274,7 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
     CineBackupPicker(
       primary = primary,
       candidates = servers.filter { it.id != primary.id },
-      selectedId = viewModel.failoverBackupId(primary.id),
+      selectedId = failoverBackups[primary.id],
       onPick = { id ->
         viewModel.setFailoverBackup(primary.id, id)
         backupPicker = null

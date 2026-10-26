@@ -94,6 +94,25 @@ class EmbyFailoverController(
   private val prefs: SharedPreferences =
     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+  /**
+   * 「主服务器 id → 备用服务器 id」映射的**可观察**副本。
+   *
+   * ⚠️ 别让 UI 直接调 [backupIdFor] 来取数：那只是读一遍 SharedPreferences，
+   * 写进去不会触发重组 —— 用户设完备用回到列表，看到的还是「未设置」，
+   * 得退出重进才有（v146 踩过）。UI 一律 collect 这个 flow。
+   */
+  private val _backups = MutableStateFlow(readBackups())
+  val backups: StateFlow<Map<Long, Long>> = _backups.asStateFlow()
+
+  private fun readBackups(): Map<Long, Long> =
+    buildMap {
+      prefs.all.forEach { (k, v) ->
+        if (k.startsWith(BACKUP_PREFIX) && v is Long && v > 0) {
+          k.removePrefix(BACKUP_PREFIX).toLongOrNull()?.let { put(it, v) }
+        }
+      }
+    }
+
   private val _enabled = MutableStateFlow(prefs.getBoolean(KEY_ENABLED, false))
   val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
 
@@ -146,8 +165,7 @@ class EmbyFailoverController(
   }
 
   /** 某台服务器配的备用（null = 没配） */
-  fun backupIdFor(primaryId: Long): Long? =
-    prefs.getLong(keyBackup(primaryId), -1L).takeIf { it > 0 }
+  fun backupIdFor(primaryId: Long): Long? = _backups.value[primaryId]?.takeIf { it > 0 }
 
   /**
    * 设置 / 取消某台的备用。
@@ -166,6 +184,8 @@ class EmbyFailoverController(
       }
     }
     editor.apply()
+    // 只有这条赋值能让界面刷新（见 [_backups] 的说明）
+    _backups.value = readBackups()
   }
 
   /** 服务器被删除时清掉与它相关的映射，避免留一堆指向不存在的 id */
@@ -175,6 +195,7 @@ class EmbyFailoverController(
       if (k.startsWith(BACKUP_PREFIX) && v is Long && v == serverId) editor.remove(k)
     }
     editor.apply()
+    _backups.value = readBackups()
     if (degradedFromId == serverId) {
       stopRecovery()
       degradedFromId = null
