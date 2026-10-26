@@ -21,15 +21,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -46,6 +49,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.domain.emby.EmbyFailoverController
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
 import app.marlboroadvance.mpvex.ui.cine.CineTheme
@@ -84,6 +88,8 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
   )
   val servers by viewModel.servers.collectAsState()
   val currentServer by viewModel.currentServer.collectAsState()
+  val failoverEnabled by viewModel.failoverEnabled.collectAsState()
+  val failoverState by viewModel.failoverState.collectAsState()
   val scope = rememberCoroutineScope()
 
   val colors = CineTheme.colors
@@ -94,6 +100,7 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
   var editing by remember { mutableStateOf<EmbyServer?>(null) }
   var addUserOn by remember { mutableStateOf<EmbyServer?>(null) }
   var pendingDelete by remember { mutableStateOf<EmbyServer?>(null) }
+  var backupPicker by remember { mutableStateOf<EmbyServer?>(null) }
 
   Column(
     modifier = modifier
@@ -143,14 +150,27 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
         ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
+        // 主备自动接管：两台以上才有意义（单台连个备用都没得切）
+        if (servers.size >= 2) {
+          item(key = "failover") {
+            CineFailoverCard(
+              enabled = failoverEnabled,
+              state = failoverState,
+              onToggle = { viewModel.setFailoverEnabled(it) },
+            )
+          }
+        }
         items(servers, key = { it.id }) { server ->
           CineServerCard(
             server = server,
             isCurrent = server.id == currentServer?.id,
+            backupName = viewModel.failoverBackupId(server.id)
+              ?.let { id -> servers.firstOrNull { it.id == id }?.name },
             onSelect = { viewModel.switchServer(server) },
             onAddUser = { addUserOn = server },
             onEdit = { editing = server },
             onDelete = { pendingDelete = server },
+            onSetBackup = { backupPicker = server },
           )
         }
       }
@@ -247,6 +267,127 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
       )
     }
   }
+
+  backupPicker?.let { primary ->
+    CineBackupPicker(
+      primary = primary,
+      candidates = servers.filter { it.id != primary.id },
+      selectedId = viewModel.failoverBackupId(primary.id),
+      onPick = { id ->
+        viewModel.setFailoverBackup(primary.id, id)
+        backupPicker = null
+      },
+      onDismiss = { backupPicker = null },
+    )
+  }
+}
+
+/**
+ * 「自动切换备用服务器」总开关 + 当前接管状态（Cine 玻璃版）。
+ *
+ * 状态行是这套后台逻辑唯一的可见面：不写出来，用户根本不知道它有没有动过。
+ */
+@Composable
+private fun CineFailoverCard(
+  enabled: Boolean,
+  state: EmbyFailoverController.FailoverState,
+  onToggle: (Boolean) -> Unit,
+) {
+  val colors = CineTheme.colors
+  val type = CineTheme.type
+  CineGlassPanel(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.padding(14.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "自动切换备用服务器",
+            style = type.itemTitle,
+            color = colors.onSurface,
+          )
+          Text(
+            text = cineFailoverStatusText(enabled, state),
+            style = type.cardMeta,
+            color = colors.onSurfaceVariant,
+          )
+        }
+        Switch(checked = enabled, onCheckedChange = onToggle)
+      }
+      Spacer(Modifier.height(6.dp))
+      Text(
+        text = "一次真实请求失败后补一次轻量探活，两者都失败才切换；" +
+          "之后每 20 秒探一次原服务器，恢复即切回。手动点选的服务器不会被改回来。",
+        style = type.cardMeta,
+        color = colors.onSurfaceVariant.copy(alpha = 0.78f),
+      )
+    }
+  }
+}
+
+private fun cineFailoverStatusText(
+  enabled: Boolean,
+  state: EmbyFailoverController.FailoverState,
+): String =
+  when {
+    !enabled -> "已关闭：连不上时保持当前服务器不动"
+    state is EmbyFailoverController.FailoverState.Degraded ->
+      "已切换到「${state.to.name}」，等待「${state.from.name}」恢复"
+    state is EmbyFailoverController.FailoverState.NoBackup ->
+      "「${state.from.name}」连不上，而这台没有设置备用"
+    state is EmbyFailoverController.FailoverState.Failed ->
+      "「${state.from.name}」与备用服务器都连不上"
+    else -> "已开启：当前服务器通讯正常"
+  }
+
+/** 给某台挑一台备用（null = 不设置） */
+@Composable
+private fun CineBackupPicker(
+  primary: EmbyServer,
+  candidates: List<EmbyServer>,
+  selectedId: Long?,
+  onPick: (Long?) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val colors = CineTheme.colors
+  val type = CineTheme.type
+  CineSheetFrame(
+    title = "「${primary.name}」的备用服务器",
+    onDismissRequest = onDismiss,
+  ) {
+    Text(
+      text = "这台连不上时自动切到选中的那台；它恢复后自动切回来。",
+      style = type.cardMeta,
+      color = colors.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(4.dp))
+    val options: List<Pair<Long?, String>> =
+      listOf<Pair<Long?, String>>(null to "不设置备用") + candidates.map { it.id to it.name }
+    options.forEach { (id, label) ->
+      val selected = id == selectedId
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .clickable { onPick(id) }
+          .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = label,
+          style = type.itemTitle,
+          color = if (selected) colors.sectionAction else colors.onSurface,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.weight(1f),
+        )
+        if (selected) {
+          Icon(
+            imageVector = Icons.Filled.Check,
+            contentDescription = null,
+            tint = colors.sectionAction,
+          )
+        }
+      }
+    }
+  }
 }
 
 /** 单个服务器卡：状态徽章 + 名称（当前标记）+ 地址 + 登录态 + 动作行。 */
@@ -254,10 +395,12 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
 private fun CineServerCard(
   server: EmbyServer,
   isCurrent: Boolean,
+  backupName: String?,
   onSelect: () -> Unit,
   onAddUser: () -> Unit,
   onEdit: () -> Unit,
   onDelete: () -> Unit,
+  onSetBackup: () -> Unit,
 ) {
   val colors = CineTheme.colors
   val type = CineTheme.type
@@ -358,6 +501,14 @@ private fun CineServerCard(
               overflow = TextOverflow.Ellipsis,
             )
           }
+          // 主备关系：配了就把名字写出来，不用点进对话框才知道配没配
+          Text(
+            text = backupName?.let { "备用：$it" } ?: "未设置备用服务器",
+            style = type.cardMeta,
+            color = if (backupName != null) colors.onSurfaceVariant else colors.onSurfaceVariant.copy(alpha = 0.62f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
         }
       }
 
@@ -368,6 +519,14 @@ private fun CineServerCard(
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
       ) {
+        CineIconButton(
+          icon = Icons.Filled.SwapHoriz,
+          contentDescription = "设置备用服务器",
+          tint = colors.onSurfaceVariant,
+          onClick = onSetBackup,
+          size = 38.dp,
+          iconSize = 18.dp,
+        )
         CineIconButton(
           icon = Icons.Filled.PersonAdd,
           contentDescription = "在这台服务器上添加另一个用户",

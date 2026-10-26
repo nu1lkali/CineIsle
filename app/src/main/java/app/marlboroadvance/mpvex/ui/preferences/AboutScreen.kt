@@ -12,6 +12,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -47,10 +48,13 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -74,13 +78,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.Serializable
 
 /**
- * 「关于」页顶部那张卡片里，tertiary 容器色混进基色的最大比例。
+ * 卡片光斑中段（55% 半径处）的颜色：tertiary 容器色按这个比例混进基色。
  *
- * 只影响观感、不影响可读性下限：混入越多，双色流动越明显，但文字所依赖的
- * onPrimaryContainer 对比度保证就越弱。0.42 是「肉眼能看出颜色在流动、底色明度又
- * 基本没离开 primaryContainer」的折中值。
+ * 0 = 纯基色（最清晰、也最平），1 = 原样 tertiary（最好看、文字最危险）。
+ * 鲜色本身交给 [0f] 那一档（直接用 `tertiaryContainer`），这里只负责中段的过渡，
+ * 所以可以给到 0.45 而不是把整块压成基色 —— KPI 是「文字区靠护罩保读、色彩区照旧艳」。
  */
-private const val ABOUT_CARD_GLOW_MIX = 0.42f
+private const val ABOUT_CARD_SPOT_MIX = 0.45f
 
 @Serializable
 object AboutScreen : Screen {
@@ -137,15 +141,16 @@ object AboutScreen : Screen {
     ) { paddingValues ->
       val cs = MaterialTheme.colorScheme
       // ── 这张卡片的「底色 / 文字」口径 ──
-      // 原来是把 primaryContainer 与 **tertiaryContainer 等权**拼成一张径向渐变，文字却
-      // 一律用 onPrimaryContainer。问题在于 on 色只保证「在自己的容器色上够对比」：
-      // 光斑荡到文字上时底色跑进了 tertiaryContainer 的色域，对比度就掉下去 ——
-      // 浅色主题 + 动态取色（壁纸取色）下尤其明显，观感就是「有时清楚、有时糊」。
-      // 现在底色钉死在 primaryContainer 上，tertiary 只按 [ABOUT_CARD_GLOW_MIX] 的比例
-      // 混进中心光斑，光斑之外立刻回落基色 —— 双色流动的观感保留，但每一个像素的
-      // 对比度都还在 onPrimaryContainer 的保证范围内。
+      // 底色是 tertiaryContainer → primaryContainer 的径向渐变，文字一律 onPrimaryContainer。
+      // 「on 色」只保证在**自己的**容器色上够对比，所以光斑扫到文字上时对比度就会掉 ——
+      // 但反过来说，把光斑整块压成基色又会变成一块素色（看着就廉价）。
+      // 现在的分工是：
+      //   · 色彩：光斑中心直接用 tertiaryContainer（不掺水），覆盖右上→右下的大半张卡；
+      //   · 可读：文字区单独垫一层基色柔光（[AboutCardScrim]），把字底拉回主色域；
+      //   · 质感：顶部柔光 + 1dp 上亮下暗的内描边（玻璃边），由 drawWithCache 里两层叠出来。
+      // 三者叠起来才是「有颜色、有光、有边」的一张卡，而不是一块平涂。
       val baseColor = cs.primaryContainer
-      val glowColor = lerp(baseColor, cs.tertiaryContainer, ABOUT_CARD_GLOW_MIX)
+      val spotColor = lerp(baseColor, cs.tertiaryContainer, ABOUT_CARD_SPOT_MIX)
       val transition = rememberInfiniteTransition()
       val fraction by transition.animateFloat(
         initialValue = 0f,
@@ -169,36 +174,51 @@ object AboutScreen : Screen {
             modifier =
               Modifier
                 .drawWithCache {
-                  val cx = size.width - size.width * fraction
-                  val cy = size.height * fraction
-
+                  // 光斑只在中右 / 下半区摆动：文字在左上，让色彩始终在它「背后流」，
+                  // 而不是从它身上扫过去 —— 扫过去的那几帧正是对比度最差的时刻。
+                  val cx = size.width * (0.98f - 0.38f * fraction)
+                  val cy = size.height * (0.06f + 0.86f * fraction)
                   // 半径跟着卡片尺寸走：原来写死 800px，同一套色在不同密度 / 屏宽上分布
                   // 完全不同（低密度屏几乎糊成纯色，高密度屏只剩一小块亮斑）。
-                  val radius = size.maxDimension * 0.9f
-                  val gradient =
+                  val radius = size.maxDimension * 1.05f
+
+                  // ① 主体：鲜 → 过渡 → 稳
+                  val body =
                     Brush.radialGradient(
-                      // 0 → 光斑色，55% 处已经回到基色，之后一路基色：文字区绝大多数像素
-                      // 落在基色上，只有一小片光晕带 tertiary 的味道。
-                      0f to glowColor,
-                      0.55f to baseColor,
+                      0f to cs.tertiaryContainer,
+                      0.55f to spotColor,
                       1f to baseColor,
                       center = Offset(cx, cy),
                       radius = radius,
                     )
-
-                  onDrawBehind {
-                    drawRoundRect(
-                      brush = gradient,
-                      cornerRadius =
-                        CornerRadius(
-                          cornerRadius.toPx(),
-                          cornerRadius.toPx(),
+                  // ② 顶部柔光：像一片光从上沿打下来 —— 玻璃质感主要靠这一层，
+                  //    纯渐变是「色块」，加了高光才是「材质」。
+                  val sheen =
+                    Brush.verticalGradient(
+                      colors = listOf(Color.White.copy(alpha = 0.16f), Color.Transparent),
+                      startY = 0f,
+                      endY = size.height * 0.55f,
+                    )
+                  // ③ 1dp 内描边：上亮下暗的细边，把卡片从背景里「托」起来。
+                  //    不能用 Box 的 border（那是画在外沿），这里跟圆角完全对齐。
+                  val edge =
+                    Brush.verticalGradient(
+                      colors =
+                        listOf(
+                          Color.White.copy(alpha = 0.20f),
+                          Color.White.copy(alpha = 0.02f),
                         ),
                     )
+                  val cr = CornerRadius(cornerRadius.toPx())
+                  onDrawBehind {
+                    drawRoundRect(brush = body, cornerRadius = cr)
+                    drawRoundRect(brush = sheen, cornerRadius = cr)
+                    drawRoundRect(brush = edge, cornerRadius = cr, style = Stroke(1.dp.toPx()))
                   }
                 }
                 .padding(16.dp),
           ) {
+            AboutCardScrim(baseColor = baseColor)
             Column {
               Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.size(64.dp)) {
@@ -225,15 +245,16 @@ object AboutScreen : Screen {
                     text = stringResource(id = R.string.i18n_project_name_en),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    // 副标题原来是 0.9：彩色底上降透明会让笔画边缘「虚」一档，
-                    // 底色现在钉在 primaryContainer 上，可以放心给到 0.95。
-                    color = cs.onPrimaryContainer.copy(alpha = 0.95f),
+                    // 层级本身就是质感：标题 100%、英文名 88%、版本 82%、
+                    // 设备信息 85%（字号最小，反而要比版本行实一点）。全部拉成
+                    // 同一个「实」度会显得像一块印刷品，没有主次。
+                    color = cs.onPrimaryContainer.copy(alpha = 0.88f),
                   )
                   Spacer(Modifier.height(4.dp))
                   Text(
                     text = "v$versionName $buildType",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = cs.onPrimaryContainer.copy(alpha = 0.92f),
+                    color = cs.onPrimaryContainer.copy(alpha = 0.82f),
                   )
                 }
               }
@@ -325,8 +346,8 @@ object AboutScreen : Screen {
                 Text(
                   text = collectDeviceInfo(),
                   style = MaterialTheme.typography.bodySmall,
-                  // bodySmall 字号本来就小，再压透明度最容易糊 ⇒ 只比标题低一档
-                  color = cs.onPrimaryContainer.copy(alpha = 0.9f),
+                  // bodySmall 字号最小，是整卡最容易糊的一处 ⇒ 不跟版本行一起压到 0.82
+                  color = cs.onPrimaryContainer.copy(alpha = 0.85f),
                 )
               }
             }
@@ -490,6 +511,34 @@ private val ACKNOWLEDGMENTS =
       url = "https://github.com/coil-kt/coil",
     ),
   )
+
+/**
+ * 卡片里压在文字底下的一层基色柔光。
+ *
+ * 只干一件事：把左上（标题 / 版本 / 设备信息所在）的底色拉回 `primaryContainer`，
+ * 让 `onPrimaryContainer` 的对比度重新有效；右下那片鲜色照旧流动，所以整张卡不会变平。
+ * 用径向而不是整块填充，是为了不留一条能看见的硬边 —— 这也是「看起来贵」和
+ * 「看起来像贴了个白色色块」的区别。
+ */
+@Composable
+private fun BoxScope.AboutCardScrim(baseColor: Color) {
+  Box(
+    modifier =
+      Modifier
+        .matchParentSize()
+        .drawBehind {
+          drawRect(
+            brush =
+              Brush.radialGradient(
+                0f to baseColor.copy(alpha = 0.62f),
+                1f to Color.Transparent,
+                center = Offset(size.width * 0.28f, size.height * 0.24f),
+                radius = size.maxDimension * 0.95f,
+              ),
+          )
+        },
+  )
+}
 
 /**
  * 一行致谢：左边图标 + 项目名 / 说明，右边一枚「打开」箭头，**整行可点**。

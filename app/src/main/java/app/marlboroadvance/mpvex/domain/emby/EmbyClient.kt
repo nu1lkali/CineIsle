@@ -322,6 +322,24 @@ object EmbyClient {
   /** 拉取服务器公开信息（无需登录）。 */
   fun getPublicSystemInfo(server: EmbyServer): EmbySystemInfo = getJson(server, "/System/Info/Public")
 
+  /**
+   * 探活：这台服务器此刻通不通。
+   *
+   * 三条口径，缺一条都会让「主备切换」判错：
+   * · 走 [EmbyHttp.health]（**无重试** + 秒级超时）：重试会把一次失败拖成十几秒，
+   *   探活自己就变成了卡顿源；
+   * · 只打 `System/Info/Public`：不碰媒体、不跟随 302 —— Emby 库只存 strm，
+   *   真媒体在网盘 CDN 上，探活绝不能顺手往 CDN 打一发；
+   * · 2xx/3xx 都算通：反代改写 `/emby` 前缀时可能回 302，能应答就说明服务活着。
+   *
+   * ⚠️ 阻塞调用（OkHttp `execute`），调用方必须切到 IO 线程。
+   */
+  fun probeAlive(server: EmbyServer): Boolean =
+    runCatching {
+      val req = authedRequest(server, "/System/Info/Public").get().build()
+      EmbyHttp.health.newCall(req).execute().use { it.code in 200..399 }
+    }.getOrDefault(false)
+
   // ════════════════════════════════════════════════════════════════════════
   // 2. 媒体库（VirtualFolders） / 媒体浏览
   // ════════════════════════════════════════════════════════════════════════

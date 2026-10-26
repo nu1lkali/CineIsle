@@ -2,12 +2,15 @@ package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,12 +21,14 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -57,6 +62,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.domain.emby.EmbyFailoverController
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
@@ -82,12 +88,16 @@ object EmbyServerManageScreen : Screen {
     )
     val servers by viewModel.servers.collectAsState()
     val currentServer by viewModel.currentServer.collectAsState()
+    val failoverEnabled by viewModel.failoverEnabled.collectAsState()
+    val failoverState by viewModel.failoverState.collectAsState()
 
     var editing by remember { mutableStateOf<EmbyServer?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     // a7：在这台服务器上再登一个用户（地址预填锁定，只换账号密码）
     var addUserOn by remember { mutableStateOf<EmbyServer?>(null) }
     var pendingDelete by remember { mutableStateOf<EmbyServer?>(null) }
+    // 「给这台设一台备用」的选择器
+    var backupPicker by remember { mutableStateOf<EmbyServer?>(null) }
 
     Scaffold(
       topBar = {
@@ -137,14 +147,29 @@ object EmbyServerManageScreen : Screen {
           contentPadding = PaddingValues(16.dp),
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+          // 主备自动接管：只有两台以上才有意义（一台连备用都没得切），
+          // 所以单台时整块不出现，免得用户以为「开了也没用」。
+          if (servers.size >= 2) {
+            item(key = "failover") {
+              FailoverCard(
+                enabled = failoverEnabled,
+                state = failoverState,
+                onToggle = { viewModel.setFailoverEnabled(it) },
+              )
+            }
+          }
           items(servers, key = { it.id }) { server ->
             ServerCard(
               server = server,
               isCurrent = server.id == currentServer?.id,
+              // 这台配的备用（null = 没配）：直接显示名字，不用点进去才知道配没配
+              backupName = viewModel.failoverBackupId(server.id)
+                ?.let { id -> servers.firstOrNull { it.id == id }?.name },
               onSelect = { viewModel.switchServer(server) },
               onEdit = { editing = server },
               onDelete = { pendingDelete = server },
               onAddUser = { addUserOn = server },
+              onSetBackup = { backupPicker = server },
             )
           }
         }
@@ -219,7 +244,170 @@ object EmbyServerManageScreen : Screen {
         onCancel = { pendingDelete = null },
       )
     }
+
+    backupPicker?.let { primary ->
+      BackupPickerDialog(
+        primary = primary,
+        candidates = servers.filter { it.id != primary.id },
+        selectedId = viewModel.failoverBackupId(primary.id),
+        onPick = { id ->
+          viewModel.setFailoverBackup(primary.id, id)
+          backupPicker = null
+        },
+        onDismiss = { backupPicker = null },
+      )
+    }
   }
+}
+
+/**
+ * 「自动切换备用服务器」总开关 + 当前接管状态。
+ *
+ * 为什么不只放一个 Switch：这套逻辑是**后台自己动的**，用户唯一能看见「它动没动」
+ * 的地方就是这一行状态；只留开关，主备切换就是个黑盒。
+ *
+ * 状态用 errorContainer 打底只在「确实出事了」（已降级 / 没备可用 / 都连不上）时出现，
+ * 正常情况下保持和普通卡片一样的中性色，免得明明没事也一片红。
+ */
+@Composable
+private fun FailoverCard(
+  enabled: Boolean,
+  state: EmbyFailoverController.FailoverState,
+  onToggle: (Boolean) -> Unit,
+) {
+  val troubled =
+    state is EmbyFailoverController.FailoverState.Degraded ||
+      state is EmbyFailoverController.FailoverState.NoBackup ||
+      state is EmbyFailoverController.FailoverState.Failed
+  Card(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(16.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = if (troubled) {
+        MaterialTheme.colorScheme.errorContainer
+      } else {
+        MaterialTheme.colorScheme.surface
+      },
+    ),
+    border = BorderStroke(
+      width = 1.dp,
+      color = if (troubled) {
+        MaterialTheme.colorScheme.error
+      } else {
+        MaterialTheme.colorScheme.outlineVariant
+      },
+    ),
+  ) {
+    Column(modifier = Modifier.padding(16.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text("自动切换备用服务器", style = MaterialTheme.typography.titleMedium)
+          Text(
+            text = failoverStatusText(enabled, state),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (troubled) {
+              MaterialTheme.colorScheme.onErrorContainer
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            },
+          )
+        }
+        Switch(checked = enabled, onCheckedChange = onToggle)
+      }
+      Text(
+        text = "判定方式：一次真实请求失败后补一次轻量探活，两者都失败才切换；" +
+          "之后每 20 秒探一次原服务器，恢复即自动切回。" +
+          "手动点选的服务器不会被后台改回来。",
+        style = MaterialTheme.typography.labelSmall,
+        color = if (troubled) {
+          MaterialTheme.colorScheme.onErrorContainer
+        } else {
+          MaterialTheme.colorScheme.outline
+        },
+        modifier = Modifier.padding(top = 8.dp),
+      )
+    }
+  }
+}
+
+/** 状态 → 一句话（列表里只看这一行就知道现在是谁在服务） */
+private fun failoverStatusText(
+  enabled: Boolean,
+  state: EmbyFailoverController.FailoverState,
+): String =
+  when {
+    !enabled -> "已关闭：连不上时保持当前服务器不动"
+    state is EmbyFailoverController.FailoverState.Degraded ->
+      "已切换到「${state.to.name}」，正在等待「${state.from.name}」恢复"
+    state is EmbyFailoverController.FailoverState.NoBackup ->
+      "「${state.from.name}」连不上，而这台还没有设置备用服务器"
+    state is EmbyFailoverController.FailoverState.Failed ->
+      "「${state.from.name}」与备用服务器都连不上"
+    else -> "已开启：当前服务器通讯正常"
+  }
+
+/**
+ * 给某台服务器挑一台备用。
+ *
+ * 只列「别的服务器」；选项里始终保留「不设置备用」，否则配过一次就没有回头路。
+ */
+@Composable
+private fun BackupPickerDialog(
+  primary: EmbyServer,
+  candidates: List<EmbyServer>,
+  selectedId: Long?,
+  onPick: (Long?) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("「${primary.name}」的备用服务器") },
+    text = {
+      Column {
+        Text(
+          text = "这台连不上时自动切到选中的那台；它恢复后自动切回来。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        // null = 不设置备用
+        val options: List<Pair<Long?, String>> =
+          listOf<Pair<Long?, String>>(null to "不设置备用") +
+            candidates.map { it.id to it.name }
+        options.forEach { (id, label) ->
+          val selected = id == selectedId
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clickable { onPick(id) }
+              .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = label,
+              style = MaterialTheme.typography.bodyLarge,
+              color = if (selected) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.onSurface
+              },
+              modifier = Modifier.weight(1f),
+            )
+            if (selected) {
+              Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      TextButton(onClick = onDismiss) { Text("关闭") }
+    },
+  )
 }
 
 /**
@@ -241,10 +429,12 @@ object EmbyServerManageScreen : Screen {
 private fun ServerCard(
   server: EmbyServer,
   isCurrent: Boolean,
+  backupName: String?,
   onSelect: () -> Unit,
   onEdit: () -> Unit,
   onDelete: () -> Unit,
   onAddUser: () -> Unit,
+  onSetBackup: () -> Unit,
 ) {
   Card(
     onClick = onSelect,
@@ -357,6 +547,18 @@ private fun ServerCard(
               overflow = TextOverflow.Ellipsis,
             )
           }
+          // 主备关系：配了就把名字写出来（不然只能点进对话框才知道配没配）
+          Text(
+            text = backupName?.let { "备用：$it" } ?: "未设置备用服务器",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (backupName != null) {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+              MaterialTheme.colorScheme.outline
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
         }
       }
 
@@ -369,6 +571,10 @@ private fun ServerCard(
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
       ) {
+        // 这台连不上时切到哪台（见 EmbyFailoverController）
+        IconButton(onClick = onSetBackup) {
+          Icon(Icons.Default.SwapHoriz, contentDescription = "设置备用服务器")
+        }
         // a7：在这台服务器上再登一个用户（地址已填过，不用重打）
         IconButton(onClick = onAddUser) {
           Icon(Icons.Default.PersonAdd, contentDescription = "在这台服务器上添加另一个用户")

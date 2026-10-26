@@ -43,6 +43,23 @@ class EmbyRepository(
   /** 当前正在浏览的服务器；null 表示未选择/未配置 */
   val currentServer: StateFlow<EmbyServer?> = _currentServer.asStateFlow()
 
+  /**
+   * 主 / 备服务器的自动接管（见 [EmbyFailoverController]）。
+   *
+   * 落盘在独立的 `emby_failover` 偏好里，**不动 Room 表** —— 加这个功能不需要任何迁移。
+   * 由仓库持有而不是做成另一个 Koin 单例：它要读的「当前服务器」、服务器列表都在这里，
+   * 做成单例会为了拿这两样再反向依赖回来，绕一圈没有收益。
+   */
+  val failover: EmbyFailoverController =
+    EmbyFailoverController(
+      context = context,
+      scope = scope,
+      currentServerProvider = { _currentServer.value },
+      // 自动切换只改内存：不写 current_server_id，重启后仍然回到用户选的那台
+      switchInMemory = { _currentServer.value = it },
+      loadServers = { serverRepo.getAll() },
+    )
+
   /** 「启动时恢复上次服务器」是否已完成。未完成前读 [currentServer] 一定是 null。 */
   private val restored = CompletableDeferred<Unit>()
 
@@ -50,6 +67,9 @@ class EmbyRepository(
     // 让 [EmbyHttp] 的重试拦截器知道「当前该用哪个 token」——
     // 401 自动重登后要拿**新** token 重放原请求，拦截器自己取不到。
     EmbyHttp.installTokenSource { _currentServer.value?.apiToken.orEmpty() }
+    // 主备切换的输入：真实请求在重试用尽后仍然失败 ⇒ 报给 [failover] 去做探活判定。
+    // 只挂 shared 那一档（API 请求），图片 / 拉流不走这里 —— 它们失败不代表服务器不可用。
+    EmbyHttp.onTransientFailure = { host, _ -> failover.onRequestFailure(host) }
     // 收到 401 时自动重登一次再重放请求（对应清单 1.3）。
     // 以前 token 过期只能靠各调用点手动 ensureLoggedIn 补，漏掉的地方
     // 用户看到的是「筛选面板空着」「列表不刷新」这类莫名其妙的表现。
@@ -104,6 +124,17 @@ class EmbyRepository(
     return server
   }
 
+  /**
+   * 用户在管理页**亲手**选了某台服务器。
+   *
+   * 与 [setCurrentServer] 的区别只有一点，但很关键：要告诉 [failover]「这是一次明确选择」——
+   * 清掉降级态、停掉后台的自动切回，否则用户刚点到备用上，20 秒后主恢复又把它抢回去。
+   */
+  fun selectServerAsUser(server: EmbyServer) {
+    setCurrentServer(server)
+    failover.onUserSelected(server)
+  }
+
   /** 重新从数据库读取并刷新当前服务器（例如凭据更新后） */
   suspend fun refreshCurrentServer(): EmbyServer? {
     val id = _currentServer.value?.id ?: return null
@@ -136,7 +167,11 @@ class EmbyRepository(
 
   suspend fun updateServer(server: EmbyServer) = serverRepo.update(server)
 
-  suspend fun deleteServer(server: EmbyServer) = serverRepo.delete(server)
+  suspend fun deleteServer(server: EmbyServer) {
+    serverRepo.delete(server)
+    // 顺手清掉与它相关的「备用」映射与降级态：留着只会指向一个不存在的 id
+    failover.forgetServer(server.id)
+  }
 
   // ─── 登录 ───
 

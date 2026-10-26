@@ -12,6 +12,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyBatchResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyExternalIdInfo
+import app.marlboroadvance.mpvex.domain.emby.EmbyFailoverController
 import app.marlboroadvance.mpvex.domain.emby.EmbyFilterOptions
 import app.marlboroadvance.mpvex.domain.emby.EmbyImageInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyImageProviderInfo
@@ -164,6 +165,18 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
   val currentServer: StateFlow<EmbyServer?> = repository.currentServer
 
+  // ─── 主 / 备自动接管（见 EmbyFailoverController）───
+  val failoverEnabled: StateFlow<Boolean> = repository.failover.enabled
+  val failoverState: StateFlow<EmbyFailoverController.FailoverState> = repository.failover.state
+
+  fun setFailoverEnabled(on: Boolean) = repository.failover.setEnabled(on)
+
+  /** 某台服务器配的备用服务器 id（null = 没配） */
+  fun failoverBackupId(serverId: Long): Long? = repository.failover.backupIdFor(serverId)
+
+  fun setFailoverBackup(serverId: Long, backupId: Long?) =
+    repository.failover.setBackup(serverId, backupId)
+
   private val _libraries = MutableStateFlow<List<EmbyItem>>(emptyList())
   val libraries: StateFlow<List<EmbyItem>> = _libraries.asStateFlow()
 
@@ -190,6 +203,11 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
 
   init {
     viewModelScope.launch { refreshHome() }
+    // 主备自动切换成功后要重拉一份数据：两台服务器各自一套 Item Id，
+    // 界面留着旧数据的话，用户点任意一张卡都会打到新服务器上并 404。
+    viewModelScope.launch {
+      repository.failover.autoSwitched.collect { refreshHome() }
+    }
   }
 
   // ==================== 服务器管理 ====================
@@ -243,7 +261,9 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun switchServer(server: EmbyServer) {
-    repository.setCurrentServer(server)
+    // 用「用户选择」那条路径：它额外会停掉主备自动接管，否则用户刚点到的这台
+    // 可能在主服务器恢复时被后台抢回去
+    repository.selectServerAsUser(server)
     viewModelScope.launch { refreshHome() }
   }
 

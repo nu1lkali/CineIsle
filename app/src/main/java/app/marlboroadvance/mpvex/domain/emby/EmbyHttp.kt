@@ -88,20 +88,52 @@ object EmbyHttp {
   }
 
   /**
+   * 探活档：**不带重试**、超时压到秒级。
+   *
+   * 用途只有一个：判断「这台服务器此刻通不通」（主备切换的判据，见 [EmbyFailoverController]）。
+   * 不能复用 [shared] —— 它的重试拦截器会给一次失败补 0.5s + 1s 的退避再试两轮，
+   * 一次 3 秒的探活会被拖成 10 秒以上，探活自己就成了"故障"。
+   */
+  val health: OkHttpClient by lazy {
+    baseBuilder(withRetry = false)
+      .connectTimeout(3, TimeUnit.SECONDS)
+      .readTimeout(4, TimeUnit.SECONDS)
+      .callTimeout(6, TimeUnit.SECONDS)
+      .build()
+  }
+
+  /**
+   * 请求最终失败的回报钩子（只在 [shared] 那档生效）。
+   *
+   * 主备切换要的是「用户正在用的时候到底连不连得上」，而不是定时探活的结论 ——
+   * 所以判据放在真实请求链路上，省掉一大堆心跳流量。
+   *
+   * ⚠️ 回调发生在 OkHttp 的工作线程上，**必须立刻返回**：只做计数 / 起协程，
+   * 别在这里做任何网络或阻塞操作。
+   */
+  @Volatile
+  var onTransientFailure: ((host: String, port: Int) -> Unit)? = null
+
+  /**
    * 三个档位共同的 builder。
    *
    * ⚠️ 顺序有意义：重试拦截器放在**最后** add，才是最外层 ——
    * 这样它能看到最终响应（含 401）并决定是否重试。
+   *
+   * @param withRetry 探活档传 false：它要的是「一次就说清通不通」，重试会污染结论。
    */
-  private fun baseBuilder(): OkHttpClient.Builder =
-    OkHttpClient.Builder()
-      .connectionPool(connectionPool)
-      .connectTimeout(15, TimeUnit.SECONDS)
-      .readTimeout(60, TimeUnit.SECONDS)
-      .writeTimeout(30, TimeUnit.SECONDS)
-      .retryOnConnectionFailure(true)
-      .addInterceptor(userAgentInterceptor)
-      .addInterceptor(retryInterceptor)
+  private fun baseBuilder(withRetry: Boolean = true): OkHttpClient.Builder {
+    val builder =
+      OkHttpClient.Builder()
+        .connectionPool(connectionPool)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .addInterceptor(userAgentInterceptor)
+    if (withRetry) builder.addInterceptor(retryInterceptor)
+    return builder
+  }
 
   /** 统一 UA。 */
   private val userAgentInterceptor =
@@ -153,10 +185,15 @@ object EmbyHttp {
             sleepBackoff(attempt)
             return@repeat
           }
+          // 5xx / 429 重试用尽后依然是这个码：对主备切换来说这就等于「这台不可用」
+          if (shouldRetryCode(resp.code)) notifyTransientFailure(req)
           return@Interceptor resp
         } catch (e: IOException) {
           lastErr = e
-          if (attempt >= MAX_ATTEMPTS - 1) throw e
+          if (attempt >= MAX_ATTEMPTS - 1) {
+            notifyTransientFailure(req)
+            throw e
+          }
           Log.w(TAG, "请求失败（${e.message}），第 ${attempt + 1} 次重试", e)
           sleepBackoff(attempt)
         }
@@ -172,6 +209,32 @@ object EmbyHttp {
 
   /** 这些状态码值得重试：服务端临时过载 / 限流 */
   private fun shouldRetryCode(code: Int): Boolean = code in 500..599 || code == 429
+
+  /**
+   * 把「这次真的失败了」报给上层（主备切换用）。
+   *
+   * 吞掉回调里的一切异常：切换逻辑出问题绝不能反过来把请求本身搞挂。
+   */
+  private fun notifyTransientFailure(req: Request) {
+    val cb = onTransientFailure ?: return
+    if (!isServerHealthEvidence(req.url.encodedPath)) return
+    runCatching { cb(req.url.host, req.url.port) }
+  }
+
+  /**
+   * 这次失败能不能当成「服务器不可用」的证据。
+   *
+   * 图片 / 拉流必须排除 —— 它们的失败有一大半跟服务器本身无关：
+   * strm 的真实媒体在网盘 CDN 上（403 / 限流 / 单张图坏掉都很常见），
+   * 拿它们当判据会让好好的主服务器被误判成挂了。
+   */
+  private fun isServerHealthEvidence(path: String): Boolean {
+    if (!path.startsWith("/emby/")) return false
+    if (path.contains("/Images/")) return false
+    if (path.startsWith("/emby/Videos/")) return false
+    if (path.startsWith("/emby/Audio/")) return false
+    return true
+  }
 
   /**
    * 指数退避的阻塞等待。
