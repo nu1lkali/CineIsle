@@ -48,6 +48,39 @@ class DislikeStore {
     _revision.value = _revision.value + 1
   }
 
+  /**
+   * 用持久化的数据初始化，但**保留读库期间已经发生的本地变更**。
+   *
+   * ## 为什么不直接用 [loadAll]
+   *
+   * `loadAll` 是无条件覆盖。而启动时读库是异步的：用户完全可能在读回来之前
+   * 就在播放器里标了一条 —— 那一刻内存快照里只有这一条，
+   * 等读库结果回来再整体覆盖，**用户刚标的就被冲掉了**（界面上一闪又变回未标记）。
+   *
+   * 合并规则（冲突时内存优先）：
+   * · 库里有的每一条：内存里有同 key 就取内存那份（备注可能刚改过），否则取库里的；
+   * · 库里没有、内存里有的：原样保留 —— 那是读库期间新标的，还在落盘队列里。
+   *
+   * 刻意**不触发** [onMutate]：合并进来的数据要么已经在库里，要么已经在落盘队列中，
+   * 再触发一次只会写一遍相同的内容。
+   */
+  fun mergeLoaded(data: List<DislikeMark>) {
+    val merged: List<DislikeMark>
+    synchronized(lock) {
+      val local = index
+      val fromDb = data.associateBy { it.key }
+      // 库里每条：内存有同 key 就用内存的（读库期间可能改过备注/状态）
+      val picked = data.map { local[it.key] ?: it }
+      // 内存独有的（读库期间新标的）
+      val localOnly = local.values.filter { it.key !in fromDb }
+      merged = (picked + localOnly).sortedByDescending { it.markedAt }
+      marks = merged
+      index = merged.associateBy { it.key }
+    }
+    _all.value = merged
+    _revision.value = _revision.value + 1
+  }
+
   /** 该条目当前是否处于已标记状态 —— UI 判断选中态只应看这个。 */
   fun isDisliked(key: DislikeKey): Boolean =
     synchronized(lock) { index[key]?.active == true }

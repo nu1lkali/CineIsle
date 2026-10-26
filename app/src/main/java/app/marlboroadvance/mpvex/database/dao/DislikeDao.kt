@@ -36,13 +36,36 @@ interface DislikeDao {
   suspend fun deleteAll()
 
   /**
+   * 把一次变更**增量**写进库：只碰被改动的行，其余行原样不动。
+   *
+   * ## 为什么不能再用「整表替换」
+   *
+   * 原来的写法是 `deleteAll() + upsertAll(全量快照)`，它依赖一个前提：
+   * **内存快照 == 库里的全部数据**。而这个前提在启动阶段是不成立的 ——
+   * [app.marlboroadvance.mpvex.domain.dislike.DislikeRepository.load] 是异步的，
+   * 在它读回来之前内存里只有「用户这几秒内新标的几条」。
+   * 此时任何一次写入都会把这半份快照当成真相覆盖回去，
+   * **库里原有的记录被连带删除** —— 用户看到的就是「以前标的全没了」。
+   *
+   * 增量写没有这个前提：写哪条就只动哪条，内存里有多少都不影响其它行。
+   *
+   * @param upserts 新增或内容有变化的行
+   * @param removed 需要在库里删掉的行（主键对）
+   */
+  @Transaction
+  suspend fun applyDiff(
+    upserts: List<DislikedMediaEntity>,
+    removed: List<Pair<Long, String>>,
+  ) {
+    if (upserts.isNotEmpty()) upsertAll(upserts)
+    removed.forEach { (serverId, itemId) -> delete(serverId, itemId) }
+  }
+
+  /**
    * **整体替换**为给定集合。
    *
-   * ⚠️ 为什么不是「逐条 diff」：diff 要处理「新增/删除/修改」三种情况，
-   * 漏掉任何一种都表现为"数据与界面不一致"，而且极难复现。
-   * 这里的写入量是「用户标记过的条目数」（几百行），一次事务整体覆盖
-   * 既简单又原子 —— 快照本来就是全量持有的（[app.marlboroadvance.mpvex.domain.dislike.DislikeStore]），
-   * 用整体替换与内存模型完全一致，不存在"内存有、库里没有"的中间态。
+   * ⚠️ 只在「清空全部」这一种场合用（传空列表 ⇒ 等价于 `deleteAll()`）。
+   * 常规变更走 [applyDiff] —— 全量覆盖的前提（内存即全库）在启动阶段不成立。
    *
    * 放进一个事务，避免中途失败留下半份数据。
    */
