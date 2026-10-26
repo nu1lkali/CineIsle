@@ -1490,7 +1490,20 @@ android {
     //     复查点：releaseSlot / SurfaceTexture 重建都会 veilUp 重新盖上，
     //     因为那之后画面要重新出帧，期间同样会有一次几何重算。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 148
+    //  ── v149（versionCode 149，修复轮不涨名，versionName 仍为 1.6.10）──────
+    //     关于页卡片「中间嵌了一块方矩形」（用户反馈：v145 改完更丑了）。
+    //     根因在 PreferenceCard 的内部结构：`Card { Column(padding(vertical = 8.dp)) }`
+    //     —— 它给内容额外套了 8dp 的上下内边距。v145 把渐变画在内容里的 Box 上，
+    //     那个 Box 于是比卡片上下各小 8dp、左右却等宽；而 drawRoundRect(28.dp)
+    //     画的圆角矩形与卡片圆角错开 8dp ⇒ 卡片上下各露一条 surfaceContainer 灰带、
+    //     左右是月牙形灰边。观感 = 「一张灰卡里嵌了一块上下有边的方矩形」。
+    //     修法：这张卡不再借用 PreferenceCard，自己的裁切 / 底色 / 渐变 / 内边距
+    //     绑在同一节点上（fillMaxWidth → padding(h16,v8) → clip(28dp) →
+    //     background → drawWithCache → padding(16)），边和角天然重合。
+    //     顺带：文字护罩 AboutCardScrim 从独立子 Box 合并进同一个 drawWithCache ——
+    //     原来它匹配的是内容区（比卡片四周各小 16dp），护罩中心与半径都跟着偏。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 149
     versionName = "1.6.10"
 
     vectorDrawables {

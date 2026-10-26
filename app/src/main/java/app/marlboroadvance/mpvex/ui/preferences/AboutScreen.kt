@@ -9,10 +9,10 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -48,7 +48,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -169,56 +169,83 @@ object AboutScreen : Screen {
             .padding(paddingValues)
             .verticalScroll(rememberScrollState()),
       ) {
-        PreferenceCard {
-          Box(
-            modifier =
-              Modifier
-                .drawWithCache {
-                  // 光斑只在中右 / 下半区摆动：文字在左上，让色彩始终在它「背后流」，
-                  // 而不是从它身上扫过去 —— 扫过去的那几帧正是对比度最差的时刻。
-                  val cx = size.width * (0.98f - 0.38f * fraction)
-                  val cy = size.height * (0.06f + 0.86f * fraction)
-                  // 半径跟着卡片尺寸走：原来写死 800px，同一套色在不同密度 / 屏宽上分布
-                  // 完全不同（低密度屏几乎糊成纯色，高密度屏只剩一小块亮斑）。
-                  val radius = size.maxDimension * 1.05f
+        // ── 这张卡为什么不再用 PreferenceCard ──
+        // PreferenceCard 内部是 `Card { Column(padding(vertical = 8.dp)) { content() } }`，
+        // 也就是说它会在内容外面再套 8dp 的**上下**内边距。上一版把渐变画在内容里的
+        // 一个 Box 上，那个 Box 于是比卡片上下各小 8dp、左右却等宽 —— 而
+        // `drawRoundRect(cornerRadius = 28.dp)` 画的圆角矩形与卡片圆角错开 8dp，
+        // 卡片上下就各露出一条 surfaceContainer 的灰带，左右是月牙形的灰边。
+        // 看着就是「一张灰卡里嵌了一块方方的、上下有边的矩形」，比原来的平涂还难看。
+        //
+        // 现在整张卡自己画：裁切、底色、渐变、内边距绑在同一个节点上，
+        // 绘制矩形与卡片外沿完全重合，圆角也天然对齐，不存在「嵌一层」的可能。
+        // 外边距（16 / 8）与 PreferenceCard 保持一致，整页的卡片左边缘仍然对齐。
+        Box(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 16.dp, vertical = 8.dp)
+              .clip(RoundedCornerShape(cornerRadius))
+              // 底色必须在渐变之下：圆角抗锯齿那半个像素需要它垫着，
+              // 否则边缘会露出背景色、显得毛躁。
+              .background(cs.surfaceContainer)
+              .drawWithCache {
+                // 光斑只在中右 / 下半区摆动：文字在左上，让色彩始终在它「背后流」，
+                // 而不是从它身上扫过去 —— 扫过去的那几帧正是对比度最差的时刻。
+                val cx = size.width * (0.98f - 0.38f * fraction)
+                val cy = size.height * (0.06f + 0.86f * fraction)
+                // 半径跟着卡片尺寸走：原来写死 800px，同一套色在不同密度 / 屏宽上分布
+                // 完全不同（低密度屏几乎糊成纯色，高密度屏只剩一小块亮斑）。
+                val radius = size.maxDimension * 1.05f
 
-                  // ① 主体：鲜 → 过渡 → 稳
-                  val body =
-                    Brush.radialGradient(
-                      0f to cs.tertiaryContainer,
-                      0.55f to spotColor,
-                      1f to baseColor,
-                      center = Offset(cx, cy),
-                      radius = radius,
-                    )
-                  // ② 顶部柔光：像一片光从上沿打下来 —— 玻璃质感主要靠这一层，
-                  //    纯渐变是「色块」，加了高光才是「材质」。
-                  val sheen =
-                    Brush.verticalGradient(
-                      colors = listOf(Color.White.copy(alpha = 0.16f), Color.Transparent),
-                      startY = 0f,
-                      endY = size.height * 0.55f,
-                    )
-                  // ③ 1dp 内描边：上亮下暗的细边，把卡片从背景里「托」起来。
-                  //    不能用 Box 的 border（那是画在外沿），这里跟圆角完全对齐。
-                  val edge =
-                    Brush.verticalGradient(
-                      colors =
-                        listOf(
-                          Color.White.copy(alpha = 0.20f),
-                          Color.White.copy(alpha = 0.02f),
-                        ),
-                    )
-                  val cr = CornerRadius(cornerRadius.toPx())
-                  onDrawBehind {
-                    drawRoundRect(brush = body, cornerRadius = cr)
-                    drawRoundRect(brush = sheen, cornerRadius = cr)
-                    drawRoundRect(brush = edge, cornerRadius = cr, style = Stroke(1.dp.toPx()))
-                  }
+                // ① 主体：鲜 → 过渡 → 稳
+                val body =
+                  Brush.radialGradient(
+                    0f to cs.tertiaryContainer,
+                    0.55f to spotColor,
+                    1f to baseColor,
+                    center = Offset(cx, cy),
+                    radius = radius,
+                  )
+                // ② 顶部柔光：像一片光从上沿打下来 —— 玻璃质感主要靠这一层，
+                //    纯渐变是「色块」，加了高光才是「材质」。
+                val sheen =
+                  Brush.verticalGradient(
+                    colors = listOf(Color.White.copy(alpha = 0.16f), Color.Transparent),
+                    startY = 0f,
+                    endY = size.height * 0.55f,
+                  )
+                // ③ 1dp 内描边：上亮下暗的细边，把卡片从背景里「托」起来。
+                //    不能用 Box 的 border（那是画在外沿），这里跟圆角完全对齐。
+                val edge =
+                  Brush.verticalGradient(
+                    colors =
+                      listOf(
+                        Color.White.copy(alpha = 0.20f),
+                        Color.White.copy(alpha = 0.02f),
+                      ),
+                  )
+                // ④ 文字护罩：把左上（标题 / 版本 / 设备信息所在）的底色拉回 primaryContainer，
+                //    让 onPrimaryContainer 的对比度重新有效；右下那片鲜色照旧流动。
+                //    原来它是画在内容区（比卡片四周各小 16dp 内边距）的一个子 Box 上，
+                //    中心与半径都跟着偏 —— 现在跟卡片同尺寸，位置才是设计意图里的那个点。
+                val scrim =
+                  Brush.radialGradient(
+                    0f to baseColor.copy(alpha = 0.62f),
+                    1f to Color.Transparent,
+                    center = Offset(size.width * 0.28f, size.height * 0.24f),
+                    radius = size.maxDimension * 0.95f,
+                  )
+                val cr = CornerRadius(cornerRadius.toPx())
+                onDrawBehind {
+                  drawRoundRect(brush = body, cornerRadius = cr)
+                  drawRoundRect(brush = scrim, cornerRadius = cr)
+                  drawRoundRect(brush = sheen, cornerRadius = cr)
+                  drawRoundRect(brush = edge, cornerRadius = cr, style = Stroke(1.dp.toPx()))
                 }
-                .padding(16.dp),
-          ) {
-            AboutCardScrim(baseColor = baseColor)
+              }
+              .padding(16.dp),
+        ) {
             Column {
               Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.size(64.dp)) {
@@ -352,7 +379,6 @@ object AboutScreen : Screen {
               }
             }
           }
-        }
 
         Spacer(Modifier.height(8.dp))
 
@@ -511,34 +537,6 @@ private val ACKNOWLEDGMENTS =
       url = "https://github.com/coil-kt/coil",
     ),
   )
-
-/**
- * 卡片里压在文字底下的一层基色柔光。
- *
- * 只干一件事：把左上（标题 / 版本 / 设备信息所在）的底色拉回 `primaryContainer`，
- * 让 `onPrimaryContainer` 的对比度重新有效；右下那片鲜色照旧流动，所以整张卡不会变平。
- * 用径向而不是整块填充，是为了不留一条能看见的硬边 —— 这也是「看起来贵」和
- * 「看起来像贴了个白色色块」的区别。
- */
-@Composable
-private fun BoxScope.AboutCardScrim(baseColor: Color) {
-  Box(
-    modifier =
-      Modifier
-        .matchParentSize()
-        .drawBehind {
-          drawRect(
-            brush =
-              Brush.radialGradient(
-                0f to baseColor.copy(alpha = 0.62f),
-                1f to Color.Transparent,
-                center = Offset(size.width * 0.28f, size.height * 0.24f),
-                radius = size.maxDimension * 0.95f,
-              ),
-          )
-        },
-  )
-}
 
 /**
  * 一行致谢：左边图标 + 项目名 / 说明，右边一枚「打开」箭头，**整行可点**。
