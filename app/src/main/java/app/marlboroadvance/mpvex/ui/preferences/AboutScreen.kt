@@ -51,6 +51,7 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -71,6 +72,15 @@ import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
 import com.mikepenz.aboutlibraries.ui.compose.produceLibraries
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.Serializable
+
+/**
+ * 「关于」页顶部那张卡片里，tertiary 容器色混进基色的最大比例。
+ *
+ * 只影响观感、不影响可读性下限：混入越多，双色流动越明显，但文字所依赖的
+ * onPrimaryContainer 对比度保证就越弱。0.42 是「肉眼能看出颜色在流动、底色明度又
+ * 基本没离开 primaryContainer」的折中值。
+ */
+private const val ABOUT_CARD_GLOW_MIX = 0.42f
 
 @Serializable
 object AboutScreen : Screen {
@@ -126,8 +136,16 @@ object AboutScreen : Screen {
       },
     ) { paddingValues ->
       val cs = MaterialTheme.colorScheme
-      val colorPrimary = cs.primaryContainer
-      val colorTertiary = cs.tertiaryContainer
+      // ── 这张卡片的「底色 / 文字」口径 ──
+      // 原来是把 primaryContainer 与 **tertiaryContainer 等权**拼成一张径向渐变，文字却
+      // 一律用 onPrimaryContainer。问题在于 on 色只保证「在自己的容器色上够对比」：
+      // 光斑荡到文字上时底色跑进了 tertiaryContainer 的色域，对比度就掉下去 ——
+      // 浅色主题 + 动态取色（壁纸取色）下尤其明显，观感就是「有时清楚、有时糊」。
+      // 现在底色钉死在 primaryContainer 上，tertiary 只按 [ABOUT_CARD_GLOW_MIX] 的比例
+      // 混进中心光斑，光斑之外立刻回落基色 —— 双色流动的观感保留，但每一个像素的
+      // 对比度都还在 onPrimaryContainer 的保证范围内。
+      val baseColor = cs.primaryContainer
+      val glowColor = lerp(baseColor, cs.tertiaryContainer, ABOUT_CARD_GLOW_MIX)
       val transition = rememberInfiniteTransition()
       val fraction by transition.animateFloat(
         initialValue = 0f,
@@ -154,11 +172,18 @@ object AboutScreen : Screen {
                   val cx = size.width - size.width * fraction
                   val cy = size.height * fraction
 
+                  // 半径跟着卡片尺寸走：原来写死 800px，同一套色在不同密度 / 屏宽上分布
+                  // 完全不同（低密度屏几乎糊成纯色，高密度屏只剩一小块亮斑）。
+                  val radius = size.maxDimension * 0.9f
                   val gradient =
                     Brush.radialGradient(
-                      colors = listOf(colorPrimary, colorTertiary),
+                      // 0 → 光斑色，55% 处已经回到基色，之后一路基色：文字区绝大多数像素
+                      // 落在基色上，只有一小片光晕带 tertiary 的味道。
+                      0f to glowColor,
+                      0.55f to baseColor,
+                      1f to baseColor,
                       center = Offset(cx, cy),
-                      radius = 800f,
+                      radius = radius,
                     )
 
                   onDrawBehind {
@@ -200,13 +225,15 @@ object AboutScreen : Screen {
                     text = stringResource(id = R.string.i18n_project_name_en),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = cs.onPrimaryContainer.copy(alpha = 0.9f),
+                    // 副标题原来是 0.9：彩色底上降透明会让笔画边缘「虚」一档，
+                    // 底色现在钉在 primaryContainer 上，可以放心给到 0.95。
+                    color = cs.onPrimaryContainer.copy(alpha = 0.95f),
                   )
                   Spacer(Modifier.height(4.dp))
                   Text(
                     text = "v$versionName $buildType",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = cs.onPrimaryContainer.copy(alpha = 0.85f),
+                    color = cs.onPrimaryContainer.copy(alpha = 0.92f),
                   )
                 }
               }
@@ -298,7 +325,8 @@ object AboutScreen : Screen {
                 Text(
                   text = collectDeviceInfo(),
                   style = MaterialTheme.typography.bodySmall,
-                  color = cs.onPrimaryContainer.copy(alpha = 0.85f),
+                  // bodySmall 字号本来就小，再压透明度最容易糊 ⇒ 只比标题低一档
+                  color = cs.onPrimaryContainer.copy(alpha = 0.9f),
                 )
               }
             }
