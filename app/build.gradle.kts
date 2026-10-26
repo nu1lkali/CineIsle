@@ -1475,7 +1475,22 @@ android {
     //       服务器不足两台时备用那套（按钮 + 「未设置备用服务器」提示）整块隐藏，
     //       否则单机用户点开会看到一个没有任何候选的空面板。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 147
+    //  ── v148（versionCode 148，修复轮不涨名，versionName 仍为 1.6.10）──────
+    //     视界流「切下一条时画面缩一下」。
+    //     根因：相邻页是「prepared 但没有解码器」的状态（池子刻意如此，省 MediaCodec），
+    //     而**没有解码器就没有 onVideoSizeChanged** ⇒ 这一页拿不到宽高比，
+    //     applyVideoLayout 无从下手，TextureView 一直停在 XML 的 match_parent 满屏。
+    //     用户滑过半、playWhenReady 打开后才创建解码器，宽高比这时才到，
+    //     于是「满屏 → 等比 contain」的矩形改写正好落在滑动过程中。
+    //     修法：每页画面加一层黑遮罩 feedVeil，等 frameOnScreen 记账
+    //     （帧真的画到 TextureView 上）才淡出 —— 几何重算全程在遮罩背后发生。
+    //     ⚠️ 遮罩必须是独立的普通 View，不能用 TextureView 的 alpha/visibility：
+    //        那样它不再走绘制流程，onSurfaceTextureUpdated 不回调，
+    //        「画面好了」的判据会永远等不到，加载圈直接锁死。
+    //     复查点：releaseSlot / SurfaceTexture 重建都会 veilUp 重新盖上，
+    //     因为那之后画面要重新出帧，期间同样会有一次几何重算。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 148
     versionName = "1.6.10"
 
     vectorDrawables {

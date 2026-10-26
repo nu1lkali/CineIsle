@@ -42,4 +42,30 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
+    <!--
+      出帧之前盖住画面的黑遮罩。
+
+      ── 为什么必须有它 ──
+      相邻那几条是「prepared 但还没创建解码器」的状态（见 ExoPlayerPool 的说明），
+      而**没有解码器就没有 `onVideoSizeChanged`** —— 于是这一页拿不到视频宽高比，
+      `applyVideoLayout` 无从下手，TextureView 就停在 XML 里声明的 match_parent 上，
+      是**满屏**的。
+
+      用户滑过来的那一瞬间，`playWhenReady` 打开 → 解码器才建起来 → 宽高比终于到了
+      → TextureView 被从「满屏」改成「等比 contain 的矩形」。这一次几何变化正好落在
+      滑动过程中，肉眼看到的就是「画面缩了一下」。
+
+      有了这层遮罩，那张从满屏缩到位的全过程都在它背后发生：等 `frameOnScreen`
+      记账（帧真的画到了 TextureView 上）时才淡出，露出来的已经是摆好位置的画面。
+
+      ⚠️ 遮罩只能是一层普通 View，**不能**用 TextureView 的 alpha / visibility 来实现：
+      那样 TextureView 不再走绘制流程，`onSurfaceTextureUpdated` 也就不会回调，
+      而它正是我们判断「画面好了」的唯一依据 —— 会直接把加载圈锁死。
+    -->
+    <View
+        android:id="@+id/feedVeil"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black" />
+
 </FrameLayout>

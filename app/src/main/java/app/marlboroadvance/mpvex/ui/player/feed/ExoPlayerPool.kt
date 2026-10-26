@@ -7,6 +7,7 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.TextureView
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -20,6 +21,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import app.marlboroadvance.mpvex.R
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -403,7 +405,56 @@ internal class ExoPlayerPool(
    */
   private fun markFrameOnScreen(index: Int) {
     revealFallbacks.remove(index)?.let { mainHandler.removeCallbacks(it) }
-    if (frameOnScreen.add(index)) onFrameVisible(index)
+    if (frameOnScreen.add(index)) {
+      // 撤遮罩必须放在「这一帧真的上屏」这一刻，而不是 `onVideoSizeChanged`：
+      // 后者只说明拿到了宽高比、矩形即将被改写，那时撤掉就会把这次几何变化露出来 ——
+      // 正是用户抱怨的「切条时画面缩一下」。上屏之后矩形一定已经摆好，露出来就是对的。
+      unveil(index)
+      onFrameVisible(index)
+    }
+  }
+
+  /**
+   * 画面 View 上那层黑遮罩。
+   *
+   * 从 [surfaces] 里的 TextureView 反查它的兄弟节点，而不是另开一份账本：
+   * 遮罩的生命周期与 TextureView 严格一致（同一个 `view_feed_video` 布局里），
+   * 多记一份就多一处可能对不上的地方。
+   */
+  private fun veilOf(index: Int): View? {
+    val parent = surfaces[index]?.parent as? ViewGroup ?: return null
+    return parent.findViewById(R.id.feedVeil)
+  }
+
+  /**
+   * 撤掉遮罩：淡出之后置 GONE。
+   *
+   * 用淡出而不是硬撤，是因为它撤的那一刻画面刚出第一帧，硬切在个别机型上还能被
+   * 看成「闪了一下」；这段淡出足够把这一下抹平，又短到不像是刻意做的转场。
+   */
+  private fun unveil(index: Int) {
+    val veil = veilOf(index) ?: return
+    // 已经撤过了：别把动画重来一遍（心跳兜底与 onSurfaceTextureUpdated 都可能重复调到这里）
+    if (veil.visibility == View.GONE) return
+    veil.animate().cancel()
+    veil.animate()
+      .alpha(0f)
+      .setDuration(VEIL_FADE_MS)
+      .withEndAction { veil.visibility = View.GONE }
+      .start()
+  }
+
+  /**
+   * 重新盖上遮罩：画面要重新出帧了（SurfaceTexture 重建、实例释放后重建）。
+   *
+   * 盖上之后这一段里所有的几何重算都在背后发生，用户不会看到「满屏 → contain」
+   * 那一下跳变。
+   */
+  private fun veilUp(index: Int) {
+    val veil = veilOf(index) ?: return
+    veil.animate().cancel()
+    veil.alpha = 1f
+    veil.visibility = View.VISIBLE
   }
 
   /**
@@ -435,6 +486,9 @@ internal class ExoPlayerPool(
     //    清了就等于允许无限重试。
     noVideoReported.remove(index)
     revealFallbacks.remove(index)?.let { mainHandler.removeCallbacks(it) }
+    // 画面要重新出帧了 —— 那片空白期间可能伴随一次「满屏 → contain」的几何重算，
+    // 遮罩必须提前盖上，否则那一下就会被看见。
+    veilUp(index)
   }
 
   /**
@@ -865,6 +919,14 @@ internal data class FeedPlaybackSnapshot(
  * 的前提下仍不至于卡死。
  */
 private const val REVEAL_FALLBACK_MS = 1200L
+
+/**
+ * 出帧后遮罩淡出的时长。
+ *
+ * 遮罩撤除的那一刻画面刚出第一帧，硬切在个别机型上还能被看成「闪了一下」；
+ * 这个长度足够把这一下抹平，又短到不像是刻意做的转场。
+ */
+private const val VEIL_FADE_MS = 140L
 
 /**
  * 播放位置推进到这个值、画面还一帧都没上屏，就判定「视频轨出不了画面」。
