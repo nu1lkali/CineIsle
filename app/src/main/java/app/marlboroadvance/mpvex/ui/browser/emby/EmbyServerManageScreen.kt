@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
@@ -62,8 +63,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.domain.emby.EmbyEndpoint
 import app.marlboroadvance.mpvex.domain.emby.EmbyFailoverController
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.domain.emby.primaryEndpoint
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
@@ -104,6 +107,9 @@ object EmbyServerManageScreen : Screen {
     val failoverState by viewModel.failoverState.collectAsState()
     // 主 → 备映射：必须 collect（设完备用要立刻反映到卡片上）
     val failoverBackups by viewModel.failoverBackups.collectAsState()
+    // 双入口：配置了什么、此刻实际在用哪个，都必须 collect
+    val endpointAlts by viewModel.endpointAlts.collectAsState()
+    val activeEndpoints by viewModel.activeEndpoints.collectAsState()
 
     var editing by remember { mutableStateOf<EmbyServer?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -112,6 +118,8 @@ object EmbyServerManageScreen : Screen {
     var pendingDelete by remember { mutableStateOf<EmbyServer?>(null) }
     // 「给这台设一台备用」的选择器
     var backupPicker by remember { mutableStateOf<EmbyServer?>(null) }
+    // 「给这台配第二地址（内网 / 公网）」的编辑器
+    var altPicker by remember { mutableStateOf<EmbyServer?>(null) }
 
     Scaffold(
       topBar = {
@@ -184,11 +192,15 @@ object EmbyServerManageScreen : Screen {
               // 这台配的备用（null = 没配）：直接显示名字，不用点进去才知道配没配
               backupName = failoverBackups[server.id]
                 ?.let { id -> servers.firstOrNull { it.id == id }?.name },
+              canSetBackup = servers.size >= 2,
+              altEndpoint = endpointAlts[server.id],
+              activeEndpoint = activeEndpoints[server.id] ?: server.primaryEndpoint(),
               onSelect = { viewModel.switchServer(server) },
               onEdit = { editing = server },
               onDelete = { pendingDelete = server },
               onAddUser = { addUserOn = server },
               onSetBackup = { backupPicker = server },
+              onSetAlt = { altPicker = server },
             )
           }
         }
@@ -276,8 +288,23 @@ object EmbyServerManageScreen : Screen {
         onDismiss = { backupPicker = null },
       )
     }
+
+    altPicker?.let { target ->
+      AltEndpointDialog(
+        server = target,
+        initial = endpointAlts[target.id],
+        onDismiss = { altPicker = null },
+        onSave = { endpoint ->
+          viewModel.setAltEndpoint(target.id, endpoint)
+          altPicker = null
+        },
+      )
+    }
   }
 }
+
+// 第二地址对话框的实现见 AltEndpointDialog.kt（Classic 与 Cine 两套管理页共用）
+
 
 /**
  * 「自动切换备用服务器」总开关 + 当前接管状态。
@@ -449,11 +476,18 @@ private fun ServerCard(
   server: EmbyServer,
   isCurrent: Boolean,
   backupName: String?,
+  /** 不足两台服务器时，没有「另一台」可选 —— 备用相关的入口与提示整块不出现 */
+  canSetBackup: Boolean,
+  /** 这台配的第二地址（null = 只有一个入口） */
+  altEndpoint: EmbyEndpoint?,
+  /** 这台**此刻**实际在用的入口（可能已经自动切到第二地址） */
+  activeEndpoint: EmbyEndpoint,
   onSelect: () -> Unit,
   onEdit: () -> Unit,
   onDelete: () -> Unit,
   onAddUser: () -> Unit,
   onSetBackup: () -> Unit,
+  onSetAlt: () -> Unit,
 ) {
   Card(
     onClick = onSelect,
@@ -566,18 +600,34 @@ private fun ServerCard(
               overflow = TextOverflow.Ellipsis,
             )
           }
-          // 主备关系：配了就把名字写出来（不然只能点进对话框才知道配没配）
-          Text(
-            text = backupName?.let { "备用：$it" } ?: "未设置备用服务器",
-            style = MaterialTheme.typography.bodySmall,
-            color = if (backupName != null) {
-              MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-              MaterialTheme.colorScheme.outline
-            },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
+          // 主备关系：配了就把名字写出来（不然只能点进对话框才知道配没配）。
+          // 只有一台服务器时整行不出现 —— 「未设置备用服务器」对单机用户是无意义噪音。
+          if (canSetBackup) {
+            Text(
+              text = backupName?.let { "备用：$it" } ?: "未设置备用服务器",
+              style = MaterialTheme.typography.bodySmall,
+              color = if (backupName != null) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              } else {
+                MaterialTheme.colorScheme.outline
+              },
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+          // 双入口：只在配了第二地址时出现（没配的服务器不该多一行噪音）。
+          // 显示的是**此刻实际在用**的地址 —— 用户在外面按一下就能确认「现在走的是公网」。
+          if (altEndpoint != null) {
+            val usingAlt = activeEndpoint.baseUrl != server.primaryEndpoint().baseUrl
+            Text(
+              text = "当前入口：${activeEndpoint.host}:${activeEndpoint.port}" +
+                if (usingAlt) "（第二地址）" else "（主地址）",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
         }
       }
 
@@ -590,9 +640,16 @@ private fun ServerCard(
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        // 这台连不上时切到哪台（见 EmbyFailoverController）
-        IconButton(onClick = onSetBackup) {
-          Icon(Icons.Default.SwapHoriz, contentDescription = "设置备用服务器")
+        // 这台连不上时换到另一台服务器（见 EmbyFailoverController）。
+        // 只有一台时没有目标可选，按钮不出现，免得点开一个空面板。
+        if (canSetBackup) {
+          IconButton(onClick = onSetBackup) {
+            Icon(Icons.Default.SwapHoriz, contentDescription = "换到另一台服务器")
+          }
+        }
+        // 同一台的内网 / 公网双入口（见 EmbyEndpointResolver）
+        IconButton(onClick = onSetAlt) {
+          Icon(Icons.Default.Language, contentDescription = "同一台的另一条线路")
         }
         // a7：在这台服务器上再登一个用户（地址已填过，不用重打）
         IconButton(onClick = onAddUser) {

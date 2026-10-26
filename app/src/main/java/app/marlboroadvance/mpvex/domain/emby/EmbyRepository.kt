@@ -44,6 +44,20 @@ class EmbyRepository(
   val currentServer: StateFlow<EmbyServer?> = _currentServer.asStateFlow()
 
   /**
+   * 第二地址（内网 / frp 公网双入口）的落盘与择优，见 [EmbyEndpointResolver]。
+   *
+   * 与 [failover] 的分工：这里换的是**同一台服务器**的入口，[failover] 换的是**服务器**。
+   * 顺序不能反 —— 内网抖一下就把用户甩到另一台服务器上是错的。
+   */
+  private val endpointStore = EmbyEndpointStore(context)
+
+  val endpoints: EmbyEndpointResolver =
+    EmbyEndpointResolver(
+      scope = scope,
+      store = endpointStore,
+    )
+
+  /**
    * 主 / 备服务器的自动接管（见 [EmbyFailoverController]）。
    *
    * 落盘在独立的 `emby_failover` 偏好里，**不动 Room 表** —— 加这个功能不需要任何迁移。
@@ -58,18 +72,45 @@ class EmbyRepository(
       // 自动切换只改内存：不写 current_server_id，重启后仍然回到用户选的那台
       switchInMemory = { _currentServer.value = it },
       loadServers = { serverRepo.getAll() },
+      // 一台服务器可能有两个入口，任一入口的失败都算「这台」的失败
+      hostBelongsTo = { server, host ->
+        server.host.equals(host, ignoreCase = true) ||
+          endpointStore.altFor(server.id)?.host?.equals(host, ignoreCase = true) == true
+      },
     )
 
   /** 「启动时恢复上次服务器」是否已完成。未完成前读 [currentServer] 一定是 null。 */
   private val restored = CompletableDeferred<Unit>()
 
   init {
+    // 拼 URL 的统一出口装上解析器：没装时行为与改造前完全一致（回落服务器自身配置）
+    EmbyEndpoints.resolver = endpoints
+    // 进出家门 / 切 WiFi / 断开蜂窝时重估所有配了双入口的服务器。
+    // 只在网络变化这一刻探，请求路径上零开销。
+    registerNetworkCallback()
     // 让 [EmbyHttp] 的重试拦截器知道「当前该用哪个 token」——
     // 401 自动重登后要拿**新** token 重放原请求，拦截器自己取不到。
     EmbyHttp.installTokenSource { _currentServer.value?.apiToken.orEmpty() }
-    // 主备切换的输入：真实请求在重试用尽后仍然失败 ⇒ 报给 [failover] 去做探活判定。
+    // 请求失败的处理顺序（很重要）：
+    //   ① 有第二地址 ⇒ 先让地址层竞速自救（换到内网/公网另一个入口，或确认只是网络闪断）；
+    //   ② 只有两个入口都不通，或者压根没配第二地址，才算「这台服务器有问题」，交给主备接管。
+    // 顺序反了会出现「家里内网抖一下就被甩到另一台服务器上」。
     // 只挂 shared 那一档（API 请求），图片 / 拉流不走这里 —— 它们失败不代表服务器不可用。
-    EmbyHttp.onTransientFailure = { host, _ -> failover.onRequestFailure(host) }
+    EmbyHttp.onTransientFailure = failure@{ host, _ ->
+      val target = _currentServer.value ?: return@failure
+      scope.launch {
+        val outcome = runCatching {
+          endpoints.refresh(target, failedHost = host)
+        }.getOrDefault(EmbyEndpointResolver.Outcome.NoAlternate)
+        val deadLike =
+          outcome == EmbyEndpointResolver.Outcome.Dead ||
+            outcome == EmbyEndpointResolver.Outcome.NoAlternate
+        // 刚换过入口的 30 秒内不判死：新入口可能还在建连接
+        if (deadLike && !endpoints.switchedRecently(target.id)) {
+          failover.onRequestFailure(host)
+        }
+      }
+    }
     // 收到 401 时自动重登一次再重放请求（对应清单 1.3）。
     // 以前 token 过期只能靠各调用点手动 ensureLoggedIn 补，漏掉的地方
     // 用户看到的是「筛选面板空着」「列表不刷新」这类莫名其妙的表现。
@@ -117,6 +158,34 @@ class EmbyRepository(
     prefs.edit().putLong(KEY_CURRENT_SERVER_ID, server.id).apply()
   }
 
+  // ─── 第二地址（内网 / 公网双入口）───
+
+  /** 各服务器配的第二地址。UI 必须 collect 这个 flow，别直接调函数读快照 */
+  val endpointAlts: StateFlow<Map<Long, EmbyEndpoint>> = endpointStore.alts
+
+  /** 当前生效入口（可能已经切到第二地址） */
+  val activeEndpoints: StateFlow<Map<Long, EmbyEndpoint>> = endpoints.active
+
+  /** 这台此刻实际走在哪个入口 */
+  fun activeEndpointFor(server: EmbyServer): EmbyEndpoint = endpoints.currentFor(server)
+
+  /**
+   * 设置 / 取消某台的第二地址。
+   *
+   * 传 null 或空 host = 取消。改完立刻重估当前服务器，用户不用退出重进。
+   */
+  fun setAltEndpoint(serverId: Long, endpoint: EmbyEndpoint?) {
+    endpointStore.setAlt(serverId, endpoint)
+    if (endpoint == null || endpoint.host.isBlank()) {
+      endpoints.forget(serverId)
+      return
+    }
+    val current = _currentServer.value
+    if (current?.id == serverId) {
+      scope.launch { runCatching { endpoints.refresh(current) } }
+    }
+  }
+
   /** 按 id 切换当前服务器 */
   suspend fun selectServer(id: Long): EmbyServer? {
     val server = serverRepo.getById(id) ?: return null
@@ -133,6 +202,37 @@ class EmbyRepository(
   fun selectServerAsUser(server: EmbyServer) {
     setCurrentServer(server)
     failover.onUserSelected(server)
+    // 用户主动选服务器时顺手定一次入口：从另一台切过来时，可能正好换了网络环境
+    if (endpointStore.altFor(server.id) != null) {
+      scope.launch { runCatching { endpoints.refresh(server) } }
+    }
+  }
+
+  /**
+   * 监听默认网络变化。
+   *
+   * 「在家 / 在外」这件事不需要读 WiFi 名字（那要定位权限，而且连着家里 WiFi
+   * 也不代表内网那台可达 —— 访客网络、VLAN 隔离都会骗过它），改成：
+   * **网络一变就重新竞速两台地址，谁先通走谁**。判据是事实而不是猜测。
+   */
+  private fun registerNetworkCallback() {
+    val cm =
+      context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+        as? android.net.ConnectivityManager ?: return
+    runCatching {
+      cm.registerDefaultNetworkCallback(
+        object : android.net.ConnectivityManager.NetworkCallback() {
+          override fun onAvailable(network: android.net.Network) {
+            // 回调在工作线程：只起协程，别在这里做网络
+            scope.launch {
+              runCatching { endpoints.refreshAll(serverRepo.getAll()) }
+            }
+          }
+        },
+      )
+    }.onFailure {
+      android.util.Log.w("EmbyRepository", "注册网络变化回调失败", it)
+    }
   }
 
   /** 重新从数据库读取并刷新当前服务器（例如凭据更新后） */
@@ -171,6 +271,9 @@ class EmbyRepository(
     serverRepo.delete(server)
     // 顺手清掉与它相关的「备用」映射与降级态：留着只会指向一个不存在的 id
     failover.forgetServer(server.id)
+    // 第二地址与它的生效入口缓存同样要清（否则 id 复用时会串到新服务器上）
+    endpointStore.forget(server.id)
+    endpoints.forget(server.id)
   }
 
   // ─── 登录 ───

@@ -203,7 +203,7 @@ object EmbyClient {
     path: String,
     extraQuery: Map<String, String?> = emptyMap(),
   ): Request.Builder {
-    val sb = StringBuilder("${server.hostUrl}/emby$path")
+    val sb = StringBuilder("${EmbyEndpoints.hostUrl(server)}/emby$path")
     if (extraQuery.isNotEmpty()) {
       sb.append('?')
       extraQuery.entries.filter { it.value != null }.joinTo(sb, "&") { (k, v) ->
@@ -312,7 +312,7 @@ object EmbyClient {
     val authHeader =
       """MediaBrowser Client="mpvEx", Device="Android", DeviceId="$deviceId", Version="1.0.0""""
     val req = Request.Builder()
-      .url("${server.hostUrl}/emby/Users/AuthenticateByName")
+      .url("${EmbyEndpoints.hostUrl(server)}/emby/Users/AuthenticateByName")
       .header("X-Emby-Authorization", authHeader)
       .post(body.toRequestBody(jsonMedia))
       .build()
@@ -338,6 +338,26 @@ object EmbyClient {
     runCatching {
       val req = authedRequest(server, "/System/Info/Public").get().build()
       EmbyHttp.health.newCall(req).execute().use { it.code in 200..399 }
+    }.getOrDefault(false)
+
+  /**
+   * 探活某个**指定的**入口（不经过地址解析）。
+   *
+   * 「同一台服务器两个入口，谁先通就用谁」要靠它 —— 必须能显式指定地址，
+   * 否则两个探测都会走解析器的当前值，永远只探同一个地址。
+   *
+   * 口径与 [probeAlive] 一致：只打 `System/Info/Public`、无重试、2xx/3xx 都算通；
+   * 区别只是超时压到 [EmbyHttp.probe] 那一档（竞速等不起 6 秒）。
+   */
+  fun probeAlive(endpoint: EmbyEndpoint, token: String): Boolean =
+    runCatching {
+      val req =
+        Request.Builder()
+          .url("${endpoint.baseUrl}/emby/System/Info/Public")
+          .apply { if (token.isNotEmpty()) header("X-Emby-Token", token) }
+          .get()
+          .build()
+      EmbyHttp.probe.newCall(req).execute().use { it.code in 200..399 }
     }.getOrDefault(false)
 
   // ════════════════════════════════════════════════════════════════════════
@@ -2696,7 +2716,7 @@ object EmbyClient {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
     }
-    return "${server.hostUrl}/emby/Items/$itemId/Images/$imageType?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Items/$itemId/Images/$imageType?$qs"
   }
 
   /**
@@ -2730,7 +2750,7 @@ object EmbyClient {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
     }
-    return "${server.hostUrl}/emby/Items/$itemId/Images/Primary?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Items/$itemId/Images/Primary?$qs"
   }
 
   /**
@@ -2750,7 +2770,7 @@ object EmbyClient {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
     }
-    return "${server.hostUrl}/emby/Items/$itemId/Download?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Items/$itemId/Download?$qs"
   }
 
   /**
@@ -2776,7 +2796,7 @@ object EmbyClient {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
     }
-    return "${server.hostUrl}/emby/Videos/$itemId/stream?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Videos/$itemId/stream?$qs"
   }
 
   /**
@@ -2845,7 +2865,7 @@ object EmbyClient {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v ?: "", "UTF-8")}"
     }
-    return "${server.hostUrl}/emby/Videos/$itemId/stream?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Videos/$itemId/stream?$qs"
   }
 
   /** 服务器给的 `DirectStreamUrl` 未必带 `api_key`（取决于 `AddApiKeyToDirectStreamUrl`），补上更稳。 */
@@ -2947,7 +2967,7 @@ object EmbyClient {
     val qs = q.entries.filter { it.value != null }.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v!!, "UTF-8")}"
     }
-    return "${server.hostUrl}/emby/Videos/$itemId/stream?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Videos/$itemId/stream?$qs"
   }
 
   /**
@@ -2960,7 +2980,7 @@ object EmbyClient {
   private fun absolutize(server: EmbyServer, url: String): String {
     if (url.startsWith("http://") || url.startsWith("https://")) return url
     val path = if (url.startsWith("/")) url else "/$url"
-    return server.hostUrl + "/emby" + path
+    return EmbyEndpoints.hostUrl(server) + "/emby" + path
   }
 
   /**
@@ -2971,7 +2991,7 @@ object EmbyClient {
    */
   fun itemDownloadUrl(server: EmbyServer, itemId: String): String {
     val q = if (server.apiToken.isNotEmpty()) "?api_key=${server.apiToken}" else ""
-    return "${server.hostUrl}/emby/Items/$itemId/Download$q"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Items/$itemId/Download$q"
   }
 
   /**
@@ -2986,7 +3006,7 @@ object EmbyClient {
     format: String = "srt",
   ): String {
     val q = if (server.apiToken.isNotEmpty()) "?api_key=${server.apiToken}" else ""
-    return "${server.hostUrl}/emby/Videos/$itemId/$mediaSourceId/Subtitles/$subtitleIndex/Stream.$format$q"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Videos/$itemId/$mediaSourceId/Subtitles/$subtitleIndex/Stream.$format$q"
   }
 
   // ════════════════════════════════════════════════════════════════════════

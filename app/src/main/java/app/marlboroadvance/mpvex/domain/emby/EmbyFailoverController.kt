@@ -71,6 +71,17 @@ class EmbyFailoverController(
   /** 只切内存里的当前服务器，不覆盖用户的持久化选择（见类注释） */
   private val switchInMemory: (EmbyServer) -> Unit,
   private val loadServers: suspend () -> List<EmbyServer>,
+  /**
+   * 这个 host 是不是**这台服务器**的地址。
+   *
+   * 一台服务器可能有多个入口（内网 IP + frp 域名，见 [EmbyEndpointResolver]），
+   * 只比对配置里的主 host 会让「正在走第二地址时的失败上报」全部被丢掉 ——
+   * 那样服务器真挂了也不会切。默认实现保持老口径（只认主 host），
+   * 由 [EmbyRepository] 注入能认两个地址的版本。
+   */
+  private val hostBelongsTo: (EmbyServer, String) -> Boolean = { s, h ->
+    s.host.equals(h, ignoreCase = true)
+  },
 ) {
 
   /** 对外暴露的接管状态，UI 直接照着画 */
@@ -232,7 +243,8 @@ class EmbyFailoverController(
     if (now - lastSwitchAt < SETTLE_MS) return
     if (now - lastFailureAt < FAILURE_MERGE_MS) return
     val current = currentServerProvider() ?: return
-    if (!current.host.equals(host, ignoreCase = true)) return
+    // 认「这台服务器的任一入口」，别只认配置里的主地址（见 hostBelongsTo 的说明）
+    if (!hostBelongsTo(current, host)) return
     lastFailureAt = now
 
     scope.launch { probeAndFailoverIfDead(current) }

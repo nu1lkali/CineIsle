@@ -11,6 +11,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyBatchResult
+import app.marlboroadvance.mpvex.domain.emby.EmbyEndpoint
 import app.marlboroadvance.mpvex.domain.emby.EmbyExternalIdInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyFailoverController
 import app.marlboroadvance.mpvex.domain.emby.EmbyFilterOptions
@@ -181,6 +182,16 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * 设置完不会触发重组（v146 的「设好了但还显示未设置」就是这么来的）。
    */
   val failoverBackups: StateFlow<Map<Long, Long>> = repository.failover.backups
+
+  // ─── 第二地址（内网 / 公网双入口）───
+  /** 各服务器配的第二地址 */
+  val endpointAlts: StateFlow<Map<Long, EmbyEndpoint>> = repository.endpointAlts
+
+  /** 各服务器**此刻生效**的入口（可能已经自动切到第二地址） */
+  val activeEndpoints: StateFlow<Map<Long, EmbyEndpoint>> = repository.activeEndpoints
+
+  fun setAltEndpoint(serverId: Long, endpoint: EmbyEndpoint?) =
+    repository.setAltEndpoint(serverId, endpoint)
 
   fun setFailoverBackup(serverId: Long, backupId: Long?) =
     repository.failover.setBackup(serverId, backupId)

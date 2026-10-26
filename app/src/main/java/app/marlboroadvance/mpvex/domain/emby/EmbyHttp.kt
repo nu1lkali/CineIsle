@@ -103,6 +103,22 @@ object EmbyHttp {
   }
 
   /**
+   * 地址竞速档：比 [health] 更短。
+   *
+   * 用途：同一台服务器的两个入口（内网 / 公网）**并发**探活，谁先通就用谁
+   * （见 [EmbyEndpointResolver]）。这里等不起 [health] 的 6 秒 —— 在外地时内网那个
+   * 地址注定不通，判定越慢用户开 App 越久。1s 连接 / 2s 读足够区分「通」和「不通」，
+   * 真连得上的内网通常几十毫秒就回包了。
+   */
+  val probe: OkHttpClient by lazy {
+    baseBuilder(withRetry = false)
+      .connectTimeout(1, TimeUnit.SECONDS)
+      .readTimeout(2, TimeUnit.SECONDS)
+      .callTimeout(2, TimeUnit.SECONDS)
+      .build()
+  }
+
+  /**
    * 请求最终失败的回报钩子（只在 [shared] 那档生效）。
    *
    * 主备切换要的是「用户正在用的时候到底连不连得上」，而不是定时探活的结论 ——

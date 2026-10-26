@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.CircularProgressIndicator
@@ -49,8 +50,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.domain.emby.EmbyEndpoint
 import app.marlboroadvance.mpvex.domain.emby.EmbyFailoverController
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.domain.emby.primaryEndpoint
+import app.marlboroadvance.mpvex.ui.browser.emby.AltEndpointDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
 import app.marlboroadvance.mpvex.ui.cine.CineTheme
 import app.marlboroadvance.mpvex.ui.cine.actions.CineSheetCheckRow
@@ -92,6 +96,9 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
   val failoverState by viewModel.failoverState.collectAsState()
   // 主 → 备映射：必须 collect（设完备用要立刻反映到卡片上）
   val failoverBackups by viewModel.failoverBackups.collectAsState()
+  // 双入口：配置了什么、此刻实际在用哪个，都必须 collect
+  val endpointAlts by viewModel.endpointAlts.collectAsState()
+  val activeEndpoints by viewModel.activeEndpoints.collectAsState()
   val scope = rememberCoroutineScope()
 
   val colors = CineTheme.colors
@@ -103,6 +110,7 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
   var addUserOn by remember { mutableStateOf<EmbyServer?>(null) }
   var pendingDelete by remember { mutableStateOf<EmbyServer?>(null) }
   var backupPicker by remember { mutableStateOf<EmbyServer?>(null) }
+  var altPicker by remember { mutableStateOf<EmbyServer?>(null) }
 
   Column(
     modifier = modifier
@@ -168,11 +176,15 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
             isCurrent = server.id == currentServer?.id,
             backupName = failoverBackups[server.id]
               ?.let { id -> servers.firstOrNull { it.id == id }?.name },
+            canSetBackup = servers.size >= 2,
+            altEndpoint = endpointAlts[server.id],
+            activeEndpoint = activeEndpoints[server.id] ?: server.primaryEndpoint(),
             onSelect = { viewModel.switchServer(server) },
             onAddUser = { addUserOn = server },
             onEdit = { editing = server },
             onDelete = { pendingDelete = server },
             onSetBackup = { backupPicker = server },
+            onSetAlt = { altPicker = server },
           )
         }
       }
@@ -280,6 +292,18 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
         backupPicker = null
       },
       onDismiss = { backupPicker = null },
+    )
+  }
+
+  altPicker?.let { target ->
+    AltEndpointDialog(
+      server = target,
+      initial = endpointAlts[target.id],
+      onDismiss = { altPicker = null },
+      onSave = { endpoint ->
+        viewModel.setAltEndpoint(target.id, endpoint)
+        altPicker = null
+      },
     )
   }
 }
@@ -398,11 +422,18 @@ private fun CineServerCard(
   server: EmbyServer,
   isCurrent: Boolean,
   backupName: String?,
+  /** 不足两台服务器时，没有「另一台」可选 —— 备用相关的入口与提示整块不出现 */
+  canSetBackup: Boolean,
+  /** 这台配的第二地址（null = 只有一个入口） */
+  altEndpoint: EmbyEndpoint?,
+  /** 这台**此刻**实际在用的入口（可能已经自动切到第二地址） */
+  activeEndpoint: EmbyEndpoint,
   onSelect: () -> Unit,
   onAddUser: () -> Unit,
   onEdit: () -> Unit,
   onDelete: () -> Unit,
   onSetBackup: () -> Unit,
+  onSetAlt: () -> Unit,
 ) {
   val colors = CineTheme.colors
   val type = CineTheme.type
@@ -503,14 +534,29 @@ private fun CineServerCard(
               overflow = TextOverflow.Ellipsis,
             )
           }
-          // 主备关系：配了就把名字写出来，不用点进对话框才知道配没配
-          Text(
-            text = backupName?.let { "备用：$it" } ?: "未设置备用服务器",
-            style = type.cardMeta,
-            color = if (backupName != null) colors.onSurfaceVariant else colors.onSurfaceVariant.copy(alpha = 0.62f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
+          // 主备关系：配了就把名字写出来，不用点进对话框才知道配没配。
+          // 只有一台服务器时整行不出现 —— 对单机用户是无意义噪音。
+          if (canSetBackup) {
+            Text(
+              text = backupName?.let { "备用：$it" } ?: "未设置备用服务器",
+              style = type.cardMeta,
+              color = if (backupName != null) colors.onSurfaceVariant else colors.onSurfaceVariant.copy(alpha = 0.62f),
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+          // 双入口：只在配了第二地址时出现，显示此刻实际在用的地址
+          if (altEndpoint != null) {
+            val usingAlt = activeEndpoint.baseUrl != server.primaryEndpoint().baseUrl
+            Text(
+              text = "当前入口：${activeEndpoint.host}:${activeEndpoint.port}" +
+                if (usingAlt) "（第二地址）" else "（主地址）",
+              style = type.cardMeta,
+              color = colors.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
         }
       }
 
@@ -521,11 +567,23 @@ private fun CineServerCard(
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
       ) {
+        // 只有一台时没有目标可选，按钮不出现，免得点开一个空面板
+        if (canSetBackup) {
+          CineIconButton(
+            icon = Icons.Filled.SwapHoriz,
+            contentDescription = "换到另一台服务器",
+            tint = colors.onSurfaceVariant,
+            onClick = onSetBackup,
+            size = 38.dp,
+            iconSize = 18.dp,
+          )
+        }
+        // 同一台的内网 / 公网双入口（见 EmbyEndpointResolver）
         CineIconButton(
-          icon = Icons.Filled.SwapHoriz,
-          contentDescription = "设置备用服务器",
+          icon = Icons.Filled.Language,
+          contentDescription = "同一台的另一条线路",
           tint = colors.onSurfaceVariant,
-          onClick = onSetBackup,
+          onClick = onSetAlt,
           size = 38.dp,
           iconSize = 18.dp,
         )
