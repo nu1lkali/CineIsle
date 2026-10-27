@@ -46,6 +46,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -265,6 +266,106 @@ fun CinePersonScreen(
     viewModel.imageUrl(current, person, "Primary", 320)
   }
 
+  // ── 头部区块：一句 lambda 三处复用（网格的 header 槽 / 加载态 / 空态）──
+  //
+  // v158 之前这一块钉在网格上方，一进页面就吃掉小半屏，海报只剩半屏可看。
+  // 现在它的归属是**滚动内容**（`CinePosterGrid(header = ...)`），跟详情页 Hero
+  // 一样「往上滚就让位」。
+  //
+  // ⚠️ 横向内边距由调用方通过 [hPad] 传：在网格里时网格自己已经有 `screenH` 的
+  // contentPadding，这里再垫一次，头像与筛选就会比下面的海报多缩进一截。
+  val headerContent: @Composable (Dp) -> Unit = { hPad ->
+    Column(modifier = Modifier.fillMaxWidth()) {
+      // ── 人物头部：头像 + 名字 + 身份 / 作品数 ──
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = hPad, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Box(
+          modifier = Modifier
+            .size(62.dp)
+            .clip(CircleShape)
+            .background(colors.skeleton),
+        ) {
+          EmbyImage(
+            url = avatarUrl,
+            contentDescription = personName,
+            modifier = Modifier.fillMaxSize(),
+            maxWidth = 320,
+            contentScale = ContentScale.Crop,
+          )
+        }
+        Column(
+          modifier = Modifier
+            .weight(1f)
+            .padding(start = 14.dp),
+        ) {
+          Text(
+            text = personName,
+            style = type.pageTitle.copy(fontSize = 22.sp),
+            color = colors.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+          )
+          Text(
+            text = buildString {
+              append(if (availableRoles.size == 2) roleTabs[availableRoles.first { it != 0 }] else "人物")
+              append(" · ${filtered.size} 部作品")
+            },
+            style = type.cardMeta,
+            color = colors.onSurfaceVariant,
+          )
+        }
+      }
+
+      if (searchOpen) {
+        CineSearchField(
+          query = query,
+          onQueryChange = { query = it },
+          onClose = {
+            searchOpen = false
+            query = ""
+          },
+          placeholder = "搜索作品名 / 原名",
+          modifier = Modifier.padding(horizontal = hPad),
+        )
+        Spacer(Modifier.height(10.dp))
+      }
+
+      // ── 类型 / 身份两行 Chip ──
+      LazyRow(
+        contentPadding = PaddingValues(horizontal = hPad),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        items(typeTabs.size) { index ->
+          CineFilterChip(
+            text = typeTabs[index],
+            selected = typeTab == index,
+            onClick = { typeTab = index },
+          )
+        }
+      }
+      if (availableRoles.size > 2) {
+        Spacer(Modifier.height(8.dp))
+        LazyRow(
+          contentPadding = PaddingValues(horizontal = hPad),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          items(availableRoles) { index ->
+            CineFilterChip(
+              text = roleTabs[index],
+              selected = roleFilter == index,
+              onClick = { roleFilter = index },
+            )
+          }
+        }
+      }
+      Spacer(Modifier.height(10.dp))
+    }
+  }
+
   Column(
     modifier = modifier
       .fillMaxSize()
@@ -317,113 +418,36 @@ fun CinePersonScreen(
         .fillMaxSize()
         .cineHazeSource(LocalCineHaze.current),
     ) {
-      // ── 人物头部 ──
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = space.screenH, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Box(
-          modifier = Modifier
-            .size(62.dp)
-            .clip(CircleShape)
-            .background(colors.skeleton),
-        ) {
-          EmbyImage(
-            url = avatarUrl,
-            contentDescription = personName,
+      // ⚠️ v158：头部（头像 / 搜索 / 两组筛选）不再是网格上方的固定区 ——
+      // 整块搬进了 `CinePosterGrid` 的 header 槽，跟着网格一起滚走。
+      // 改头部长什么样只改上面那个 `headerContent`，三处调用共用一份。
+
+      when {
+        // 加载 / 空态没有网格可挂，头部照旧贴顶（hPad 用 screenH 补回来）
+        loading -> Column(modifier = Modifier.fillMaxSize()) {
+          headerContent(space.screenH)
+          Box(
             modifier = Modifier.fillMaxSize(),
-            maxWidth = 320,
-            contentScale = ContentScale.Crop,
-          )
-        }
-        Column(
-          modifier = Modifier
-            .weight(1f)
-            .padding(start = 14.dp),
-        ) {
-          Text(
-            text = personName,
-            style = type.pageTitle.copy(fontSize = 22.sp),
-            color = colors.onSurface,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-          )
-          Text(
-            text = buildString {
-              append(if (availableRoles.size == 2) roleTabs[availableRoles.first { it != 0 }] else "人物")
-              append(" · ${filtered.size} 部作品")
-            },
-            style = type.cardMeta,
-            color = colors.onSurfaceVariant,
-          )
-        }
-      }
-
-      if (searchOpen) {
-        CineSearchField(
-          query = query,
-          onQueryChange = { query = it },
-          onClose = {
-            searchOpen = false
-            query = ""
-          },
-          placeholder = "搜索作品名 / 原名",
-          modifier = Modifier.padding(horizontal = space.screenH),
-        )
-        Spacer(Modifier.height(10.dp))
-      }
-
-      // ── 类型 / 身份两行 Chip ──
-      LazyRow(
-        contentPadding = PaddingValues(horizontal = space.screenH),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        items(typeTabs.size) { index ->
-          CineFilterChip(
-            text = typeTabs[index],
-            selected = typeTab == index,
-            onClick = { typeTab = index },
-          )
-        }
-      }
-      if (availableRoles.size > 2) {
-        Spacer(Modifier.height(8.dp))
-        LazyRow(
-          contentPadding = PaddingValues(horizontal = space.screenH),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          items(availableRoles) { index ->
-            CineFilterChip(
-              text = roleTabs[index],
-              selected = roleFilter == index,
-              onClick = { roleFilter = index },
+            contentAlignment = Alignment.Center,
+          ) {
+            CircularProgressIndicator(
+              color = colors.progressFill,
+              modifier = Modifier.size(30.dp),
+              strokeWidth = 2.5.dp,
             )
           }
         }
-      }
-      Spacer(Modifier.height(10.dp))
 
-      when {
-        loading -> Box(
-          modifier = Modifier.fillMaxSize(),
-          contentAlignment = Alignment.Center,
-        ) {
-          CircularProgressIndicator(
-            color = colors.progressFill,
-            modifier = Modifier.size(30.dp),
-            strokeWidth = 2.5.dp,
+        mediaUi.isEmpty() -> Column(modifier = Modifier.fillMaxSize()) {
+          headerContent(space.screenH)
+          CineStatePanel(
+            icon = Icons.Outlined.Search,
+            title = if (query.isNotBlank()) "没有匹配的作品" else "没有作品",
+            description = error ?: "换一个筛选条件试试",
+            primaryLabel = "返回",
+            onPrimary = { backStack.removeLastOrNull() },
           )
         }
-
-        mediaUi.isEmpty() -> CineStatePanel(
-          icon = Icons.Outlined.Search,
-          title = if (query.isNotBlank()) "没有匹配的作品" else "没有作品",
-          description = error ?: "换一个筛选条件试试",
-          primaryLabel = "返回",
-          onPrimary = { backStack.removeLastOrNull() },
-        )
 
         else -> CinePosterGrid(
           items = mediaUi,
@@ -437,6 +461,9 @@ fun CinePersonScreen(
             end = space.screenH,
             bottom = 34.dp,
           ),
+          // 头部进网格（跨满整行）⇒ 滚动时让位给海报。hPad 传 0：
+          // 横向留白已经由上面的 contentPadding 给了，再垫一次会比海报多缩进。
+          header = { headerContent(0.dp) },
           onClick = { media ->
             val id = media.id
             if (id.isNotBlank()) {

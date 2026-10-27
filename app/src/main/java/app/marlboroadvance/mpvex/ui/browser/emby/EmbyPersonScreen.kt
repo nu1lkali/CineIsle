@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -60,6 +61,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
@@ -257,6 +259,113 @@ data class EmbyPersonScreen(
       onDispose { personLifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // ── 头部区块：头像行 / 两组筛选 / 搜索 + 排序 ──
+    //
+    // v158：这一整块**不再钉在网格上方**，而是作为网格的第一个条目（跨满整行）
+    // 跟着海报一起滚走 —— 原先它一进页面就吃掉小半屏，用户滚不起来就只能看
+    // 半屏海报。与媒体详情页「Hero 往上滚就让位」是同一种手感。
+    //
+    // ⚠️ 横向内边距由 [hPad] 传入，不能写死：在网格里时网格自己已经有 12dp 的
+    // contentPadding，这里再垫 16dp 会比下面的海报多缩进一截。
+    // 加载 / 空态没有网格可挂，才用 16dp 贴边。
+    val headerContent: @Composable (Dp) -> Unit = { hPad ->
+      Column(modifier = Modifier.fillMaxWidth()) {
+        val avatarUrl = remember(personId, personImageTag, server) {
+          server?.let { EmbyClient.imageUrl(it, personId, "Primary", personImageTag, 300) }
+        }
+        // ── 演员头像 + 名字 ──
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = hPad, vertical = 8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.size(72.dp),
+          ) {
+            EmbyImage(
+              url = avatarUrl,
+              contentDescription = personName,
+              modifier = Modifier
+                .fillMaxSize()
+                .clip(CircleShape),
+              maxWidth = 300,
+              placeholder = Icons.Default.Person,
+            )
+          }
+          Spacer(modifier = Modifier.width(16.dp))
+          Column {
+            Text(
+              text = personName,
+              style = MaterialTheme.typography.titleLarge,
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.longPressToCopy(personName, "姓名"),
+            )
+            Text(
+              text = if (isLoading) "加载中…" else "共 ${visibleItems.size} 部作品",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // 人物 ID：排查「同名分裂成多条 Person」问题时最有用的信息，长按复制。
+            // 前缀用 personLabel（演员 / 导演 / 编剧 / 人物），不写死成「演员」。
+            Text(
+              text = "$personLabel ID：$personId",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.longPressToCopy(personId, "$personLabel ID"),
+            )
+          }
+        }
+
+        // 类型 / 身份两组筛选 chips：只过滤本页已加载的数据，切 tab 不发请求
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+          verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+          FilterChipRow(
+            options = PersonItemTab.entries,
+            selected = itemTab,
+            label = { it.label },
+            onSelect = { itemTab = it },
+            hPad = hPad,
+          )
+          FilterChipRow(
+            // 只列出这个人真实拥有的身份（见 availableRoles）：只演戏的人不再出现「导演 / 编剧」
+            options = availableRoles,
+            selected = roleFilter,
+            label = { it.label },
+            onSelect = { roleFilter = it },
+            hPad = hPad,
+          )
+        }
+
+        // ── 搜索 + 排序 ──
+        PersonSearchSortRow(
+          query = searchQuery,
+          onQueryChange = { searchQuery = it },
+          sort = sort,
+          asc = sortAsc,
+          onSortChange = { newSort, newAsc ->
+            sort = newSort
+            sortAsc = newAsc
+            browserPreferences.embyPersonSort.set(newSort.name)
+            browserPreferences.embyPersonSortAsc.set(newAsc)
+            // 切到随机时给一个新种子：不然沿用旧种子洗出来的还是看得眼熟的那一批
+            if (newSort == PersonSort.RANDOM) randomSeed = Random.nextInt()
+          },
+          onReshuffle = { randomSeed = Random.nextInt() },
+          hPad = hPad,
+        )
+      }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
       TopAppBar(
         title = {
@@ -329,112 +438,35 @@ data class EmbyPersonScreen(
         },
       )
 
-      // ── 头部：演员头像 + 名字 ──
-      val avatarUrl = remember(personId, personImageTag, server) {
-        server?.let { EmbyClient.imageUrl(it, personId, "Primary", personImageTag, 300) }
-      }
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Surface(
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.surfaceVariant,
-          modifier = Modifier.size(72.dp),
-        ) {
-          EmbyImage(
-            url = avatarUrl,
-            contentDescription = personName,
-            modifier = Modifier
-              .fillMaxSize()
-              .clip(CircleShape),
-            maxWidth = 300,
-            placeholder = Icons.Default.Person,
-          )
-        }
-        Spacer(modifier = Modifier.width(16.dp))
-        Column {
-          Text(
-            text = personName,
-            style = MaterialTheme.typography.titleLarge,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.longPressToCopy(personName, "姓名"),
-          )
-          Text(
-            text = if (isLoading) "加载中…" else "共 ${visibleItems.size} 部作品",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          // 人物 ID：排查「同名分裂成多条 Person」问题时最有用的信息，长按复制。
-          // 前缀用 personLabel（演员 / 导演 / 编剧 / 人物），不写死成「演员」。
-          Text(
-            text = "$personLabel ID：$personId",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.longPressToCopy(personId, "$personLabel ID"),
-          )
-        }
-      }
-
-      // 类型 / 身份两组筛选 chips：只过滤本页已加载的数据，切 tab 不发请求
-      Column(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(top = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-      ) {
-        FilterChipRow(
-          options = PersonItemTab.entries,
-          selected = itemTab,
-          label = { it.label },
-          onSelect = { itemTab = it },
-        )
-        FilterChipRow(
-          // 只列出这个人真实拥有的身份（见 availableRoles）：只演戏的人不再出现「导演 / 编剧」
-          options = availableRoles,
-          selected = roleFilter,
-          label = { it.label },
-          onSelect = { roleFilter = it },
-        )
-      }
-
-      // ── 搜索 + 排序 ──
-      PersonSearchSortRow(
-        query = searchQuery,
-        onQueryChange = { searchQuery = it },
-        sort = sort,
-        asc = sortAsc,
-        onSortChange = { newSort, newAsc ->
-          sort = newSort
-          sortAsc = newAsc
-          browserPreferences.embyPersonSort.set(newSort.name)
-          browserPreferences.embyPersonSortAsc.set(newAsc)
-          // 切到随机时给一个新种子：不然沿用旧种子洗出来的还是看得眼熟的那一批
-          if (newSort == PersonSort.RANDOM) randomSeed = Random.nextInt()
-        },
-        onReshuffle = { randomSeed = Random.nextInt() },
-      )
+      // 头部的三块（头像行 / 两组筛选 / 搜索排序）已整体上移成 `headerContent`，
+      // 由网格作为第一个条目渲染 —— 这里不再固定占位（见 v158 说明）。
 
       Box(modifier = Modifier.fillMaxSize()) {
         when {
           isLoading && items.isEmpty() -> {
-            EmbySkeletonGrid(columns = 3, ratio = 3f / 4f)
+            // 骨架屏没有网格可挂，头部贴顶显示（hPad = 16dp）
+            Column(modifier = Modifier.fillMaxSize()) {
+              headerContent(16.dp)
+              EmbySkeletonGrid(columns = 3, ratio = 3f / 4f)
+            }
           }
 
           error != null && items.isEmpty() -> {
-            Text(
-              text = error ?: "",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier
-                .align(Alignment.Center)
-                .padding(24.dp),
-            )
+            // 出错也要看得见是谁、能返回 —— 头部照旧贴顶（hPad = 16dp）
+            Column(modifier = Modifier.fillMaxSize()) {
+              headerContent(16.dp)
+              Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+              ) {
+                Text(
+                  text = error ?: "",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.padding(24.dp),
+                )
+              }
+            }
           }
 
           // 有数据时一律进网格分支：被筛空也**保持网格挂载**，只在上层叠一句提示
@@ -448,6 +480,9 @@ data class EmbyPersonScreen(
               horizontalArrangement = Arrangement.spacedBy(8.dp),
               modifier = Modifier.fillMaxSize(),
             ) {
+              // 头部作为第一个条目（跨满整行）：跟着海报一起滚走，不再固定吃小半屏。
+              // hPad 传 0 —— 横向 12dp 已由 contentPadding 给了，与海报对齐。
+              item(span = { GridItemSpan(maxLineSpan) }) { headerContent(0.dp) }
               items(visibleItems, key = { it.Id ?: it.Name ?: "" }) { item ->
                 EmbyMediaCard(
                   title = item.Name ?: "",
@@ -615,13 +650,15 @@ private fun PersonSearchSortRow(
   asc: Boolean,
   onSortChange: (PersonSort, Boolean) -> Unit,
   onReshuffle: () -> Unit,
+  /** 同 [FilterChipRow]：放进网格时传 0，贴顶时用 16dp */
+  hPad: Dp = 16.dp,
 ) {
   var sortMenu by remember { mutableStateOf(false) }
   val focusManager = LocalFocusManager.current
   Row(
     modifier = Modifier
       .fillMaxWidth()
-      .padding(horizontal = 16.dp, vertical = 8.dp),
+      .padding(horizontal = hPad, vertical = 8.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
     OutlinedTextField(
@@ -742,9 +779,11 @@ private fun <T> FilterChipRow(
   selected: T,
   label: (T) -> String,
   onSelect: (T) -> Unit,
+  /** 横向内边距：放进网格时传 0（网格已有 contentPadding），贴顶时用 16dp */
+  hPad: Dp = 16.dp,
 ) {
   LazyRow(
-    contentPadding = PaddingValues(horizontal = 16.dp),
+    contentPadding = PaddingValues(horizontal = hPad),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
     modifier = Modifier.fillMaxWidth(),
   ) {
