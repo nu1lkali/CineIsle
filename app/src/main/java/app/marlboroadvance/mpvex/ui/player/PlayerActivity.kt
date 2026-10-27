@@ -2809,6 +2809,14 @@ private fun cancelAutoplayCountdown() {
    */
   private fun handleEndOfFile(isEof: Boolean) {
     if (isEof) {
+      // 诊断埋点（v162）：EOF 时「停在哪儿」比「有没有 EOF」有用得多。
+      // 若 `pos` 比 `duration` 小了明显一截，这条流是**被提前掐断**的
+      // （代理/上游的问题，不是片子真播完了）—— 见 NetworkStreamingProxy.ResumableStream。
+      PlayerDiagLog.log(
+        "eof",
+        "pos=${PlayerLib.getPropertyDouble("time-pos")} " +
+          "duration=${PlayerLib.getPropertyDouble("duration")}",
+      )
       // Check if we should repeat the current file
       if (viewModel.shouldRepeatCurrentFile()) {
         PlayerLib.command("seek", "0", "absolute")
@@ -2975,6 +2983,21 @@ private fun cancelAutoplayCountdown() {
     // 文件真的起来了 ⇒ 之前那次「无法播放」的判定作废（可能是地址临时过期，
     // 重试后拿到了新的直链）。不清的话错误卡片会一直压在画面上。
     viewModel.clearPlaybackError()
+
+    // ── 诊断埋点（v162）：「这次打开到底拿到了什么」──
+    // `.mts` / MPEG-TS 这类容器**没有内嵌索引**，时长完全取决于「能不能 seek 到尾部
+    // 读最后一个 PTS」。若这一行里 `format=mpegts` 而 `duration` 明显偏小、
+    // `seekable=false`，那就说明是取流层没能随机读取（代理回的长度不对 / 上游不支持
+    // Range），而不是进度条算错了 —— 一眼就能分清该修哪边。
+    // 只在设置里开「详细日志」时落盘（关着时 PlayerDiagLog 直接短路）。
+    PlayerDiagLog.log(
+      "file-loaded",
+      "format=${PlayerLib.getPropertyString("file-format")} " +
+        "duration=${PlayerLib.getPropertyDouble("duration")} " +
+        "size=${PlayerLib.getPropertyDouble("file-size")} " +
+        "seekable=${PlayerLib.getPropertyBoolean("seekable")}",
+    )
+
     // Extract fileName from intent only if not already set
     // This preserves fileName set in onNewIntent or onCreate
     if (fileName.isBlank()) {
