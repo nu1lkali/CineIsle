@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -454,9 +455,13 @@ data class NetworkBrowserScreen(
       }
     }
 
-    // 返回键：搜索态先退搜索（清词 + 收键盘），再退出页面 —— 与 Emby 媒体库同一手势
+    // 返回键：属性面板先关（它是整页高的模态抽屉，用户把它当一层），
+    // 其次搜索态（清词 + 收键盘），最后才退出页面 —— 与 Emby 媒体库同一手势
     BackHandler {
-      if (searchActive) {
+      if (propertyTarget != null) {
+        propertyTarget = null
+        viewModel.cancelDirSize()
+      } else if (searchActive) {
         searchActive = false
         searchQuery = ""
       } else {
@@ -492,6 +497,11 @@ data class NetworkBrowserScreen(
     val coverTrigger: ((String) -> Unit)? =
       if (folderCoverEnabled) viewModel::ensureFolderCover else null
 
+    // ⚠️ 外面这层 Box 只为**属性面板盖住顶栏**而存在：Scaffold 的 bars 是画在内容
+    //    *之上* 的（先 place 内容、再 place topBar），所以面板只要还在内容层里，
+    //    就永远顶不到屏幕顶端 —— 只能排到 Scaffold 之后（同一个 Box 里后画的在上）。
+    //    （下面 Scaffold 那一大块没有重新缩进：重排等于整文件重写，风险远大于收益。）
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
       topBar = {
         BrowserTopBar(
@@ -604,7 +614,13 @@ data class NetworkBrowserScreen(
                 // 没提示根本注意不到刚才那下点没点上。
                 DropdownMenuItem(
                   text = {
-                    Text(if (isCurrentFavorite) "取消收藏「$dirTitle」" else "收藏「$dirTitle」")
+                    // 目录名进来以后也是「任意长度」——同样给上限，别让 ⋮ 菜单被撑成横幅
+                    Text(
+                      text = if (isCurrentFavorite) "取消收藏「$dirTitle」" else "收藏「$dirTitle」",
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                      modifier = Modifier.widthIn(max = 208.dp),
+                    )
                   },
                   leadingIcon = {
                     Icon(
@@ -976,42 +992,6 @@ data class NetworkBrowserScreen(
         }
       }
 
-      // ── 属性面板（右侧抽屉）──
-      // ⚠️ 这层 Box 让出顶栏 / 底栏的高度：Scaffold 的内容层铺满整屏（padding 只是
-      //    数值，不给就真的铺满），而 bars 是画在内容**之上**的 —— 不让开的话，
-      //    抽屉的头部会被顶栏压住、底部的「下载 / 关闭」会被下载条压住。
-      Box(
-        modifier =
-          Modifier
-            .fillMaxSize()
-            .padding(
-              top = padding.calculateTopPadding(),
-              bottom = padding.calculateBottomPadding(),
-            ),
-      ) {
-        NetworkFilePropertiesOverlay(
-          file = propertyTarget,
-          connectionName = connectionName,
-          protocolLabel = protocolLabel,
-          dirSize = dirSizeState,
-          onRequestDirSize = {
-            propertyTarget?.takeIf { it.isDirectory }?.let { dir ->
-              viewModel.computeDirSize(dir) { dirSizeState = it }
-            }
-          },
-          onDownload = { file ->
-            viewModel.startDownload(file) { started, reason ->
-              if (!started) toast(reason ?: "无法开始下载")
-            }
-          },
-          onDismiss = {
-            propertyTarget = null
-            // 面板关了就停掉统计：一次几千个目录的递归没必要在后台跑完
-            viewModel.cancelDirSize()
-          },
-        )
-      }
-
       // ── 长按条目的操作菜单（重命名 / 删除）──
       // **范式照抄 Emby 媒体库**：锚定在手指位置的浮动气泡菜单（`DropdownMenu`），
       // 不是居中的大卡片 —— AList 库与 Emby 媒体库除接口外结构一致，交互观感
@@ -1221,11 +1201,45 @@ data class NetworkBrowserScreen(
         )
       }
     }
+
+      // ── 属性面板（右侧抽屉）──
+      // 排在 Scaffold **之后** ⇒ 画在顶栏之上，一路顶到屏幕顶端（用户反馈「太矮了」）。
+      // 只让开状态栏 / 导航栏（在 overlay 内部用 statusBarsPadding/navigationBarsPadding），
+      // 不再让开 appbar 与下载条 —— 面板本身是一个盖住整页的模态抽屉。
+      NetworkFilePropertiesOverlay(
+        file = propertyTarget,
+        connectionName = connectionName,
+        protocolLabel = protocolLabel,
+        dirSize = dirSizeState,
+        onRequestDirSize = {
+          propertyTarget?.takeIf { it.isDirectory }?.let { dir ->
+            viewModel.computeDirSize(dir) { dirSizeState = it }
+          }
+        },
+        onDownload = { file ->
+          viewModel.startDownload(file) { started, reason ->
+            if (!started) {
+              toast(reason ?: "无法开始下载")
+            } else {
+              // 开始下载就收起面板：底栏的进度条现在被面板盖着（面板是整页高的），
+              // 不收起的话用户点完什么反馈都看不到
+              propertyTarget = null
+              viewModel.cancelDirSize()
+            }
+          }
+        },
+        onDismiss = {
+          propertyTarget = null
+          // 面板关了就停掉统计：一次几千个目录的递归没必要在后台跑完
+          viewModel.cancelDirSize()
+        },
+      )
+    }
   }
 }
 
 /**
- * 长按条目弹出的**操作气泡菜单**（重命名 / 删除）。
+ * 长按条目弹出的**操作气泡菜单**（属性 / 下载 / 重命名 / 删除）。
  *
  * 与 Emby 媒体库的 `EmbyItemActionsDialog` 同一套写法与观感 —— AList 库和
  * Emby 媒体库除接口外结构一致，长按交互就不该长成两副样子：
@@ -1247,14 +1261,7 @@ private fun NetworkFileActionMenu(
   onDelete: () -> Unit,
 ) {
   DropdownMenu(expanded = true, onDismissRequest = onDismissRequest) {
-    Text(
-      text = file.name,
-      style = MaterialTheme.typography.labelMedium,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-      modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-    )
+    MenuHeaderTitle(text = file.name)
     // ── 只读两项：任何协议都有 ──
     DropdownMenuItem(
       text = { Text("属性") },
@@ -1286,6 +1293,29 @@ private fun NetworkFileActionMenu(
       )
     }
   }
+}
+
+/**
+ * 长按 / 更多菜单顶部那行「条目名」。
+ *
+ * ⚠️ **必须给宽度上限**：`DropdownMenu` 的内容列是按 `IntrinsicSize.Max` 量宽的，
+ * 一个不设上限的单行 `Text` 会以**整串文字**的固有宽度把整个菜单撑开 ——
+ * `maxLines = 1` + `Ellipsis` 只有在「被约束到放不下」时才生效，而菜单里恰好
+ * 没人约束它。名字一长菜单就横跨半屏（用户反馈「标题很长会把弹窗撑的很开」）。
+ *
+ * 208dp ≈ 一行 10~12 个汉字：够认出是哪个条目，又不至于让菜单变成一条横幅。
+ */
+@Composable
+private fun MenuHeaderTitle(text: String) {
+  Text(
+    text = text,
+    style = MaterialTheme.typography.labelMedium,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    maxLines = 1,
+    overflow = TextOverflow.Ellipsis,
+    // 顺序要紧：widthIn 在外层 ⇒ 连 12dp 的内边距一起算进这 208dp，菜单不会被"多出 24dp"
+    modifier = Modifier.widthIn(max = 208.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+  )
 }
 
 /**

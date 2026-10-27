@@ -171,7 +171,10 @@ fun EmbyItemActionsDialog(
       color = MaterialTheme.colorScheme.onSurfaceVariant,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
-      modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+      // ⚠️ 必须给宽度上限：菜单内容列按 `IntrinsicSize.Max` 量宽，不设上限时
+      //    单行 Text 会按整串文字的固有宽度把菜单撑开（maxLines/Ellipsis 要「被约束」才生效）。
+      //    与网络浏览的长按菜单同一口径（那边是 `MenuHeaderTitle`）。
+      modifier = Modifier.widthIn(max = 208.dp).padding(horizontal = 12.dp, vertical = 8.dp),
     )
     if (isPinned != null && onTogglePin != null) {
       DropdownMenuItem(

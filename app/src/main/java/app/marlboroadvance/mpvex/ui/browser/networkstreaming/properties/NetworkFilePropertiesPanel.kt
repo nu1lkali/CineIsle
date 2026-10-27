@@ -18,8 +18,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -287,7 +289,14 @@ fun NetworkFilePropertiesOverlay(
 
     AnimatedVisibility(
       visible = visible,
-      modifier = Modifier.align(Alignment.CenterEnd),
+      // 让开系统栏（状态栏 / 导航栏）：面板是整页高的模态抽屉，盖住 appbar 是刻意的，
+      // 但压到状态栏下面就会把图标和面板头部叠在一起。
+      // ⚠️ 遮罩不加这两个 inset —— 遮罩要铺满整屏，只在系统栏里留一条亮着很怪。
+      modifier =
+        Modifier
+          .align(Alignment.CenterEnd)
+          .statusBarsPadding()
+          .navigationBarsPadding(),
       enter = slideInHorizontally { it },
       exit = slideOutHorizontally { it },
     ) {
