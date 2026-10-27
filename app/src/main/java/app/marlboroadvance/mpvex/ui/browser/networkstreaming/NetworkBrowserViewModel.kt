@@ -426,6 +426,9 @@ class NetworkBrowserViewModel(
   /** 同一时刻只允许一个整理任务：两个任务同时搬同一个目录，冲突处理会互相打架 */
   private var toolJob: kotlinx.coroutines.Job? = null
 
+  /** 当前是不是连接根目录（`/` 与空串都算同一个位置） */
+  private fun isAtRoot(): Boolean = currentPath.trim('/').isEmpty()
+
   /**
    * 扫描（**只读**，不动服务器），产出一份计划给确认框过目。
    *
@@ -435,6 +438,13 @@ class NetworkBrowserViewModel(
   fun scanToolbox(tool: NetworkTool, onResult: (ToolPlan?, String?) -> Unit) {
     if (toolJob?.isActive == true) {
       onResult(null, "已有整理任务在运行")
+      return
+    }
+    // 根目录只开放只读工具。整理 / 清理类在根上会动整块存储的顶层内容
+    // （按类型归类会建「图片/视频」把顶层文件全搬走），而这个位置往往就是
+    // 所有网盘挂载的汇合处 —— 一次误点代价太大。UI 那边同样置灰，这里是第二道闸。
+    if (!tool.readOnly && isAtRoot()) {
+      onResult(null, "根目录下不开放整理工具，请先进入具体目录")
       return
     }
     toolJob =

@@ -12,8 +12,9 @@ import java.util.Locale
  *
  * 前三项照搬 AlistClientN（`lib/screen/file_list/file_list_screen.dart` 的
  * `_organizeByType` / `_extractAndOrganize` / `_deleteEmptyFolders`），
- * 后两项是这个 App 自己补的：空文件在网盘上几乎全是「下载中断 / 上传失败」留下的壳，
- * 而按月份归档是整理相册 / 追番目录时最常用的一刀。
+ * 后四项是这个 App 自己补的：空文件在网盘上几乎全是「下载中断 / 上传失败」留下的壳，
+ * 垃圾文件是别的系统顺手扔下的残留，按月份归档是整理相册 / 追番目录时最常用的一刀，
+ * 大文件排行则是清理网盘时的第一眼（唯一一个只读工具）。
  *
  * ## 为什么全部只作用在「AList」
  *
@@ -33,6 +34,13 @@ enum class NetworkTool(
   val description: String,
   /** 会删东西的工具：确认框用错误色，文案更重 */
   val destructive: Boolean,
+  /**
+   * 只读工具：只统计、给报告，**不产生任何写操作**。
+   *
+   * 这类工具**没有确认清单** —— 面板扫完直接把报告摊开（「大文件排行」就是唯一一个）。
+   * 让用户对一份「什么都不会改」的报告点「确认执行」是纯噪声，还会让人怀疑它要动手。
+   */
+  val readOnly: Boolean = false,
 ) {
   ORGANIZE_BY_TYPE(
     title = "按类型归类",
@@ -63,6 +71,12 @@ enum class NetworkTool(
     title = "按月份归档",
     description = "当前目录里的文件按修改时间移进「2026-10」这样的月份文件夹",
     destructive = false,
+  ),
+  BIG_FILE_RANKING(
+    title = "大文件排行",
+    description = "只读统计：列出当前目录及子目录里最大的文件（不移动、不删除）",
+    destructive = false,
+    readOnly = true,
   ),
 }
 

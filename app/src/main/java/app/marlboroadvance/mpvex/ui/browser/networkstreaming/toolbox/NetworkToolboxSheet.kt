@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FolderSpecial
+import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
@@ -46,6 +47,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,11 +71,16 @@ import kotlinx.coroutines.launch
  * 进度不在这里存，而是订阅 ViewModel 的 [ToolProgress]（见 `NetworkBrowserViewModel`）——
  * 面板关掉、整理继续跑，重新打开还能接着看。这里的 `remember` 只放「扫描中 / 待确认的
  * 计划」这类**面板独有**的临时状态。
+ *
+ * @param atRoot 当前是否在连接的**根目录**。是的话除只读工具外全部置灰 ——
+ *   根目录往往是所有网盘挂载的汇合处，「按类型归类」在那一层建个「视频」目录
+ *   就等于把整块存储的顶层文件全搬走，误点一次代价太大。ViewModel 里还有第二道闸。
  */
 @Composable
 fun NetworkToolboxSheet(
   dirTitle: String,
   progress: ToolProgress?,
+  atRoot: Boolean = false,
   onScan: (NetworkTool, (ToolPlan?, String?) -> Unit) -> Unit,
   onRun: (ToolPlan) -> Unit,
   onCancel: () -> Unit,
@@ -139,6 +146,7 @@ fun NetworkToolboxSheet(
         else ->
           ToolListPane(
             scanning = scanning,
+            atRoot = atRoot,
             scanError = scanError,
             onScanErrorShown = { scanError = null },
             onPick = { tool ->
@@ -160,60 +168,92 @@ fun NetworkToolboxSheet(
     }
   }
 
-  // ── 确认清单 ──
+  // ── 确认清单 / 只读报告 ──
+  // 只读工具（大文件排行）没有「动手」这一步，扫完直接把报告摊开：
+  // 对一份什么都不会改的清单点「确认执行」是纯噪声，还会让人以为它要动文件。
   val plan = pendingPlan
   if (plan != null) {
-    val empty = plan.isEmpty
-    AlertDialog(
-      onDismissRequest = { pendingPlan = null },
-      title = { Text(plan.tool.title) },
-      text = {
-        Column(
-          modifier =
-            Modifier
-              .heightIn(max = 420.dp)
-              .verticalScroll(rememberScrollState()),
-        ) {
-          plan.summary.forEach { line ->
-            Text(
-              text = line,
-              style = MaterialTheme.typography.bodyMedium,
-              modifier = Modifier.padding(vertical = 2.dp),
-            )
+    val summaryColumn: @Composable () -> Unit = {
+      Column(
+        modifier =
+          Modifier
+            .heightIn(max = 460.dp)
+            .verticalScroll(rememberScrollState()),
+      ) {
+        plan.summary.forEach { line ->
+          Text(
+            text = line,
+            style =
+              if (plan.tool.readOnly) {
+                MaterialTheme.typography.bodySmall
+              } else {
+                MaterialTheme.typography.bodyMedium
+              },
+            modifier = Modifier.padding(vertical = 2.dp),
+          )
+        }
+      }
+    }
+    val truncatedNote: @Composable () -> Unit = {
+      if (plan.truncated) {
+        Spacer(Modifier.height(8.dp))
+        Text(
+          text = "⚠️ 已达扫描上限，只处理已扫到的部分（重新点一次可继续处理剩下的）",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.error,
+        )
+      }
+    }
+
+    if (plan.tool.readOnly) {
+      AlertDialog(
+        onDismissRequest = { pendingPlan = null },
+        title = { Text(plan.tool.title) },
+        text = {
+          Column {
+            summaryColumn()
+            truncatedNote()
           }
-          if (plan.truncated) {
-            Spacer(Modifier.height(8.dp))
+        },
+        confirmButton = {
+          TextButton(onClick = { pendingPlan = null }) { Text("知道了") }
+        },
+      )
+    } else {
+      val empty = plan.isEmpty
+      AlertDialog(
+        onDismissRequest = { pendingPlan = null },
+        title = { Text(plan.tool.title) },
+        text = {
+          Column {
+            summaryColumn()
+            truncatedNote()
+            Spacer(Modifier.height(12.dp))
             Text(
-              text = "⚠️ 已达扫描上限，只处理已扫到的部分（重新点一次可继续处理剩下的）",
+              text = "操作直接作用在服务器上，AList 没有回收站，完成后不可撤销。",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.error,
             )
           }
-          Spacer(Modifier.height(12.dp))
-          Text(
-            text = "操作直接作用在服务器上，AList 没有回收站，完成后不可撤销。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-          )
-        }
-      },
-      confirmButton = {
-        TextButton(
-          enabled = !empty,
-          onClick = {
-            pendingPlan = null
-            onRun(plan)
-            // 关掉面板不影响执行（状态在 ViewModel 上），但这里留着能看到进度
-            scope.launch { sheetState.expand() }
-          },
-        ) {
-          Text(if (empty) "无可处理" else "确认执行")
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { pendingPlan = null }) { Text("取消") }
-      },
-    )
+        },
+        confirmButton = {
+          TextButton(
+            enabled = !empty,
+            onClick = {
+              pendingPlan = null
+              onRun(plan)
+              // 关掉面板不影响执行（状态在 ViewModel 上），但这里留着能看到进度
+              scope.launch { sheetState.expand() }
+            },
+          ) {
+            Text(if (empty) "无可处理" else "确认执行")
+          }
+        },
+        dismissButton = {
+          TextButton(onClick = { pendingPlan = null }) { Text("取消") }
+        },
+      )
+    }
   }
 }
 
@@ -221,6 +261,7 @@ fun NetworkToolboxSheet(
 @Composable
 private fun ToolListPane(
   scanning: NetworkTool?,
+  atRoot: Boolean,
   scanError: String?,
   onScanErrorShown: () -> Unit,
   onPick: (NetworkTool) -> Unit,
@@ -234,7 +275,13 @@ private fun ToolListPane(
         .padding(horizontal = 16.dp),
   ) {
     Text(
-      text = "先扫描目录、把要做的改动列成清单，确认之后才动手。",
+      text =
+        if (atRoot) {
+          "根目录只开放「大文件排行」（只读）。整理 / 清理类会把整块存储顶层的文件搬走或删掉，" +
+            "先进到具体目录再用。"
+        } else {
+          "先扫描目录、把要做的改动列成清单，确认之后才动手。「大文件排行」只读，只出报告。"
+        },
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
       modifier = Modifier.padding(bottom = 10.dp),
@@ -262,10 +309,12 @@ private fun ToolListPane(
     }
 
     NetworkTool.entries.forEach { tool ->
+      val blocked = atRoot && !tool.readOnly
       ToolRow(
         tool = tool,
         scanning = scanning == tool,
-        enabled = scanning == null,
+        enabled = scanning == null && !blocked,
+        note = if (blocked) "根目录下不开放" else null,
         onClick = { onPick(tool) },
       )
       Spacer(Modifier.height(8.dp))
@@ -278,6 +327,7 @@ private fun ToolRow(
   tool: NetworkTool,
   scanning: Boolean,
   enabled: Boolean,
+  note: String? = null,
   onClick: () -> Unit,
 ) {
   val icon = tool.icon()
@@ -287,6 +337,9 @@ private fun ToolRow(
     modifier =
       Modifier
         .fillMaxWidth()
+        // 置灰用整体透明度而不是改色：图标底色、标题、副标题、箭头一次性都淡下去，
+        // 不会出现「卡片是灰的但字是全黑」的半灰状态
+        .alpha(if (enabled || scanning) 1f else 0.45f)
         .clickable(enabled = enabled && !scanning, onClick = onClick),
   ) {
     Row(
@@ -333,6 +386,14 @@ private fun ToolRow(
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (note != null) {
+          Spacer(Modifier.height(3.dp))
+          Text(
+            text = note,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+          )
+        }
       }
       Spacer(Modifier.width(8.dp))
       if (scanning) {
@@ -446,4 +507,5 @@ private fun NetworkTool.icon(): ImageVector =
     NetworkTool.CLEAN_EMPTY_FILES -> Icons.Default.DeleteSweep
     NetworkTool.CLEAN_JUNK_FILES -> Icons.Default.AutoDelete
     NetworkTool.ARCHIVE_BY_MONTH -> Icons.Default.CalendarMonth
+    NetworkTool.BIG_FILE_RANKING -> Icons.Default.Leaderboard
   }

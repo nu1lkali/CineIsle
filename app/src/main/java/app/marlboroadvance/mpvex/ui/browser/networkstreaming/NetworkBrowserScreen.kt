@@ -1058,6 +1058,9 @@ data class NetworkBrowserScreen(
         NetworkToolboxSheet(
           dirTitle = dirTitle,
           progress = toolProgress,
+          // 根目录只留只读工具：这一层往往是所有网盘挂载的汇合处，
+          // 「按类型归类」在这儿建个「视频」就等于把整块存储顶层搬空
+          atRoot = currentPath.trim('/').isEmpty(),
           onScan = { tool, onResult -> viewModel.scanToolbox(tool, onResult) },
           onRun = { plan ->
             viewModel.runToolbox(plan) { message -> toast(message) }

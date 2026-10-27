@@ -30,6 +30,9 @@ object NetworkToolboxPlanner {
   /** 一次最多处理多少个文件 */
   private const val MAX_FILES = 30_000
 
+  /** 只读报告最多列多少行（再多也翻不完，翻到底反而找不到重点） */
+  private const val REPORT_ROWS = 40
+
   /**
    * @param root 当前目录（内部相对路径，无前导斜杠；根目录传空串）
    * @param list 列一个目录的条目。由 ViewModel 接到 `AlistClient.listFiles` 上
@@ -48,7 +51,8 @@ object NetworkToolboxPlanner {
       NetworkTool.EXTRACT_AND_ORGANIZE,
       NetworkTool.CLEAN_EMPTY_DIRS,
       NetworkTool.CLEAN_EMPTY_FILES,
-      NetworkTool.CLEAN_JUNK_FILES -> planWithWalk(tool, root, rootEntries, list, onPhase)
+      NetworkTool.CLEAN_JUNK_FILES,
+      NetworkTool.BIG_FILE_RANKING -> planWithWalk(tool, root, rootEntries, list, onPhase)
     }
   }
 
@@ -237,6 +241,36 @@ object NetworkToolboxPlanner {
           summary = summary,
           truncated = budget.truncated,
         )
+      }
+
+      // 大文件排行：**只读**，不产生 action，报告全部塞进 summary
+      NetworkTool.BIG_FILE_RANKING -> {
+        val rootFiles = rootEntries.filter { !it.isDirectory }
+        val all =
+          buildList {
+            rootFiles.forEach { add(root to it) }
+            addAll(filesInSubdirs)
+          }
+        // 目录里可能几万个文件，全排也没意义 —— 只留前 N 个，其余报个数
+        val top = all.sortedByDescending { it.second.size }.take(REPORT_ROWS)
+        val totalBytes = all.sumOf { it.second.size }
+        val bigCount = all.count { it.second.size >= 1024L * 1024 * 100 }
+        val summary = buildList {
+          if (all.isEmpty()) {
+            add("这个目录里没有文件")
+          } else {
+            add("共 ${all.size} 个文件，合计 ${MediaFormatUtils.formatFileSize(totalBytes)}")
+            if (bigCount > 0) add("其中 ≥ 100 MB 的有 $bigCount 个")
+            add("最大的 ${top.size} 个：")
+            top.forEachIndexed { index, (dir, file) ->
+              add("${index + 1}. ${MediaFormatUtils.formatFileSize(file.size)} · ${toolboxJoinPath(dir, file.name)}")
+            }
+            if (all.size > top.size) add("…其余 ${all.size - top.size} 个略")
+          }
+          if (budget.truncated) add("⚠️ 已达扫描上限，只统计了已扫到的部分")
+          add("扫描了 ${all.size} 个文件 / ${dirEntries.size} 个文件夹")
+        }
+        ToolPlan(tool = tool, root = root, actions = emptyList(), summary = summary, truncated = budget.truncated)
       }
 
       // EXTRACT_AND_ORGANIZE
