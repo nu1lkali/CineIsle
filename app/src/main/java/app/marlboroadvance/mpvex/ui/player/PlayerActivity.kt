@@ -2138,6 +2138,37 @@ open class PlayerActivity :
     val pathLike = playableUri.substringBefore('?')
     val isAvi = pathLike.endsWith(".avi", ignoreCase = true) && pathLike.startsWith("/")
     PlayerLib.setPropertyString("demuxer-lavf-o", if (isAvi) "fflags=+genpts" else "")
+    applyStreamSeekHint(playableUri)
+  }
+
+  /**
+   * 给「本地代理流」补一条 ffmpeg 的 seekability 断言（`seekable=1`）。
+   *
+   * ## 为什么是本地代理才有
+   *
+   * mpv 的 ffmpeg 对 `.mts` / MPEG-TS **只能靠 seek 到文件尾读最后一个 PTS 来算时长**。
+   * ffmpeg 默认（`seekable=-1`）会在打开连接时**自己发一次 Range 试探**来判断这条
+   * 连接能不能随机读；判成「不能」就整条流按 streamed 处理，于是 TS 的时长一步都
+   * 算不出来 ⇒ `duration` 恒为 0 ⇒ 进度条 00:00 / 拖不动 / 续播和「已看」一起失效。
+   *
+   * `127.0.0.1` 这条是 [app.marlboroadvance.mpvex.ui.browser.networkstreaming.proxy.NetworkStreamingProxy]，
+   * **它到底支不支持 Range 是我们自己实现的**（`Accept-Ranges` + 206 + 正确的
+   * `Content-Range`，见 v162），所以这里不需要 ffmpeg 再猜 —— 直接告诉它「能」。
+   * 这一步只是把已知事实提前，不动任何数据通路；猜错的余地都没有。
+   *
+   * ⚠️ 只对本地代理生效：网盘直链 / 第三方 CDN 支不支持 Range 我们不知道，
+   * 乱断言会让 ffmpeg 发一堆换不回来的 seek，反而更糟 —— 那些地址仍走自动探测。
+   *
+   * ⚠️ `stream-lavf-o` 是**整体覆盖**的，所以这里必须带上 [LAVF_STREAM_OPTS]，
+   * 否则每次换片都会把「断流重连」那几项冲掉。
+   */
+  private fun applyStreamSeekHint(playableUri: String) {
+    val host = runCatching { Uri.parse(playableUri).host }.getOrNull()
+    val isLocalProxy = host == "127.0.0.1" || host == "localhost"
+    PlayerLib.setPropertyString(
+      "stream-lavf-o",
+      if (isLocalProxy) "$LAVF_STREAM_OPTS,seekable=1" else LAVF_STREAM_OPTS,
+    )
   }
 
   /**
@@ -2860,6 +2891,55 @@ private fun cancelAutoplayCountdown() {
     }
   }
 
+  /** 时长探测协程（每片一份，换片即取消） */
+  private var durationProbeJob: Job? = null
+
+  /**
+   * 探针：mpv 报不出时长时，用 Android 原生解析把时长救回来（v163）。
+   *
+   * ## 为什么 mpv 会「拿不到时长」
+   *
+   * `.mts` / MPEG-TS **没有内嵌索引**，时长只能靠「seek 到文件尾、读最后一个 PTS」算。
+   * 只要取流层被判定为「不可随机读取」（或尾部那一步读到的不是真尾部），ffmpeg 就
+   * 干脆不报时长 —— mpv 的 `duration` **恒为 0**，进度条于是 00:00、拖不动，
+   * 连带续播位置 / 「已看」判定（都读 `duration`）一起失效。
+   *
+   * ## 为什么用 MediaMetadataRetriever
+   *
+   * 同一个地址交给 GSY 是正常的 —— ExoPlayer / Android MediaExtractor 采用
+   * 「文件长度 ÷ 平均码率」估算，**根本不需要 seek 到尾部**。所以走同一套原生解析
+   * （[getVideoDurationFromUri] → `METADATA_KEY_DURATION`），得到的就是 GSY 显示的那个值：
+   * 它准，我们就准；它估，我们也估 —— 但至少进度条、拖动、续播全部恢复可用。
+   *
+   * ## 什么时候探
+   *
+   * 只在 mpv 自己**给不出**时长时探，且晚 3 秒 —— TS 的尾部扫描本身要时间，
+   * 太早探等于白探一次（还会白读一段流）。探到 0（真正的直播 / 流没有长度）就什么都不写，
+   * UI 仍如实显示 00:00，绝不编一个假时长出来。
+   */
+  private fun scheduleDurationProbe() {
+    durationProbeJob?.cancel()
+    // 换片先清：不清的话新片会顶着上一部片的时长画进度条
+    viewModel.resetProbedDuration()
+    durationProbeJob =
+      lifecycleScope.launch {
+        delay(DURATION_PROBE_DELAY_MS)
+        if ((PlayerLib.getPropertyDouble("duration") ?: 0.0) > 0.0) return@launch
+        // 队列连播时 intent 里存的是「第一片」，当前片要从 playlist 取
+        val uri = getCurrentPlayingUri() ?: return@launch
+        val format = PlayerLib.getPropertyString("file-format")
+        val ms =
+          withContext(Dispatchers.IO) {
+            runCatching { getVideoDurationFromUri(uri) }.getOrDefault(0L)
+          }
+        PlayerDiagLog.log(
+          "duration-probe",
+          "format=$format mpv=0 probed=${ms}ms uri=${redactUrlSecrets(uri.toString())}",
+        )
+        if (ms > 0L) viewModel.applyProbedDuration(ms / 1000f)
+      }
+  }
+
   /**
    * Observer callback for MPV property changes (MPVNode values).
    *
@@ -2997,6 +3077,10 @@ private fun cancelAutoplayCountdown() {
         "size=${PlayerLib.getPropertyDouble("file-size")} " +
         "seekable=${PlayerLib.getPropertyBoolean("seekable")}",
     )
+
+    // 时长兜底（v163）：mpv 拿不到 `duration` 时用 Android 原生解析顶上。
+    // ⚠️ 必须在**每次** file-loaded 都调：换片要清掉上一部片的兜底值。
+    scheduleDurationProbe()
 
     // Extract fileName from intent only if not already set
     // This preserves fileName set in onNewIntent or onCreate
@@ -3517,7 +3601,14 @@ private fun cancelAutoplayCountdown() {
 
     // Read values from MPV immediately while it is still loaded (before stop/destroy or coroutine delay)
     val currentPos = (PlayerLib.getPropertyInt("time-pos") ?: viewModel.pos ?: 0).coerceAtLeast(0)
-    val currentDuration = (PlayerLib.getPropertyInt("duration")?.takeIf { it > 0 } ?: (viewModel.duration ?: 0)).coerceAtLeast(0)
+    // ⚠️ 三档回落，别只读 mpv：`.mts` 这类容器在取流层不可随机读时 mpv 的 `duration`
+    // 恒为 0（见 scheduleDurationProbe），只读它会把「已看/剩余时间」整条链路打成 0。
+    val currentDuration =
+      (
+        PlayerLib.getPropertyInt("duration")?.takeIf { it > 0 }
+          ?: viewModel.effectiveDurationSeconds().toInt().takeIf { it > 0 }
+          ?: (viewModel.duration ?: 0)
+        ).coerceAtLeast(0)
     val speed = PlayerLib.getPropertyDouble("speed") ?: DEFAULT_PLAYBACK_SPEED
     val videoZoom = PlayerLib.getPropertyDouble("video-zoom")?.toFloat() ?: 0f
     val currentSid = PlayerLib.getPropertyInt("sid") ?: -1
@@ -5007,10 +5098,13 @@ private fun cancelAutoplayCountdown() {
       }
       val retriever = android.media.MediaMetadataRetriever()
       try {
-        if (uri.scheme == "file") {
-          retriever.setDataSource(uri.path)
-        } else {
-          retriever.setDataSource(this, uri)
+        when (uri.scheme) {
+          "file" -> retriever.setDataSource(uri.path)
+          // ⚠️ 网络地址（含本地代理 127.0.0.1）**不能**走 `setDataSource(Context, Uri)`：
+          // 那个重载只认 content:// 和 file://，http 会直接抛 IllegalArgumentException。
+          // 网络流必须用「url + 请求头」这个重载，让 MediaHTTPConnection 自己去取流。
+          "http", "https" -> retriever.setDataSource(uri.toString(), emptyMap<String, String>())
+          else -> retriever.setDataSource(this, uri)
         }
         retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
       } finally {
@@ -5399,6 +5493,15 @@ private fun cancelAutoplayCountdown() {
      * Factor to divide subtitle and audio delays to convert from ms to seconds.
      */
     private const val DELAY_DIVISOR = 1000.0
+
+    /**
+     * `file-loaded` 之后等多久再判断「mpv 到底有没有时长」。
+     *
+     * 给 3000ms 的理由：`.mts` / MPEG-TS 的时长要靠 seek 到尾部扫 PTS，这一步本身
+     * 就要几百毫秒到一两秒（网络源更慢）。等太短会把「还在算」误判成「算不出来」，
+     * 于是白读一段流去探；等太长则用户已经盯着 00:00 看了好几秒。
+     */
+    private const val DURATION_PROBE_DELAY_MS = 3000L
 
     /**
      * 续播位置离片尾小于这个秒数就视为"已经看完"，从头开始播。

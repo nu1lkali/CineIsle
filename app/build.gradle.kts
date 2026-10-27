@@ -1685,7 +1685,34 @@ android {
     //       「取流层拿不到真实时长」还是「进度条算错」；`eof` 记 pos / duration ——
     //       pos 明显小于 duration 就是**被提前掐断**，不是真播完。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 162
+    // ── v163（versionCode 163，修复轮不涨名，versionName 仍为 1.6.10）──────
+    //     mpv 对 `.mts` 只能拿到 **00:00** 的时长，GSY 正常（用户 v162 实测回报：
+    //     「还是一样 表现为 mpv 对于 mts 格式媒体只能拿到 00:00 的时长 gsy 正常」）。
+    //     ⚠️ 这条证据把 v162 的假设推翻了一半：不是「时长被估小了」，而是**恰好为 0**；
+    //        且同一个地址交给 GSY（ExoPlayer / Android MediaExtractor）就是对的。
+    //     根因（两条路各治一半）：
+    //       · MPEG-TS **没有内嵌索引**，ffmpeg 的时长只能靠「seek 到文件尾读最后一个
+    //         PTS」。它开连前会自己发一次 Range 试探来判断能不能随机读；一旦判成
+    //         「streamed」，时长一步都算不出来 ⇒ `duration` 恒为 0 ⇒ 进度条 00:00、
+    //         拖不动、续播位置与「已看」判定（都读 duration）一起失效。
+    //         修法 A：本地代理（`127.0.0.1`）在 `stream-lavf-o` 里显式加 `seekable=1`
+    //         —— 它支不支持 Range 是我们自己实现的（v162 已补 `Accept-Ranges` /
+    //         206 / 正确 `Content-Range`），不需要 ffmpeg 再猜。**只对本地代理生效**，
+    //         网盘直链/CDN 仍走自动探测（乱断言会让 ffmpeg 发一堆换不回来的 seek）。
+    //       · 修法 B（兜底，与引擎无关）：mpv 仍报 0 时，晚 3 秒用
+    //         `MediaMetadataRetriever` 探一次时长 —— 它与 GSY 同源（「文件长度 ÷
+    //         平均码率」估算，不需要 seek 到尾部），GSY 显示多少这里就探到多少，
+    //         写进 `PlayerViewModel.probedDuration`，与 mpv 真值合成 `preciseDuration`
+    //         （mpv > 0 且不离谱时永远以 mpv 为准）。探到 0（真直播）就什么都不写，
+    //         绝不编一个假时长。
+    //       · 顺带：`getVideoDurationFromUri` 补 http/https 分支（`setDataSource(Context,
+    //         Uri)` 只认 content:// 与 file://，网络地址会直接抛异常）；播完存进度时
+    //         的 `currentDuration` 也接上兜底值，否则 .mts 永远标不成「已看」。
+    //       · `MPVView` 的网络流选项抽成 `LAVF_STREAM_OPTS` 常量，两处共用 ——
+    //         `stream-lavf-o` 是**整体覆盖**的，谁在别处硬编码一份，换片就会把
+    //         「断流重连」弄丢。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 163
     versionName = "1.6.10"
 
     vectorDrawables {

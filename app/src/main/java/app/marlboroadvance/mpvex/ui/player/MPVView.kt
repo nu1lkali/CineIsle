@@ -37,6 +37,16 @@ import kotlin.reflect.KProperty
  */
 private const val MPV_HWDEC_CODECS = "h264,hevc,mpeg2video,vc1,vp8,vp9,av1"
 
+/**
+ * 网络流（http/https）在 lavf 协议层的基准选项：中途断了接着拉，而不是直接判死。
+ *
+ * ⚠️ 这里只放**与取流无关的通用项**，不要往字符串里塞只对某类地址成立的开关 ——
+ * [app.marlboroadvance.mpvex.ui.player.PlayerActivity] 每次换片都会用这个常量
+ * **整体重写** `stream-lavf-o`，再按地址是不是本地代理决定是否追加 `seekable=1`。
+ * 两处必须共用同一个常量：谁在别处硬编码一份，换片时就会把「断流重连」悄悄弄丢。
+ */
+internal const val LAVF_STREAM_OPTS = "reconnect=1,reconnect_streamed=1,reconnect_delay_max=20"
+
 class MPVView(
   context: Context,
   attributes: AttributeSet,
@@ -190,10 +200,7 @@ class MPVView(
     MPVLib.setOptionString("stream-buffer-size", "4MiB")
     MPVLib.setOptionString("network-timeout", "30")
     // lavf 的 HTTP 重连：中途断了接着拉，而不是直接判死
-    MPVLib.setOptionString(
-      "stream-lavf-o",
-      "reconnect=1,reconnect_streamed=1,reconnect_delay_max=20",
-    )
+    MPVLib.setOptionString("stream-lavf-o", LAVF_STREAM_OPTS)
 
     // ── 落盘缓存（清单 #18）──
     // 上面那几项是**内存**缓冲：进程活着就有，退出就没了 ⇒ 同一片子第二次看

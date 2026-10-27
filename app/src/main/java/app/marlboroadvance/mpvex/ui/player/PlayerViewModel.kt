@@ -165,8 +165,61 @@ class PlayerViewModel(
   private val _precisePosition = MutableStateFlow(0f)
   val precisePosition = _precisePosition.asStateFlow()
 
+  /** mpv 自己报的 `duration`（秒）。> 0 才可信，见 [preciseDuration]。 */
   private val _preciseDuration = MutableStateFlow(0f)
-  val preciseDuration = _preciseDuration.asStateFlow()
+
+  /**
+   * 兜底时长（秒）：mpv 报不出来时，由 Android 原生解析探到的值。
+   *
+   * 写入方只有一个 —— [applyProbedDuration]，由播放页在 mpv 的 `duration` 为 0 时调用。
+   */
+  private val _probedDuration = MutableStateFlow(0f)
+
+  /**
+   * 进度条用的总时长（秒）—— **mpv 的真值与兜底值合成后的结果**。
+   *
+   * ## 为什么需要这一层
+   *
+   * `.mts` / MPEG-TS 这类容器**没有内嵌索引**，时长只能靠「seek 到文件尾、读最后一个
+   * PTS」算出来。取流层一旦不能随机读取（或那一步读到的并不是真正的尾部），mpv 的
+   * `duration` 就**恒为 0**：进度条显示 00:00、拖不动、拖了也不准，连带「已看/续播」
+   * 也一起失效（那里同样读 `duration`）。
+   *
+   * 而同一个地址交给 GSY 却正常 —— ExoPlayer / Android MediaExtractor 用的是
+   * 「文件长度 ÷ 平均码率」估算，**不需要 seek 到尾部**。所以这里的策略是：
+   *  ① mpv 报 0 ⇒ 用探针值顶上；
+   *  ② mpv 报的值**不足探针值一半** ⇒ 判为伪值（多半是按错码率估出来的），仍用探针值；
+   *  ③ 两者都拿不到 ⇒ 0，UI 侧如实显示 00:00（不编造时长）。
+   */
+  val preciseDuration: StateFlow<Float> =
+    combine(_preciseDuration, _probedDuration) { mpvDuration, probed ->
+      when {
+        mpvDuration <= 0f -> probed
+        probed <= 0f -> mpvDuration
+        mpvDuration < probed * 0.5f -> probed
+        else -> mpvDuration
+      }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+
+  /**
+   * 写入「兜底时长」（秒）。
+   *
+   * 只在 mpv 自己还不知道时长时生效 —— mpv 一旦报出真值，永远以它为准（见 [preciseDuration]
+   * 的合成规则）。传入非法值（NaN / 负数 / 0）一律忽略，避免把进度条弄成空值。
+   */
+  fun applyProbedDuration(seconds: Float) {
+    if (!seconds.isFinite() || seconds <= 0f) return
+    if (_preciseDuration.value > 0f) return
+    _probedDuration.value = seconds
+  }
+
+  /** 换片时清掉上一部片的兜底时长，否则新片会先顶着旧片的时长画进度条。 */
+  fun resetProbedDuration() {
+    _probedDuration.value = 0f
+  }
+
+  /** 当前可用的总时长（秒）：mpv 真值优先，其次探针兜底；0 = 两者都拿不到。 */
+  fun effectiveDurationSeconds(): Float = preciseDuration.value
 
   // Audio state
   val currentVolume = MutableStateFlow(host.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC))
