@@ -2891,53 +2891,127 @@ private fun cancelAutoplayCountdown() {
     }
   }
 
-  /** 时长探测协程（每片一份，换片即取消） */
-  private var durationProbeJob: Job? = null
+  /** 时长看守协程（每片一份，换片即取消） */
+  private var durationWatchdogJob: Job? = null
 
   /**
-   * 探针：mpv 报不出时长时，用 Android 原生解析把时长救回来（v163）。
+   * 时长看守：mpv 报的时长**不可信**时，用别的来源把它救回来（v163 起，v164 扩到「报小了」）。
    *
-   * ## 为什么 mpv 会「拿不到时长」
+   * ## mpv 在 `.mts` 上会怎么坏
    *
-   * `.mts` / MPEG-TS **没有内嵌索引**，时长只能靠「seek 到文件尾、读最后一个 PTS」算。
-   * 只要取流层被判定为「不可随机读取」（或尾部那一步读到的不是真尾部），ffmpeg 就
-   * 干脆不报时长 —— mpv 的 `duration` **恒为 0**，进度条于是 00:00、拖不动，
-   * 连带续播位置 / 「已看」判定（都读 `duration`）一起失效。
+   * MPEG-TS **没有内嵌索引**，时长只能靠「seek 到文件尾、读最后一个 PTS」算。取流层
+   * 一旦不能随机读取（或读到的那一段不是真尾部），mpv 的 `duration` 有两种坏法：
+   *  · **恒为 0** ⇒ 进度条 00:00、拖不动；
+   *  · **报一个很小的值** ⇒ 播到 15 秒了总时长还写着 8 秒，进度条一开就顶到 100%。
    *
-   * ## 为什么用 MediaMetadataRetriever
+   * ## 判据只认物理事实
    *
-   * 同一个地址交给 GSY 是正常的 —— ExoPlayer / Android MediaExtractor 采用
-   * 「文件长度 ÷ 平均码率」估算，**根本不需要 seek 到尾部**。所以走同一套原生解析
-   * （[getVideoDurationFromUri] → `METADATA_KEY_DURATION`），得到的就是 GSY 显示的那个值：
-   * 它准，我们就准；它估，我们也估 —— 但至少进度条、拖动、续播全部恢复可用。
+   * 不再按「mpv 报 0 才探」这种窄条件，而是每秒看一眼：
+   * **已经播到的位置 > 声称的总时长 + 1s，且还没到 EOF** ⇒ 这个时长一定是错的。
+   * 位置超过总时长是不需要讨论的矛盾，任何估算都解释不了它；
+   * 反过来，播放正常推进、位置始终落在总时长之内，就当它是对的，立刻收工。
    *
-   * ## 什么时候探
+   * ## 两条后备来源（按可信度排序）
    *
-   * 只在 mpv 自己**给不出**时长时探，且晚 3 秒 —— TS 的尾部扫描本身要时间，
-   * 太早探等于白探一次（还会白读一段流）。探到 0（真正的直播 / 流没有长度）就什么都不写，
-   * UI 仍如实显示 00:00，绝不编一个假时长出来。
+   *  ① [getVideoDurationFromUri] → `MediaMetadataRetriever`：**与 GSY 同源**
+   *     （ExoPlayer / MediaExtractor 用「文件长度 ÷ 平均码率」估算，不需要 seek），
+   *     GSY 显示多少这里就探到多少。用户认 GSY 的值，那就照它的口径来。
+   *  ② 兜底再兜底：`file-size × 8 ÷ (video-bitrate + audio-bitrate)` ——
+   *     用 mpv 自己报的码率反推。VBR 会有偏差，但量级一定对，
+   *     比「播到 15 秒总时长 8 秒」强得多。
+   *
+   * ⚠️ 两条都要求结果 **大于已经播过的位置**（否则就是又一次同样的错），探不到就下一轮再来
+   * （多播几秒后码率估得更准），最多 [MAX_DURATION_PROBES] 轮。
+   * ⚠️ 探到 0 / 探不到 / 真直播 ⇒ 什么都不写，UI 如实显示，绝不编一个假时长出来。
    */
-  private fun scheduleDurationProbe() {
-    durationProbeJob?.cancel()
+  private fun startDurationWatchdog() {
+    durationWatchdogJob?.cancel()
     // 换片先清：不清的话新片会顶着上一部片的时长画进度条
     viewModel.resetProbedDuration()
-    durationProbeJob =
+    durationWatchdogJob =
       lifecycleScope.launch {
-        delay(DURATION_PROBE_DELAY_MS)
-        if ((PlayerLib.getPropertyDouble("duration") ?: 0.0) > 0.0) return@launch
-        // 队列连播时 intent 里存的是「第一片」，当前片要从 playlist 取
-        val uri = getCurrentPlayingUri() ?: return@launch
-        val format = PlayerLib.getPropertyString("file-format")
-        val ms =
-          withContext(Dispatchers.IO) {
-            runCatching { getVideoDurationFromUri(uri) }.getOrDefault(0L)
+        var attempts = 0
+        while (true) {
+          delay(DURATION_WATCHDOG_INTERVAL_MS)
+          if (PlayerLib.getPropertyBoolean("eof-reached") == true) return@launch
+          val pos = PlayerLib.getPropertyDouble("time-pos") ?: continue
+          val mpvDuration = PlayerLib.getPropertyDouble("duration") ?: 0.0
+          val effective = viewModel.effectiveDurationSeconds().toDouble()
+
+          // ── 判据（两个，都只认事实）──
+          //  · overflow：**有时长，但已播位置跑出去了** ⇒ 这个时长一定是错的。
+          //    注意「8 秒 vs 播到 15 秒」这种值在起播头一两秒看是**自洽的**
+          //    （位置 1s < 8s），所以**绝不能一自洽就收工**，必须一直盯着。
+          //  · missing：**根本没有时长**，且已经播过起步宽限 ⇒ 该探了。
+          val overflow = effective > 0.0 && pos > effective + DURATION_WATCHDOG_TOLERANCE_SEC
+          val missing = effective <= 0.0 && pos >= DURATION_PROBE_GRACE_SEC
+          if (!overflow && !missing) continue
+          if (attempts >= MAX_DURATION_PROBES) return@launch
+          attempts++
+
+          // 探到的值至少要大于已播位置，否则就是把同一个错再犯一次
+          val floor = maxOf(pos, DURATION_PROBE_GRACE_SEC)
+          // ⚠️ 只有 overflow 才「证伪」mpv：missing 时 mpv 只是**还没算出来**，
+          // 它稍后报出的真值仍然更可信，不能提前把它钉死在探针值上。
+          if (overflow) viewModel.markDurationUntrusted()
+          val probed = probeDurationSeconds(floor)
+          if (probed != null) {
+            viewModel.applyProbedDuration(probed)
+            dipLog(
+              "duration-probe",
+              "applied=${probed}s floor=$floor mpv=$mpvDuration pos=$pos " +
+                "kind=${if (overflow) "overflow" else "missing"}",
+            )
+          } else {
+            dipLog(
+              "duration-probe",
+              "failed floor=$floor mpv=$mpvDuration pos=$pos " +
+                "kind=${if (overflow) "overflow" else "missing"}",
+            )
           }
-        PlayerDiagLog.log(
-          "duration-probe",
-          "format=$format mpv=0 probed=${ms}ms uri=${redactUrlSecrets(uri.toString())}",
-        )
-        if (ms > 0L) viewModel.applyProbedDuration(ms / 1000f)
+        }
       }
+  }
+
+  /**
+   * 探一条「可信时长」（秒），要求结果大于 [floorSeconds]。
+   *
+   * 两条来源、按可信度排序，理由见 [startDurationWatchdog]。返回 null = 都没探到，
+   * 调用方会隔一秒再来（多播几秒，码率就估得更准）。
+   */
+  private suspend fun probeDurationSeconds(floorSeconds: Double): Float? {
+    // ① 与 GSY 同源：Android 原生解析
+    val uri = getCurrentPlayingUri()
+    if (uri != null) {
+      val ms =
+        withContext(Dispatchers.IO) {
+          runCatching { getVideoDurationFromUri(uri) }.getOrDefault(0L)
+        }
+      val seconds = ms / 1000.0
+      dipLog("duration-probe", "src=mmr value=${seconds}s floor=$floorSeconds uri=${redactUrlSecrets(uri.toString())}")
+      if (seconds > floorSeconds) return seconds.toFloat()
+    }
+    // ② 用 mpv 自己报的码率反推（TS 没有索引时这是唯一还算靠谱的口径）
+    val size = runCatching { PlayerLib.getPropertyDouble("file-size") ?: 0.0 }.getOrDefault(0.0)
+    val bitrate =
+      runCatching {
+        (PlayerLib.getPropertyDouble("video-bitrate") ?: 0.0) +
+          (PlayerLib.getPropertyDouble("audio-bitrate") ?: 0.0)
+      }.getOrDefault(0.0)
+    if (size > 0.0 && bitrate > 0.0) {
+      val seconds = size * 8.0 / bitrate
+      dipLog("duration-probe", "src=bitrate value=${seconds}s size=$size bitrate=$bitrate floor=$floorSeconds")
+      if (seconds > floorSeconds) return seconds.toFloat()
+    }
+    return null
+  }
+
+  /** 诊断日志的短别名：只在设置里开「详细日志」时才落盘。 */
+  private fun dipLog(
+    tag: String,
+    message: String,
+  ) {
+    runCatching { PlayerDiagLog.log(tag, message) }
   }
 
   /**
@@ -3078,9 +3152,9 @@ private fun cancelAutoplayCountdown() {
         "seekable=${PlayerLib.getPropertyBoolean("seekable")}",
     )
 
-    // 时长兜底（v163）：mpv 拿不到 `duration` 时用 Android 原生解析顶上。
+    // 时长看守（v163 起，v164 扩到「报小了」）：mpv 的 duration 不可信时用原生解析顶上。
     // ⚠️ 必须在**每次** file-loaded 都调：换片要清掉上一部片的兜底值。
-    scheduleDurationProbe()
+    startDurationWatchdog()
 
     // Extract fileName from intent only if not already set
     // This preserves fileName set in onNewIntent or onCreate
@@ -3602,7 +3676,7 @@ private fun cancelAutoplayCountdown() {
     // Read values from MPV immediately while it is still loaded (before stop/destroy or coroutine delay)
     val currentPos = (PlayerLib.getPropertyInt("time-pos") ?: viewModel.pos ?: 0).coerceAtLeast(0)
     // ⚠️ 三档回落，别只读 mpv：`.mts` 这类容器在取流层不可随机读时 mpv 的 `duration`
-    // 恒为 0（见 scheduleDurationProbe），只读它会把「已看/剩余时间」整条链路打成 0。
+    // 恒为 0（见 startDurationWatchdog），只读它会把「已看/剩余时间」整条链路打成 0。
     val currentDuration =
       (
         PlayerLib.getPropertyInt("duration")?.takeIf { it > 0 }
@@ -5495,13 +5569,38 @@ private fun cancelAutoplayCountdown() {
     private const val DELAY_DIVISOR = 1000.0
 
     /**
-     * `file-loaded` 之后等多久再判断「mpv 到底有没有时长」。
+     * 时长看守的采样间隔。
      *
-     * 给 3000ms 的理由：`.mts` / MPEG-TS 的时长要靠 seek 到尾部扫 PTS，这一步本身
-     * 就要几百毫秒到一两秒（网络源更慢）。等太短会把「还在算」误判成「算不出来」，
-     * 于是白读一段流去探；等太长则用户已经盯着 00:00 看了好几秒。
+     * 1 秒一拍：判据是「播到的位置有没有跑出总时长」，TS 报错的那些值通常小到
+     * 几秒就露馅，慢一拍就多看一眼 100% 的进度条。开销可以忽略（一次 `time-pos`
+     * 读 + 两次数值比较），而且一旦自洽就立刻退出，正常的片子上只多跑一两拍。
      */
-    private const val DURATION_PROBE_DELAY_MS = 3000L
+    private const val DURATION_WATCHDOG_INTERVAL_MS = 1000L
+
+    /**
+     * 判「时长自洽」的容差（秒）。
+     *
+     * 位置落在 `总时长 - 1s` 以内就当 mpv 说得对：片尾那一下 `time-pos` 与
+     * `duration` 本来就贴得很近，容差太小会把正确的时长误判成错的。
+     */
+    private const val DURATION_WATCHDOG_TOLERANCE_SEC = 1.0
+
+    /**
+     * 起步宽限（秒）：位置走到这个数之前不判 mpv 的「0 时长」是错的。
+     *
+     * `.mts` 的时长要靠 seek 到尾部扫 PTS，本身就要几百毫秒到一两秒（网络源更慢），
+     * 太早判会白读一段流去探。
+     */
+    private const val DURATION_PROBE_GRACE_SEC = 3.0
+
+    /**
+     * 一部片最多探几轮。
+     *
+     * 给 3：第一轮常在刚起播时，码率还没估稳；多播几秒后再探一次往往就准了。
+     * 3 轮还探不出来，说明这条流确实没有可用长度（直播 / 长度未知），
+     * 继续探只是白白多读数据。
+     */
+    private const val MAX_DURATION_PROBES = 3
 
     /**
      * 续播位置离片尾小于这个秒数就视为"已经看完"，从头开始播。

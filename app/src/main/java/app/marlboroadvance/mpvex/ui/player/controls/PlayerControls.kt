@@ -1147,9 +1147,22 @@ fun PlayerControls(
           val seekbarStyle by appearancePreferences.seekbarStyle.collectAsState()
           var wasPlayerAlreadyPaused by remember { mutableStateOf(false) }
 
+          // ⚠️ 总时长**不可能**小于「已经播过的位置」：`.mts` / MPEG-TS 上 mpv 有时会把
+          // 时长报成一个很小的值（播到 15 秒、总时长还写着 8 秒），进度条于是一开就顶到 100%。
+          // 播放页的时长看守（`startDurationWatchdog`）会自动去探一个更靠谱的值，
+          // 但探到之前不能让画面自相矛盾 —— 这里兜一层：只要位置真的跑出去了，
+          // 就把总时长抬到「当前位置 + 1 秒」，让进度条至少不倒挂。
+          val rawDuration = if (preciseDuration > 0) preciseDuration else duration?.toFloat() ?: 0f
+          val safeDuration =
+            when {
+              rawDuration <= 0f -> 0f
+              precisePosition > rawDuration + 1f -> precisePosition + 1f
+              else -> rawDuration
+            }
+
           SeekbarWithTimers(
             position = precisePosition,
-            duration = if (preciseDuration > 0) preciseDuration else duration?.toFloat() ?: 0f,
+            duration = safeDuration,
             onValueChange = {
               if (!isSeeking) {
                 // First drag frame - pause playback

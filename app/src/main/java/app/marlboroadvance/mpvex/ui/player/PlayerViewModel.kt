@@ -169,11 +169,23 @@ class PlayerViewModel(
   private val _preciseDuration = MutableStateFlow(0f)
 
   /**
-   * 兜底时长（秒）：mpv 报不出来时，由 Android 原生解析探到的值。
+   * 兜底时长（秒）：mpv 报不出来、或报的值已被证伪时，由别的来源探到的值。
    *
-   * 写入方只有一个 —— [applyProbedDuration]，由播放页在 mpv 的 `duration` 为 0 时调用。
+   * 写入方只有一个 —— [applyProbedDuration]，由播放页的时长看守协程调用。
    */
   private val _probedDuration = MutableStateFlow(0f)
+
+  /**
+   * mpv 报的时长是否**已被证伪**。
+   *
+   * 证伪的依据只有一个，而且是物理事实：**已经播到的位置超过了声称的总时长**
+   * （`.mts` 上很常见 —— mpv 会把时长报成一个很小的值，比如播到 15 秒、总时长还写着 8 秒）。
+   * 一旦置位，[preciseDuration] 就彻底不再采信 mpv 的值，只用探针值。
+   *
+   * 由播放页的时长看守协程通过 [markDurationUntrusted] 置位，换片时随
+   * [resetProbedDuration] 一起复位。
+   */
+  private val _durationUntrusted = MutableStateFlow(false)
 
   /**
    * 进度条用的总时长（秒）—— **mpv 的真值与兜底值合成后的结果**。
@@ -182,18 +194,21 @@ class PlayerViewModel(
    *
    * `.mts` / MPEG-TS 这类容器**没有内嵌索引**，时长只能靠「seek 到文件尾、读最后一个
    * PTS」算出来。取流层一旦不能随机读取（或那一步读到的并不是真正的尾部），mpv 的
-   * `duration` 就**恒为 0**：进度条显示 00:00、拖不动、拖了也不准，连带「已看/续播」
-   * 也一起失效（那里同样读 `duration`）。
+   * `duration` 就只有两种坏法：
+   *  · **恒为 0** —— 进度条显示 00:00、拖不动，连带「已看/续播」（都读 duration）一起失效；
+   *  · **报一个很小的值** —— 播到 15 秒了总时长还写着 8 秒，进度条一开就顶到 100%。
    *
    * 而同一个地址交给 GSY 却正常 —— ExoPlayer / Android MediaExtractor 用的是
-   * 「文件长度 ÷ 平均码率」估算，**不需要 seek 到尾部**。所以这里的策略是：
-   *  ① mpv 报 0 ⇒ 用探针值顶上；
-   *  ② mpv 报的值**不足探针值一半** ⇒ 判为伪值（多半是按错码率估出来的），仍用探针值；
-   *  ③ 两者都拿不到 ⇒ 0，UI 侧如实显示 00:00（不编造时长）。
+   * 「文件长度 ÷ 平均码率」估算，**不需要 seek 到尾部**。所以合成规则是：
+   *  ① [markDurationUntrusted] 置位过 ⇒ 一律用探针值（mpv 已被证伪）；
+   *  ② mpv 报 0 ⇒ 用探针值顶上；
+   *  ③ mpv 报的值**不足探针值一半** ⇒ 判为伪值，仍用探针值；
+   *  ④ 两者都拿不到 ⇒ 0，UI 侧如实显示 00:00（不编造时长）。
    */
   val preciseDuration: StateFlow<Float> =
-    combine(_preciseDuration, _probedDuration) { mpvDuration, probed ->
+    combine(_preciseDuration, _probedDuration, _durationUntrusted) { mpvDuration, probed, untrusted ->
       when {
+        untrusted && probed > 0f -> probed
         mpvDuration <= 0f -> probed
         probed <= 0f -> mpvDuration
         mpvDuration < probed * 0.5f -> probed
@@ -204,18 +219,30 @@ class PlayerViewModel(
   /**
    * 写入「兜底时长」（秒）。
    *
-   * 只在 mpv 自己还不知道时长时生效 —— mpv 一旦报出真值，永远以它为准（见 [preciseDuration]
-   * 的合成规则）。传入非法值（NaN / 负数 / 0）一律忽略，避免把进度条弄成空值。
+   * 只在两种情况下生效：mpv 还没给出时长（0），或 mpv 的值已经被证伪
+   * （[markDurationUntrusted]）。其余情况 mpv 一旦报出真值，永远以它为准。
+   * 传入非法值（NaN / 负数 / 0）一律忽略，避免把进度条弄成空值。
    */
   fun applyProbedDuration(seconds: Float) {
     if (!seconds.isFinite() || seconds <= 0f) return
-    if (_preciseDuration.value > 0f) return
+    if (!_durationUntrusted.value && _preciseDuration.value > 0f) return
     _probedDuration.value = seconds
   }
 
-  /** 换片时清掉上一部片的兜底时长，否则新片会先顶着旧片的时长画进度条。 */
+  /**
+   * 宣布「mpv 报的这个时长不可信」。
+   *
+   * 判据（由播放页给）：**已播位置已经超过声称的总时长** —— 这是物理矛盾，不需要再讨论。
+   * 置位后 mpv 的值直接被忽略，见 [preciseDuration] 的合成规则①。
+   */
+  fun markDurationUntrusted() {
+    _durationUntrusted.value = true
+  }
+
+  /** 换片时清掉上一部片的兜底时长与「已证伪」标记，否则新片会顶着旧片的时长画进度条。 */
   fun resetProbedDuration() {
     _probedDuration.value = 0f
+    _durationUntrusted.value = false
   }
 
   /** 当前可用的总时长（秒）：mpv 真值优先，其次探针兜底；0 = 两者都拿不到。 */
