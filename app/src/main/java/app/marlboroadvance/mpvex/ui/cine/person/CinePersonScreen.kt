@@ -2,6 +2,11 @@ package app.marlboroadvance.mpvex.ui.cine.person
 
 import android.app.Application
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -43,8 +49,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -67,6 +76,7 @@ import app.marlboroadvance.mpvex.ui.cine.components.CinePosterGrid
 import app.marlboroadvance.mpvex.ui.cine.components.CineSearchField
 import app.marlboroadvance.mpvex.ui.cine.components.CineStatePanel
 import app.marlboroadvance.mpvex.ui.cine.components.LocalCineHaze
+import app.marlboroadvance.mpvex.ui.cine.components.cineGlass
 import app.marlboroadvance.mpvex.ui.cine.components.cineHazeSource
 import app.marlboroadvance.mpvex.ui.cine.toCineMedia
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
@@ -89,6 +99,8 @@ import kotlin.random.Random
  *   合并成两行横滑，选中态走 `primaryContainer`
  * - 排序收进玻璃抽屉（名称 / 年份 / 评分 / 最新添加 / 随机），再点一次已选中的项反转方向
  * - 收藏红心钉在顶栏右侧，状态不等网络：进页面先用最小条目顶上，立刻可点
+ * - 头部（头像行 / 筛选 / 搜索）是网格的第一个条目，跟着海报一起滚走（v158）；
+ *   滚过头像行后顶栏下方浮出「头像 + 名字」的紧凑条（v159），顶栏标题同时让位
  */
 @Composable
 fun CinePersonScreen(
@@ -266,6 +278,25 @@ fun CinePersonScreen(
     viewModel.imageUrl(current, person, "Primary", 320)
   }
 
+  // ── 折叠态：滚过头部头像行后，顶栏下方浮出「头像 + 名字」的紧凑条（v159）──
+  //
+  // 阈值取头像行的**实测高度**（`onGloballyPositioned`）而不是写死常量：
+  // 语义是「大头像刚刚滚出视野」，早了会和下面那个大头像同时出现、晚了会有一段什么都没有。
+  // 用 `derivedStateOf` 包住，滚动过程中只在**跨过阈值那一刻**重组一次，
+  // 不是每帧都重组整个页面（`firstVisibleItemScrollOffset` 每帧都在变）。
+  val avatarRowPx = remember { mutableIntStateOf(0) }
+  val fallbackThresholdPx = with(LocalDensity.current) { 88.dp.roundToPx() }
+  // 加载 / 空态挂的是别的分支（没有网格），此时 gridState 里还留着上次的滚动位置，
+  // 直接读会让紧凑条在空态里凭空出现 —— 所以要按「网格在不在」来闸一下。
+  val gridActive = !loading && mediaUi.isNotEmpty()
+  val scrolledPastHeader by remember(gridActive, fallbackThresholdPx) {
+    derivedStateOf {
+      val threshold = avatarRowPx.intValue.takeIf { it > 0 } ?: fallbackThresholdPx
+      gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > threshold
+    }
+  }
+  val showCompact = gridActive && scrolledPastHeader
+
   // ── 头部区块：一句 lambda 三处复用（网格的 header 槽 / 加载态 / 空态）──
   //
   // v158 之前这一块钉在网格上方，一进页面就吃掉小半屏，海报只剩半屏可看。
@@ -280,7 +311,9 @@ fun CinePersonScreen(
       Row(
         modifier = Modifier
           .fillMaxWidth()
-          .padding(horizontal = hPad, vertical = 14.dp),
+          .padding(horizontal = hPad, vertical = 14.dp)
+          // 记下这一行的实测高度：紧凑条以「它滚出视野」为触发阈值
+          .onGloballyPositioned { avatarRowPx.intValue = it.size.height },
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Box(
@@ -372,7 +405,8 @@ fun CinePersonScreen(
       .background(colors.surface),
   ) {
     CineGlassTopBar(
-      title = personName,
+      // 紧凑条出现时名字交给它 —— 同一屏里出现两个「张三」上下叠着最难看
+      title = if (showCompact) null else personName,
       onBack = { backStack.removeLastOrNull() },
       actions = {
         CineIconButton(
@@ -413,65 +447,78 @@ fun CinePersonScreen(
       },
     )
 
-    Column(
-      modifier = Modifier
-        .fillMaxSize()
-        .cineHazeSource(LocalCineHaze.current),
-    ) {
-      // ⚠️ v158：头部（头像 / 搜索 / 两组筛选）不再是网格上方的固定区 ——
-      // 整块搬进了 `CinePosterGrid` 的 header 槽，跟着网格一起滚走。
-      // 改头部长什么样只改上面那个 `headerContent`，三处调用共用一份。
+    Box(modifier = Modifier.fillMaxSize()) {
+      Column(
+        modifier = Modifier
+          .fillMaxSize()
+          .cineHazeSource(LocalCineHaze.current),
+      ) {
+        // ⚠️ v158：头部（头像 / 搜索 / 两组筛选）不再是网格上方的固定区 ——
+        // 整块搬进了 `CinePosterGrid` 的 header 槽，跟着网格一起滚走。
+        // 改头部长什么样只改上面那个 `headerContent`，三处调用共用一份。
 
-      when {
-        // 加载 / 空态没有网格可挂，头部照旧贴顶（hPad 用 screenH 补回来）
-        loading -> Column(modifier = Modifier.fillMaxSize()) {
-          headerContent(space.screenH)
-          Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
-          ) {
-            CircularProgressIndicator(
-              color = colors.progressFill,
-              modifier = Modifier.size(30.dp),
-              strokeWidth = 2.5.dp,
+        when {
+          // 加载 / 空态没有网格可挂，头部照旧贴顶（hPad 用 screenH 补回来）
+          loading -> Column(modifier = Modifier.fillMaxSize()) {
+            headerContent(space.screenH)
+            Box(
+              modifier = Modifier.fillMaxSize(),
+              contentAlignment = Alignment.Center,
+            ) {
+              CircularProgressIndicator(
+                color = colors.progressFill,
+                modifier = Modifier.size(30.dp),
+                strokeWidth = 2.5.dp,
+              )
+            }
+          }
+
+          mediaUi.isEmpty() -> Column(modifier = Modifier.fillMaxSize()) {
+            headerContent(space.screenH)
+            CineStatePanel(
+              icon = Icons.Outlined.Search,
+              title = if (query.isNotBlank()) "没有匹配的作品" else "没有作品",
+              description = error ?: "换一个筛选条件试试",
+              primaryLabel = "返回",
+              onPrimary = { backStack.removeLastOrNull() },
             )
           }
-        }
 
-        mediaUi.isEmpty() -> Column(modifier = Modifier.fillMaxSize()) {
-          headerContent(space.screenH)
-          CineStatePanel(
-            icon = Icons.Outlined.Search,
-            title = if (query.isNotBlank()) "没有匹配的作品" else "没有作品",
-            description = error ?: "换一个筛选条件试试",
-            primaryLabel = "返回",
-            onPrimary = { backStack.removeLastOrNull() },
+          else -> CinePosterGrid(
+            items = mediaUi,
+            // 用设置里的列数：与媒体库页保持同一个密度口径
+            cardWidth = (LocalContext.current.resources.displayMetrics.widthPixels /
+              LocalContext.current.resources.displayMetrics.density / (gridColumns + 1)).dp,
+            columns = gridColumns,
+            state = gridState,
+            contentPadding = PaddingValues(
+              start = space.screenH,
+              end = space.screenH,
+              bottom = 34.dp,
+            ),
+            // 头部进网格（跨满整行）⇒ 滚动时让位给海报。hPad 传 0：
+            // 横向留白已经由上面的 contentPadding 给了，再垫一次会比海报多缩进。
+            header = { headerContent(0.dp) },
+            onClick = { media ->
+              val id = media.id
+              if (id.isNotBlank()) {
+                backStack.add(EmbyDetailScreen(itemId = id, title = media.title))
+              }
+            },
           )
         }
-
-        else -> CinePosterGrid(
-          items = mediaUi,
-          // 用设置里的列数：与媒体库页保持同一个密度口径
-          cardWidth = (LocalContext.current.resources.displayMetrics.widthPixels /
-            LocalContext.current.resources.displayMetrics.density / (gridColumns + 1)).dp,
-          columns = gridColumns,
-          state = gridState,
-          contentPadding = PaddingValues(
-            start = space.screenH,
-            end = space.screenH,
-            bottom = 34.dp,
-          ),
-          // 头部进网格（跨满整行）⇒ 滚动时让位给海报。hPad 传 0：
-          // 横向留白已经由上面的 contentPadding 给了，再垫一次会比海报多缩进。
-          header = { headerContent(0.dp) },
-          onClick = { media ->
-            val id = media.id
-            if (id.isNotBlank()) {
-              backStack.add(EmbyDetailScreen(itemId = id, title = media.title))
-            }
-          },
-        )
       }
+
+      // ── 折叠态的紧凑条（v159）──
+      // ⚠️ **压在内容上、不占布局**：占位的话它一出现就把网格视口压矮 46dp，
+      // 滚到一半的位置会跳一下；压在内容上位置完全不动，
+      // 而且下面的海报真的在动，玻璃才有东西可糊。
+      CinePersonCompactBar(
+        name = personName,
+        avatarUrl = avatarUrl,
+        visible = showCompact,
+        modifier = Modifier.align(Alignment.TopCenter),
+      )
     }
   }
 
@@ -523,6 +570,78 @@ fun CinePersonScreen(
           }
         }
       }
+    }
+  }
+}
+
+/**
+ * 折叠态的「紧凑条」：只有头像 + 名字（v159）。
+ *
+ * ## 为什么单独一条、而不是把头像塞进顶栏
+ * 顶栏本来就有页面标题（名字）。紧凑条一出现，顶栏标题就让位（传 `null`），
+ * 于是同一屏里名字**只有一个**；紧凑条本身贴边、玻璃底，看上去就是「顶栏变厚了一点」，
+ * 而不是多出一条工具栏。
+ *
+ * ## 为什么压在内容上（不占布局）
+ * 占位的话，它出现 / 消失会把下面网格的视口高度改 46dp，滚到一半的列表会跳一下。
+ * 压在内容上位置完全不动，而且底下的海报确实在滚 —— 玻璃（`cineGlass`）才有东西可糊。
+ *
+ * @param visible 只在「网格已经滚过头部头像行」时为 true
+ */
+@Composable
+private fun CinePersonCompactBar(
+  name: String,
+  avatarUrl: String?,
+  visible: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  val colors = CineTheme.colors
+  val type = CineTheme.type
+  val space = CineTheme.space
+
+  AnimatedVisibility(
+    visible = visible,
+    enter = expandVertically() + fadeIn(),
+    exit = shrinkVertically() + fadeOut(),
+    modifier = modifier,
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .cineGlass(
+          shape = RectangleShape,
+          elevation = 0.dp,
+          blurRadius = 18.dp,
+          border = false,
+        )
+        .height(46.dp)
+        .padding(horizontal = space.screenH),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Box(
+        modifier = Modifier
+          .size(30.dp)
+          .clip(CircleShape)
+          .background(colors.skeleton),
+      ) {
+        EmbyImage(
+          url = avatarUrl,
+          contentDescription = name,
+          modifier = Modifier.fillMaxSize(),
+          maxWidth = 160,
+          contentScale = ContentScale.Crop,
+        )
+      }
+      Text(
+        text = name,
+        style = type.pageBarTitle,
+        color = colors.onSurface,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+          .weight(1f)
+          .padding(start = 10.dp),
+      )
     }
   }
 }

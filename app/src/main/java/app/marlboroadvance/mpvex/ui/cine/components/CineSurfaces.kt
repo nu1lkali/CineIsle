@@ -96,10 +96,14 @@ fun CineIconButton(
  * ⚠️ 图标色一律走 `onSurfaceVariant`，**不能**写 `onImage`（纯白）：
  * 这条顶栏的底是玻璃条（浅色主题下是浅色的），白图标会彻底消失 ——
  * 折叠顶栏踩过一次，这里不重犯。
+ *
+ * @param title 传 `null` = 只留返回键与动作、不显示标题。给「头部折叠后下方另有
+ *   紧凑身份条」的页面用（如演员作品页 v159）：名字已经在紧凑条上了，
+ *   再在顶栏写一遍就是同一个名字上下叠两层。
  */
 @Composable
 fun CineGlassTopBar(
-  title: String,
+  title: String?,
   modifier: Modifier = Modifier,
   onBack: (() -> Unit)? = null,
   actions: @Composable RowScope.() -> Unit = {},
@@ -146,16 +150,21 @@ fun CineGlassTopBar(
       } else {
         Spacer(Modifier.width(space.screenH - 4.dp))
       }
-      Text(
-        text = title,
-        style = type.pageBarTitle,
-        color = colors.onSurface,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier
-          .weight(1f)
-          .padding(start = 2.dp),
-      )
+      if (title != null) {
+        Text(
+          text = title,
+          style = type.pageBarTitle,
+          color = colors.onSurface,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier
+            .weight(1f)
+            .padding(start = 2.dp),
+        )
+      } else {
+        // 没有标题时也要把动作挤到右边，否则图标会紧贴返回键
+        Spacer(Modifier.weight(1f))
+      }
       actions()
     }
     // 1dp 分隔线：玻璃条与内容同色时，没有它顶栏像「浮在内容上的半透明块」

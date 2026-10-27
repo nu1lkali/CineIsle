@@ -2,6 +2,11 @@ package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,6 +53,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -58,7 +64,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -259,6 +267,25 @@ data class EmbyPersonScreen(
       onDispose { personLifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // ── 折叠态：滚过头部头像行后，顶栏下方浮出「头像 + 名字」的紧凑条（v159）──
+    //
+    // 阈值取头像行的**实测高度**（`onGloballyPositioned`）而不是写死常量：
+    // 语义是「大头像刚刚滚出视野」，早了会和下面的大头像同时出现、晚了中间会空一段。
+    // 用 `derivedStateOf` 包住，滚动过程中只在**跨过阈值那一刻**重组一次
+    // （`firstVisibleItemScrollOffset` 是每帧都在变的）。
+    val avatarRowPx = remember { mutableIntStateOf(0) }
+    val fallbackThresholdPx = with(LocalDensity.current) { 88.dp.roundToPx() }
+    // 骨架 / 出错态挂的是别的分支（网格不在），此时 gridState 还留着上次的滚动位置，
+    // 不闸一下紧凑条会凭空出现。
+    val gridActive = !isLoading && items.isNotEmpty()
+    val scrolledPastHeader by remember(gridActive, fallbackThresholdPx) {
+      derivedStateOf {
+        val threshold = avatarRowPx.intValue.takeIf { it > 0 } ?: fallbackThresholdPx
+        gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > threshold
+      }
+    }
+    val showCompact = gridActive && scrolledPastHeader
+
     // ── 头部区块：头像行 / 两组筛选 / 搜索 + 排序 ──
     //
     // v158：这一整块**不再钉在网格上方**，而是作为网格的第一个条目（跨满整行）
@@ -277,7 +304,9 @@ data class EmbyPersonScreen(
         Row(
           modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = hPad, vertical = 8.dp),
+            .padding(horizontal = hPad, vertical = 8.dp)
+            // 记下这一行的实测高度：紧凑条以「它滚出视野」为触发阈值
+            .onGloballyPositioned { avatarRowPx.intValue = it.size.height },
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Surface(
@@ -369,12 +398,15 @@ data class EmbyPersonScreen(
     Column(modifier = Modifier.fillMaxSize()) {
       TopAppBar(
         title = {
-          Text(
-            text = personName,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.longPressToCopy(personName, "姓名"),
-          )
+          // 紧凑条出现时名字交给它 —— 同一屏里两个「张三」上下叠着最难看
+          if (!showCompact) {
+            Text(
+              text = personName,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.longPressToCopy(personName, "姓名"),
+            )
+          }
         },
         navigationIcon = {
           IconButton(onClick = { backStack.removeLastOrNull() }) {
@@ -522,6 +554,81 @@ data class EmbyPersonScreen(
             }
           }
         }
+
+        // ── 折叠态的紧凑条（v159）──
+        // ⚠️ 压在内容上、**不占布局**：占位的话它一出现就把网格视口压矮 46dp，
+        // 滚到一半的位置会跳一下；压在内容上位置完全不动。
+        PersonCompactBar(
+          name = personName,
+          avatarUrl = server?.let {
+            EmbyClient.imageUrl(it, personId, "Primary", personImageTag, 160)
+          },
+          visible = showCompact,
+          modifier = Modifier.align(Alignment.TopCenter),
+        )
+      }
+    }
+  }
+}
+
+/**
+ * 折叠态的「紧凑条」：只有头像 + 名字（v159）。
+ *
+ * 紧凑条出现时顶栏标题让位（`TopAppBar` 的 title 传空）—— 否则同一个名字会在
+ * 相邻两行里各出现一次。它压在内容之上、**不占布局**：占位的话它一出现就把网格
+ * 视口压矮 46dp，滚到一半的位置会跳一下。
+ *
+ * @param visible 只在「网格已经滚过头部头像行」时为 true
+ */
+@Composable
+private fun PersonCompactBar(
+  name: String,
+  avatarUrl: String?,
+  visible: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  AnimatedVisibility(
+    visible = visible,
+    enter = expandVertically() + fadeIn(),
+    exit = shrinkVertically() + fadeOut(),
+    modifier = modifier,
+  ) {
+    Surface(
+      color = MaterialTheme.colorScheme.surfaceContainer,
+      shadowElevation = 2.dp,
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .height(46.dp)
+          .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceVariant,
+          modifier = Modifier.size(30.dp),
+        ) {
+          EmbyImage(
+            url = avatarUrl,
+            contentDescription = name,
+            modifier = Modifier
+              .fillMaxSize()
+              .clip(CircleShape),
+            maxWidth = 160,
+            placeholder = Icons.Default.Person,
+          )
+        }
+        Text(
+          text = name,
+          style = MaterialTheme.typography.titleSmall,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier
+            .weight(1f)
+            .padding(start = 10.dp)
+            .longPressToCopy(name, "姓名"),
+        )
       }
     }
   }
