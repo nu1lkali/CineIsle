@@ -570,7 +570,7 @@ data class NetworkBrowserScreen(
                 // 压根不显示 —— 弹出来点了报错不如不给入口（与长按菜单同一原则）。
                 if (supportsWrite) {
                   DropdownMenuItem(
-                    text = { Text("上传文件…") },
+                    text = { Text("上传到远程") },
                     leadingIcon = { Icon(Icons.Default.UploadFile, contentDescription = null) },
                     onClick = {
                       showOverflowMenu = false
