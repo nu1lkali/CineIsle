@@ -29,7 +29,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -38,6 +41,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.utils.media.MediaFormatUtils
+import kotlinx.coroutines.delay
+
+/**
+ * 成功提示停留的秒数（v157）。
+ *
+ * 太短来不及看清「存到哪儿了」，太长那条底栏一直占着高度。5 秒对得上
+ * 「读一句「已保存到 Download/CineIsle/xxx」」的时间。
+ */
+private const val SUCCESS_AUTO_DISMISS_SECONDS = 5
 
 /**
  * 下载进度条（常驻**底栏**，不是弹窗）。
@@ -51,9 +63,16 @@ import app.marlboroadvance.mpvex.utils.media.MediaFormatUtils
  * ## 三段文案
  *
  * - **进行中**：文件名 / 阶段 + 进度条 + `已传 / 总量 · 速度`，右侧一个取消按钮；
- * - **成功**：`已保存` + 落盘路径（用户下一步就是去那儿找），右侧关闭；
+ * - **成功**：`已保存` + 落盘路径（用户下一步就是去那儿找）+ `N 秒后自动关闭`，右侧关闭；
  * - **失败 / 取消**：原因 + 重试（原始条目还在，重试不用重新选一遍）。
  *
+ * ## 成功态为什么自己消失（v157）
+ *
+ * 成功只是一句「事办完了」的告知，没有任何需要用户决定的东西；留在 bottomBar 里
+ * 就是一直占着一条高度。所以倒计时几秒自己收。**失败 / 取消不自动收** ——
+ * 那两态上有「重试」，收掉等于把唯一的补救入口藏了。
+ *
+ * @param autoCloseInSec 成功态剩余自动关闭秒数；0 表示不显示倒计时（非成功态恒 0）
  * @param onCancel 取消当前任务（半成品会被删掉）
  * @param onDismiss 收起这条提示（任务还在跑时收起 = 只是不看了，**不取消**）
  * @param onRetry 失败后重来一次
@@ -64,6 +83,7 @@ fun NetworkDownloadBar(
   onCancel: () -> Unit,
   onDismiss: () -> Unit,
   onRetry: () -> Unit,
+  autoCloseInSec: Int = 0,
   modifier: Modifier = Modifier,
 ) {
   Surface(
@@ -112,6 +132,7 @@ fun NetworkDownloadBar(
           detail = progress.errorMessage,
           tint = MaterialTheme.colorScheme.primary,
           action = null,
+          hint = if (autoCloseInSec > 0) "${autoCloseInSec} 秒后自动关闭" else null,
         )
         NetworkDownloadState.Failed -> ResultBody(
           text = progress.errorMessage ?: "下载失败",
@@ -185,13 +206,14 @@ private fun RunningBody(progress: NetworkDownloadProgress) {
   }
 }
 
-/** 结束态：一行结论 +（可选）说明 +（可选）动作按钮 */
+/** 结束态：一行结论 +（可选）说明 +（可选）倒计时提示 +（可选）动作按钮 */
 @Composable
 private fun ResultBody(
   text: String,
   detail: String?,
   tint: Color,
   action: (@Composable () -> Unit)?,
+  hint: String? = null,
 ) {
   Row(verticalAlignment = Alignment.CenterVertically) {
     Column(modifier = Modifier.weight(1f)) {
@@ -209,6 +231,18 @@ private fun ResultBody(
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      // 倒计时是最不重要的一条信息（用户真正要看的是「存到哪儿了」），
+      // 所以字号再降一档、不抢正文的注意力
+      if (!hint.isNullOrBlank()) {
+        Spacer(Modifier.height(2.dp))
+        Text(
+          text = hint,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
       }
@@ -267,6 +301,9 @@ private fun NetworkDownloadProgress.statusTint() =
  *
  * 单独抽出来是为了让 `Scaffold(bottomBar = ...)` 那一行保持一句 ——
  * 调用方不需要自己写 `AnimatedVisibility` 与空值判断。
+ *
+ * 成功提示**自己会走**（[SUCCESS_AUTO_DISMISS_SECONDS] 秒倒计时后回调 `onDismiss`），
+ * 失败 / 取消留着等用户点重试。
  */
 @Composable
 fun NetworkDownloadBarHost(
@@ -279,6 +316,28 @@ fun NetworkDownloadBarHost(
   // 用普通数组兜住最后一份非空值（不是 State，避免在组合里写状态触发重组）
   val holder = remember { arrayOfNulls<NetworkDownloadProgress>(1) }
   if (progress != null) holder[0] = progress
+
+  // ── 成功态倒计时自动收起（v157）──
+  //
+  // ⚠️ 键只用 `state` 而不是整个 progress 对象：进度每 200ms 推一次，
+  // 用对象当键会让倒计时每秒从头开始，永远收不掉。同理也不能写进
+  // `remember(progress)` —— 那等于同一个 bug 换个写法。
+  // 手动关闭（progress → null）或开始新任务（state → Running）都会换键，
+  // 协程随之取消，倒计时不会「复活」把新任务的面板收掉。
+  val latestDismiss = rememberUpdatedState(onDismiss)
+  val autoCloseInSec = remember { mutableIntStateOf(0) }
+  LaunchedEffect(progress?.state) {
+    autoCloseInSec.intValue = 0
+    // 失败 / 取消不自动收：那两态上有「重试」，收掉就把补救入口藏了
+    if (progress?.state != NetworkDownloadState.Success) return@LaunchedEffect
+    for (sec in SUCCESS_AUTO_DISMISS_SECONDS downTo 1) {
+      autoCloseInSec.intValue = sec
+      delay(1_000L)
+    }
+    autoCloseInSec.intValue = 0
+    latestDismiss.value()
+  }
+
   AnimatedVisibility(
     visible = progress != null,
     enter = expandVertically() + fadeIn(),
@@ -290,6 +349,7 @@ fun NetworkDownloadBarHost(
         onCancel = onCancel,
         onDismiss = onDismiss,
         onRetry = onRetry,
+        autoCloseInSec = autoCloseInSec.intValue,
       )
     }
   }
