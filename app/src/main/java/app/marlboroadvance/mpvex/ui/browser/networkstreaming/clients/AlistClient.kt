@@ -527,6 +527,35 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     }
 
   /**
+   * `POST /api/fs/move`：移动（同一次调用可以带多个名字）。
+   *
+   * @param srcDir 源**目录**（相对 base path）
+   * @param dstDir 目标**目录**
+   * @param names 要移动的**文件名**列表（不是完整路径）
+   *
+   * ⚠️ **目标重名时的行为取决于底层驱动**：有的直接覆盖、有的回错、有的生成
+   * `name(1).ext`。所以工具箱在移动前会先自己查一遍目标目录、把重名文件改名
+   * （见 `toolbox/NetworkToolboxExecutor`），不把这件事交给服务端猜。
+   */
+  suspend fun move(srcDir: String, dstDir: String, names: List<String>): Result<Unit> =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        require(names.isNotEmpty()) { "没有要移动的文件" }
+        withAuthRetry {
+          postJsonChecked(
+            endpoint = "fs/move",
+            body = buildJsonObject {
+              put("src_dir", fsPath(srcDir))
+              put("dst_dir", fsPath(dstDir))
+              putJsonArray("names") { names.forEach { add(it) } }
+            },
+          )
+        }
+        Unit
+      }
+    }
+
+  /**
    * `PUT /api/fs/put`：**流式上传**一个文件。
    *
    * ## 契约（容易踩的两点）

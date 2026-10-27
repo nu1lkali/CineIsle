@@ -17,6 +17,12 @@ import app.marlboroadvance.mpvex.domain.network.isVideoFile
 import app.marlboroadvance.mpvex.domain.network.type
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.AlistClient
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkTool
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkToolboxExecutor
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkToolboxPlanner
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.ToolPlan
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.ToolProgress
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.ToolResult
 import app.marlboroadvance.mpvex.preferences.NetworkSortType
 import app.marlboroadvance.mpvex.preferences.SortOrder
 import app.marlboroadvance.mpvex.preferences.preference.Preference
@@ -405,6 +411,131 @@ class NetworkBrowserViewModel(
         }
         .onFailure { onResult(false, it.message ?: "新建文件夹失败") }
     }
+  }
+
+  // ── 工具箱（按类型归类 / 提取并整理 / 清空目录 …，只有 AList 可用）──
+
+  private val _toolProgress = MutableStateFlow<ToolProgress?>(null)
+
+  /**
+   * 工具箱的实时状态。**挂在 ViewModel 上而不是面板的 `remember` 上** ——
+   * 面板可以随时关掉，整理继续跑（几百个文件要几十秒，谁也不愿意盯着面板）。
+   */
+  val toolProgress: StateFlow<ToolProgress?> = _toolProgress.asStateFlow()
+
+  /** 同一时刻只允许一个整理任务：两个任务同时搬同一个目录，冲突处理会互相打架 */
+  private var toolJob: kotlinx.coroutines.Job? = null
+
+  /**
+   * 扫描（**只读**，不动服务器），产出一份计划给确认框过目。
+   *
+   * @param onResult (计划, 失败原因)。二者必有其一非空 —— 扫描失败也要让用户看到原因，
+   *   静默返回会让「点了没反应」变成新的抱怨点。
+   */
+  fun scanToolbox(tool: NetworkTool, onResult: (ToolPlan?, String?) -> Unit) {
+    if (toolJob?.isActive == true) {
+      onResult(null, "已有整理任务在运行")
+      return
+    }
+    toolJob =
+      viewModelScope.launch {
+        try {
+          val client = writeClient()
+          if (client == null) {
+            onResult(null, "当前协议不支持整理（只有 AList 有写接口）")
+            return@launch
+          }
+          val plan =
+            NetworkToolboxPlanner.plan(
+              tool = tool,
+              root = currentPath.trim('/'),
+              // 必须写成具名实参：尾随 lambda 会绑到最后一个参数 onPhase 上
+              list = { path -> client.listFiles(path).getOrThrow() },
+            )
+          onResult(plan, null)
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          Log.w(TAG, "工具箱扫描失败: ${tool.name} | ${e.message}")
+          onResult(null, e.message ?: "扫描失败")
+        }
+      }
+  }
+
+  /** 取消正在跑的整理任务（做到哪儿算哪儿，不回滚 —— 确认框已写明不可撤销） */
+  fun cancelToolbox() {
+    toolJob?.cancel()
+  }
+
+  /** 面板关掉时清状态，下次打开不会看到上一轮的结果 */
+  fun resetToolbox() {
+    if (toolJob?.isActive != true) _toolProgress.value = null
+  }
+
+  /**
+   * 执行计划。
+   *
+   * 失败与取消都**不算异常退出**：已经改动的部分留在服务器上，所以两条路径都要
+   * 刷新列表（让用户立刻看到「现在是什么样」）并回一句结果。
+   */
+  fun runToolbox(plan: ToolPlan, onFinished: (String) -> Unit) {
+    if (toolJob?.isActive == true) {
+      onFinished("已有整理任务在运行")
+      return
+    }
+    _toolProgress.value =
+      ToolProgress(tool = plan.tool, phase = "准备中…", done = 0, total = plan.actions.size)
+    toolJob =
+      viewModelScope.launch {
+        val client = writeClient()
+        if (client == null) {
+          _toolProgress.value =
+            _toolProgress.value?.copy(errorMessage = "当前协议不支持整理（只有 AList 有写接口）")
+          return@launch
+        }
+        try {
+          val result =
+            NetworkToolboxExecutor(client).execute(plan) { phase, done, total, current, failed ->
+              _toolProgress.value =
+                ToolProgress(
+                  tool = plan.tool,
+                  phase = phase,
+                  done = done,
+                  total = total,
+                  current = current,
+                  failed = failed,
+                )
+            }
+          _toolProgress.value = _toolProgress.value?.copy(result = result) ?: ToolProgress(
+            tool = plan.tool,
+            phase = "已完成",
+            done = result.succeeded,
+            total = result.succeeded + result.failed,
+            result = result,
+          )
+          loadFiles()
+          onFinished(toolResultText(plan.tool, result))
+        } catch (e: CancellationException) {
+          // 用户点了取消：已完成的部分照样反映到列表里
+          _toolProgress.value = _toolProgress.value?.copy(cancelled = true)
+          loadFiles()
+        } catch (e: Exception) {
+          Log.w(TAG, "工具箱执行失败: ${plan.tool.name} | ${e.message}")
+          _toolProgress.value = _toolProgress.value?.copy(errorMessage = e.message ?: "整理失败")
+          loadFiles()
+        }
+      }
+  }
+
+  private fun toolResultText(tool: NetworkTool, result: ToolResult): String {
+    val head =
+      when {
+        result.succeeded == 0 && result.failed == 0 -> "${tool.title}：没有需要处理的文件"
+        result.failed == 0 -> "${tool.title}完成：处理 ${result.succeeded} 项"
+        else -> "${tool.title}：成功 ${result.succeeded} 项，失败 ${result.failed} 项"
+      }
+    val swept = if (result.sweptDirs > 0) "，另删除 ${result.sweptDirs} 个空目录" else ""
+    return head + swept
   }
 
   /**

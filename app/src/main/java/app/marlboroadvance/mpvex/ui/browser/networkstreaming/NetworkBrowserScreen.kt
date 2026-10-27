@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Handyman
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
@@ -85,11 +86,15 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
@@ -121,6 +126,7 @@ import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
 import app.marlboroadvance.mpvex.ui.browser.emby.components.VideoFeedIcon
 import app.marlboroadvance.mpvex.ui.browser.states.EmptyState
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.NetworkUploadCenter
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkToolboxSheet
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.NetworkUploadSheet
 import app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen
 import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
@@ -205,6 +211,8 @@ data class NetworkBrowserScreen(
     val sortChangeTick by viewModel.sortChangeTick.collectAsState()
     // 当前协议是否支持重命名 / 删除（目前只有 AList）—— 决定卡片挂不挂长按
     val supportsWrite by viewModel.supportsWrite.collectAsState()
+    // 整理工具箱的执行状态（挂在 ViewModel 上：抽屉关掉，任务照跑）
+    val toolProgress by viewModel.toolProgress.collectAsState()
 
     // 视图模式：与本地文件夹浏览共用同一偏好（AlbumView=网格 / FileManager=列表）
     val browserPreferences = koinInject<BrowserPreferences>()
@@ -312,6 +320,10 @@ data class NetworkBrowserScreen(
 
     // 新建文件夹的输入框（与「重命名」同一套：输入框 + 确认）
     var showNewFolder by remember { mutableStateOf(false) }
+
+    // 整理工具箱抽屉（按类型归类 / 提取并整理 / 清理空目录 …）。
+    // 只有 AList 有写接口，入口跟「上传」「新建文件夹」同一条 supportsWrite 门禁。
+    var showToolbox by remember { mutableStateOf(false) }
 
     // 本地搜索（关键词过滤，纯内存 —— 目录列表本来就是全量一次拉完的）
     var searchActive by remember { mutableStateOf(false) }
@@ -487,6 +499,19 @@ data class NetworkBrowserScreen(
             // 这三个都是低频操作（不像搜索那样随时要点），多一下点击换来的
             // 「看得清当前在哪个文件夹」是划算的。
             Box {
+              // ⚠️ 强制「吸在屏幕右侧」（用户要求，与首页长按 Emby 图标的
+              //    `EmbyLibraryVisibilityMenu` 同一手法，别再"优化"掉）：
+              //    给一个必然超宽的 x 偏移（整个屏宽），M3 的前两个横向候选
+              //    （贴锚点左缘 / 贴锚点右缘）都会被「放不下」检查否掉，
+              //    只剩 third 分支 rightToWindowRight（贴窗口右缘 − 8dp）。
+              //    不这么绕的话，菜单右缘会贴在竖三点图标上 —— 图标虽然也在
+              //    右侧，但它落在 actions 行的内缩位置，菜单看着是"飘在中间"。
+              val pinMenuToRightEdge =
+                if (LocalLayoutDirection.current == LayoutDirection.Ltr) {
+                  DpOffset(x = LocalConfiguration.current.screenWidthDp.dp, y = 0.dp)
+                } else {
+                  DpOffset.Zero
+                }
               IconButton(onClick = { showOverflowMenu = true }) {
                 Icon(
                   imageVector = Icons.Default.MoreVert,
@@ -498,6 +523,7 @@ data class NetworkBrowserScreen(
               DropdownMenu(
                 expanded = showOverflowMenu,
                 onDismissRequest = { showOverflowMenu = false },
+                offset = pinMenuToRightEdge,
               ) {
                 // ── 回到首页（网络模块首页）──
                 // 从深层文件夹一键回首页，不必连按好几次「上一级」。
@@ -591,6 +617,22 @@ data class NetworkBrowserScreen(
                     onClick = {
                       showOverflowMenu = false
                       showNewFolder = true
+                    },
+                  )
+                }
+
+                // ── 整理工具箱（按类型归类 / 提取并整理 / 清理空目录 / 按月份归档）──
+                // 从 AlistClientN 的批量整理能力搬过来的，全部走 AList 写接口，
+                // 所以同样只在 supportsWrite 下给入口。
+                if (supportsWrite) {
+                  DropdownMenuItem(
+                    text = { Text("整理工具箱") },
+                    leadingIcon = {
+                      Icon(Icons.Default.Handyman, contentDescription = null)
+                    },
+                    onClick = {
+                      showOverflowMenu = false
+                      showToolbox = true
                     },
                   )
                 }
@@ -1005,6 +1047,27 @@ data class NetworkBrowserScreen(
           targetDir = currentPath,
           targetLabel = dirTitle,
           onDismiss = { showUpload = false },
+        )
+      }
+
+      // ── 整理工具箱（底部抽屉）──
+      // 与上传面板同理挂在菜单外面：菜单一收就出组合，抽屉会被连带销毁。
+      // 抽屉只负责「选工具 / 看清单 / 看进度」，真正的任务是 ViewModel 上的
+      // toolJob —— 抽屉关掉它也继续跑，再打开还能接着看进度与结果。
+      if (showToolbox) {
+        NetworkToolboxSheet(
+          dirTitle = dirTitle,
+          progress = toolProgress,
+          onScan = { tool, onResult -> viewModel.scanToolbox(tool, onResult) },
+          onRun = { plan ->
+            viewModel.runToolbox(plan) { message -> toast(message) }
+          },
+          onCancel = { viewModel.cancelToolbox() },
+          onDismiss = {
+            showToolbox = false
+            // 只清「已经跑完」的状态；任务还在跑就保留，重开抽屉能继续看
+            viewModel.resetToolbox()
+          },
         )
       }
     }
