@@ -102,6 +102,15 @@ class BrowserPreferences(
    */
   val networkRandomDrillDown = preferenceStore.getBoolean("network_random_drill_down", false)
 
+  /**
+   * 网络浏览在**宽屏**（≥720dp）下是否启用双栏：左栏列上一级的文件夹，右栏是当前目录。
+   *
+   * 默认 true —— 平板上「进 A 看一眼 → 退回 → 进 B」是最常见的动作，双栏省一半点击。
+   * 但固定双栏会吃掉主内容 240dp，小尺寸平板横屏时有人就是嫌挤，所以给一个开关
+   * （⋮ 菜单里，且只在宽屏出现）。窄屏无论如何都不生效 —— 那是布局层自己判的。
+   */
+  val networkDualPane = preferenceStore.getBoolean("network_dual_pane", true)
+
   // Visibility preferences for video card chips
   val showVideoThumbnails = preferenceStore.getBoolean("show_video_thumbnails", true)
   val showSizeChip = preferenceStore.getBoolean("show_size_chip", true)

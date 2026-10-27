@@ -17,6 +17,10 @@ import app.marlboroadvance.mpvex.domain.network.isVideoFile
 import app.marlboroadvance.mpvex.domain.network.type
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.AlistClient
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.download.NetworkDownloadCenter
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.DirSizeEntry
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.DirSizeUiState
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.NetworkDirSizeStore
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkTool
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkToolboxExecutor
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkToolboxPlanner
@@ -347,6 +351,9 @@ class NetworkBrowserViewModel(
       }
       client.rename(file.path, newName)
         .onSuccess {
+          // 改名会让路径变，但目录大小不变；真正需要失效的是「以后的统计别拿着旧路径」——
+          // 一个连接整体失效最省心（见 NetworkDirSizeStore.invalidate 的说明）
+          NetworkDirSizeStore.invalidate(connectionId)
           loadFiles()
           onResult(true, null)
         }
@@ -371,6 +378,8 @@ class NetworkBrowserViewModel(
       val dir = if (lastSlash >= 0) file.path.substring(0, lastSlash) else ""
       client.remove(dir, listOf(file.name))
         .onSuccess {
+          // 删掉东西以后，祖先目录的大小全变了 —— 缓存必须失效
+          NetworkDirSizeStore.invalidate(connectionId)
           loadFiles()
           onResult(true, null)
         }
@@ -406,6 +415,7 @@ class NetworkBrowserViewModel(
       val target = if (dir.isEmpty()) trimmed else "$dir/$trimmed"
       client.mkdir(target)
         .onSuccess {
+          NetworkDirSizeStore.invalidate(connectionId)
           loadFiles()
           onResult(true, null)
         }
@@ -523,15 +533,18 @@ class NetworkBrowserViewModel(
             total = result.succeeded + result.failed,
             result = result,
           )
+          NetworkDirSizeStore.invalidate(connectionId)
           loadFiles()
           onFinished(toolResultText(plan.tool, result))
         } catch (e: CancellationException) {
           // 用户点了取消：已完成的部分照样反映到列表里
           _toolProgress.value = _toolProgress.value?.copy(cancelled = true)
+          NetworkDirSizeStore.invalidate(connectionId)
           loadFiles()
         } catch (e: Exception) {
           Log.w(TAG, "工具箱执行失败: ${plan.tool.name} | ${e.message}")
           _toolProgress.value = _toolProgress.value?.copy(errorMessage = e.message ?: "整理失败")
+          NetworkDirSizeStore.invalidate(connectionId)
           loadFiles()
         }
       }
@@ -546,6 +559,140 @@ class NetworkBrowserViewModel(
       }
     val swept = if (result.sweptDirs > 0) "，另删除 ${result.sweptDirs} 个空目录" else ""
     return head + swept
+  }
+
+  // ── 属性面板 / 目录大小统计 ──
+
+  /**
+   * 当前连接的协议名（属性面板「存储」那一行：`我的 NAS · AList`）。
+   *
+   * 由 [loadFiles] 顺手填 —— 那里本来就取了一次 connection，
+   * 不必为了一行文案再查一次数据库。
+   */
+  private val _protocolLabel = MutableStateFlow("")
+  val protocolLabel: StateFlow<String> = _protocolLabel.asStateFlow()
+
+  private var dirSizeJob: kotlinx.coroutines.Job? = null
+
+  /** 缓存命中的结果（面板一打开就能显示，不必每次重算 —— 见 [NetworkDirSizeStore]） */
+  fun cachedDirSize(file: NetworkFile): DirSizeEntry? =
+    NetworkDirSizeStore.cached(connectionId, file.path)
+
+  /**
+   * 统计一个目录的总大小（递归 + 缓存）。
+   *
+   * ⚠️ 结果通过回调回给界面，而不是做成一条 StateFlow：**面板是单例的一份状态**，
+   * 但用户可能连点几个目录的属性 —— 那属于「换了一个问题」，旧结果没有保留价值。
+   * 回调写法让「这是第几次提问」天然对上，不必在 VM 里维护一份「当前在看哪个目录」。
+   *
+   * @param onState 先收 `running = true`（有旧结果时一并带上，界面继续显示旧数字），
+   *   再收结果或失败原因
+   */
+  fun computeDirSize(file: NetworkFile, onState: (DirSizeUiState) -> Unit) {
+    val cached = NetworkDirSizeStore.cached(connectionId, file.path)
+    if (cached != null) {
+      onState(DirSizeUiState(entry = cached))
+      return
+    }
+    dirSizeJob?.cancel()
+    onState(DirSizeUiState(running = true))
+    dirSizeJob =
+      viewModelScope.launch {
+        try {
+          val connection = cachedConnection
+            ?: repository.getConnectionById(connectionId)?.also { cachedConnection = it }
+            ?: error("连接已不存在")
+          val entry =
+            NetworkDirSizeStore.compute(
+              connectionId = connectionId,
+              path = file.path,
+              // 具名实参：尾随 lambda 会绑到最后一个参数 onPhase 上（v152 踩过）
+              list = { path -> repository.listFiles(connection, path).getOrThrow() },
+            )
+          onState(DirSizeUiState(entry = entry))
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          Log.w(TAG, "目录大小统计失败: ${file.path} | ${e.message}")
+          onState(DirSizeUiState(error = e.message ?: "统计失败"))
+        }
+      }
+  }
+
+  fun cancelDirSize() {
+    dirSizeJob?.cancel()
+  }
+
+  /**
+   * 开始下载（文件 = 直接存到 Download/CineIsle，目录 = 打包成 zip）。
+   *
+   * ⚠️ 真正的任务跑在 [NetworkDownloadCenter]（进程级）上 —— 本方法只负责
+   * 「把 connection 取出来交给引擎」，这样浏览页被销毁也不影响下载，
+   * 界面也不必自己持有一份 `NetworkConnection`。
+   *
+   * @param onResult (是否已开始, 未开始的原因)。已经在下载时不排队 ——
+   *   同时往 Download 写两个大文件，用户分不清哪个进度条是谁的。
+   */
+  fun startDownload(file: NetworkFile, onResult: (Boolean, String?) -> Unit) {
+    viewModelScope.launch {
+      val connection = cachedConnection
+        ?: repository.getConnectionById(connectionId)?.also { cachedConnection = it }
+      if (connection == null) {
+        onResult(false, "连接已不存在，请重新进入")
+        return@launch
+      }
+      val started = NetworkDownloadCenter.start(application, connection, file)
+      onResult(started, if (started) null else "已有下载任务在运行，请等它结束")
+    }
+  }
+
+  // ── 双栏（平板）：上一级的文件夹列表 ──
+
+  /**
+   * 上一级的子文件夹（双栏左栏）。
+   *
+   * `null` = 还没列出来（界面显示转圈），空列表 = 列过了但没有兄弟目录。
+   *
+   * ⚠️ 只在**宽屏**由界面调用（[ensureSiblings]），窄屏一个请求都不多发 ——
+   * 这个列表唯一的用途就是双栏导航。
+   */
+  private val _siblings = MutableStateFlow<List<NetworkFile>?>(null)
+  val siblings: StateFlow<List<NetworkFile>?> = _siblings.asStateFlow()
+
+  private var siblingsLoaded = false
+
+  /** 宽屏首帧调用一次；列过就不再列（同一 ViewModel 的路径不变，兄弟目录也不会变） */
+  fun ensureSiblings() {
+    if (siblingsLoaded) return
+    siblingsLoaded = true
+    viewModelScope.launch {
+      try {
+        val connection = cachedConnection
+          ?: repository.getConnectionById(connectionId)?.also { cachedConnection = it }
+        if (connection == null) {
+          _siblings.value = emptyList()
+          return@launch
+        }
+        val trimmed = currentPath.trim('/')
+        // 根目录没有「上一级」——界面那边也不会显示左栏，这里给空列表兜底
+        if (!trimmed.contains('/')) {
+          _siblings.value = emptyList()
+          return@launch
+        }
+        val parent = trimmed.substringBeforeLast('/')
+        val list = repository.listFiles(connection, parent).getOrThrow()
+        _siblings.value =
+          list
+            .filter { it.isDirectory }
+            .sortedWith(compareBy(SortUtils.NaturalOrderComparator.DEFAULT) { it.name })
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        Log.w(TAG, "上一级目录列不出来: $currentPath | ${e.message}")
+        // 列失败给空列表（不是 null）：界面会落到「没有其他文件夹」而不是永远转圈
+        _siblings.value = emptyList()
+      }
+    }
   }
 
   /**
@@ -582,6 +729,8 @@ class NetworkBrowserViewModel(
 
         // 长按菜单只对支持写操作的协议开放（当前只有 AList）
         _supportsWrite.value = connection.protocol == NetworkProtocol.ALIST
+        // 属性面板「存储」那一行要用（`我的 NAS · AList`）
+        _protocolLabel.value = connection.protocol.displayName
 
         repository.listFiles(connection, currentPath)
           .onSuccess { fileList ->

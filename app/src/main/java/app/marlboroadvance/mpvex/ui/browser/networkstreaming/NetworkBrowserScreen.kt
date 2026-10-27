@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FilterList
@@ -45,6 +46,7 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Handyman
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
@@ -125,6 +127,10 @@ import app.marlboroadvance.mpvex.ui.browser.cards.NetworkVideoCard
 import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
 import app.marlboroadvance.mpvex.ui.browser.emby.components.VideoFeedIcon
 import app.marlboroadvance.mpvex.ui.browser.states.EmptyState
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.download.NetworkDownloadBarHost
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.download.NetworkDownloadCenter
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.DirSizeUiState
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.NetworkFilePropertiesOverlay
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.NetworkUploadCenter
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkToolboxSheet
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.NetworkUploadSheet
@@ -325,6 +331,16 @@ data class NetworkBrowserScreen(
     // 只有 AList 有写接口，入口跟「上传」「新建文件夹」同一条 supportsWrite 门禁。
     var showToolbox by remember { mutableStateOf(false) }
 
+    // ── 属性面板（右侧抽屉）──
+    // null = 收起。属性是**只读**的，所以不设 supportsWrite 门禁 ——
+    // SMB / WebDAV / FTP 的用户同样有「这个文件夹多大、它在哪」的疑问。
+    var propertyTarget by remember { mutableStateOf<NetworkFile?>(null) }
+    // 目录统计状态。⚠️ 换条目时必须清空，否则会把上一个目录的字节数贴到新条目上
+    var dirSizeState by remember { mutableStateOf<DirSizeUiState?>(null) }
+
+    // 下载进度（进程级单例：关掉提示条、甚至离开本页，任务照跑）
+    val downloadProgress by NetworkDownloadCenter.job.collectAsState()
+
     // 本地搜索（关键词过滤，纯内存 —— 目录列表本来就是全量一次拉完的）
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -368,6 +384,26 @@ data class NetworkBrowserScreen(
         }
       }
     }
+
+    // ── 双栏（平板 / 折叠屏展开）──
+    // 720dp = 240dp 左栏 + 480dp 内容：再窄两边都不好看，直接回落到单栏。
+    // 这一条判据只用「宽度」—— 窄屏（手机）无论如何都不开，满足「自动回落」的要求。
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    val dualPaneCapable = screenWidthDp >= 720
+    val dualPanePref by browserPreferences.networkDualPane.collectAsState()
+    val siblings by viewModel.siblings.collectAsState()
+    val protocolLabel by viewModel.protocolLabel.collectAsState()
+    // 根目录没有「上一级」，双栏在那儿只会多一块空壳
+    val dualPane = dualPaneCapable && dualPanePref && !atConnectionRoot
+    // 左栏的列表是一次**额外**的列目录请求，只有真要用双栏时才发
+    LaunchedEffect(dualPane) {
+      if (dualPane) viewModel.ensureSiblings()
+    }
+    // 上一级自己的显示名（左栏栏头那行小字）
+    val parentLabel =
+      remember(currentPath, connectionName) {
+        networkPathDisplayName(currentPath.trim('/').substringBeforeLast('/', ""), connectionName)
+      }
 
     // 跳到某一层（面包屑跳转 = **丢弃「前进历史」**，与文件管理器点面包屑同一语义）。
     fun navigateToPath(target: String) {
@@ -591,6 +627,27 @@ data class NetworkBrowserScreen(
                   },
                 )
 
+                // ── 当前目录属性（大小统计 / 完整路径 / 打包下载）──
+                // 长按只能点列表里的条目，而「当前目录」自己也在列表里看不到 ——
+                // 想统计「我现在站的这个文件夹有多大」只有这里一个入口。
+                DropdownMenuItem(
+                  text = { Text("当前目录属性") },
+                  leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    val dirFile =
+                      NetworkFile(
+                        name = dirTitle,
+                        path = currentPath,
+                        size = 0,
+                        isDirectory = true,
+                      )
+                    dirSizeState = null
+                    propertyTarget = dirFile
+                    viewModel.computeDirSize(dirFile) { dirSizeState = it }
+                  },
+                )
+
                 // ── 上传（本地 → 当前目录）──
                 // 只有 AList 有写接口（fs/put），其余协议的 supportsWrite 为 false，
                 // 压根不显示 —— 弹出来点了报错不如不给入口（与长按菜单同一原则）。
@@ -760,9 +817,31 @@ data class NetworkBrowserScreen(
                     )
                   },
                 )
+
+                // ── 双栏浏览（**只在宽屏出现**）──
+                // 窄屏根本不具备双栏条件，摆在这儿点了也没反应 —— 干脆不显示。
+                // 与「穿透子文件夹」同一手法：点它不关菜单，勾选状态要能被看见。
+                if (dualPaneCapable) {
+                  DropdownMenuItem(
+                    text = { Text("双栏浏览") },
+                    leadingIcon = { Checkbox(checked = dualPanePref, onCheckedChange = null) },
+                    onClick = { browserPreferences.networkDualPane.set(!dualPanePref) },
+                  )
+                }
               }
             }
           },
+        )
+      },
+      // 下载进度条挂在底栏：bottomBar 是**占位**的（内容会被顶上去），
+      // 不是浮在列表上 —— 最后一行永远不会被这条盖住。
+      bottomBar = {
+        NetworkDownloadBarHost(
+          progress = downloadProgress,
+          onCancel = { NetworkDownloadCenter.cancel() },
+          onDismiss = { NetworkDownloadCenter.clear() },
+          // 重试要用同一个 context；引擎自己记着上一次的源条目
+          onRetry = { NetworkDownloadCenter.retry(context) },
         )
       },
     ) { padding ->
@@ -815,70 +894,121 @@ data class NetworkBrowserScreen(
           }
         }
 
-        NetworkBrowserContent(
-          files = visibleFiles,
-          connectionId = connectionId,
-          isLoading = isLoading && files.isEmpty(),
-          isRefreshing = isRefreshing,
-          error = error,
-          isGridView = isGridView,
-          // 滚动 state 由本页顶层持有（保存/恢复/排序回顶都在那一层驱动，见上方注释）
-          gridState = networkGridState,
-          listState = networkListState,
-          searchQuery = searchQuery,
-          anyTypeHidden = !(showFolders && showPhotos && showVideos),
-          folderCovers = folderCovers,
-          coverTrigger = coverTrigger,
-          titleMaxLines = titleMaxLines,
-          // 下拉刷新 = 用户显式要最新 ⇒ 顺带失效子文件夹封面缓存重取；
-          // 正常进入 / 返回上一级走缓存，不重列目录（见 NetworkBrowserViewModel.loadFiles）
-          onRefresh = { viewModel.loadFiles(invalidateCovers = true) },
-          onFolderClick = { folder ->
-            backstack.add(
-              NetworkBrowserScreen(
-                connectionId = connectionId,
-                connectionName = connectionName,
-                currentPath = folder.path,
-              ),
+        // ── 主体：单栏 / 双栏 ──
+        // 双栏只在**宽屏且不在根目录**时出现（见上面 dualPane）。左栏固定 240dp，
+        // 右栏吃掉剩下的宽度 —— 两个面板在同一个 Row 里各占各的宽度，
+        // 所以无论哪种形态都不会互相压盖。
+        Row(modifier = Modifier.weight(1f)) {
+          if (dualPane) {
+            NetworkFolderPane(
+              parentLabel = parentLabel,
+              folders = siblings,
+              currentPath = currentPath,
+              onGoUp = { backstack.removeLastOrNull() },
+              onSelect = { folder -> navigateToPath(folder.path) },
+              modifier = Modifier.width(240.dp),
             )
-          },
-          onPhotoClick = { photo ->
-            // 队列 = 当前目录全部照片（浏览器的目录列表本来就是全量一次拉完，
-            // 没有续页问题），点哪张就从哪张开始
-            val photos = files.filter { it.isPhoto() }
-            backstack.add(
-              NetworkPhotoViewerScreen(
-                connectionId = connectionId,
-                connectionName = connectionName,
-                dirPath = currentPath,
-                photos = photos,
-                initialIndex =
-                  photos.indexOfFirst { it.path == photo.path }.coerceAtLeast(0),
-                title = dirTitle,
-              ),
-            )
-          },
-          onVideoClick = { video ->
-            // 点击即播：队列是当前目录全部视频，点哪条从哪条开始连播
-            val videos = files.filter { it.isVideoFile() }
-            viewModel.playVideos(
-              videos,
-              videos.indexOfFirst { it.path == video.path }.coerceAtLeast(0),
-            )
-          },
-          onFileLongClick =
-            if (supportsWrite) {
-              { file, offset ->
-                actionTarget = file
-                actionMenuAnchor = offset
-              }
-            } else {
-              null
+            PaneDivider()
+          }
+
+          NetworkBrowserContent(
+            files = visibleFiles,
+            connectionId = connectionId,
+            isLoading = isLoading && files.isEmpty(),
+            isRefreshing = isRefreshing,
+            error = error,
+            isGridView = isGridView,
+            // 滚动 state 由本页顶层持有（保存/恢复/排序回顶都在那一层驱动，见上方注释）
+            gridState = networkGridState,
+            listState = networkListState,
+            searchQuery = searchQuery,
+            anyTypeHidden = !(showFolders && showPhotos && showVideos),
+            folderCovers = folderCovers,
+            coverTrigger = coverTrigger,
+            titleMaxLines = titleMaxLines,
+            // 下拉刷新 = 用户显式要最新 ⇒ 顺带失效子文件夹封面缓存重取；
+            // 正常进入 / 返回上一级走缓存，不重列目录（见 NetworkBrowserViewModel.loadFiles）
+            onRefresh = { viewModel.loadFiles(invalidateCovers = true) },
+            onFolderClick = { folder ->
+              backstack.add(
+                NetworkBrowserScreen(
+                  connectionId = connectionId,
+                  connectionName = connectionName,
+                  currentPath = folder.path,
+                ),
+              )
             },
-          // 未过滤总数（筛选 / 搜索前的 files.size）——空态文案要区分
-          // 「目录真空」和「全被滤掉」，只有过滤后的列表看不出来
-          totalCount = files.size,
-          modifier = Modifier.weight(1f),
+            onPhotoClick = { photo ->
+              // 队列 = 当前目录全部照片（浏览器的目录列表本来就是全量一次拉完，
+              // 没有续页问题），点哪张就从哪张开始
+              val photos = files.filter { it.isPhoto() }
+              backstack.add(
+                NetworkPhotoViewerScreen(
+                  connectionId = connectionId,
+                  connectionName = connectionName,
+                  dirPath = currentPath,
+                  photos = photos,
+                  initialIndex =
+                    photos.indexOfFirst { it.path == photo.path }.coerceAtLeast(0),
+                  title = dirTitle,
+                ),
+              )
+            },
+            onVideoClick = { video ->
+              // 点击即播：队列是当前目录全部视频，点哪条从哪条开始连播
+              val videos = files.filter { it.isVideoFile() }
+              viewModel.playVideos(
+                videos,
+                videos.indexOfFirst { it.path == video.path }.coerceAtLeast(0),
+              )
+            },
+            // 长按菜单：**所有协议都挂**（属性 / 下载是只读动作，SMB、WebDAV、FTP 一样需要）；
+            // 重命名 / 删除两项在菜单内部按 supportsWrite 决定显不显示。
+            onFileLongClick = { file, offset ->
+              actionTarget = file
+              actionMenuAnchor = offset
+            },
+            // 未过滤总数（筛选 / 搜索前的 files.size）——空态文案要区分
+            // 「目录真空」和「全被滤掉」，只有过滤后的列表看不出来
+            totalCount = files.size,
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
+
+      // ── 属性面板（右侧抽屉）──
+      // ⚠️ 这层 Box 让出顶栏 / 底栏的高度：Scaffold 的内容层铺满整屏（padding 只是
+      //    数值，不给就真的铺满），而 bars 是画在内容**之上**的 —— 不让开的话，
+      //    抽屉的头部会被顶栏压住、底部的「下载 / 关闭」会被下载条压住。
+      Box(
+        modifier =
+          Modifier
+            .fillMaxSize()
+            .padding(
+              top = padding.calculateTopPadding(),
+              bottom = padding.calculateBottomPadding(),
+            ),
+      ) {
+        NetworkFilePropertiesOverlay(
+          file = propertyTarget,
+          connectionName = connectionName,
+          protocolLabel = protocolLabel,
+          dirSize = dirSizeState,
+          onRequestDirSize = {
+            propertyTarget?.takeIf { it.isDirectory }?.let { dir ->
+              viewModel.computeDirSize(dir) { dirSizeState = it }
+            }
+          },
+          onDownload = { file ->
+            viewModel.startDownload(file) { started, reason ->
+              if (!started) toast(reason ?: "无法开始下载")
+            }
+          },
+          onDismiss = {
+            propertyTarget = null
+            // 面板关了就停掉统计：一次几千个目录的递归没必要在后台跑完
+            viewModel.cancelDirSize()
+          },
         )
       }
 
@@ -899,7 +1029,24 @@ data class NetworkBrowserScreen(
         ) {
           NetworkFileActionMenu(
             file = target,
+            // 重命名 / 删除只有 AList 有写接口；属性与下载对谁都可用
+            canWrite = supportsWrite,
             onDismissRequest = { actionTarget = null },
+            onProperties = {
+              actionTarget = null
+              // 先清掉上一个条目的统计结果，再对目录发起统计（文件不需要）
+              dirSizeState = null
+              propertyTarget = target
+              if (target.isDirectory) {
+                viewModel.computeDirSize(target) { dirSizeState = it }
+              }
+            },
+            onDownload = {
+              actionTarget = null
+              viewModel.startDownload(target) { started, reason ->
+                if (!started) toast(reason ?: "无法开始下载")
+              }
+            },
             onRename = {
               actionTarget = null
               renameTarget = target
@@ -1091,7 +1238,11 @@ data class NetworkBrowserScreen(
 @Composable
 private fun NetworkFileActionMenu(
   file: NetworkFile,
+  /** 当前协议是否支持写操作（AList）。false 时不显示重命名 / 删除 */
+  canWrite: Boolean,
   onDismissRequest: () -> Unit,
+  onProperties: () -> Unit,
+  onDownload: () -> Unit,
   onRename: () -> Unit,
   onDelete: () -> Unit,
 ) {
@@ -1104,22 +1255,36 @@ private fun NetworkFileActionMenu(
       overflow = TextOverflow.Ellipsis,
       modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
     )
+    // ── 只读两项：任何协议都有 ──
     DropdownMenuItem(
-      text = { Text(stringResource(R.string.i18n_rename)) },
-      leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-      onClick = onRename,
+      text = { Text("属性") },
+      leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+      onClick = onProperties,
     )
     DropdownMenuItem(
-      text = { Text(stringResource(R.string.i18n_delete), color = MaterialTheme.colorScheme.error) },
-      leadingIcon = {
-        Icon(
-          Icons.Default.Delete,
-          contentDescription = null,
-          tint = MaterialTheme.colorScheme.error,
-        )
-      },
-      onClick = onDelete,
+      text = { Text(if (file.isDirectory) "打包下载" else "下载到本地") },
+      leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
+      onClick = onDownload,
     )
+    if (canWrite) {
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+      DropdownMenuItem(
+        text = { Text(stringResource(R.string.i18n_rename)) },
+        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+        onClick = onRename,
+      )
+      DropdownMenuItem(
+        text = { Text(stringResource(R.string.i18n_delete), color = MaterialTheme.colorScheme.error) },
+        leadingIcon = {
+          Icon(
+            Icons.Default.Delete,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+          )
+        },
+        onClick = onDelete,
+      )
+    }
   }
 }
 
