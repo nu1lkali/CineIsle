@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -81,6 +82,7 @@ import app.marlboroadvance.mpvex.ui.cine.components.cineHazeSource
 import app.marlboroadvance.mpvex.ui.cine.toCineMedia
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import app.marlboroadvance.mpvex.ui.utils.ScrollToTopOnOrderChange
+import app.marlboroadvance.mpvex.ui.utils.animateToTop
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import kotlin.random.Random
@@ -100,7 +102,7 @@ import kotlin.random.Random
  * - 排序收进玻璃抽屉（名称 / 年份 / 评分 / 最新添加 / 随机），再点一次已选中的项反转方向
  * - 收藏红心钉在顶栏右侧，状态不等网络：进页面先用最小条目顶上，立刻可点
  * - 头部（头像行 / 筛选 / 搜索）是网格的第一个条目，跟着海报一起滚走（v158）；
- *   滚过头像行后顶栏下方浮出「头像 + 名字」的紧凑条（v159），顶栏标题同时让位
+ *   滚过头像行后顶栏下方浮出「头像 + 名字 + 回到顶部」的紧凑条（v159 起，v160 加回顶钮）
  */
 @Composable
 fun CinePersonScreen(
@@ -405,8 +407,9 @@ fun CinePersonScreen(
       .background(colors.surface),
   ) {
     CineGlassTopBar(
-      // 紧凑条出现时名字交给它 —— 同一屏里出现两个「张三」上下叠着最难看
-      title = if (showCompact) null else personName,
+      // 标题一直留着：v159 曾在紧凑条出现时把它置空（怕两个名字上下叠），
+      // 真机上「顶栏只剩三个图标飘着」比重复更难看，v160 改回来。
+      title = personName,
       onBack = { backStack.removeLastOrNull() },
       actions = {
         CineIconButton(
@@ -517,6 +520,8 @@ fun CinePersonScreen(
         name = personName,
         avatarUrl = avatarUrl,
         visible = showCompact,
+        // 回到顶部：走 ScrollToTop.kt 里的入口（全项目「回顶」只有那一个出处）
+        onBackToTop = { scope.launch { gridState.animateToTop() } },
         modifier = Modifier.align(Alignment.TopCenter),
       )
     }
@@ -575,24 +580,23 @@ fun CinePersonScreen(
 }
 
 /**
- * 折叠态的「紧凑条」：只有头像 + 名字（v159）。
- *
- * ## 为什么单独一条、而不是把头像塞进顶栏
- * 顶栏本来就有页面标题（名字）。紧凑条一出现，顶栏标题就让位（传 `null`），
- * 于是同一屏里名字**只有一个**；紧凑条本身贴边、玻璃底，看上去就是「顶栏变厚了一点」，
- * 而不是多出一条工具栏。
+ * 折叠态的「紧凑条」：头像 + 名字 + 回到顶部（v159 / v160 加回顶钮）。
  *
  * ## 为什么压在内容上（不占布局）
  * 占位的话，它出现 / 消失会把下面网格的视口高度改 46dp，滚到一半的列表会跳一下。
  * 压在内容上位置完全不动，而且底下的海报确实在滚 —— 玻璃（`cineGlass`）才有东西可糊。
  *
+ * 顶栏**不再**为它让位（v159 让过，真机上「顶栏空着只剩图标」更难看）。
+ *
  * @param visible 只在「网格已经滚过头部头像行」时为 true
+ * @param onBackToTop 回到网格顶部（调用方走 `ScrollToTop.kt` 的 `animateToTop`）
  */
 @Composable
 private fun CinePersonCompactBar(
   name: String,
   avatarUrl: String?,
   visible: Boolean,
+  onBackToTop: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val colors = CineTheme.colors
@@ -615,7 +619,7 @@ private fun CinePersonCompactBar(
           border = false,
         )
         .height(46.dp)
-        .padding(horizontal = space.screenH),
+        .padding(start = space.screenH, end = space.screenH - 6.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Box(
@@ -641,6 +645,14 @@ private fun CinePersonCompactBar(
         modifier = Modifier
           .weight(1f)
           .padding(start = 10.dp),
+      )
+      CineIconButton(
+        icon = Icons.Filled.ArrowUpward,
+        contentDescription = "回到顶部",
+        tint = colors.onSurfaceVariant,
+        onClick = onBackToTop,
+        size = 32.dp,
+        iconSize = 17.dp,
       )
     }
   }

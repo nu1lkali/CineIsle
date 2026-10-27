@@ -227,6 +227,16 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     viewModelScope.launch {
       repository.failover.autoSwitched.collect { refreshHome() }
     }
+    // 第二地址切换（**同一台服务器**换入口）同样必须重拉（v160）。
+    //
+    // ⚠️ 这一条原来漏了 —— 用户真机报的「服务器管理页已经显示切到第二地址，
+    // 首页却还在往第一地址拿数据，卡满 15 秒超时、点重试才走第二地址」就是它：
+    // 地址层是独立于主备的另一层（见 `EmbyEndpointResolver`），它切完只发了
+    // `switched` 事件，而全场没有一个人收，于是首页那条**已经在飞的旧请求**
+    // 只能自己跑完超时。
+    viewModelScope.launch {
+      repository.endpoints.switched.collect { refreshHome() }
+    }
   }
 
   // ==================== 服务器管理 ====================
@@ -293,16 +303,39 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
 
   // ==================== 数据加载 ====================
 
+  /**
+   * 首页加载的**代数**：只有最新一代允许写状态。
+   *
+   * 为什么非要这个：`OkHttp` 的阻塞调用**不会**被协程取消真正掐断，旧请求仍会在
+   * 十几秒后带着超时结果回来。它要是还能写 `_libraries` / `_error`，
+   * 就会把新一代刚拉到的数据冲成「空列表 + 加载失败」—— 表现就是
+   * 「切完地址首页刷新了一下，又变回空的」。
+   */
+  @Volatile
+  private var homeGeneration = 0
+
+  /** 上一次首页加载的协程 */
+  private var homeJob: Job? = null
+
   /** 加载首页所需的全部数据：媒体库 + 继续观看 + 最新加入 */
   fun refreshHome() {
-    viewModelScope.launch { loadHome() }
+    // ⚠️ 显式取消上一次：它很可能正卡在**已经切走**的旧地址上。
+    // 光发新请求不够 —— 旧的那条要等 socket 超时（15s 级）才结束，期间
+    // 骨架屏不会消失、用户看到的就是「切了地址还是拉不出来」。
+    val gen = ++homeGeneration
+    homeJob?.cancel()
+    homeJob = viewModelScope.launch { loadHome(gen) }
   }
 
   /**
    * [refreshHome] 的可等待版本：下拉刷新要用它 —— 刷新指示器得等这批请求真的回来才收起，
    * 否则手指刚松开动画就没了，用户看不出到底刷没刷。
    */
-  suspend fun refreshHomeAndWait() = loadHome()
+  suspend fun refreshHomeAndWait() {
+    val gen = ++homeGeneration
+    homeJob?.cancel()
+    loadHome(gen)
+  }
 
   /**
    * 首页数据加载。
@@ -336,12 +369,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * ⚠️ 并行**不能**改掉上面那条铁律：三发依旧是各自独立的 `runCatching`，
    * 一发放鸽子不能拖垮另外两块。
    */
-  private suspend fun loadHome() {
+  private suspend fun loadHome(gen: Int) {
     _isLoading.value = true
     _error.value = null
     try {
       // 冷启动时服务器是异步恢复的，这里必须等它恢复完，否则会误判成「没有服务器」
       val server = repository.ensureLoggedIn(repository.awaitCurrentServer())
+      // 等服务器的这一段也可能被新的加载取代（切服务器 / 切入口），过期就别往下走
+      if (gen != homeGeneration) return
       if (server == null) {
         _libraries.value = emptyList()
         _resumeItems.value = emptyList()
@@ -355,15 +390,25 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         val latestDeferred = async { runCatching { repository.getLatestItems(server, limit = 24) } }
 
         val libs = libsDeferred.await()
-        _libraries.value = libs.getOrElse { e ->
-          _error.value = e.message ?: "加载失败"
-          emptyList()
+        // ⚠️ 每一处写入前都要判代：旧代（已经切了地址的那一次）拿回来的多半是超时，
+        // 写下去会把新代刚拉到的数据冲成「空 + 加载失败」。
+        if (gen == homeGeneration) {
+          _libraries.value = libs.getOrElse { e ->
+            _error.value = e.message ?: "加载失败"
+            emptyList()
+          }
         }
 
         // 下面两发失败只留空列表，不碰 _error —— 首页已经有内容了，
         // 为「继续观看没加载出来」把整页标成失败是本末倒置。
-        _resumeItems.value = resumeDeferred.await().getOrElse { emptyList() }
-        _latestItems.value = latestDeferred.await().getOrElse { emptyList() }
+        val resume = resumeDeferred.await()
+        if (gen == homeGeneration) {
+          _resumeItems.value = resume.getOrElse { emptyList() }
+        }
+        val latest = latestDeferred.await()
+        if (gen == homeGeneration) {
+          _latestItems.value = latest.getOrElse { emptyList() }
+        }
 
         // 显示偏好自动恢复（清单 #16）。放在数据加载**之后**：
         // 拉回来的偏好要影响本次已经渲染的首屏，重新触发一次重组就够了，
@@ -371,13 +416,18 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         // 失败**不写 _error** —— 显示偏好是锦上添花，为它把整个首页标成「加载失败」不合理。
         // ⚠️ 把已经拉到的媒体库列表传进去：它内部按「每个媒体库一份」读偏好，
         // 老路会**自己再发一次 /Views**，纯属重复请求。
-        runCatching {
-          displayPrefsSync.pullIfEnabled(server, libraries = libs.getOrNull())
+        if (gen == homeGeneration) {
+          runCatching {
+            displayPrefsSync.pullIfEnabled(server, libraries = libs.getOrNull())
+          }
         }
       }
     } finally {
-      _isLoading.value = false
-      _homeLoads.value = _homeLoads.value + 1
+      // 只有最新一代能收尾：旧代把 isLoading 置 false 会让新代的骨架屏提前消失
+      if (gen == homeGeneration) {
+        _isLoading.value = false
+        _homeLoads.value = _homeLoads.value + 1
+      }
     }
   }
 

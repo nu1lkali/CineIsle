@@ -84,6 +84,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import app.marlboroadvance.mpvex.ui.utils.ScrollToTopOnOrderChange
+import app.marlboroadvance.mpvex.ui.utils.animateToTop
 import app.marlboroadvance.mpvex.ui.utils.longPressToCopy
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -398,15 +399,13 @@ data class EmbyPersonScreen(
     Column(modifier = Modifier.fillMaxSize()) {
       TopAppBar(
         title = {
-          // 紧凑条出现时名字交给它 —— 同一屏里两个「张三」上下叠着最难看
-          if (!showCompact) {
-            Text(
-              text = personName,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.longPressToCopy(personName, "姓名"),
-            )
-          }
+          // 标题一直留着：v159 曾在紧凑条出现时置空，真机上「顶栏只剩图标」更难看
+          Text(
+            text = personName,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.longPressToCopy(personName, "姓名"),
+          )
         },
         navigationIcon = {
           IconButton(onClick = { backStack.removeLastOrNull() }) {
@@ -564,6 +563,8 @@ data class EmbyPersonScreen(
             EmbyClient.imageUrl(it, personId, "Primary", personImageTag, 160)
           },
           visible = showCompact,
+          // 回到顶部：走 ScrollToTop.kt 里的入口（全项目「回顶」只有那一个出处）
+          onBackToTop = { scope.launch { gridState.animateToTop() } },
           modifier = Modifier.align(Alignment.TopCenter),
         )
       }
@@ -572,19 +573,20 @@ data class EmbyPersonScreen(
 }
 
 /**
- * 折叠态的「紧凑条」：只有头像 + 名字（v159）。
+ * 折叠态的「紧凑条」：头像 + 名字 + 回到顶部（v159 / v160 加回顶钮）。
  *
- * 紧凑条出现时顶栏标题让位（`TopAppBar` 的 title 传空）—— 否则同一个名字会在
- * 相邻两行里各出现一次。它压在内容之上、**不占布局**：占位的话它一出现就把网格
- * 视口压矮 46dp，滚到一半的位置会跳一下。
+ * 它压在内容之上、**不占布局**：占位的话它一出现就把网格视口压矮 46dp，
+ * 滚到一半的位置会跳一下。顶栏**不再**为它让位（v159 让过，真机上顶栏空着更难看）。
  *
  * @param visible 只在「网格已经滚过头部头像行」时为 true
+ * @param onBackToTop 回到网格顶部（调用方走 `ScrollToTop.kt` 的 `animateToTop`）
  */
 @Composable
 private fun PersonCompactBar(
   name: String,
   avatarUrl: String?,
   visible: Boolean,
+  onBackToTop: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   AnimatedVisibility(
@@ -601,7 +603,7 @@ private fun PersonCompactBar(
         modifier = Modifier
           .fillMaxWidth()
           .height(46.dp)
-          .padding(horizontal = 16.dp),
+          .padding(start = 16.dp, end = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Surface(
@@ -629,6 +631,14 @@ private fun PersonCompactBar(
             .padding(start = 10.dp)
             .longPressToCopy(name, "姓名"),
         )
+        IconButton(onClick = onBackToTop, modifier = Modifier.size(34.dp)) {
+          Icon(
+            imageVector = Icons.Default.ArrowUpward,
+            contentDescription = "回到顶部",
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
       }
     }
   }

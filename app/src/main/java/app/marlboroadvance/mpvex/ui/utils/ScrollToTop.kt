@@ -64,6 +64,19 @@ fun LazyListState.scrollToTop() {
 }
 
 /**
+ * 带滚动动画地回到第一项。**只给「用户主动点回顶」用**（如作品页紧凑条上的回顶钮）。
+ *
+ * 与 [scrollToTop] 的分工：那个是瞬时定位，专门对付「数据换序后框架按 key 把列表
+ * 锚回中间」。用户点按钮时列表**没有换序**，不存在重锚问题，所以这里可以用普通
+ * 动画滚动 —— 一屏海报「刷」地滑上去比瞬间跳顶更符合直觉。
+ *
+ * ⚠️ 同一个列表**换序之后**的回顶仍然只能用 [scrollToTop] / [ScrollToTopOnOrderChange]。
+ */
+suspend fun LazyGridState.animateToTop() {
+  animateScrollToItem(0)
+}
+
+/**
  * 「顺序变了就回顶」的组合式封装：**首次组合不触发**。
  *
  * @param key 顺序变化的信号。只要是「顺序真的变了才会变值」的稳定值即可：

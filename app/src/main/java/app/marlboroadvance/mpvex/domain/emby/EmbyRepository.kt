@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.domain.emby
 
+import android.widget.Toast
 import app.marlboroadvance.mpvex.database.repository.EmbyServerRepository
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -85,6 +86,29 @@ class EmbyRepository(
   init {
     // 拼 URL 的统一出口装上解析器：没装时行为与改造前完全一致（回落服务器自身配置）
     EmbyEndpoints.resolver = endpoints
+    // 入口切换要给用户一句提示（v160）。
+    //
+    // 为什么不放在某个页面里：触发点是「任意一次真实请求失败」，那一刻用户可能
+    // 在首页、媒体库、甚至在播放器里 —— 没有哪个界面「拥有」这个事件。
+    // 放在仓库（Koin 单例、随 App 存活）才不会漏。
+    //
+    // ⚠️ Toast 必须在主线程：仓库的 scope 是 `Dispatchers.Default`，非主线程上
+    // `Toast#show()` 会抛 "Can't create handler inside thread that has not called
+    // Looper.prepare()"（Toast 的 TN 在构造时绑当前线程的 Looper）。
+    scope.launch {
+      endpoints.switched.collect { server ->
+        val now = endpoints.currentFor(server)
+        val text =
+          if (now.baseUrl == server.primaryEndpoint().baseUrl) {
+            "已切回主地址 ${now.host}:${now.port}"
+          } else {
+            "已切换到第二地址 ${now.host}:${now.port}"
+          }
+        withContext(Dispatchers.Main) {
+          Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
+        }
+      }
+    }
     // 进出家门 / 切 WiFi / 断开蜂窝时重估所有配了双入口的服务器。
     // 只在网络变化这一刻探，请求路径上零开销。
     registerNetworkCallback()
