@@ -54,6 +54,11 @@ enum class NetworkTool(
     description = "递归删除 0 字节的文件，多是下载中断 / 上传失败留下的空壳（跳过隐藏文件）",
     destructive = true,
   ),
+  CLEAN_JUNK_FILES(
+    title = "清理垃圾文件",
+    description = "递归删除系统 / 同步残留：Thumbs.db、.DS_Store、._* 资源叉、@eaDir 缩略图目录等",
+    destructive = true,
+  ),
   ARCHIVE_BY_MONTH(
     title = "按月份归档",
     description = "当前目录里的文件按修改时间移进「2026-10」这样的月份文件夹",
@@ -142,6 +147,69 @@ fun toolboxMonthFolder(lastModified: Long): String =
     SimpleDateFormat("yyyy-MM", Locale.US).format(Date(lastModified))
   }
 
+/**
+ * 垃圾**文件**名单（小写比较），按来源分三组 —— 分组不是为了执行，是为了让确认清单
+ * 能说清「删的是什么东西」，而不是甩一个总数让人猜。
+ *
+ * - **Windows 缓存**：`Thumbs.db` / `ehthumbs*.db` 是资源管理器缩略图库，
+ *   `desktop.ini` 是文件夹显示属性；进网络共享就会跟着漂过来。
+ * - **macOS 标记**：`.DS_Store` 存图标位置，`._*` 是给每个文件配的资源叉
+ *   （`._影片.mkv`，内容只有 Finder 元信息），`.localized` / `.apdisk` /
+ *   `.VolumeIcon.icns` 同理。
+ * - **临时残留**：`.fuse_hidden*` 是 FUSE 卸载不干净留下的副本，往往还占着真实空间。
+ *
+ * ⚠️ **刻意不收** `.part` / `.crdownload` / `.aria2` / `.!ut`：这些是断点续传的现场，
+ * 删掉等于把「还能接着下」的那一半废掉。清理工具最忌讳把可恢复的东西当垃圾。
+ */
+private val TOOLBOX_JUNK_WINDOWS: Set<String> =
+  setOf("thumbs.db", "ehthumbs.db", "ehthumbs_vista.db", "desktop.ini")
+
+private val TOOLBOX_JUNK_MACOS: Set<String> =
+  setOf(".ds_store", ".localized", ".apdisk", ".volumeicon.icns")
+
+private const val TOOLBOX_JUNK_LABEL_WINDOWS = "Windows 缓存"
+private const val TOOLBOX_JUNK_LABEL_MACOS = "macOS 标记"
+private const val TOOLBOX_JUNK_LABEL_TEMP = "临时残留"
+
+/**
+ * 垃圾**目录**名单（小写）。这些目录里动辄几百上千个小文件，逐个删既慢又没意义，
+ * 直接整目录删。
+ *
+ * ⚠️ **刻意不收** `#recycle` / `.recycle` / `.Trashes`：那是「回收站」本身，
+ * 里面是用户以为还能恢复的东西 —— 从清理工具里删掉，比不清理恶劣得多。
+ */
+private val TOOLBOX_JUNK_DIRS: Set<String> =
+  setOf(
+    "@eadir", // Synology 缩略图 / 索引
+    ".@__thumb", // QNAP 缩略图
+    ".appledouble", // SMB 上的资源叉目录
+    ".spotlight-v100", // macOS 索引
+    ".fseventsd", // macOS 文件事件
+    ".temporaryitems", // macOS 临时目录
+  )
+
+/**
+ * 垃圾文件的归类标签；不是垃圾返回 null。
+ *
+ * 「是不是垃圾」和「是哪一类垃圾」用同一个函数判，避免两处名单走偏
+ * （一处加了、另一处忘了 ⇒ 清单里出现「共 12 个」但只列出 10 个的怪账）。
+ */
+fun toolboxJunkLabel(fileName: String): String? {
+  val lower = fileName.lowercase()
+  return when {
+    lower in TOOLBOX_JUNK_WINDOWS -> TOOLBOX_JUNK_LABEL_WINDOWS
+    lower in TOOLBOX_JUNK_MACOS || lower.startsWith("._") -> TOOLBOX_JUNK_LABEL_MACOS
+    lower.startsWith(".fuse_hidden") -> TOOLBOX_JUNK_LABEL_TEMP
+    else -> null
+  }
+}
+
+/** 是不是垃圾文件（按文件名，忽略大小写） */
+fun toolboxIsJunkFile(fileName: String): Boolean = toolboxJunkLabel(fileName) != null
+
+/** 是不是垃圾目录（按目录名，忽略大小写） */
+fun toolboxIsJunkDir(dirName: String): Boolean = dirName.lowercase() in TOOLBOX_JUNK_DIRS
+
 /** 一步动作。执行器只认这四种 —— 顺序即执行顺序 */
 sealed interface ToolAction {
   /** 列表里那一行的描述（进度页显示「正在…」） */
@@ -166,6 +234,17 @@ sealed interface ToolAction {
   data class DeleteDir(val dir: String, val name: String) : ToolAction {
     override val label: String get() = "删除空目录 $name"
   }
+
+  /**
+   * 删除一棵**非空**目录树（`fs/remove` 对目录是递归的，与删空目录同一个接口）。
+   *
+   * 单独立一个类型不是为了执行路径不同，而是为了在确认清单和进度里说清楚
+   * 「这里面是有东西的」—— 「清理垃圾文件」撞上 `@eaDir` 时不能让人误以为
+   * 只删了一个空壳。
+   */
+  data class DeleteTree(val dir: String, val name: String) : ToolAction {
+    override val label: String get() = "删除目录 $name（含内容）"
+  }
 }
 
 /**
@@ -188,7 +267,8 @@ data class ToolPlan(
 ) {
   val mkdirCount: Int get() = actions.count { it is ToolAction.Mkdir }
   val moveCount: Int get() = actions.count { it is ToolAction.Move }
-  val deleteCount: Int get() = actions.count { it is ToolAction.DeleteFile || it is ToolAction.DeleteDir }
+  val deleteCount: Int
+    get() = actions.count { it is ToolAction.DeleteFile || it is ToolAction.DeleteDir || it is ToolAction.DeleteTree }
 
   val isEmpty: Boolean get() = mkdirCount == 0 && moveCount == 0 && deleteCount == 0
 }

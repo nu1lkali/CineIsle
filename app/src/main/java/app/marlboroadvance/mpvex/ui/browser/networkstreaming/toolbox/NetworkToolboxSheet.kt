@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AutoDelete
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CleaningServices
@@ -126,14 +127,14 @@ fun NetworkToolboxSheet(
 
       Spacer(Modifier.height(8.dp))
 
+      // 取一份局部引用：直接对参数 progress 判空会被智能转换吃掉（编译器报
+      // 「Condition is always true」），转成局部 val 后判空才有意义，也顺便把
+      // 三个分支收在一处读
+      val active = progress
       when {
-        running && progress != null -> ProgressPane(progress = progress, onCancel = onCancel)
+        active != null && running -> ProgressPane(progress = active, onCancel = onCancel)
 
-        finished && progress != null ->
-          ResultPane(
-            progress = progress,
-            onClose = onDismiss,
-          )
+        active != null && finished -> ResultPane(progress = active, onClose = onDismiss)
 
         else ->
           ToolListPane(
@@ -397,9 +398,11 @@ private fun ProgressPane(progress: ToolProgress, onCancel: () -> Unit) {
 @Composable
 private fun ResultPane(progress: ToolProgress, onClose: () -> Unit) {
   Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+    // 取局部 val 再判空：对参数属性判空会被智能转换吃掉（`?: ""` 被判「永远取左边」）
+    val errorMessage = progress.errorMessage
     val (title, detail) =
       when {
-        progress.errorMessage != null -> "执行中断" to (progress.errorMessage ?: "")
+        errorMessage != null -> "执行中断" to errorMessage
         progress.cancelled -> "已取消" to "已完成的改动保留在服务器上，未处理的部分没有动。"
         progress.result != null -> {
           val r = progress.result
@@ -421,7 +424,7 @@ private fun ResultPane(progress: ToolProgress, onClose: () -> Unit) {
       text = detail,
       style = MaterialTheme.typography.bodySmall,
       color =
-        if (progress.errorMessage != null) {
+        if (errorMessage != null) {
           MaterialTheme.colorScheme.error
         } else {
           MaterialTheme.colorScheme.onSurfaceVariant
@@ -441,5 +444,6 @@ private fun NetworkTool.icon(): ImageVector =
     NetworkTool.EXTRACT_AND_ORGANIZE -> Icons.Default.AutoAwesome
     NetworkTool.CLEAN_EMPTY_DIRS -> Icons.Default.CleaningServices
     NetworkTool.CLEAN_EMPTY_FILES -> Icons.Default.DeleteSweep
+    NetworkTool.CLEAN_JUNK_FILES -> Icons.Default.AutoDelete
     NetworkTool.ARCHIVE_BY_MONTH -> Icons.Default.CalendarMonth
   }

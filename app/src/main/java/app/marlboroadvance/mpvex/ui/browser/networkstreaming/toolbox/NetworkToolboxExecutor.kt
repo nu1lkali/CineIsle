@@ -72,6 +72,12 @@ class NetworkToolboxExecutor(private val client: AlistClient) {
           val result = client.remove(action.dir, listOf(action.name))
           step(action, ok = result.isSuccess, error = result.exceptionOrNull()?.message)
         }
+
+        is ToolAction.DeleteTree -> {
+          // fs/remove 对目录是递归的，与删空目录同一个接口；差别只在文案与进度阶段
+          val result = client.remove(action.dir, listOf(action.name))
+          step(action, ok = result.isSuccess, error = result.exceptionOrNull()?.message)
+        }
       }
     }
 
@@ -155,5 +161,6 @@ class NetworkToolboxExecutor(private val client: AlistClient) {
       is ToolAction.Move -> "正在移动文件…"
       is ToolAction.DeleteFile -> "正在删除空文件…"
       is ToolAction.DeleteDir -> "正在删除空目录…"
+      is ToolAction.DeleteTree -> "正在删除垃圾目录…"
     }
 }

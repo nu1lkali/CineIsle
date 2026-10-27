@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox
 
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
+import app.marlboroadvance.mpvex.utils.media.MediaFormatUtils
 
 /**
  * 扫描目录、把「用户选的那个工具要做哪些事」算成一份 [ToolPlan]。
@@ -46,7 +47,8 @@ object NetworkToolboxPlanner {
       NetworkTool.ARCHIVE_BY_MONTH -> planArchiveByMonth(root, rootEntries)
       NetworkTool.EXTRACT_AND_ORGANIZE,
       NetworkTool.CLEAN_EMPTY_DIRS,
-      NetworkTool.CLEAN_EMPTY_FILES -> planWithWalk(tool, root, rootEntries, list, onPhase)
+      NetworkTool.CLEAN_EMPTY_FILES,
+      NetworkTool.CLEAN_JUNK_FILES -> planWithWalk(tool, root, rootEntries, list, onPhase)
     }
   }
 
@@ -119,8 +121,15 @@ object NetworkToolboxPlanner {
     // 后序：子目录先入表、父目录后入 —— 判「父目录是否只剩空子目录」靠的就是这个顺序
     val dirEntries = LinkedHashMap<String, List<NetworkFile>>()
     val filesInSubdirs = mutableListOf<Pair<String, NetworkFile>>()
+    // 只有「清理垃圾文件」用：撞上 @eaDir / .fseventsd 这类垃圾目录就整棵记下来、不再下钻
+    // （里面几百个小文件逐条扫既慢又没意义，反正整目录一次就删掉了）
+    val junkDirs = mutableListOf<Pair<String, NetworkFile>>()
 
     rootEntries.filter { it.isDirectory }.forEach { sub ->
+      if (tool == NetworkTool.CLEAN_JUNK_FILES && toolboxIsJunkDir(sub.name)) {
+        junkDirs += root to sub
+        return@forEach
+      }
       walk(
         dir = toolboxJoinPath(root, sub.name),
         depth = 1,
@@ -129,6 +138,7 @@ object NetworkToolboxPlanner {
         onPhase = onPhase,
         dirEntries = dirEntries,
         filesOut = filesInSubdirs,
+        junkDirs = if (tool == NetworkTool.CLEAN_JUNK_FILES) junkDirs else null,
       )
     }
 
@@ -175,6 +185,50 @@ object NetworkToolboxPlanner {
           }
           add("隐藏文件（. 开头）不会被删")
           add("扫描了 ${budget.files + rootFiles.size} 个文件")
+        }
+        ToolPlan(
+          tool = tool,
+          root = root,
+          actions = actions,
+          summary = summary,
+          truncated = budget.truncated,
+        )
+      }
+
+      NetworkTool.CLEAN_JUNK_FILES -> {
+        // 垃圾文件：当前层 + 子目录里散落的（垃圾目录本身不下钻，见上面 junkDirs）
+        val rootFiles = rootEntries.filter { !it.isDirectory }
+        val junkFiles =
+          buildList {
+            rootFiles.forEach { f -> toolboxJunkLabel(f.name)?.let { add(Triple(root, f, it)) } }
+            filesInSubdirs.forEach { (dir, f) ->
+              toolboxJunkLabel(f.name)?.let { add(Triple(dir, f, it)) }
+            }
+          }
+        // 先删目录（一次请求带走一整棵），再删散落的文件 —— 顺序不影响结果，只是少发请求
+        val actions = mutableListOf<ToolAction>()
+        junkDirs.forEach { (dir, entry) -> actions += ToolAction.DeleteTree(dir, entry.name) }
+        junkFiles.forEach { (dir, f, _) -> actions += ToolAction.DeleteFile(dir, f.name) }
+
+        val summary = buildList {
+          if (actions.isEmpty()) {
+            add("没有发现垃圾文件（Thumbs.db / .DS_Store / ._* / @eaDir 等）")
+          } else {
+            add("将删除 ${junkFiles.size} 个垃圾文件 + ${junkDirs.size} 个垃圾目录：")
+            junkFiles.groupBy { it.third }.forEach { (label, items) -> add("· $label ${items.size} 个") }
+            if (junkDirs.isNotEmpty()) {
+              val names = junkDirs.map { it.second.name }.distinct().take(3).joinToString("、")
+              add("· 垃圾目录 ${junkDirs.size} 个（$names）")
+            }
+            val bytes = junkFiles.sumOf { it.second.size }
+            if (bytes > 0) {
+              add("文件合计 ${MediaFormatUtils.formatFileSize(bytes)}（目录内容不计）")
+            }
+            junkFiles.take(6).forEach { (dir, f, _) -> add("· ${toolboxJoinPath(dir, f.name)}") }
+            if (junkFiles.size > 6) add("· 其余 ${junkFiles.size - 6} 个略")
+          }
+          add("不会动 .part / .crdownload 这类断点续传文件，也不碰回收站目录")
+          add("扫描了 ${budget.files + rootFiles.size} 个文件 / ${dirEntries.size} 个文件夹")
         }
         ToolPlan(
           tool = tool,
@@ -248,6 +302,8 @@ object NetworkToolboxPlanner {
     onPhase: (String) -> Unit,
     dirEntries: MutableMap<String, List<NetworkFile>>,
     filesOut: MutableList<Pair<String, NetworkFile>>,
+    /** 非 null 时：撞上垃圾目录就记进这里、且**不再下钻**（只有「清理垃圾文件」传） */
+    junkDirs: MutableList<Pair<String, NetworkFile>>? = null,
   ) {
     if (depth > MAX_DEPTH) return
     if (budget.dirs >= MAX_DIRS) {
@@ -260,6 +316,10 @@ object NetworkToolboxPlanner {
     val entries = runCatching { list(dir) }.getOrNull() ?: return
     entries.forEach { entry ->
       if (entry.isDirectory) {
+        if (junkDirs != null && toolboxIsJunkDir(entry.name)) {
+          junkDirs += dir to entry
+          return@forEach
+        }
         walk(
           dir = toolboxJoinPath(dir, entry.name),
           depth = depth + 1,
@@ -268,6 +328,7 @@ object NetworkToolboxPlanner {
           onPhase = onPhase,
           dirEntries = dirEntries,
           filesOut = filesOut,
+          junkDirs = junkDirs,
         )
       } else {
         if (budget.files >= MAX_FILES) {

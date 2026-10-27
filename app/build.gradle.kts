@@ -1547,7 +1547,23 @@ android {
     //     ⚠️ 入口与「上传到远程 / 新建文件夹」同一条 `supportsWrite` 门禁：
     //        SMB / FTP / WebDAV 三个客户端没有写接口，给了入口也只会在点击后报错。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 152
+    // ────────────────────────────────────────────────────────────────────────
+    //  ── v153（versionCode 153，功能轮不涨名，versionName 仍为 1.6.10）──────
+    //     整理工具箱补第 6 个工具：**清理垃圾文件**（递归扫，当前目录及其子目录）。
+    //       · 垃圾文件：Thumbs.db / ehthumbs*.db / desktop.ini（Windows 缩略图与
+    //         文件夹属性）、.DS_Store / .localized / .apdisk / .VolumeIcon.icns /
+    //         `._*` 资源叉（macOS 标记）、.fuse_hidden*（FUSE 卸载残留）；
+    //       · 垃圾目录：@eaDir（Synology）、.@__thumb（QNAP）、.AppleDouble、
+    //         .Spotlight-V100、.fseventsd、.TemporaryItems —— 整棵删，不下钻
+    //         （里面几百个小文件逐条扫既慢又没意义）；
+    //       · 新增 `ToolAction.DeleteTree`：与 DeleteDir 同一个 `fs/remove`，
+    //         单列一个类型只为在清单/进度里说清「这里面是有东西的」。
+    //     ⚠️ **刻意不收** `.part` / `.crdownload` / `.aria2` / `.!ut`（断点续传现场，
+    //        删了等于废掉「还能接着下」的那一半），也不收 `#recycle` / `.Trashes`
+    //        （回收站本身，里面是用户以为还能恢复的东西）。确认清单里明写这两条。
+    //     清单按来源分组报数（Windows 缓存 / macOS 标记 / 临时残留）+ 文件合计大小。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 153
     versionName = "1.6.10"
 
     vectorDrawables {
