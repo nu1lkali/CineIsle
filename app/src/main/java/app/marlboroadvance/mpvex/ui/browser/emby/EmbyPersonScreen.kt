@@ -400,12 +400,23 @@ data class EmbyPersonScreen(
       TopAppBar(
         title = {
           // 标题一直留着：v159 曾在紧凑条出现时置空，真机上「顶栏只剩图标」更难看
-          Text(
-            text = personName,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.longPressToCopy(personName, "姓名"),
-          )
+          // v161：补「 - 作品」，名字过长时只缩名字 —— 尾巴单独成段、不带 weight，
+          // 先量、拿满自己的宽度，名字 `weight(fill = false)` 只吃剩下的。
+          // 合成一个字符串交给单个 Text 不行：Ellipsis 会把尾巴一起削掉。
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = personName,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier
+                .weight(1f, fill = false)
+                .longPressToCopy(personName, "姓名"),
+            )
+            Text(text = " - 作品", maxLines = 1)
+          }
         },
         navigationIcon = {
           IconButton(onClick = { backStack.removeLastOrNull() }) {

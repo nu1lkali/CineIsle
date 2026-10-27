@@ -409,7 +409,10 @@ fun CinePersonScreen(
     CineGlassTopBar(
       // 标题一直留着：v159 曾在紧凑条出现时把它置空（怕两个名字上下叠），
       // 真机上「顶栏只剩三个图标飘着」比重复更难看，v160 改回来。
+      // v161：补上「 - 作品」。名字过长时只缩名字（顶栏里尾巴单独成段，不吃省略号），
+      // 这样长名字的演员 / 导演页也能一眼看出这是作品列表而不是详情页。
       title = personName,
+      titleSuffix = " - 作品",
       onBack = { backStack.removeLastOrNull() },
       actions = {
         CineIconButton(

@@ -1649,7 +1649,19 @@ android {
     //         `LazyGridState.animateToTop()`（用户主动点，列表没换序 ⇒ 可以用动画；
     //         换序后的回顶仍只准 `scrollToTop`）。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 160
+    //  ── v161（versionCode 161，修复轮不涨名，versionName 仍为 1.6.10）──────
+    //     作品页顶栏标题补「 - 作品」（用户：演员 / 导演页顶栏只有一个名字，
+    //     看不出这是作品列表）：
+    //       · ⚠️ **不能**直接把 `"名字 - 作品"` 拼成一个字符串交给单个 `Text` ——
+    //         `TextOverflow.Ellipsis` 是整串一起省略的，名字一长尾巴就被吃掉。
+    //         做法 = 两段文字分开量：尾巴（`" - 作品"`）不带 `weight`，先量、拿到
+    //         自己该有的宽度；名字 `weight(1f, fill = false)` 只吃剩下的 ⇒ 名字
+    //         缩成 `…`，尾巴永远完整。
+    //       · `CineGlassTopBar` 新增可选 `titleSuffix`（排在 `actions` 之前，
+    //         保住尾随 lambda 写法；全部调用点本来都用命名实参）。
+    //       · 两套界面同步：`CinePersonScreen` + `EmbyPersonScreen`。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 161
     versionName = "1.6.10"
 
     vectorDrawables {

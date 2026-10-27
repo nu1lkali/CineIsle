@@ -96,12 +96,19 @@ fun CineIconButton(
  * ⚠️ 图标色一律走 `onSurfaceVariant`，**不能**写 `onImage`（纯白）：
  * 这条顶栏的底是玻璃条（浅色主题下是浅色的），白图标会彻底消失 ——
  * 折叠顶栏踩过一次，这里不重犯。
+ *
+ * @param titleSuffix 跟在标题后面的固定小尾巴（如 `" - 作品"`）。它**不参与省略**：
+ *   标题过长时只有标题自己缩成 `…`，尾巴必须完整留着。做法是两段文字分开量 ——
+ *   尾巴不带 `weight`（先量，拿到自己该有的宽度），标题 `weight(1f, fill = false)`
+ *   只拿剩下的。合成一个字符串交给单个 `Text` 做不到：`TextOverflow.Ellipsis`
+ *   会把尾巴连同名字一起削掉（「长名字…」后面什么都没有）。
  */
 @Composable
 fun CineGlassTopBar(
   title: String,
   modifier: Modifier = Modifier,
   onBack: (() -> Unit)? = null,
+  titleSuffix: String? = null,
   actions: @Composable RowScope.() -> Unit = {},
 ) {
   val colors = CineTheme.colors
@@ -153,9 +160,19 @@ fun CineGlassTopBar(
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier
-          .weight(1f)
+          // 有尾巴时不能 fill：fill 会把余宽全吃光 ⇒ 短名字与尾巴之间拉出一大段空白。
+          // fill = false 时名字只占自己需要的宽度，尾巴紧跟着它。
+          .weight(1f, fill = titleSuffix == null)
           .padding(start = 2.dp),
       )
+      if (titleSuffix != null) {
+        Text(
+          text = titleSuffix,
+          style = type.pageBarTitle,
+          color = colors.onSurface,
+          maxLines = 1,
+        )
+      }
       actions()
     }
     // 1dp 分隔线：玻璃条与内容同色时，没有它顶栏像「浮在内容上的半透明块」
