@@ -19,7 +19,12 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.presentation.Screen
 import kotlinx.coroutines.delay
@@ -61,6 +66,15 @@ object SettingsSpotlight {
 
   /** 已组合出来的行：标题 → 它的 `bringIntoView` 请求器。 */
   private val targets = HashMap<String, BringIntoViewRequester>()
+
+  /**
+   * 已组合出来的行的实际尺寸（标题 → 像素尺寸）。
+   *
+   * `bringIntoView(rect)` 的 rect 是**行内局部坐标**，要做「上方留白」就得知道行本身多高
+   * （留白那块是往行上方扩出来的空矩形）。行自己 `onSizeChanged` 报上来，比在定位侧猜一个
+   * 固定行高靠谱 —— 设置行有一行的也有带副标题两行的，高度差一倍。
+   */
+  private val sizes = HashMap<String, IntSize>()
 
   fun request(screen: Screen, title: String?) {
     val key = title?.trim().orEmpty()
@@ -109,6 +123,12 @@ object SettingsSpotlight {
   internal fun isComposed(title: String): Boolean = targets.containsKey(title)
 
   internal fun requesterOf(title: String): BringIntoViewRequester? = targets[title]
+
+  internal fun recordSize(title: String, size: IntSize) {
+    sizes[title] = size
+  }
+
+  internal fun sizeOf(title: String): IntSize? = sizes[title]
 }
 
 /**
@@ -159,14 +179,17 @@ internal fun Modifier.settingsAnchor(titles: List<String>): Modifier {
   }
 
   val highlight = MaterialTheme.colorScheme.primary
-  return this.drawBehind {
-    val alpha = pulse.value
-    if (alpha <= 0f) return@drawBehind
-    drawRoundRect(
-      color = highlight.copy(alpha = 0.22f * alpha),
-      cornerRadius = CornerRadius(16.dp.toPx()),
-    )
-  }
+  return this
+    .drawBehind {
+      val alpha = pulse.value
+      if (alpha <= 0f) return@drawBehind
+      drawRoundRect(
+        color = highlight.copy(alpha = 0.22f * alpha),
+        cornerRadius = CornerRadius(16.dp.toPx()),
+      )
+    }
+    // 报尺寸：定位侧要拿它算「上方留白」那块空矩形（见 SettingsSpotlightReveal）
+    .onSizeChanged { size -> keys.forEach { SettingsSpotlight.recordSize(it, size) } }
 }
 
 /**
@@ -193,6 +216,7 @@ fun SettingsSpotlightReveal(owner: Screen) {
 private fun SettingsSpotlightReveal(owner: Screen, listState: LazyListState?) {
   val title = SettingsSpotlight.pending
   val target = SettingsSpotlight.owner
+  val density = LocalDensity.current
   LaunchedEffect(title, target, listState, owner) {
     val wanted = title ?: return@LaunchedEffect
     if (target !== owner) return@LaunchedEffect
@@ -221,8 +245,7 @@ private fun SettingsSpotlightReveal(owner: Screen, listState: LazyListState?) {
       }
     }
 
-    // 精确落位：行自己算「需要滚多少才能完整露出」（可见时是 no-op）
-    SettingsSpotlight.requesterOf(wanted)?.bringIntoView()
+    revealRow(wanted, listState, density)
     SettingsSpotlight.beginFlash(wanted)
 
     // 兜底：标题对不上任何一行（页面级入口 / 页面改版删了那项）也要把请求撤掉，
@@ -231,3 +254,55 @@ private fun SettingsSpotlightReveal(owner: Screen, listState: LazyListState?) {
     SettingsSpotlight.abandon(wanted)
   }
 }
+
+/**
+ * 落位：让那一行的**顶边**停在大约 [LEAD_FRACTION] 屏高的位置，而不是刚好贴住顶端。
+ *
+ * v174 用的是裸 `bringIntoView()`，语义是「滚最少的距离让它完整露出」——
+ * 而上面的下扫是 0.6 屏一步，扫到它时它往往已经贴着顶端了，于是「定位完还得自己往上找一下」。
+ *
+ * 做法：请求一个**往行上方扩出 `offset` 的空矩形**（`Rect(top = -offset)`）。滚动容器为了让
+ * 这块空矩形也可见，只能继续滚，把行顶压到 `offset` 以下 —— 比「先滚再算差多少」稳，
+ * 后者要拿行的实时坐标去和视口比，跨嵌套滚动 / 卡片内滚动时很容易算偏。
+ *
+ * ⚠️ 只往上推、不强行归位：行本来就停在屏幕中间时，这个扩出来的矩形已经完整可见，
+ *    `bringIntoView` 是 no-op，不会把画面硬拽一下。
+ * ⚠️ 行本身很高时（卡片式）要收敛：留白 + 行高不能超过 85% 视口，否则顶放对了、底部被切。
+ */
+private suspend fun revealRow(
+  title: String,
+  listState: LazyListState?,
+  density: Density,
+) {
+  val requester = SettingsSpotlight.requesterOf(title) ?: return
+  val size = SettingsSpotlight.sizeOf(title)
+  if (size == null || size.width <= 0 || size.height <= 0) {
+    requester.bringIntoView()
+    return
+  }
+
+  val viewport = listState?.layoutInfo?.viewportSize?.height ?: 0
+  var offset = if (viewport > 0) {
+    viewport * LEAD_FRACTION
+  } else {
+    with(density) { LEAD_FALLBACK.toPx() }
+  }
+  if (viewport > 0) {
+    offset = offset.coerceIn(0f, (viewport * 0.85f - size.height).coerceAtLeast(0f))
+  }
+
+  requester.bringIntoView(
+    Rect(
+      left = 0f,
+      top = -offset,
+      right = size.width.toFloat(),
+      bottom = size.height.toFloat(),
+    ),
+  )
+}
+
+/** 定位后行顶上方留白 = 视口高度的 1/5（够看清上下文，又不至于把行推到屏幕中间）。 */
+private const val LEAD_FRACTION = 0.2f
+
+/** 没有视口信息时（`About` / `Folders` 这类普通 Column 页面）用的固定留白。 */
+private val LEAD_FALLBACK = 120.dp
