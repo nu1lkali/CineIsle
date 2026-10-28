@@ -1802,7 +1802,26 @@ android {
     //     ⚠️ `NetworkGridCell` 的 `modifier` 必须由调用点传 `Modifier.animateItem()`：
     //     它是 `LazyGridItemScope` 的扩展，只有 `items { }` 的 lambda 里有接收者。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 168
+    // ── v169（versionCode 169，功能轮不涨名，versionName 仍为 1.6.10）──────
+    //     网络浏览新增「按文件类型强制分组」（可开关，默认关；仅网络位置模块）。
+    //     之前的段序是写死的：网格里照片与视频**混排**、列表恒为 图片→视频→其他。
+    //     · 开关 `network_type_grouping`（默认 false）+ VM `typeGrouping` / `setTypeGrouping`。
+    //       只改**切分口径**，不动排序维度与方向 —— 用户设好的排序开关前后完全保留；
+    //       因为整页顺序会变，切开关时 +1 sortChangeTick 让页面回顶。
+    //     · 段序单一来源 `NETWORK_TYPE_GROUP_ORDER`（文件夹 → 视频 → 图片 → 其他文件）
+    //       + 取词函数 `networkTypeGroupLabel`，段序改了文案跟着改。
+    //       ⚠️ 与「按类型排序」维度 (`NetworkSortType.Type.typeRank`) 是两套顺序，别合并。
+    //     · 切段仍是纯 partition（`groupNetworkFilesByType`，groupBy 保序）⇒
+    //       「每类内部各自按当前排序、互不影响」天然成立，也不必为三类各排一遍。
+    //       **与随机排序不冲突**（均匀洗牌按类型切段 = 每类各自洗牌），不像时间分组要置灰。
+    //     · 两条分组正交，叠起来是 **类型在外、时间桶在内**；
+    //       段内是否省年份改成按段自算（各段桶数不同，全局口径会丢年份）。
+    //     · 列表改成「先算 sections 再统一发射」，四种行只写一份渲染；
+    //       网格类型段头占满整行（`GridItemSpan(maxLineSpan)`），单段时不画段头。
+    //       网格本来就不渲染其他类型（字幕/nfo），所以网格只有 文件夹/视频/图片 三段。
+    //     · 排序 chip 带上口径（`名称 ↑ · 分类型 · 按年份`），菜单分隔线以下加勾选项。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 169
     versionName = "1.6.10"
 
     vectorDrawables {

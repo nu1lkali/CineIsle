@@ -1,10 +1,71 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming
 
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
+import app.marlboroadvance.mpvex.domain.network.NetworkFileType
+import app.marlboroadvance.mpvex.domain.network.type
 import app.marlboroadvance.mpvex.preferences.NetworkGroupMode
 import java.time.Instant
 import java.time.YearMonth
 import java.time.ZoneId
+
+/**
+ * 类型分组的**固定顺序**，同时是段头文案的唯一来源（列表段头与网格段头都读它）。
+ *
+ * 需求指定：文件夹恒在最顶层，其下 视频 → 图片 → 其他文件。
+ *
+ * ⚠️ 与 `NetworkSortType.Type` 的排序权重**不是同一套**：那个是「按类型排序」这个
+ *    排序维度用的字典序（文件夹 → 图片 → 视频 → 其他，见 `NetworkBrowserViewModel.typeRank`），
+ *    这里只服务「强制类型分组」。两者不要合并 —— 合并会顺手改掉「按类型排序」的老行为。
+ */
+internal val NETWORK_TYPE_GROUP_ORDER: List<Pair<NetworkFileType, String>> =
+  listOf(
+    NetworkFileType.FOLDER to "文件夹",
+    NetworkFileType.VIDEO to "视频",
+    NetworkFileType.PHOTO to "图片",
+    NetworkFileType.OTHER to "其他文件",
+  )
+
+/**
+ * 类型段头文案：**唯一取词点**（列表段头 / 网格段头 / 将来任何地方都读它）。
+ *
+ * 这样段序改了文案跟着改，不会出现「顺序换成视频在前、标题还写着图片」；
+ * 也保证「关闭类型分组」时老段头文案不变 —— [NETWORK_TYPE_GROUP_ORDER] 里
+ * 的四个标签与老的硬编码字符串逐字一致。
+ */
+fun networkTypeGroupLabel(type: NetworkFileType): String =
+  NETWORK_TYPE_GROUP_ORDER.firstOrNull { it.first == type }?.second ?: type.displayName
+
+/**
+ * 一个类型段：类型 + 段头文案 + 段内条目（顺序 = 传入顺序，本函数不重排）。
+ *
+ * 空的类型**不产出** —— 段头下面空着比没有更糟。
+ */
+data class NetworkTypeBucket(
+  val type: NetworkFileType,
+  val label: String,
+  val files: List<NetworkFile>,
+)
+
+/**
+ * 把**已排好序**的列表按类型切成连续段（顺序见 [NETWORK_TYPE_GROUP_ORDER]）。
+ *
+ * 关键点：只是 partition，**不重新排序**。所以每一段内部的顺序就是全局排序的结果，
+ * 即「各类型内部独立按当前排序键排序」——这正好满足「互不影响」：
+ * 类型之间不会因为对方的条目多少而改变先后，段内也不受其他类型干扰。
+ *
+ * 附带的好处：随机排序下也成立。均匀洗牌后按类型 partition，每类内部的相对顺序
+ * 仍是一个均匀随机子序列，等价于「每类各自洗牌」，不需要为组合场景写特殊分支。
+ *
+ * @return 只含**非空**类型段；全空返回空列表。
+ */
+fun groupNetworkFilesByType(files: List<NetworkFile>): List<NetworkTypeBucket> {
+  if (files.isEmpty()) return emptyList()
+  // groupBy 内部是 LinkedHashMap ⇒ 每段内部保持传入顺序
+  val byType = files.groupBy { it.type() }
+  return NETWORK_TYPE_GROUP_ORDER.mapNotNull { (type, label) ->
+    byType[type]?.takeIf { it.isNotEmpty() }?.let { NetworkTypeBucket(type, label, it) }
+  }
+}
 
 /**
  * 一个时间桶：`title` + 桶内条目（顺序 = 传进来的顺序，本函数**不重排**）。

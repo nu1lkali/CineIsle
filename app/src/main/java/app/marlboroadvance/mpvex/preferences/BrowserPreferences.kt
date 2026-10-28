@@ -103,6 +103,18 @@ class BrowserPreferences(
   val networkGroupMode = preferenceStore.getEnum("network_group_mode", NetworkGroupMode.None)
 
   /**
+   * **按文件类型强制分组**（仅网络浏览）。
+   *
+   * 开启后：文件夹恒在最顶层，其后依次 视频 → 图片 → 其他文件；每一类内部仍按
+   * 当前排序维度与方向各自排序（类型之间互不影响）。关闭则恢复原有行为 ——
+   * 网格里照片与视频按排序键混排，列表仍是 图片 → 视频 → 其他 的段序。
+   *
+   * 默认 false：这是改变列表结构的强约束，必须是用户显式选的。
+   * 与时间分组（[networkGroupMode]）叠加时，**类型在外、时间桶在内**。
+   */
+  val networkTypeGrouping = preferenceStore.getBoolean("network_type_grouping", false)
+
+  /**
    * 网络目录里「随机播放视频 / 视界流播放」是否**穿透子文件夹**。
    *
    * 默认 false：这两颗按钮长期以来的语义就是「只播这一层」，改成递归会悄悄改变

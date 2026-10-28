@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -217,6 +218,7 @@ data class NetworkBrowserScreen(
     val sortType by viewModel.sortType.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
     val groupMode by viewModel.groupMode.collectAsState()
+    val typeGrouped by viewModel.typeGrouping.collectAsState()
     // 时间桶的先后：只有「用户明确选了时间升序」才翻成旧→新。
     // 其余情况（含按名字/大小排序时仍开着分组）桶一律新→旧 —— 见 groupNetworkFilesByPeriod
     val bucketAscending = sortType == NetworkSortType.Date && sortOrder.isAscending
@@ -911,9 +913,11 @@ data class NetworkBrowserScreen(
               sortType = sortType,
               sortOrder = sortOrder,
               groupMode = groupMode,
+              typeGrouped = typeGrouped,
               onSortTypeChange = viewModel::setSortType,
               onSortOrderChange = viewModel::setSortOrder,
               onGroupModeChange = viewModel::setGroupMode,
+              onTypeGroupingChange = viewModel::setTypeGrouping,
             )
           }
         }
@@ -952,6 +956,7 @@ data class NetworkBrowserScreen(
             titleMaxLines = titleMaxLines,
             groupMode = groupMode,
             bucketAscending = bucketAscending,
+            typeGrouped = typeGrouped,
             // 下拉刷新 = 用户显式要最新 ⇒ 顺带失效子文件夹封面缓存重取；
             // 正常进入 / 返回上一级走缓存，不重列目录（见 NetworkBrowserViewModel.loadFiles）
             onRefresh = { viewModel.loadFiles(invalidateCovers = true) },
@@ -1490,6 +1495,8 @@ private fun NetworkBrowserContent(
   groupMode: NetworkGroupMode,
   /** 时间桶是否「旧→新」（仅「时间升序」时为 true，见调用点） */
   bucketAscending: Boolean,
+  /** 按文件类型强制分组（文件夹 → 视频 → 图片 → 其他，仅网络浏览） */
+  typeGrouped: Boolean,
   /** 未过滤的条目数（区分「目录真空」与「全被筛掉」） */
   totalCount: Int,
   onRefresh: suspend () -> Unit,
@@ -1635,6 +1642,7 @@ private fun NetworkBrowserContent(
         titleMaxLines = titleMaxLines,
         groupMode = groupMode,
         bucketAscending = bucketAscending,
+        typeGrouped = typeGrouped,
         onFileLongClick = onFileLongClick,
         modifier = modifier,
       )
@@ -1658,6 +1666,7 @@ private fun NetworkBrowserContent(
         coverTrigger = coverTrigger,
         groupMode = groupMode,
         bucketAscending = bucketAscending,
+        typeGrouped = typeGrouped,
         onFileLongClick = onFileLongClick,
         modifier = modifier,
       )
@@ -1666,10 +1675,28 @@ private fun NetworkBrowserContent(
 }
 
 /**
+ * 网格里「类型分组」的一段：类型 + 段头文案 + 段内时间桶。
+ *
+ * 只在类型分组开启时构造（关闭走老结构：文件夹平铺 + 媒体混排）。
+ * 段内的时间桶**外层**就是这一段，所以网格天然是「类型在外、时间在内」。
+ */
+private data class NetworkGridTypeSection(
+  val type: NetworkFileType,
+  val label: String,
+  val periodGroups: List<NetworkPeriodGroup>,
+)
+
+/**
  * 网格视图：统一卡型混排（文件夹在前，照片 + 视频沿用当前排序混排）。
  *
  * 排序沿用 [NetworkBrowserScreen] 传来的 `gridItems` 顺序 —— 也就是用户在顶栏
  * 选的排序键，这里**不再二次排序**（见该处注释）。
+ *
+ * 两条渲染路径（[typeGrouped] 决定走哪条）：
+ * - **关闭**（默认）：文件夹平铺在最前，照片与视频**混排**后再按时间桶切段；
+ * - **开启**：先按类型切成 文件夹 → 视频 → 图片 三段（段头占满整行），段内再叠时间桶。
+ *   网格里没有「其他」段 —— 网格本来就不渲染 OTHER（字幕 / nfo），它们在列表视图里。
+ * 两条路径都只 partition、不重排，所以段内顺序恒等于用户选的排序。
  *
  * 固定 3 列：混合内容没有「海报比例」可依赖，1:1 卡 + 3 列是手机宽度下
  * 缩略图尺寸与信息密度的平衡点（与 Emby 照片网格默认列数一致）。
@@ -1695,6 +1722,8 @@ private fun NetworkBrowserGrid(
   groupMode: NetworkGroupMode,
   /** 时间桶是否「旧→新」（仅「时间升序」时为 true） */
   bucketAscending: Boolean,
+  /** 按文件类型强制分组（文件夹 → 视频 → 图片；网格不渲染其他类型） */
+  typeGrouped: Boolean,
   /** 长按条目；null = 协议不支持写操作，卡片不挂长按。第二参 = 手指坐标 */
   onFileLongClick: ((NetworkFile, Offset) -> Unit)? = null,
   modifier: Modifier = Modifier,
@@ -1711,6 +1740,57 @@ private fun NetworkBrowserGrid(
     }
   // 只有真的要画表头时才省年份；只有一个桶（title 全 null）时不能省
   val dateHasYear = mediaGroups.none { it.title != null }
+
+  // ── 按文件类型强制分组（v169）──
+  // 只在开启时算。类型段 = 文件夹 → 视频 → 图片（网格本来就不渲染 OTHER，
+  // 见 `gridItems` 的过滤，所以这里恒为三段以内）。
+  //
+  // 段内顺序直接沿用 `items`（全局排序的结果）—— `groupBy` 只 partition、不重排，
+  // 所以「每一类内部各自按当前排序键排」天然成立，不需要为三类各排一遍。
+  // 段内再叠时间桶：**类型在外、时间在内**（先分类型，类里再按年月切）。
+  val typeSections =
+    remember(items, typeGrouped, groupMode, bucketAscending) {
+      if (!typeGrouped) {
+        emptyList()
+      } else {
+        groupNetworkFilesByType(items).map { bucket ->
+          NetworkGridTypeSection(
+            type = bucket.type,
+            label = bucket.label,
+            periodGroups =
+              if (bucket.type == NetworkFileType.FOLDER) {
+                // 文件夹不按时间切（与老结构一致：它们是导航，时间戳是建/挪时间）
+                listOf(NetworkPeriodGroup(null, bucket.files))
+              } else {
+                groupNetworkFilesByPeriod(bucket.files, groupMode, bucketAscending)
+              },
+          )
+        }
+      }
+    }
+  // 只有一段时不画类型段头：一行标题框住全部内容是纯噪音
+  // （与时间桶「单桶不画头」同一原则）
+  val showTypeHeaders = typeSections.size > 1
+
+  // 网格条目发射器：类型段 / 老结构两条渲染路径共用，卡片参数别复制两遍。
+  // 写成 LazyGridScope 的局部扩展，`Modifier.animateItem()` 才拿得到条目作用域。
+  fun LazyGridScope.cells(files: List<NetworkFile>, showYear: Boolean) {
+    items(files, key = { it.path }) { file ->
+      NetworkGridCell(
+        file = file,
+        connectionId = connectionId,
+        folderCovers = folderCovers,
+        coverTrigger = coverTrigger,
+        titleMaxLines = titleMaxLines,
+        showYear = showYear,
+        onFileLongClick = onFileLongClick,
+        onFolderClick = onFolderClick,
+        onPhotoClick = onPhotoClick,
+        onVideoClick = onVideoClick,
+        modifier = Modifier.animateItem(),
+      )
+    }
+  }
 
   PullRefreshGridBox(
     isRefreshing = isRefreshing,
@@ -1738,43 +1818,41 @@ private fun NetworkBrowserGrid(
           horizontalArrangement = Arrangement.spacedBy(8.dp),
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          // 文件夹：平铺，不分组
-          items(gridFolders, key = { it.path }) { file ->
-            NetworkGridCell(
-              file = file,
-              connectionId = connectionId,
-              folderCovers = folderCovers,
-              coverTrigger = coverTrigger,
-              titleMaxLines = titleMaxLines,
-              showYear = true,
-              onFileLongClick = onFileLongClick,
-              onFolderClick = onFolderClick,
-              onPhotoClick = onPhotoClick,
-              onVideoClick = onVideoClick,
-              modifier = Modifier.animateItem(),
-            )
-          }
-          // 媒体：按时间桶切段，桶头占满整行（GridItemSpan(maxLineSpan)）
-          mediaGroups.forEach { group ->
-            if (group.title != null) {
-              item(key = "period:${group.title}", span = { GridItemSpan(maxLineSpan) }) {
-                NetworkPeriodHeader(group.title)
+          if (typeGrouped) {
+            // ── 类型优先（v169）：文件夹 → 视频 → 图片，段内再切时间桶 ──
+            typeSections.forEach { section ->
+              if (showTypeHeaders) {
+                item(key = "type:${section.type.name}", span = { GridItemSpan(maxLineSpan) }) {
+                  SectionHeader(section.label)
+                }
+              }
+              // 要不要省年份**按本段自己**算：某一段只有一个桶、另一段有多个，
+              // 全局口径会让没桶头的那段丢掉年份（见 v167）
+              val sectionHasYear = section.periodGroups.none { it.title != null }
+              section.periodGroups.forEach { group ->
+                val title = group.title
+                if (title != null) {
+                  item(
+                    key = "type-period:${section.type.name}:$title",
+                    span = { GridItemSpan(maxLineSpan) },
+                  ) {
+                    NetworkPeriodHeader(title)
+                  }
+                }
+                cells(group.files, sectionHasYear)
               }
             }
-            items(group.files, key = { it.path }) { file ->
-              NetworkGridCell(
-                file = file,
-                connectionId = connectionId,
-                folderCovers = folderCovers,
-                coverTrigger = coverTrigger,
-                titleMaxLines = titleMaxLines,
-                showYear = dateHasYear,
-                onFileLongClick = onFileLongClick,
-                onFolderClick = onFolderClick,
-                onPhotoClick = onPhotoClick,
-                onVideoClick = onVideoClick,
-                modifier = Modifier.animateItem(),
-              )
+          } else {
+            // 文件夹：平铺，不分组
+            cells(gridFolders, true)
+            // 媒体：按时间桶切段，桶头占满整行（GridItemSpan(maxLineSpan)）
+            mediaGroups.forEach { group ->
+              if (group.title != null) {
+                item(key = "period:${group.title}", span = { GridItemSpan(maxLineSpan) }) {
+                  NetworkPeriodHeader(group.title)
+                }
+              }
+              cells(group.files, dateHasYear)
             }
           }
         }
@@ -1849,7 +1927,23 @@ private fun NetworkPeriodHeader(title: String, modifier: Modifier = Modifier) {
 }
 
 /**
- * 列表视图：分 section 展示（文件夹 / 图片 / 视频 / 其他）。
+ * 列表视图里的一段：类型 + 段头文案 + 段内时间桶 + 本段是否还要显示年份。
+ *
+ * 为什么要有它：段序有两种口径（开类型分组 = 文件夹→视频→图片→其他，
+ * 关闭 = 文件夹→图片→视频→其他），若把四种行的渲染各写两遍，迟早走样。
+ * 收成「先算段、再统一发射」后，口径差异只存在于 `order` 那一行。
+ */
+private data class NetworkListSection(
+  val type: NetworkFileType,
+  val label: String,
+  val periodGroups: List<NetworkPeriodGroup>,
+  /** 本段没有任何时间桶头时才需要带年份（否则日期会丢年份，见 v167） */
+  val hasYear: Boolean,
+)
+
+/**
+ * 列表视图：分 section 展示（文件夹 / 视频 / 图片 / 其他，或关闭类型分组时的
+ * 文件夹 / 图片 / 视频 / 其他）。
  *
  * 保留旧版的 section 头与滚动条行为；照片行 [NetworkPhotoRow] 与
  * 其他文件行 [NetworkOtherFileRow] 是这次改造新增的两种卡。
@@ -1883,6 +1977,8 @@ private fun NetworkBrowserList(
   groupMode: NetworkGroupMode,
   /** 时间桶是否「旧→新」（仅「时间升序」时为 true） */
   bucketAscending: Boolean,
+  /** 按文件类型强制分组（文件夹 → 视频 → 图片 → 其他） */
+  typeGrouped: Boolean,
   /** 长按条目；null = 协议不支持写操作，卡片不挂长按。第二参 = 手指坐标 */
   onFileLongClick: ((NetworkFile, Offset) -> Unit)? = null,
   modifier: Modifier = Modifier,
@@ -1903,10 +1999,65 @@ private fun NetworkBrowserList(
     remember(others, groupMode, bucketAscending) {
       groupNetworkFilesByPeriod(others, groupMode, bucketAscending)
     }
-  // 只在「真的有表头」时省年份；一张表头都没有就得保留年份，否则日期会丢年份
-  val photoHasYear = photoGroups.none { it.title != null }
-  val videoHasYear = videoGroups.none { it.title != null }
-  val otherHasYear = otherGroups.none { it.title != null }
+
+  // ── 段的先后（v169）──
+  // 两种口径只有一处差别：**视频段与图片段谁在前**。
+  //   开启类型分组 ⇒ 文件夹 → 视频 → 图片 → 其他（= NETWORK_TYPE_GROUP_ORDER）
+  //   关闭         ⇒ 文件夹 → 图片 → 视频 → 其他（老顺序，一个字都不动）
+  // 段头文案统一从 networkTypeGroupLabel 取，与类型分组同源，两处不会漂移。
+  //
+  // ⚠️ 这里只重排「段」，段内一律沿用传进来的顺序 —— 也就是用户的排序键 + 方向，
+  //    所以「各类型内部各自排序、互不影响」在两种口径下都成立。
+  // ⚠️ 与「按类型排序」这个排序维度无关（那是 typeRank，顺序是 文件夹→图片→视频→其他）。
+  val sections =
+    remember(folders, photos, videos, others, photoGroups, videoGroups, otherGroups, typeGrouped) {
+      fun section(
+        type: NetworkFileType,
+        files: List<NetworkFile>,
+        groups: List<NetworkPeriodGroup>,
+      ): NetworkListSection? =
+        if (files.isEmpty()) {
+          // 空段整段不产出：段头下面空着比没有更糟
+          null
+        } else {
+          NetworkListSection(
+            type = type,
+            label = networkTypeGroupLabel(type),
+            periodGroups = groups,
+            // 只在「本段真的有桶头」时省年份；一个桶头都没有就得保留，否则日期丢年份
+            hasYear = groups.none { it.title != null },
+          )
+        }
+
+      // 文件夹不参与时间切分：它们是导航，时间戳是建/挪时间（与网格口径一致）
+      val folderSection =
+        section(NetworkFileType.FOLDER, folders, listOf(NetworkPeriodGroup(null, folders)))
+      val byType =
+        listOfNotNull(
+          folderSection,
+          section(NetworkFileType.PHOTO, photos, photoGroups),
+          section(NetworkFileType.VIDEO, videos, videoGroups),
+          section(NetworkFileType.OTHER, others, otherGroups),
+        ).associateBy { it.type }
+
+      val order =
+        if (typeGrouped) {
+          listOf(
+            NetworkFileType.FOLDER,
+            NetworkFileType.VIDEO,
+            NetworkFileType.PHOTO,
+            NetworkFileType.OTHER,
+          )
+        } else {
+          listOf(
+            NetworkFileType.FOLDER,
+            NetworkFileType.PHOTO,
+            NetworkFileType.VIDEO,
+            NetworkFileType.OTHER,
+          )
+        }
+      order.mapNotNull { byType[it] }
+    }
 
   PullRefreshBox(
     isRefreshing = isRefreshing,
@@ -1931,116 +2082,82 @@ private fun NetworkBrowserList(
             bottom = navigationBarHeight,
           ),
         ) {
-          // Folders section
-          if (folders.isNotEmpty()) {
-            item {
-              SectionHeader("文件夹")
+          // 段是按顺序算好的（见上面的 `sections`），这里只负责统一发射。
+          // 四种行的渲染只写一份：段序差异完全交给 `sections` 的顺序，
+          // 不在这里复制「图片段 / 视频段」两套分支。
+          sections.forEach { section ->
+            item(key = "section:${section.type.name}") {
+              SectionHeader(section.label)
             }
-            items(
-              items = folders,
-              key = { it.path },
-            ) { folder ->
-              NetworkFolderCard(
-                file = folder,
-                connectionId = connectionId,
-                onClick = { onFolderClick(folder) },
-                coverPath = folderCovers[folder.path],
-                onCoverNeeded = coverTrigger,
-                onLongClick =
-                  if (onFileLongClick == null) {
-                    null
-                  } else {
-                    { offset -> onFileLongClick(folder, offset) }
-                  },
-                modifier = Modifier.animateItem(),
-              )
-            }
-          }
-
-          // Photos section
-          if (photos.isNotEmpty()) {
-            item {
-              SectionHeader("图片")
-            }
-            photoGroups.forEach { group ->
+            section.periodGroups.forEach { group ->
               val title = group.title
               if (title != null) {
-                item(key = "period:photo:$title") { NetworkPeriodHeader(title) }
-              }
-              items(
-                items = group.files,
-                key = { it.path },
-              ) { photo ->
-                NetworkPhotoRow(
-                  file = photo,
-                  connectionId = connectionId,
-                  onClick = { onPhotoClick(photo) },
-                  onLongClick =
-                    if (onFileLongClick == null) {
-                      null
-                    } else {
-                      { offset -> onFileLongClick(photo, offset) }
-                    },
-                  modifier = Modifier.animateItem(),
-                  showYear = photoHasYear,
-                )
-              }
-            }
-          }
-
-          // Videos section
-          if (videos.isNotEmpty()) {
-            item {
-              SectionHeader("视频")
-            }
-            videoGroups.forEach { group ->
-              val title = group.title
-              if (title != null) {
-                item(key = "period:video:$title") { NetworkPeriodHeader(title) }
-              }
-              items(
-                items = group.files,
-                key = { it.path },
-              ) { video ->
-                // Only show card if connection is loaded
-                connection?.let { conn ->
-                  NetworkVideoCard(
-                    file = video,
-                    connection = conn,
-                    onClick = { onVideoClick(video) },
-                    onLongClick =
-                      if (onFileLongClick == null) {
-                        null
-                      } else {
-                        { offset -> onFileLongClick(video, offset) }
-                      },
-                    modifier = Modifier.animateItem(),
-                    showYear = videoHasYear,
-                  )
+                item(key = "section-period:${section.type.name}:$title") {
+                  NetworkPeriodHeader(title)
                 }
               }
-            }
-          }
-
-          // Other files section（字幕 / nfo 等，纯展示）
-          if (others.isNotEmpty()) {
-            item {
-              SectionHeader("其他文件")
-            }
-            otherGroups.forEach { group ->
-              val title = group.title
-              if (title != null) {
-                item(key = "period:other:$title") { NetworkPeriodHeader(title) }
-              }
               items(
                 items = group.files,
                 key = { it.path },
-              ) { other ->
-                NetworkOtherFileRow(
-                  file = other,
-                  modifier = Modifier.animateItem(),
-                  showYear = otherHasYear,
-                )
+              ) { file ->
+                when (section.type) {
+                  NetworkFileType.FOLDER ->
+                    NetworkFolderCard(
+                      file = file,
+                      connectionId = connectionId,
+                      onClick = { onFolderClick(file) },
+                      coverPath = folderCovers[file.path],
+                      onCoverNeeded = coverTrigger,
+                      onLongClick =
+                        if (onFileLongClick == null) {
+                          null
+                        } else {
+                          { offset -> onFileLongClick(file, offset) }
+                        },
+                      modifier = Modifier.animateItem(),
+                    )
+
+                  NetworkFileType.PHOTO ->
+                    NetworkPhotoRow(
+                      file = file,
+                      connectionId = connectionId,
+                      onClick = { onPhotoClick(file) },
+                      onLongClick =
+                        if (onFileLongClick == null) {
+                          null
+                        } else {
+                          { offset -> onFileLongClick(file, offset) }
+                        },
+                      modifier = Modifier.animateItem(),
+                      showYear = section.hasYear,
+                    )
+
+                  // 连接没加载完就不出视频卡（老行为，别改成占位卡）
+                  NetworkFileType.VIDEO ->
+                    connection?.let { conn ->
+                      NetworkVideoCard(
+                        file = file,
+                        connection = conn,
+                        onClick = { onVideoClick(file) },
+                        onLongClick =
+                          if (onFileLongClick == null) {
+                            null
+                          } else {
+                            { offset -> onFileLongClick(file, offset) }
+                          },
+                        modifier = Modifier.animateItem(),
+                        showYear = section.hasYear,
+                      )
+                    }
+
+                  // 字幕 / nfo 等，纯展示
+                  NetworkFileType.OTHER ->
+                    NetworkOtherFileRow(
+                      file = file,
+                      modifier = Modifier.animateItem(),
+                      showYear = section.hasYear,
+                    )
+                }
               }
             }
           }
@@ -2190,15 +2307,24 @@ private fun NetworkFilterDropdownRow(
  * - **方向不单列菜单项**：再点一次已选中项 = 只翻方向；点其他项 = 换维度
  *   （ViewModel 走该维度的自然方向）；
  * - 随机再点一次菜单里的「随机」= 换一批顺序（新种子，ViewModel 处理）。
+ *
+ * 分组有两条**正交**的轴，都挂在这个菜单里（都在分隔线以下）：
+ * - 时间分组（不分组 / 按年份 / 按年月）：切时间桶，与随机互斥 ⇒ 置灰；
+ * - 按文件类型分组（勾选）：文件夹恒顶层，其后 视频 → 图片 → 其他。
+ *   与随机**不冲突**（均匀洗牌后按类型 partition，等价于每类各自洗牌），所以始终可点。
+ * 两条都开时 **类型在外、时间桶在内**。
  */
 @Composable
 private fun NetworkSortButton(
   sortType: NetworkSortType,
   sortOrder: SortOrder,
   groupMode: NetworkGroupMode,
+  /** 按文件类型强制分组是否开启 */
+  typeGrouped: Boolean,
   onSortTypeChange: (NetworkSortType) -> Unit,
   onSortOrderChange: (SortOrder) -> Unit,
   onGroupModeChange: (NetworkGroupMode) -> Unit,
+  onTypeGroupingChange: (Boolean) -> Unit,
 ) {
   var menuExpanded by remember { mutableStateOf(false) }
   val hasDirection = sortType != NetworkSortType.Random
@@ -2223,9 +2349,14 @@ private fun NetworkSortButton(
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-          // 分组开着就把粒度带上：不点开菜单也能看出当前是「按年份」还是「按年月」
+          // 分组开着就把口径带上：不点开菜单也能看出当前是「分类型」「按年份」还是「按年月」。
+          // 顺序与菜单一致：类型在前、时间在后（与「类型在外、时间在内」对应）。
           text =
-            if (groupMode.isActive) "${sortType.label} · ${groupMode.label}" else sortType.label,
+            buildString {
+              append(sortType.label)
+              if (typeGrouped) append(" · 分类型")
+              if (groupMode.isActive) append(" · ").append(groupMode.label)
+            },
           style = MaterialTheme.typography.labelLarge,
         )
         // 升降序指示包在类型标签里面：随机排序没有方向，不显示
@@ -2316,6 +2447,29 @@ private fun NetworkSortButton(
           },
         )
       }
+
+      HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+      // ── 按文件类型强制分组（v169，与上面的时间分组正交）──
+      // 上面三条管「段内怎么按时间切」，这条管「先把列表切成几段类型」。
+      // 开启后段序固定为 文件夹 → 视频 → 图片 → 其他，**段内仍用上面的排序键与方向**。
+      //
+      // 用 Checkbox 表示开关（与筛选菜单同一手法，比 "✓" 更像可开关项），
+      // 点完关菜单：整页顺序会变，得让用户看得见结果。
+      // 与随机**不冲突**，所以不像时间分组那样置灰。
+      DropdownMenuItem(
+        text = {
+          Text(
+            text = "按文件类型分组",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+        },
+        leadingIcon = { Checkbox(checked = typeGrouped, onCheckedChange = null) },
+        onClick = {
+          menuExpanded = false
+          onTypeGroupingChange(!typeGrouped)
+        },
+      )
     }
   }
 }

@@ -82,6 +82,15 @@ class NetworkBrowserViewModel(
   private val _groupMode = MutableStateFlow(browserPreferences.networkGroupMode.get())
 
   /**
+   * 按文件类型强制分组（镜像持久化偏好，见 BrowserPreferences.networkTypeGrouping）。
+   *
+   * 与 [groupMode] 一样是 UI 层的切分口径：排序结果 [files] 不变，分组是它的纯函数
+   * 视图（`groupNetworkFilesByType`）。放进 VM 只为了下面三件事：持久化、镜像成流、
+   * 以及切换时 +1 tick 让页面回顶。
+   */
+  private val _typeGrouping = MutableStateFlow(browserPreferences.networkTypeGrouping.get())
+
+  /**
    * 目录滚动位置记忆：key = `"$connectionId|$path"`，value = `firstVisibleItemIndex`。
    *
    * 为什么需要它：从照片查看器 / 播放器返回到浏览页时，滚动位置**不可靠**。
@@ -122,6 +131,7 @@ class NetworkBrowserViewModel(
   val sortType: StateFlow<NetworkSortType> = _sortType.asStateFlow()
   val sortOrder: StateFlow<SortOrder> = _sortOrder.asStateFlow()
   val groupMode: StateFlow<NetworkGroupMode> = _groupMode.asStateFlow()
+  val typeGrouping: StateFlow<Boolean> = _typeGrouping.asStateFlow()
 
   /** 「动过排序」的计数，UI 拿它做「回到 item 0」的触发键 */
   val sortChangeTick: StateFlow<Int> = _sortChangeTick.asStateFlow()
@@ -873,7 +883,21 @@ class NetworkBrowserViewModel(
     _sortChangeTick.value += 1
   }
 
-
+  /**
+   * 开关「按文件类型强制分组」。
+   *
+   * 只改切分口径，**不动排序维度与方向** —— 用户设好的排序在开关前后完全保留，
+   * 只是从「照片视频混排」变成「各类各自成段、段内仍按那个排序」。
+   * 段的先后顺序固定为 文件夹 → 视频 → 图片 → 其他（见 `NETWORK_TYPE_GROUP_ORDER`）。
+   *
+   * 整页顺序会变，所以 +1 tick 让页面回顶。
+   */
+  fun setTypeGrouping(enabled: Boolean) {
+    if (enabled == _typeGrouping.value) return
+    _typeGrouping.value = enabled
+    browserPreferences.networkTypeGrouping.set(enabled)
+    _sortChangeTick.value += 1
+  }
 
   /**
    * 队列播放一批视频（普通连播 / 随机播放共用）。
