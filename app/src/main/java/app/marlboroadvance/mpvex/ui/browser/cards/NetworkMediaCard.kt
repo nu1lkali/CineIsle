@@ -54,9 +54,6 @@ import app.marlboroadvance.mpvex.domain.network.type
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkApiThumbnail
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoThumbnail
 import app.marlboroadvance.mpvex.ui.utils.pressDownScale
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 「单击 + 长按」合成 modifier，把**长按位置（root 坐标）**回传给 [onLongClick]。
@@ -272,20 +269,41 @@ fun NetworkMediaCard(
       }
     }
 
+    // 日期：**独立一行**放在名字上方（dim + 定长）。
+    // 为什么不在网格里做成标题前缀：3 列布局下单元宽度只有 ~120dp，而
+    // 「2026-09-07」加两个空格就占掉一行的大半，默认标题又只有一行 —— 内联会把
+    // 文件名挤成「2026-09-07  Movi…」。独立成行零宽度代价，名字仍能占满整行。
+    // ⚠️ 文件夹不显示：SMB/WebDAV 的目录项常带一个「建目录 / 挪动」时间，
+    //    单独一条「2026-09-07」对它没有意义（见 networkFileSizeText 的说明）。
+    if (!file.isDirectory && file.lastModified > 0) {
+      Text(
+        text = formatNetworkFullDate(file.lastModified),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp),
+      )
+    }
+
     Text(
       text = file.name,
       style = MaterialTheme.typography.bodyMedium,
       color = MaterialTheme.colorScheme.onSurface,
       maxLines = titleMaxLines,
       overflow = TextOverflow.Ellipsis,
-      modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp),
+      modifier =
+        Modifier.padding(
+          top = if (!file.isDirectory && file.lastModified > 0) 2.dp else 6.dp,
+          start = 2.dp,
+          end = 2.dp,
+        ),
     )
 
-    // 媒体类卡片给一行副标题（大小 · 日期）；文件夹没有可显示的元数据，不占位
-    val subtitle = networkFileSubtitle(file)
-    if (subtitle != null) {
+    // 副标题只剩大小（日期已提到名字上方）；文件夹没有可显示的元数据，不占位
+    val sizeText = networkFileSizeText(file)
+    if (sizeText != null) {
       Text(
-        text = subtitle,
+        text = sizeText,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
@@ -330,10 +348,10 @@ fun NetworkTypeBadge(
 }
 
 /**
- * 网络照片的**列表行**（列表视图用）：64dp 圆角缩略图 + 名称 + 大小/日期。
+ * 网络照片的**列表行**（列表视图用）：64dp 圆角缩略图 + 「日期 名称」+ 大小。
  *
- * 与网格卡的分工：网格看「脸」，列表看「信息」—— 所以这里额外渲染
- * 大小 · 日期副标题（[networkFileSubtitle]）。
+ * 与网格卡的分工：网格看「脸」，列表看「信息」—— 所以日期以**定长前缀**并进标题，
+ * 副标题只留大小（见 [NetworkFileNameText] 与 [networkFileSizeText]）。
  */
 @Composable
 fun NetworkPhotoRow(
@@ -390,18 +408,21 @@ fun NetworkPhotoRow(
       Column(
         modifier = Modifier.weight(1f),
       ) {
-        Text(
-          file.name,
+        // 日期进标题前缀：列表横向空间充足，省掉单独一列 / 一个 chip；前缀位置
+        // 保证长名字被省略时日期仍在（理由见 NetworkFileNameText 的 KDoc）
+        NetworkFileNameText(
+          name = file.name,
+          lastModified = file.lastModified,
           style = MaterialTheme.typography.titleSmall,
-          color = MaterialTheme.colorScheme.onSurface,
           maxLines = 2,
-          overflow = TextOverflow.Ellipsis,
+          color = MaterialTheme.colorScheme.onSurface,
         )
-        val subtitle = networkFileSubtitle(file)
-        if (subtitle != null) {
+        // 副标题只剩大小（日期已在标题里）
+        val sizeText = networkFileSizeText(file)
+        if (sizeText != null) {
           Spacer(modifier = Modifier.height(4.dp))
           Text(
-            subtitle,
+            sizeText,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -452,18 +473,21 @@ fun NetworkOtherFileRow(
       Column(
         modifier = Modifier.weight(1f),
       ) {
-        Text(
-          file.name,
+        // 日期进标题前缀：列表横向空间充足，省掉单独一列 / 一个 chip；前缀位置
+        // 保证长名字被省略时日期仍在（理由见 NetworkFileNameText 的 KDoc）
+        NetworkFileNameText(
+          name = file.name,
+          lastModified = file.lastModified,
           style = MaterialTheme.typography.titleSmall,
-          color = MaterialTheme.colorScheme.onSurface,
           maxLines = 2,
-          overflow = TextOverflow.Ellipsis,
+          color = MaterialTheme.colorScheme.onSurface,
         )
-        val subtitle = networkFileSubtitle(file)
-        if (subtitle != null) {
+        // 副标题只剩大小（日期已在标题里）
+        val sizeText = networkFileSizeText(file)
+        if (sizeText != null) {
           Spacer(modifier = Modifier.height(4.dp))
           Text(
-            subtitle,
+            sizeText,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -476,25 +500,22 @@ fun NetworkOtherFileRow(
 }
 
 /**
- * 媒体卡片的副标题：「大小 · 日期」，缺哪段就不显示哪段。
- * 文件夹 / 没有任何元数据的条目返回 null（调用方不占位）。
+ * 媒体卡片的**大小**文案；文件夹 / 大小未知时返回 null（调用方不占位）。
  *
- * ⚠️ **文件夹一律返回 null**：SMB/WebDAV 的目录项经常带着一个lastModified
- * （建目录/挪动的时间），单独显示成一个孤零零的「10月15」没人看得懂，
+ * ⚠️ 日期**不在这个函数里**，两处视图各自处理：
+ *    - 列表行：并进标题前缀（[NetworkFileNameText]）；
+ *    - 网格卡：单独一行放在名字上方（见 NetworkMediaCard 的文本块）。
+ *    所以这里只留大小，否则同一个日期会在标题和副标题里各出现一次。
+ *
+ * ⚠️ **文件夹一律返回 null**：SMB/WebDAV 的目录项经常带着一个 lastModified
+ * （建目录 / 挪动的时间），单独显示成一个孤零零的日期没人看得懂，
  * 且对「认内容」没有任何帮助 —— 文件夹的封面与名字已经说清它是什么了。
  *
  * 纯函数（不读 Composable 状态）：调用点直接拿结果，不参与重组。
  */
-private fun networkFileSubtitle(file: NetworkFile): String? {
+private fun networkFileSizeText(file: NetworkFile): String? {
   if (file.isDirectory) return null
-  val sizeText = if (file.size > 0) formatNetworkFileSize(file.size) else null
-  val dateText = if (file.lastModified > 0) formatNetworkFileDate(file.lastModified) else null
-  return when {
-    sizeText != null && dateText != null -> "$sizeText · $dateText"
-    sizeText != null -> sizeText
-    dateText != null -> dateText
-    else -> null
-  }
+  return if (file.size > 0) formatNetworkFileSize(file.size) else null
 }
 
 private fun formatNetworkFileSize(bytes: Long): String {
@@ -504,13 +525,4 @@ private fun formatNetworkFileSize(bytes: Long): String {
     bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
     else -> String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
   }
-}
-
-private fun formatNetworkFileDate(timestamp: Long): String {
-  val date = Date(timestamp)
-  // MM/dd 固定数字格式：以前用 "MMM dd"，中文 locale 下会渲染成「12月29」——
-  // 月份被翻成中文、日子后面又没有「日」，读着像个残缺的日期。
-  // 用 Locale.US 保证任何locale 下都是纯 ASCII 的「12/29」。
-  val format = SimpleDateFormat("MM/dd", Locale.US)
-  return format.format(date)
 }

@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
@@ -29,7 +28,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.ui.theme.LocalCardCorner
 import app.marlboroadvance.mpvex.R
@@ -40,9 +38,6 @@ import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkApiThumbnail
 import org.koin.compose.koinInject
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @Composable
 fun NetworkVideoCard(
@@ -118,46 +113,29 @@ fun NetworkVideoCard(
       Column(
         modifier = Modifier.weight(1f),
       ) {
-        Text(
-          file.name,
+        // 日期进标题前缀（含年份、定长）⇒ 不再单占一个 chip，长名字被省略时日期仍在
+        NetworkFileNameText(
+          name = file.name,
+          lastModified = file.lastModified,
           style = MaterialTheme.typography.titleSmall,
-          color = MaterialTheme.colorScheme.onSurface,
           maxLines = maxLines,
-          overflow = TextOverflow.Ellipsis,
+          color = MaterialTheme.colorScheme.onSurface,
         )
-        Spacer(modifier = Modifier.height(4.dp))
-        FlowRow(
-          horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
-          verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
-        ) {
-          if (showSizeChip && file.size > 0) {
-            Text(
-              formatFileSize(file.size),
-              style = MaterialTheme.typography.labelSmall,
-              modifier =
-                Modifier
-                  .background(
-                    MaterialTheme.colorScheme.surfaceContainerHigh,
-                    RoundedCornerShape(8.dp),
-                  )
-                  .padding(horizontal = 8.dp, vertical = 4.dp),
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-          }
-          if (file.lastModified > 0) {
-            Text(
-              formatDate(file.lastModified),
-              style = MaterialTheme.typography.labelSmall,
-              modifier =
-                Modifier
-                  .background(
-                    MaterialTheme.colorScheme.surfaceContainerHigh,
-                    RoundedCornerShape(8.dp),
-                  )
-                  .padding(horizontal = 8.dp, vertical = 4.dp),
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-          }
+        // 只有大小有 chip 时才画这一行：日期已进标题，这里再没别的内容
+        if (showSizeChip && file.size > 0) {
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            formatFileSize(file.size),
+            style = MaterialTheme.typography.labelSmall,
+            modifier =
+              Modifier
+                .background(
+                  MaterialTheme.colorScheme.surfaceContainerHigh,
+                  RoundedCornerShape(8.dp),
+                )
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            color = MaterialTheme.colorScheme.onSurface,
+          )
         }
       }
     }
@@ -171,12 +149,4 @@ private fun formatFileSize(bytes: Long): String {
     bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
     else -> String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
   }
-}
-
-private fun formatDate(timestamp: Long): String {
-  val date = Date(timestamp)
-  // MM/dd 固定数字格式（与网格卡副标题统一）：中文 locale 下 "MMM dd"
-  // 会渲染成「12月29」这种没有「日」的残缺日期
-  val format = SimpleDateFormat("MM/dd", Locale.US)
-  return format.format(date)
 }
