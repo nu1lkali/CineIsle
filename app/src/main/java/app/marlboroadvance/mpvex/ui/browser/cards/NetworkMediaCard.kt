@@ -222,20 +222,26 @@ fun NetworkMediaCard(
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh),
               contentAlignment = Alignment.Center,
             ) {
-              // 视频不本地生成缩略图：有接口海报就用，没有 / 拉不到就退回下面的播放图标占位。
+              // 有接口海报就整块交给海报：右上角已有 Movie 角标标明是视频，中间再压一个
+              // 播放图标既挡住海报主体、语义也重复。没海报 / 拉不到才退回播放图标占位。
               NetworkApiThumbnail(
                 remoteThumbUrl = file.thumb,
                 contentDescription = file.name,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
                 showShimmer = false,
-                fallback = {},
-              )
-              Icon(
-                Icons.Filled.PlayCircle,
-                contentDescription = null,
-                modifier = Modifier.size(44.dp),
-                tint = MaterialTheme.colorScheme.secondary,
+                fallback = {
+                  // ⚠️ 必须自己居中：本组件的空态在父 Box 里（居中），失败态却在自己的
+                  // Box 里（默认 TopStart）—— 两处对齐不同，靠外面兜不住。
+                  Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(
+                      Icons.Filled.PlayCircle,
+                      contentDescription = null,
+                      modifier = Modifier.size(44.dp),
+                      tint = MaterialTheme.colorScheme.secondary,
+                    )
+                  }
+                },
               )
             }
           }

@@ -1760,7 +1760,18 @@ android {
     //         （NetworkVideoCard）、照片查看器胶片条（renderThumbnail）四处都接上；
     //         WebDAV / SMB / FTP 服务端不返 `thumb`，恒走回退，不多打一个 HTTP。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 165
+    // ── v166（versionCode 166，修复轮不涨名，versionName 仍为 1.6.10）──────
+    //     视频卡「播放图标压海报」的视觉修正：有接口海报时不再叠加中间的播放图标。
+    //     理由：① 右上角 NetworkTypeBadge 对视频已经是 Movie 图标（20dp 半透明黑底），
+    //     语义已经明确，中间再放一个圆底三角属于重复；② 图标直接盖在封面上，海报主体
+    //     （人脸 / 场景）被挡；列表卡 48dp 压在 64dp 上更明显。
+    //     改法：把图标从「常驻叠加」移进 NetworkApiThumbnail 的 fallback ——
+    //     有海报就整块给海报，没海报 / 拉不到才显示图标占位（不本地生成缩略图这一点不变）。
+    //     ⚠️ fallback 里必须自己 Box(fillMaxSize, Center)：本组件「无 URL」早退时 fallback
+    //     落在父 Box 里（居中），「加载失败」时落在组件自己的 Box 里（默认 TopStart），
+    //     两处对齐不同，靠外层 contentAlignment 兜不住。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 166
     versionName = "1.6.10"
 
     vectorDrawables {

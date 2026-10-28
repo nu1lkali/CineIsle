@@ -93,21 +93,25 @@ fun NetworkVideoCard(
             .tapAndLongPress(onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.Center,
       ) {
-        // 视频不本地生成缩略图：有接口海报就用，没有 / 拉不到就退回下面的播放图标占位。
+        // 有接口海报就不再压播放三角（48dp 压在 64dp 的海报上会挡掉大半个画面，
+        // 而且文件名后缀已经表明是视频）。没海报 / 拉不到才退回三角占位。
         NetworkApiThumbnail(
           remoteThumbUrl = file.thumb,
           contentDescription = file.name,
           modifier = Modifier.fillMaxSize(),
           contentScale = ContentScale.Crop,
           showShimmer = false,
-          fallback = {},
-        )
-        // Play icon overlay
-        Icon(
-          Icons.Filled.PlayArrow,
-          contentDescription = stringResource(R.string.i18n_play),
-          modifier = Modifier.size(48.dp),
-          tint = MaterialTheme.colorScheme.secondary,
+          fallback = {
+            // ⚠️ 自己居中：本组件空态在父 Box（居中）、失败态在自己的 Box（默认 TopStart）
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+              Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = stringResource(R.string.i18n_play),
+                modifier = Modifier.size(48.dp),
+                tint = MaterialTheme.colorScheme.secondary,
+              )
+            }
+          },
         )
       }
       Spacer(modifier = Modifier.width(16.dp))
