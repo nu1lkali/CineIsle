@@ -339,6 +339,13 @@ data class EmbyLibraryScreen(
     var categoryInherited by remember(libraryId) {
       mutableStateOf(savedCategoryName.isBlank() && inheritCategory != null)
     }
+    /**
+     * 「继承来的『文件夹』在本层一个子目录都没有」时已经自动落到「全部」了。
+     *
+     * 每页只自动落一次：用户之后若又手动切回「文件夹」，那是他的选择，
+     * 再把他弹回「全部」就成了抢方向盘。
+     */
+    var autoFellBackToAll by remember(libraryId) { mutableStateOf(false) }
 
     // ── 「照片视频混合库」的处置：内容原样铺开，不再让用户手选档位 ──
     // 家庭视频 / 照片这类库（collectionType = homevideos / mixed / 未知）里，同一个
@@ -980,6 +987,31 @@ data class EmbyLibraryScreen(
           // 游标按**服务端给了多少**推进，与本地去重结果无关
           if (reset) consumedCount = page.items.size else consumedCount += page.items.size
           totalCount = page.totalCount
+          // ── 继承来的「文件夹」在本层没东西可钻 ⇒ 自动落到「全部」──
+          // 「文件夹」这一档只查容器（Folder / CollectionFolder / UserView / PhotoAlbum），
+          // 所以「返回 0 条」= 这一层一个子目录都没有。此时继续停在「文件夹」页上就是一片空，
+          // 用户还得自己切一次「全部」才知道里面装着片子 —— 本页是**顺着父页的档位**进来的，
+          // 落空就该退回「全部」，这也是「子文件夹里没有文件夹了怎么办」的答案。
+          // ⚠️ 三条门槛，缺一不可：
+          //   ① 档位是**继承**来的（`categoryInherited`）—— 用户亲手选过 / 本目录有记忆的，
+          //      一律不动，空就是空，别自作主张；
+          //   ② 没开筛选、没在搜索（`hasActiveFilter` / `searchQuery`）—— 否则「空」可能是
+          //      筛出来的，不是真的没有子目录；
+          //   ③ 每页只落一次（`autoFellBackToAll`）。
+          // 落回「全部」时**保持** `categoryInherited = true`：本页的「全部」仍是
+          // 「这一层装什么铺什么」，不触发穿透递归（这一层既然没有子目录，递归也没有意义）。
+          if (
+            reset && category == EmbyCategory.FOLDER && categoryInherited &&
+            !autoFellBackToAll && !hasActiveFilter && searchQuery.isBlank() &&
+            page.items.isEmpty() && page.totalCount <= 0
+          ) {
+            autoFellBackToAll = true
+            // 作废本次收尾：否则紧接着的 `isLoading = false` 会让「没有内容」闪一帧，
+            // 再被下一次加载的骨架屏接上 —— 看起来就是「空页闪了一下又好了」。
+            isLoading = true
+            loadGeneration++
+            category = EmbyCategory.ALL
+          }
           // 这一页一条新的都没有（或服务端干脆返回空页）：它已经在我们见过的地方
           // 打转了 —— SmartStrm 兼容层忽略 StartIndex、或服务端重复条目被客户端
           // 去重削光时都会这样。把 totalCount 对齐已消耗，续页条件
