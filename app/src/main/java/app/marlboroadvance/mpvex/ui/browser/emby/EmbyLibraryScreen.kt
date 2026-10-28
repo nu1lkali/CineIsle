@@ -516,6 +516,16 @@ data class EmbyLibraryScreen(
     val scanJob = remember { mutableStateOf<Job?>(null) }
     // 长按选中的条目：非空时弹操作框（文件夹与媒体是两套菜单）
     var actionTarget by remember { mutableStateOf<EmbyItem?>(null) }
+
+    /**
+     * 「正在打开」整页加载层（v172）：随机播放 / 随机播放收藏 / 视界流 / 随机播放图片
+     * 这四个入口在**取数阶段**是纯挂起的网络请求（递归下钻时能慢到几秒），
+     * 以前这段时间屏幕上什么都不会动，用户会以为没点上、然后连点第二下。
+     *
+     * 与网络位置、Emby 详情页那一层是同一个全局入口（[AppLoadingIndicator]），
+     * 所以「外观 → 加载动画」里换的样式 / 大小在这里同样生效。
+     */
+    var randomLaunching by remember { mutableStateOf(false) }
   /** 长按发生的位置（root 坐标）：菜单锚在这里展开，而不是屏幕中间 */
   var menuAnchor by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
 
@@ -1425,7 +1435,11 @@ data class EmbyLibraryScreen(
      * @param drillDown true = 下钻（含子文件夹，默认单击）；false = 只播当前目录（长按）
      */
     fun startRandomPlayback(favoritesOnly: Boolean, drillDown: Boolean = true) {
+      // 取数期间已经在转圈了：再点一次没有意义，只会多打一轮网络请求
+      if (randomLaunching) return
+      randomLaunching = true
       scope.launch {
+        try {
         val current = viewModel.currentServerOrAwait() ?: return@launch
         val random =
           loadRandomForView(current, favoritesOnly = favoritesOnly, drillDown = drillDown)
@@ -1450,6 +1464,11 @@ data class EmbyLibraryScreen(
         // 走 launchRandomPlayback 而不是 launchPlaylist：起播前会用硬预算替首条探一次直链，
         // 否则 strm 条目会在服务端 probe 上干等（见该方法注释）。
         viewModel.launchRandomPlayback(current, random)
+        } finally {
+          // 起播探测也在这一层里（launchRandomPlayback 是挂起的），所以转圈一直转到
+          // 播放器真要起来为止 —— 动画消失与画面切换是同一瞬间，中间不再有空窗期。
+          randomLaunching = false
+        }
       }
     }
 
@@ -1461,7 +1480,10 @@ data class EmbyLibraryScreen(
      * 落点直接是全屏照片浏览器（不进视频播放器）。
      */
     fun startRandomPhotoPlayback() {
+      if (randomLaunching) return
+      randomLaunching = true
       scope.launch {
+        try {
         val current = viewModel.currentServerOrAwait() ?: return@launch
         val random = viewModel.loadPhotos(
           server = current,
@@ -1486,6 +1508,11 @@ data class EmbyLibraryScreen(
             title = title,
           ),
         )
+        } finally {
+          // 照片浏览器是压栈（同一个 Activity），本页组合不会销毁 ⇒ 必须自己摘掉这层；
+          // 放在压栈之后，观感上是「转圈 → 直接换成照片」而不是先空一下再换。
+          randomLaunching = false
+        }
       }
     }
 
@@ -1499,7 +1526,10 @@ data class EmbyLibraryScreen(
      * @param drillDown true = 下钻（含子文件夹，默认单击）；false = 只取当前目录（长按）
      */
     fun startFeedPlayback(favoritesOnly: Boolean, drillDown: Boolean = true) {
+      if (randomLaunching) return
+      randomLaunching = true
       scope.launch {
+        try {
         val current = viewModel.currentServerOrAwait() ?: return@launch
         val random =
           loadRandomForView(current, favoritesOnly = favoritesOnly, drillDown = drillDown)
@@ -1529,6 +1559,9 @@ data class EmbyLibraryScreen(
         // 与「随机播放」同一个意思：视界流同样要说明这次取片的范围（两种手势都弹）。
         showGestureHint("视界流", drillDown)
         VerticalFeedActivity.launch(context, items, libraryId, favoritesOnly)
+        } finally {
+          randomLaunching = false
+        }
       }
     }
 
@@ -2416,6 +2449,35 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               }
               }
             }
+          }
+        }
+
+        // ── 「正在打开」整页加载层（v172）──
+        // 位置：内容容器的**最后一个子节点** —— 后声明的画在上层，才盖得住网格；
+        // 同时又排在所有对话框之前，所以弹窗仍然压在它上面。
+        //
+        // 透明底、不染色：与网络位置、Emby 详情页那层同款（纯动画，不压暗内容）。
+        // ⚠️ 必须放在 `when` 之后：放前面会被骨架屏 / 列表盖住，
+        //    四个随机入口里恰恰有三个是在「列表已就绪」的状态下点的。
+        //
+        // ⚠️ 这一层**吞点击**（clickable + null indication，无涟漪）：取数有几百毫秒到几秒，
+        //    空窗期内连点两下 = 拉起两个播放器 / 压两层视界流，是实际会踩到的。
+        if (randomLaunching) {
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .clickable(
+                interactionSource =
+                  remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+              ) {
+                // 故意的空实现：只用来吃掉取数期间的重复点击
+              },
+            contentAlignment = Alignment.Center,
+          ) {
+            // ⚠️ 用 size 参数（96dp，还会乘「加载动画大小」的缩放）而不是
+            //    Modifier.size —— 后者不走那个缩放（见 AppLoadingIndicator 的 KDoc）。
+            app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 96.dp)
           }
         }
       }

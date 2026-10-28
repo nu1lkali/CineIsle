@@ -14,15 +14,28 @@ data class SearchablePreference(
     @StringRes val summaryRes: Int? = null,
     val summary: String? = null,
     val keywords: List<String> = emptyList(),
+    /**
+     * 页面级别名（v172）：挂在「该页第一条」上，检索时算**最低权重**。
+     *
+     * 用途：用户搜「弹幕」时，除了命中标题里带「弹幕」的那几项，也把整页的其它
+     * 弹幕配置一起带出来（它们标题里往往没有「弹幕」二字）。权重压到最低是为了
+     * 不让「播放」这种词把整页几十条都顶到标题命中项前面。
+     */
+    val screenKeywords: List<String> = emptyList(),
     val category: String,
     val screen: Screen,
 )
 
 /**
  * All searchable preferences indexed for settings search.
+ *
+ * v172 起 = 下面这张**手写清单**（带英文关键词）+ [generatedSearchablePreferences]
+ * （从各设置页源码自动抽取的全量清单，200+ 项）。合并时手写优先 —— 它多了
+ * amoled / vulkan / danmaku 这类英文别名，是搜英文的唯一来源。
  */
 object SearchablePreferences {
-    val allPreferences: List<SearchablePreference> by lazy {
+    /** 手写清单：带英文关键词的那一份（搜英文靠它）。 */
+    private val curatedPreferences: List<SearchablePreference> by lazy {
         buildList {
             // Appearance preferences
             add(SearchablePreference(
@@ -591,24 +604,84 @@ object SearchablePreferences {
     }
 
     /**
-     * Search preferences by query.
-     * Simple case-insensitive search against title, summary, keywords, and category.
+     * 全量索引：手写清单 + 自动抽取清单。
+     *
+     * 手写那份排前面 —— 它带英文关键词，且指向的是「专页」而不是设置首页。
+     * 自动抽取那份按 [dedupeKey] 去重后再并入，所以不会出现同一个配置项两条。
      */
-    fun search(query: String, getStringRes: (Int) -> String): List<SearchablePreference> {
-        if (query.isBlank()) return emptyList()
-
-        val normalizedQuery = query.lowercase().trim()
-
-        return allPreferences.filter { pref ->
-            val title = (if (pref.titleRes != null) getStringRes(pref.titleRes) else pref.title ?: "").lowercase()
-            val summary = (if (pref.summaryRes != null) getStringRes(pref.summaryRes) else pref.summary ?: "").lowercase()
-            val keywords = pref.keywords.joinToString(" ").lowercase()
-            val category = pref.category.lowercase()
-
-            title.contains(normalizedQuery) ||
-                    summary.contains(normalizedQuery) ||
-                    keywords.contains(normalizedQuery) ||
-                    category.contains(normalizedQuery)
+    val allPreferences: List<SearchablePreference> by lazy {
+        val seen = HashSet<String>()
+        curatedPreferences.forEach { seen.add(it.dedupeKey()) }
+        buildList {
+            addAll(curatedPreferences)
+            generatedSearchablePreferences.forEach { pref ->
+                if (seen.add(pref.dedupeKey())) add(pref)
+            }
         }
     }
+
+    /**
+     * 去重键：有 string 资源就用资源（同一项在不同页面里通常复用同一个资源），
+     * 字面量标题则带上所属页面 —— 不同页面有同名项（「默认」之类）是正常的，不该互相吃掉。
+     */
+    private fun SearchablePreference.dedupeKey(): String =
+        if (titleRes != null) "res:$titleRes" else "lit:${title.orEmpty()}|$screen"
+
+    /**
+     * Search preferences by query.
+     *
+     * 匹配规则（v172 重写）：
+     *  - 查询按空白 / 中英文逗号 / 顿号切成多个词，**每个词都命中**才算结果（AND），
+     *    这样「emby 随机」这种组合词才收得紧；
+     *  - 词可以落在标题、副标题、英文关键词、分类名、页面别名上，按命中位置给权重，
+     *    结果按权重降序 —— 标题命中的一定排在「只是副标题里提到」的前面；
+     *  - 全部小写、去首尾空白；中文不做分词，靠子串匹配（「弹幕源」能被「弹幕」命中）。
+     */
+    fun search(query: String, getStringRes: (Int) -> String): List<SearchablePreference> {
+        val tokens = query
+            .lowercase()
+            .split(' ', '\t', '\n', '，', ',', '、', ';', '；', '/')
+            .filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return emptyList()
+
+        return allPreferences
+            .mapNotNull { pref ->
+                val score = score(pref, tokens, getStringRes)
+                if (score == null) null else pref to score
+            }
+            .sortedWith(
+                compareByDescending<Pair<SearchablePreference, Int>> { it.second }
+                    .thenBy { it.first.category },
+            )
+            .map { it.first }
+    }
+
+    /** 命中返回累计权重，任一 token 没命中返回 null。 */
+    private fun score(
+        pref: SearchablePreference,
+        tokens: List<String>,
+        getStringRes: (Int) -> String,
+    ): Int? {
+        val title = resolve(pref.titleRes, pref.title, getStringRes)
+        val summary = resolve(pref.summaryRes, pref.summary, getStringRes)
+        val keywords = pref.keywords.joinToString(" ").lowercase()
+        val category = pref.category.lowercase()
+        val screenKeywords = pref.screenKeywords.joinToString(" ").lowercase()
+
+        var total = 0
+        for (token in tokens) {
+            total += when {
+                title.contains(token) -> 6
+                keywords.contains(token) -> 4
+                summary.contains(token) -> 3
+                category.contains(token) -> 2
+                screenKeywords.contains(token) -> 1
+                else -> return null
+            }
+        }
+        return total
+    }
+
+    private fun resolve(resId: Int?, literal: String?, getStringRes: (Int) -> String): String =
+        (if (resId != null) getStringRes(resId) else literal.orEmpty()).lowercase()
 }

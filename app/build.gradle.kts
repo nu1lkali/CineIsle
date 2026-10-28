@@ -1851,7 +1851,31 @@ android {
     //     · `playVideos` 增加 `onFinished` 回调（成功 / 失败 / 提前返回三路都给），
     //       加载层改由它摘除；`beginOpening` 的超时从 3s 提到 10s，只当最后一道网。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 171
+    // ── v172（versionCode 172，功能轮不涨名，versionName 仍为 1.6.10）──────
+    //     两件事（用户反馈）：
+    //     ① Emby 媒体库四个随机入口（随机播放 / 随机播放收藏 / 视界流 / 随机播放图片）
+    //        取数期间没有任何反馈。根因：`loadRandomForView` / `loadPhotos` 是纯挂起
+    //        网络请求，递归下钻时能慢到几秒，而这段空窗期界面完全静止。
+    //        · 新增 `randomLaunching` 状态 + 内容容器最后子节点的整页
+    //          `AppLoadingIndicator(size = 96.dp)`（与网络位置、详情页同一个全局入口，
+    //          「外观 → 加载动画」的样式/缩放一并生效）。
+    //        · 三个入口统一 `try { … } finally { randomLaunching = false }`：
+    //          `launchRandomPlayback`（起播探测）也在 try 内 ⇒ 动画消失 = 播放器起跳，
+    //          中间不再留空窗期（v171 的教训）。
+    //        · 该层 `clickable(interactionSource, indication = null)` **吞点击**：
+    //          取数期间连点两下会拉起两个播放器 / 压两层视界流。
+    //     ② 设置页搜索「很多配置项搜不出来」。根因：索引是**手写**的，每张设置页只登记了
+    //        「首页那个入口」，而 `PreferencesScreen.kt` 里内联着 Emby 推荐 / 封面合成 /
+    //        随机播放 / 网络浏览 / 数据缓存 / 应用锁 上百个配置项，标题用的是**中文字面量**
+    //        而不是 string 资源 —— 两边都对不上。手写清单 80 项，实际配置项 200+。
+    //        · 新增 `tools/gen_pref_index.py` 从各设置页源码抽 `title =` / `summary =`，
+    //          生成 `SearchablePreferenceIndex.kt`（214 项，`screenKeywords` 挂页面别名）。
+    //        · `SearchablePreferences.allPreferences` = 手写（带英文关键词）+ 自动抽取，
+    //          按 titleRes / 字面量去重，手写优先。
+    //        · 检索重写：按空白/中英文逗号/顿号切词后 **AND** 匹配，命中位置分权重
+    //          （标题 6 / 英文关键词 4 / 副标题 3 / 分类 2 / 页面别名 1）并按权重排序。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 172
     versionName = "1.6.10"
 
     vectorDrawables {
