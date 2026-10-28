@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -94,7 +95,10 @@ object DecoderPreferencesScreen : Screen {
       },
     ) { padding ->
       ProvidePreferenceLocals {
+        val listState = rememberLazyListState()
+        SettingsSpotlightReveal(listState, DecoderPreferencesScreen)
         LazyColumn(
+          state = listState,
           modifier =
             Modifier
               .fillMaxSize()
@@ -120,6 +124,7 @@ object DecoderPreferencesScreen : Screen {
                 onValueChange = { preferences.profile.set(it.value) },
                 values = MPVProfile.entries,
                 valueToText = { value -> AnnotatedString(stringResource(value.displayNameRes)) },
+                modifier = Modifier.settingsAnchor("pref_decoder_profile_title"),
                 title = { Text(stringResource(R.string.pref_decoder_profile_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -144,6 +149,7 @@ object DecoderPreferencesScreen : Screen {
                 onValueChange = {
                   preferences.tryHWDecoding.set(it)
                 },
+                modifier = Modifier.settingsAnchor("pref_decoder_try_hw_dec_title"),
                 title = { Text(stringResource(R.string.pref_decoder_try_hw_dec_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
 
@@ -170,6 +176,7 @@ object DecoderPreferencesScreen : Screen {
                         }
                     }
                 },
+                modifier = Modifier.settingsAnchor("pref_decoder_gpu_next_title"),
                 title = { Text(stringResource(R.string.pref_decoder_gpu_next_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -241,6 +248,7 @@ object DecoderPreferencesScreen : Screen {
                 value = hdrEnabled,
                 onValueChange = { preferences.hdrEnabled.set(it) },
                 enabled = gpuNext,
+                modifier = Modifier.settingsAnchor("pref_decoder_hdr_title"),
                 title = { Text(stringResource(R.string.pref_decoder_hdr_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -281,6 +289,7 @@ object DecoderPreferencesScreen : Screen {
                   }
                 },
                 enabled = isVulkanSupported,
+                modifier = Modifier.settingsAnchor("pref_decoder_vulkan_title"),
                 title = { Text(stringResource(R.string.pref_decoder_vulkan_title) + " (Experimental)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -309,6 +318,7 @@ object DecoderPreferencesScreen : Screen {
                 onValueChange = { preferences.debanding.set(it) },
                 values = Debanding.entries,
                 valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
+                modifier = Modifier.settingsAnchor("pref_decoder_debanding_title"),
                 title = { Text(stringResource(R.string.pref_decoder_debanding_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -333,6 +343,7 @@ object DecoderPreferencesScreen : Screen {
                 onValueChange = {
                   preferences.useYUV420P.set(it)
                 },
+                modifier = Modifier.settingsAnchor("pref_decoder_yuv420p_title"),
                 title = { Text(stringResource(R.string.pref_decoder_yuv420p_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -360,6 +371,7 @@ object DecoderPreferencesScreen : Screen {
                         preferences.gpuNext.set(false)
                     }
                 },
+                modifier = Modifier.settingsAnchor("pref_anime4k_title"),
                 title = { Text(stringResource(R.string.pref_anime4k_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Column {

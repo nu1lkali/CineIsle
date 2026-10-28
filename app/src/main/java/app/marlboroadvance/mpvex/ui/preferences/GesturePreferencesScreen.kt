@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -94,7 +95,10 @@ object GesturePreferencesScreen : Screen {
       },
     ) { padding ->
       ProvidePreferenceLocals {
+        val listState = rememberLazyListState()
+        SettingsSpotlightReveal(listState, GesturePreferencesScreen)
         LazyColumn(
+          state = listState,
           modifier =
             Modifier
               .fillMaxSize()
@@ -135,6 +139,7 @@ object GesturePreferencesScreen : Screen {
                 AnnotatedString("${value}s")
               }
             },
+            modifier = Modifier.settingsAnchor("pref_player_double_tap_seek_duration"),
             title = { Text(text = stringResource(id = R.string.pref_player_double_tap_seek_duration), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
@@ -206,6 +211,7 @@ object GesturePreferencesScreen : Screen {
             onValueChange = { preferences.doubleTapSeekAreaWidth.set(it) },
             values = seekAreaValues,
             valueToText = { AnnotatedString("${it}%") },
+            modifier = Modifier.settingsAnchor("i18n_double_tap_area_width"),
             title = { Text(text = stringResource(R.string.i18n_double_tap_area_width), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
@@ -230,6 +236,7 @@ object GesturePreferencesScreen : Screen {
             onValueChange = { preferences.leftSingleActionGesture.set(it) },
             values = SingleActionGesture.entries,
             valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
+            modifier = Modifier.settingsAnchor("pref_gesture_double_tap_left_title"),
             title = { Text(text = stringResource(R.string.pref_gesture_double_tap_left_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { Text(
               text = stringResource(leftDoubleTap.titleRes),
@@ -286,6 +293,7 @@ object GesturePreferencesScreen : Screen {
             onValueChange = { preferences.rightSingleActionGesture.set(it) },
             values = SingleActionGesture.entries,
             valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
+            modifier = Modifier.settingsAnchor("pref_gesture_double_tap_right_title"),
             title = { Text(text = stringResource(R.string.pref_gesture_double_tap_right_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { Text(
               text = stringResource(rightDoubleTap.titleRes),
@@ -306,6 +314,7 @@ object GesturePreferencesScreen : Screen {
             },
             value = useSingleTapForCenter,
             onValueChange = { preferences.useSingleTapForCenter.set(it) },
+            modifier = Modifier.settingsAnchor("pref_gesture_use_single_tap_for_center_title"),
             title = {
               Text(
                 text = stringResource(id = R.string.pref_gesture_use_single_tap_for_center_title),
@@ -374,6 +383,7 @@ object GesturePreferencesScreen : Screen {
             onValueChange = { preferences.mediaPreviousGesture.set(it) },
             values = SingleActionGesture.entries,
             valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
+            modifier = Modifier.settingsAnchor("pref_gesture_media_previous"),
             title = { Text(text = stringResource(R.string.pref_gesture_media_previous), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { Text(
               text = stringResource(mediaPreviousGesture.titleRes),
@@ -400,6 +410,7 @@ object GesturePreferencesScreen : Screen {
                 SingleActionGesture.Custom,
               ),
             valueToText = { AnnotatedString(context.getString(it.titleRes)) },
+            modifier = Modifier.settingsAnchor("pref_gesture_media_play"),
             title = { Text(text = stringResource(R.string.pref_gesture_media_play), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { Text(
               text = stringResource(mediaPlayGesture.titleRes),
@@ -421,6 +432,7 @@ object GesturePreferencesScreen : Screen {
             onValueChange = { preferences.mediaNextGesture.set(it) },
             values = SingleActionGesture.entries,
             valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
+            modifier = Modifier.settingsAnchor("pref_gesture_media_next"),
             title = { Text(text = stringResource(R.string.pref_gesture_media_next), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = { Text(
               text = stringResource(mediaNextGesture.titleRes),

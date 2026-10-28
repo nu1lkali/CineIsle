@@ -22,6 +22,12 @@ data class SearchablePreference(
      * 不让「播放」这种词把整页几十条都顶到标题命中项前面。
      */
     val screenKeywords: List<String> = emptyList(),
+    /**
+     * 定位锚点（v173）：目标页里那一行的标识，由 `tools/gen_pref_index.py` 同时写进
+     * 索引和行修饰符（`Modifier.settingsAnchor`）。null = 这一项没法精确定位
+     * （页面级入口 / 所在行没挂修饰符），点进去停在页顶。
+     */
+    val anchor: String? = null,
     val category: String,
     val screen: Screen,
 )

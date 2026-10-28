@@ -218,6 +218,9 @@ object SettingsSearchScreen : Screen {
                                 preference = preference,
                                 onClick = {
                                     keyboardController?.hide()
+                                    // v173：先把「跳到哪一行」挂出去，目标页起来后自己滚过去并闪一下。
+                                    // 没有锚点（页面级入口 / 行上没挂修饰符）时传 null，行为回到「进页顶」。
+                                    SettingsSpotlight.request(preference.screen, preference.anchor)
                                     backstack.add(preference.screen)
                                 }
                             )

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -125,7 +126,10 @@ object PlayerControlsPreferencesScreen : Screen {
       },
     ) { padding ->
       ProvidePreferenceLocals {
+        val listState = rememberLazyListState()
+        SettingsSpotlightReveal(listState, PlayerControlsPreferencesScreen)
         LazyColumn(
+          state = listState,
           modifier =
             Modifier
               .fillMaxSize()
@@ -139,6 +143,7 @@ object PlayerControlsPreferencesScreen : Screen {
           item {
             PreferenceCard {
               PreferenceCategoryWithEditButton(
+                modifier = Modifier.settingsAnchor("pref_layout_top_right_controls"),
                 title = stringResource(id = R.string.pref_layout_top_right_controls),
                 onClick = {
                   backstack.add(ControlLayoutEditorScreen(ControlRegion.TOP_RIGHT))
@@ -149,6 +154,7 @@ object PlayerControlsPreferencesScreen : Screen {
               PreferenceDivider()
               
               PreferenceCategoryWithEditButton(
+                modifier = Modifier.settingsAnchor("pref_layout_bottom_right_controls"),
                 title = stringResource(id = R.string.pref_layout_bottom_right_controls),
                 onClick = {
                   backstack.add(ControlLayoutEditorScreen(ControlRegion.BOTTOM_RIGHT))
@@ -159,6 +165,7 @@ object PlayerControlsPreferencesScreen : Screen {
               PreferenceDivider()
               
               PreferenceCategoryWithEditButton(
+                modifier = Modifier.settingsAnchor("pref_layout_bottom_left_controls"),
                 title = stringResource(id = R.string.pref_layout_bottom_left_controls),
                 onClick = {
                   backstack.add(ControlLayoutEditorScreen(ControlRegion.BOTTOM_LEFT))
@@ -178,6 +185,7 @@ object PlayerControlsPreferencesScreen : Screen {
 
             
               PreferenceCategoryWithEditButton(
+                modifier = Modifier.settingsAnchor("pref_layout_portrait_bottom_controls"),
                 title = stringResource(id = R.string.pref_layout_portrait_bottom_controls),
                 onClick = {
                   backstack.add(ControlLayoutEditorScreen(ControlRegion.PORTRAIT_BOTTOM))
@@ -245,6 +253,7 @@ object PlayerControlsPreferencesScreen : Screen {
                 },
                 value = hidePlayerButtonsBackground,
                 onValueChange = { appearancePrefs.hidePlayerButtonsBackground.set(it) },
+                modifier = Modifier.settingsAnchor("pref_appearance_hide_player_buttons_background_title"),
                 title = {
                   Text(
                     text = stringResource(id = R.string.pref_appearance_hide_player_buttons_background_title),
@@ -284,6 +293,7 @@ object PlayerControlsPreferencesScreen : Screen {
                     AnnotatedString("$value ms")
                   }
                 },
+                modifier = Modifier.settingsAnchor("pref_player_display_hide_player_control_time"),
                 title = { Text(text = stringResource(R.string.pref_player_display_hide_player_control_time), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -354,10 +364,12 @@ object PlayerControlsPreferencesScreen : Screen {
   private fun PreferenceCategoryWithEditButton(
     title: String,
     onClick: () -> Unit,
+    // 搜索定位用（见 SettingsSpotlight）：不传就是普通一行，视觉上无差别
+    modifier: Modifier = Modifier,
   ) {
     Row(
       modifier =
-        Modifier
+        modifier
           .fillMaxWidth()
           .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
       // Apply padding to Row - minimal padding for tighter appearance

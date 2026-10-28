@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -155,7 +156,10 @@ object PreferencesScreen : Screen {
       },
     ) { padding ->
       ProvidePreferenceLocals {
+        val listState = rememberLazyListState()
+        SettingsSpotlightReveal(listState, PreferencesScreen)
         LazyColumn(
+          state = listState,
           modifier =
             Modifier
               .fillMaxSize()
@@ -201,6 +205,7 @@ object PreferencesScreen : Screen {
           item {
             PreferenceCard {
               Preference(
+                modifier = Modifier.settingsAnchor("pref_appearance_title"),
                 title = { Text(text = stringResource(id = R.string.pref_appearance_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -230,6 +235,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
+                modifier = Modifier.settingsAnchor("pref_player"),
                 title = { Text(text = stringResource(id = R.string.pref_player), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -250,6 +256,7 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               Preference(
+                modifier = Modifier.settingsAnchor("pref_layout_title"),
                 title = { Text(text = stringResource(id = R.string.pref_layout_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -271,6 +278,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
+                modifier = Modifier.settingsAnchor("pref_gesture"),
                 title = { Text(text = stringResource(id = R.string.pref_gesture), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -297,6 +305,7 @@ object PreferencesScreen : Screen {
               val danmakuPrefs = koinInject<DanmakuPreferences>()
               val danmakuEnabled by danmakuPrefs.enabled.collectAsState()
               Preference(
+                modifier = Modifier.settingsAnchor("danmaku_title"),
                 title = { Text(text = stringResource(id = R.string.danmaku_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -320,6 +329,7 @@ object PreferencesScreen : Screen {
               // GSY 播放器是**独立的一套播放页**（内核 / 渲染 / 手势都跟 mpv 不共用），
               // 所以它的配置单开一页：这一页改什么都不影响 mpv，反之亦然。
               Preference(
+                modifier = Modifier.settingsAnchor("pref_gsy_player"),
                 title = { Text(text = stringResource(id = R.string.pref_gsy_player), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -342,6 +352,7 @@ object PreferencesScreen : Screen {
               // （关开关会清掉控件簇里的按钮、开开关会加回原簇），
               // 细节见 DislikeLayoutSync。
               Preference(
+                modifier = Modifier.settingsAnchor("pref_dislike_title"),
                 title = { Text(text = stringResource(id = R.string.pref_dislike_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -370,6 +381,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
+                modifier = Modifier.settingsAnchor("pref_folders_title"),
                 title = { Text(text = stringResource(id = R.string.pref_folders_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -398,6 +410,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
+                modifier = Modifier.settingsAnchor("pref_decoder"),
                 title = { Text(text = stringResource(id = R.string.pref_decoder), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -419,6 +432,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
+                modifier = Modifier.settingsAnchor("pref_subtitles"),
                 title = { Text(text = stringResource(id = R.string.pref_subtitles), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -440,6 +454,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
+                modifier = Modifier.settingsAnchor("pref_audio"),
                 title = { Text(text = stringResource(id = R.string.pref_audio), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -480,6 +495,7 @@ object PreferencesScreen : Screen {
                 },
                 value = predictivePreload,
                 onValueChange = { browserPreferences.embyPredictivePreload.set(it) },
+                modifier = Modifier.settingsAnchor("预测性懒加载"),
                 title = { Text(text = "预测性懒加载", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -496,6 +512,7 @@ object PreferencesScreen : Screen {
               // 这里只做入口 —— 与播放列表、合集同一套分工：设置里给门，内容在专门页面管。
               // 多服务器 / 多用户：管理页按「当前服务器」分桶，标题下会显示在管哪台。
               Preference(
+                modifier = Modifier.settingsAnchor("聚合库"),
                 title = { Text(text = "聚合库", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -518,6 +535,7 @@ object PreferencesScreen : Screen {
               // 演职员合并：同一个演员因为名字写法不同会裂成多条 Person（作品页缺片、演职员表重复）。
               // 这是唯一会写服务器元数据的工具，单独一个页面承载，这里只放入口。
               Preference(
+                modifier = Modifier.settingsAnchor("演职员合并"),
                 title = { Text(text = "演职员合并", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -560,6 +578,7 @@ object PreferencesScreen : Screen {
                 },
                 value = showRecommendations,
                 onValueChange = { browserPreferences.embyShowRecommendations.set(it) },
+                modifier = Modifier.settingsAnchor("详情页推荐"),
                 title = { Text(text = "详情页推荐", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -582,6 +601,7 @@ object PreferencesScreen : Screen {
                 },
                 value = randomGenreRecommend,
                 onValueChange = { browserPreferences.embyRandomGenreRecommend.set(it) },
+                modifier = Modifier.settingsAnchor("同类型推荐随机选取类型"),
                 title = { Text(text = "同类型推荐随机选取类型", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -657,6 +677,7 @@ object PreferencesScreen : Screen {
                 },
                 value = excludePlayed,
                 onValueChange = { browserPreferences.embySimilarExcludePlayed.set(it) },
+                modifier = Modifier.settingsAnchor("推荐时排除已看过"),
                 title = { Text(text = "推荐时排除已看过", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -680,6 +701,7 @@ object PreferencesScreen : Screen {
                 },
                 value = homeShowMix,
                 onValueChange = { browserPreferences.embyHomeShowMix.set(it) },
+                modifier = Modifier.settingsAnchor("首页「随便看看」"),
                 title = { Text(text = "首页「随便看看」", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -710,6 +732,7 @@ object PreferencesScreen : Screen {
                 // 「连播列表」是「猜你喜欢」页里那个区块的标题（见EmbyDiscoverScreen），
                 // 别写成「即混」—— 那是 Emby 的 InstantMix 接口名，
                 // 玩家在界面上搜不到这个词，只会觉得说的是别的地方。
+                modifier = Modifier.settingsAnchor("连播列表每行数量"),
                 title = { Text(text = "连播列表每行数量", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 valueRange = 2f..6f,
                 valueSteps = 3,
@@ -750,6 +773,7 @@ object PreferencesScreen : Screen {
                 },
                 value = resolveDirectLink,
                 onValueChange = { browserPreferences.embyResolveDirectLink.set(it) },
+                modifier = Modifier.settingsAnchor("预解析直链（302）"),
                 title = { Text(text = "预解析直链（302）", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -772,6 +796,7 @@ object PreferencesScreen : Screen {
                 },
                 value = clearProgressOnDownload,
                 onValueChange = { browserPreferences.embyClearProgressOnDownload.set(it) },
+                modifier = Modifier.settingsAnchor("下载后清除播放进度"),
                 title = { Text(text = "下载后清除播放进度", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -804,6 +829,7 @@ object PreferencesScreen : Screen {
                 onValueChange = { browserPreferences.embyMediaSourcePreference.set(it.key) },
                 values = MediaSourcePreference.entries,
                 valueToText = { AnnotatedString(mediaSourcePreferenceLabel(it)) },
+                modifier = Modifier.settingsAnchor("pref_media_source_pref_title"),
                 title = { Text(text = stringResource(R.string.pref_media_source_pref_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -840,6 +866,7 @@ object PreferencesScreen : Screen {
                 onValueChange = { browserPreferences.photoPreloadCount.set(it.coerceIn(1, 3)) },
                 values = listOf(1, 2, 3),
                 valueToText = { AnnotatedString("前后各 $it 张") },
+                modifier = Modifier.settingsAnchor("照片预加载张数"),
                 title = { Text(text = "照片预加载张数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -868,6 +895,7 @@ object PreferencesScreen : Screen {
                 onValueChange = { browserPreferences.photoSlideshowInterval.set(it) },
                 values = PhotoSlideshowInterval.entries,
                 valueToText = { AnnotatedString("${it.seconds} 秒") },
+                modifier = Modifier.settingsAnchor("照片幻灯片间隔"),
                 title = { Text(text = "照片幻灯片间隔", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -894,6 +922,7 @@ object PreferencesScreen : Screen {
                 },
                 value = photoAutoSlideshow,
                 onValueChange = { browserPreferences.photoAutoSlideshow.set(it) },
+                modifier = Modifier.settingsAnchor("照片浏览器自动播放幻灯片"),
                 title = { Text(text = "照片浏览器自动播放幻灯片", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -925,6 +954,7 @@ object PreferencesScreen : Screen {
                 },
                 value = photoFilmstrip,
                 onValueChange = { browserPreferences.photoFilmstrip.set(it) },
+                modifier = Modifier.settingsAnchor("照片浏览器显示底部缩略图"),
                 title = { Text(text = "照片浏览器显示底部缩略图", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -956,6 +986,7 @@ object PreferencesScreen : Screen {
               val saveDirPath by browserPreferences.photoSaveDirPath.collectAsState()
               var showFolderPicker by remember { mutableStateOf(false) }
               Preference(
+                modifier = Modifier.settingsAnchor("照片保存位置"),
                 title = { Text(text = "照片保存位置", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1001,6 +1032,7 @@ object PreferencesScreen : Screen {
                       tint = MaterialTheme.colorScheme.primary,
                     )
                   },
+                  modifier = Modifier.settingsAnchor("恢复默认保存位置"),
                   title = { Text(text = "恢复默认保存位置", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                   summary = {
                     Text(
@@ -1043,6 +1075,7 @@ object PreferencesScreen : Screen {
                 },
                 value = quickFavorite,
                 onValueChange = { browserPreferences.embyQuickFavorite.set(it) },
+                modifier = Modifier.settingsAnchor("卡片快捷收藏"),
                 title = { Text(text = "卡片快捷收藏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1065,6 +1098,7 @@ object PreferencesScreen : Screen {
                 onValueChange = { browserPreferences.embyCardCorner.set(it.roundToInt()) },
                 sliderValue = cardCorner.toFloat(),
                 onSliderValueChange = { browserPreferences.embyCardCorner.set(it.roundToInt()) },
+                modifier = Modifier.settingsAnchor("卡片圆角"),
                 title = { Text(text = "卡片圆角", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 valueRange = 0f..24f,
                 summary = {
@@ -1087,6 +1121,7 @@ object PreferencesScreen : Screen {
                 },
                 value = showCardBadges,
                 onValueChange = { browserPreferences.embyShowCardBadges.set(it) },
+                modifier = Modifier.settingsAnchor("显示封面角标"),
                 title = { Text(text = "显示封面角标", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1110,6 +1145,7 @@ object PreferencesScreen : Screen {
                 },
                 value = folderIconBlue,
                 onValueChange = { browserPreferences.embyFolderIconBlue.set(it) },
+                modifier = Modifier.settingsAnchor("文件夹图标使用蓝色"),
                 title = { Text(text = "文件夹图标使用蓝色", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1144,6 +1180,7 @@ object PreferencesScreen : Screen {
                 },
                 value = folderRandomCover,
                 onValueChange = { browserPreferences.embyFolderRandomCover.set(it) },
+                modifier = Modifier.settingsAnchor("合成随机封面图"),
                 title = { Text(text = "合成随机封面图", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1184,6 +1221,7 @@ object PreferencesScreen : Screen {
                   },
                   values = FolderCoverRefreshPolicy.entries,
                   valueToText = { AnnotatedString(it.label) },
+                  modifier = Modifier.settingsAnchor("重新合成策略"),
                   title = { Text(text = "重新合成策略", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                   summary = {
                     Text(
@@ -1206,6 +1244,7 @@ object PreferencesScreen : Screen {
                         tint = MaterialTheme.colorScheme.primary,
                       )
                     },
+                    modifier = Modifier.settingsAnchor("合成封面图间隔小时数"),
                     title = { Text(text = "合成封面图间隔小时数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     summary = {
                       Text(
@@ -1227,6 +1266,7 @@ object PreferencesScreen : Screen {
                         tint = MaterialTheme.colorScheme.primary,
                       )
                     },
+                    modifier = Modifier.settingsAnchor("间隔天数"),
                     title = { Text(text = "间隔天数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     summary = {
                       Text(
@@ -1289,6 +1329,7 @@ object PreferencesScreen : Screen {
             var showRandomDialog by remember { mutableStateOf(false) }
             PreferenceCard {
               Preference(
+                modifier = Modifier.settingsAnchor("随机播放视频数量"),
                 title = { Text(text = "随机播放视频数量", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1318,6 +1359,7 @@ object PreferencesScreen : Screen {
                 },
                 value = drillDownOnTap,
                 onValueChange = { browserPreferences.embyRandomDrillDownOnTap.set(it) },
+                modifier = Modifier.settingsAnchor("随机播放默认下钻"),
                 title = { Text(text = "随机播放默认下钻", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1349,6 +1391,7 @@ object PreferencesScreen : Screen {
                 },
                 value = gestureToast,
                 onValueChange = { browserPreferences.embyRandomGestureToast.set(it) },
+                modifier = Modifier.settingsAnchor("显示手势提示"),
                 title = { Text(text = "显示手势提示", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1398,6 +1441,7 @@ object PreferencesScreen : Screen {
                 },
                 value = folderCoverEnabled,
                 onValueChange = { browserPreferences.folderCoverEnabled.set(it) },
+                modifier = Modifier.settingsAnchor("文件夹封面"),
                 title = { Text(text = "文件夹封面", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1428,6 +1472,7 @@ object PreferencesScreen : Screen {
                 onValueChange = { browserPreferences.networkGridTitleLines.set(it) },
                 values = GridTitleLines.entries,
                 valueToText = { AnnotatedString(it.label) },
+                modifier = Modifier.settingsAnchor("网格标题行数"),
                 title = { Text(text = "网格标题行数", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1457,6 +1502,7 @@ object PreferencesScreen : Screen {
             }
             PreferenceCard {
               Preference(
+                modifier = Modifier.settingsAnchor("图片缓存"),
                 title = { Text(text = "图片缓存", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1522,6 +1568,7 @@ object PreferencesScreen : Screen {
 
             PreferenceCard {
               Preference(
+                modifier = Modifier.settingsAnchor("app_lock_title"),
                 title = { Text(text = stringResource(R.string.app_lock_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   val text = if (appLockEnabled) {
@@ -1636,6 +1683,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
+                modifier = Modifier.settingsAnchor("pref_advanced"),
                 title = { Text(text = stringResource(R.string.pref_advanced), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -1657,6 +1705,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
+                modifier = Modifier.settingsAnchor("pref_about_title"),
                 title = { Text(text = stringResource(id = R.string.pref_about_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(

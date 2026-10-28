@@ -1875,7 +1875,26 @@ android {
     //        · 检索重写：按空白/中英文逗号/顿号切词后 **AND** 匹配，命中位置分权重
     //          （标题 6 / 英文关键词 4 / 副标题 3 / 分类 2 / 页面别名 1）并按权重排序。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 172
+    // ── v173（versionCode 173，功能轮不涨名，versionName 仍为 1.6.10）──────
+    //     用户：搜索命中的配置项点进去只落在页顶，「用户都不知道在哪，还是得找」——
+    //     要「直接到那个位置，然后闪烁一下」。
+    //     · 新增 `ui/preferences/SettingsSpotlight.kt`：
+    //       - `SettingsSpotlight.request(screen, anchor)` 记下「跳到哪一行」；
+    //       - 目标页 `SettingsSpotlightReveal(listState, screen)` 负责滚过去：
+    //         离屏行 LazyColumn 不组合，所以从顶部按 **0.6 屏**步长下扫，直到那一行
+    //         自己登记的锚点出现，再交给 `BringIntoViewRequester` 精确露出。
+    //         ⚠️ 刻意不用「第几个 item」的下标表 —— 那种表一次插项就会错位。
+    //       - 行上 `Modifier.settingsAnchor("<锚点>")`：`drawBehind` 画呼吸背景 ×3
+    //         （约 1.6s）后自己撤销请求，下次进页面不会重复闪。
+    //     · `tools/gen_pref_index.py` 扩成「索引 + 行锚点」双职责：给每张设置页的
+    //       `title =` 行插 `modifier = Modifier.settingsAnchor(...)`（幂等），
+    //       并在页面的 LazyColumn 上接 `listState` + `SettingsSpotlightReveal`。
+    //       索引 205 条里 **186 条带锚点**（其余是页面级入口，点进页顶即正确）。
+    //     · 顺手清掉索引里的弹窗标题噪音（「导出完成」「关闭播放器按钮？」之类）。
+    //     · `ToggleRow` / `PreferenceCategoryWithEditButton` 补 `modifier` 形参（默认值，
+    //       不传时视觉零变化），这样这两类自定义行也能被定位。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 173
     versionName = "1.6.10"
 
     vectorDrawables {

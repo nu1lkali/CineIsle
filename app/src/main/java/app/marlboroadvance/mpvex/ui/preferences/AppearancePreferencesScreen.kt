@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.AutoAwesomeMotion
@@ -99,7 +100,10 @@ object AppearancePreferencesScreen : Screen {
             },
         ) { padding ->
             ProvidePreferenceLocals {
+                val listState = rememberLazyListState()
+                SettingsSpotlightReveal(listState, AppearancePreferencesScreen)
                 LazyColumn(
+                  state = listState,
                     modifier =
                     Modifier
                         .fillMaxSize()
@@ -148,6 +152,7 @@ object AppearancePreferencesScreen : Screen {
                                 onValueChange = { newValue ->
                                     preferences.amoledMode.set(newValue)
                                 },
+                                modifier = Modifier.settingsAnchor("pref_appearance_amoled_mode_title"),
                                 title = { Text(text = stringResource(id = R.string.pref_appearance_amoled_mode_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 summary = {
                                     Text(
@@ -207,6 +212,7 @@ object AppearancePreferencesScreen : Screen {
                                 },
                                 value = unlimitedNameLines,
                                 onValueChange = { preferences.unlimitedNameLines.set(it) },
+                                modifier = Modifier.settingsAnchor("pref_appearance_unlimited_name_lines_title"),
                                 title = {
                                     Text(
                                         text = stringResource(id = R.string.pref_appearance_unlimited_name_lines_title),
@@ -233,6 +239,7 @@ object AppearancePreferencesScreen : Screen {
                                 },
                                 value = showUnplayedOldVideoLabel,
                                 onValueChange = { preferences.showUnplayedOldVideoLabel.set(it) },
+                                modifier = Modifier.settingsAnchor("pref_appearance_show_unplayed_old_video_label_title"),
                                 title = {
                                     Text(
                                         text = stringResource(id = R.string.pref_appearance_show_unplayed_old_video_label_title),
@@ -259,6 +266,7 @@ object AppearancePreferencesScreen : Screen {
                                 },
                                 value = unplayedOldVideoDays.toFloat(),
                                 onValueChange = { preferences.unplayedOldVideoDays.set(it.roundToInt()) },
+                                modifier = Modifier.settingsAnchor("pref_appearance_unplayed_old_video_days_title"),
                                 title = { Text(text = stringResource(id = R.string.pref_appearance_unplayed_old_video_days_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 valueRange = 1f..30f,
                                 summary = {
@@ -288,6 +296,7 @@ object AppearancePreferencesScreen : Screen {
                                 },
                                 value = autoScrollToLastPlayed,
                                 onValueChange = { browserPreferences.autoScrollToLastPlayed.set(it) },
+                                modifier = Modifier.settingsAnchor("pref_appearance_auto_scroll_title"),
                                 title = {
                                     Text(text = stringResource(R.string.pref_appearance_auto_scroll_title))
                                 },
@@ -316,6 +325,7 @@ object AppearancePreferencesScreen : Screen {
                                 },
                                 value = sideScrollbar,
                                 onValueChange = { browserPreferences.sideScrollbarEnabled.set(it) },
+                                modifier = Modifier.settingsAnchor("pref_appearance_side_scrollbar_title"),
                                 title = {
                                     Text(
                                         text = stringResource(id = R.string.pref_appearance_side_scrollbar_title),
@@ -350,6 +360,7 @@ object AppearancePreferencesScreen : Screen {
                                 onValueChange = { browserPreferences.watchedThreshold.set(it.roundToInt()) },
                                 sliderValue = watchedThreshold.toFloat(),
                                 onSliderValueChange = { browserPreferences.watchedThreshold.set(it.roundToInt()) },
+                                modifier = Modifier.settingsAnchor("pref_appearance_watched_threshold_title"),
                                 title = { Text(text = stringResource(id = R.string.pref_appearance_watched_threshold_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 valueRange = 50f..100f,
                                 valueSteps = 9,
@@ -377,6 +388,7 @@ object AppearancePreferencesScreen : Screen {
                                 },
                                 value = tapThumbnailToSelect,
                                 onValueChange = { gesturePreferences.tapThumbnailToSelect.set(it) },
+                                modifier = Modifier.settingsAnchor("pref_gesture_tap_thumbnail_to_select_title"),
                                 title = {
                                     Text(
                                         text = stringResource(id = R.string.pref_gesture_tap_thumbnail_to_select_title),
@@ -398,6 +410,7 @@ object AppearancePreferencesScreen : Screen {
                     item {
                         PreferenceCard {
                             Preference(
+                                modifier = Modifier.settingsAnchor("appearance_deep_title"),
                                 title = { Text(text = stringResource(id = R.string.appearance_deep_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 summary = {
                                     Text(

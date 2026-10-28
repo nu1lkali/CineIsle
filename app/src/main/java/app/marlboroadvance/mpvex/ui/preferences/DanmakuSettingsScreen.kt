@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -88,7 +89,10 @@ object DanmakuSettingsScreen : Screen {
       },
     ) { padding ->
       ProvidePreferenceLocals {
+        val listState = rememberLazyListState()
+        SettingsSpotlightReveal(listState, DanmakuSettingsScreen)
         LazyColumn(
+          state = listState,
           modifier = Modifier
             .fillMaxSize()
             .padding(padding)
@@ -101,6 +105,7 @@ object DanmakuSettingsScreen : Screen {
 
           item {
             ToggleRow(
+              modifier = Modifier.settingsAnchor("danmaku_enable_title"),
               title = stringResource(R.string.danmaku_enable_title),
               summary =
                 stringResource(R.string.danmaku_enable_summary) +
@@ -176,6 +181,7 @@ object DanmakuSettingsScreen : Screen {
           }
           item {
             ToggleRow(
+              modifier = Modifier.settingsAnchor("danmaku_auto_match"),
               title = stringResource(R.string.danmaku_auto_match),
               summary = stringResource(R.string.danmaku_auto_match_summary),
               checked = autoMatch,
@@ -209,9 +215,11 @@ private fun ToggleRow(
   summary: String,
   checked: Boolean,
   onCheckedChange: (Boolean) -> Unit,
+  // 搜索定位用（见 SettingsSpotlight）：不传就是普通一行，视觉上无差别
+  modifier: Modifier = Modifier,
 ) {
   Row(
-    modifier = Modifier
+    modifier = modifier
       .fillMaxWidth()
       .clip(RoundedCornerShape(16.dp))
       .clickable { onCheckedChange(!checked) }

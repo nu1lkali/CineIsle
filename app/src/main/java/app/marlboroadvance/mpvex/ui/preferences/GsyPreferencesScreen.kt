@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.preferences
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -117,7 +118,10 @@ object GsyPreferencesScreen : Screen {
       },
     ) { padding ->
       ProvidePreferenceLocals {
+        val listState = rememberLazyListState()
+        SettingsSpotlightReveal(listState, GsyPreferencesScreen)
         LazyColumn(
+          state = listState,
           modifier =
             Modifier
               .fillMaxSize()
@@ -154,6 +158,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = playbackEngine,
                 onValueChange = { playerPrefs.playbackEngine.set(it) },
+                modifier = Modifier.settingsAnchor("默认播放内核"),
                 title = { Text("默认播放内核", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = listOf("MPV", "GSY"),
                 valueToText = { value ->
@@ -185,6 +190,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = longPressReverse,
                 onValueChange = playerPrefs.longPressReverseEngine::set,
+                modifier = Modifier.settingsAnchor("长按用另一个内核播放"),
                 title = { Text("长按用另一个内核播放", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -215,6 +221,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = kernel,
                 onValueChange = { prefs.kernel.set(it) },
+                modifier = Modifier.settingsAnchor("GSY 解码内核"),
                 title = { Text("GSY 解码内核", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = GsyKernelKind.entries,
                 valueToText = { AnnotatedString(it.title) },
@@ -239,6 +246,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = hardwareDecode,
                 onValueChange = { prefs.hardwareDecode.set(it) },
+                modifier = Modifier.settingsAnchor("硬解码（IJK MediaCodec）"),
                 title = { Text("硬解码（IJK MediaCodec）", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -261,6 +269,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = smartFallback,
                 onValueChange = { prefs.smartFallback.set(it) },
+                modifier = Modifier.settingsAnchor("硬解失败自动回退软解"),
                 title = { Text("硬解失败自动回退软解", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -283,6 +292,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = overrideExtension,
                 onValueChange = { prefs.overrideExtension.set(it) },
+                modifier = Modifier.settingsAnchor("强制解封装器（Exo 内核）"),
                 title = { Text("强制解封装器（Exo 内核）", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = listOf("", "m3u8", "mpd", "ism"),
                 valueToText = { AnnotatedString(if (it.isEmpty()) "自动" else it) },
@@ -312,6 +322,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = renderKind,
                 onValueChange = { prefs.renderKind.set(it) },
+                modifier = Modifier.settingsAnchor("渲染方式"),
                 title = { Text("渲染方式", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = GsyRenderKind.entries,
                 valueToText = { AnnotatedString(it.title) },
@@ -337,6 +348,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = showKind,
                 onValueChange = { prefs.showKind.set(it) },
+                modifier = Modifier.settingsAnchor("显示比例"),
                 title = { Text("显示比例", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = GsyShowKind.entries,
                 valueToText = { AnnotatedString(it.title) },
@@ -362,6 +374,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = filter,
                 onValueChange = { prefs.filter.set(it) },
+                modifier = Modifier.settingsAnchor("画面滤镜（GL）"),
                 title = { Text("画面滤镜（GL）", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = GsyFilterKind.entries,
                 valueToText = { AnnotatedString(it.title) },
@@ -392,6 +405,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = looping,
                 onValueChange = { prefs.looping.set(it) },
+                modifier = Modifier.settingsAnchor("循环播放"),
                 title = { Text("循环播放", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { Text(text = "官方 setLooping", color = MaterialTheme.colorScheme.outline) },
               )
@@ -409,6 +423,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = defaultSpeed,
                 onValueChange = { prefs.defaultSpeed.set(it) },
+                modifier = Modifier.settingsAnchor("起播倍速"),
                 title = { Text("起播倍速", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 2.5f, 3f),
                 valueToText = { AnnotatedString("${it}x") },
@@ -433,6 +448,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = soundTouch,
                 onValueChange = { prefs.soundTouch.set(it) },
+                modifier = Modifier.settingsAnchor("变速不变调"),
                 title = { Text("变速不变调", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -455,6 +471,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = cacheWithPlay,
                 onValueChange = { prefs.cacheWithPlay.set(it) },
+                modifier = Modifier.settingsAnchor("边播边缓存"),
                 title = { Text("边播边缓存", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -478,6 +495,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = resumePosition,
                 onValueChange = { prefs.resumePosition.set(it) },
+                modifier = Modifier.settingsAnchor("续播到上次位置"),
                 title = { Text("续播到上次位置", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -500,6 +518,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = closeAfterEnd,
                 onValueChange = { prefs.closeAfterEnd.set(it) },
+                modifier = Modifier.settingsAnchor("播完自动退出播放页"),
                 title = { Text("播完自动退出播放页", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -522,6 +541,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = muteOnStart,
                 onValueChange = { prefs.muteOnStart.set(it) },
+                modifier = Modifier.settingsAnchor("进入即静音"),
                 title = { Text("进入即静音", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -549,6 +569,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = touchGesture,
                 onValueChange = { prefs.touchGesture.set(it) },
+                modifier = Modifier.settingsAnchor("非全屏响应手势"),
                 title = { Text("非全屏响应手势", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -571,6 +592,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = touchGestureFull,
                 onValueChange = { prefs.touchGestureFull.set(it) },
+                modifier = Modifier.settingsAnchor("全屏响应手势"),
                 title = { Text("全屏响应手势", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -593,6 +615,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = seekRatio,
                 onValueChange = { prefs.seekRatio.set(it) },
+                modifier = Modifier.settingsAnchor("横滑 seek 灵敏度"),
                 title = { Text("横滑 seek 灵敏度", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 valueRange = 0.5f..3f,
                 summary = {
@@ -618,6 +641,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = wifiTip,
                 onValueChange = { prefs.wifiTip.set(it) },
+                modifier = Modifier.settingsAnchor("移动网络提示"),
                 title = { Text("移动网络提示", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -645,6 +669,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = dismiss,
                 onValueChange = { prefs.dismissControlTimeMs.set(it) },
+                modifier = Modifier.settingsAnchor("控件自动隐藏"),
                 title = { Text("控件自动隐藏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 values = listOf(2000, 3000, 4000, 5000, 8000, 15000),
                 valueToText = { AnnotatedString("${it / 1000} 秒") },
@@ -669,6 +694,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = needLockFull,
                 onValueChange = { prefs.needLockFull.set(it) },
+                modifier = Modifier.settingsAnchor("全屏显示屏幕锁"),
                 title = { Text("全屏显示屏幕锁", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -691,6 +717,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = showDragText,
                 onValueChange = { prefs.showDragProgressText.set(it) },
+                modifier = Modifier.settingsAnchor("拖动进度条时显示目标时间"),
                 title = { Text("拖动进度条时显示目标时间", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -713,6 +740,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = showPauseCover,
                 onValueChange = { prefs.showPauseCover.set(it) },
+                modifier = Modifier.settingsAnchor("暂停保留最后一帧"),
                 title = { Text("暂停保留最后一帧", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -740,6 +768,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = pipAutoEnter,
                 onValueChange = { prefs.pipAutoEnter.set(it) },
+                modifier = Modifier.settingsAnchor("按 Home 键自动进小窗"),
                 title = { Text("按 Home 键自动进小窗", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -769,6 +798,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = lockLand,
                 onValueChange = { prefs.lockLand.set(it) },
+                modifier = Modifier.settingsAnchor("全屏锁横屏"),
                 title = { Text("全屏锁横屏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { Text(text = "官方 setLockLand", color = MaterialTheme.colorScheme.outline) },
               )
@@ -786,6 +816,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = onlyRotateLand,
                 onValueChange = { prefs.onlyRotateLand.set(it) },
+                modifier = Modifier.settingsAnchor("只允许横屏方向变化"),
                 title = { Text("只允许横屏方向变化", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -808,6 +839,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = autoFullWithSize,
                 onValueChange = { prefs.autoFullWithSize.set(it) },
+                modifier = Modifier.settingsAnchor("竖屏视频自动竖屏全屏"),
                 title = { Text("竖屏视频自动竖屏全屏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -830,6 +862,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = rotateWithSystem,
                 onValueChange = { prefs.rotateWithSystem.set(it) },
+                modifier = Modifier.settingsAnchor("跟随系统「自动旋转」"),
                 title = { Text("跟随系统「自动旋转」", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -853,6 +886,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = fullAnimation,
                 onValueChange = { prefs.showFullAnimation.set(it) },
+                modifier = Modifier.settingsAnchor("全屏过渡动画"),
                 title = { Text("全屏过渡动画", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -875,6 +909,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = fullHideStatusBar,
                 onValueChange = { prefs.fullHideStatusBar.set(it) },
+                modifier = Modifier.settingsAnchor("全屏隐藏状态栏"),
                 title = { Text("全屏隐藏状态栏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -897,6 +932,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = hideKey,
                 onValueChange = { prefs.hideKey.set(it) },
+                modifier = Modifier.settingsAnchor("全屏隐藏虚拟按键"),
                 title = { Text("全屏隐藏虚拟按键", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -924,6 +960,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = showStatusBar,
                 onValueChange = { prefs.showSystemStatusBar.set(it) },
+                modifier = Modifier.settingsAnchor("显示系统状态栏"),
                 title = { Text("显示系统状态栏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -946,6 +983,7 @@ object GsyPreferencesScreen : Screen {
                 },
                 value = showNavBar,
                 onValueChange = { prefs.showSystemNavigationBar.set(it) },
+                modifier = Modifier.settingsAnchor("显示系统导航栏"),
                 title = { Text("显示系统导航栏", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(

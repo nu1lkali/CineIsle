@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -117,7 +118,10 @@ object DislikePreferencesScreen : Screen {
       },
     ) { padding ->
       ProvidePreferenceLocals {
+        val listState = rememberLazyListState()
+        SettingsSpotlightReveal(listState, DislikePreferencesScreen)
         LazyColumn(
+          state = listState,
           modifier =
             Modifier
               .fillMaxSize()
@@ -136,6 +140,7 @@ object DislikePreferencesScreen : Screen {
             },
             value = showInDetailMenu,
             onValueChange = browserPreferences.dislikeShowInDetailMenu::set,
+            modifier = Modifier.settingsAnchor("详情页菜单项"),
             title = { Text("详情页菜单项", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
@@ -176,6 +181,7 @@ object DislikePreferencesScreen : Screen {
                 pendingTurnOff = true
               }
             },
+            modifier = Modifier.settingsAnchor("播放器按钮"),
             title = { Text("播放器按钮", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
@@ -195,6 +201,7 @@ object DislikePreferencesScreen : Screen {
             },
             value = showInFeed,
             onValueChange = browserPreferences.dislikeShowInFeed::set,
+            modifier = Modifier.settingsAnchor("视界流按钮"),
             title = { Text("视界流按钮", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
@@ -215,6 +222,7 @@ object DislikePreferencesScreen : Screen {
                 tint = MaterialTheme.colorScheme.primary,
               )
             },
+            modifier = Modifier.settingsAnchor("不喜欢视频管理"),
             title = { Text("不喜欢视频管理", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             summary = {
               Text(
