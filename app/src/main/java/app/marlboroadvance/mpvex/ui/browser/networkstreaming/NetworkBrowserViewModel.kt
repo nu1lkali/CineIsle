@@ -27,6 +27,7 @@ import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkTool
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.ToolPlan
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.ToolProgress
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.ToolResult
+import app.marlboroadvance.mpvex.preferences.NetworkGroupMode
 import app.marlboroadvance.mpvex.preferences.NetworkSortType
 import app.marlboroadvance.mpvex.preferences.SortOrder
 import app.marlboroadvance.mpvex.preferences.preference.Preference
@@ -73,6 +74,14 @@ class NetworkBrowserViewModel(
   private val _sortOrder = MutableStateFlow(browserPreferences.networkSortOrder.get())
 
   /**
+   * 时间分组方式（镜像持久化偏好，见 BrowserPreferences.networkGroupMode）。
+   *
+   * 只改「怎么切堆」，实际切分在 UI 层用 [groupNetworkFilesByPeriod] 做 ——
+   * 排序结果 [files] 不变，分组是它的纯函数视图，没必要再进一次 combine。
+   */
+  private val _groupMode = MutableStateFlow(browserPreferences.networkGroupMode.get())
+
+  /**
    * 目录滚动位置记忆：key = `"$connectionId|$path"`，value = `firstVisibleItemIndex`。
    *
    * 为什么需要它：从照片查看器 / 播放器返回到浏览页时，滚动位置**不可靠**。
@@ -112,6 +121,7 @@ class NetworkBrowserViewModel(
 
   val sortType: StateFlow<NetworkSortType> = _sortType.asStateFlow()
   val sortOrder: StateFlow<SortOrder> = _sortOrder.asStateFlow()
+  val groupMode: StateFlow<NetworkGroupMode> = _groupMode.asStateFlow()
 
   /** 「动过排序」的计数，UI 拿它做「回到 item 0」的触发键 */
   val sortChangeTick: StateFlow<Int> = _sortChangeTick.asStateFlow()
@@ -811,6 +821,12 @@ class NetworkBrowserViewModel(
    *    UI 靠 tick 回顶，少了它「随机换批」停在原位（见该字段的 KDoc）。
    */
   fun setSortType(type: NetworkSortType) {
+    // 随机与时间分组**互斥**：洗牌会把时间桶打散，两件事语义冲突。
+    // 切到随机就顺手把分组关掉（UI 那边分组项也会置灰）。
+    if (type == NetworkSortType.Random && _groupMode.value.isActive) {
+      _groupMode.value = NetworkGroupMode.None
+      browserPreferences.networkGroupMode.set(NetworkGroupMode.None)
+    }
     if (type == _sortType.value) {
       if (type == NetworkSortType.Random) {
         _randomSeed.value = System.currentTimeMillis()
@@ -835,6 +851,26 @@ class NetworkBrowserViewModel(
     _sortOrder.value = order
     _sortChangeTick.value += 1
     browserPreferences.networkSortOrder.set(order)
+  }
+
+  /**
+   * 切时间分组方式（不分组 / 按年份 / 按年月）。
+   *
+   * 选分组时**自动把排序切到「时间降序」**：按年份分组却按名字排，组内顺序与时间轴
+   * 无关，几乎不是用户想要的（真实意图通常是「按年倒序看最近的」）。用户之后仍可
+   * 手动改排序——桶的先后默认仍是新→旧，见 [groupNetworkFilesByPeriod]。
+   *
+   * 分组变化会改变整页布局，所以要 +1 tick 让 UI 回顶；否则停在原来的下标会「跳段」。
+   */
+  fun setGroupMode(mode: NetworkGroupMode) {
+    if (mode == _groupMode.value) return
+    _groupMode.value = mode
+    browserPreferences.networkGroupMode.set(mode)
+    if (mode.isActive && _sortType.value != NetworkSortType.Random) {
+      // 内部会带上该维度的自然方向（时间 = 降序）并已 +1 tick
+      setSortType(NetworkSortType.Date)
+    }
+    _sortChangeTick.value += 1
   }
 
 

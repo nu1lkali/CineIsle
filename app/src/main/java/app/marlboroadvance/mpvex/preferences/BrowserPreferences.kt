@@ -93,6 +93,16 @@ class BrowserPreferences(
   val networkSortOrder = preferenceStore.getEnum("network_sort_order", SortOrder.Ascending)
 
   /**
+   * 网络浏览的**时间分组**方式（不分组 / 按年份 / 按年月）。
+   *
+   * 与排序是两件正交的事：分组决定「分几堆、堆的先后」，排序决定「堆内谁在前」。
+   * 默认 [NetworkGroupMode.None] —— 保持老用户看到的平铺列表，改观感必须是用户显式选的。
+   *
+   * ⚠️ 存的是**枚举名**（`getEnum`），常量名 `None` / `Year` / `YearMonth` 发布后不可改。
+   */
+  val networkGroupMode = preferenceStore.getEnum("network_group_mode", NetworkGroupMode.None)
+
+  /**
    * 网络目录里「随机播放视频 / 视界流播放」是否**穿透子文件夹**。
    *
    * 默认 false：这两颗按钮长期以来的语义就是「只播这一层」，改成递归会悄悄改变
@@ -923,6 +933,28 @@ enum class NetworkSortType(
     fun fromDisplayName(name: String): NetworkSortType? =
       entries.find { it.displayName == name }
   }
+}
+
+/**
+ * 网络浏览的**时间分组**粒度。
+ *
+ * 分组与排序正交：分组只管「按年/月切堆 + 堆的先后」，堆内顺序仍由
+ * [NetworkSortType] + [SortOrder] 决定（见 `groupNetworkFilesByPeriod`）。
+ *
+ * ⚠️ 常量名就是持久化的值（`getEnum` 用 `enum.name`），**发布后不可改**。
+ */
+enum class NetworkGroupMode(
+  /** 设置项里的展示名 */
+  val label: String,
+) {
+  None("不分组"),
+  Year("按年份"),
+  YearMonth("按年月"),
+  ;
+
+  /** 是否真的要分组（调用点省一次 `!= None` 判断） */
+  val isActive: Boolean
+    get() = this != None
 }
 
 /**

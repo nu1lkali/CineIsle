@@ -125,6 +125,11 @@ fun NetworkMediaCard(
   /** 网格标题行数（一行 / 两行 / 全显，走设置项） */
   titleMaxLines: Int = 1,
   /**
+   * 日期是否带年份。false 用在「按年份分组」时 —— 表头已经写了年份，
+   * 行内再来一次是重复，省下的 5 个字符还给文件名。
+   */
+  showYear: Boolean = true,
+  /**
    * 文件夹还没有封面时通知调用方去加载（传文件夹 path）。
    *
    * ⚠️ 这就是封面的**懒加载触发点**：LazyGrid 只组合可见项，卡片被组合出来
@@ -277,7 +282,12 @@ fun NetworkMediaCard(
     //    单独一条「2026-09-07」对它没有意义（见 networkFileSizeText 的说明）。
     if (!file.isDirectory && file.lastModified > 0) {
       Text(
-        text = formatNetworkFullDate(file.lastModified),
+        text =
+          if (showYear) {
+            formatNetworkFullDate(file.lastModified)
+          } else {
+            formatNetworkMonthDay(file.lastModified)
+          },
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
@@ -360,6 +370,8 @@ fun NetworkPhotoRow(
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
   onLongClick: ((Offset) -> Unit)? = null,
+  /** 日期是否带年份（「按年份分组」时传 false，组头已有年份） */
+  showYear: Boolean = true,
 ) {
   Card(
     modifier =
@@ -416,6 +428,7 @@ fun NetworkPhotoRow(
           style = MaterialTheme.typography.titleSmall,
           maxLines = 2,
           color = MaterialTheme.colorScheme.onSurface,
+          showYear = showYear,
         )
         // 副标题只剩大小（日期已在标题里）
         val sizeText = networkFileSizeText(file)
@@ -444,6 +457,8 @@ fun NetworkPhotoRow(
 fun NetworkOtherFileRow(
   file: NetworkFile,
   modifier: Modifier = Modifier,
+  /** 日期是否带年份（「按年份分组」时传 false，组头已有年份） */
+  showYear: Boolean = true,
 ) {
   Card(
     modifier = modifier.fillMaxWidth(),
@@ -481,6 +496,7 @@ fun NetworkOtherFileRow(
           style = MaterialTheme.typography.titleSmall,
           maxLines = 2,
           color = MaterialTheme.colorScheme.onSurface,
+          showYear = showYear,
         )
         // 副标题只剩大小（日期已在标题里）
         val sizeText = networkFileSizeText(file)

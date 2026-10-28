@@ -30,6 +30,15 @@ internal fun formatNetworkFullDate(timestamp: Long): String =
   SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(timestamp))
 
 /**
+ * 只到月日：`09-07`。用在「按年份分组」的行内 —— 组头已经写了年份，
+ * 行内再来一次是重复，省下的 5 个字符正好还给文件名。
+ *
+ * 仍然补零定长（5 字符），所以同一个组里每一行的左边界还是齐的。
+ */
+internal fun formatNetworkMonthDay(timestamp: Long): String =
+  SimpleDateFormat("MM-dd", Locale.US).format(Date(timestamp))
+
+/**
  * 列表行标题：**日期前缀 + 文件名**，同一个 `Text` 内两种样式。
  *
  * ## 为什么日期放前缀，而不是后缀
@@ -67,14 +76,18 @@ internal fun NetworkFileNameText(
   maxLines: Int,
   modifier: Modifier = Modifier,
   color: Color = Color.Unspecified,
+  /** false = 只画 `MM-dd`（配合「按年份分组」的组头，见 [formatNetworkMonthDay]） */
+  showYear: Boolean = true,
 ) {
   val dateColor = MaterialTheme.colorScheme.onSurfaceVariant
   // 日期与名字之间用两个空格：比单空格更能分隔，又不引入「·」等第三种符号
   val text =
-    remember(name, lastModified, dateColor) {
+    remember(name, lastModified, dateColor, showYear) {
       buildAnnotatedString {
         if (lastModified > 0) {
-          withStyle(SpanStyle(color = dateColor)) { append(formatNetworkFullDate(lastModified)) }
+          val date =
+            if (showYear) formatNetworkFullDate(lastModified) else formatNetworkMonthDay(lastModified)
+          withStyle(SpanStyle(color = dateColor)) { append(date) }
           append("  ")
         }
         append(name)

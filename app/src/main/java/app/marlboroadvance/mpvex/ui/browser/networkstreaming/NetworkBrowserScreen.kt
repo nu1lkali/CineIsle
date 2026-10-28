@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -109,6 +110,7 @@ import app.marlboroadvance.mpvex.domain.network.type
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.FolderViewMode
+import app.marlboroadvance.mpvex.preferences.NetworkGroupMode
 import app.marlboroadvance.mpvex.preferences.NetworkSortType
 import app.marlboroadvance.mpvex.preferences.SortOrder
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -214,6 +216,10 @@ data class NetworkBrowserScreen(
     val folderCovers by viewModel.folderCovers.collectAsState()
     val sortType by viewModel.sortType.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
+    val groupMode by viewModel.groupMode.collectAsState()
+    // 时间桶的先后：只有「用户明确选了时间升序」才翻成旧→新。
+    // 其余情况（含按名字/大小排序时仍开着分组）桶一律新→旧 —— 见 groupNetworkFilesByPeriod
+    val bucketAscending = sortType == NetworkSortType.Date && sortOrder.isAscending
     // 「动过排序」的计数（每次有效排序操作 +1，含随机换种子那种值不变的）
     val sortChangeTick by viewModel.sortChangeTick.collectAsState()
     // 当前协议是否支持重命名 / 删除（目前只有 AList）—— 决定卡片挂不挂长按
@@ -904,8 +910,10 @@ data class NetworkBrowserScreen(
             NetworkSortButton(
               sortType = sortType,
               sortOrder = sortOrder,
+              groupMode = groupMode,
               onSortTypeChange = viewModel::setSortType,
               onSortOrderChange = viewModel::setSortOrder,
+              onGroupModeChange = viewModel::setGroupMode,
             )
           }
         }
@@ -942,6 +950,8 @@ data class NetworkBrowserScreen(
             folderCovers = folderCovers,
             coverTrigger = coverTrigger,
             titleMaxLines = titleMaxLines,
+            groupMode = groupMode,
+            bucketAscending = bucketAscending,
             // 下拉刷新 = 用户显式要最新 ⇒ 顺带失效子文件夹封面缓存重取；
             // 正常进入 / 返回上一级走缓存，不重列目录（见 NetworkBrowserViewModel.loadFiles）
             onRefresh = { viewModel.loadFiles(invalidateCovers = true) },
@@ -1476,6 +1486,10 @@ private fun NetworkBrowserContent(
   coverTrigger: ((String) -> Unit)?,
   /** 网格卡标题行数（设置项：一行 / 两行 / 全显） */
   titleMaxLines: Int,
+  /** 时间分组方式（不分组 / 按年份 / 按年月） */
+  groupMode: NetworkGroupMode,
+  /** 时间桶是否「旧→新」（仅「时间升序」时为 true，见调用点） */
+  bucketAscending: Boolean,
   /** 未过滤的条目数（区分「目录真空」与「全被筛掉」） */
   totalCount: Int,
   onRefresh: suspend () -> Unit,
@@ -1619,6 +1633,8 @@ private fun NetworkBrowserContent(
         folderCovers = folderCovers,
         coverTrigger = coverTrigger,
         titleMaxLines = titleMaxLines,
+        groupMode = groupMode,
+        bucketAscending = bucketAscending,
         onFileLongClick = onFileLongClick,
         modifier = modifier,
       )
@@ -1640,6 +1656,8 @@ private fun NetworkBrowserContent(
         onVideoClick = onVideoClick,
         folderCovers = folderCovers,
         coverTrigger = coverTrigger,
+        groupMode = groupMode,
+        bucketAscending = bucketAscending,
         onFileLongClick = onFileLongClick,
         modifier = modifier,
       )
@@ -1673,11 +1691,26 @@ private fun NetworkBrowserGrid(
   folderCovers: Map<String, String?>,
   coverTrigger: ((String) -> Unit)?,
   titleMaxLines: Int,
+  /** 时间分组方式（不分组 / 按年份 / 按年月） */
+  groupMode: NetworkGroupMode,
+  /** 时间桶是否「旧→新」（仅「时间升序」时为 true） */
+  bucketAscending: Boolean,
   /** 长按条目；null = 协议不支持写操作，卡片不挂长按。第二参 = 手指坐标 */
   onFileLongClick: ((NetworkFile, Offset) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val navigationBarHeight = LocalNavigationBarHeight.current
+
+  // 文件夹**不进时间桶**：它们是导航，恒在最前（与列表视图的 L1 一致）。
+  // 只有媒体（照片 + 视频混排）参与按年/月切分。
+  val gridFolders = remember(items) { items.filter { it.isDirectory } }
+  val gridMedia = remember(items) { items.filter { !it.isDirectory } }
+  val mediaGroups =
+    remember(gridMedia, groupMode, bucketAscending) {
+      groupNetworkFilesByPeriod(gridMedia, groupMode, bucketAscending)
+    }
+  // 只有真的要画表头时才省年份；只有一个桶（title 全 null）时不能省
+  val dateHasYear = mediaGroups.none { it.title != null }
 
   PullRefreshGridBox(
     isRefreshing = isRefreshing,
@@ -1705,36 +1738,114 @@ private fun NetworkBrowserGrid(
           horizontalArrangement = Arrangement.spacedBy(8.dp),
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          items(
-            items = items,
-            key = { it.path },
-          ) { file ->
-            NetworkMediaCard(
+          // 文件夹：平铺，不分组
+          items(gridFolders, key = { it.path }) { file ->
+            NetworkGridCell(
               file = file,
               connectionId = connectionId,
-              onClick = {
-                when (file.type()) {
-                  NetworkFileType.FOLDER -> onFolderClick(file)
-                  NetworkFileType.PHOTO -> onPhotoClick(file)
-                  NetworkFileType.VIDEO -> onVideoClick(file)
-                  NetworkFileType.OTHER -> Unit // 网格里不渲染，兜底
-                }
-              },
-              // 文件夹封面：缓存里有就用（功能关闭时 Map 是空的 ⇒ 全是 null），
-              // 没有就让卡片触发懒加载（coverTrigger 为 null 时不触发）
-              coverPath = if (file.isDirectory) folderCovers[file.path] else null,
+              folderCovers = folderCovers,
+              coverTrigger = coverTrigger,
               titleMaxLines = titleMaxLines,
-              onCoverNeeded = coverTrigger,
-              onLongClick =
-                if (onFileLongClick == null) null else { { offset -> onFileLongClick(file, offset) } },
-              // 切排序 / 删除条目后平滑重排，而不是整屏硬切
+              showYear = true,
+              onFileLongClick = onFileLongClick,
+              onFolderClick = onFolderClick,
+              onPhotoClick = onPhotoClick,
+              onVideoClick = onVideoClick,
               modifier = Modifier.animateItem(),
             )
+          }
+          // 媒体：按时间桶切段，桶头占满整行（GridItemSpan(maxLineSpan)）
+          mediaGroups.forEach { group ->
+            if (group.title != null) {
+              item(key = "period:${group.title}", span = { GridItemSpan(maxLineSpan) }) {
+                NetworkPeriodHeader(group.title)
+              }
+            }
+            items(group.files, key = { it.path }) { file ->
+              NetworkGridCell(
+                file = file,
+                connectionId = connectionId,
+                folderCovers = folderCovers,
+                coverTrigger = coverTrigger,
+                titleMaxLines = titleMaxLines,
+                showYear = dateHasYear,
+                onFileLongClick = onFileLongClick,
+                onFolderClick = onFolderClick,
+                onPhotoClick = onPhotoClick,
+                onVideoClick = onVideoClick,
+                modifier = Modifier.animateItem(),
+              )
+            }
           }
         }
       }
     }
   }
+}
+
+/**
+ * 网格里的一个条目（1 列宽）：按类型分发点击，其余全交给 [NetworkMediaCard]。
+ *
+ * 抽出来是因为网格现在有两条渲染路径（文件夹平铺 / 媒体按时间桶）——
+ * 卡片体复制两遍迟早走样，收口到一处。
+ */
+@Composable
+private fun NetworkGridCell(
+  file: NetworkFile,
+  connectionId: Long,
+  folderCovers: Map<String, String?>,
+  coverTrigger: ((String) -> Unit)?,
+  titleMaxLines: Int,
+  showYear: Boolean,
+  onFileLongClick: ((NetworkFile, Offset) -> Unit)?,
+  onFolderClick: (NetworkFile) -> Unit,
+  onPhotoClick: (NetworkFile) -> Unit,
+  onVideoClick: (NetworkFile) -> Unit,
+  /**
+   * ⚠️ 必须由调用点传入（`Modifier.animateItem()`）：它是 `LazyGridItemScope` 的扩展，
+   *    只有 `items { }` 的 lambda 里拿得到那个接收者 —— 在本函数里写会编译不过。
+   */
+  modifier: Modifier = Modifier,
+) {
+  NetworkMediaCard(
+    file = file,
+    connectionId = connectionId,
+    onClick = {
+      when (file.type()) {
+        NetworkFileType.FOLDER -> onFolderClick(file)
+        NetworkFileType.PHOTO -> onPhotoClick(file)
+        NetworkFileType.VIDEO -> onVideoClick(file)
+        NetworkFileType.OTHER -> Unit // 网格里不渲染，兜底
+      }
+    },
+    // 文件夹封面：缓存里有就用（功能关闭时 Map 是空的 ⇒ 全是 null），
+    // 没有就让卡片触发懒加载（coverTrigger 为 null 时不触发）
+    coverPath = if (file.isDirectory) folderCovers[file.path] else null,
+    titleMaxLines = titleMaxLines,
+    showYear = showYear,
+    onCoverNeeded = coverTrigger,
+    onLongClick =
+      if (onFileLongClick == null) null else { { offset -> onFileLongClick(file, offset) } },
+    // 切排序 / 删除条目后平滑重排，而不是整屏硬切
+    modifier = modifier,
+  )
+}
+
+/**
+ * 时间桶的表头（年 / 年月）。
+ *
+ * 视觉上比类型段头 [SectionHeader] **轻一级**（labelLarge + onSurfaceVariant，
+ * 不带主色）：段头是「这是什么」，桶头是「这堆是什么时候的」，层级本来就更低；
+ * 两者都用主色会互相抢注意力。
+ */
+@Composable
+private fun NetworkPeriodHeader(title: String, modifier: Modifier = Modifier) {
+  Text(
+    text = title,
+    style = MaterialTheme.typography.labelLarge,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    modifier = modifier.padding(start = 16.dp, top = 14.dp, bottom = 6.dp),
+  )
 }
 
 /**
@@ -1768,11 +1879,34 @@ private fun NetworkBrowserList(
   onVideoClick: (NetworkFile) -> Unit,
   folderCovers: Map<String, String?>,
   coverTrigger: ((String) -> Unit)?,
+  /** 时间分组方式（不分组 / 按年份 / 按年月） */
+  groupMode: NetworkGroupMode,
+  /** 时间桶是否「旧→新」（仅「时间升序」时为 true） */
+  bucketAscending: Boolean,
   /** 长按条目；null = 协议不支持写操作，卡片不挂长按。第二参 = 手指坐标 */
   onFileLongClick: ((NetworkFile, Offset) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val navigationBarHeight = LocalNavigationBarHeight.current
+
+  // 三个媒体段各自切时间桶（文件夹段不分组 —— 它们恒在最前，与网格一致）。
+  // 传进来的三段已经是全局排序的结果，所以桶内顺序天然正确，这里不重排。
+  val photoGroups =
+    remember(photos, groupMode, bucketAscending) {
+      groupNetworkFilesByPeriod(photos, groupMode, bucketAscending)
+    }
+  val videoGroups =
+    remember(videos, groupMode, bucketAscending) {
+      groupNetworkFilesByPeriod(videos, groupMode, bucketAscending)
+    }
+  val otherGroups =
+    remember(others, groupMode, bucketAscending) {
+      groupNetworkFilesByPeriod(others, groupMode, bucketAscending)
+    }
+  // 只在「真的有表头」时省年份；一张表头都没有就得保留年份，否则日期会丢年份
+  val photoHasYear = photoGroups.none { it.title != null }
+  val videoHasYear = videoGroups.none { it.title != null }
+  val otherHasYear = otherGroups.none { it.title != null }
 
   PullRefreshBox(
     isRefreshing = isRefreshing,
@@ -1828,22 +1962,29 @@ private fun NetworkBrowserList(
             item {
               SectionHeader("图片")
             }
-            items(
-              items = photos,
-              key = { it.path },
-            ) { photo ->
-              NetworkPhotoRow(
-                file = photo,
-                connectionId = connectionId,
-                onClick = { onPhotoClick(photo) },
-                onLongClick =
-                  if (onFileLongClick == null) {
-                    null
-                  } else {
-                    { offset -> onFileLongClick(photo, offset) }
-                  },
-                modifier = Modifier.animateItem(),
-              )
+            photoGroups.forEach { group ->
+              val title = group.title
+              if (title != null) {
+                item(key = "period:photo:$title") { NetworkPeriodHeader(title) }
+              }
+              items(
+                items = group.files,
+                key = { it.path },
+              ) { photo ->
+                NetworkPhotoRow(
+                  file = photo,
+                  connectionId = connectionId,
+                  onClick = { onPhotoClick(photo) },
+                  onLongClick =
+                    if (onFileLongClick == null) {
+                      null
+                    } else {
+                      { offset -> onFileLongClick(photo, offset) }
+                    },
+                  modifier = Modifier.animateItem(),
+                  showYear = photoHasYear,
+                )
+              }
             }
           }
 
@@ -1852,24 +1993,31 @@ private fun NetworkBrowserList(
             item {
               SectionHeader("视频")
             }
-            items(
-              items = videos,
-              key = { it.path },
-            ) { video ->
-              // Only show card if connection is loaded
-              connection?.let { conn ->
-                NetworkVideoCard(
-                  file = video,
-                  connection = conn,
-                  onClick = { onVideoClick(video) },
-                  onLongClick =
-                    if (onFileLongClick == null) {
-                      null
-                    } else {
-                      { offset -> onFileLongClick(video, offset) }
-                    },
-                  modifier = Modifier.animateItem(),
-                )
+            videoGroups.forEach { group ->
+              val title = group.title
+              if (title != null) {
+                item(key = "period:video:$title") { NetworkPeriodHeader(title) }
+              }
+              items(
+                items = group.files,
+                key = { it.path },
+              ) { video ->
+                // Only show card if connection is loaded
+                connection?.let { conn ->
+                  NetworkVideoCard(
+                    file = video,
+                    connection = conn,
+                    onClick = { onVideoClick(video) },
+                    onLongClick =
+                      if (onFileLongClick == null) {
+                        null
+                      } else {
+                        { offset -> onFileLongClick(video, offset) }
+                      },
+                    modifier = Modifier.animateItem(),
+                    showYear = videoHasYear,
+                  )
+                }
               }
             }
           }
@@ -1879,14 +2027,21 @@ private fun NetworkBrowserList(
             item {
               SectionHeader("其他文件")
             }
-            items(
-              items = others,
-              key = { it.path },
-            ) { other ->
-              NetworkOtherFileRow(
-                file = other,
-                modifier = Modifier.animateItem(),
-              )
+            otherGroups.forEach { group ->
+              val title = group.title
+              if (title != null) {
+                item(key = "period:other:$title") { NetworkPeriodHeader(title) }
+              }
+              items(
+                items = group.files,
+                key = { it.path },
+              ) { other ->
+                NetworkOtherFileRow(
+                  file = other,
+                  modifier = Modifier.animateItem(),
+                  showYear = otherHasYear,
+                )
+              }
             }
           }
         }
@@ -2040,8 +2195,10 @@ private fun NetworkFilterDropdownRow(
 private fun NetworkSortButton(
   sortType: NetworkSortType,
   sortOrder: SortOrder,
+  groupMode: NetworkGroupMode,
   onSortTypeChange: (NetworkSortType) -> Unit,
   onSortOrderChange: (SortOrder) -> Unit,
+  onGroupModeChange: (NetworkGroupMode) -> Unit,
 ) {
   var menuExpanded by remember { mutableStateOf(false) }
   val hasDirection = sortType != NetworkSortType.Random
@@ -2066,7 +2223,9 @@ private fun NetworkSortButton(
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-          text = sortType.label,
+          // 分组开着就把粒度带上：不点开菜单也能看出当前是「按年份」还是「按年月」
+          text =
+            if (groupMode.isActive) "${sortType.label} · ${groupMode.label}" else sortType.label,
           style = MaterialTheme.typography.labelLarge,
         )
         // 升降序指示包在类型标签里面：随机排序没有方向，不显示
@@ -2125,6 +2284,35 @@ private fun NetworkSortButton(
               // 点其他项 = 换维度（ViewModel 走自然方向）
               else -> onSortTypeChange(type)
             }
+          },
+        )
+      }
+
+      HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+      // ── 时间分组（与上面的排序正交）──
+      // 分组只决定「切几堆、堆的先后」；堆内顺序仍是上面选的排序键。
+      // 随机与分组**互斥**（洗牌会把时间桶打散）⇒ 置灰而不是隐藏：
+      // 隐藏会让人以为这个版本没有分组功能。
+      NetworkGroupMode.entries.forEach { mode ->
+        val selected = mode == groupMode
+        val enabled = sortType != NetworkSortType.Random
+        DropdownMenuItem(
+          enabled = enabled,
+          text = {
+            Text(
+              text = if (selected) "${mode.label} ✓" else mode.label,
+              style = MaterialTheme.typography.bodyMedium,
+              color =
+                when {
+                  !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                  selected -> MaterialTheme.colorScheme.primary
+                  else -> MaterialTheme.colorScheme.onSurface
+                },
+            )
+          },
+          onClick = {
+            menuExpanded = false
+            onGroupModeChange(mode)
           },
         )
       }

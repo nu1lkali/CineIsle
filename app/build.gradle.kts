@@ -1785,7 +1785,24 @@ android {
     //     文件夹依旧不显示日期（沿既有约定：目录项的 mtime 是「建/挪目录」时间）。
     //     `networkFileSubtitle` 拆成 `networkFileSizeText`（只留大小）+ 上面两处日期。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 167
+    // ── v168（versionCode 168，功能轮涨名，versionName 仍为 1.6.10）──────
+    //     网络浏览「按年份 / 年月分组」：分组与排序**正交**，不互相覆盖。
+    //     分层优先级（外→内）：文件夹区（导航，恒最前）> 类型区（图片/视频/其他，
+    //     列表固有）> 时间桶（年 / 年月）> 组内排序键 > 名称自然序兜底。
+    //       · 新增 `NetworkGroupMode { None, Year, YearMonth }` + 偏好
+    //         `network_group_mode`（`getEnum` 按 enum.name 存，常量名不可改）。
+    //       · 分组逻辑是纯函数 `groupNetworkFilesByPeriod`（O(n)）：
+    //         桶默认**新→旧**，仅「时间升序」时翻转；`lastModified<=0` 归「未知时间」
+    //         且恒排最后；只有一个桶时不画表头；时区走 ZoneId（minSdk 26，java.time 原生）。
+    //       · 选分组时自动切「时间降序」（分组却按名字排几乎不是用户想要的）；
+    //         随机排序与分组**互斥**：切随机顺手关分组，菜单里分组项置灰。
+    //       · 列表在类型段内插桶头（`NetworkPeriodHeader`，比段头轻一级）；
+    //         网格把文件夹平铺、媒体按桶切段，桶头用 `GridItemSpan(maxLineSpan)` 占满整行。
+    //       · 有表头时行内日期省年份（`NetworkFileNameText(showYear=false)` → `MM-dd`）。
+    //     ⚠️ `NetworkGridCell` 的 `modifier` 必须由调用点传 `Modifier.animateItem()`：
+    //     它是 `LazyGridItemScope` 的扩展，只有 `items { }` 的 lambda 里有接收者。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 168
     versionName = "1.6.10"
 
     vectorDrawables {

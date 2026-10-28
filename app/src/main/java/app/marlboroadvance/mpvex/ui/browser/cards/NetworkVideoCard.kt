@@ -48,6 +48,8 @@ fun NetworkVideoCard(
   /** 长按回调带**手指坐标**（root 坐标）—— 调用方据此在手指旁边弹菜单，见 tapAndLongPress */
   onLongClick: ((Offset) -> Unit)? = null,
   isSelected: Boolean = false,
+  /** 日期是否带年份（「按年份分组」时传 false，组头已有年份） */
+  showYear: Boolean = true,
 ) {
   val appearancePreferences = koinInject<AppearancePreferences>()
   val browserPreferences = koinInject<BrowserPreferences>()
@@ -120,6 +122,7 @@ fun NetworkVideoCard(
           style = MaterialTheme.typography.titleSmall,
           maxLines = maxLines,
           color = MaterialTheme.colorScheme.onSurface,
+          showYear = showYear,
         )
         // 只有大小有 chip 时才画这一行：日期已进标题，这里再没别的内容
         if (showSizeChip && file.size > 0) {
