@@ -215,6 +215,20 @@ data class EmbyLibraryScreen(
    * 这一层真实装了什么就铺什么（唯一例外见 [contentAsIsExclude]）。
    */
   val isFolderDive: Boolean = false,
+  /**
+   * 从父页带下来的分类档位（`EmbyCategory.name`），只在**本目录自己没有记忆**时生效。
+   *
+   * 为什么需要：分类档位是按 [libraryId]（= 当前目录 Id）分别记的，而每个子目录第一次
+   * 进去必然没有记忆，于是永远回落「全部」。用户在下钻时看到的现象就是
+   * 「刚从『文件夹』点进来，档位自己变回『全部』了，想再进一层还得重新点一次『文件夹』」。
+   *
+   * ⚠️ 优先级：本目录的记忆 > 本字段（父页当前档位）> 全部。
+   *    记忆优先是为了保住原有能力：在某个目录里手动选过档位，以后从哪儿进来都还是那一档。
+   *
+   * ⚠️ 只由「点进一个 [Folder]」这类**结构性下钻**传，合集（BoxSet）之类容器不传 ——
+   *    盒子里装的是影片，继承「合集」会把子页滤成一个盒子都没有的空页。
+   */
+  val inheritCategory: String? = null,
 ) : Screen {
   // ⚠️ ExperimentalFoundationApi 是为了 `LazyGridScope.stickyHeader`（年份吸顶，清单 4.1）。
   // 它在 foundation 1.7 里从 Experimental 升为 Stable 了，但为兼容旧版本仍保留注解写法。
@@ -300,12 +314,31 @@ data class EmbyLibraryScreen(
     // ── 分类（全部 / 继续播放 / 合集 / 收藏 / 文件夹）──
     // 和排序、筛选一样**按库持久化**：从库里下钻进一个文件夹再返回时，这一页的组合会被重建，
     // 只放在 remember 里的话分类会被打回「全部」。落盘后返回、甚至重启 App 都还在上次的档位。
-    val savedCategory = remember(libraryId) {
-      EmbyCategory.entries.firstOrNull {
-        it.name == browserPreferences.embyLibraryCategory(libraryId).get()
-      } ?: EmbyCategory.ALL
+    //
+    // 三层优先级（v176）：
+    //   ① 本目录自己的记忆 —— 用户在这个目录里手动选过档位就以它为准，从哪儿进来都一样；
+    //   ② 父页带下来的档位 [inheritCategory] —— 下钻时「文件夹」不再自己退回「全部」；
+    //   ③ 全部。
+    // 注意 ② **不落盘**：继承只是一次性的带入，不该替用户把这个目录的选择也定死。
+    val savedCategoryName = remember(libraryId) {
+      browserPreferences.embyLibraryCategory(libraryId).get()
+    }
+    val savedCategory = remember(libraryId, inheritCategory) {
+      EmbyCategory.entries.firstOrNull { it.name == savedCategoryName }
+        ?: EmbyCategory.entries.firstOrNull { it.name == inheritCategory }
+        ?: EmbyCategory.ALL
     }
     var category by remember(libraryId) { mutableStateOf(savedCategory) }
+    /**
+     * 当前档位是不是「继承来的、本页还没表过态」。
+     *
+     * 只影响一件事：下钻页的「全部 = 整个子树」穿透模式（[folderDiveRecursive]）。
+     * 用户**主动**选「全部」才展开子树；继承来的「全部」应当停在「这一层装了什么就铺什么」，
+     * 否则刚从文件夹点进来，子目录卡片就被递归摊平没了，等于换个地方再遇到同一个问题。
+     */
+    var categoryInherited by remember(libraryId) {
+      mutableStateOf(savedCategoryName.isBlank() && inheritCategory != null)
+    }
 
     // ── 「照片视频混合库」的处置：内容原样铺开，不再让用户手选档位 ──
     // 家庭视频 / 照片这类库（collectionType = homevideos / mixed / 未知）里，同一个
@@ -429,6 +462,9 @@ data class EmbyLibraryScreen(
     // 而一旦把搜索词算进 key，一敲字就换一个新桶，扫完那份数据在重组时就被丢掉了 ——
     // 只剩「再向服务端要一小截」这条路，于是出现「筛选里有、搜索却搜不到」。
     val cacheKey = "$libraryId|${category.name}|$sortBy|$sortOrder|" +
+      // 继承来的档位与主动选的同档位**查询口径不同**（见 folderDiveRecursive），
+      // 不进 key 会让两种页面互相复用同一桶缓存 —— 一边是这一层，一边是整个子树。
+      "inh=${if (categoryInherited) 1 else 0}|" +
       "${if (chineseSubsOnly) "" else searchQuery}|" +
       "g=${selectedGenres.sorted().joinToString(",")}|" +
       "t=${selectedTags.sorted().joinToString(",")}|" +
@@ -576,7 +612,9 @@ data class EmbyLibraryScreen(
     // 递归铺开：例如「这个文件夹里有 4 个子目录」时，看到的是这 4 个子目录里的全部视频，
     // 而不是孤零零 4 张目录卡片。想逐层点进去看目录结构 —— 切「文件夹」分类，
     // 那一档仍然是不递归的一层（recursive=false），语义不变。
-    val folderDiveRecursive = isFolderDive && category == EmbyCategory.ALL
+    // ⚠️ 只认**用户主动选的「全部」**：从父页继承来的「全部」不递归。否则「点进文件夹」
+    //    这件事本身就等于把子树摊平，子目录卡片消失、想再下一层又得先点一次「文件夹」。
+    val folderDiveRecursive = isFolderDive && category == EmbyCategory.ALL && !categoryInherited
     // 「内容原样」档**不递归**：这一层装了什么就铺什么（文件夹是文件夹、照片是照片），
     // 和 Emby Web 一样一层一层点进去。递归会把这层和它下面所有层级的东西混在一起，
     // 既看不出一层里有几个目录，也让分页失去意义。
@@ -1669,6 +1707,8 @@ data class EmbyLibraryScreen(
           selected = category,
           onSelect = {
             category = it
+            // 手动选过 = 本页已经表态，之后的「全部」该按穿透模式处理
+            categoryInherited = false
             // 选完立刻落盘：下次进这个库（含从文件夹返回、重启 App）都停在这一档
             browserPreferences.embyLibraryCategory(libraryId).set(it.name)
           },
@@ -2320,6 +2360,7 @@ data class EmbyLibraryScreen(
                         photoIndex = photos.indexOfFirst { it.Id == item.Id }.coerceAtLeast(0),
                         photoParentId = libraryId,
                         collectionType = collectionType,
+                        categoryName = category.name,
                       )
                     },
                     onLongClick = { offset ->
@@ -2394,6 +2435,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               photoIndex = photos.indexOfFirst { it.Id == item.Id }.coerceAtLeast(0),
               photoParentId = libraryId,
               collectionType = collectionType,
+              categoryName = category.name,
             )
           },
     onLongClick = { offset ->
@@ -2432,6 +2474,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                           photoIndex = photos.indexOfFirst { it.Id == item.Id }.coerceAtLeast(0),
                           photoParentId = libraryId,
                           collectionType = collectionType,
+                          categoryName = category.name,
                         )
                       },
                       onLongClick = { offset ->
@@ -3642,6 +3685,14 @@ private fun openItem(
    * 内容原样档）跟着错位，症状是「点进文件夹后照片目录一片空」。
    */
   collectionType: String? = null,
+  /**
+   * 父页当前的分类档位（`EmbyCategory.name`），只传给**点进真实文件夹**那条路径。
+   *
+   * 子页拿它当「本目录还没记忆时」的默认档位，于是从「文件夹」点进去还是「文件夹」，
+   * 可以一层层点下去，不必每进一层重新点一次。合集（BoxSet）等容器不传：
+   * 盒子里装的是影片，继承「合集」会把子页滤空。
+   */
+  categoryName: String? = null,
 ) {
   val id = item.Id
   if (id.isNullOrBlank() || id.contains("://")) {
@@ -3690,6 +3741,9 @@ private fun openItem(
           title = item.Name ?: "",
           collectionType = item.CollectionType ?: collectionType,
           isFolderDive = true,
+          // 带着父页的档位下钻：在「文件夹」里点文件夹，进来还是「文件夹」，
+          // 于是可以一路点下去；本目录若已有自己的记忆，子页会以记忆为准。
+          inheritCategory = categoryName,
         ),
       )
 
