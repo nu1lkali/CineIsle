@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.browser.networkstreaming
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -143,6 +144,7 @@ import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import app.marlboroadvance.mpvex.ui.utils.ScrollToTopOnOrderChange
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -243,6 +245,30 @@ data class NetworkBrowserScreen(
 
     // UI State
     val isRefreshing = remember { mutableStateOf(false) }
+
+    // ── 「正在打开」整页加载层（v170）──
+    // 点条目之后、目标真正起来之前有一段**看得见但没反馈**的空窗：
+    //  · 文件夹：新页面要发请求列目录（慢盘 / 大目录尤其明显）；
+    //  · 图片：查看器要拉原图；
+    //  · 视频：`playVideos` 要对整个目录的每个视频算播放地址再拉起播放器。
+    // 这段时间原来页面一点动静都没有，表现就是「点了没反应，是不是没点中」。
+    //
+    // 范式**照抄 Emby 详情页**的「正在打开播放器」层：整页居中一枚 96dp 的
+    // `AppLoadingIndicator` —— 同一个全局入口，所以「外观 → 加载动画」
+    // （含大小缩放）在这里一样生效，两处观感完全一致。
+    var opening by remember { mutableStateOf(false) }
+
+    // 统一的「开始打开」入口：置位 + **兜底超时复位**。
+    // ⚠️ 超时不能省：文件夹 / 图片会换页，本页组合随即被销毁（remember 归零，
+    //    不会残留）；但**播放器是另一个 Activity**，本页组合并不销毁 ——
+    //    不兜底的话从播放器返回时会看到一个永远转的圈。
+    fun beginOpening() {
+      opening = true
+      scope.launch {
+        delay(3_000)
+        opening = false
+      }
+    }
 
     // ⭐ 滚动位置 state 提升到本页顶层持有（网格/列表各建一个，按视图模式选用）。
     //     为什么不放进 Grid/List 内部：保存要挂在「本页组合被销毁」上，恢复要等
@@ -961,6 +987,7 @@ data class NetworkBrowserScreen(
             // 正常进入 / 返回上一级走缓存，不重列目录（见 NetworkBrowserViewModel.loadFiles）
             onRefresh = { viewModel.loadFiles(invalidateCovers = true) },
             onFolderClick = { folder ->
+              beginOpening()
               backstack.add(
                 NetworkBrowserScreen(
                   connectionId = connectionId,
@@ -973,6 +1000,7 @@ data class NetworkBrowserScreen(
               // 队列 = 当前目录全部照片（浏览器的目录列表本来就是全量一次拉完，
               // 没有续页问题），点哪张就从哪张开始
               val photos = files.filter { it.isPhoto() }
+              beginOpening()
               backstack.add(
                 NetworkPhotoViewerScreen(
                   connectionId = connectionId,
@@ -988,6 +1016,7 @@ data class NetworkBrowserScreen(
             onVideoClick = { video ->
               // 点击即播：队列是当前目录全部视频，点哪条从哪条开始连播
               val videos = files.filter { it.isVideoFile() }
+              beginOpening()
               viewModel.playVideos(
                 videos,
                 videos.indexOfFirst { it.path == video.path }.coerceAtLeast(0),
@@ -1051,6 +1080,34 @@ data class NetworkBrowserScreen(
               deleteTarget = target
             },
           )
+        }
+      }
+
+      // ── 「正在打开」整页加载层（v170）──
+      // 位置：内容 Box 的**最后一个子节点** —— 后声明的画在上层，才盖得住列表；
+      // 同时又在本页所有对话框（重命名 / 删除 / 属性）之前，所以弹窗仍在其上。
+      //
+      // 透明底、不染色：与 Emby 详情页那层同款（纯动画，不压暗内容），
+      // 用户视线在条目上时也能立刻看到「在动」。
+      //
+      // ⚠️ 这一层**吞点击**（clickable + null indication，无涟漪）：
+      //    空窗期内连点两下 = 拉起两个播放器 / 压两层同名目录，是实际会踩到的。
+      //    只吞输入、不留任何视觉痕迹，所以观感上仍是「透明的一层」。
+      if (opening) {
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .clickable(
+              interactionSource = remember { MutableInteractionSource() },
+              indication = null,
+            ) {
+              // 故意的空实现：只用来吃掉空窗期内的重复点击
+            },
+          contentAlignment = Alignment.Center,
+        ) {
+          // ⚠️ 用 size 参数（96dp，还会乘「加载动画大小」的缩放）而不是
+          //    Modifier.size —— 后者不走那个缩放（见 AppLoadingIndicator 的 KDoc）。
+          app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(size = 96.dp)
         }
       }
       }

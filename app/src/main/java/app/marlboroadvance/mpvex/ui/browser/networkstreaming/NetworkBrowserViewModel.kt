@@ -190,7 +190,17 @@ class NetworkBrowserViewModel(
       }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-  private val _isLoading = MutableStateFlow(false)
+  /**
+   * 是否正在列目录。
+   *
+   * ⚠️ **初值必须是 true**（v170）：每进一个目录都是新 VM + 全新组合，
+   * `loadFiles()` 挂在 `LaunchedEffect` 里、首帧之后才跑。初始为 false 时
+   * 首帧正好落在「没在加载 + 还没有条目 + totalCount=0」这一档 ⇒ 界面会先闪一下
+   * **「空文件夹 · 该文件夹中没有文件或子目录」**，再被骨架屏顶掉。
+   * 空目录本来就是极少数，这一闪纯属误导（用户以为目录是空的 / 没加载出来）。
+   * 初值为 true 后首帧直接进骨架屏，数据到了再切内容，全程不跳档。
+   */
+  private val _isLoading = MutableStateFlow(true)
   val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
   private val _error = MutableStateFlow<String?>(null)
