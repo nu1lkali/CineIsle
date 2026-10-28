@@ -473,6 +473,36 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     }
 
   /**
+   * 签名直链的**零请求**版本：只用手上已有的签名本地拼 URL，拼不出来返回 null。
+   *
+   * 取哪个签名，优先级与 [getFileStream] 第 ① 级完全一致：
+   * 1. 调用方给的（`fs/list` 现场带回来的，见 [NetworkFile.sign]）；
+   * 2. 进程内 [signCache]（同样是 `fs/list` / `fs/get` 顺手记的）。
+   *
+   * ⚠️ 已被 [failedSigns] 证伪的那个**必须跳过**：用它等于明知 401 还去撞一次，
+   *    白白把播放器卡在那儿等一个必然失败的响应。
+   *
+   * ## 为什么值得单独开一个方法
+   *
+   * 连播队列是「整个目录逐条算地址」。走 [getFileUri] 就是每条一次 `fs/get`：
+   * 100 条视频 = 100 次串行网络往返，真机上十几秒起步 —— 现象是「点了视频，
+   * 过很久才弹出播放器」。而 `fs/list` 早就把签名给全了，这里只是把字符串拼起来，
+   * 100 条也就几十微秒。所以**默认路径必须是它**，`fs/get` 只当兜底。
+   *
+   * 注意：这里刻意**不走 `raw_url`**（那要 `fs/get` 才有）。`/d/?sign=` 同样支持
+   * Range（能拖动），对播放器没有功能损失。
+   */
+  override fun directUriOrNull(path: String, sign: String?): Uri? {
+    val key = keyOf(path)
+    val failed = failedSigns[key]
+    val fresh =
+      listOfNotNull(sign?.takeIf { it.isNotBlank() }, signCache[key])
+        .firstOrNull { it != failed }
+        ?: return null
+    return Uri.parse(directUrl(path, fresh))
+  }
+
+  /**
    * 文件详情（[getFileUri] 与将来的直链下载都要用）。
    *
    * [NetworkFile.sign] 就出自这里与 `fs/list`：签名有时效，取一次用一次，别长期缓存。

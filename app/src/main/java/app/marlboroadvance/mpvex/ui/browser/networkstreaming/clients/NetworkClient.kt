@@ -54,4 +54,23 @@ interface NetworkClient {
    * Get file URI for playback
    */
   suspend fun getFileUri(path: String): Result<Uri>
+
+  /**
+   * **零请求**地尽量给出播放直链；拿不到就返回 null（由调用方决定回落还是跳过）。
+   *
+   * 与 [getFileUri] 的分工：
+   * - [getFileUri] 是「**一定能拿到**」的那条路，代价是**至少一次网络往返**
+   *   （AList 要 `fs/get` 换 `raw_url` / 新签名）；
+   * - 本方法是「**手里已经有的信息够拼就拼**」，纯本地字符串处理，**同步、可循环调用**。
+   *
+   * 为什么需要它：主播放器的连播队列是「整个目录逐条算地址」，
+   * 100 条视频走 [getFileUri] 就是 100 次串行 `fs/get` —— 用户看到的现象是
+   * 「点了视频，十几秒后才弹播放器」。而 `fs/list` 本来就把每条的 `sign` 带回来了
+   * （存在 [NetworkFile.sign] / 客户端签名缓存里），拼一条 `/d/...?sign=` 就够了。
+   *
+   * 默认实现返回 null（= 本协议没有这种便宜路），只有 AList 覆写。
+   *
+   * @param sign 调用方手里的签名（通常是 `fs/list` 现场拿到的那个），可为 null。
+   */
+  fun directUriOrNull(path: String, sign: String? = null): Uri? = null
 }

@@ -255,6 +255,8 @@ object NetworkFeedLauncher {
  * 现在主播放器队列与视界流共用，避免「一边修了另一边没修」。
  *
  * - **AList**：服务端直出签名直链（支持 Range ⇒ 能拖动），直连不过代理；
+ *   签名优先用 `fs/list` 带回来的那一份**本地拼**（零请求，见 `directUriOrNull`），
+ *   只有拿不到签名时才 `fs/get` 兜底一次。
  * - **SMB / FTP / WebDAV**：走本地代理（会话对象不能交给播放器，代理支持 Range）；
  * - **其余**：ContentProvider 单向管道兜底（拖不了进度，但能播）。
  */
@@ -276,6 +278,15 @@ internal class NetworkVideoUriBuilder(
   suspend fun uriFor(file: NetworkFile, streamId: String): Uri {
     if (connection.protocol == NetworkProtocol.ALIST) {
       val client = directClient ?: repository.clientFor(connection).also { directClient = it }
+      // ⭐ ① 零请求快路：`fs/list` 已经把每条的 `sign` 带回来了（[NetworkFile.sign]），
+      //    本地拼一条 `/d/...?sign=` 就够 —— 支持 Range，播放器直连。
+      //
+      //    ⚠️ 这一步是「点视频要等十几秒才弹播放器」的解药，别改回只走 fs/get：
+      //    连播队列是**整个目录逐条算地址**，`getFileUri` 每条一次 `fs/get`，
+      //    100 条视频 = 100 次串行往返。真机上就是这个现象的根因。
+      client.directUriOrNull(file.path, file.sign)?.let { return it }
+      // ② 手里没有签名（服务端没开签名 / 签名已证伪 / 非 list 来源的条目）
+      //    才发那一次 fs/get，让它给 raw_url 或一个新鲜签名。
       return client.getFileUri(file.path).getOrThrow()
     }
     if (useProxy) {

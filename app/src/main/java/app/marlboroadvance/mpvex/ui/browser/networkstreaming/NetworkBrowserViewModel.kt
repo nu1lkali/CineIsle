@@ -914,14 +914,29 @@ class NetworkBrowserViewModel(
    *
    * @param videos 完整队列，顺序即播放顺序
    * @param startIndex 从哪一条开始
+   * @param onFinished 本函数**收工**时回调（成功拉起播放器 / 提前返回 / 出错都算），
+   *   用来摘掉界面上的「正在打开」加载层。⚠️ 不提供它的话，调用方只能靠超时猜，
+   *   猜短了 = 加载动画先消失、播放器还没出来（用户看到一段死寂），
+   *   猜长了 = 起播失败时留一个转不停的圈。所以必须由这里给准信。
    *
    * 队列经 intent extras 传给播放器：`playlist`（Uri 表）+ `playlist_titles` +
    * `playlist_index`。⚠️ 另外传 `network_file_paths`（与 playlist 同序的原始网络
    * 路径表）—— 播放器靠它按当前下标算每片的进度键 / 找字幕，否则连播换片后
    * 进度全串到第一片头上（PlayerActivity.networkFilePaths 的注释有详述）。
+   *
+   * ⚠️ 这里的 `uriFor` 是**逐条串行**的。所以它必须走零请求的富签名快路
+   * （`NetworkVideoUriBuilder` → `AlistClient.directUriOrNull`），否则 N 条视频
+   * 就是 N 次网络往返，用户看到的是「点了十几秒后才弹播放器」。
    */
-  fun playVideos(videos: List<NetworkFile>, startIndex: Int) {
-    if (videos.isEmpty() || startIndex !in videos.indices) return
+  fun playVideos(
+    videos: List<NetworkFile>,
+    startIndex: Int,
+    onFinished: () -> Unit = {},
+  ) {
+    if (videos.isEmpty() || startIndex !in videos.indices) {
+      onFinished()
+      return
+    }
     viewModelScope.launch {
       try {
         val connection = repository.getConnectionById(connectionId)
@@ -967,6 +982,9 @@ class NetworkBrowserViewModel(
       } catch (e: Exception) {
         Log.e(TAG, "Error playing videos", e)
         _error.value = e.message ?: "未知错误"
+      } finally {
+        // 成功拉起 / 失败 / 被取消，三路都放行 —— 界面的加载层只认这一个信号
+        onFinished()
       }
     }
   }

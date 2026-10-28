@@ -259,13 +259,17 @@ data class NetworkBrowserScreen(
     var opening by remember { mutableStateOf(false) }
 
     // 统一的「开始打开」入口：置位 + **兜底超时复位**。
-    // ⚠️ 超时不能省：文件夹 / 图片会换页，本页组合随即被销毁（remember 归零，
-    //    不会残留）；但**播放器是另一个 Activity**，本页组合并不销毁 ——
-    //    不兜底的话从播放器返回时会看到一个永远转的圈。
+    // ⚠️ 超时只是最后一道网，不是主复位手段：
+    //    视频那条链路由 `playVideos(onFinished = …)` 给准信（拉起/失败/取消都会回调），
+    //    文件夹 / 图片换页时本页组合被销毁、remember 自然归零。
+    //    所以这个 10 秒只在「两条路都没发生」时兜住（异常 / 播放器没起来），
+    //    绝不留一个永远转的圈。
+    // ⚠️ 别把它调回 3 秒：3 秒一到就摘，而排队解析还没收工 —— 用户看到的是
+    //    「加载动画先消失、然后又等很久才弹出播放器」，正是 v170 首版的问题。
     fun beginOpening() {
       opening = true
       scope.launch {
-        delay(3_000)
+        delay(10_000)
         opening = false
       }
     }
@@ -1020,6 +1024,8 @@ data class NetworkBrowserScreen(
               viewModel.playVideos(
                 videos,
                 videos.indexOfFirst { it.path == video.path }.coerceAtLeast(0),
+                // 播放器真正被拉起（或失败）才摘加载层 —— 不用超时去猜
+                onFinished = { opening = false },
               )
             },
             // 长按菜单：**所有协议都挂**（属性 / 下载是只读动作，SMB、WebDAV、FTP 一样需要）；
