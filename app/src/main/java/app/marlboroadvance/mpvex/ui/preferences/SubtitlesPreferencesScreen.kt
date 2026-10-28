@@ -182,7 +182,7 @@ object SubtitlesPreferencesScreen : Screen {
                 value = preferredLanguages,
                 onValueChange = preferences.preferredLanguages::set,
                 textToValue = { it },
-                modifier = Modifier.settingsAnchor("pref_preferred_languages"),
+                modifier = Modifier.settingsAnchor(R.string.pref_preferred_languages),
                 title = { Text(stringResource(R.string.pref_preferred_languages), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   if (preferredLanguages.isNotBlank()) {
@@ -223,7 +223,7 @@ object SubtitlesPreferencesScreen : Screen {
                 },
                 value = autoload,
                 onValueChange = { preferences.autoloadMatchingSubtitles.set(it) },
-                modifier = Modifier.settingsAnchor("pref_subtitles_autoload_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_subtitles_autoload_title),
                 title = { Text(stringResource(R.string.pref_subtitles_autoload_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -246,7 +246,7 @@ object SubtitlesPreferencesScreen : Screen {
                 },
                 value = overrideAss,
                 onValueChange = { preferences.overrideAssSubs.set(it) },
-                modifier = Modifier.settingsAnchor("player_sheets_sub_override_ass"),
+                modifier = Modifier.settingsAnchor(R.string.player_sheets_sub_override_ass),
                 title = { Text(stringResource(R.string.player_sheets_sub_override_ass), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -269,7 +269,7 @@ object SubtitlesPreferencesScreen : Screen {
                 },
                 value = followPicture,
                 onValueChange = { preferences.followPictureScale.set(it) },
-                modifier = Modifier.settingsAnchor("player_sheets_sub_follow_picture"),
+                modifier = Modifier.settingsAnchor(R.string.player_sheets_sub_follow_picture),
                 title = { Text(stringResource(R.string.player_sheets_sub_follow_picture), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -285,6 +285,9 @@ object SubtitlesPreferencesScreen : Screen {
               Box(
                 modifier =
                   Modifier
+                    // 这一行是手写的（标题走 Text 而不是 Preference 的 title 参数），
+                    // 生成器看不见，锚点手挂 —— 否则搜索「字体目录」点进来定位不到。
+                    .settingsAnchor(R.string.pref_subtitles_fonts_dir)
                     .fillMaxWidth()
                     .clickable { locationPicker.launch(null) }
                     .padding(vertical = 16.dp, horizontal = 16.dp),

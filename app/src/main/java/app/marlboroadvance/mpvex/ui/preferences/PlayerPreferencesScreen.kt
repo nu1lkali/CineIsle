@@ -150,7 +150,7 @@ object PlayerPreferencesScreen : Screen {
                 onValueChange = preferences.orientation::set,
                 values = PlayerOrientation.entries,
                 valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
-                modifier = Modifier.settingsAnchor("pref_player_orientation"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_orientation),
                 title = { Text(text = stringResource(id = R.string.pref_player_orientation), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -173,7 +173,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = savePositionOnQuit,
                 onValueChange = preferences.savePositionOnQuit::set,
-                modifier = Modifier.settingsAnchor("pref_player_save_position_on_quit"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_save_position_on_quit),
                 title = { Text(stringResource(R.string.pref_player_save_position_on_quit), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
               
@@ -190,7 +190,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = closeAfterEndOfVideo,
                 onValueChange = preferences.closeAfterReachingEndOfVideo::set,
-                modifier = Modifier.settingsAnchor("pref_player_close_after_eof"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_close_after_eof),
                 title = { Text(stringResource(id = R.string.pref_player_close_after_eof), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
               
@@ -207,7 +207,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = autoplayNextVideo,
                 onValueChange = preferences.autoplayNextVideo::set,
-                modifier = Modifier.settingsAnchor("i18n_autoplay_next_video"),
+                modifier = Modifier.settingsAnchor(R.string.i18n_autoplay_next_video),
                 title = { Text(text = stringResource(R.string.i18n_autoplay_next_video), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -408,7 +408,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = rememberSubtitleTrack,
                 onValueChange = preferences.rememberSubtitleTrackPerSeries::set,
-                modifier = Modifier.settingsAnchor("pref_remember_subtitle_track_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_remember_subtitle_track_title),
                 title = { Text(text = stringResource(R.string.pref_remember_subtitle_track_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -434,7 +434,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = rememberGlobalSpeed,
                 onValueChange = preferences.rememberGlobalSpeed::set,
-                modifier = Modifier.settingsAnchor("pref_remember_global_speed_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_remember_global_speed_title),
                 title = { Text(text = stringResource(R.string.pref_remember_global_speed_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -460,7 +460,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = autoSkipIntro,
                 onValueChange = preferences.autoSkipIntro::set,
-                modifier = Modifier.settingsAnchor("pref_auto_skip_intro_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_auto_skip_intro_title),
                 title = { Text(text = stringResource(R.string.pref_auto_skip_intro_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -486,7 +486,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = autoSkipOutro,
                 onValueChange = preferences.autoSkipOutro::set,
-                modifier = Modifier.settingsAnchor("pref_auto_skip_outro_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_auto_skip_outro_title),
                 title = { Text(text = stringResource(R.string.pref_auto_skip_outro_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -539,7 +539,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = preloadNextVideo,
                 onValueChange = preferences.preloadNextVideo::set,
-                modifier = Modifier.settingsAnchor("i18n_preload_next_video"),
+                modifier = Modifier.settingsAnchor(R.string.i18n_preload_next_video),
                 title = { Text(text = stringResource(R.string.i18n_preload_next_video), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -576,7 +576,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = diskCacheEnabled,
                 onValueChange = preferences.diskCacheEnabled::set,
-                modifier = Modifier.settingsAnchor("pref_player_disk_cache"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_disk_cache),
                 title = { Text(text = stringResource(R.string.pref_player_disk_cache), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -600,7 +600,7 @@ object PlayerPreferencesScreen : Screen {
                 onValueChange = { preferences.diskCacheSizeMb.set(it.roundToInt()) },
                 sliderValue = diskCacheSizeMb.toFloat(),
                 onSliderValueChange = { preferences.diskCacheSizeMb.set(it.roundToInt()) },
-                modifier = Modifier.settingsAnchor("pref_player_disk_cache_size"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_disk_cache_size),
                 title = { Text(text = stringResource(R.string.pref_player_disk_cache_size), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 valueRange = MpvDiskCache.MIN_SIZE_MB.toFloat()..MpvDiskCache.MAX_SIZE_MB.toFloat(),
                 summary = {
@@ -615,7 +615,7 @@ object PlayerPreferencesScreen : Screen {
               PreferenceDivider()
 
               Preference(
-                modifier = Modifier.settingsAnchor("pref_player_clear_disk_cache"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_clear_disk_cache),
                 title = { Text(text = stringResource(R.string.pref_player_clear_disk_cache), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -670,7 +670,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = playlistMode,
                 onValueChange = preferences.playlistMode::set,
-                modifier = Modifier.settingsAnchor("i18n_enable_nav"),
+                modifier = Modifier.settingsAnchor(R.string.i18n_enable_nav),
                 title = { Text(text = stringResource(R.string.i18n_enable_nav), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -696,7 +696,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = rememberBrightness,
                 onValueChange = preferences.rememberBrightness::set,
-                modifier = Modifier.settingsAnchor("pref_player_remember_brightness"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_remember_brightness),
                 title = { Text(text = stringResource(R.string.pref_player_remember_brightness), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
 
@@ -713,7 +713,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = rememberSeriesBrightness,
                 onValueChange = preferences.rememberSeriesBrightness::set,
-                modifier = Modifier.settingsAnchor("pref_player_remember_series_brightness"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_remember_series_brightness),
                 title = { Text(text = stringResource(R.string.pref_player_remember_series_brightness), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -793,7 +793,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = showDoubleTapOvals,
                 onValueChange = preferences.showDoubleTapOvals::set,
-                modifier = Modifier.settingsAnchor("show_splash_ovals_on_double_tap_to_seek"),
+                modifier = Modifier.settingsAnchor(R.string.show_splash_ovals_on_double_tap_to_seek),
                 title = { Text(stringResource(R.string.show_splash_ovals_on_double_tap_to_seek), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
               
@@ -810,7 +810,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = showSeekTimeWhileSeeking,
                 onValueChange = preferences.showSeekTimeWhileSeeking::set,
-                modifier = Modifier.settingsAnchor("show_time_on_double_tap_to_seek"),
+                modifier = Modifier.settingsAnchor(R.string.show_time_on_double_tap_to_seek),
                 title = { Text(stringResource(R.string.show_time_on_double_tap_to_seek), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
               
@@ -827,7 +827,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = usePreciseSeeking,
                 onValueChange = preferences.usePreciseSeeking::set,
-                modifier = Modifier.settingsAnchor("pref_player_use_precise_seeking"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_use_precise_seeking),
                 title = { Text(stringResource(R.string.pref_player_use_precise_seeking), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
               
@@ -844,7 +844,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = customSkipDuration.toFloat(),
                 onValueChange = { preferences.customSkipDuration.set(it.roundToInt()) },
-                modifier = Modifier.settingsAnchor("pref_player_custom_skip_duration_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_custom_skip_duration_title),
                 title = { Text(stringResource(R.string.pref_player_custom_skip_duration_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 valueRange = 5f..180f,
                 summary = {
@@ -870,7 +870,7 @@ object PlayerPreferencesScreen : Screen {
                   value = coerceSeekStepSeconds(seekForward),
                   onValueChange = { preferences.seekForwardSeconds.set(it) },
                   valueRange = SEEK_STEP_RANGE,
-                  modifier = Modifier.settingsAnchor("pref_seek_step_title"),
+                  modifier = Modifier.settingsAnchor(R.string.pref_seek_step_title),
                   title = stringResource(R.string.pref_seek_step_title),
                   supportingText =
                     stringResource(R.string.pref_seek_forward_title) +
@@ -911,7 +911,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = showClock,
                 onValueChange = preferences.showPlayerClock::set,
-                modifier = Modifier.settingsAnchor("pref_show_player_clock_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_show_player_clock_title),
                 title = { Text(stringResource(R.string.pref_show_player_clock_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -934,7 +934,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = showBattery,
                 onValueChange = preferences.showPlayerBattery::set,
-                modifier = Modifier.settingsAnchor("pref_show_player_battery_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_show_player_battery_title),
                 title = { Text(stringResource(R.string.pref_show_player_battery_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -963,7 +963,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = brightnessGesture,
                 onValueChange = preferences.brightnessGesture::set,
-                modifier = Modifier.settingsAnchor("pref_player_gestures_brightness"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_gestures_brightness),
                 title = { Text(stringResource(R.string.pref_player_gestures_brightness), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
               
@@ -980,7 +980,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = volumeGesture,
                 onValueChange = preferences.volumeGesture::set,
-                modifier = Modifier.settingsAnchor("pref_player_gestures_volume"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_gestures_volume),
                 title = { Text(stringResource(R.string.pref_player_gestures_volume), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
               
@@ -997,7 +997,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = pinchToZoomGesture,
                 onValueChange = preferences.pinchToZoomGesture::set,
-                modifier = Modifier.settingsAnchor("pref_player_gestures_pinch_to_zoom"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_gestures_pinch_to_zoom),
                 title = { Text(stringResource(R.string.pref_player_gestures_pinch_to_zoom), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
               
@@ -1014,7 +1014,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = horizontalSwipeToSeek,
                 onValueChange = preferences.horizontalSwipeToSeek::set,
-                modifier = Modifier.settingsAnchor("pref_player_gestures_horizontal_swipe_to_seek"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_gestures_horizontal_swipe_to_seek),
                 title = { Text(stringResource(R.string.pref_player_gestures_horizontal_swipe_to_seek), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
               
@@ -1031,7 +1031,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = horizontalSwipeSensitivity,
                 onValueChange = { preferences.horizontalSwipeSensitivity.set(it.toFixed(3)) },
-                modifier = Modifier.settingsAnchor("pref_player_gestures_horizontal_swipe_sensitivity"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_gestures_horizontal_swipe_sensitivity),
                 title = { Text(stringResource(R.string.pref_player_gestures_horizontal_swipe_sensitivity), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 valueRange = 0.020f..0.1f,
                 summary = {
@@ -1062,7 +1062,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = hapticFeedbackEnabled,
                 onValueChange = preferences.hapticFeedbackEnabled::set,
-                modifier = Modifier.settingsAnchor("pref_player_haptic_feedback"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_haptic_feedback),
                 title = { Text(stringResource(R.string.pref_player_haptic_feedback), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1085,7 +1085,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = holdForMultipleSpeed,
                 onValueChange = { preferences.holdForMultipleSpeed.set(it.toFixed(2)) },
-                modifier = Modifier.settingsAnchor("pref_player_gestures_hold_for_multiple_speed"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_gestures_hold_for_multiple_speed),
                 title = { Text(stringResource(R.string.pref_player_gestures_hold_for_multiple_speed), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 valueRange = 0f..6f,
                 summary = {
@@ -1143,7 +1143,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = allowGesturesInPanels,
                 onValueChange = preferences.allowGesturesInPanels::set,
-                modifier = Modifier.settingsAnchor("pref_player_controls_allow_gestures_in_panels"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_controls_allow_gestures_in_panels),
                 title = {
                   Text(
                     text = stringResource(id = R.string.pref_player_controls_allow_gestures_in_panels),
@@ -1164,7 +1164,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = swapVolumeAndBrightness,
                 onValueChange = preferences.swapVolumeAndBrightness::set,
-                modifier = Modifier.settingsAnchor("swap_the_volume_and_brightness_slider"),
+                modifier = Modifier.settingsAnchor(R.string.swap_the_volume_and_brightness_slider),
                 title = { Text(stringResource(R.string.swap_the_volume_and_brightness_slider), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
               
@@ -1181,7 +1181,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = showLoadingCircle,
                 onValueChange = preferences.showLoadingCircle::set,
-                modifier = Modifier.settingsAnchor("pref_player_controls_show_loading_circle"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_controls_show_loading_circle),
                 title = { Text(stringResource(R.string.pref_player_controls_show_loading_circle), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
 
@@ -1223,7 +1223,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = showSystemStatusBar,
                 onValueChange = preferences.showSystemStatusBar::set,
-                modifier = Modifier.settingsAnchor("pref_player_display_show_status_bar"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_display_show_status_bar),
                 title = { Text(stringResource(R.string.pref_player_display_show_status_bar), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
 
@@ -1257,7 +1257,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = reduceMotion,
                 onValueChange = preferences.reduceMotion::set,
-                modifier = Modifier.settingsAnchor("pref_player_display_reduce_player_animation"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_display_reduce_player_animation),
                 title = { Text(stringResource(R.string.pref_player_display_reduce_player_animation), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
 
@@ -1276,7 +1276,7 @@ object PlayerPreferencesScreen : Screen {
                 },
                 value = autoCropBlackBars,
                 onValueChange = preferences.autoCropBlackBars::set,
-                modifier = Modifier.settingsAnchor("pref_auto_crop_black_bars_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_auto_crop_black_bars_title),
                 title = { Text(stringResource(R.string.pref_auto_crop_black_bars_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(

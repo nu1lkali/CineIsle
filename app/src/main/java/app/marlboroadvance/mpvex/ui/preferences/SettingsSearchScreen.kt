@@ -214,13 +214,21 @@ object SettingsSearchScreen : Screen {
                             items = searchResults,
                             key = { index, pref -> "${pref.titleRes}_${pref.category}_${pref.screen}_$index".hashCode() }
                         ) { _, preference ->
+                            // 定位用的键 = 这条结果标题**解析出来的文字**。
+                            // 目标页那一行挂的锚点也是同一句文字（资源在那边解析），
+                            // 所以「搜到的」与「能定位的」是同一批，不存在两套标识对不上。
+                            val targetTitle = if (preference.titleRes != null) {
+                                stringResource(preference.titleRes)
+                            } else {
+                                preference.title.orEmpty()
+                            }
                             SearchResultItem(
                                 preference = preference,
                                 onClick = {
                                     keyboardController?.hide()
-                                    // v173：先把「跳到哪一行」挂出去，目标页起来后自己滚过去并闪一下。
-                                    // 没有锚点（页面级入口 / 行上没挂修饰符）时传 null，行为回到「进页顶」。
-                                    SettingsSpotlight.request(preference.screen, preference.anchor)
+                                    // 先把「跳到哪一行」挂出去，目标页起来后自己滚过去并闪一下。
+                                    // 页面级入口（标题就是那页的名字）页面上没有这一行，行为是停在页顶。
+                                    SettingsSpotlight.request(preference.screen, targetTitle)
                                     backstack.add(preference.screen)
                                 }
                             )

@@ -105,7 +105,7 @@ object DanmakuSettingsScreen : Screen {
 
           item {
             ToggleRow(
-              modifier = Modifier.settingsAnchor("danmaku_enable_title"),
+              modifier = Modifier.settingsAnchor(R.string.danmaku_enable_title),
               title = stringResource(R.string.danmaku_enable_title),
               summary =
                 stringResource(R.string.danmaku_enable_summary) +
@@ -181,7 +181,7 @@ object DanmakuSettingsScreen : Screen {
           }
           item {
             ToggleRow(
-              modifier = Modifier.settingsAnchor("danmaku_auto_match"),
+              modifier = Modifier.settingsAnchor(R.string.danmaku_auto_match),
               title = stringResource(R.string.danmaku_auto_match),
               summary = stringResource(R.string.danmaku_auto_match_summary),
               checked = autoMatch,

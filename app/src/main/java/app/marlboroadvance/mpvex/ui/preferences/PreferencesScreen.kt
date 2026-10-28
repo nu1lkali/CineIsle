@@ -205,7 +205,7 @@ object PreferencesScreen : Screen {
           item {
             PreferenceCard {
               Preference(
-                modifier = Modifier.settingsAnchor("pref_appearance_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_appearance_title),
                 title = { Text(text = stringResource(id = R.string.pref_appearance_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -235,7 +235,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
-                modifier = Modifier.settingsAnchor("pref_player"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player),
                 title = { Text(text = stringResource(id = R.string.pref_player), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -256,7 +256,7 @@ object PreferencesScreen : Screen {
               PreferenceDivider()
 
               Preference(
-                modifier = Modifier.settingsAnchor("pref_layout_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_layout_title),
                 title = { Text(text = stringResource(id = R.string.pref_layout_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -278,7 +278,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
-                modifier = Modifier.settingsAnchor("pref_gesture"),
+                modifier = Modifier.settingsAnchor(R.string.pref_gesture),
                 title = { Text(text = stringResource(id = R.string.pref_gesture), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -305,7 +305,7 @@ object PreferencesScreen : Screen {
               val danmakuPrefs = koinInject<DanmakuPreferences>()
               val danmakuEnabled by danmakuPrefs.enabled.collectAsState()
               Preference(
-                modifier = Modifier.settingsAnchor("danmaku_title"),
+                modifier = Modifier.settingsAnchor(R.string.danmaku_title),
                 title = { Text(text = stringResource(id = R.string.danmaku_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -329,7 +329,7 @@ object PreferencesScreen : Screen {
               // GSY 播放器是**独立的一套播放页**（内核 / 渲染 / 手势都跟 mpv 不共用），
               // 所以它的配置单开一页：这一页改什么都不影响 mpv，反之亦然。
               Preference(
-                modifier = Modifier.settingsAnchor("pref_gsy_player"),
+                modifier = Modifier.settingsAnchor(R.string.pref_gsy_player),
                 title = { Text(text = stringResource(id = R.string.pref_gsy_player), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -352,7 +352,7 @@ object PreferencesScreen : Screen {
               // （关开关会清掉控件簇里的按钮、开开关会加回原簇），
               // 细节见 DislikeLayoutSync。
               Preference(
-                modifier = Modifier.settingsAnchor("pref_dislike_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_dislike_title),
                 title = { Text(text = stringResource(id = R.string.pref_dislike_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -381,7 +381,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
-                modifier = Modifier.settingsAnchor("pref_folders_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_folders_title),
                 title = { Text(text = stringResource(id = R.string.pref_folders_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -410,7 +410,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
-                modifier = Modifier.settingsAnchor("pref_decoder"),
+                modifier = Modifier.settingsAnchor(R.string.pref_decoder),
                 title = { Text(text = stringResource(id = R.string.pref_decoder), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -432,7 +432,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
-                modifier = Modifier.settingsAnchor("pref_subtitles"),
+                modifier = Modifier.settingsAnchor(R.string.pref_subtitles),
                 title = { Text(text = stringResource(id = R.string.pref_subtitles), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -454,7 +454,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
-                modifier = Modifier.settingsAnchor("pref_audio"),
+                modifier = Modifier.settingsAnchor(R.string.pref_audio),
                 title = { Text(text = stringResource(id = R.string.pref_audio), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -829,7 +829,7 @@ object PreferencesScreen : Screen {
                 onValueChange = { browserPreferences.embyMediaSourcePreference.set(it.key) },
                 values = MediaSourcePreference.entries,
                 valueToText = { AnnotatedString(mediaSourcePreferenceLabel(it)) },
-                modifier = Modifier.settingsAnchor("pref_media_source_pref_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_media_source_pref_title),
                 title = { Text(text = stringResource(R.string.pref_media_source_pref_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -1568,7 +1568,7 @@ object PreferencesScreen : Screen {
 
             PreferenceCard {
               Preference(
-                modifier = Modifier.settingsAnchor("app_lock_title"),
+                modifier = Modifier.settingsAnchor(R.string.app_lock_title),
                 title = { Text(text = stringResource(R.string.app_lock_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   val text = if (appLockEnabled) {
@@ -1683,7 +1683,7 @@ object PreferencesScreen : Screen {
             PreferenceCard {
               Preference(
 
-                modifier = Modifier.settingsAnchor("pref_advanced"),
+                modifier = Modifier.settingsAnchor(R.string.pref_advanced),
                 title = { Text(text = stringResource(R.string.pref_advanced), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -1705,7 +1705,7 @@ object PreferencesScreen : Screen {
               
               Preference(
 
-                modifier = Modifier.settingsAnchor("pref_about_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_about_title),
                 title = { Text(text = stringResource(id = R.string.pref_about_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(

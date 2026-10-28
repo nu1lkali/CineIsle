@@ -1,12 +1,12 @@
 package app.marlboroadvance.mpvex.ui.preferences
 
+import androidx.annotation.StringRes
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -19,26 +19,35 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.presentation.Screen
 import kotlinx.coroutines.delay
 
 /**
- * 设置搜索的「跳到那一项并闪一下」（v173）。
+ * 设置搜索的「跳到那一项并闪一下」。
  *
- * 背景：搜索命中后只会把用户丢到那张设置页的**顶部** —— Emby 那几节动辄一整屏，
- * 用户还得自己找。这里把「哪一项」变成可执行的定位请求：
+ * ⚠️⚠️ **锚点就是那一行在屏幕上显示的文字本身**（v174 起）。
  *
- * 1. [request] 记下目标锚点与目标页，然后照常跳页；
+ * v173 用的是脚本生成的另一套标识（`pref_xxx` 这种资源名），索引里存一份、行上挂一份 ——
+ * 只要两边有一点不同步，现象就是「有的能定位、有的点了只到页顶」，而且**静默**失效。
+ * 最要命的一处：手写索引的条目没有这个字段，合并去重时把带锚点的那条吃掉，锚点就丢了。
+ *
+ * 现在两侧都从同一个表达式取值（string 资源或字面量标题），索引里不再存第三套键，
+ * 于是「索引最终选中了哪一条」与「能不能定位」彻底解耦：
+ * 只要那张页面上真有一行叫这个名字，就一定能滚过去并闪。
+ *
+ * 一行可能显示多种文字（`title = if (flag) A else B` 这种按状态换文案的），
+ * 所以锚点接受多个标题 —— 运行时显示哪一句都能对上。
+ *
+ * 流程：
+ * 1. [request] 记下「跳到哪一行」与目标页，然后照常跳页；
  * 2. 目标页在 [SettingsSpotlightReveal] 里滚到那一行（离屏行 LazyColumn 不会组合，
  *    所以先逐步下扫直到它被组合，再交给它自己 `bringIntoView`）；
- * 3. 那一行由 [settingsAnchor] 修饰符接管：滚进视野后背景呼吸三次，然后自己撤销请求。
- *
- * ⚠️ 锚点字符串由 `tools/gen_pref_index.py` 同时写进「索引」和「行修饰符」两处，
- *    两边必须一致 —— 改完设置项重跑脚本，别只手改一边。
+ * 3. 那一行由 [settingsAnchor] 接管：滚进视野后背景呼吸三次，然后自己撤销请求。
  */
 object SettingsSpotlight {
-  /** 待定位的锚点；null = 当前没有定位任务。 */
+  /** 待定位的行标题；null = 当前没有定位任务。 */
   var pending: String? by mutableStateOf(null)
     private set
 
@@ -46,15 +55,16 @@ object SettingsSpotlight {
   var owner: Screen? by mutableStateOf(null)
     private set
 
-  /** 正在闪烁的锚点（滚动定位完成之后才置位，避免「还没滚到就已经闪完了」）。 */
+  /** 正在闪烁的行标题（滚动定位完成之后才置位，避免「还没滚到就已经闪完了」）。 */
   var flashing: String? by mutableStateOf(null)
     private set
 
-  /** 已组合出来的行：锚点 → 它的 `bringIntoView` 请求器。 */
+  /** 已组合出来的行：标题 → 它的 `bringIntoView` 请求器。 */
   private val targets = HashMap<String, BringIntoViewRequester>()
 
-  fun request(screen: Screen, anchor: String?) {
-    pending = anchor
+  fun request(screen: Screen, title: String?) {
+    val key = title?.trim().orEmpty()
+    pending = key.ifEmpty { null }
     owner = screen
     flashing = null
   }
@@ -66,51 +76,76 @@ object SettingsSpotlight {
   }
 
   /** 定位完成、该开始闪了。只认当前 pending，避免慢一步的旧请求闪到别的行。 */
-  fun beginFlash(anchor: String) {
-    if (pending == anchor) flashing = anchor
+  fun beginFlash(title: String) {
+    if (pending == title) flashing = title
   }
 
-  /** 闪完收工：清掉两个状态，下次进页面不会再闪。 */
-  fun finish(anchor: String) {
-    if (flashing == anchor) flashing = null
-    if (pending == anchor) {
+  /** 闪完收工。只清「确实是自己在闪」的那次请求，别把刚点的新请求也一起清掉。 */
+  fun finish(titles: List<String>) {
+    val lit = flashing ?: return
+    if (titles.contains(lit)) {
+      flashing = null
       pending = null
       owner = null
     }
   }
 
-  internal fun attach(anchor: String, requester: BringIntoViewRequester) {
-    targets[anchor] = requester
+  /** 兜底：标题对不上任何一行时也要撤掉请求，否则下次进这页会莫名其妙地闪。 */
+  fun abandon(title: String) {
+    if (pending == title) {
+      pending = null
+      owner = null
+    }
   }
 
-  internal fun detach(anchor: String) {
-    targets.remove(anchor)
+  internal fun attach(title: String, requester: BringIntoViewRequester) {
+    targets[title] = requester
   }
 
-  internal fun isComposed(anchor: String): Boolean = targets.containsKey(anchor)
+  internal fun detach(title: String) {
+    targets.remove(title)
+  }
 
-  internal fun requesterOf(anchor: String): BringIntoViewRequester? = targets[anchor]
+  internal fun isComposed(title: String): Boolean = targets.containsKey(title)
+
+  internal fun requesterOf(title: String): BringIntoViewRequester? = targets[title]
 }
 
 /**
  * 给一行设置项挂上「可被搜索定位」的能力。
  *
- * 只做两件事：登记自己的 `bringIntoView` 请求器（离屏行不会被组合，所以「是否已组合」
- * 就是「是否在屏幕附近」的判据），以及在被点亮时画一层呼吸背景。
+ * 资源版与字面量版最终都收敛到同一批字符串键 —— 与索引里那一条解析出来的标题逐字相同，
+ * 所以不存在「两边写法不一致」这类失效。
  *
- * ⚠️ 用 `size` 无关的 `drawBehind`（不是包一层 Box）：包 Box 会多一层布局节点，
- *    设置行的对齐 / 分隔线间距都靠父 Column 直接测量，多套一层容易出半像素偏差。
+ * 多个参数用于「按状态换文案」的行：把每种可能的文案都登记上，
+ * 用户从哪个文案点进来都能定位（`title = if (x) A else B`）。
+ *
+ * ⚠️ 用 `drawBehind` 而不是包一层 Box：设置行的对齐 / 分隔线间距都靠父 Column 直接测量，
+ *    多套一层布局节点容易出半像素偏差。
  */
+@Composable
+fun Modifier.settingsAnchor(@StringRes vararg resIds: Int): Modifier {
+  // 每个 resId 都在这里解析成「屏幕上那句文字」，与索引侧 `titleRes` 的解析结果一致
+  val titles = resIds.map { stringResource(it).trim() }
+  return settingsAnchor(titles)
+}
+
 @Suppress("ComposableModifierFactory")
 @Composable
-fun Modifier.settingsAnchor(anchor: String): Modifier {
-  val requester = remember(anchor) { BringIntoViewRequester() }
-  DisposableEffect(anchor) {
-    SettingsSpotlight.attach(anchor, requester)
-    onDispose { SettingsSpotlight.detach(anchor) }
+fun Modifier.settingsAnchor(text: String): Modifier = settingsAnchor(listOf(text))
+
+@Composable
+internal fun Modifier.settingsAnchor(titles: List<String>): Modifier {
+  val keys = titles.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+  if (keys.isEmpty()) return this
+
+  val requester = remember(keys) { BringIntoViewRequester() }
+  DisposableEffect(keys) {
+    keys.forEach { SettingsSpotlight.attach(it, requester) }
+    onDispose { keys.forEach { SettingsSpotlight.detach(it) } }
   }
 
-  val lit = SettingsSpotlight.flashing == anchor
+  val lit = keys.any { it == SettingsSpotlight.flashing }
   val pulse = remember { Animatable(0f) }
   LaunchedEffect(lit) {
     if (!lit) return@LaunchedEffect
@@ -120,7 +155,7 @@ fun Modifier.settingsAnchor(anchor: String): Modifier {
       pulse.animateTo(1f, tween(durationMillis = 240, easing = FastOutSlowInEasing))
       pulse.animateTo(0f, tween(durationMillis = 300, easing = FastOutSlowInEasing))
     }
-    SettingsSpotlight.finish(anchor)
+    SettingsSpotlight.finish(keys)
   }
 
   val highlight = MaterialTheme.colorScheme.primary
@@ -138,21 +173,34 @@ fun Modifier.settingsAnchor(anchor: String): Modifier {
  * 目标页一侧：把 [SettingsSpotlight.pending] 落实到「滚到那一行」。
  *
  * 为什么不是直接 `animateScrollToItem(index)`：LazyColumn 只能按**下标**滚，
- * 而「某个标题在第几个 item」这件事只有源码知道，写死一张下标表迟早和布局对不上。
- * 这里换成「逐步下扫直到那一行被组合」—— 判据是行自己登记的锚点，布局怎么改都不会错。
+ * 而「某个标题在第几个 item」这件事只有源码知道，写死一张下标表迟早和布局对不上，
+ * 且对不上时是**静默**滚到别处。这里的判据是「那一行有没有被组合出来」，布局怎么改都不会错。
+ *
+ * [listState] 可空：`Folders` / `About` 这类页面没有主 LazyColumn（内容是普通 Column），
+ * 所有行天然都在组合里，只需要 `bringIntoView` + 闪，不需要下扫。
  */
 @Composable
 fun SettingsSpotlightReveal(listState: LazyListState, owner: Screen) {
-  val anchor = SettingsSpotlight.pending
+  SettingsSpotlightReveal(owner, listState)
+}
+
+@Composable
+fun SettingsSpotlightReveal(owner: Screen) {
+  SettingsSpotlightReveal(owner, listState = null)
+}
+
+@Composable
+private fun SettingsSpotlightReveal(owner: Screen, listState: LazyListState?) {
+  val title = SettingsSpotlight.pending
   val target = SettingsSpotlight.owner
-  LaunchedEffect(anchor, target, listState, owner) {
-    val wanted = anchor ?: return@LaunchedEffect
+  LaunchedEffect(title, target, listState, owner) {
+    val wanted = title ?: return@LaunchedEffect
     if (target !== owner) return@LaunchedEffect
 
-    // 等一帧：让行的 DisposableEffect 把锚点登记进来（同一次组合里 effect 顺序不保证）
+    // 等一帧：让行的 DisposableEffect 把标题登记进来（同一次组合里 effect 顺序不保证）
     withFrameNanos { }
 
-    if (!SettingsSpotlight.isComposed(wanted)) {
+    if (listState != null && !SettingsSpotlight.isComposed(wanted)) {
       // 目标是离屏行 ⇒ 从顶往下扫。步长 0.6 屏：LazyColumn 的预组合窗口只有一屏多一点，
       // 步子迈太大（一屏一次）可能整段跳过目标行，落得「扫到底也没找到」。
       listState.scrollToItem(0)
@@ -177,8 +225,9 @@ fun SettingsSpotlightReveal(listState: LazyListState, owner: Screen) {
     SettingsSpotlight.requesterOf(wanted)?.bringIntoView()
     SettingsSpotlight.beginFlash(wanted)
 
-    // 兜底：锚点漂了（比如那一行被删了）也要把请求撤掉，否则下次进这页会莫名其妙地闪
+    // 兜底：标题对不上任何一行（页面级入口 / 页面改版删了那项）也要把请求撤掉，
+    // 否则下次进这页会莫名其妙地闪
     delay(3000)
-    SettingsSpotlight.finish(wanted)
+    SettingsSpotlight.abandon(wanted)
   }
 }

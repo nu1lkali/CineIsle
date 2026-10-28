@@ -143,7 +143,7 @@ object PlayerControlsPreferencesScreen : Screen {
           item {
             PreferenceCard {
               PreferenceCategoryWithEditButton(
-                modifier = Modifier.settingsAnchor("pref_layout_top_right_controls"),
+                modifier = Modifier.settingsAnchor(R.string.pref_layout_top_right_controls),
                 title = stringResource(id = R.string.pref_layout_top_right_controls),
                 onClick = {
                   backstack.add(ControlLayoutEditorScreen(ControlRegion.TOP_RIGHT))
@@ -154,7 +154,7 @@ object PlayerControlsPreferencesScreen : Screen {
               PreferenceDivider()
               
               PreferenceCategoryWithEditButton(
-                modifier = Modifier.settingsAnchor("pref_layout_bottom_right_controls"),
+                modifier = Modifier.settingsAnchor(R.string.pref_layout_bottom_right_controls),
                 title = stringResource(id = R.string.pref_layout_bottom_right_controls),
                 onClick = {
                   backstack.add(ControlLayoutEditorScreen(ControlRegion.BOTTOM_RIGHT))
@@ -165,7 +165,7 @@ object PlayerControlsPreferencesScreen : Screen {
               PreferenceDivider()
               
               PreferenceCategoryWithEditButton(
-                modifier = Modifier.settingsAnchor("pref_layout_bottom_left_controls"),
+                modifier = Modifier.settingsAnchor(R.string.pref_layout_bottom_left_controls),
                 title = stringResource(id = R.string.pref_layout_bottom_left_controls),
                 onClick = {
                   backstack.add(ControlLayoutEditorScreen(ControlRegion.BOTTOM_LEFT))
@@ -185,7 +185,7 @@ object PlayerControlsPreferencesScreen : Screen {
 
             
               PreferenceCategoryWithEditButton(
-                modifier = Modifier.settingsAnchor("pref_layout_portrait_bottom_controls"),
+                modifier = Modifier.settingsAnchor(R.string.pref_layout_portrait_bottom_controls),
                 title = stringResource(id = R.string.pref_layout_portrait_bottom_controls),
                 onClick = {
                   backstack.add(ControlLayoutEditorScreen(ControlRegion.PORTRAIT_BOTTOM))
@@ -253,7 +253,7 @@ object PlayerControlsPreferencesScreen : Screen {
                 },
                 value = hidePlayerButtonsBackground,
                 onValueChange = { appearancePrefs.hidePlayerButtonsBackground.set(it) },
-                modifier = Modifier.settingsAnchor("pref_appearance_hide_player_buttons_background_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_appearance_hide_player_buttons_background_title),
                 title = {
                   Text(
                     text = stringResource(id = R.string.pref_appearance_hide_player_buttons_background_title),
@@ -293,7 +293,7 @@ object PlayerControlsPreferencesScreen : Screen {
                     AnnotatedString("$value ms")
                   }
                 },
-                modifier = Modifier.settingsAnchor("pref_player_display_hide_player_control_time"),
+                modifier = Modifier.settingsAnchor(R.string.pref_player_display_hide_player_control_time),
                 title = { Text(text = stringResource(R.string.pref_player_display_hide_player_control_time), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(

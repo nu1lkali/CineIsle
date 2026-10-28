@@ -297,7 +297,7 @@ object AdvancedPreferencesScreen : Screen {
           item {
             PreferenceCard {
               Preference(
-                modifier = Modifier.settingsAnchor("i18n_export_settings"),
+                modifier = Modifier.settingsAnchor(R.string.i18n_export_settings),
                 title = { Text(text = stringResource(R.string.i18n_export_settings), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -320,7 +320,7 @@ object AdvancedPreferencesScreen : Screen {
               PreferenceDivider()
               
               Preference(
-                modifier = Modifier.settingsAnchor("i18n_import_settings"),
+                modifier = Modifier.settingsAnchor(R.string.i18n_import_settings),
                 title = { Text(text = stringResource(R.string.i18n_import_settings), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -418,7 +418,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                modifier = Modifier.settingsAnchor("pref_advanced_mpv_conf_storage_location"),
+                modifier = Modifier.settingsAnchor(R.string.pref_advanced_mpv_conf_storage_location),
                 title = { Text(stringResource(R.string.pref_advanced_mpv_conf_storage_location), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   if (mpvConfStorageLocation.isNotBlank()) {
@@ -450,7 +450,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                modifier = Modifier.settingsAnchor("pref_advanced_mpv_conf"),
+                modifier = Modifier.settingsAnchor(R.string.pref_advanced_mpv_conf),
                 title = { Text(stringResource(R.string.pref_advanced_mpv_conf), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   val firstLine = mpvConf.lines().firstOrNull()
@@ -480,7 +480,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                modifier = Modifier.settingsAnchor("pref_advanced_input_conf"),
+                modifier = Modifier.settingsAnchor(R.string.pref_advanced_input_conf),
                 title = { Text(stringResource(R.string.pref_advanced_input_conf), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   val firstLine = inputConf.lines().firstOrNull()
@@ -524,7 +524,7 @@ object AdvancedPreferencesScreen : Screen {
                 },
                 value = enableRecentlyPlayed,
                 onValueChange = preferences.enableRecentlyPlayed::set,
-                modifier = Modifier.settingsAnchor("pref_advanced_enable_recently_played_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_advanced_enable_recently_played_title),
                 title = { Text(stringResource(R.string.pref_advanced_enable_recently_played_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -544,7 +544,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                modifier = Modifier.settingsAnchor("pref_advanced_clear_playback_history"),
+                modifier = Modifier.settingsAnchor(R.string.pref_advanced_clear_playback_history),
                 title = { Text(stringResource(R.string.pref_advanced_clear_playback_history), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 onClick = { isConfirmDialogShown = true },
               )
@@ -606,7 +606,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                modifier = Modifier.settingsAnchor("i18n_clear_config_cache"),
+                modifier = Modifier.settingsAnchor(R.string.i18n_clear_config_cache),
                 title = { Text(text = stringResource(R.string.i18n_clear_config_cache), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -643,7 +643,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                modifier = Modifier.settingsAnchor("i18n_clear_thumb_cache"),
+                modifier = Modifier.settingsAnchor(R.string.i18n_clear_thumb_cache),
                 title = { Text(text = stringResource(R.string.i18n_clear_thumb_cache), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
@@ -689,7 +689,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                modifier = Modifier.settingsAnchor("pref_advanced_clear_fonts_cache"),
+                modifier = Modifier.settingsAnchor(R.string.pref_advanced_clear_fonts_cache),
                 title = { Text(text = stringResource(id = R.string.pref_advanced_clear_fonts_cache), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -748,7 +748,7 @@ object AdvancedPreferencesScreen : Screen {
                 },
                 value = verboseLogging,
                 onValueChange = preferences.verboseLogging::set,
-                modifier = Modifier.settingsAnchor("pref_advanced_verbose_logging_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_advanced_verbose_logging_title),
                 title = { Text(stringResource(R.string.pref_advanced_verbose_logging_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(
@@ -768,7 +768,7 @@ object AdvancedPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                modifier = Modifier.settingsAnchor("pref_advanced_dump_logs_title"),
+                modifier = Modifier.settingsAnchor(R.string.pref_advanced_dump_logs_title),
                 title = { Text(stringResource(R.string.pref_advanced_dump_logs_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = { 
                   Text(

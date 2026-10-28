@@ -22,12 +22,6 @@ data class SearchablePreference(
      * 不让「播放」这种词把整页几十条都顶到标题命中项前面。
      */
     val screenKeywords: List<String> = emptyList(),
-    /**
-     * 定位锚点（v173）：目标页里那一行的标识，由 `tools/gen_pref_index.py` 同时写进
-     * 索引和行修饰符（`Modifier.settingsAnchor`）。null = 这一项没法精确定位
-     * （页面级入口 / 所在行没挂修饰符），点进去停在页顶。
-     */
-    val anchor: String? = null,
     val category: String,
     val screen: Screen,
 )
@@ -279,8 +273,11 @@ object SearchablePreferences {
                 screen = PlayerPreferencesScreen,
             ))
             add(SearchablePreference(
-                titleRes = R.string.pref_show_navigation_bar_title,
-                keywords = listOf("navigation bar", "controls", "system", "show", "hide"),
+                // ⚠️ 这一行在 PlayerPreferencesScreen 里是**中文字面量**标题，
+                //    而 `pref_show_navigation_bar_title` 的文案是「显示控件时同时显示导航栏」，
+                //    差一个「同时」—— 按资源名挂就会永远定位不到，所以这里跟字面量对齐。
+                title = "显示控件时显示导航栏",
+                keywords = listOf("navigation bar", "controls", "system", "show", "hide", "导航栏"),
                 category = "Player",
                 screen = PlayerPreferencesScreen,
             ))
