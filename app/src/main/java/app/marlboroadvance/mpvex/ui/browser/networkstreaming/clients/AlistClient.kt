@@ -137,7 +137,15 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     @Volatile
     private var sharedHttp: OkHttpClient? = null
 
-    private fun http(): OkHttpClient =
+    /**
+     * 共享客户端对外只读入口。
+     *
+     * 封面（`fs/list` 的 `thumb`）与 AList 的 API **同源同 host**，走同一份连接池
+     * 才能真正复用 keep-alive；另起一个客户端等于又开一套池子，正是类 KDoc 里
+     * 点名的那个坑。所以这里放开成 `internal` 给
+     * [app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.ApiThumbFetcher] 用。
+     */
+    internal fun http(): OkHttpClient =
       sharedHttp ?: synchronized(this) {
         sharedHttp ?: OkHttpClient.Builder()
           .connectTimeout(15, TimeUnit.SECONDS)
@@ -259,6 +267,25 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     val encoded = segments.joinToString("/") { Uri.encode(it) }
     val url = "${serverRoot()}d/$encoded"
     return if (!sign.isNullOrBlank()) "$url?sign=$sign" else url
+  }
+
+  /**
+   * 把 AList `fs/list` 返回的 `thumb` 归一化成绝对 URL。
+   *
+   * AList 给的 `thumb` 通常是**服务端相对路径**（如 `/d/photos/cat.jpg?sign=...`），
+   * 少数部署（套了反代 / 自定义 site_url）会直接给完整 URL。两种情况都兜住：
+   * 已经是 `http(s)://` 就原样返回；否则拼上 [serverRoot]（`...host:port/`，已带斜杠）。
+   *
+   * ⚠️ 这张图带的 `sign` 有时效，过期后这里拉不到 —— 正好由 [NetworkApiThumbnail]
+   *   的失败回退接住，退回客户端生成（图片）或占位（视频）。
+   */
+  private fun resolveThumb(thumb: String): String {
+    val t = thumb.trim()
+    if (t.startsWith("http://", ignoreCase = true) || t.startsWith("https://", ignoreCase = true)) {
+      return t
+    }
+    val root = serverRoot()
+    return if (t.startsWith("/")) "$root${t.removePrefix("/")}" else "$root$t"
   }
 
   // ── NetworkClient ──
@@ -747,6 +774,7 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
               lastModified = parseModified(item.modified),
               mimeType = if (item.isDir) null else guessNetworkMimeType(name),
               sign = item.sign.takeIf { it.isNotBlank() },
+              thumb = item.thumb.takeIf { it.isNotBlank() }?.let { resolveThumb(it) },
             )
           if (merged.put(name, file) == null) added++
           // 顺手把签名记进缓存：照片取流就是最后一跳，不必再为它发一次 fs/get

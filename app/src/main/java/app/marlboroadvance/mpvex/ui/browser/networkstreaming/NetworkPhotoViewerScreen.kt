@@ -41,6 +41,7 @@ import app.marlboroadvance.mpvex.repository.NetworkRepository
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoImageLoader
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoPageImage
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoSaver
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkApiThumbnail
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoThumbnail
 import app.marlboroadvance.mpvex.ui.browser.photo.PhotoViewerEntry
 import app.marlboroadvance.mpvex.ui.browser.photo.SharedPhotoViewer
@@ -264,18 +265,25 @@ data class NetworkPhotoViewerScreen(
       },
       renderThumbnail = { index, modifier ->
         queue.getOrNull(index)?.let { item ->
-          NetworkPhotoThumbnail(
-            connectionId = connectionId,
-            path = item.path,
+          NetworkApiThumbnail(
+            remoteThumbUrl = item.thumb,
             contentDescription = item.name,
-            sign = item.sign,
-            // ⚠️ 胶片条的格子只有 44dp，而重试钮的触控区是 48dp —— 放进来会盖满整块，
-            //    把「点一下跳到那张」这个唯一手势吃掉。
-            showRetry = false,
-            // 44dp 与网格的 360px 是两个尺寸，必须独占一个内存桶：共用会把
-            // 网格缩略图覆盖成 132px 的小图（回去就变糊），反之也浪费内存。
-            cacheBucket = app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoImageLoader.BUCKET_FILM,
             modifier = modifier,
+            showShimmer = false,
+            fallback = {
+              NetworkPhotoThumbnail(
+                connectionId = connectionId,
+                path = item.path,
+                contentDescription = item.name,
+                sign = item.sign,
+                // ⚠️ 胶片条的格子只有 44dp，而重试钮的触控区是 48dp —— 放进来会盖满整块，
+                //    把「点一下跳到那张」这个唯一手势吃掉。
+                showRetry = false,
+                // 44dp 与网格的 360px 是两个尺寸，必须独占一个内存桶：共用会把
+                // 网格缩略图覆盖成 132px 的小图（回去就变糊），反之也浪费内存。
+                cacheBucket = app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoImageLoader.BUCKET_FILM,
+              )
+            },
           )
         }
       },

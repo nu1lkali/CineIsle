@@ -51,6 +51,7 @@ import app.marlboroadvance.mpvex.ui.theme.LocalCardCorner
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.domain.network.NetworkFileType
 import app.marlboroadvance.mpvex.domain.network.type
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkApiThumbnail
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoThumbnail
 import app.marlboroadvance.mpvex.ui.utils.pressDownScale
 import java.text.SimpleDateFormat
@@ -191,16 +192,26 @@ fun NetworkMediaCard(
           }
 
           NetworkFileType.PHOTO -> {
-            // 网络照片：流式拉全图 + 采样解码，骨架屏 / 失败重试都在组件里。
-            // sign 必须带上 —— AList 的 /d/ 下载口在服务端开启签名时只认它
-            // （不带会被 401，兜底多一次 fs/get）。见 AlistClient 类注释。
-            NetworkPhotoThumbnail(
-              connectionId = connectionId,
-              path = file.path,
+            // 接口有封面（AList 的 thumb）就直接拉它渲染，省一次「流式拉原图 + 采样解码」；
+            // 没给 / 拉不到再退回客户端生成。视频不做本地生成，见 VIDEO 分支。
+            NetworkApiThumbnail(
+              remoteThumbUrl = file.thumb,
               contentDescription = file.name,
               modifier = Modifier.fillMaxSize(),
               contentScale = ContentScale.Crop,
-              sign = file.sign,
+              fallback = {
+                // 网络照片：流式拉全图 + 采样解码，骨架屏 / 失败重试都在组件里。
+                // sign 必须带上 —— AList 的 /d/ 下载口在服务端开启签名时只认它
+                // （不带会被 401，兜底多一次 fs/get）。见 AlistClient 类注释。
+                NetworkPhotoThumbnail(
+                  connectionId = connectionId,
+                  path = file.path,
+                  contentDescription = file.name,
+                  modifier = Modifier.fillMaxSize(),
+                  contentScale = ContentScale.Crop,
+                  sign = file.sign,
+                )
+              },
             )
           }
 
@@ -211,6 +222,15 @@ fun NetworkMediaCard(
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh),
               contentAlignment = Alignment.Center,
             ) {
+              // 视频不本地生成缩略图：有接口海报就用，没有 / 拉不到就退回下面的播放图标占位。
+              NetworkApiThumbnail(
+                remoteThumbUrl = file.thumb,
+                contentDescription = file.name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                showShimmer = false,
+                fallback = {},
+              )
               Icon(
                 Icons.Filled.PlayCircle,
                 contentDescription = null,
@@ -337,13 +357,21 @@ fun NetworkPhotoRow(
           .background(MaterialTheme.colorScheme.surfaceContainerHigh),
         contentAlignment = Alignment.Center,
       ) {
-        NetworkPhotoThumbnail(
-          connectionId = connectionId,
-          path = file.path,
+        NetworkApiThumbnail(
+          remoteThumbUrl = file.thumb,
           contentDescription = file.name,
           modifier = Modifier.fillMaxSize(),
           contentScale = ContentScale.Crop,
-          sign = file.sign,
+          fallback = {
+            NetworkPhotoThumbnail(
+              connectionId = connectionId,
+              path = file.path,
+              contentDescription = file.name,
+              modifier = Modifier.fillMaxSize(),
+              contentScale = ContentScale.Crop,
+              sign = file.sign,
+            )
+          },
         )
         NetworkTypeBadge(
           type = NetworkFileType.PHOTO,

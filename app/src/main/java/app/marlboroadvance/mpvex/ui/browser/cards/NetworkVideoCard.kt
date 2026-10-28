@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -27,6 +28,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.ui.theme.LocalCardCorner
@@ -36,6 +38,7 @@ import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkApiThumbnail
 import org.koin.compose.koinInject
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -90,6 +93,15 @@ fun NetworkVideoCard(
             .tapAndLongPress(onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.Center,
       ) {
+        // 视频不本地生成缩略图：有接口海报就用，没有 / 拉不到就退回下面的播放图标占位。
+        NetworkApiThumbnail(
+          remoteThumbUrl = file.thumb,
+          contentDescription = file.name,
+          modifier = Modifier.fillMaxSize(),
+          contentScale = ContentScale.Crop,
+          showShimmer = false,
+          fallback = {},
+        )
         // Play icon overlay
         Icon(
           Icons.Filled.PlayArrow,

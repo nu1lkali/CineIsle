@@ -1733,7 +1733,34 @@ android {
     //       · 诊断升级：`duration-probe` 逐条记 `src=mmr|bitrate`、`floor`（要求大于的值）、
     //         `applied` / `failed` —— 下次再不准，一眼能看出是原生探不到还是码率反推偏了。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 164
+    // ── v165（versionCode 165，功能轮涨名，versionName 仍为 1.6.10）──────
+    //     网络位置（AList 协议）：图片 / 视频**有服务端封面就直接拉接口给的 `thumb`**，
+    //     不再一律客户端生成缩略图。背景：AList `fs/list` 每条自带 `thumb`
+    //     （图片 = 图片本身、视频 = 海报帧，都是服务端缩放好的小图），拉它比客户端
+    //     「流式拉原图 + 解码采样」省流量、出图更快。
+    //     改法：
+    //       · `NetworkFile` 加 `thumb`（绝对 URL，AList 才填，其余协议恒 null）。
+    //         `AlistClient.resolveThumb()` 把相对路径（`/d/...`）拼成绝对 URL，
+    //         已是 `http(s)://` 就原样留。
+    //       · 新增 `NetworkApiThumbnail`：接口 `thumb` 优先；
+    //         **回退只对图片生效**——图片没给 / 拉不到退回 `NetworkPhotoThumbnail`
+    //         客户端生成；视频**不本地生成**（拉帧不划算），没海报就退回播放图标占位。
+    //         `thumb` 带的 sign 过期 ⇒ 拉不到 ⇒ 正好触发回退。
+    //       · ⚠️⭐ 接口封面**不能**用 Coil 默认单例：本工程刻意没引
+    //         `coil-network-okhttp`，默认 ImageLoader 里**没有 http/https 的 Fetcher**
+    //         （实测 coil-core 3.6.3 只有 AssetUri/Bitmap/ByteArray/ByteBuffer/
+    //         ContentUri/DataUri/Drawable/FileUri/JarFile/ResourceUri 十个），
+    //         直接 `rememberAsyncImagePainter(model = url)` 会立刻 Error ⇒
+    //         界面只看到兜底、功能等于没做。所以新增 `ApiThumbRequest` +
+    //         `ApiThumbFetcher`（注册进 `NetworkPhotoImageLoader` 的那份 ImageLoader），
+    //         字节用 `AlistClient.http()` 取 —— thumb 与 AList API 同源同 host，
+    //         共用连接池才符合「不要每请求新建客户端」的红线。
+    //         缓存 key = `api-thumb:` + 去掉 query 的 URL（sign 每次都变，带上必然 miss）。
+    //       · 网格卡（NetworkMediaCard）、列表图片行（NetworkPhotoRow）、列表视频卡
+    //         （NetworkVideoCard）、照片查看器胶片条（renderThumbnail）四处都接上；
+    //         WebDAV / SMB / FTP 服务端不返 `thumb`，恒走回退，不多打一个 HTTP。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 165
     versionName = "1.6.10"
 
     vectorDrawables {

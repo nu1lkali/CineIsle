@@ -236,3 +236,79 @@ fun NetworkPhotoThumbnail(
  *    （详见 [NetworkPhotoThumbnail] 里错误分支的注释）。
  */
 private val RETRY_TOUCH_SIZE = 48.dp
+
+/**
+ * **接口封面优先、客户端生成兜底** 的缩略图包装。
+ *
+ * AList 的 `fs/list` 每条会带一个 `thumb`（封面图直链，已归一化成绝对 URL 收在
+ * [NetworkFile.thumb]）。如果服务端已经给了封面 —— 图片就是图片本身、视频是海报帧 ——
+ * 直接拉这张渲染，比客户端「流式拉原图 + 解码采样」省一次大流量、出图也快。
+ *
+ * 两条回退路径（[fallback] 决定）：
+ * - **图片**：`fallback` 传 [NetworkPhotoThumbnail]，接口没给图 / 图拉不到（签名过期、
+ *   地址失效）就退回客户端生成。
+ * - **视频**：`fallback` 传空块 `{}` —— 视频**不做**客户端生成（拉帧要么整文件下载
+ *   要么接解码器，都不划算），接口没给海报就退回调用方给的占位（通常是播放图标）。
+ *
+ * ⚠️ **必须显式传 imageLoader = [NetworkPhotoImageLoader]**，不能靠 Coil 的默认单例：
+ *   本项目刻意没引 `coil-network-okhttp`，默认单例里**没有 http/https 的 Fetcher**，
+ *   直接 `rememberAsyncImagePainter(model = url)` 会立刻 Error，永远只看到兜底。
+ *   字节由 [ApiThumbFetcher] 取、缓存与照片链路共用一份（见 [NetworkPhotoImageLoader.thumbRequest]）。
+ *
+ * ⚠️ 接口缩略图**不进**二级缩略图磁盘缓存（[NetworkThumbnailDiskCache]）：服务端给的
+ *   本来就是小 JPEG，Coil 自带的磁盘缓存（存响应字节）已经够，再压一遍只是多写一次盘。
+ *   客户端生成的兜底才需要那套二级缓存（见 [NetworkPhotoImageLoader] 的 KDoc）。
+ *
+ * @param remoteThumbUrl 接口给的绝对缩略图 URL；null / 空 = 直接走 [fallback]
+ * @param showShimmer 接口缩略图加载中是否画扫光骨架（视频卡传 false，让它底下就是占位块）
+ * @param fallback 没有接口缩略图、或它加载失败时的渲染（不消费点击，避免盖住外层卡片手势）
+ */
+@Composable
+fun NetworkApiThumbnail(
+  remoteThumbUrl: String?,
+  contentDescription: String?,
+  modifier: Modifier = Modifier,
+  contentScale: ContentScale = ContentScale.Crop,
+  showShimmer: Boolean = true,
+  fallback: @Composable () -> Unit,
+) {
+  var failed by remember(remoteThumbUrl) { mutableStateOf(false) }
+  val url = remoteThumbUrl
+  if (url.isNullOrBlank() || failed) {
+    fallback()
+    return
+  }
+  val context = LocalContext.current
+  // ⚠️ imageLoader 必须显式给：默认单例没有 HTTP Fetcher（本工程没引 coil-network-okhttp）
+  val painter =
+    rememberAsyncImagePainter(
+      model = remember(url) { NetworkPhotoImageLoader.thumbRequest(context, url) },
+      imageLoader = NetworkPhotoImageLoader.get(context),
+    )
+  val state by painter.state.collectAsState()
+  Box(modifier = modifier) {
+    when (state) {
+      is AsyncImagePainter.State.Success -> {
+        Image(
+          painter = painter,
+          contentDescription = contentDescription,
+          modifier = Modifier.fillMaxSize(),
+          contentScale = contentScale,
+        )
+      }
+
+      is AsyncImagePainter.State.Error -> {
+        // 接口给的图拉不到（签名过期 / 地址失效）⇒ 立刻退回兜底，不空转重试。
+        LaunchedEffect(url) { failed = true }
+        fallback()
+      }
+
+      // Empty / Loading：首显画骨架避免露底色；已经显示过的（命中磁盘）就不画，避免回滚闪一下。
+      else -> {
+        if (showShimmer) {
+          Box(modifier = Modifier.fillMaxSize().shimmer(rememberShimmer()))
+        }
+      }
+    }
+  }
+}

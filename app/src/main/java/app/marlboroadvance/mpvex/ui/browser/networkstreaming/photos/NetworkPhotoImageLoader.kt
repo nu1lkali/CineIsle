@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.AlistClient
 import coil3.ImageLoader
 import coil3.disk.DiskCache
 import coil3.decode.DataSource
@@ -15,6 +16,9 @@ import coil3.request.ImageRequest
 import coil3.request.Options
 import coil3.request.SuccessResult
 import coil3.size.Size
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.Request
 import okio.Buffer
 import java.io.File
 import okio.FileSystem
@@ -46,6 +50,29 @@ data class NetworkPhotoRequest(
    */
   val bucket: String = NetworkPhotoImageLoader.BUCKET_THUMB,
 )
+
+/**
+ * 一张「服务端已经生成好的缩略图」的取图请求（Coil 的 `data`）。
+ *
+ * 用在 AList 的 `thumb`（[app.marlboroadvance.mpvex.domain.network.NetworkFile.thumb]）：
+ * 图片是服务端缩好的小图、视频是服务端抽好的封面帧，**都不该再由客户端下载原文件**。
+ *
+ * ## 为什么必须套一层壳，而不能直接把 URL 当 String
+ *
+ * String / Uri 会被 Coil **内置的** Fetcher 抢走（`ContentUriFetcher` 等按 scheme
+ * 派发）。本项目刻意没引 `coil-network-okhttp`（见
+ * [app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoImageLoader] 的说明），
+ * 内置那套里**根本没有 http/https 的 Fetcher** —— 实测 coil-core 3.6.3 只有
+ * AssetUri / Bitmap / ByteArray / ByteBuffer / ContentUri / DataUri / Drawable /
+ * FileUri / JarFile / ResourceUri 十个。所以直接传 String 的结局是
+ * 「找不到 Fetcher → 立刻 Error」，界面永远只看到兜底，接口封面等于白做。
+ * 套壳之后只有 [ApiThumbFetcher.Factory] 认它，字节由项目自己的 OkHttp 取。
+ *
+ * @param url 已归一化成绝对地址的缩略图 URL（见 `AlistClient.resolveThumb`）。
+ *   ⚠️ 直接进缓存 key：带 `sign` 的地址每次列目录都可能变，会让缓存永远 miss；
+ *   所以 [NetworkPhotoImageLoader.thumbRequest] 里把 query 去掉再当 key。
+ */
+data class ApiThumbRequest(val url: String)
 
 /**
  * 网络照片的图片加载器（Coil 3）。
@@ -146,7 +173,11 @@ object NetworkPhotoImageLoader {
 
   private fun build(context: Context): ImageLoader =
     ImageLoader.Builder(context)
-      .components { add(NetworkPhotoFetcher.Factory(context), NetworkPhotoRequest::class) }
+      .components {
+        add(NetworkPhotoFetcher.Factory(context), NetworkPhotoRequest::class)
+        // AList 的 thumb：服务端已缩好的图，走 HTTP 直取（见 ApiThumbRequest 的 KDoc）
+        add(ApiThumbFetcher.Factory(), ApiThumbRequest::class)
+      }
       .memoryCache {
         MemoryCache.Builder()
           .maxSizeBytes(memoryCacheBytes())
@@ -293,6 +324,35 @@ object NetworkPhotoImageLoader {
           precision(coil3.size.Precision.INEXACT)
         }
       }
+      .build()
+  }
+
+  /**
+   * 接口缩略图的请求尺寸上限（像素）。
+   *
+   * 与 [THUMB_MAX_EDGE_PX] 同值：网格 ~360px 足够、列表 64dp / 胶片条 44dp 由 GPU
+   * 再缩小 —— 重复解码三种尺寸只会多占内存和下载，观感没有收益。
+   */
+  private val THUMB_REQUEST_SIZE: Size = Size(THUMB_MAX_EDGE_PX, THUMB_MAX_EDGE_PX)
+
+  /**
+   * 构造「服务端缩略图」请求（AList 的 `thumb`）。
+   *
+   * 与 [request] 共用同一份 ImageLoader / 内存缓存 / 磁盘缓存，只是缓存 key 独立。
+   *
+   * ⚠️ **key 里必须去掉 query**：AList 的 `?sign=...` 每次列目录都可能重新签发，
+   *    带着它当 key ⇒ 每张图都是新键，缓存命中率归零。
+   *    代价是「同一路径换了内容」不会自动刷新（封面本来极少变），可以接受。
+   */
+  fun thumbRequest(context: Context, url: String): ImageRequest {
+    val key = "api-thumb:${url.substringBefore('?')}"
+    return ImageRequest.Builder(context)
+      .data(ApiThumbRequest(url))
+      .memoryCacheKey(key)
+      .diskCacheKey(key)
+      .size(THUMB_REQUEST_SIZE)
+      // INEXACT：给的是上限，绝不放大小图（理由同 [request] 里的长注释）
+      .precision(coil3.size.Precision.INEXACT)
       .build()
   }
 
@@ -615,3 +675,59 @@ private const val THUMB_MAX_EDGE_PX = 512
 
 /** 查看器底部胶片条的目标短边（像素）。44dp @3x ≈ 132px，留到 192 同理。 */
 private const val FILM_MAX_EDGE_PX = 192
+
+/**
+ * 接口缩略图的 Fetcher：HTTP 直取服务端**已经生成好**的那张小图。
+ *
+ * 与 [NetworkPhotoFetcher] 的分工：
+ * - [NetworkPhotoFetcher]：服务端**没给**缩略图时，下载原文件再采样解码（贵）。
+ * - 本类：服务端给了 `thumb` 就直接取那张小图（几十~几百 KB），省掉一次原文件下载。
+ *
+ * ⚠️ 这里**不做**二级缩略图磁盘缓存（[NetworkThumbnailDiskCache]）：服务端缩略图
+ *    本身就是小 JPEG，Coil 自带的磁盘缓存（存响应字节）已经够，再压一遍只是多写一次盘。
+ * ⚠️ 响应体生命周期：成功时把 source 交给 Coil，Coil 消费完会 close（连带关掉
+ *    response）；**异常路径必须自己 close**，否则连接一直挂在池里 —— 这正是
+ *    [AlistClient] 类 KDoc 里点名的「连接 / fd 耗尽」事故。
+ * ⚠️ 复用 [AlistClient.http] 的连接池：thumb 与 AList API **同源同 host**，
+ *    另起一个客户端等于又开一套池子。
+ */
+private class ApiThumbFetcher(private val url: String) : Fetcher {
+  override suspend fun fetch(): FetchResult =
+    // execute() 是阻塞调用，必须自己切 IO —— 不能假设 Coil 一定在 IO 线程上调 fetch
+    withContext(Dispatchers.IO) {
+      val response =
+        AlistClient.http()
+          .newCall(Request.Builder().url(url).get().build())
+          .execute()
+      try {
+        if (!response.isSuccessful) {
+          // 401/403 基本都是 sign 过期，交给 NetworkApiThumbnail 回退兜底
+          throw java.io.IOException("接口缩略图加载失败 HTTP ${response.code}: $url")
+        }
+        val body = response.body
+        SourceFetchResult(
+          source =
+            ImageSource(
+              source = body.source(),
+              fileSystem = FileSystem.SYSTEM,
+              metadata = null,
+            ),
+          mimeType = body.contentType()?.toString(),
+          dataSource = DataSource.NETWORK,
+        )
+      } catch (t: Throwable) {
+        // 只有「还没把 source 交出去」的失败才会走到这里，此时响应体仍归我们
+        response.close()
+        throw t
+      }
+    }
+
+  class Factory : Fetcher.Factory<ApiThumbRequest> {
+    override fun create(
+      data: ApiThumbRequest,
+      options: Options,
+      imageLoader: ImageLoader,
+    ): Fetcher = ApiThumbFetcher(data.url)
+  }
+}
+
