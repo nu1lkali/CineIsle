@@ -108,11 +108,10 @@ import app.marlboroadvance.mpvex.utils.history.RecentlyPlayedOps
 import app.marlboroadvance.mpvex.utils.media.CopyPasteOps
 import app.marlboroadvance.mpvex.utils.media.MediaUtils
 import app.marlboroadvance.mpvex.utils.sort.SortUtils
+import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
+import app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import my.nanihadesuka.compose.LazyColumnScrollbar
-import my.nanihadesuka.compose.LazyVerticalGridScrollbar
-import my.nanihadesuka.compose.ScrollbarSettings
 import org.koin.compose.koinInject
 import java.io.File
 import kotlin.math.roundToInt
@@ -702,24 +701,8 @@ private fun VideoListContent(
       
       val coroutineScope = rememberCoroutineScope()
 
-      val isAtTop by remember {
-        derivedStateOf {
-          if (mediaLayoutMode == MediaLayoutMode.GRID) {
-            gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
-          } else {
-            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-          }
-        }
-      }
-
-      val hasEnoughItems = videosWithInfo.size > 20
-
-      val scrollbarAlpha by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (isAtTop || !hasEnoughItems) 0f else 1f,
-        animationSpec = androidx.compose.animation.core.tween(durationMillis = 200),
-        label = "scrollbarAlpha",
-      )
-
+      // 滚动条的出现时机 / 外观 / 拖动逻辑统一由外壳负责（见 ui/utils/SideScrollbar.kt），
+      // 本页不再自己算 scrollbarAlpha。
       PullRefreshBox(
         isRefreshing = isRefreshing,
         onRefresh = onRefresh,
@@ -738,13 +721,7 @@ private fun VideoListContent(
               .fillMaxSize()
               .padding(bottom = navigationBarHeight)
           ) {
-            LazyVerticalGridScrollbar(
-              state = gridState,
-              settings = ScrollbarSettings(
-                thumbUnselectedColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f * scrollbarAlpha),
-                thumbSelectedColor = MaterialTheme.colorScheme.primary.copy(alpha = scrollbarAlpha),
-              ),
-            ) {
+            LazyGridSideScrollbar(state = gridState) {
               LazyVerticalGrid(
                 columns = GridCells.Fixed(columns),
                 state = gridState,
@@ -793,13 +770,7 @@ private fun VideoListContent(
               .fillMaxSize()
               .padding(bottom = navigationBarHeight)
           ) {
-            LazyColumnScrollbar(
-              state = listState,
-              settings = ScrollbarSettings(
-                thumbUnselectedColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f * scrollbarAlpha),
-                thumbSelectedColor = MaterialTheme.colorScheme.primary.copy(alpha = scrollbarAlpha),
-              ),
-            ) {
+            LazyListSideScrollbar(state = listState) {
               LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),

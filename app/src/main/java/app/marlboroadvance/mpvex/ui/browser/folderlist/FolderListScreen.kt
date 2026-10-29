@@ -117,11 +117,10 @@ import app.marlboroadvance.mpvex.utils.permission.PermissionUtils
 import app.marlboroadvance.mpvex.utils.sort.SortUtils
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.PermissionStatus
+import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
+import app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import my.nanihadesuka.compose.LazyColumnScrollbar
-import my.nanihadesuka.compose.LazyVerticalGridScrollbar
-import my.nanihadesuka.compose.ScrollbarSettings
 import org.koin.compose.koinInject
 import java.io.File
 
@@ -641,24 +640,7 @@ private fun FolderListContent(
   val showLoading = isLoading && !hasCompletedInitialLoad
   val showEmpty = folders.isEmpty() && !isLoading && (hasCompletedInitialLoad || foldersWereDeleted)
 
-  // Scrollbar alpha animation
-  val isAtTop by remember {
-    derivedStateOf {
-      if (isGridMode) {
-        gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
-      } else {
-        listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-      }
-    }
-  }
-
-  val hasEnoughItems = folders.size > 20
-  val scrollbarAlpha by androidx.compose.animation.core.animateFloatAsState(
-    targetValue = if (isAtTop || !hasEnoughItems) 0f else 1f,
-    animationSpec = androidx.compose.animation.core.tween(durationMillis = 200),
-    label = "scrollbarAlpha",
-  )
-
+  // 滚动条的出现时机 / 外观 / 拖动逻辑统一由外壳负责（见 ui/utils/SideScrollbar.kt）
   PullRefreshBox(
     isRefreshing = isRefreshing,
     onRefresh = onRefresh,
@@ -694,7 +676,6 @@ private fun FolderListContent(
           tapThumbnailToSelect = tapThumbnailToSelect,
           navigationBarHeight = navigationBarHeight,
           gridState = gridState,
-          scrollbarAlpha = scrollbarAlpha,
           selectionManager = selectionManager,
           onFolderClick = onFolderClick,
           onFolderLongClick = onFolderLongClick,
@@ -707,7 +688,6 @@ private fun FolderListContent(
           tapThumbnailToSelect = tapThumbnailToSelect,
           navigationBarHeight = navigationBarHeight,
           listState = listState,
-          scrollbarAlpha = scrollbarAlpha,
           selectionManager = selectionManager,
           onFolderClick = onFolderClick,
           onFolderLongClick = onFolderLongClick,
@@ -737,12 +717,16 @@ private fun GridContent(
   tapThumbnailToSelect: Boolean,
   navigationBarHeight: androidx.compose.ui.unit.Dp,
   gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
-  scrollbarAlpha: Float,
   selectionManager: app.marlboroadvance.mpvex.ui.browser.selection.SelectionManager<VideoFolder, String>,
   onFolderClick: (VideoFolder) -> Unit,
   onFolderLongClick: (VideoFolder) -> Unit,
 ) {
-  Box(modifier = Modifier.fillMaxSize()) {
+  // 外壳包住网格本身就是滚动条；bottom padding 挂在**外壳**上，
+  // 这样滑块轨道也止于导航栏之上（以前是另铺一层空列表专门画滑块）。
+  LazyGridSideScrollbar(
+    state = gridState,
+    modifier = Modifier.padding(bottom = navigationBarHeight),
+  ) {
     LazyVerticalGrid(
       columns = GridCells.Fixed(folderGridColumns),
       state = gridState,
@@ -782,23 +766,6 @@ private fun GridContent(
         )
       }
     }
-
-    // Scrollbar with bottom padding
-    Box(
-      modifier = Modifier
-        .fillMaxSize()
-        .padding(bottom = navigationBarHeight)
-    ) {
-      LazyVerticalGridScrollbar(
-        state = gridState,
-        settings = ScrollbarSettings(
-          thumbUnselectedColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f * scrollbarAlpha),
-          thumbSelectedColor = MaterialTheme.colorScheme.primary.copy(alpha = scrollbarAlpha),
-        ),
-      ) {
-        // Empty content - scrollbar only
-      }
-    }
   }
 }
 
@@ -810,12 +777,15 @@ private fun ListContent(
   tapThumbnailToSelect: Boolean,
   navigationBarHeight: androidx.compose.ui.unit.Dp,
   listState: LazyListState,
-  scrollbarAlpha: Float,
   selectionManager: app.marlboroadvance.mpvex.ui.browser.selection.SelectionManager<VideoFolder, String>,
   onFolderClick: (VideoFolder) -> Unit,
   onFolderLongClick: (VideoFolder) -> Unit,
 ) {
-  Box(modifier = Modifier.fillMaxSize()) {
+  // 同 GridContent：外壳即滚动条，bottom padding 挂外壳上
+  LazyListSideScrollbar(
+    state = listState,
+    modifier = Modifier.padding(bottom = navigationBarHeight),
+  ) {
     LazyColumn(
       state = listState,
       modifier = Modifier.fillMaxSize(),
@@ -849,23 +819,6 @@ private fun ListContent(
           newVideoCount = newCount,
           isGridMode = false,
         )
-      }
-    }
-
-    // Scrollbar with bottom padding
-    Box(
-      modifier = Modifier
-        .fillMaxSize()
-        .padding(bottom = navigationBarHeight)
-    ) {
-      LazyColumnScrollbar(
-        state = listState,
-        settings = ScrollbarSettings(
-          thumbUnselectedColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f * scrollbarAlpha),
-          thumbSelectedColor = MaterialTheme.colorScheme.primary.copy(alpha = scrollbarAlpha),
-        ),
-      ) {
-        // Empty content - scrollbar only
       }
     }
   }

@@ -1955,7 +1955,27 @@ android {
     //     · 收尾先 `loadGeneration++` 再换档：否则 `isLoading = false` 会让「没有内容」
     //       闪一帧，再被下一次骨架屏接上（看起来像空页闪了一下）。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 177
+    // ── v178（versionCode 178，修复轮，versionName 仍为 1.6.10）─────────────
+    //     用户：「emby媒体库右侧的一个滚动条，如果滑的比较慢，画面就会很抖。
+    //            你排查下 看看这个滚动条应用的地方其他有没有这个问题」。
+    //     根因（javap 核验 LazyColumnScrollbar 2.2.0）：拖动每个 delta 起一个协程，
+    //     协程里**连做两次** `scrollToItem` —— 先 `(行首, 0)` 只为量行高、再落到
+    //     `(行首, 行内偏移)`。①就是最多一整行的瞬间回跳，且多个协程会交错覆盖，
+    //     慢拖时每帧只走几像素却夹一次整行回跳 ⇒ 画面来回抽搐；快拖一帧跨几行反而看不见。
+    //     这是库的缺陷，**所有套它的页面（Emby 三个视图 / 聚合库 / 网络浏览 / 本地文件 /
+    //     播放列表 / 最近播放）都有**。
+    //     · `SideScrollbar.kt` 改成**自绘**：拖动只算目标位置 → CONFLATED Channel 单消费者
+    //       执行 `scrollToItem`（旧目标被新目标顶掉，不存在协程交错）；滑块位置与目标共用
+    //       同一份 `ThumbGeometry`，拖动中**只听手指**、绝不拿滚动结果反推滑块 ⇒ 无反馈环；
+    //       网格按「行」、列表按「条目」为单位并做单位内像素插值 ⇒ 慢拖是连续移动。
+    //     · 视觉沿用库默认值：粗 6dp、距边 8dp、最短占轨道 10%、圆角胶囊、未选中 40% 透明。
+    //     · 六个仍在直接调库的旧页面（VideoList / FolderList / FileSystem / Playlist /
+    //       PlaylistDetail / RecentlyPlayed）全部改走统一外壳，顺手去掉各自重复的
+    //       `scrollbarAlpha` 计算；依赖 `LazyColumnScrollbar` 从 build.gradle 里删掉。
+    //     · 触摸只认滑块（上下 12dp 容差），落在别处**不消费**事件 —— 旧库把整条轨道当热区，
+    //       右边缘那一竖条「摸得到却点不到卡片」。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 178
     versionName = "1.6.10"
 
     vectorDrawables {
@@ -2328,7 +2348,9 @@ dependencies {
         exclude(group = "xpp3", module = "xpp3")
     }
     implementation(libs.nanohttpd)
-    implementation(libs.lazycolumnscrollbar)
+    // v178：侧边滚动条改成自绘（ui/utils/SideScrollbar.kt），不再依赖 LazyColumnScrollbar。
+    // 库的拖动实现每帧起协程 + 连做两次 scrollToItem（先回跳到行首、再落到真实位置），
+    // 慢拖时画面来回抽搐，且无法从外部关闭该行为 —— 直接去掉依赖，漏改的调用点会编译报错。
     implementation(libs.reorderable)
 
     // ── Emby Java SDK (OpenAPI 生成) ──

@@ -78,11 +78,10 @@ import app.marlboroadvance.mpvex.ui.browser.selection.rememberSelectionManager
 import app.marlboroadvance.mpvex.ui.browser.sheets.PlaylistActionSheet
 import app.marlboroadvance.mpvex.ui.browser.states.EmptyState
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
+import app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import my.nanihadesuka.compose.LazyColumnScrollbar
-import my.nanihadesuka.compose.LazyVerticalGridScrollbar
-import my.nanihadesuka.compose.ScrollbarSettings
 import org.koin.compose.koinInject
 
 @Serializable
@@ -408,27 +407,7 @@ object PlaylistScreen : Screen {
 
     val isGridMode = mediaLayoutMode == MediaLayoutMode.GRID
 
-    // Check if at top of list to hide scrollbar during pull-to-refresh
-    val isAtTop by remember {
-      derivedStateOf {
-        if (isGridMode) {
-          gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
-        } else {
-          listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-        }
-      }
-    }
-
-    // Only show scrollbar if list has more than 20 items
-    val hasEnoughItems = playlistsWithCount.size > 20
-
-    // Animate scrollbar alpha
-    val scrollbarAlpha by androidx.compose.animation.core.animateFloatAsState(
-      targetValue = if (isAtTop || !hasEnoughItems) 0f else 1f,
-      animationSpec = androidx.compose.animation.core.tween(durationMillis = 200),
-      label = "scrollbarAlpha",
-    )
-
+    // 滚动条的出现时机 / 外观 / 拖动逻辑统一由外壳负责（见 ui/utils/SideScrollbar.kt）
     PullRefreshBox(
       isRefreshing = isRefreshing,
       onRefresh = onRefresh,
@@ -443,13 +422,7 @@ object PlaylistScreen : Screen {
             .fillMaxSize()
             .padding(bottom = navigationBarHeight)
         ) {
-          LazyVerticalGridScrollbar(
-            state = gridState,
-            settings = ScrollbarSettings(
-              thumbUnselectedColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f * scrollbarAlpha),
-              thumbSelectedColor = MaterialTheme.colorScheme.primary.copy(alpha = scrollbarAlpha),
-            ),
-          ) {
+          LazyGridSideScrollbar(state = gridState) {
             LazyVerticalGrid(
               columns = GridCells.Fixed(folderGridColumns),
               state = gridState,
@@ -487,13 +460,7 @@ object PlaylistScreen : Screen {
             .fillMaxSize()
             .padding(bottom = navigationBarHeight)
         ) {
-          LazyColumnScrollbar(
-            state = listState,
-            settings = ScrollbarSettings(
-              thumbUnselectedColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f * scrollbarAlpha),
-              thumbSelectedColor = MaterialTheme.colorScheme.primary.copy(alpha = scrollbarAlpha),
-            ),
-          ) {
+          LazyListSideScrollbar(state = listState) {
             LazyColumn(
               state = listState,
               modifier = Modifier.fillMaxSize(),

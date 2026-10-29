@@ -71,12 +71,11 @@ import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
 import app.marlboroadvance.mpvex.ui.browser.selection.rememberSelectionManager
 import app.marlboroadvance.mpvex.ui.player.PlayerActivity
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar
 import app.marlboroadvance.mpvex.utils.media.MediaInfoOps
 import app.marlboroadvance.mpvex.utils.media.MediaUtils
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import my.nanihadesuka.compose.LazyColumnScrollbar
-import my.nanihadesuka.compose.ScrollbarSettings
 import org.koin.compose.koinInject
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -604,15 +603,7 @@ private fun PlaylistVideoListContent(
     }
 
     else -> {
-      // Only show scrollbar if list has more than 20 items
-      val hasEnoughItems = videoItems.size > 20
-
-      // Animate scrollbar alpha
-      val scrollbarAlpha by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (!hasEnoughItems) 0f else 1f,
-        animationSpec = androidx.compose.animation.core.tween(durationMillis = 200),
-        label = "scrollbarAlpha",
-      )
+      // 滚动条的出现时机 / 外观 / 拖动逻辑统一由外壳负责（见 ui/utils/SideScrollbar.kt）
 
       // Reorderable state
       val reorderableLazyListState = rememberReorderableLazyListState(listState) { from, to ->
@@ -621,12 +612,8 @@ private fun PlaylistVideoListContent(
         }
       }
 
-      LazyColumnScrollbar(
+      LazyListSideScrollbar(
         state = listState,
-        settings = ScrollbarSettings(
-          thumbUnselectedColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f * scrollbarAlpha),
-          thumbSelectedColor = MaterialTheme.colorScheme.primary.copy(alpha = scrollbarAlpha),
-        ),
         modifier = modifier.fillMaxSize(),
       ) {
         LazyColumn(
