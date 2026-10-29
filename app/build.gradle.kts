@@ -1975,7 +1975,37 @@ android {
     //     · 触摸只认滑块（上下 12dp 容差），落在别处**不消费**事件 —— 旧库把整条轨道当热区，
     //       右边缘那一竖条「摸得到却点不到卡片」。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 178
+    // ── v179（versionCode 179，修复轮，versionName 仍为 1.6.10）─────────────
+    //     用户：「mpv 播放器拖进度条或者快进进度条，播放的视频会变成暂停状态；
+    //            还有的视频刚开始能拿到正常的总时长数据，放着放着总时长变成几百小时，
+    //            有的视频又不会出现」。
+    //
+    //     〔A〕拖/快进后变暂停 —— 两个缺陷叠加：
+    //       ① `pause()` / `unpause()` 各自 `viewModelScope.launch(Dispatchers.IO)` 写
+    //          `pause` 属性，**落地顺序无保证**。松手 unpause 与下一轮拖动首帧 pause
+    //          并发时，「暂停」可能最后落地。
+    //       ② 调用点用 `wasPlayerAlreadyPaused = paused ?: false` 决定收尾要不要恢复，
+    //          而 `paused` 是 `propBoolean` 的 StateFlow **异步快照**：上一次的恢复
+    //          还没落地时它仍是 true ⇒ 这次被判成「本来就在暂停」⇒ 收尾不再恢复。
+    //       修法：把暂停写入收成**单槽 StateFlow + 单消费者**（最后一次意图胜出、
+    //       串行落地，`init` 里那条协程）；新增 `beginSeekPause` / `endSeekPause`
+    //       **自己记账**（`seekPauseApplied`）—— 只有「seek 期间我们自己打上的暂停」
+    //       才由我们撤销，用户自己按的暂停永远不动；幂等，三条手势路径重复进来也安全。
+    //       另加 6s 安全阀（手势被掐断、`onValueChangeFinished` 不触发时兜底恢复）。
+    //       横滑快进的**多指中断分支**原来把 `hasStartedSeeking` 置 false 后直接 break，
+    //       末尾的恢复整段跳过 ⇒ 漏恢复，一并补上。
+    //
+    //     〔B〕时长变几百小时 —— 写入端没有「偏大」防护，而合成规则只拦「偏小」：
+    //       `if (dur > 0) _preciseDuration.value = dur` 无条件覆盖，`preciseDuration`
+    //       的 `mpv < probed * 0.5` 只兜偏小；巨值写进去后看守的 overflow 判据
+    //       （`pos > duration`）永远不成立 ⇒ 永远不被推翻。
+    //       修法：抽出 `acceptMpvDuration`，两道闸（对探针值 ×4、对同片上一版 ×4）
+    //       拒绝离谱值并置 `_durationUntrusted`；看守新增 **oversize** 判据
+    //       （`claimed > file-size×8÷码率 × 8`，物理容量上限，专治巨值）；
+    //       换片时 `resetProbedDuration` 连 `_preciseDuration` 一起清（否则新片会被
+    //       旧片的值当基准误判），靠看守每秒把 mpv 当前值喂回来补上。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 179
     versionName = "1.6.10"
 
     vectorDrawables {

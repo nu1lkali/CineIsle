@@ -829,7 +829,6 @@ fun GestureHandler(
           var gestureType: String? = null
           var hasStartedSeeking = false
           var initialVideoPosition = 0f
-          var wasPlayerAlreadyPaused = false
           // ── 横滑快进的震动计数（issue 反馈新增）─────────────────────
           // 记「已经震过几个 2 秒档」，而不是「上次震在哪」——
           // 后者在手指抖回来时会立刻再震一次，手感很碎。
@@ -865,11 +864,11 @@ fun GestureHandler(
                     hasStartedSeeking = true
                     initialVideoPosition = position?.toFloat() ?: 0f
                     
-                    // Pause before seeking to prevent decoder stalls
-                    wasPlayerAlreadyPaused = paused ?: false
-                    if (!wasPlayerAlreadyPaused) {
-                      viewModel.pause()
-                    }
+                    // Pause before seeking to prevent decoder stalls.
+                    // ⚠️ 暂停/恢复交给 ViewModel 记账（v179）—— 这里不再自己记
+                    // 「本来是否暂停」：那个快照来自 StateFlow，是异步的，
+                    // 上一次手势的恢复还没落地就会被读成「本来在暂停」⇒ 松手不恢复。
+                    viewModel.beginSeekPause()
                     
                     // Show seekbar and start seeking mode (same as seekbar scrubbing)
                     viewModel.showSeekBar()
@@ -932,16 +931,19 @@ fun GestureHandler(
                 viewModel.playerUpdate.update { PlayerUpdates.None }
                 viewModel.hideSeekBar()
               }
+              // ⚠️ 必须在这里收尾（v179）：上面把 hasStartedSeeking 置 false 之后，
+              // 手势末尾那段 `if (hasStartedSeeking)` 就整段跳过了 —— 以前正是这里
+              // 漏了恢复，横滑途中再落一根手指 ⇒ 播放永久停在暂停态。
+              // 幂等：这次没打上暂停（用户本来就是暂停的）时是 no-op。
+              viewModel.endSeekPause()
               break
             }
           } while (event.changes.any { it.pressed })
 
           // Apply the final seek when gesture ends
           if (hasStartedSeeking) {
-            // Unpause if it wasn't paused before seeking
-            if (!wasPlayerAlreadyPaused) {
-              viewModel.unpause()
-            }
+            // 恢复播放：幂等，只有这次 seek 里打上的暂停才撤销
+            viewModel.endSeekPause()
             
             // Clear the horizontal seek update and hide seekbar after a short delay
             coroutineScope.launch {

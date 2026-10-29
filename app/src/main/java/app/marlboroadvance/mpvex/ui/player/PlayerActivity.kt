@@ -2936,41 +2936,82 @@ private fun cancelAutoplayCountdown() {
           if (PlayerLib.getPropertyBoolean("eof-reached") == true) return@launch
           val pos = PlayerLib.getPropertyDouble("time-pos") ?: continue
           val mpvDuration = PlayerLib.getPropertyDouble("duration") ?: 0.0
+          // 每秒把 mpv 当前值喂回 ViewModel（v179）：
+          //  ① 换片时 `resetProbedDuration` 会清掉 `_preciseDuration`，而 StateFlow
+          //     不会因为「值没变」重发 ⇒ 只能靠这条轮询把时长补回去；
+          //  ② 顺带走一遍「离谱值」闸门（见 `PlayerViewModel.acceptMpvDuration`）。
+          if (mpvDuration > 0.0) viewModel.acceptMpvDuration(mpvDuration)
           val effective = viewModel.effectiveDurationSeconds().toDouble()
 
-          // ── 判据（两个，都只认事实）──
+          // ── 判据（三个，都只认事实）──
           //  · overflow：**有时长，但已播位置跑出去了** ⇒ 这个时长一定是错的。
           //    注意「8 秒 vs 播到 15 秒」这种值在起播头一两秒看是**自洽的**
           //    （位置 1s < 8s），所以**绝不能一自洽就收工**，必须一直盯着。
           //  · missing：**根本没有时长**，且已经播过起步宽限 ⇒ 该探了。
+          //  · oversize：**时长比这份文件物理上能装下的还大一个量级** ⇒ 巨值（v179）。
+          //    这条专治「放着放着变成几百小时」：overflow 在巨值面前永远不会触发
+          //    （几小时的位置追不上几百小时），必须有这道独立的门。
           val overflow = effective > 0.0 && pos > effective + DURATION_WATCHDOG_TOLERANCE_SEC
           val missing = effective <= 0.0 && pos >= DURATION_PROBE_GRACE_SEC
-          if (!overflow && !missing) continue
+          val oversize = effective > 0.0 && isDurationOversized(effective)
+          if (!overflow && !missing && !oversize) continue
           if (attempts >= MAX_DURATION_PROBES) return@launch
           attempts++
 
           // 探到的值至少要大于已播位置，否则就是把同一个错再犯一次
           val floor = maxOf(pos, DURATION_PROBE_GRACE_SEC)
-          // ⚠️ 只有 overflow 才「证伪」mpv：missing 时 mpv 只是**还没算出来**，
+          // ⚠️ 只有 overflow / oversize 才「证伪」mpv：missing 时 mpv 只是**还没算出来**，
           // 它稍后报出的真值仍然更可信，不能提前把它钉死在探针值上。
-          if (overflow) viewModel.markDurationUntrusted()
+          val kind =
+            when {
+              overflow -> "overflow"
+              oversize -> "oversize"
+              else -> "missing"
+            }
+          if (overflow || oversize) viewModel.markDurationUntrusted()
           val probed = probeDurationSeconds(floor)
           if (probed != null) {
             viewModel.applyProbedDuration(probed)
             dipLog(
               "duration-probe",
-              "applied=${probed}s floor=$floor mpv=$mpvDuration pos=$pos " +
-                "kind=${if (overflow) "overflow" else "missing"}",
+              "applied=${probed}s floor=$floor mpv=$mpvDuration pos=$pos kind=$kind",
             )
           } else {
             dipLog(
               "duration-probe",
-              "failed floor=$floor mpv=$mpvDuration pos=$pos " +
-                "kind=${if (overflow) "overflow" else "missing"}",
+              "failed floor=$floor mpv=$mpvDuration pos=$pos kind=$kind",
             )
           }
         }
       }
+  }
+
+  /**
+   * 声称的时长是否**大得离谱**（v179）。
+   *
+   * 判据只有一条：`file-size × 8 ÷ (视频码率 + 音频码率)` 是这份文件**物理上**
+   * 能装下的时长，声称值超过它的 [DURATION_OVERSIZE_FACTOR] 倍就不是估算误差能解释的。
+   *
+   * 为什么需要这条独立的门：mpv 的 `duration` 不是「报出来就定死」的属性。TS /
+   * 直播录制这类容器没有内嵌索引，时长靠「seek 到尾部读最后一个 PTS」算，那次 seek
+   * 一旦落在坏包上、或上游给的 `Content-Length` 是错的，它会重算出荒唐的值。
+   * 而 overflow 判据是「位置超过时长」，在「时长几百小时」面前永远不成立 ⇒
+   * 巨值一旦写进去就再也不会被推翻，进度条右端一直挂着几百小时。
+   *
+   * 拿不到 `file-size` 或码率时返回 false（不猜）：直播 / 长度未知的流本来就没有
+   * 「能装下多少」这回事，交给 overflow 判据。
+   */
+  private fun isDurationOversized(claimedSeconds: Double): Boolean {
+    val size = runCatching { PlayerLib.getPropertyDouble("file-size") ?: 0.0 }.getOrDefault(0.0)
+    if (size <= 0.0) return false
+    val bitrate =
+      runCatching {
+        (PlayerLib.getPropertyDouble("video-bitrate") ?: 0.0) +
+          (PlayerLib.getPropertyDouble("audio-bitrate") ?: 0.0)
+      }.getOrDefault(0.0)
+    if (bitrate <= 0.0) return false
+    val capacity = size * 8.0 / bitrate
+    return capacity > 0.0 && claimedSeconds > capacity * DURATION_OVERSIZE_FACTOR
   }
 
   /**
@@ -5601,6 +5642,17 @@ private fun cancelAutoplayCountdown() {
      * 继续探只是白白多读数据。
      */
     private const val MAX_DURATION_PROBES = 3
+
+    /**
+     * 判「时长离谱」的倍数（v179）：声称的时长超过
+     * `file-size × 8 ÷ 码率`（这份文件物理上能装下的时长）这么多倍，就不是估算误差。
+     *
+     * 取 8 而不是 2、4：`video-bitrate` 在 VBR 片源上报的可能是**瞬时峰值**，
+     * 高估两三倍很正常，容量因此被低估两三倍。而真正要拦的巨值是**一个量级以上**
+     * 的偏差（用户实测 40 分钟 → 几百小时 ≈ 400 倍），8 倍的门既兜得住，
+     * 又不会把码率抖动误判成错误。详见 `isDurationOversized`。
+     */
+    private const val DURATION_OVERSIZE_FACTOR = 8.0
 
     /**
      * 续播位置离片尾小于这个秒数就视为"已经看完"，从头开始播。

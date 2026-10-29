@@ -1145,7 +1145,6 @@ fun PlayerControls(
         ) {
           val invertDuration by playerPreferences.invertDuration.collectAsState()
           val seekbarStyle by appearancePreferences.seekbarStyle.collectAsState()
-          var wasPlayerAlreadyPaused by remember { mutableStateOf(false) }
 
           // ⚠️ 总时长**不可能**小于「已经播过的位置」：`.mts` / MPEG-TS 上 mpv 有时会把
           // 时长报成一个很小的值（播到 15 秒、总时长还写着 8 秒），进度条于是一开就顶到 100%。
@@ -1164,13 +1163,11 @@ fun PlayerControls(
             position = precisePosition,
             duration = safeDuration,
             onValueChange = {
-              if (!isSeeking) {
-                // First drag frame - pause playback
-                wasPlayerAlreadyPaused = paused ?: false
-                if (!wasPlayerAlreadyPaused) {
-                  viewModel.pause()
-                }
-              }
+              // ⚠️ 暂停/恢复**必须交给 ViewModel 记账**（v179），这里不能再自己记
+              // `wasPlayerAlreadyPaused` —— 那是 StateFlow 的异步快照，连续拖动两次时
+              // 上一次的恢复还没落地就被读成「本来在暂停」，松手后不再恢复，
+              // 表现就是「拖一下进度条视频就停住」。`beginSeekPause` 幂等，每帧调无副作用。
+              viewModel.beginSeekPause()
               isSeeking = true
               resetControlsTimestamp = System.currentTimeMillis()
               viewModel.seekTo(it.toInt())
@@ -1178,10 +1175,9 @@ fun PlayerControls(
             onValueChangeFinished = {
               isSeeking = false
               resetControlsTimestamp = System.currentTimeMillis()
-              // Unpause if it wasn't paused before seeking
-              if (!wasPlayerAlreadyPaused) {
-                viewModel.unpause()
-              }
+              // 幂等恢复：只有「这次 seek 里我们自己打上的暂停」才撤销，
+              // 用户自己按的暂停永远不动。三条手势路径重复进来也不会误恢复。
+              viewModel.endSeekPause()
               viewModel.showControls()
             },
             timersInverted = Pair(false, invertDuration),

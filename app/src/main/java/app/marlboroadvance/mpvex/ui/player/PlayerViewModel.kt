@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -149,6 +150,33 @@ class PlayerViewModel(
   val pos by PlayerLib.propInt["time-pos"].collectAsState(viewModelScope)
   val duration by PlayerLib.propInt["duration"].collectAsState(viewModelScope)
 
+  // ── 暂停写入通道（v179，见 init 里的消费者）──────────────────────────────
+
+  /**
+   * 「想要的暂停态」单槽，`null` = 还没有人要求过。
+   *
+   * 只由 [setPaused] 写，只由 [init] 里那条串行协程消费。存在的理由：
+   * **同一文件上 pause/unpause 的落地顺序必须可控**（详见 init 里的注释）。
+   */
+  private val _pauseIntent = MutableStateFlow<Boolean?>(null)
+
+  /**
+   * 这次 seek 期间的暂停**是我们自己打上的** ⇒ 松手时必须由我们恢复。
+   *
+   * 刻意不再用 `paused` 的快照判断「用户本来是不是在播」：那个快照来自
+   * `propBoolean` 的 StateFlow，是**异步**值 —— 上一次 seek 的恢复还没落地时它
+   * 仍然是 `true`，于是这一次就被误判成「用户本来就在暂停」⇒ 松手后不再恢复
+   * ⇒ 播放永久停住。这是「拖一下就暂停」的直接成因，见 [beginSeekPause]。
+   */
+  @Volatile
+  private var seekPauseApplied = false
+
+  /** [seekPauseApplied] 的安全阀：手势被中途掐断（`onValueChangeFinished` 不触发）时的最后一道网。 */
+  private var seekPauseSafetyJob: Job? = null
+
+  /** 安全阀最近一次续期的时间戳（拖动每帧都会 seek，别每帧都重建协程）。 */
+  private var seekPauseRenewedAt = 0L
+
   // ── 网络加载速度（播放器顶栏的指示器）──
   private val _netSpeedBytesPerSec = MutableStateFlow<Long?>(null)
 
@@ -243,6 +271,56 @@ class PlayerViewModel(
   fun resetProbedDuration() {
     _probedDuration.value = 0f
     _durationUntrusted.value = false
+    // ⚠️ 必须把 mpv 那一份也清掉（v179）：不清的话，新片报出时长之前，
+    // 进度条画的是**上一部片**的时长；更糟的是 [acceptMpvDuration] 的
+    // 「同片跳变」闸门会拿旧片的值当基准，把新片（更长的）正常时长误判成离谱值。
+    // 清成 0 之后不用等 StateFlow 重发 —— 时长看守每秒都会把 mpv 当前值喂回
+    // [acceptMpvDuration]，最迟一秒就能恢复（见 `PlayerActivity.startDurationWatchdog`）。
+    _preciseDuration.value = 0f
+  }
+
+  /**
+   * 采信一条 mpv 报的 `duration`（秒）—— **带「离谱值」闸门**（v179）。
+   *
+   * ## 为什么需要闸门
+   *
+   * 以前这里是裸写（`if (dur > 0) _preciseDuration.value = dur`）。但 mpv 的 `duration`
+   * **不是「报出来就定死」的属性**：TS / 直播录制这类没有内嵌索引的容器，时长靠
+   * 「seek 到尾部读最后一个 PTS」算出来，那次 seek 一旦落在坏包上、或上游给的
+   * 文件长度是错的，它就会重算出一个大得离谱的数（用户实测：正常 40 分钟的片，
+   * 放着放着右端变成几百小时）。
+   *
+   * 而 [preciseDuration] 原来的合成规则只拦「报小了」（`mpv < probed × 0.5`），
+   * 对「报大了」完全不设防 —— 所以巨值会直接生效、并且**永远不会被推翻**
+   * （看守协程的 overflow 判据是 `pos > duration`，位置永远追不上几百小时）。
+   *
+   * ## 两道闸（任一命中：拒绝写入 + 宣布 mpv 不可信）
+   *
+   *  ① 有探针值时 `mpv > probed × [DURATION_OVERSIZE_RATIO]`。探针来自
+   *     `MediaMetadataRetriever`（与 GSY 同源）或 `file-size ÷ bitrate`，
+   *     与「seek 到尾部」是两条互不相干的路，两边差一个量级就说明 mpv 这次算错了。
+   *  ② 同一份文件内的跳变 `mpv > 上一版 × [DURATION_OVERSIZE_RATIO]`。
+   *     换片时 [resetProbedDuration] 会清零，所以这里比的一定是**同一份文件**
+   *     的前后两次采样 —— 「放着放着变几百小时」正是这一条能抓住的形态。
+   *
+   * 拒绝写入 ≠ 时长没了：`_preciseDuration` 保留上一次的合理值，进度条继续用它画；
+   * 同时 `_durationUntrusted` 置位，看守探到真值后会接管（见 [preciseDuration] 规则①）。
+   */
+  fun acceptMpvDuration(seconds: Double) {
+    val value = seconds.toFloat()
+    if (!value.isFinite() || value <= 0f) return
+
+    val probed = _probedDuration.value
+    if (probed > 0f && value > probed * DURATION_OVERSIZE_RATIO) {
+      _durationUntrusted.value = true
+      return
+    }
+    val previous = _preciseDuration.value
+    if (previous > 0f && value > previous * DURATION_OVERSIZE_RATIO) {
+      _durationUntrusted.value = true
+      return
+    }
+    _preciseDuration.value = value
   }
 
   /** 当前可用的总时长（秒）：mpv 真值优先，其次探针兜底；0 = 两者都拿不到。 */
@@ -273,11 +351,29 @@ class PlayerViewModel(
     }
 
     // Update precise duration when the integer duration changes (avoid polling)
+    // ⚠️ 不能裸写 `_preciseDuration`：mpv 会在播放中途重算时长，偶尔算出大得离谱的值
+    // （TS 类容器靠 seek 到尾部读 PTS，读到坏包就翻车）。闸门逻辑见 [acceptMpvDuration]。
     viewModelScope.launch {
       PlayerLib.propInt["duration"].collect { _ ->
-        val dur = PlayerLib.getPropertyDouble("duration")
-        if (dur != null && dur > 0) {
-            _preciseDuration.value = dur.toFloat()
+        PlayerLib.getPropertyDouble("duration")?.let(::acceptMpvDuration)
+      }
+    }
+
+    // ── 暂停写入的**单槽串行**通道 ──
+    // 这里必须串行：以前每个 pause()/unpause() 各起一个 IO 协程去写 mpv 属性，
+    // **同一个文件上「暂停 → 恢复」的落地顺序没有任何保证**。进度条松手时会先
+    // unpause 再（下一轮拖动的第一帧）pause，两个协程并发 ⇒ 谁最后落地看调度，
+    // 结果是「暂停」赢下来，而 UI 侧那次收尾又以为「本来就在暂停」不再恢复
+    // ⇒ 用户看到的就是「拖一下/快进一下就永久暂停了」。
+    // 单槽 StateFlow 天然「最后一次意图胜出」，且 collect 是串行消费 ⇒ 顺序确定。
+    viewModelScope.launch(Dispatchers.IO) {
+      _pauseIntent.filterNotNull().collect { wantPaused ->
+        if (wantPaused) {
+          PlayerLib.setPropertyBoolean("pause", true)
+          withContext(Dispatchers.Main) { host.abandonAudioFocus() }
+        } else {
+          withContext(Dispatchers.Main) { host.requestAudioFocus() }
+          PlayerLib.setPropertyBoolean("pause", false)
         }
       }
     }
@@ -360,6 +456,10 @@ class PlayerViewModel(
   /** 换片 / 重新加载时把「首帧已出」打回 false，让加载层重新出现。 */
   fun onLoadingNewFile() {
     _firstFrameRendered.value = false
+    // 换片后 mpv 的 `pause` 会被 loadfile 重置，留在通道里的旧意图（多半是 `true`）
+    // 已经不代表事实了 —— 不清的话 [beginSeekPause] 会拿它当「当前已暂停」，
+    // 于是换片后的第一次拖动不会暂停（只是解码更吃力，不会卡住播放，但要修掉）。
+    _pauseIntent.value = null
   }
 
   /** mpv 报 `PLAYBACK_RESTART`（首帧已上屏）时调用。 */
@@ -553,6 +653,21 @@ class PlayerViewModel(
   private companion object {
     const val TAG = "PlayerViewModel"
     const val SEEK_COALESCE_DELAY_MS = 60L
+
+    /**
+     * 「mpv 报的时长超过参照值多少倍就判为离谱」。
+     *
+     * 4 倍是刻意留宽的：真实片源里 `file-size ÷ bitrate` 对 VBR 的估算误差通常
+     * 在 ±30% 内，两倍已经很反常；而 TS 读坏包算出来的巨值是**一个量级以上**的偏差
+     * （40 分钟 → 几百小时）。取 4 既不会误伤正常的重算，也能一刀切掉巨值。
+     */
+    const val DURATION_OVERSIZE_RATIO = 4f
+
+    /** seek 暂停的安全阀时长：远大于任何一次正常拖动，只在收尾回调被吞掉时才到期。 */
+    const val SEEK_PAUSE_SAFETY_MS = 6_000L
+
+    /** 安全阀续期的最小间隔（拖动每帧都会 seekTo）。 */
+    const val SEEK_PAUSE_RENEW_INTERVAL_MS = 1_000L
 
     /** 网络加载速度的采样周期：1 秒一拍，与常见播放器（VLC / PotPlayer）的刷新节奏一致 */
     const val NET_SPEED_POLL_INTERVAL_MS = 1_000L
@@ -944,31 +1059,81 @@ class PlayerViewModel(
 
   fun pauseUnpause() {
     viewModelScope.launch(Dispatchers.IO) {
-      val isPaused = PlayerLib.getPropertyBoolean("pause") ?: false
-      if (isPaused) {
-        // We are about to unpause, so request focus
-        withContext(Dispatchers.Main) { host.requestAudioFocus() }
-        PlayerLib.setPropertyBoolean("pause", false)
-      } else {
-        // We are about to pause
-        PlayerLib.setPropertyBoolean("pause", true)
-        withContext(Dispatchers.Main) { host.abandonAudioFocus() }
+      setPaused(PlayerLib.getPropertyBoolean("pause") != true)
+    }
+  }
+
+  fun pause() = setPaused(true)
+
+  fun unpause() = setPaused(false)
+
+  /**
+   * 请求「暂停 / 恢复」，**不做任何 JNI 调用**，只把一个意图塞进单槽通道，
+   * 由 [init] 里那条串行协程按顺序落到 mpv 上。
+   *
+   * 为什么不让调用方各自起协程去写：同一个文件上「暂停 → 恢复」两次写入若并发，
+   * 落地顺序是不确定的，会出现「最后一次意图是恢复，但最终状态是暂停」。
+   * 单槽 StateFlow 保证**最后一次意图胜出**，collect 串行保证**不会交错**。
+   */
+  private fun setPaused(wantPaused: Boolean) {
+    _pauseIntent.value = wantPaused
+  }
+
+  /**
+   * 开始 seek：若当前正在播放，先暂停（拖动时解码器不必追着跳变的位置跑）。
+   *
+   * ## 为什么不用「记下 paused 再恢复」那套
+   *
+   * 以前是在调用点 `wasPlayerAlreadyPaused = paused ?: false`。`paused` 是
+   * `propBoolean["pause"]` 的 StateFlow 快照，**异步**更新：上一次 seek 的恢复
+   * 还没落地时它仍然是 `true` ⇒ 这次被判成「用户本来就在暂停」⇒ 松手后不恢复。
+   * 连续拖动两次必现，表现就是「拖一下就永久暂停」。
+   *
+   * 现在改成**自己记账**（[seekPauseApplied]）：只有「我们亲手打上的暂停」才由我们
+   * 撤销，用户自己按的暂停永远不动。判断当前是否已暂停时先看通道里有没有未落地的
+   * 意图，没有再同步读一次 native（一次调用，可接受；避免快照滞后）。
+   */
+  fun beginSeekPause() {
+    if (seekPauseApplied) return
+    val alreadyPaused = _pauseIntent.value ?: (PlayerLib.getPropertyBoolean("pause") ?: false)
+    if (alreadyPaused) return
+    seekPauseApplied = true
+    setPaused(true)
+    armSeekPauseSafetyNet()
+  }
+
+  /**
+   * 结束 seek：只有当暂停是 [beginSeekPause] 打上的，才恢复播放。
+   *
+   * 幂等 —— 进度条有三条手势路径（外层 tap / 外层 drag / 内层 Slider）都会调
+   * `onValueChangeFinished`，同一次拖动可能进来两次；第二次在这里直接 no-op，
+   * 不会把「用户自己暂停的播放」误恢复。
+   */
+  fun endSeekPause() {
+    if (!seekPauseApplied) return
+    seekPauseApplied = false
+    seekPauseSafetyJob?.cancel()
+    seekPauseSafetyJob = null
+    setPaused(false)
+  }
+
+  /**
+   * 给安全阀续期。拖动期间 [seekTo] 每帧都会调，所以只要手还在屏幕上就不会到期。
+   */
+  private fun armSeekPauseSafetyNet() {
+    seekPauseSafetyJob?.cancel()
+    seekPauseSafetyJob =
+      viewModelScope.launch {
+        delay(SEEK_PAUSE_SAFETY_MS)
+        // 到点了还挂着 ⇒ 收尾回调一定被吞掉了（手指被父容器抢走、进度条随控制条
+        // 一起被移除、返回手势打断…）。这时宁可多恢复一次播放，也不能让用户
+        // 对着一个静止的画面到处找播放键。
+        if (seekPauseApplied) {
+          seekPauseApplied = false
+          setPaused(false)
+          Log.w(TAG, "seek-pause safety net fired")
+        }
       }
-    }
-  }
-
-  fun pause() {
-    viewModelScope.launch(Dispatchers.IO) {
-      PlayerLib.setPropertyBoolean("pause", true)
-      withContext(Dispatchers.Main) { host.abandonAudioFocus() }
-    }
-  }
-
-  fun unpause() {
-    viewModelScope.launch(Dispatchers.IO) {
-      withContext(Dispatchers.Main) { host.requestAudioFocus() }
-      PlayerLib.setPropertyBoolean("pause", false)
-    }
   }
 
   // ==================== UI Control ====================
@@ -1046,6 +1211,14 @@ class PlayerViewModel(
   }
 
   fun seekTo(position: Int) {
+    // 手还在屏幕上：给 seek 暂停的安全阀续期（最多一秒续一次，别每帧都重建协程）
+    if (seekPauseApplied) {
+      val now = System.currentTimeMillis()
+      if (now - seekPauseRenewedAt > SEEK_PAUSE_RENEW_INTERVAL_MS) {
+        seekPauseRenewedAt = now
+        armSeekPauseSafetyNet()
+      }
+    }
     viewModelScope.launch(Dispatchers.IO) {
       val maxDuration = PlayerLib.getPropertyInt("duration") ?: 0
       var clampedPosition = position.coerceIn(0, maxDuration)
