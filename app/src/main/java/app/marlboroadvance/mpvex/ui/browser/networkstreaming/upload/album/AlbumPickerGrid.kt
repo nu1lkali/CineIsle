@@ -1,8 +1,8 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.album
 
 import android.content.Context
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -10,27 +10,26 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,7 +42,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,7 +51,6 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -132,20 +129,8 @@ internal fun AlbumPickerGrid(
   var searching by remember { mutableStateOf(false) }
   var searchResult by remember { mutableStateOf<AlbumSearchResult?>(null) }
 
-  // 相册轨道的滚动位置：选中项被挤出视野时要把轨道带回来
-  val railState = rememberLazyListState()
-
-  // 相册几十个时，「点了别处再点回来」很容易找不到当前选中的那个 ——
-  // 只在它**已经不在视野里**时才滚，否则每点一下轨道都会莫名跳一下
-  LaunchedEffect(bucketId, searchActive) {
-    if (searchActive) return@LaunchedEffect
-    val index = buckets.indexOfFirst { it.id == bucketId }
-    if (index < 0) return@LaunchedEffect
-    val visible = railState.layoutInfo.visibleItemsInfo
-    val first = visible.firstOrNull()?.index ?: 0
-    val last = visible.lastOrNull()?.index ?: -1
-    if (index < first || index > last) railState.animateScrollToItem(index)
-  }
+  // 相册选择面板（3 列封面网格 + 按相册名过滤）开着的时候，内容区让给它
+  var albumPickerOpen by remember { mutableStateOf(false) }
 
   // 只查一次：面板开合很频繁，每次重查会让「打开就要等 1 秒」变成常态。
   // 进程内缓存足以覆盖一次上传会话（相册内容不会在这期间变）。
@@ -236,76 +221,47 @@ internal fun AlbumPickerGrid(
     }
   }
 
+  // 当前相册（「全部」= 没有具体相册）——顶栏按钮要一直显示你在看哪一档
+  val selectedBucket = buckets.firstOrNull { it.id == bucketId }
+
   Column(modifier = modifier) {
-    // ── 相册轨道（搜索时让位给一行说明）──
+    // ── 顶栏：相册选择器 · 按文件名搜索 · 类型筛选 ──
     Row(
-      modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 2.dp, top = 7.dp, bottom = 7.dp),
+      modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 2.dp, top = 6.dp, bottom = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      if (searchActive) {
-        Text(
-          text = if (query.isBlank()) "按文件名搜索全部相册" else "在全部相册里搜「${query.trim()}」",
-          style = MaterialTheme.typography.labelMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-          modifier = Modifier.weight(1f),
-        )
-      } else {
-        // 「全部」**钉在轨道外**，不参与横向滚动：它是最高频的目标，
-        // 相册一多就会被几十个相册挤到视野之外，那时候用户只能一路滑回最左边。
-        AlbumRailChip(
-          label = "全部",
-          count = items.size,
-          more = hasMore,
-          selected = bucketId == ALL_BUCKETS,
-          onClick = { bucketId = ALL_BUCKETS },
-        ) {
+      AlbumSelectButton(
+        label = selectedBucket?.name ?: "全部相册",
+        countText =
+          if (selectedBucket == null) {
+            if (hasMore) "${items.size}+" else items.size.toString()
+          } else {
+            selectedBucket.count.toString()
+          },
+        open = albumPickerOpen,
+        onClick = {
+          albumPickerOpen = !albumPickerOpen
+          // 两个「找东西」的界面不能叠着：进相册面板就把文件名搜索收掉
+          if (albumPickerOpen) {
+            searchActive = false
+            query = ""
+          }
+        },
+      ) {
+        if (selectedBucket == null) {
           AlbumMosaicCover(items = items.take(4), loader = loader)
-        }
-        Box(modifier = Modifier.weight(1f)) {
-          LazyRow(
-            state = railState,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            items(items = buckets, key = { it.id }) { bucket ->
-              AlbumRailChip(
-                label = bucket.name,
-                count = bucket.count,
-                selected = bucketId == bucket.id,
-                onClick = { bucketId = bucket.id },
-              ) {
-                AlbumCoverImage(item = bucket.cover, loader = loader)
-              }
-            }
-          }
-          // 右缘渐隐：最后一张被切一半不足以说明「还能滑」，一层 24dp 渐隐才是暗示。
-          // 用 matchParentSize 而不是 fillMaxHeight —— 后者会参与测量，和 LazyRow 互相撑高。
-          val canScrollMore by remember(railState) {
-            derivedStateOf { railState.canScrollForward }
-          }
-          if (canScrollMore) {
-            Box(modifier = Modifier.matchParentSize()) {
-              Box(
-                modifier =
-                  Modifier.align(Alignment.CenterEnd)
-                    .fillMaxHeight()
-                    .width(24.dp)
-                    .background(
-                      Brush.horizontalGradient(
-                        listOf(Color.Transparent, MaterialTheme.colorScheme.surfaceContainerLow),
-                      ),
-                    ),
-              )
-            }
-          }
+        } else {
+          AlbumCoverImage(item = selectedBucket.cover, loader = loader)
         }
       }
+      // 按钮靠左，把剩余宽度让出来：相册名再长也不该把右边的图标挤到换行
+      Spacer(Modifier.weight(1f))
       IconButton(
         onClick = {
           searchActive = !searchActive
           if (!searchActive) query = ""
+          if (searchActive) albumPickerOpen = false
         },
       ) {
         Icon(
@@ -323,97 +279,115 @@ internal fun AlbumPickerGrid(
       FilterMenu(current = filter, onSelect = { filter = it })
     }
 
-    if (searchActive) {
-      NetworkSearchField(
-        query = query,
-        onQueryChange = { query = it },
-        onClose = {
-          searchActive = false
-          query = ""
+    if (albumPickerOpen) {
+      // 相册**多**的时候，横向轨道是死路：几十个相册一路滑过去根本找不准。
+      // 这里换成「3 列封面网格 + 按相册名过滤」，竖着翻两三屏就到头，名字还能直接搜。
+      AlbumGridPanel(
+        modifier = Modifier.weight(1f).fillMaxWidth(),
+        buckets = buckets,
+        mosaic = items.take(4),
+        totalCount = items.size,
+        hasMore = hasMore,
+        selectedId = bucketId,
+        loader = loader,
+        onSelect = { id ->
+          bucketId = id
+          albumPickerOpen = false
         },
-        placeholder = "搜索文件名…",
       )
-    }
-
-    // ── 网格 ──
-    val emptyText =
-      when {
-        searchActive ->
-          if (query.isBlank()) {
-            "输入文件名关键词开始搜索"
-          } else {
-            "没有名字含「${query.trim()}」的照片或视频"
-          }
-        filter == AlbumFilter.Images -> "这个相册里没有图片"
-        filter == AlbumFilter.Videos -> "这个相册里没有视频"
-        else -> "这个相册是空的"
-      }
-
-    if (searching && searchResult == null) {
-      Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-          CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-          Text(
-            text = "正在搜索…",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp),
-          )
-        }
-      }
-    } else if (visible.isEmpty()) {
-      Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-        Text(
-          text = emptyText,
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.outline,
-          modifier = Modifier.padding(horizontal = 24.dp),
+    } else {
+      if (searchActive) {
+        NetworkSearchField(
+          query = query,
+          onQueryChange = { query = it },
+          onClose = {
+            searchActive = false
+            query = ""
+          },
+          placeholder = "搜索文件名…",
         )
       }
-    } else {
-      LazyVerticalGrid(
-        columns = GridCells.Fixed(3),
-        modifier = Modifier.weight(1f).fillMaxWidth(),
-        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-      ) {
-        gridItemsIndexed(items = visible, key = { _, it -> it.key }) { index, item ->
-          val order = selected.indexOfFirst { it.key == item.key } + 1
-          AlbumCell(
-            item = item,
-            order = order,
-            loader = loader,
-            onClick = { onToggle(item) },
-            onLongClick = { onPreview(index, visible) },
-          )
+
+      // ── 网格 ──
+      val emptyText =
+        when {
+          searchActive ->
+            if (query.isBlank()) {
+              "输入文件名关键词开始搜索"
+            } else {
+              "没有名字含「${query.trim()}」的照片或视频"
+            }
+          filter == AlbumFilter.Images -> "这个相册里没有图片"
+          filter == AlbumFilter.Videos -> "这个相册里没有视频"
+          else -> "这个相册是空的"
         }
-        // ── 底部两行说明：「还有更早的没读」/「搜索命中被截断」──
-        // 两条都是**上限的诚实交代**：不说的话用户以为库里就这么多
-        val hint =
-          when {
-            searchResult?.truncated == true ->
-              "只显示前 ${AlbumMediaSource.SEARCH_LIMIT} 条结果，换个更精确的关键词试试"
-            // 搜索中不提供「加载更多」：搜索结果来自整库，与时间游标无关
-            searchResult != null -> null
-            hasMore -> null // 有「加载更多」按钮就够，不必再写一遍
-            items.size > AlbumMediaSource.MAX_ITEMS -> "已经到最早的一张了"
-            else -> null
-          }
-        if (hint != null) {
-          item(span = { GridItemSpan(maxLineSpan) }, key = "hint") {
+
+      if (searching && searchResult == null) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+          Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
             Text(
-              text = hint,
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.outline,
-              modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
-              textAlign = TextAlign.Center,
+              text = "正在搜索…",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(top = 8.dp),
             )
           }
         }
-        if (searchResult == null && hasMore) {
-          item(span = { GridItemSpan(maxLineSpan) }, key = "load-more") {
-            LoadMoreRow(loading = loadingMore, onClick = { loadMore() })
+      } else if (visible.isEmpty()) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+          Text(
+            text = emptyText,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.padding(horizontal = 24.dp),
+          )
+        }
+      } else {
+        LazyVerticalGrid(
+          columns = GridCells.Fixed(3),
+          modifier = Modifier.weight(1f).fillMaxWidth(),
+          contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+          horizontalArrangement = Arrangement.spacedBy(3.dp),
+          verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+          gridItemsIndexed(items = visible, key = { _, it -> it.key }) { index, item ->
+            val order = selected.indexOfFirst { it.key == item.key } + 1
+            AlbumCell(
+              item = item,
+              order = order,
+              loader = loader,
+              onClick = { onToggle(item) },
+              onLongClick = { onPreview(index, visible) },
+            )
+          }
+          // ── 底部两行说明：「还有更早的没读」/「搜索命中被截断」──
+          // 两条都是**上限的诚实交代**：不说的话用户以为库里就这么多
+          val hint =
+            when {
+              searchResult?.truncated == true ->
+                "只显示前 ${AlbumMediaSource.SEARCH_LIMIT} 条结果，换个更精确的关键词试试"
+              // 搜索中不提供「加载更多」：搜索结果来自整库，与时间游标无关
+              searchResult != null -> null
+              hasMore -> null // 有「加载更多」按钮就够，不必再写一遍
+              items.size > AlbumMediaSource.MAX_ITEMS -> "已经到最早的一张了"
+              else -> null
+            }
+          if (hint != null) {
+            item(span = { GridItemSpan(maxLineSpan) }, key = "hint") {
+              Text(
+                text = hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                textAlign = TextAlign.Center,
+              )
+            }
+          }
+          if (searchResult == null && hasMore) {
+            item(span = { GridItemSpan(maxLineSpan) }, key = "load-more") {
+              LoadMoreRow(loading = loadingMore, onClick = { loadMore() })
+            }
           }
         }
       }
@@ -453,52 +427,40 @@ private fun LoadMoreRow(loading: Boolean, onClick: () -> Unit) {
 }
 
 /**
- * 相册轨道上的一个标签：**封面小头像 + 相册名 + 数量**。
+ * 顶栏那个「当前相册」按钮：**封面小头像 + 相册名 + 数量 + ▾**。
  *
- * ## 为什么不是纯文字 chip
+ * ## 为什么不是一排可横滑的相册 chip
  *
- * 纯文字 chip 只能靠「读名字」找相册 —— 十几个相册时全靠逐字扫，而且所有 chip
- * 长得一模一样，眼睛没有落点。加一个 24dp 的封面头像，人就能靠「那张封面」直接认出来，
- * 这是相册场景里最省力的定位方式（系统相册 App 全都这么做）。
+ * 相册一多就废：几十个相册横向排开，用户只能一路滑着找，滑到一半连自己滑到哪儿
+ * 都不知道，而且 chip 越宽（加头像之后）一屏能看到的越少 —— 越加越难找。
+ * 横向滚动**天生不适合「在一堆同类里挑一个」**：它的目标序列是线性且不可预读的。
  *
- * ## 为什么不用「竖向大卡片」（封面在上、名字在下）
+ * 现在这个按钮只承担两件事：告诉用户「当前在看哪一档」、点开真正的选择面板。
+ * 一行一个按钮，横向空间怎么都不会被相册数量拖垮；顺带把整条轨道的高度（约 44dp）
+ * 还给照片网格。
  *
- * 那种卡片宽 64dp，中文相册名（「微信图片」「截屏」）会被截成两个字，
- * 而它比 chip 高 50dp —— 从网格里硬生生抠掉近一行缩略图。chip 能把名字完整放下，
- * 高度只多 8dp，是这个面板里更划算的取舍。
- *
- * 选中用「主色薄底 + 主色描边 + 名字变主色」三重表达：只看一层谁都可能漏掉
- * （薄底在缩略图旁边不明显，描边在深色主题下又弱）。
- *
- * @param more 数量只是「已加载」的部分时打加号，别让用户读成精确总数
+ * @param countText 传字符串而不是数字：可能带「+」（还有没读的）
  */
 @Composable
-private fun AlbumRailChip(
+private fun AlbumSelectButton(
   label: String,
-  count: Int,
-  selected: Boolean,
+  countText: String,
+  open: Boolean,
   onClick: () -> Unit,
-  more: Boolean = false,
   cover: @Composable () -> Unit,
 ) {
   Surface(
     shape = RoundedCornerShape(50),
     color =
-      if (selected) {
+      if (open) {
         MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
       } else {
         MaterialTheme.colorScheme.surfaceContainerHigh
       },
-    border =
-      if (selected) {
-        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
-      } else {
-        null
-      },
     modifier = Modifier.clickable(onClick = onClick),
   ) {
     Row(
-      modifier = Modifier.padding(start = 4.dp, end = 11.dp, top = 4.dp, bottom = 4.dp),
+      modifier = Modifier.padding(start = 4.dp, end = 9.dp, top = 4.dp, bottom = 4.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
@@ -515,26 +477,184 @@ private fun AlbumRailChip(
         style = MaterialTheme.typography.labelLarge,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        // 名字再长也给它一个上限：一个「2024 年春节全家福精选」能把整条轨道占满
-        modifier = Modifier.widthIn(max = 168.dp),
+        // 名字再长也有上限：一个「2024 年春节全家福精选」不该把右边图标挤出去
+        modifier = Modifier.widthIn(max = 150.dp),
         color =
-          if (selected) {
+          if (open) {
+            MaterialTheme.colorScheme.primary
+          } else {
+            MaterialTheme.colorScheme.onSurface
+          },
+      )
+      Text(
+        text = countText,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+      )
+      Icon(
+        imageVector = Icons.Default.KeyboardArrowDown,
+        contentDescription = null,
+        modifier = Modifier.size(16.dp),
+        tint =
+          if (open) {
             MaterialTheme.colorScheme.primary
           } else {
             MaterialTheme.colorScheme.onSurfaceVariant
           },
       )
+    }
+  }
+}
+
+/**
+ * 相册选择面板：**3 列封面网格 + 按相册名过滤**，替换掉原来那条横向轨道。
+ *
+ * ## 为什么这个才解决「相册太多找不到」
+ *
+ * - **竖向网格**：一屏 9~12 个，几十个相册两三屏就到底，而且滑动距离与位置一一对应
+ *   （「我记得它在靠下一点」这种模糊记忆用得上）；
+ * - **名字可搜**：记得名字就直接打两个字，不用滑；
+ * - **封面足够大**（1/3 屏宽）：靠画面认相册，而不是靠读小字；
+ * - 点一下即选定并自动退出，不需要额外的「确定」。
+ *
+ * 注意这里**不显示**类型筛选（图片/视频）—— 那是「看什么」的事，选相册时不该掺进来。
+ */
+@Composable
+private fun AlbumGridPanel(
+  modifier: Modifier,
+  buckets: List<AlbumBucket>,
+  /** 「全部」那一格的四宫格拼贴素材（最新四张） */
+  mosaic: List<AlbumItem>,
+  totalCount: Int,
+  hasMore: Boolean,
+  selectedId: Long,
+  loader: ImageLoader,
+  onSelect: (Long) -> Unit,
+) {
+  var nameQuery by remember { mutableStateOf("") }
+  val needle = nameQuery.trim()
+  val shown =
+    if (needle.isEmpty()) {
+      buckets
+    } else {
+      buckets.filter { it.name.contains(needle, ignoreCase = true) }
+    }
+
+  Column(modifier = modifier) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 2.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       Text(
-        text = if (more) "$count+" else count.toString(),
+        text = "选择相册",
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.onSurface,
+      )
+      Text(
+        text = "共 ${buckets.size} 个",
         style = MaterialTheme.typography.labelSmall,
-        color =
-          if (selected) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-          } else {
-            MaterialTheme.colorScheme.outline
-          },
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.padding(start = 8.dp),
       )
     }
+    NetworkSearchField(
+      query = nameQuery,
+      onQueryChange = { nameQuery = it },
+      onClose = { nameQuery = "" },
+      placeholder = "搜索相册名…",
+    )
+    if (shown.isEmpty()) {
+      Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Text(
+          text = "没有名字含「$needle」的相册",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.outline,
+          modifier = Modifier.padding(horizontal = 24.dp),
+        )
+      }
+    } else {
+      LazyVerticalGrid(
+        columns = GridCells.Fixed(3),
+        modifier = Modifier.weight(1f).fillMaxWidth(),
+        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        item(key = "album-all") {
+          AlbumBucketCell(
+            label = "全部",
+            countText = if (hasMore) "$totalCount+" else totalCount.toString(),
+            selected = selectedId == ALL_BUCKETS,
+            onClick = { onSelect(ALL_BUCKETS) },
+          ) {
+            AlbumMosaicCover(items = mosaic, loader = loader)
+          }
+        }
+        items(items = shown, key = { it.id }) { bucket ->
+          AlbumBucketCell(
+            label = bucket.name,
+            countText = bucket.count.toString(),
+            selected = selectedId == bucket.id,
+            onClick = { onSelect(bucket.id) },
+          ) {
+            AlbumCoverImage(item = bucket.cover, loader = loader)
+          }
+        }
+      }
+    }
+  }
+}
+
+/** 相册面板里的一格：大封面 + 数量角标 + 名字 */
+@Composable
+private fun AlbumBucketCell(
+  label: String,
+  countText: String,
+  selected: Boolean,
+  onClick: () -> Unit,
+  cover: @Composable () -> Unit,
+) {
+  Column(modifier = Modifier.clickable(onClick = onClick)) {
+    Box(
+      modifier =
+        Modifier.fillMaxWidth()
+          .aspectRatio(1f)
+          .clip(RoundedCornerShape(10.dp))
+          .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+      cover()
+      Text(
+        text = countText,
+        fontSize = 10.sp,
+        // 压在封面上，不跟主题走（底下是画面，不是 UI 表面）——与视频时长角标同一口径
+        color = Color.White,
+        modifier =
+          Modifier.align(Alignment.BottomEnd)
+            .padding(4.dp)
+            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(5.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+      )
+      if (selected) {
+        Box(
+          modifier =
+            Modifier.matchParentSize()
+              .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp)),
+        )
+      }
+    }
+    Spacer(Modifier.height(5.dp))
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelMedium,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      color =
+        if (selected) {
+          MaterialTheme.colorScheme.primary
+        } else {
+          MaterialTheme.colorScheme.onSurface
+        },
+    )
   }
 }
 
