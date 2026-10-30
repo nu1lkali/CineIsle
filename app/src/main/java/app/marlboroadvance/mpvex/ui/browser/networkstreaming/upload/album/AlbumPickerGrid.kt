@@ -26,10 +26,12 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -223,16 +226,37 @@ internal fun AlbumPickerGrid(
 
   // 当前相册（「全部」= 没有具体相册）——顶栏按钮要一直显示你在看哪一档
   val selectedBucket = buckets.firstOrNull { it.id == bucketId }
+  val focusManager = LocalFocusManager.current
 
   Column(modifier = modifier) {
-    // ── 顶栏：相册选择器 · 按文件名搜索 · 类型筛选 ──
+    // ── 顶栏：返回 · 相册选择器 · 按文件名搜索 · 类型筛选 ──
     Row(
-      modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 2.dp, top = 6.dp, bottom = 6.dp),
+      modifier = Modifier.fillMaxWidth().padding(start = 6.dp, end = 2.dp, top = 6.dp, bottom = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(4.dp),
+      horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
+      // 进了某个相册就是「深了一层」，左上角必须有个回上一层的箭头 ——
+      // 这是 Google 相册 / 三星相册的同一套层级逻辑：相册列表 → 相册 → 照片。
+      // 「全部照片」是顶层，没有上一层，所以不显示箭头（否则箭头点下去只是原地打转）。
+      if (selectedBucket != null) {
+        IconButton(
+          onClick = {
+            focusManager.clearFocus()
+            searchActive = false
+            query = ""
+            albumPickerOpen = true
+          },
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "返回相册列表",
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
       AlbumSelectButton(
-        label = selectedBucket?.name ?: "全部相册",
+        label = selectedBucket?.name ?: "全部照片",
         countText =
           if (selectedBucket == null) {
             if (hasMore) "${items.size}+" else items.size.toString()
@@ -241,12 +265,15 @@ internal fun AlbumPickerGrid(
           },
         open = albumPickerOpen,
         onClick = {
-          albumPickerOpen = !albumPickerOpen
+          val opening = !albumPickerOpen
+          albumPickerOpen = opening
           // 两个「找东西」的界面不能叠着：进相册面板就把文件名搜索收掉
-          if (albumPickerOpen) {
+          if (opening) {
             searchActive = false
             query = ""
           }
+          // 面板里有自己的输入框：不收焦点的话键盘会一直压着面板底部
+          focusManager.clearFocus()
         },
       ) {
         if (selectedBucket == null) {
@@ -261,7 +288,10 @@ internal fun AlbumPickerGrid(
         onClick = {
           searchActive = !searchActive
           if (!searchActive) query = ""
-          if (searchActive) albumPickerOpen = false
+          if (searchActive) {
+            albumPickerOpen = false
+            focusManager.clearFocus()
+          }
         },
       ) {
         Icon(
@@ -290,8 +320,15 @@ internal fun AlbumPickerGrid(
         hasMore = hasMore,
         selectedId = bucketId,
         loader = loader,
+        onCollapse = {
+          focusManager.clearFocus()
+          albumPickerOpen = false
+        },
         onSelect = { id ->
+          // 记一笔「最近使用」：下次打开面板它就在最上面，不用再滑
+          AlbumMediaSource.rememberAlbumUsed(id)
           bucketId = id
+          focusManager.clearFocus()
           albumPickerOpen = false
         },
       )
@@ -507,7 +544,7 @@ private fun AlbumSelectButton(
 }
 
 /**
- * 相册选择面板：**3 列封面网格 + 按相册名过滤**，替换掉原来那条横向轨道。
+ * 相册选择面板：**全部照片横条 + 最近使用 + 所有相册**，替换掉原来那条横向轨道。
  *
  * ## 为什么这个才解决「相册太多找不到」
  *
@@ -517,36 +554,57 @@ private fun AlbumSelectButton(
  * - **封面足够大**（1/3 屏宽）：靠画面认相册，而不是靠读小字；
  * - 点一下即选定并自动退出，不需要额外的「确定」。
  *
+ * ## 为什么「全部照片」是一整行横条，不当网格第一格
+ *
+ * 网格第一格会让它和相册**并列**：读起来像「叫全部的那个相册」，位置还会随过滤/排序
+ * 乱跳。它其实是**上一层**（不筛相册）。做成整行横条，层级关系和「最近使用」「所有相册」
+ * 两个小标题一起成立，正好是 Google 相册 / 三星相册相册页的那套结构。
+ *
+ * ## 为什么有「最近使用」
+ *
+ * 「最近有新照片」是时间顺序，「最近用过的」是你亲手挑过的 —— 后者才是真正的快捷入口。
+ * 几十个相册时，第一行就是上次用的那几个，多数情况下根本不用滚。
+ *
  * 注意这里**不显示**类型筛选（图片/视频）—— 那是「看什么」的事，选相册时不该掺进来。
  */
 @Composable
 private fun AlbumGridPanel(
   modifier: Modifier,
   buckets: List<AlbumBucket>,
-  /** 「全部」那一格的四宫格拼贴素材（最新四张） */
+  /** 「全部照片」那一行的四宫格拼贴素材（最新四张） */
   mosaic: List<AlbumItem>,
   totalCount: Int,
   hasMore: Boolean,
   selectedId: Long,
   loader: ImageLoader,
+  onCollapse: () -> Unit,
   onSelect: (Long) -> Unit,
 ) {
   var nameQuery by remember { mutableStateOf("") }
   val needle = nameQuery.trim()
-  val shown =
+  val filtered =
     if (needle.isEmpty()) {
       buckets
     } else {
       buckets.filter { it.name.contains(needle, ignoreCase = true) }
     }
 
+  // 最近使用：只留还在当前库里的（相册被删掉后 id 会失效）
+  val recent =
+    remember(buckets) {
+      AlbumMediaSource.recentAlbumIds().mapNotNull { id -> buckets.firstOrNull { it.id == id } }
+    }
+  val recentIds = recent.mapTo(HashSet(recent.size)) { it.id }
+  // 最近用过的已经在上面露过脸了，再在「所有相册」里出现一次只会让人以为有两份
+  val rest = filtered.filter { it.id !in recentIds }
+
   Column(modifier = modifier) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 2.dp),
+      modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
-        text = "选择相册",
+        text = "相册",
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.onSurface,
       )
@@ -556,14 +614,26 @@ private fun AlbumGridPanel(
         color = MaterialTheme.colorScheme.outline,
         modifier = Modifier.padding(start = 8.dp),
       )
+      Spacer(Modifier.weight(1f))
+      // 与按钮上的 ▾ 呼应：▾ 展开、▴ 收起。面板占满内容区，必须有一眼可见的出口
+      IconButton(onClick = onCollapse) {
+        Icon(
+          imageVector = Icons.Default.KeyboardArrowUp,
+          contentDescription = "收起相册面板",
+          modifier = Modifier.size(20.dp),
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
     }
     NetworkSearchField(
       query = nameQuery,
       onQueryChange = { nameQuery = it },
       onClose = { nameQuery = "" },
       placeholder = "搜索相册名…",
+      // 面板一开就抢焦点弹键盘的话，下面第一行的相册会被键盘压掉一半
+      autoFocus = false,
     )
-    if (shown.isEmpty()) {
+    if (filtered.isEmpty()) {
       Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
         Text(
           text = "没有名字含「$needle」的相册",
@@ -576,21 +646,41 @@ private fun AlbumGridPanel(
       LazyVerticalGrid(
         columns = GridCells.Fixed(3),
         modifier = Modifier.weight(1f).fillMaxWidth(),
-        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp),
+        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        item(key = "album-all") {
-          AlbumBucketCell(
-            label = "全部",
-            countText = if (hasMore) "$totalCount+" else totalCount.toString(),
-            selected = selectedId == ALL_BUCKETS,
-            onClick = { onSelect(ALL_BUCKETS) },
-          ) {
-            AlbumMosaicCover(items = mosaic, loader = loader)
+        // 搜索时不显示「全部照片」横条与分组：此刻用户要的是一个平铺的命中列表
+        if (needle.isEmpty()) {
+          item(span = { GridItemSpan(maxLineSpan) }, key = "all-photos") {
+            AllPhotosRow(
+              countText = if (hasMore) "$totalCount+" else totalCount.toString(),
+              selected = selectedId == ALL_BUCKETS,
+              onClick = { onSelect(ALL_BUCKETS) },
+            ) {
+              AlbumMosaicCover(items = mosaic, loader = loader)
+            }
+          }
+          if (recent.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }, key = "h-recent") {
+              AlbumSectionHeader(text = "最近使用")
+            }
+            items(items = recent, key = { "r${it.id}" }) { bucket ->
+              AlbumBucketCell(
+                label = bucket.name,
+                countText = bucket.count.toString(),
+                selected = selectedId == bucket.id,
+                onClick = { onSelect(bucket.id) },
+              ) {
+                AlbumCoverImage(item = bucket.cover, loader = loader)
+              }
+            }
+          }
+          item(span = { GridItemSpan(maxLineSpan) }, key = "h-all") {
+            AlbumSectionHeader(text = "所有相册")
           }
         }
-        items(items = shown, key = { it.id }) { bucket ->
+        items(items = if (needle.isEmpty()) rest else filtered, key = { "a${it.id}" }) { bucket ->
           AlbumBucketCell(
             label = bucket.name,
             countText = bucket.count.toString(),
@@ -600,6 +690,81 @@ private fun AlbumGridPanel(
             AlbumCoverImage(item = bucket.cover, loader = loader)
           }
         }
+      }
+    }
+  }
+}
+
+/** 分组小标题：最近使用 / 所有相册 */
+@Composable
+private fun AlbumSectionHeader(text: String) {
+  Text(
+    text = text,
+    style = MaterialTheme.typography.labelMedium,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp),
+  )
+}
+
+/**
+ * 「全部照片」一整行横条：四宫格缩略 + 名称 + 总数 + 选中勾。
+ *
+ * 比网格里的一格更像「上一层」而不是「一个相册」—— 它确实是上一层（不筛相册）。
+ */
+@Composable
+private fun AllPhotosRow(
+  countText: String,
+  selected: Boolean,
+  onClick: () -> Unit,
+  cover: @Composable () -> Unit,
+) {
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color =
+      if (selected) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+      } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+      },
+    modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+  ) {
+    Row(
+      modifier = Modifier.padding(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Box(
+        modifier =
+          Modifier.size(44.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+      ) {
+        cover()
+      }
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = "全部照片",
+          style = MaterialTheme.typography.bodyLarge,
+          color =
+            if (selected) {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.onSurface
+            },
+        )
+        Text(
+          text = "$countText 项",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.outline,
+        )
+      }
+      if (selected) {
+        Icon(
+          imageVector = Icons.Default.Check,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+          tint = MaterialTheme.colorScheme.primary,
+        )
       }
     }
   }

@@ -38,6 +38,9 @@ import androidx.compose.ui.unit.dp
  * 各写一份的话圆角/字号/尾部按钮行为迟早跑偏（这个项目已经吃过这种亏）。
  *
  * @param placeholder 空内容时的提示语。根页是「搜索连接…」，浏览页是「搜索当前目录…」。
+ * @param autoFocus 出现即要焦点、弹键盘。**「点放大镜才出现」的场景要 true**（用户明确是要搜）；
+ *   **常驻在页面里的场景必须 false** —— 否则一进页面键盘就弹起来，把下面的内容顶掉一半，
+ *   用户想点的东西刚好被键盘盖住（相册面板踩过这个坑）。
  */
 @Composable
 fun NetworkSearchField(
@@ -46,10 +49,12 @@ fun NetworkSearchField(
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
   placeholder: String = "搜索当前目录…",
+  autoFocus: Boolean = true,
 ) {
   val focusRequester = remember { FocusRequester() }
 
-  LaunchedEffect(Unit) {
+  LaunchedEffect(autoFocus) {
+    if (!autoFocus) return@LaunchedEffect
     // 要焦点弹键盘。偶发节点还没挂上（重组时序）会抛异常，吞掉不影响使用
     runCatching { focusRequester.requestFocus() }
   }

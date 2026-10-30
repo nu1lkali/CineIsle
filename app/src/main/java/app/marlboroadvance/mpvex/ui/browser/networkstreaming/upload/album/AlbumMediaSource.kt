@@ -263,6 +263,32 @@ object AlbumMediaSource {
       )
   }
 
+  // ── 最近使用（进程内，最多 [RECENT_ALBUMS] 个）────────────────────────────
+  //
+  // 「最近用过的」和「最近有新照片的」是两件事：前者是你主动挑过的，
+  // 后者只是时间顺序。相册几十个时，前者才是真正省事的那个快捷入口
+  // （Google 相册 / 三星相册的相册页顶部都有这一档）。
+  //
+  // 只记进程内存：一次上传会话里够用；落盘反而会出现「半年前挑过一次的相册
+  // 永远挂在最上面」这种尴尬。
+
+  private const val RECENT_ALBUMS = 3
+
+  private val recentIds = ArrayList<Long>(RECENT_ALBUMS)
+
+  /** 记一次「用户挑了这个相册」。重复挑会把它提到最前 */
+  @Synchronized
+  fun rememberAlbumUsed(bucketId: Long) {
+    if (bucketId <= 0L) return
+    recentIds.remove(bucketId)
+    recentIds.add(0, bucketId)
+    while (recentIds.size > RECENT_ALBUMS) recentIds.removeAt(recentIds.lastIndex)
+  }
+
+  /** 最近用过的相册 id，最近的在前 */
+  @Synchronized
+  fun recentAlbumIds(): List<Long> = recentIds.toList()
+
   @Suppress("LongParameterList")
   private fun query(
     context: Context,
