@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.album
 
 import android.content.Context
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -10,16 +11,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -38,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +53,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -124,6 +131,21 @@ internal fun AlbumPickerGrid(
   var query by remember { mutableStateOf("") }
   var searching by remember { mutableStateOf(false) }
   var searchResult by remember { mutableStateOf<AlbumSearchResult?>(null) }
+
+  // 相册轨道的滚动位置：选中项被挤出视野时要把轨道带回来
+  val railState = rememberLazyListState()
+
+  // 相册几十个时，「点了别处再点回来」很容易找不到当前选中的那个 ——
+  // 只在它**已经不在视野里**时才滚，否则每点一下轨道都会莫名跳一下
+  LaunchedEffect(bucketId, searchActive) {
+    if (searchActive) return@LaunchedEffect
+    val index = buckets.indexOfFirst { it.id == bucketId }
+    if (index < 0) return@LaunchedEffect
+    val visible = railState.layoutInfo.visibleItemsInfo
+    val first = visible.firstOrNull()?.index ?: 0
+    val last = visible.lastOrNull()?.index ?: -1
+    if (index < first || index > last) railState.animateScrollToItem(index)
+  }
 
   // 只查一次：面板开合很频繁，每次重查会让「打开就要等 1 秒」变成常态。
   // 进程内缓存足以覆盖一次上传会话（相册内容不会在这期间变）。
@@ -215,10 +237,11 @@ internal fun AlbumPickerGrid(
   }
 
   Column(modifier = modifier) {
-    // ── 相册条（搜索时让位给搜索框）──
+    // ── 相册轨道（搜索时让位给一行说明）──
     Row(
-      modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 2.dp),
+      modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 2.dp, top = 7.dp, bottom = 7.dp),
       verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       if (searchActive) {
         Text(
@@ -230,29 +253,52 @@ internal fun AlbumPickerGrid(
           modifier = Modifier.weight(1f),
         )
       } else {
-        LazyRow(
-          modifier = Modifier.weight(1f),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-          contentPadding = PaddingValues(end = 4.dp),
+        // 「全部」**钉在轨道外**，不参与横向滚动：它是最高频的目标，
+        // 相册一多就会被几十个相册挤到视野之外，那时候用户只能一路滑回最左边。
+        AlbumRailChip(
+          label = "全部",
+          count = items.size,
+          more = hasMore,
+          selected = bucketId == ALL_BUCKETS,
+          onClick = { bucketId = ALL_BUCKETS },
         ) {
-          item(key = "all-buckets") {
-            AlbumChip(
-              text = "全部",
-              count = items.size,
-              more = hasMore,
-              selected = bucketId == ALL_BUCKETS,
-              onClick = { bucketId = ALL_BUCKETS },
-            )
+          AlbumMosaicCover(items = items.take(4), loader = loader)
+        }
+        Box(modifier = Modifier.weight(1f)) {
+          LazyRow(
+            state = railState,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            items(items = buckets, key = { it.id }) { bucket ->
+              AlbumRailChip(
+                label = bucket.name,
+                count = bucket.count,
+                selected = bucketId == bucket.id,
+                onClick = { bucketId = bucket.id },
+              ) {
+                AlbumCoverImage(item = bucket.cover, loader = loader)
+              }
+            }
           }
-          items(items = buckets, key = { it.id }) { bucket ->
-            AlbumChip(
-              text = bucket.name,
-              count = bucket.count,
-              // 单个相册的数字只统计**已加载**的部分，但没有逐相册的「还有多少」
-              // 可算（要再查一次数据库），所以这里只给 6000 这个总数打加号
-              selected = bucketId == bucket.id,
-              onClick = { bucketId = bucket.id },
-            )
+          // 右缘渐隐：最后一张被切一半不足以说明「还能滑」，一层 24dp 渐隐才是暗示。
+          // 用 matchParentSize 而不是 fillMaxHeight —— 后者会参与测量，和 LazyRow 互相撑高。
+          val canScrollMore by remember(railState) {
+            derivedStateOf { railState.canScrollForward }
+          }
+          if (canScrollMore) {
+            Box(modifier = Modifier.matchParentSize()) {
+              Box(
+                modifier =
+                  Modifier.align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(24.dp)
+                    .background(
+                      Brush.horizontalGradient(
+                        listOf(Color.Transparent, MaterialTheme.colorScheme.surfaceContainerLow),
+                      ),
+                    ),
+              )
+            }
           }
         }
       }
@@ -285,7 +331,7 @@ internal fun AlbumPickerGrid(
           searchActive = false
           query = ""
         },
-        placeholder = "搜索文件名（不受 6000 条上限限制）…",
+        placeholder = "搜索文件名…",
       )
     }
 
@@ -406,14 +452,34 @@ private fun LoadMoreRow(loading: Boolean, onClick: () -> Unit) {
   }
 }
 
+/**
+ * 相册轨道上的一个标签：**封面小头像 + 相册名 + 数量**。
+ *
+ * ## 为什么不是纯文字 chip
+ *
+ * 纯文字 chip 只能靠「读名字」找相册 —— 十几个相册时全靠逐字扫，而且所有 chip
+ * 长得一模一样，眼睛没有落点。加一个 24dp 的封面头像，人就能靠「那张封面」直接认出来，
+ * 这是相册场景里最省力的定位方式（系统相册 App 全都这么做）。
+ *
+ * ## 为什么不用「竖向大卡片」（封面在上、名字在下）
+ *
+ * 那种卡片宽 64dp，中文相册名（「微信图片」「截屏」）会被截成两个字，
+ * 而它比 chip 高 50dp —— 从网格里硬生生抠掉近一行缩略图。chip 能把名字完整放下，
+ * 高度只多 8dp，是这个面板里更划算的取舍。
+ *
+ * 选中用「主色薄底 + 主色描边 + 名字变主色」三重表达：只看一层谁都可能漏掉
+ * （薄底在缩略图旁边不明显，描边在深色主题下又弱）。
+ *
+ * @param more 数量只是「已加载」的部分时打加号，别让用户读成精确总数
+ */
 @Composable
-private fun AlbumChip(
-  text: String,
+private fun AlbumRailChip(
+  label: String,
   count: Int,
   selected: Boolean,
   onClick: () -> Unit,
-  /** 这个数字只是**已加载**的部分（后面还有更早的没读）时打个 + */
   more: Boolean = false,
+  cover: @Composable () -> Unit,
 ) {
   Surface(
     shape = RoundedCornerShape(50),
@@ -423,18 +489,34 @@ private fun AlbumChip(
       } else {
         MaterialTheme.colorScheme.surfaceContainerHigh
       },
+    border =
+      if (selected) {
+        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+      } else {
+        null
+      },
     modifier = Modifier.clickable(onClick = onClick),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+      modifier = Modifier.padding(start = 4.dp, end = 11.dp, top = 4.dp, bottom = 4.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(5.dp),
+      horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
+      Box(
+        modifier =
+          Modifier.size(24.dp)
+            .clip(RoundedCornerShape(7.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+      ) {
+        cover()
+      }
       Text(
-        text = text,
+        text = label,
         style = MaterialTheme.typography.labelLarge,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
+        // 名字再长也给它一个上限：一个「2024 年春节全家福精选」能把整条轨道占满
+        modifier = Modifier.widthIn(max = 168.dp),
         color =
           if (selected) {
             MaterialTheme.colorScheme.primary
@@ -443,7 +525,6 @@ private fun AlbumChip(
           },
       )
       Text(
-        // 「6000+」而不是「6000」：不加这个加号，用户会把它读成精确总数
         text = if (more) "$count+" else count.toString(),
         style = MaterialTheme.typography.labelSmall,
         color =
@@ -454,6 +535,44 @@ private fun AlbumChip(
           },
       )
     }
+  }
+}
+
+/** 相册封面：该相册最新一张的缩略图 */
+@Composable
+private fun AlbumCoverImage(item: AlbumItem, loader: ImageLoader, modifier: Modifier = Modifier) {
+  AsyncImage(
+    model = item.uri,
+    contentDescription = null,
+    imageLoader = loader,
+    contentScale = ContentScale.Crop,
+    modifier = modifier.fillMaxSize(),
+  )
+}
+
+/**
+ * 「全部」的头像：最新四张的**四宫格拼贴**。
+ *
+ * 不能拿第一张当头像 —— 那样它和最新那个相册长得一模一样，两个挨着的 chip 会互相冒充。
+ * 拼贴一眼就能认出「这是一堆照片」，正好表达「全部」。
+ */
+@Composable
+private fun AlbumMosaicCover(items: List<AlbumItem>, loader: ImageLoader) {
+  when {
+    items.size >= 4 ->
+      Column(modifier = Modifier.fillMaxSize()) {
+        Row(modifier = Modifier.weight(1f)) {
+          AlbumCoverImage(item = items[0], loader = loader, modifier = Modifier.weight(1f))
+          AlbumCoverImage(item = items[1], loader = loader, modifier = Modifier.weight(1f))
+        }
+        Row(modifier = Modifier.weight(1f)) {
+          AlbumCoverImage(item = items[2], loader = loader, modifier = Modifier.weight(1f))
+          AlbumCoverImage(item = items[3], loader = loader, modifier = Modifier.weight(1f))
+        }
+      }
+    // 不到四张就退回第一张：这时也谈不上「混淆」，因为没几个相册
+    items.isNotEmpty() -> AlbumCoverImage(item = items.first(), loader = loader)
+    else -> Unit
   }
 }
 
