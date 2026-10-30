@@ -25,7 +25,16 @@ data class AlbumItem(
   val uri: Uri,
   val name: String,
   val sizeBytes: Long,
+  /** 加进媒体库的时间（`date_added`，秒）。系统相册默认就照这个排 */
   val dateAdded: Long,
+  /**
+   * 文件本身的修改时间（`date_modified`，秒）。
+   *
+   * 和 [dateAdded] 不是一回事：从电脑拷进来的老照片 `date_added` 是「刚才」，
+   * 而 `date_modified` 还留着拍摄/改图那天的日期。按「创建时间」排时用户心里
+   * 想的往往是后者，所以两列都得留着。
+   */
+  val dateModified: Long,
   val isVideo: Boolean,
   val durationMs: Long,
   val bucketId: Long,
@@ -116,6 +125,7 @@ object AlbumMediaSource {
   private const val COL_NAME = "_display_name"
   private const val COL_SIZE = "_size"
   private const val COL_DATE = "date_added"
+  private const val COL_DATE_MODIFIED = "date_modified"
   private const val COL_DATA = "_data"
   private const val COL_DURATION = "duration"
   private const val COL_BUCKET_ID = "bucket_id"
@@ -304,6 +314,7 @@ object AlbumMediaSource {
           add(COL_NAME)
           add(COL_SIZE)
           add(COL_DATE)
+          add(COL_DATE_MODIFIED)
           add(COL_BUCKET_ID)
           add(COL_BUCKET_NAME)
           add(COL_DATA)
@@ -332,6 +343,7 @@ object AlbumMediaSource {
           val nameIdx = cursor.getColumnIndex(COL_NAME)
           val sizeIdx = cursor.getColumnIndex(COL_SIZE)
           val dateIdx = cursor.getColumnIndex(COL_DATE)
+          val dateModifiedIdx = cursor.getColumnIndex(COL_DATE_MODIFIED)
           val bucketIdIdx = cursor.getColumnIndex(COL_BUCKET_ID)
           val bucketNameIdx = cursor.getColumnIndex(COL_BUCKET_NAME)
           val dataIdx = cursor.getColumnIndex(COL_DATA)
@@ -367,6 +379,10 @@ object AlbumMediaSource {
                 name = name,
                 sizeBytes = sizeIdx.takeIf { it >= 0 }?.let { cursor.getLong(it) } ?: 0L,
                 dateAdded = dateIdx.takeIf { it >= 0 }?.let { cursor.getLong(it) } ?: 0L,
+                // 个别 ROM 不返回这一列：退回 date_added，至少排序不会全塌成 0
+                dateModified =
+                  dateModifiedIdx.takeIf { it >= 0 }?.let { cursor.getLong(it) }?.takeIf { it > 0L }
+                    ?: (dateIdx.takeIf { it >= 0 }?.let { cursor.getLong(it) } ?: 0L),
                 isVideo = isVideo,
                 durationMs = durationIdx.takeIf { it >= 0 }?.let { cursor.getLong(it) } ?: 0L,
                 bucketId = bucketId,

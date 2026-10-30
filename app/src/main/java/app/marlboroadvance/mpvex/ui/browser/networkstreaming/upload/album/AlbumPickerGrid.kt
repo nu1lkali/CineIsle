@@ -27,15 +27,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -65,6 +69,7 @@ import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
 /** 相册网格里的媒体类型筛选 */
 private enum class AlbumFilter(val label: String) {
@@ -75,6 +80,72 @@ private enum class AlbumFilter(val label: String) {
 
 /** 「全部相册」的哨兵 id（真实的 bucketId 不会为 -1） */
 private const val ALL_BUCKETS = -1L
+
+/**
+ * 相册内照片的排序字段。
+ *
+ * [defaultAscending] 是「第一次点这个字段」给的方向，按各字段的常识定：
+ * 时间类默认**新的在前**（没有谁会想先看十年前的照片），名称默认 A→Z，
+ * 大小默认大的在前（挑大文件上传是最常见的动机）。再点一次同一项就反向。
+ */
+private enum class AlbumSort(val label: String, val defaultAscending: Boolean) {
+  DateAdded("创建时间", false),
+  DateModified("修改时间", false),
+  Name("名称", true),
+  Size("大小", false),
+  Random("随机", false),
+}
+
+/**
+ * 排序的跨会话记忆（进程内）。
+ *
+ * 用 `object` + `mutableStateOf` 而不是 `remember`：上传面板每次打开都是新的组合，
+ * 用 `remember` 的话「上次按大小排的」一关面板就没了 —— 而排序偏好恰恰是
+ * 「一旦设过就该一直有效」的那种。放进程内存不落盘，和最近使用相册同一口径。
+ */
+private object AlbumSortMemory {
+  var field by mutableStateOf(AlbumSort.DateAdded)
+  var ascending by mutableStateOf(false)
+
+  /** 随机排序的种子：每点一次「随机」换一个，等于重洗一遍 */
+  var seed by mutableStateOf(System.nanoTime())
+}
+
+/**
+ * 名称的自然序：`IMG_2` 排在 `IMG_10` 前面。
+ *
+ * 纯字典序会得到 `IMG_10, IMG_2` —— 相册里全是 `IMG_xxxx` 这类名字时，
+ * 按名称排就完全失去意义。数字段按数值比，其余按小写字符比。
+ */
+private fun naturalCompare(a: String, b: String): Int {
+  var i = 0
+  var j = 0
+  while (i < a.length && j < b.length) {
+    val ca = a[i]
+    val cb = b[j]
+    if (ca.isDigit() && cb.isDigit()) {
+      var ei = i
+      var ej = j
+      while (ei < a.length && a[ei].isDigit()) ei++
+      while (ej < b.length && b[ej].isDigit()) ej++
+      val na = a.substring(i, ei).trimStart('0')
+      val nb = b.substring(j, ej).trimStart('0')
+      if (na.length != nb.length) return na.length - nb.length
+      val cmp = na.compareTo(nb)
+      if (cmp != 0) return cmp
+      i = ei
+      j = ej
+    } else {
+      val cmp = ca.lowercaseChar().compareTo(cb.lowercaseChar())
+      if (cmp != 0) return cmp
+      i++
+      j++
+    }
+  }
+  return (a.length - i) - (b.length - j)
+}
+
+private val NaturalNameOrder = Comparator<AlbumItem> { a, b -> naturalCompare(a.name, b.name) }
 
 /**
  * 相册式选择器：顶部相册条 + 三列缩略图网格。
@@ -175,23 +246,46 @@ internal fun AlbumPickerGrid(
     return
   }
 
+  // 排序状态放在进程内存里（见 AlbumSortMemory）：关掉面板再打开还是上次那套
+  val sort = AlbumSortMemory.field
+  val ascending = AlbumSortMemory.ascending
+  val seed = AlbumSortMemory.seed
+
   // key 用 loadedAt 而不是 items 本身：data class 的 equals 会深比较上千个条目，
   // 每次重组都做一次会拖慢滚动。
-  val visible = remember(loadedAt, items, bucketId, filter, searchResult) {
-    val hit = searchResult
-    val base =
-      when {
-        // 搜索结果是**跨相册**的（本来就不该再被相册条过滤一次）
-        hit != null -> hit.items
-        bucketId == ALL_BUCKETS -> items
-        else -> items.filter { it.bucketId == bucketId }
+  val visible =
+    remember(loadedAt, items, bucketId, filter, searchResult, sort, ascending, seed) {
+      val hit = searchResult
+      val base =
+        when {
+          // 搜索结果是**跨相册**的（本来就不该再被相册条过滤一次）
+          hit != null -> hit.items
+          bucketId == ALL_BUCKETS -> items
+          else -> items.filter { it.bucketId == bucketId }
+        }
+      val typed =
+        when (filter) {
+          AlbumFilter.All -> base
+          AlbumFilter.Images -> base.filter { !it.isVideo }
+          AlbumFilter.Videos -> base.filter { it.isVideo }
+        }
+      // 排序永远在筛选**之后**做：先决定「看哪些」，再决定「怎么排」
+      when (sort) {
+        AlbumSort.Random -> typed.shuffled(Random(seed))
+        AlbumSort.DateAdded ->
+          if (ascending) typed.sortedBy { it.dateAdded } else typed.sortedByDescending { it.dateAdded }
+        AlbumSort.DateModified ->
+          if (ascending) {
+            typed.sortedBy { it.dateModified }
+          } else {
+            typed.sortedByDescending { it.dateModified }
+          }
+        AlbumSort.Size ->
+          if (ascending) typed.sortedBy { it.sizeBytes } else typed.sortedByDescending { it.sizeBytes }
+        AlbumSort.Name ->
+          if (ascending) typed.sortedWith(NaturalNameOrder) else typed.sortedWith(NaturalNameOrder.reversed())
       }
-    when (filter) {
-      AlbumFilter.All -> base
-      AlbumFilter.Images -> base.filter { !it.isVideo }
-      AlbumFilter.Videos -> base.filter { it.isVideo }
     }
-  }
 
   if (items.isEmpty()) {
     Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -297,7 +391,28 @@ internal fun AlbumPickerGrid(
               },
           )
         }
-        FilterMenu(current = filter, onSelect = { filter = it })
+        SortFilterMenu(
+          sort = sort,
+          ascending = ascending,
+          filter = filter,
+          onPickSort = { picked ->
+            when {
+              // 「随机」没有方向：再点一次就重洗一遍（换种子）
+              picked == AlbumSort.Random -> {
+                AlbumSortMemory.field = AlbumSort.Random
+                AlbumSortMemory.seed = System.nanoTime()
+              }
+              // 再点同一个字段 = 反方向；换个字段 = 用它的默认方向
+              picked == AlbumSortMemory.field ->
+                AlbumSortMemory.ascending = !AlbumSortMemory.ascending
+              else -> {
+                AlbumSortMemory.field = picked
+                AlbumSortMemory.ascending = picked.defaultAscending
+              }
+            }
+          },
+          onPickFilter = { filter = it },
+        )
       }
     }
 
@@ -880,55 +995,147 @@ private fun AlbumMosaicCover(items: List<AlbumItem>, loader: ImageLoader) {
   }
 }
 
+/**
+ * 排序 + 筛选合一的菜单。
+ *
+ * ## 为什么挤进一个菜单
+ *
+ * 两条是同一类操作（「这批照片怎么摆」），分成两个图标就要占掉 40dp 的顶栏宽度 ——
+ * 相册名一长，右边三个图标会开始互相挤。合成一个，图标数不变，
+ * 而且用户不需要先想「排序算筛选还是算别的」。
+ *
+ * ## 方向箭头
+ *
+ * 顶栏图标右侧常驻一枚 11dp 的 ↑/↓，不打开菜单也知道现在是升还是降；
+ * 菜单里当前字段那一行同样带箭头。**再点一次当前字段就反向**，并把箭头就地翻转
+ * （菜单不收起，方便连续试两种顺序）；点别的字段才收起 —— 那是一次「选定」。
+ * 「随机」没有方向，改用 🔀 形状的图标，再点一次等于重洗。
+ */
 @Composable
-private fun FilterMenu(current: AlbumFilter, onSelect: (AlbumFilter) -> Unit) {
+private fun SortFilterMenu(
+  sort: AlbumSort,
+  ascending: Boolean,
+  filter: AlbumFilter,
+  onPickSort: (AlbumSort) -> Unit,
+  onPickFilter: (AlbumFilter) -> Unit,
+) {
   var expanded by remember { mutableStateOf(false) }
+  val accent = MaterialTheme.colorScheme.primary
+  val muted = MaterialTheme.colorScheme.onSurfaceVariant
+  // 只有当「排序/筛选不是默认值」时才给主色：一直亮着等于一直没提示
+  val touched = sort != AlbumSort.DateAdded || ascending || filter != AlbumFilter.All
+
   Box {
     IconButton(onClick = { expanded = true }) {
-      Icon(
-        imageVector = Icons.Default.FilterList,
-        contentDescription = "筛选",
-        modifier = Modifier.size(18.dp),
-        tint =
-          if (current == AlbumFilter.All) {
-            MaterialTheme.colorScheme.onSurfaceVariant
-          } else {
-            MaterialTheme.colorScheme.primary
-          },
-      )
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(1.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Tune,
+          contentDescription = "排序与筛选",
+          modifier = Modifier.size(18.dp),
+          tint = if (touched) accent else muted,
+        )
+        if (sort == AlbumSort.Random) {
+          Icon(
+            imageVector = Icons.Default.Shuffle,
+            contentDescription = null,
+            modifier = Modifier.size(11.dp),
+            tint = if (touched) accent else muted,
+          )
+        } else {
+          Icon(
+            imageVector =
+              if (ascending) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+            contentDescription = if (ascending) "升序" else "降序",
+            modifier = Modifier.size(11.dp),
+            tint = if (touched) accent else muted,
+          )
+        }
+      }
     }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-      AlbumFilter.values().forEach { option ->
+      MenuSectionLabel("排序")
+      AlbumSort.entries.forEach { option ->
+        val active = option == sort
         DropdownMenuItem(
           text = {
             Text(
               text = option.label,
-              color =
-                if (option == current) {
-                  MaterialTheme.colorScheme.primary
-                } else {
-                  MaterialTheme.colorScheme.onSurface
-                },
+              color = if (active) accent else MaterialTheme.colorScheme.onSurface,
             )
           },
           trailingIcon = {
-            if (option == current) {
+            if (active) {
+              if (option == AlbumSort.Random) {
+                Icon(
+                  imageVector = Icons.Default.Shuffle,
+                  contentDescription = null,
+                  modifier = Modifier.size(15.dp),
+                  tint = accent,
+                )
+              } else {
+                Icon(
+                  imageVector =
+                    if (ascending) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                  contentDescription = null,
+                  modifier = Modifier.size(15.dp),
+                  tint = accent,
+                )
+              }
+            }
+          },
+          onClick = {
+            onPickSort(option)
+            // 换字段 / 点随机 = 一次选定，收起；再点当前字段只是反向，留着好连点
+            if (!active || option == AlbumSort.Random) expanded = false
+          },
+        )
+      }
+      HorizontalDivider(
+        modifier = Modifier.padding(vertical = 4.dp),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+      )
+      MenuSectionLabel("类型")
+      AlbumFilter.entries.forEach { option ->
+        val active = option == filter
+        DropdownMenuItem(
+          text = {
+            Text(
+              text = option.label,
+              color = if (active) accent else MaterialTheme.colorScheme.onSurface,
+            )
+          },
+          trailingIcon = {
+            if (active) {
               Icon(
                 imageVector = Icons.Default.Check,
                 contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(15.dp),
+                tint = accent,
               )
             }
           },
           onClick = {
+            onPickFilter(option)
             expanded = false
-            onSelect(option)
           },
         )
       }
     }
   }
+}
+
+/** 菜单里的分组小标题（「排序」「类型」） */
+@Composable
+private fun MenuSectionLabel(text: String) {
+  Text(
+    text = text,
+    style = MaterialTheme.typography.labelSmall,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    modifier = Modifier.padding(start = 16.dp, top = 6.dp, bottom = 2.dp),
+  )
 }
 
 @Composable
