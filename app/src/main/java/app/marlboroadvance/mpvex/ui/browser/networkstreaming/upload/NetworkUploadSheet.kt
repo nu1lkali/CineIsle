@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -99,6 +100,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import app.marlboroadvance.mpvex.ui.browser.components.NetworkSearchField
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.album.AlbumImageLoader
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.album.AlbumItem
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.album.AlbumPickerGrid
@@ -110,11 +112,18 @@ import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-/** 三种模式：相册（缩略图网格，传图片/视频最方便）/ 文件（目录树多选）/ 文件夹（整目录） */
-private enum class UploadMode { Album, Files, Folder }
+/**
+ * 三种模式：相册（缩略图网格，传图片/视频最方便）/ 文件（目录树多选）/ 文件夹（整目录）。
+ *
+ * `internal` 而不是 `private`：上次用过的模式记在 [NetworkUploadCenter]（进程级），
+ * 下一次打开面板直接落回那一档 —— 老从「相册」起步对天天传文件夹的人是一种折磨。
+ */
+internal enum class UploadMode { Album, Files, Folder }
 
 /** 预览器里的一项。[uri] 为 null 时只能显示「无法预览」。 */
 private data class PreviewItem(val uri: Uri?, val isVideo: Boolean, val title: String)
@@ -155,6 +164,154 @@ private fun deckOfTasks(tasks: List<UploadTask>, current: UploadTask): PreviewDe
     index = index,
   )
 }
+
+// ────────────────────────── 本地文件搜索（v181）──────────────────────────
+
+/** 一条搜索命中：文件 / 文件夹 + 它相对搜索根的目录（空串 = 就在根目录下） */
+private data class FileHit(val file: File, val relativeDir: String)
+
+/** 一次搜索最多收多少条结果：再多列表也翻不完，而且通常说明关键词太宽 */
+private const val SEARCH_MAX_HITS = 500
+
+/** 最多扫多少个文件夹（不设上限时在存储根搜一个字母要几十秒） */
+private const val SEARCH_MAX_DIRS = 800
+
+/** 下钻深度上限（防符号链接 / 互相挂载成环） */
+private const val SEARCH_MAX_DEPTH = 8
+
+/** 边扫边出的节流间隔：两次回调至少隔这么久，或攒够 [SEARCH_FLUSH_HITS] 条 */
+private const val SEARCH_FLUSH_MS = 120L
+
+private const val SEARCH_FLUSH_HITS = 24
+
+/** 搜索的实时状态（UI 只读这一份） */
+private data class SearchProgress(
+  val hits: List<FileHit> = emptyList(),
+  val scannedDirs: Int = 0,
+  /** 撞上条数 / 目录数 / 深度上限：结果是**不完全**的，UI 必须说出来 */
+  val truncated: Boolean = false,
+  val done: Boolean = false,
+)
+
+/**
+ * 在 [root]（可选含子文件夹）里按**名字**找文件与文件夹，边扫边回调。
+ *
+ * ## 为什么边扫边出而不是扫完再显示
+ *
+ * 存储根（`/storage/emulated/0`）扫一遍要几秒到几十秒。扫完才给结果 = 用户盯着空白
+ * 好几秒，中途还以为「这功能坏了」；边扫边出，第一两百毫秒就有东西跳出来。
+ *
+ * ## 三条护栏（缺一条就会变成「搜一个字母卡十秒」）
+ *
+ * - 条数 [SEARCH_MAX_HITS]、目录数 [SEARCH_MAX_DIRS]、深度 [SEARCH_MAX_DEPTH]；
+ *   任何一条撞上都置 [SearchProgress.truncated]，由 UI 明确告诉你「结果不全」。
+ * - 跳过隐藏文件 / 隐藏目录（`.` 开头）：`Android/data`、`.thumbnails` 这类目录
+ *   既不该出现在上传列表里，扫它们还特别慢。
+ * - 每列一个目录 `withContext(Dispatchers.IO)`：`listFiles()` 是阻塞 IO，
+ *   留在主线程会让列表和输入框一起卡。
+ *
+ * ## 大小写与分词
+ *
+ * 一律 `contains(ignoreCase = true)` —— 文件名里中英混排很常见，大小写敏感只会让人困惑。
+ * **不做空格分词**：文件名本身常有空格（`My Movie.mkv`），把空格当分隔符反而搜不到。
+ *
+ * @param onProgress 每 [SEARCH_FLUSH_MS] 毫秒（或攒够 [SEARCH_FLUSH_HITS] 条）回调一次；
+ *   最后一次一定带 `done = true`，并在那时把结果排好序（扫的过程中排序会让人眼看着结果乱跳）
+ */
+private suspend fun collectFileHits(
+  root: File,
+  query: String,
+  includeSubdirs: Boolean,
+  onProgress: (SearchProgress) -> Unit,
+) {
+  val needle = query.trim()
+  if (needle.isEmpty()) {
+    onProgress(SearchProgress(done = true))
+    return
+  }
+
+  val queue = ArrayDeque<Pair<File, Int>>()
+  queue.addLast(root to 0)
+  val hits = mutableListOf<FileHit>()
+  var scannedDirs = 0
+  var truncated = false
+  var lastFlushAt = 0L
+  var flushedCount = 0
+
+  fun emit(done: Boolean) {
+    val ordered =
+      if (done) {
+        hits.sortedWith(
+          compareBy({ !it.file.isDirectory }, { it.relativeDir.lowercase() }, { it.file.name.lowercase() }),
+        )
+      } else {
+        hits.toList()
+      }
+    onProgress(
+      SearchProgress(
+        hits = ordered,
+        scannedDirs = scannedDirs,
+        truncated = truncated,
+        done = done,
+      ),
+    )
+    flushedCount = hits.size
+    lastFlushAt = System.currentTimeMillis()
+  }
+
+  while (queue.isNotEmpty()) {
+    if (scannedDirs >= SEARCH_MAX_DIRS) {
+      truncated = true
+      break
+    }
+    val (dir, depth) = queue.removeFirst()
+    scannedDirs++
+    val children = withContext(Dispatchers.IO) { runCatching { dir.listFiles() }.getOrNull() }
+    if (children == null) {
+      // 读不了就跳过这一支（权限 / 竞态删除）：整轮不该因为一个目录失败
+      emit(false)
+      continue
+    }
+    for (child in children) {
+      val name = child.name
+      if (name.isBlank() || name.startsWith(".")) continue
+      if (name.contains(needle, ignoreCase = true)) {
+        val relative =
+          dir.absolutePath.removePrefix(root.absolutePath).trim(File.separatorChar).trim('/')
+        hits += FileHit(child, relative)
+        if (hits.size >= SEARCH_MAX_HITS) {
+          truncated = true
+          break
+        }
+      }
+      if (includeSubdirs && child.isDirectory && depth + 1 <= SEARCH_MAX_DEPTH) {
+        queue.addLast(child to (depth + 1))
+      }
+    }
+    val now = System.currentTimeMillis()
+    if (now - lastFlushAt >= SEARCH_FLUSH_MS || hits.size - flushedCount >= SEARCH_FLUSH_HITS) {
+      emit(false)
+    }
+    if (truncated) break
+  }
+
+  emit(true)
+}
+
+/**
+ * 剩余时间的口语化写法。
+ *
+ * 上传速度一直在变，给一个精确到秒的倒计时是假精确 —— 这里只用
+ * 「x 分 y 秒 / x 小时 y 分」这种量级表达，用户要的是「还要不要等」。
+ */
+private fun formatEta(seconds: Long): String =
+  when {
+    seconds <= 0 -> "即将完成"
+    seconds < 60 -> "$seconds 秒"
+    seconds < 3600 -> "${seconds / 60} 分 ${seconds % 60} 秒"
+    else -> "${seconds / 3600} 小时 ${(seconds % 3600) / 60} 分"
+  }
+
 
 /**
  * 网络位置（AList）→ 上传面板：**本地文件 / 文件夹选择器 + 上传进度**。
@@ -252,10 +409,18 @@ private fun PickerPane(
   onShowTransfer: () -> Unit,
   onStart: (List<UploadPick>) -> Unit,
 ) {
-  var mode by remember { mutableStateOf(UploadMode.Album) }
+  // 落回上次用的档位（进程内记忆）。默认仍是「相册」—— 那是打开即能选到东西的那一档
+  var mode by remember { mutableStateOf(NetworkUploadCenter.lastMode ?: UploadMode.Album) }
   var hasPermission by remember { mutableStateOf(PermissionUtils.hasStoragePermission(context)) }
   var preparing by remember { mutableStateOf(false) }
   var hint by remember { mutableStateOf<String?>(null) }
+
+  // ── 搜索（文件 / 文件夹模式）──
+  // 相册模式的搜索在 AlbumPickerGrid 里（那边走 MediaStore 的名字索引），
+  // 这里走的是文件系统的名字匹配，两者根不同，不能共用一份状态。
+  var searchOpen by remember { mutableStateOf(false) }
+  var searchQuery by remember { mutableStateOf("") }
+  var searchState by remember { mutableStateOf(SearchProgress()) }
 
   // 从系统设置授权回来后要重新判一次，否则明明给了权限、面板还停在「去授权」
   val lifecycleOwner = LocalLifecycleOwner.current
@@ -290,6 +455,38 @@ private fun PickerPane(
   }
   // 每次换目录都记一笔：下次打开面板直接停在原处
   LaunchedEffect(currentDir) { NetworkUploadCenter.lastLocalDir = currentDir.absolutePath }
+  LaunchedEffect(mode) { NetworkUploadCenter.lastMode = mode }
+
+  /**
+   * 搜索的起点：**当前所在的这块存储的根**，而不是当前目录。
+   *
+   * 在 `Download/某部剧/S01` 里搜东西，用户心里想的从来不是「只在这个文件夹里搜」——
+   * 他要找的那个文件多半在隔壁目录。而按当前目录搜还有个更糟的后果：越往里走越搜不到，
+   * 用户会以为「搜索坏了」。所以固定从卷根开始，状态行也会写明搜的是哪里。
+   */
+  val searchRoot =
+    remember(currentDir, volumes) {
+      volumes
+        .map { it.second }
+        .firstOrNull { root ->
+          val base = root.absolutePath.trimEnd('/')
+          currentDir.absolutePath == base || currentDir.absolutePath.startsWith("$base/")
+        } ?: currentDir
+    }
+
+  // 搜索本体：输入停下 200ms 才开扫（每敲一个字就全盘扫一遍，等于一直在扫第一个字）
+  LaunchedEffect(searchOpen, searchQuery, searchRoot) {
+    if (!searchOpen || searchQuery.isBlank()) {
+      searchState = SearchProgress()
+      return@LaunchedEffect
+    }
+    // 立刻清空上一轮：否则新词的头几百毫秒里，屏幕上还是上一个词的结果
+    searchState = SearchProgress()
+    delay(200)
+    collectFileHits(root = searchRoot, query = searchQuery, includeSubdirs = true) {
+      searchState = it
+    }
+  }
 
   val selected = remember { mutableStateMapOf<String, File>() }
   // 相册模式的选择（跨相册累积，再点一下取消）。与文件模式的 selected 各自独立 ——
@@ -300,6 +497,9 @@ private fun PickerPane(
   // 切模式时清空：文件夹模式下没有「勾选」这回事，留着只会在切回来时冒出旧选择
   LaunchedEffect(mode) {
     hint = null
+    // 搜索范围/口径都跟着模式变（文件夹模式只找文件夹），留着旧结果只会误导
+    searchOpen = false
+    searchQuery = ""
     if (mode == UploadMode.Folder) selected.clear()
   }
 
@@ -455,95 +655,163 @@ private fun PickerPane(
             text = "${entries.size} 项",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.outline,
-            modifier = Modifier.padding(end = 8.dp),
+            modifier = Modifier.padding(end = 6.dp),
           )
+          IconButton(
+            onClick = {
+              searchOpen = !searchOpen
+              if (!searchOpen) searchQuery = ""
+            },
+          ) {
+            Icon(
+              imageVector = if (searchOpen) Icons.Default.Close else Icons.Default.Search,
+              contentDescription = if (searchOpen) "退出搜索" else "搜索文件和文件夹",
+              modifier = Modifier.size(18.dp),
+              tint =
+                if (searchOpen) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+          }
         }
       }
 
+      // ── 搜索 ──
+      // 三档模式里只有「文件 / 文件夹」需要它：相册模式的搜索在 AlbumPickerGrid 里，
+      // 走的是 MediaStore 的名字索引（能搜到首批 6000 条之外的），根不同不能共用。
+      val searching = searchOpen && searchQuery.isNotBlank()
+      // 文件夹模式下文件本来就不可选（点了也进不了选中集），搜索结果里索性不列
+      val hits =
+        when {
+          !searching -> emptyList()
+          mode == UploadMode.Folder -> searchState.hits.filter { it.file.isDirectory }
+          else -> searchState.hits
+        }
+      val listModifier = Modifier.weight(1f).fillMaxWidth()
+
+      if (searchOpen) {
+        NetworkSearchField(
+          query = searchQuery,
+          onQueryChange = { searchQuery = it },
+          onClose = {
+            searchOpen = false
+            searchQuery = ""
+          },
+          placeholder =
+            if (mode == UploadMode.Folder) {
+              "搜索文件夹名（含子文件夹）…"
+            } else {
+              "搜索文件名或文件夹名（含子文件夹）…"
+            },
+        )
+      }
+
+      // 状态行只在「还在扫」或「确实有结果」时出现：0 结果时下面那句空态已经说清楚了
+      if (searching && (!searchState.done || hits.isNotEmpty())) {
+        SearchStatusRow(state = searchState, root = searchRoot, shown = hits.size)
+      }
+
+      val emptyText =
+        when {
+          searching ->
+            if (mode == UploadMode.Folder) {
+              "没有名字含「${searchQuery.trim()}」的文件夹"
+            } else {
+              "没有名字含「${searchQuery.trim()}」的文件或文件夹"
+            }
+          mode == UploadMode.Folder -> "这里没有子文件夹"
+          else -> "这里没有可上传的文件"
+        }
+
       // ── 内容 ──
-      if (entries.isEmpty()) {
-        Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+      if (searching && hits.isEmpty() && !searchState.done) {
+        // 边扫边出：还没命中的头几百毫秒留白，进度交给状态行 ——
+        // 这里再摆一句「正在搜索」会随着第一条结果跳出来而闪一下
+        Box(modifier = listModifier)
+      } else if (searching) {
+        if (hits.isEmpty()) {
+          Box(modifier = listModifier, contentAlignment = Alignment.Center) {
+            Text(
+              text = emptyText,
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.outline,
+              modifier = Modifier.padding(horizontal = 24.dp),
+              textAlign = TextAlign.Center,
+            )
+          }
+        } else {
+          LazyColumn(
+            modifier = listModifier,
+            contentPadding = PaddingValues(vertical = 4.dp),
+          ) {
+            items(items = hits, key = { it.file.absolutePath }) { hit ->
+              val entry = hit.file
+              PickerEntryRow(
+                file = entry,
+                selected = selected,
+                // 搜索结果是跨目录的：必须标出它在哪，否则两个同名文件分不清
+                breadcrumb = hit.relativeDir.takeIf { it.isNotEmpty() },
+                onToggle = {
+                  if (selected.containsKey(entry.absolutePath)) {
+                    selected.remove(entry.absolutePath)
+                  } else {
+                    selected[entry.absolutePath] = entry
+                  }
+                  hint = null
+                },
+                // 点文件夹 = 跳进去（顺手退出搜索）：命中之后真正要干的
+                // 十有八九是「在同一层里挑几个」，一直停在搜索态反而挡路
+                onEnter = {
+                  currentDir = entry
+                  searchOpen = false
+                  searchQuery = ""
+                },
+                onPreview =
+                  if (entry.isPreviewable()) {
+                    { previewDeck = deckOfFiles(hits.map { it.file }, entry) }
+                  } else {
+                    null
+                  },
+              )
+            }
+          }
+        }
+      } else if (entries.isEmpty()) {
+        Box(modifier = listModifier, contentAlignment = Alignment.Center) {
           Text(
-            text = if (mode == UploadMode.Folder) "这里没有子文件夹" else "这里没有可上传的文件",
+            text = emptyText,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.outline,
           )
         }
       } else {
         LazyColumn(
-          modifier = Modifier.weight(1f).fillMaxWidth(),
+          modifier = listModifier,
           contentPadding = PaddingValues(vertical = 4.dp),
         ) {
           items(items = entries, key = { it.absolutePath }) { entry ->
-            if (entry.isDirectory) {
-              PickerRow(
-                icon = Icons.Default.Folder,
-                tint = MaterialTheme.colorScheme.secondary,
-                title = entry.name,
-                subtitle = null,
-                trailing = {
-                  Icon(
-                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.outline,
-                  )
+            PickerEntryRow(
+              file = entry,
+              selected = selected,
+              onToggle = {
+                if (selected.containsKey(entry.absolutePath)) {
+                  selected.remove(entry.absolutePath)
+                } else {
+                  selected[entry.absolutePath] = entry
+                }
+                hint = null
+              },
+              onEnter = { currentDir = entry },
+              // 图片/视频才给长按预览：文档类没有可看的内容，给一个「能点开」的暗示是骗人
+              onPreview =
+                if (entry.isPreviewable()) {
+                  { previewDeck = deckOfFiles(entries, entry) }
+                } else {
+                  null
                 },
-                onClick = { currentDir = entry },
-              )
-            } else {
-              val isSelected = selected.containsKey(entry.absolutePath)
-              // 图片/视频才给缩略图和长按预览：文档类没有可看的内容，
-              // 给一个「能点开」的暗示反而是骗人
-              val previewable = entry.isPreviewable()
-              PickerRow(
-                icon = iconFor(entry),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                title = entry.name,
-                subtitle = MediaFormatUtils.formatFileSize(entry.length()),
-                leading =
-                  if (previewable) {
-                    {
-                      LocalMediaThumb(
-                        uri = Uri.fromFile(entry),
-                        isVideo = FileTypeUtils.isVideoFile(entry),
-                        size = 40.dp,
-                      )
-                    }
-                  } else {
-                    null
-                  },
-                trailing = {
-                  Icon(
-                    imageVector =
-                      if (isSelected) {
-                        Icons.Default.CheckCircle
-                      } else {
-                        Icons.Default.RadioButtonUnchecked
-                      },
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint =
-                      if (isSelected) {
-                        MaterialTheme.colorScheme.primary
-                      } else {
-                        MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
-                      },
-                  )
-                },
-                onClick = {
-                  if (isSelected) selected.remove(entry.absolutePath)
-                  else selected[entry.absolutePath] = entry
-                  hint = null
-                },
-                onLongClick =
-                  if (previewable) {
-                    { previewDeck = deckOfFiles(entries, entry) }
-                  } else {
-                    null
-                  },
-              )
-            }
+            )
           }
         }
       }
@@ -803,6 +1071,129 @@ private fun PickerRow(
   }
 }
 
+/**
+ * 选择器里的一行（目录 / 文件）。
+ *
+ * 抽出来是因为「当前目录列表」与「搜索结果列表」画的是同一种行，只有两处不同：
+ * 搜索结果要标出**父目录**（结果跨目录，两个同名文件否则分不清），
+ * 且点文件夹是「跳过去」而不是「就地展开」。
+ */
+@Composable
+private fun PickerEntryRow(
+  file: File,
+  selected: Map<String, File>,
+  onToggle: () -> Unit,
+  onEnter: () -> Unit,
+  onPreview: (() -> Unit)?,
+  /** 搜索命中项相对搜索根的父目录；为空表示没有可标的位置（或就在根下） */
+  breadcrumb: String? = null,
+) {
+  if (file.isDirectory) {
+    PickerRow(
+      icon = Icons.Default.Folder,
+      tint = MaterialTheme.colorScheme.secondary,
+      title = file.name,
+      subtitle = breadcrumb,
+      trailing = {
+        Icon(
+          Icons.AutoMirrored.Filled.KeyboardArrowRight,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+          tint = MaterialTheme.colorScheme.outline,
+        )
+      },
+      onClick = onEnter,
+    )
+    return
+  }
+
+  val isSelected = selected.containsKey(file.absolutePath)
+  val sizeText = MediaFormatUtils.formatFileSize(file.length())
+  val previewable = file.isPreviewable()
+  PickerRow(
+    icon = iconFor(file),
+    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+    title = file.name,
+    subtitle = if (breadcrumb == null) sizeText else "$sizeText · $breadcrumb",
+    leading =
+      if (previewable) {
+        {
+          LocalMediaThumb(
+            uri = Uri.fromFile(file),
+            isVideo = FileTypeUtils.isVideoFile(file),
+            size = 40.dp,
+          )
+        }
+      } else {
+        null
+      },
+    trailing = {
+      Icon(
+        imageVector =
+          if (isSelected) {
+            Icons.Default.CheckCircle
+          } else {
+            Icons.Default.RadioButtonUnchecked
+          },
+        contentDescription = null,
+        modifier = Modifier.size(20.dp),
+        tint =
+          if (isSelected) {
+            MaterialTheme.colorScheme.primary
+          } else {
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+          },
+      )
+    },
+    onClick = onToggle,
+    onLongClick = onPreview,
+  )
+}
+
+/**
+ * 搜索状态行：正在扫哪儿、扫了多少、找到几条、有没有撞上限。
+ *
+ * 「撞上限」必须说出来。搜索是有界的（[SEARCH_MAX_DIRS] / [SEARCH_MAX_HITS]），
+ * 悄悄少给几条，用户只会以为「那个文件不在这台机器上」，然后放弃 ——
+ * 比直接告诉他「结果可能不全，换个更准的词」糟得多。
+ */
+@Composable
+private fun SearchStatusRow(state: SearchProgress, root: File, shown: Int) {
+  val text =
+    buildString {
+      if (state.done) {
+        append("在 ${root.absolutePath} 下找到 $shown 项")
+        if (state.truncated) append(" · 已到扫描上限，结果可能不全")
+      } else {
+        append("正在搜索 ${root.absolutePath}")
+        append(" · 已查 ${state.scannedDirs} 个文件夹")
+        if (shown > 0) append(" · 找到 $shown 项")
+      }
+    }
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    if (!state.done) {
+      CircularProgressIndicator(modifier = Modifier.size(11.dp), strokeWidth = 1.5.dp)
+      Spacer(Modifier.width(7.dp))
+    }
+    Text(
+      text = text,
+      style = MaterialTheme.typography.labelSmall,
+      color =
+        if (state.done && state.truncated) {
+          MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+          MaterialTheme.colorScheme.outline
+        },
+      maxLines = 2,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.weight(1f),
+    )
+  }
+}
+
 @Composable
 private fun NoPermissionPane(
   modifier: Modifier = Modifier,
@@ -842,6 +1233,34 @@ private fun TransferPane(
   // deck 覆盖**整批任务**里所有拿得到本地源的文件 —— 预览里能直接翻前后，
   // 不用关窗再点下一行（图片尤其需要：一组照片要连着比对）。
   var previewDeck by remember { mutableStateOf<PreviewDeck?>(null) }
+
+  /**
+   * 实时速度（字节/秒），只用来算「剩余约 x」。
+   *
+   * 为什么不放进 [UploadBatch]：速度是纯展示量，每秒往状态流里塞一次会让整张
+   * 任务列表跟着重组；这里 1 秒采一次、本地持有就够，且关掉面板自然停。
+   */
+  var speedBps by remember(batch.id) { mutableStateOf(0L) }
+  LaunchedEffect(batch.id) {
+    var lastAt = System.currentTimeMillis()
+    var lastSent = NetworkUploadCenter.batch.value?.sentBytes ?: 0L
+    while (true) {
+      delay(1000)
+      val now = NetworkUploadCenter.batch.value ?: break
+      if (now.id != batch.id || !now.running) break
+      val at = System.currentTimeMillis()
+      val elapsed = at - lastAt
+      val sent = now.sentBytes
+      if (elapsed > 0) {
+        val instant = (sent - lastSent) * 1000 / elapsed
+        // 指数平滑：单次采样会被缓冲冲刷和网络抖动放到很大（能看到 0 与几十 MB/s
+        // 交替出现），原样显示等于让数字乱跳
+        speedBps = if (speedBps <= 0) instant else (speedBps * 2 + instant) / 3
+      }
+      lastAt = at
+      lastSent = sent
+    }
+  }
 
   Column(modifier = Modifier.fillMaxSize()) {
     Row(
@@ -895,6 +1314,24 @@ private fun TransferPane(
             } else {
               MaterialTheme.colorScheme.onSurfaceVariant
             },
+        )
+      }
+      // 「还要多久」——进度条百分比回答不了这个问题，用户真正需要的是这个量级
+      if (batch.running && speedBps > 0) {
+        Spacer(Modifier.height(4.dp))
+        val remaining = (batch.totalBytes - batch.sentBytes).coerceAtLeast(0L)
+        Text(
+          text =
+            buildString {
+              append(MediaFormatUtils.formatFileSize(speedBps))
+              append("/s")
+              if (remaining > 0) {
+                append(" · 剩余约 ")
+                append(formatEta(remaining * 1000 / speedBps))
+              }
+            },
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       }
     }

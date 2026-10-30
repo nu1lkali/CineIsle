@@ -51,11 +51,19 @@ data class AlbumBucket(val id: Long, val name: String, val cover: AlbumItem, val
  *
  * @param loadedAt 加载完成的时间戳。**只用来当 Compose 的 remember key** ——
  *   直接拿 [items] 当 key 会让每次重组都深比较六千个条目。
+ * @param hasMore 库里是否还有更早的条目没读（v181：超出首批上限时给「加载更多」用）
  */
 data class AlbumLibrary(
   val items: List<AlbumItem>,
   val buckets: List<AlbumBucket>,
   val loadedAt: Long = 0L,
+  val hasMore: Boolean = false,
+)
+
+/** 按名字搜索的结果。[truncated] = 撞上条数上限，只给了前一部分 */
+data class AlbumSearchResult(
+  val items: List<AlbumItem>,
+  val truncated: Boolean = false,
 )
 
 /**
@@ -83,13 +91,23 @@ object AlbumMediaSource {
   private const val TAG = "AlbumMediaSource"
 
   /**
-   * 最多读取多少条。
+   * 首批最多读取多少条。
    *
    * 6000 是「够用」与「查询/内存成本」的折中：一个手机相册通常 1000~5000 张，
    * 上万张的设备上少显示最旧的那部分 —— 传文件时几乎不会去挑三年前的照片，
    * 而全量查询会让面板打开前多等好几秒。
+   *
+   * ⚠️ **但首批上限不等于「看不到」**（v181 修）：
+   * - 往下翻有「加载更多」（[loadMore]，按 `date_added` 键集分页，能一直往前翻）；
+   * - 直接找有按名字搜索（[searchByName]，**直查 MediaStore，不受这个上限约束**）。
    */
   const val MAX_ITEMS = 6000
+
+  /** 「加载更多」一次追加多少条。2000 ≈ 屏幕上滚七八屏，够用又不会一次卡住 */
+  const val PAGE_SIZE = 2000
+
+  /** 按名字搜索最多返回多少条（同样会翻页式追加，见 [searchByName] 的 limit） */
+  const val SEARCH_LIMIT = 2000
 
   // 这些列名在 API 26~36 之间有过归属变化（bucket_* 从 ImageColumns/VideoColumns
   // 挪到了 MediaColumns，_data 在 29 被 deprecated 但仍是真实列），
@@ -117,24 +135,143 @@ object AlbumMediaSource {
     val loaded =
       withContext(Dispatchers.IO) {
         val app = context.applicationContext
-        val items =
+        // 两张表各多取一条：用来判断「还有更早的没读」（撞上限 ⇒ 一定还有）
+        val raw =
           buildList {
               addAll(query(app, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, isVideo = false))
               addAll(query(app, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, isVideo = true))
             }
             .sortedByDescending { it.dateAdded }
-            .take(MAX_ITEMS)
+        val items = raw.take(MAX_ITEMS)
         AlbumLibrary(
           items = items,
-          buckets = buildBuckets(items),
+          buckets = bucketsOf(items),
           loadedAt = System.currentTimeMillis(),
+          hasMore = raw.size > items.size,
         )
       }
     cached = loaded
     return loaded
   }
 
-  private fun query(context: Context, base: Uri, isVideo: Boolean): List<AlbumItem> {
+  /**
+   * 「加载更多」：读严格早于 [beforeDateAdded] 的下一段（**键集分页**，不是 offset）。
+   *
+   * ## 为什么用 `date_added < 游标` 而不是 `LIMIT/OFFSET`
+   *
+   * 图片与视频是**两张表**，各自的 offset 对不上统一的「第 6000 条」：
+   * offset 分页还得记住两张表各自消费了多少，中途有新增条目就会漏读或重读。
+   * 键集只需一个游标（当前最旧一条的时间），两表各查一段再归并即可 ——
+   * 重读由调用方按 [AlbumItem.key] 去重（同一时间戳的相邻条目会被重复查出）。
+   *
+   * @param beforeDateAdded 当前已有的最旧一条的 `date_added`（秒）
+   */
+  suspend fun loadMore(context: Context, beforeDateAdded: Long): List<AlbumItem> =
+    withContext(Dispatchers.IO) {
+      val app = context.applicationContext
+      val selection = "$COL_DATE < ?"
+      val args = arrayOf(beforeDateAdded.toString())
+      buildList {
+          addAll(
+            query(
+              context = app,
+              base = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+              isVideo = false,
+              selection = selection,
+              selectionArgs = args,
+              limit = PAGE_SIZE,
+            ),
+          )
+          addAll(
+            query(
+              context = app,
+              base = MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+              isVideo = true,
+              selection = selection,
+              selectionArgs = args,
+              limit = PAGE_SIZE,
+            ),
+          )
+        }
+        .sortedByDescending { it.dateAdded }
+        .take(PAGE_SIZE)
+    }
+
+  /**
+   * 按**文件名**搜索，**直查 MediaStore** —— 这是「找第 6000 条之外的内容」的正解。
+   *
+   * 为什么不只是过滤 [load] 那 6000 条：那 6000 条是按时间取的最新一段，
+   * 三年前拍的那张截图根本不在里面，本地过滤永远搜不到。`_display_name LIKE` 由
+   * MediaProvider 在数据库层完成，不受任何客户端上限影响。
+   *
+   * ⚠️ 上限 [limit] 仍然存在（一次拉几万条没有意义），但**超了会明确回报**
+   * [AlbumSearchResult.truncated]，UI 提示「换个更精确的关键词」而不是假装搜完了。
+   *
+   * @param query 关键词；`%` / `_` 会被剥掉（它们在 LIKE 里是通配符，用户不会想用）
+   */
+  suspend fun searchByName(
+    context: Context,
+    query: String,
+    limit: Int = SEARCH_LIMIT,
+  ): AlbumSearchResult =
+    withContext(Dispatchers.IO) {
+      val needle = query.trim().replace("%", "").replace("_", "")
+      if (needle.isEmpty()) return@withContext AlbumSearchResult(emptyList())
+      val app = context.applicationContext
+      val selection = "$COL_NAME LIKE ?"
+      val args = arrayOf("%$needle%")
+      val raw =
+        buildList {
+            addAll(
+              this@AlbumMediaSource.query(
+                context = app,
+                base = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                isVideo = false,
+                selection = selection,
+                selectionArgs = args,
+                // 多要一条用于判「还有」
+                limit = limit + 1,
+              ),
+            )
+            addAll(
+              this@AlbumMediaSource.query(
+                context = app,
+                base = MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                isVideo = true,
+                selection = selection,
+                selectionArgs = args,
+                limit = limit + 1,
+              ),
+            )
+          }
+          .sortedByDescending { it.dateAdded }
+      AlbumSearchResult(
+        items = raw.take(limit),
+        truncated = raw.size > limit,
+      )
+    }
+
+  /** 把「加载更多」/ 搜索之后的列表并回缓存，避免面板重开又退回首批 6000 条 */
+  fun rememberLoaded(items: List<AlbumItem>, hasMore: Boolean) {
+    val current = cached ?: return
+    cached =
+      current.copy(
+        items = items,
+        buckets = bucketsOf(items),
+        hasMore = hasMore,
+        loadedAt = System.currentTimeMillis(),
+      )
+  }
+
+  @Suppress("LongParameterList")
+  private fun query(
+    context: Context,
+    base: Uri,
+    isVideo: Boolean,
+    selection: String? = null,
+    selectionArgs: Array<String>? = null,
+    limit: Int = MAX_ITEMS,
+  ): List<AlbumItem> {
     val projection =
       buildList {
           add(COL_ID)
@@ -154,7 +291,12 @@ object AlbumMediaSource {
     val args =
       Bundle().apply {
         putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, "$COL_DATE DESC")
-        putInt(ContentResolver.QUERY_ARG_LIMIT, MAX_ITEMS)
+        putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
+        // 条件也走 Bundle（API 26+），免得依赖已废弃的三参重载
+        if (selection != null) putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
+        if (selectionArgs != null) {
+          putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
+        }
       }
 
     val out = ArrayList<AlbumItem>(512)
@@ -219,7 +361,7 @@ object AlbumMediaSource {
    * 入参已按时间倒序，所以 LinkedHashMap 的插入顺序天然就是
    * 「相册按各自最新一张的时间倒序」—— 和系统相册 App 的顺序一致。
    */
-  private fun buildBuckets(items: List<AlbumItem>): List<AlbumBucket> {
+  fun bucketsOf(items: List<AlbumItem>): List<AlbumBucket> {
     val grouped = LinkedHashMap<Long, MutableList<AlbumItem>>()
     items.forEach { grouped.getOrPut(it.bucketId) { mutableListOf() }.add(it) }
     return grouped.map { (id, list) ->

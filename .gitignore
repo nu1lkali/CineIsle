@@ -88,6 +88,9 @@ crash-reports/
 /_*
 /.tmp_*
 /build_tmp_*/
+# 协作期临时写的小工具（git 直调 / 锁清理），只在本机用，不入库
+/.git-run.py
+/.clean_transforms_locks.py
 
 # ── tools/ 本地辅助脚本的产物 ─────────────────────────────────
 #  脚本本身（*.py）入库；它们的输出和下载的 sources jar 不入库

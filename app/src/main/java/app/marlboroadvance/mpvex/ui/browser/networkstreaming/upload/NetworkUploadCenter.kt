@@ -224,6 +224,15 @@ object NetworkUploadCenter {
   @Volatile
   var lastLocalDir: String? = null
 
+  /**
+   * 选择器上次用的模式（进程内记忆，同 [lastLocalDir]）。
+   *
+   * 每一次都从「相册」起步，对「我就是来传某个文件夹」的人是每天多两次点击；
+   * 而真正天天传相册的人也只会多看到一次别的档位 —— 记住上次的选择更划算。
+   */
+  @Volatile
+  internal var lastMode: UploadMode? = null
+
   val running: Boolean get() = _batch.value?.running == true
 
   /**
