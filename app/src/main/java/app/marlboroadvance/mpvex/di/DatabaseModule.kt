@@ -908,6 +908,33 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
 }
 
 
+/**
+ * 19 → 20：新增「收藏时间」账本表 `favorite_marks`。
+ *
+ * 纯新增表，不动任何既有表，所以这条迁移只 `CREATE TABLE`。
+ *
+ * ⚠️ 列的**顺序 / 类型 / 主键声明**必须与 Room 由 [app.marlboroadvance.mpvex.database.entities.FavoriteMarkEntity]
+ * 生成的建表语句逐字一致 —— 差一个字符，Room 打开库时校验就会失败，
+ * 而本项目挂着 `fallbackToDestructiveMigration`，后果是**整库重建**
+ * （服务器配置 / 播放进度 / 播放列表全丢）。改实体时这条 SQL 必须跟着改。
+ */
+val MIGRATION_19_20 = object : Migration(19, 20) {
+  override fun migrate(db: SupportSQLiteDatabase) {
+    db.execSQL(
+      """
+      CREATE TABLE IF NOT EXISTS `favorite_marks` (
+        `serverId` INTEGER NOT NULL,
+        `itemId` TEXT NOT NULL,
+        `favoritedAt` INTEGER NOT NULL,
+        PRIMARY KEY(`serverId`, `itemId`)
+      )
+      """.trimIndent(),
+    )
+    android.util.Log.d("Migration_19_20", "favorite_marks 表已创建")
+  }
+}
+
+
 val DatabaseModule =
   module {
     single<Json> {
@@ -944,6 +971,7 @@ val DatabaseModule =
           MIGRATION_16_17,
           MIGRATION_17_18,
           MIGRATION_18_19,
+          MIGRATION_19_20,
         )
         .fallbackToDestructiveMigration(true) // 最后兜底：迁移链有洞时至少不崩 App
         .build()
@@ -976,6 +1004,8 @@ val DatabaseModule =
       app.marlboroadvance.mpvex.domain.emby.EmbyRepository(
         serverRepo = get(),
         context = androidContext(),
+        // 单条收藏的时间戳在仓库这一层落账（详情页 / 播放器控件 / 视界流三条路都经过它）
+        favoriteClock = get(),
       )
     }
 
@@ -1016,11 +1046,19 @@ val DatabaseModule =
 
     // 「聚合库」：定义只有一份（管理页 / 首页 / 聚合页共用），DAO 与仓库都单例
     single { get<MpvExDatabase>().aggregateLibraryDao() }
+
     single {
       app.marlboroadvance.mpvex.database.repository.AggregateLibraryRepository(
         dao = get(),
       )
     }
+
+    // 「收藏时间」账本：Emby 侧没有收藏时间戳（见 FavoriteMarkEntity 的 KDoc），
+    // 只能客户端点红心时自己记。写入点收敛在 EmbyViewModel 的收藏两个入口，
+    // 单例是必须的 —— 收藏页读的同时播放器可能正在写，多实例没有共享状态也无所谓，
+    // 但省一次 Room 查询总归是好的。
+    single { get<MpvExDatabase>().favoriteMarkDao() }
+    single { app.marlboroadvance.mpvex.domain.emby.FavoriteClock(dao = get()) }
 
     // 清单 4.2：离线内容仓库（纯 Room 读，断网可用）
     single { app.marlboroadvance.mpvex.domain.emby.DownloadedMediaRepository(dao = get()) }

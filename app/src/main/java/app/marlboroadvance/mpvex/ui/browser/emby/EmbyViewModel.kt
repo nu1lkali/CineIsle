@@ -27,6 +27,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyScanChunk
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.domain.emby.FavoriteClock
 import app.marlboroadvance.mpvex.domain.emby.StreamProbe
 import app.marlboroadvance.mpvex.domain.emby.DuplicateGroup
 import app.marlboroadvance.mpvex.domain.emby.MergeItemRef
@@ -157,6 +158,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   private val playerPreferences by inject<PlayerPreferences>(PlayerPreferences::class.java)
   private val browserPreferences by inject<BrowserPreferences>(BrowserPreferences::class.java)
   private val displayPrefsSync by inject<EmbyDisplayPrefsSync>(EmbyDisplayPrefsSync::class.java)
+  /** 收藏时间账本：Emby 不记收藏时间，点红心时自己记一笔（见 FavoriteClock 的 KDoc） */
+  private val favoriteClock by inject<FavoriteClock>(FavoriteClock::class.java)
   // 「聚合库」：删服务器时要级联清掉这台服务器上的聚合库（成员库 Id 全都失效了）
   private val aggregateLibraryRepository by inject<app.marlboroadvance.mpvex.database.repository.AggregateLibraryRepository>(
     app.marlboroadvance.mpvex.database.repository.AggregateLibraryRepository::class.java,
@@ -620,14 +623,32 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     return EmbyItemsPage(result.Items, result.TotalRecordCount)
   }
 
+  /**
+   * 收藏列表的一页。
+   *
+   * [sortBy] / [sortOrder] 必须与收藏页当前的排序口径**一致**：分页是按服务端排序切的，
+   * 本地再排一遍无法把还没加载的条目补进来（详见 EmbyClient.getFavoriteItems 的 KDoc）。
+   * 传 null 走服务端默认（`SortName Ascending`），供不关心顺序的调用方沿用。
+   */
   suspend fun loadFavorites(
     server: EmbyServer,
     startIndex: Int = 0,
     limit: Int = 100,
+    sortBy: String? = null,
+    sortOrder: String? = null,
   ): EmbyItemsPage {
-    val result = repository.getFavoriteItems(server, startIndex, limit)
+    val result = repository.getFavoriteItems(server, startIndex, limit, sortBy, sortOrder)
     return EmbyItemsPage(result.Items, result.TotalRecordCount)
   }
+
+  /**
+   * 本机账本里记过的「收藏时刻」（itemId → epoch millis）。
+   *
+   * 收藏页的「收藏时间」排序用它。读失败 / 没有记录都返回空表 —— 排序会退回
+   * 入库时间当近似值，不影响页面可用。
+   */
+  suspend fun favoriteMarks(server: EmbyServer): Map<String, Long> =
+    runCatching { favoriteClock.marks(server.id) }.getOrDefault(emptyMap())
 
   /**
    * 收藏的演员列表（收藏页「演员」tab）。
@@ -937,6 +958,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     if (isPerson) {
       invalidateFavoritePersonsCache()
     }
+    // 单条收藏的时间戳**不在这里记**：它由 EmbyRepository 的收藏方法统一落账，
+    // 这样播放器控件（EmbyPlayerActions）与视界流红心（FeedViewModel）两条旁路也覆盖到了。
     result.exceptionOrNull()?.let { _error.value = it.message ?: "操作失败" }
     return result
   }
@@ -1032,6 +1055,16 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       .getOrElse { EmbyBatchResult(0, ids.size, it.message) }
     if (items.any { it.Type?.equals("Person", ignoreCase = true) == true }) {
       invalidateFavoritePersonsCache()
+    }
+    // 与单条收藏同一套记账。批量接口只回「成功几条 / 失败几条」，拿不到具体是哪些，
+    // 所以按整批记：多记的那几条此时并没有被收藏，不会出现在收藏页，不影响排序；
+    // 真被收藏时（下一次操作）时间会被覆盖。
+    // ⚠️ 批量走的是 EmbyClient.setFavoriteMany（静态方法），绕过 EmbyRepository，
+    //    所以这里必须单独记一次 —— 单条那条路已经在仓库里记过了。
+    if (favorite) {
+      favoriteClock.stamp(server.id, ids)
+    } else {
+      favoriteClock.forget(server.id, ids)
     }
     _error.value = if (result.failed > 0) result.firstError ?: "部分操作失败" else null
     result

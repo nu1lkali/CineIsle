@@ -32,6 +32,19 @@ import kotlinx.coroutines.withContext
 class EmbyRepository(
   private val serverRepo: EmbyServerRepository,
   private val context: android.content.Context,
+  /**
+   * 收藏时间账本。Emby 只存 `IsFavorite` 这个布尔值，没有收藏时间戳
+   * （见 [app.marlboroadvance.mpvex.database.entities.FavoriteMarkEntity] 的 KDoc），
+   * 收藏页「收藏时间」排序只能靠它。
+   *
+   * ⚠️ 挂在这一层而不是各个 UI 调用点：单条收藏一共有三条路
+   * （详情页/媒体库卡片 → EmbyViewModel、播放器控件 → EmbyPlayerActions、
+   * 视界流红心 → FeedViewModel），它们最终都走 [setFavorite] / [favorite] / [unfavorite]。
+   * 在 UI 层记账迟早漏一条，而漏掉的表现是「排序里它凭空沉到最后」，很难查。
+   *
+   * 可空：仓库在单元测试里不需要账本，传 null 即退化为「不记录」。
+   */
+  private val favoriteClock: FavoriteClock? = null,
 ) {
   // 仓库是 Koin 单例，用它自己的作用域维护"当前服务器"，保证跨页面一致
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -659,13 +672,26 @@ class EmbyRepository(
   suspend fun getItem(server: EmbyServer, itemId: String): EmbyItem =
     withContext(Dispatchers.IO) { EmbyClient.getItem(server, itemId) }
 
-  /** 收藏夹列表 */
+  /**
+   * 收藏夹列表。
+   *
+   * [sortBy] / [sortOrder] 会**下推到服务端**：收藏页是分页的，分页切分跟着 SortBy 走，
+   * 只在本地排序会得到「第一页里再排一遍」这种半截结果（见 EmbyClient.getFavoriteItems 的 KDoc）。
+   */
   suspend fun getFavoriteItems(
     server: EmbyServer,
     startIndex: Int = 0,
     limit: Int = 100,
+    sortBy: String? = null,
+    sortOrder: String? = null,
   ): EmbyItemsResult = withContext(Dispatchers.IO) {
-    EmbyClient.getFavoriteItems(server, startIndex, limit)
+    EmbyClient.getFavoriteItems(
+      server = server,
+      startIndex = startIndex,
+      limit = limit,
+      sortBy = sortBy,
+      sortOrder = sortOrder,
+    )
   }
 
   /**
@@ -974,11 +1000,16 @@ class EmbyRepository(
   // ─── 收藏 / 删除 / 已看 ───
 
   suspend fun favorite(server: EmbyServer, itemId: String) = withContext(Dispatchers.IO) {
-    EmbyClient.setFavorite(server, itemId, true)
+    val data = EmbyClient.setFavorite(server, itemId, true)
+    // 记账（见构造参数的说明）：服务端不记时间，客户端现在记
+    favoriteClock?.stamp(server.id, listOf(itemId))
+    data
   }
 
   suspend fun unfavorite(server: EmbyServer, itemId: String) = withContext(Dispatchers.IO) {
-    EmbyClient.setFavorite(server, itemId, false)
+    val data = EmbyClient.setFavorite(server, itemId, false)
+    favoriteClock?.forget(server.id, listOf(itemId))
+    data
   }
 
   /** 加入 / 取消收藏；返回服务器回传的 UserData（含 IsFavorite），调用方据此确认真实状态 */
@@ -987,7 +1018,13 @@ class EmbyRepository(
     itemId: String,
     favorite: Boolean,
   ): EmbyUserData? = withContext(Dispatchers.IO) {
-    EmbyClient.setFavorite(server, itemId, favorite)
+    val data = EmbyClient.setFavorite(server, itemId, favorite)
+    if (favorite) {
+      favoriteClock?.stamp(server.id, listOf(itemId))
+    } else {
+      favoriteClock?.forget(server.id, listOf(itemId))
+    }
+    data
   }
 
   /**
@@ -997,7 +1034,9 @@ class EmbyRepository(
    * `POST .../Delete` 回 200 却不落库，需要标准写法兜底。
    */
   suspend fun unfavoriteHard(server: EmbyServer, itemId: String): EmbyUserData? = withContext(Dispatchers.IO) {
-    EmbyClient.unfavoriteHard(server, itemId)
+    val data = EmbyClient.unfavoriteHard(server, itemId)
+    favoriteClock?.forget(server.id, listOf(itemId))
+    data
   }
 
   /**

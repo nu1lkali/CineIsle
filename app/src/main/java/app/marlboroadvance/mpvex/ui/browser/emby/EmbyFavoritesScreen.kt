@@ -124,6 +124,16 @@ private const val MOVIE_PAGE_SIZE = 100
 private const val SEARCH_AUTOFILL_MAX_PAGES = 10
 
 /**
+ * 选「收藏时间」排序时最多自动往后补拉几页。
+ *
+ * 这个排序**服务端做不了**（Emby 只存 IsFavorite 布尔值，没有收藏时间戳），
+ * 只能在本地按账本排。而分页是按名称切的 —— 不补拉的话，「我刚收藏的那部」
+ * 如果名字靠后，压根不在第一页里，用户会觉得「收藏时间排序根本没用」。
+ * 上限与搜索同一量级（10 页 ≈ 1000 项）：再多的收藏也不会为了一次排序全量拉完。
+ */
+private const val FAVORITE_SORT_AUTOFILL_MAX_PAGES = 10
+
+/**
  * Emby 收藏页：展示服务器上标记为收藏的媒体、演员、类型与工作室。
  *
  * 标题右侧下拉切换 tab（默认影片），各 tab 列表各自缓存一份，来回切换不重复发请求；
@@ -166,6 +176,8 @@ fun EmbyFavoritesScreen() {
   val studioCache = remember { mutableStateOf<Pair<Long, List<EmbyItem>>?>(null) }
   /** 影片 tab 的分页缓存：serverId → 已加载页数（0 = 没加载过） */
   val movieCache = remember { mutableStateOf<Pair<Long, Int>?>(null) }
+  /** 上次成功拉取时用的排序口径（[sortKey]）。与缓存里的顺序不一致 ⇒ 缓存作废 */
+  var movieCacheSortKey by remember { mutableStateOf<String?>(null) }
   var isLoading by remember { mutableStateOf(true) }
   var error by remember { mutableStateOf<String?>(null) }
 
@@ -181,8 +193,9 @@ fun EmbyFavoritesScreen() {
   }
 
   // ── 搜索 / 排序 ──
-  // 过滤与排序都在已加载的页上做，即时且不发请求。分页后本地搜索只覆盖已翻到的页，
-  // 故 searchQuery 变化时会自动补拉（有上限，见 SEARCH_AUTOFILL_MAX_PAGES）。
+  // 搜索是**本地过滤**，只覆盖已加载的页（不够时自动补拉，见 SEARCH_AUTOFILL_MAX_PAGES）；
+  // 排序不同：名称 / 年份 / 评分 / 入库时间四档都下推服务端（分页与排序同口径），
+  // 只有服务端没有的「收藏时间」是本地排 —— 见 FavoriteSort 的 KDoc。
   var searchQuery by rememberSaveable { mutableStateOf("") }
   var sort by remember {
     mutableStateOf(
@@ -196,6 +209,24 @@ fun EmbyFavoritesScreen() {
   // ⚠️ 不能每次重组现洗 —— 敲一个搜索字都会重组，列表会在手指底下乱跳
   var randomSeed by rememberSaveable { mutableIntStateOf(Random.nextInt()) }
 
+  // ── 收藏时间账本（只有「收藏时间」排序用得到）──
+  // Emby 侧没有收藏时间戳（见 FavoriteSort 的 KDoc），这里读的是本机记录，
+  // 进页面 / 换服务器时读一次即可。读失败返回空表 ⇒ 该排序退回按入库时间，不挡页面。
+  var favoriteTimes by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
+  LaunchedEffect(server?.id) {
+    val current = server ?: return@LaunchedEffect
+    favoriteTimes = viewModel.favoriteMarks(current)
+  }
+
+  /**
+   * 排序口径的字符串键。
+   *
+   * 它同时是两件事的判据：
+   * 1. **页内缓存是否过期** —— 服务端排序参与分页切分，口径一变，缓存里的顺序就作废；
+   * 2. 换排序时那条重拉 effect 的 key。
+   */
+  val sortKey = "${sort.name}:$sortAsc"
+
   // ⚠️⚠️ `remember(items, ...)` 成立的前提是 items 每次更新都为新的 List 实例。
   // 若用 mutableStateListOf，实例不变 ⇒ key 不变 ⇒ 缓存死在首次（空列表）那一版，
   // 表现为一进页面就弹「没有匹配「」的收藏」且网格空白。
@@ -204,8 +235,8 @@ fun EmbyFavoritesScreen() {
       searchQuery.isBlank() || it.Name?.contains(searchQuery.trim(), ignoreCase = true) == true
     }
   }
-  val visibleItems = remember(filteredItems, sort, sortAsc, randomSeed) {
-    sort.apply(filteredItems, sortAsc, randomSeed)
+  val visibleItems = remember(filteredItems, sort, sortAsc, randomSeed, favoriteTimes) {
+    sort.apply(filteredItems, sortAsc, randomSeed, favoriteTimes)
   }
 
   // ── 多选模式（批量操作）──
@@ -271,7 +302,17 @@ fun EmbyFavoritesScreen() {
    */
   fun moviePageLoader(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer):
     suspend (Int, Int) -> PagedResult<EmbyItem>? = { start, limit ->
-    val page = viewModel.loadFavorites(current, start, limit)
+    // 排序口径必须与分页口径一致：分页是按服务端 SortBy 切的，本地再排一遍
+    // 补不回没加载的条目（见 FavoriteSort 的 KDoc）。
+    // 服务端没有对应排序的（收藏时间 / 随机）仍然只传默认的 SortName，
+    // 由本地排序负责，调用方会先自动补拉几页再排。
+    val page = viewModel.loadFavorites(
+      server = current,
+      startIndex = start,
+      limit = limit,
+      sortBy = sort.serverSortBy,
+      sortOrder = if (sort.hasDirection) (if (sortAsc) "Ascending" else "Descending") else null,
+    )
     // 网格 key = Id ?: Name：服务端可能重复返回同一条目，重复 key 会撞崩 LazyVerticalGrid
     PagedResult(
       items = page.items.distinctBy { it.Id ?: it.Name ?: "" },
@@ -281,9 +322,17 @@ fun EmbyFavoritesScreen() {
   }
 
   suspend fun loadMovies(current: app.marlboroadvance.mpvex.domain.emby.EmbyServer, force: Boolean) {
-    // 只有本服务器已拉过至少一页才跳过请求（切 tab 回来不再发一次）
+    // 只有本服务器、且**同排序口径**已拉过至少一页才跳过请求（切 tab 回来不再发一次）。
+    // ⚠️ 少了 sortKey 的判断，换排序后切回影片 tab 会命中旧缓存 ——
+    // 服务端按旧口径切的分页 + 新排序本地排一遍，又回到「排序像没生效」的老毛病。
     val cached = movieCache.value
-    if (!force && cached != null && cached.first == current.id && moviePage.items.isNotEmpty()) {
+    if (
+      !force &&
+        cached != null &&
+        cached.first == current.id &&
+        moviePage.items.isNotEmpty() &&
+        movieCacheSortKey == sortKey
+    ) {
       return
     }
     runCatching { moviePage.reload(moviePageLoader(current)) }
@@ -291,10 +340,12 @@ fun EmbyFavoritesScreen() {
     if (moviePage.error != null) {
       error = moviePage.error
       movieCache.value = null
+      movieCacheSortKey = null
       return
     }
     error = null
     movieCache.value = current.id to 1
+    movieCacheSortKey = sortKey
   }
 
   /**
@@ -480,6 +531,41 @@ fun EmbyFavoritesScreen() {
   }
 
   LaunchedEffect(server?.id, tab) { load(force = false) }
+
+  /**
+   * 换排序 / 反转方向 → **按新口径重拉首页**。
+   *
+   * 为什么不只是本地重排：分页的切法跟着服务端 `SortBy` 走，本地排只能动「已经加载的
+   * 那几页」。选「入库时间 ↓」时若只本地排，得到的是「名字最靠前的 100 条里最晚入库的」，
+   * 真正最晚入库的片子可能还没被拉下来 —— 这正是原来「排序看着不太对劲」的根因。
+   *
+   * 「收藏时间」服务端排不了，改为先补拉若干页再本地排（见 FAVORITE_SORT_AUTOFILL_MAX_PAGES）。
+   *
+   * ⚠️ `appliedSortKey` 初值就是当前口径 ⇒ 首次组合不触发，避免进页面就请求两次。
+   */
+  var appliedSortKey by remember { mutableStateOf(sortKey) }
+  LaunchedEffect(sortKey, tab, server?.id) {
+    if (appliedSortKey == sortKey) return@LaunchedEffect
+    appliedSortKey = sortKey
+    val current = server ?: return@LaunchedEffect
+    if (tab != FavoriteTab.MOVIE) return@LaunchedEffect
+    isLoading = true
+    loadMovies(current, force = true)
+    if (sort == FavoriteSort.FAVORITED) {
+      // 账本再读一次：用户很可能是刚在详情页点了红心才回来切到这一档的，
+      // 上面那条 LaunchedEffect 只在换服务器时读，读到的是进来那一刻的快照
+      favoriteTimes = viewModel.favoriteMarks(current)
+      var guard = 0
+      while (moviePage.hasMore && guard < FAVORITE_SORT_AUTOFILL_MAX_PAGES) {
+        val before = moviePage.items.size
+        loadMoreMovies(current)
+        // 一页都没新增 = 服务端开始重复返回同一批，再拉也是白拉
+        if (moviePage.items.size == before) break
+        guard++
+      }
+    }
+    isLoading = false
+  }
 
   // 下拉刷新：绕过本页缓存与 ViewModel 缓存强制重拉当前 tab
   val isRefreshing = remember { mutableStateOf(false) }
@@ -941,10 +1027,20 @@ private fun itemProgressOf(item: EmbyItem): Float? {
 }
 
 /**
- * 收藏页的排序方式（本地排序，不发请求）。
+ * 收藏页的排序方式。
  *
- * 名称用 [EmbyItem.SortName]（已剥离 "The/A" 前缀）而非 Name，与服务器排序口径一致，
- * 切到本地排序不会突然乱序。
+ * ## 「服务端排序」与「本地排序」的分界（两处都改了才自洽）
+ *
+ * 收藏列表是**分页**的，而且分页的切法跟着服务端的 `SortBy` 走。原来一律按
+ * `SortName Ascending` 拿页、再在本地重排，得到的是「名字最靠前的 N 条里再排一遍」——
+ * 用户选了「最新入库」却看不到真正最晚入库的那部片（它名字靠后，根本没被拉下来）。
+ * 所以凡服务端有对应排序的（名称 / 年份 / 评分 / 入库时间），一律**下推**，
+ * 见 [serverSortBy]；换排序时会把首页重拉（收藏页里那段 LaunchedEffect）。
+ *
+ * 只有 `收藏时间` 是服务端**没有**的能力（Emby 的收藏只是布尔状态，
+ * `UserItemDataDto` 与 `ItemSortBy` 都没有收藏时间），只能靠本机账本
+ * [app.marlboroadvance.mpvex.domain.emby.FavoriteClock] 在本地排，
+ * 因此它会先自动补拉若干页再排（见 FAVORITE_SORT_AUTOFILL_MAX_PAGES）。
  */
 private enum class FavoriteSort(
   val label: String,
@@ -954,11 +1050,36 @@ private enum class FavoriteSort(
   val descHint: String,
   /** 没手动切过方向时的自然方向（与媒体库页同一套规则） */
   val naturalAsc: Boolean,
+  /** 菜单里的第二行补充说明：说清这一项**到底按什么排**。null = 不需要 */
+  val note: String? = null,
+  /**
+   * 下推给服务端的 `SortBy` 取值。null = 服务端没有这个排序（只能本地排）。
+   * 取值必须是 Emby `ItemSortBy` 的合法值，写错服务端会 400。
+   */
+  val serverSortBy: String? = null,
 ) {
-  NAME("名称", "A → Z", "Z → A", naturalAsc = true),
-  YEAR("年份", "旧 → 新", "新 → 旧", naturalAsc = false),
-  RATING("评分", "低 → 高", "高 → 低", naturalAsc = false),
-  ADDED("最新添加", "旧 → 新", "新 → 旧", naturalAsc = false),
+  NAME("名称", "A → Z", "Z → A", naturalAsc = true, serverSortBy = "SortName"),
+  YEAR("年份", "旧 → 新", "新 → 旧", naturalAsc = false, serverSortBy = "ProductionYear"),
+  RATING("评分", "低 → 高", "高 → 低", naturalAsc = false, serverSortBy = "CommunityRating"),
+  // 原来叫「最新添加」，但它排的是媒体的入库时间（DateCreated），与「收藏」无关 ——
+  // 名字必须说实话，否则用户会把它当成「我最近收藏的」。
+  ADDED(
+    label = "入库时间",
+    ascHint = "旧 → 新",
+    descHint = "新 → 旧",
+    naturalAsc = false,
+    note = "媒体加入媒体库的时间，不是收藏时间",
+    serverSortBy = "DateCreated",
+  ),
+  // 服务端没有收藏时间戳，只能读本机账本；没记过的（别的客户端收藏的 / 本功能上线前收藏的）
+  // 退回入库时间当近似值 —— 它不会比「刚收藏的」更晚，所以新收藏永远排在前头。
+  FAVORITED(
+    label = "收藏时间",
+    ascHint = "旧 → 新",
+    descHint = "新 → 旧",
+    naturalAsc = false,
+    note = "本机记录的收藏时间；旧收藏按入库时间估算",
+  ),
   // 随机：不分升降序，再点一次换一批
   RANDOM("随机", "再点一次换一批", "再点一次换一批", naturalAsc = true),
   ;
@@ -966,7 +1087,18 @@ private enum class FavoriteSort(
   /** 是否带方向（随机没有） */
   val hasDirection: Boolean get() = this != RANDOM
 
-  fun apply(list: List<EmbyItem>, asc: Boolean, seed: Int = 0): List<EmbyItem> = when (this) {
+  /**
+   * 本地排序。
+   *
+   * @param favoriteTimes 收藏时刻（itemId → epoch millis），只有 [FAVORITED] 用得上。
+   *   为空表时该排序退化成「按入库时间」，不会崩也不会空列表
+   */
+  fun apply(
+    list: List<EmbyItem>,
+    asc: Boolean,
+    seed: Int = 0,
+    favoriteTimes: Map<String, Long> = emptyMap(),
+  ): List<EmbyItem> = when (this) {
     // ⚠️ 随机必须用固定种子：直接 shuffled() 会在每次重组时洗出不同顺序
     RANDOM -> list.shuffled(Random(seed))
     NAME -> sortByKey(list, asc) { (it.SortName ?: it.Name)?.lowercase() }
@@ -974,7 +1106,23 @@ private enum class FavoriteSort(
     RATING -> sortByKey(list, asc) { it.CommunityRating }
     // DateCreated 是 ISO-8601 串，字典序即时间序（同格式下成立）
     ADDED -> sortByKey(list, asc) { it.DateCreated }
+    FAVORITED ->
+      sortByKey(list, asc) { it.Id?.let(favoriteTimes::get) ?: isoToEpochMs(it.DateCreated) }
   }
+}
+
+/**
+ * Emby 的时间串 → epoch millis，解析不出来返回 null（该条会按「无值」沉底）。
+ *
+ * `DateCreated` 的典型形态是 `2024-05-01T12:34:56.0000000Z`（7 位小数）。
+ * `OffsetDateTime` 能吃下带 `Z` 与带 `+08:00` 两种；`Instant` 只认 `Z`，
+ * 所以先试前者。minSdk 26 ⇒ java.time 原生可用，不需要 desugaring。
+ */
+private fun isoToEpochMs(iso: String?): Long? {
+  if (iso.isNullOrBlank()) return null
+  return runCatching { java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli() }
+    .recoverCatching { java.time.Instant.parse(iso).toEpochMilli() }
+    .getOrNull()
 }
 
 /**
@@ -1112,6 +1260,16 @@ private fun FavoriteSearchSortRow(
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.outline,
                 )
+                // 第三行只说一件事：这一项**排的到底是什么**。
+                // 「入库时间」必须点明它不是收藏时间，「收藏时间」必须点明旧收藏是估算值 ——
+                // 这两处含糊会让用户以为排序坏了。
+                option.note?.let { note ->
+                  Text(
+                    text = note,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                  )
+                }
               }
             },
             // 勾放尾部（M3 惯例），再用主色文字强化，不靠位置飘忽的首位图标表达选中

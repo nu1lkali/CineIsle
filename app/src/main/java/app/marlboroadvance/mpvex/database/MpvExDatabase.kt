@@ -9,6 +9,7 @@ import app.marlboroadvance.mpvex.database.dao.DislikeDao
 import app.marlboroadvance.mpvex.database.dao.DownloadedMediaDao
 import app.marlboroadvance.mpvex.database.dao.EmbyDownloadDao
 import app.marlboroadvance.mpvex.database.dao.EmbyServerDao
+import app.marlboroadvance.mpvex.database.dao.FavoriteMarkDao
 import app.marlboroadvance.mpvex.database.dao.FolderCoverCacheDao
 import app.marlboroadvance.mpvex.database.dao.NetworkConnectionDao
 import app.marlboroadvance.mpvex.database.dao.NetworkFavoriteDao
@@ -21,6 +22,7 @@ import app.marlboroadvance.mpvex.database.entities.AggregateLibraryEntity
 import app.marlboroadvance.mpvex.database.entities.DislikedMediaEntity
 import app.marlboroadvance.mpvex.database.entities.DownloadedMediaEntity
 import app.marlboroadvance.mpvex.database.entities.EmbyDownloadEntity
+import app.marlboroadvance.mpvex.database.entities.FavoriteMarkEntity
 import app.marlboroadvance.mpvex.database.entities.PlaybackStateEntity
 import app.marlboroadvance.mpvex.database.entities.PlaylistEntity
 import app.marlboroadvance.mpvex.database.entities.PlaylistItemEntity
@@ -56,8 +58,11 @@ import app.marlboroadvance.mpvex.domain.network.NetworkFavorite
     // 「聚合库」：把同服务器多个同类型媒体库聚合成一个本地视图（不写服务端）。
     // 只一张小表：名字 + 逗号分隔的成员库 Id + 排序位，见 AggregateLibraryEntity 的 KDoc
     AggregateLibraryEntity::class,
+    // 「收藏时间」账本。Emby 的收藏只是布尔状态、没有时间戳，
+    // 「最近收藏的排最前」只能本机记，见 FavoriteMarkEntity 的 KDoc
+    FavoriteMarkEntity::class,
   ],
-  version = 19,
+  version = 20,
   exportSchema = true,
 )
 @TypeConverters(NetworkProtocolConverter::class)
@@ -87,4 +92,6 @@ abstract class MpvExDatabase : RoomDatabase() {
   abstract fun dislikeDao(): DislikeDao
 
   abstract fun aggregateLibraryDao(): AggregateLibraryDao
+
+  abstract fun favoriteMarkDao(): FavoriteMarkDao
 }

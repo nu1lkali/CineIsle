@@ -1526,16 +1526,35 @@ object EmbyClient {
    * 收藏夹列表（用户标过 IsFavorite 的项）。
    *
    * 默认只返回视频类媒体，音乐与图片不在播放器收藏页展示。
+   *
+   * ## 为什么排序要交给服务端（而不是拉回来本地排）
+   *
+   * 这个接口是**分页**的（收藏页一页 100 条，滚到底再续拉）。本地排序只作用于
+   * 「已经拉回来的那几页」，而**分页切分本身是按 SortBy 走的**：
+   * 排序口径写死 `SortName Ascending` 时，服务端返回的第一页是「名字最靠前的 100 条」，
+   * 客户端再按入库时间排一遍 —— 得到的其实是「名字前 100 条里最晚入库的」，
+   * 真正最晚入库的那部片子如果名字靠后，压根不在这一页里，永远进不了第一屏。
+   * 收藏越多越离谱，且只在特定排序下出现，看起来就像「排序偶尔不生效」。
+   *
+   * 所以凡是服务端有对应排序的（名称 / 年份 / 评分 / 入库时间），都必须下推，
+   * 让**分页与排序同口径**；只有 `收藏时间` 这种服务端没有的，才退回本地排
+   * （见 EmbyFavoritesScreen 的 FavoriteSort.FAVORITED）。
+   *
+   * @param sortBy Emby `SortBy` 取值（`SortName` / `ProductionYear` / `CommunityRating` /
+   *   `DateCreated` …）。传 null 保持原来的 `SortName`，老调用方行为不变。
+   * @param sortOrder `Ascending` / `Descending`
    */
   fun getFavoriteItems(
     server: EmbyServer,
     startIndex: Int = 0,
     limit: Int = 100,
     mediaTypes: List<String>? = listOf(VIDEO_MEDIA_TYPE),
+    sortBy: String? = null,
+    sortOrder: String? = null,
   ): EmbyItemsResult = getItems(
     server,
-    sortBy = "SortName",
-    sortOrder = "Ascending",
+    sortBy = sortBy ?: "SortName",
+    sortOrder = sortOrder ?: "Ascending",
     filters = listOf("IsFavorite"),
     mediaTypes = mediaTypes,
     startIndex = startIndex,
