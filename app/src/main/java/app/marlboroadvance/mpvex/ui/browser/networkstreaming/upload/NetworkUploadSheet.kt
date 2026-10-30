@@ -531,7 +531,7 @@ private fun PickerPane(
   Column(modifier = Modifier.fillMaxSize()) {
     // ── 头部：标题 + 目标路径 ──
     Row(
-      modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 18.dp),
+      modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 14.dp),
       verticalAlignment = Alignment.Top,
     ) {
       Column(modifier = Modifier.weight(1f)) {
@@ -820,7 +820,14 @@ private fun PickerPane(
     // ── 底部操作条 ──
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
-      Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(20.dp)) {
+      // 这一条只承担两件事：说清选了多久、给一个上传键。
+      // 原来四周 20dp 留白 + 10dp 间隔一共吃掉 ~110dp，等于砍掉一整行缩略图。
+      Column(
+        modifier =
+          Modifier.fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+      ) {
         Text(
           text =
             hint
@@ -855,7 +862,7 @@ private fun PickerPane(
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
           if (hasRunningBatch) {
             TextButton(onClick = onShowTransfer) { Text("查看上传进度") }
@@ -950,7 +957,7 @@ private fun ModeChip(
     modifier = Modifier.clickable(onClick = onClick),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+      modifier = Modifier.padding(horizontal = 13.dp, vertical = 5.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
