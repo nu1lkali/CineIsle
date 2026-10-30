@@ -2005,8 +2005,40 @@ android {
     //       换片时 `resetProbedDuration` 连 `_preciseDuration` 一起清（否则新片会被
     //       旧片的值当基准误判），靠看守每秒把 mpv 当前值喂回来补上。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 179
-    versionName = "1.6.10"
+    // ── v180（versionCode 180，versionName 涨到 1.6.11：功能轮）──────────────
+    //     用户：「请对网络位置模块（alist 协议）的上传到远程功能做以下优化：
+    //            ① 上传时按单条目显示当前已上传容量与总容量；
+    //            ② 修复视频预览：底部暂停/播放控件在时长很长时显示不全、过小；
+    //            ③ 补全 alist 的复制、移动操作，支持单文件和单目录；
+    //            ④ 设计并补全 alist 的批量操作（复制、移动、删除），明确进入多选的
+    //               方式，确保与现有操作不冲突」。
+    //
+    //     〔①〕上传面板 `TaskRow` 的进度条下面补一行「已上传 x / 共 y」
+    //       （`MediaFormatUtils.formatFileSize`）；总量未知（sizeBytes<=0）时只报已传量，
+    //       不编一个「共 0 B」。进度条保留 —— 它是「大概到哪」的快速视觉，
+    //       文字回答「还差多少 MB」，两者互补。
+    //     〔②〕预览里的 `MediaController` 换成自绘控件条，根因见
+    //       `NetworkUploadSheet.VideoPreview` 的 KDoc：MediaController 的尺寸由系统主题
+    //       与锚点窗口决定，锚在 16:9 画面框里本就矮；时长变成 `12:34:56` 后两侧文本
+    //       把中间进度条挤没 ⇒ 就是「控件过小/不全」。现在固定 56dp 高控件栏
+    //       （44dp 播放键 + 最小宽度时间 + 吃剩余宽度的 Slider），与时长无关。
+    //       控件放在画面**下方**而非浮层：VideoView 是 SurfaceView，同层 Compose 盖不住。
+    //     〔③〕`AlistClient.copy`（POST fs/copy，与 fs/move 请求体同构）+
+    //       `ops/NetworkFileOps`：移动走「撞名先在本目录改名再移」（复用工具箱
+    //       `toolboxUniqueName`）；复制**不能改源名**，撞名改走「目标临时目录 →
+    //       复制 → 改名 → 移出 → 删临时目录」，绝不覆盖。自身嵌套先拦掉。
+    //       入口：长按菜单「复制到…/移动到…」→ `NetworkFolderPickerSheet` 选目标目录。
+    //     〔④〕多选态 `selectionMode` 是**显式开关**（不是「选中集非空」的派生态：
+    //       ⋮ 菜单「批量选择」要能从零开始挑）。入口两个：⋮「批量选择」、长按菜单
+    //       「选择」（勾上该条）。选中态复用 `SelectionState` + `BrowserTopBar` 的
+    //       `SelectionTopBar`（新开 `onCopyClick`/`onMoveClick` 两槽位）⇒ 与 Emby /
+    //       本地浏览同一套观感。卡片勾选外壳 `NetworkSelectableFrame` 包住四种卡，
+    //       点击由 `onItemClickOverride` 统一接管；长按在多选态改为切换勾选。
+    //       批量删除二次确认、写操作期间 `NetworkOpProgressDialog` 显示 x/y。
+    //     与本轮无关的旧文件一律不动；写操作仍只对 AList（supportsWrite）开放。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 180
+    versionName = "1.6.11"
 
     vectorDrawables {
       useSupportLibrary = true

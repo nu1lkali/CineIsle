@@ -18,6 +18,9 @@ import app.marlboroadvance.mpvex.domain.network.type
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.AlistClient
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.download.NetworkDownloadCenter
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkFileOps
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkOpResult
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkTransferMode
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.DirSizeEntry
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.DirSizeUiState
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.NetworkDirSizeStore
@@ -450,6 +453,85 @@ class NetworkBrowserViewModel(
           onResult(true, null)
         }
         .onFailure { onResult(false, it.message ?: "新建文件夹失败") }
+    }
+  }
+
+  // ── 复制 / 移动 / 批量删除（只有 AList 有写接口）──
+
+  /**
+   * 给「选择目标文件夹」弹窗列目录（只读，但用 [writeClient]）：
+   *
+   * 这个弹窗只会在 `supportsWrite` 的协议下出现，用写客户端既能顺带判「还能不能写」，
+   * 也省得再取一次读客户端（两者是同一个实例）。
+   */
+  suspend fun listDirForPicker(path: String): Result<List<NetworkFile>> {
+    val client = writeClient() ?: return Result.failure(IllegalStateException("当前协议不支持此操作"))
+    return client.listFiles(path)
+  }
+
+  /**
+   * 把一组条目复制 / 移动到 [dstDir]（单条与批量走同一条路：传一个元素的列表即可）。
+   *
+   * @param onProgress (已完成, 总数)。⚠️ 从协程里同步回调，UI 侧只更新状态
+   * @param onResult 结束回执。**成败必须给准信** —— 写操作作用在服务器上，
+   *   静默结束会让用户以为「点了没反应」（与 [renameFile] / [deleteFile] 同一约定）
+   */
+  fun transferFiles(
+    files: List<NetworkFile>,
+    dstDir: String,
+    mode: NetworkTransferMode,
+    onProgress: (done: Int, total: Int) -> Unit,
+    onResult: (NetworkOpResult) -> Unit,
+  ) {
+    if (files.isEmpty()) {
+      onResult(NetworkOpResult())
+      return
+    }
+    viewModelScope.launch {
+      val client = writeClient()
+      if (client == null) {
+        onResult(NetworkOpResult(failed = files.size, firstError = "当前协议不支持${mode.verb}"))
+        return@launch
+      }
+      val result =
+        runCatching { NetworkFileOps.transfer(client, files, dstDir, mode, onProgress) }
+          .getOrElse {
+            NetworkOpResult(failed = files.size, firstError = it.message ?: "${mode.verb}失败")
+          }
+      // 目标目录（以及被搬空的源目录）的统计全部失效：一个连接整体失效最省心，
+      // 与 renameFile / deleteFile 同一口径（见 NetworkDirSizeStore.invalidate）
+      NetworkDirSizeStore.invalidate(connectionId)
+      loadFiles()
+      onResult(result)
+    }
+  }
+
+  /**
+   * 批量删除。
+   *
+   * ⚠️ **不可逆**（AList 没有回收站），UI 必须二次确认后再调。
+   */
+  fun deleteFiles(
+    files: List<NetworkFile>,
+    onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    onResult: (NetworkOpResult) -> Unit,
+  ) {
+    if (files.isEmpty()) {
+      onResult(NetworkOpResult())
+      return
+    }
+    viewModelScope.launch {
+      val client = writeClient()
+      if (client == null) {
+        onResult(NetworkOpResult(failed = files.size, firstError = "当前协议不支持删除"))
+        return@launch
+      }
+      val result =
+        runCatching { NetworkFileOps.delete(client, files, onProgress) }
+          .getOrElse { NetworkOpResult(failed = files.size, firstError = it.message ?: "删除失败") }
+      NetworkDirSizeStore.invalidate(connectionId)
+      loadFiles()
+      onResult(result)
     }
   }
 

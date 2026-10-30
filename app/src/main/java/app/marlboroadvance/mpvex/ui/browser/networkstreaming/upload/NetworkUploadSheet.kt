@@ -6,7 +6,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
-import android.widget.MediaController
 import android.widget.VideoView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,6 +26,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -46,6 +46,7 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -61,6 +62,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -107,6 +110,7 @@ import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** 三种模式：相册（缩略图网格，传图片/视频最方便）/ 文件（目录树多选）/ 文件夹（整目录） */
@@ -1039,6 +1043,25 @@ private fun TaskRow(task: UploadTask, onPreview: () -> Unit) {
             progress = { task.progress },
             modifier = Modifier.fillMaxWidth().height(2.dp),
           )
+          Spacer(Modifier.height(3.dp))
+          // 「已上传 x / 共 y」——进度条只说得清「大概到哪了」，说不清「还差多少」。
+          // 网盘上传慢的时候，用户真正想知道的就是这两个绝对量：
+          // 传到哪了、还剩多少 MB。（用户原话：「按单条目显示当前已上传容量与总容量」）
+          // ⚠️ 总量未知（sizeBytes <= 0：例如统计不到的目录项）时不要摆一个假的
+          //    「共 0 B」，那只说已传了多少，绝不编一个总量出来。
+          Text(
+            text =
+              if (task.sizeBytes > 0) {
+                "已上传 ${MediaFormatUtils.formatFileSize(task.sentBytes)}" +
+                  " / 共 ${MediaFormatUtils.formatFileSize(task.sizeBytes)}"
+              } else {
+                "已上传 ${MediaFormatUtils.formatFileSize(task.sentBytes)}"
+              },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
         }
         task.state == UploadTaskState.Failed && task.error != null -> {
           Spacer(Modifier.height(2.dp))
@@ -1177,11 +1200,13 @@ private fun TaskPreviewThumb(task: UploadTask, onClick: () -> Unit) {
  * 预览器（选择器与进度页共用）：黑底卡片，图片按比例完整显示、视频用 [VideoView]
  * 循环播且可拖进度；一叠里有多项时底部给左右翻页与序号。
  *
- * ## 为什么图片不锁 16:9 而视频锁
+ * ## 为什么图片不锁 16:9，视频的 16:9 交给 [VideoPreview] 自己锁
  *
  * 手机竖拍的照片塞进 16:9 只剩中间一条，看不出拍的是什么；图片改用「屏宽 + 高度
  * 夹在 180~440dp」的自由比例（`ContentScale.Fit`），横竖都够看。视频画面本身是
- * 横向的，固定 16:9 反而让控件位置稳定、不随片源抖动。
+ * 横向的，锁 16:9 让控件位置稳定 —— 但**锁在 [VideoPreview] 内部**：那一层只包
+ * 画面，下面还要留出固定高度的控件条；在外面这层锁比例会把控件条一起算进 16:9，
+ * 结果就是控件被压扁（用户报的「控件显示不全」）。
  *
  * ## 为什么用 Dialog 而不是内嵌一个 Box
  *
@@ -1216,8 +1241,10 @@ private fun MediaPreviewDialog(deck: PreviewDeck, onDismiss: () -> Unit) {
           modifier =
             Modifier.fillMaxWidth().then(
               if (item.isVideo) {
-                // 视频画面本身是横的，固定 16:9 最省事
-                Modifier.aspectRatio(16f / 9f)
+                // 视频**自己不锁高度**：画面 16:9 由 [VideoPreview] 内部固定，
+                // 底下还有一条固定高度的控件栏 —— 在本层再套一个 aspectRatio 会
+                // 把控件栏挤到框外（或者压成一条线），这正是「控件显示不全」的老毛病。
+                Modifier
               } else {
                 // 图片不锁比例：手机竖拍塞进 16:9 只剩中间一条，看不出是什么
                 Modifier.heightIn(min = 180.dp, max = 440.dp)
@@ -1342,24 +1369,187 @@ private fun PreviewContent(item: PreviewItem) {
   }
 }
 
+/**
+ * 上传预览里的视频（画面 + **自绘控件条**）。
+ *
+ * ## 为什么不用 `MediaController`（这是用户报的那个 bug 的根因）
+ *
+ * 原先挂的是 `VideoView.setMediaController(MediaController(ctx).setAnchorView(view))`。
+ * `MediaController` 是 Android 十多年前的控件，它的尺寸完全由**系统主题里的
+ * `@dimen/mediacontroller_*`** 与锚点窗口决定，我们一行都改不了。这里的具体表现：
+ *
+ * - 它是「浮在画面底部的一层」，锚点就是那个 16:9 的画面框；
+ *   框本身不高（手机竖屏下约 200dp），控件层按比例压下来就只剩一条；
+ * - 时长很长时，两边的时间文本从 `01:23` 变成 `12:34:56`，**把中间的进度条挤没了** ——
+ *   用户看到的正是「控件显示不全、过小」；
+ * - 而且它显示/隐藏靠点画面切换，预览这种「只想看一眼」的场景经常一半控件在外面。
+ *
+ * 所以这里换成**自己排的一条控件栏**：固定 56dp 高、图标按钮 44dp 触摸区、
+ * 时间文本给最小宽度、进度条吃剩余空间。时长是 3 分钟还是 30 小时，布局都一样。
+ *
+ * ## 为什么控件放在画面**下方**而不是浮在上面
+ *
+ * [VideoView] 底层是 `SurfaceView`：它直接在自己的 surface 上出画面，**Compose 画在
+ * 同一层的内容盖不住它**（这正是本文件顶部 KDoc 说的「必须用独立 Dialog 窗口」的
+ * 同一个原因）。浮层想稳，只能再开一个子窗口 —— 为一条控件栏不值。放在下方是纯
+ * 布局关系，谁也不会盖住谁，且永远可见（不需要「点一下才出来」）。
+ *
+ * ## 为什么位置靠轮询
+ *
+ * `VideoView` 只有 `getCurrentPosition()`，没有任何进度回调。500ms 读一次够用
+ * （进度条 1px 的移动肉眼分辨不出更细的粒度），也不会费电。拖动时跳过轮询 ——
+ * 否则手指还没松，轮询就把滑块拽回播放位置，滑块会「抖」。
+ */
 @Composable
 private fun VideoPreview(uri: Uri) {
   // 关窗必须显式停播：VideoView 不在 Compose 的生命周期里，不主动停会一直占着解码器
   var player by remember { mutableStateOf<VideoView?>(null) }
-  DisposableEffect(Unit) { onDispose { player?.stopPlayback() } }
+  var prepared by remember(uri) { mutableStateOf(false) }
+  var playing by remember(uri) { mutableStateOf(false) }
+  var durationMs by remember(uri) { mutableStateOf(0L) }
+  var positionMs by remember(uri) { mutableStateOf(0L) }
+  // 拖动中：此时滑块位置由手指决定，轮询让位
+  var scrubbing by remember(uri) { mutableStateOf(false) }
+  var scrubMs by remember(uri) { mutableStateOf(0L) }
 
-  AndroidView(
-    modifier = Modifier.fillMaxSize(),
-    factory = { ctx ->
-      VideoView(ctx).apply {
-        val view = this
-        setOnPreparedListener { mp -> mp.isLooping = true }
-        setOnErrorListener { _, _, _ -> true }
-        setMediaController(MediaController(ctx).apply { setAnchorView(view) })
-        setVideoURI(uri)
-        start()
-        player = this
+  DisposableEffect(uri) { onDispose { player?.stopPlayback() } }
+
+  LaunchedEffect(prepared) {
+    if (!prepared) return@LaunchedEffect
+    while (true) {
+      delay(500)
+      val view = player ?: continue
+      playing = runCatching { view.isPlaying }.getOrDefault(false)
+      if (!scrubbing) {
+        positionMs = runCatching { view.currentPosition.toLong() }.getOrDefault(0L)
       }
-    },
-  )
+    }
+  }
+
+  val shownPosition = if (scrubbing) scrubMs else positionMs
+  val total = durationMs.coerceAtLeast(1L)
+
+  Column(modifier = Modifier.fillMaxWidth()) {
+    Box(
+      modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+      contentAlignment = Alignment.Center,
+    ) {
+      AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { ctx ->
+          VideoView(ctx).apply {
+            val view = this
+            setOnPreparedListener { mp ->
+              mp.isLooping = true
+              // 时长在这里取一次就够了：本地文件不会中途改长度
+              durationMs = mp.duration.toLong().coerceAtLeast(0L)
+              prepared = true
+              playing = true
+            }
+            setOnCompletionListener { playing = false }
+            setOnErrorListener { _, _, _ ->
+              prepared = false
+              true
+            }
+            setVideoURI(uri)
+            start()
+            player = this
+          }
+        },
+      )
+    }
+
+    // ── 控件条：高度固定，与时长无关 ──
+    Row(
+      modifier =
+        Modifier.fillMaxWidth().padding(start = 6.dp, end = 12.dp, top = 2.dp, bottom = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      // 44dp = Material 的最小触摸目标，比图标本身大一圈，指头不容易点空
+      IconButton(
+        onClick = {
+          val view = player ?: return@IconButton
+          if (view.isPlaying) {
+            view.pause()
+            playing = false
+          } else {
+            // 播完了再点播放：回到开头，否则「点了没反应」（停在末尾）
+            if (durationMs > 0 && positionMs >= durationMs - 200) view.seekTo(0)
+            view.start()
+            playing = true
+          }
+        },
+        modifier = Modifier.size(44.dp),
+        enabled = prepared,
+      ) {
+        Icon(
+          imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+          contentDescription = if (playing) "暂停" else "播放",
+          modifier = Modifier.size(28.dp),
+          tint = Color.White.copy(alpha = if (prepared) 0.95f else 0.35f),
+        )
+      }
+
+      // 时间文本给最小宽度：否则「0:03」和「12:34:56」宽度跳变，滑块会左右抖
+      Text(
+        text = formatPlaybackTime(shownPosition),
+        style = MaterialTheme.typography.labelMedium,
+        color = Color.White.copy(alpha = 0.9f),
+        maxLines = 1,
+        modifier = Modifier.widthIn(min = 54.dp),
+      )
+
+      Slider(
+        value = shownPosition.coerceIn(0L, total).toFloat(),
+        onValueChange = {
+          scrubbing = true
+          scrubMs = it.toLong()
+        },
+        onValueChangeFinished = {
+          player?.seekTo(scrubMs.toInt())
+          positionMs = scrubMs
+          scrubbing = false
+        },
+        valueRange = 0f..total.toFloat(),
+        enabled = prepared,
+        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+        // 黑底上必须显式给颜色：默认的 inactive track 在纯黑上几乎看不见
+        colors =
+          SliderDefaults.colors(
+            thumbColor = Color.White,
+            activeTrackColor = Color.White,
+            inactiveTrackColor = Color.White.copy(alpha = 0.28f),
+            disabledThumbColor = Color.White.copy(alpha = 0.35f),
+            disabledActiveTrackColor = Color.White.copy(alpha = 0.35f),
+            disabledInactiveTrackColor = Color.White.copy(alpha = 0.15f),
+          ),
+      )
+
+      Text(
+        text = if (prepared) formatPlaybackTime(durationMs) else "--:--",
+        style = MaterialTheme.typography.labelMedium,
+        color = Color.White.copy(alpha = 0.9f),
+        maxLines = 1,
+        modifier = Modifier.widthIn(min = 54.dp),
+      )
+    }
+  }
+}
+
+/**
+ * 毫秒 → `mm:ss` / `h:mm:ss`。
+ *
+ * 超过 1 小时才补小时段：几十分钟的视频显示成 `00:12:34` 只是白占宽度
+ * （而预览窗的控件条宽度是有限的，这几十 dp 直接决定进度条长短）。
+ */
+private fun formatPlaybackTime(ms: Long): String {
+  val totalSeconds = (ms / 1000).coerceAtLeast(0)
+  val hours = totalSeconds / 3600
+  val minutes = (totalSeconds % 3600) / 60
+  val seconds = totalSeconds % 60
+  return if (hours > 0) {
+    String.format("%d:%02d:%02d", hours, minutes, seconds)
+  } else {
+    String.format("%02d:%02d", minutes, seconds)
+  }
 }

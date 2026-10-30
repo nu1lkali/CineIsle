@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
@@ -83,6 +85,15 @@ fun BrowserTopBar(
   onSettingsClick: (() -> Unit)? = null,
   onDeleteClick: (() -> Unit)? = null,
   onRenameClick: (() -> Unit)? = null,
+  /**
+   * 复制 / 移动（只有需要「把条目搬到另一个目录」的页面才传，如网络浏览的 AList）。
+   *
+   * 单独开两个槽位而不是复用 `additionalActions`：`additionalActions` 只在**普通**顶栏
+   * 渲染，选中态的顶栏是另一套布局（[SelectionTopBar]）。而复制 / 移动恰恰只在
+   * 选中态才有意义 —— 塞进普通顶栏的追加区等于放错地方，永远不会显示。
+   */
+  onCopyClick: (() -> Unit)? = null,
+  onMoveClick: (() -> Unit)? = null,
   isSingleSelection: Boolean = false,
   onInfoClick: (() -> Unit)? = null,
   onShareClick: (() -> Unit)? = null,
@@ -110,6 +121,8 @@ fun BrowserTopBar(
       onCancel = onCancelSelection,
       onDelete = onDeleteClick,
       onRename = onRenameClick,
+      onCopy = onCopyClick,
+      onMove = onMoveClick,
       isSingleSelection = isSingleSelection,
       onInfo = onInfoClick,
       onShare = onShareClick,
@@ -345,6 +358,8 @@ private fun SelectionTopBar(
   onCancel: () -> Unit,
   onDelete: (() -> Unit)?,
   onRename: (() -> Unit)?,
+  onCopy: (() -> Unit)? = null,
+  onMove: (() -> Unit)? = null,
   isSingleSelection: Boolean,
   onInfo: (() -> Unit)?,
   onShare: (() -> Unit)?,
@@ -460,6 +475,48 @@ private fun SelectionTopBar(
             contentDescription = stringResource(R.string.i18n_add_to_playlist),
             modifier = Modifier.size(28.dp),
             tint = MaterialTheme.colorScheme.secondary,
+          )
+        }
+      }
+
+      // Copy / Move（网络浏览的 AList 批量操作）
+      // ⚠️ 0 项选中时置灰而不是隐藏：按钮位置稳定，用户能看出「这里本来有这个动作」，
+      //    只是得先勾一个——隐藏会让顶栏随选择数跳来跳去。
+      if (onCopy != null) {
+        IconButton(
+          onClick = onCopy,
+          enabled = selectedCount > 0,
+          modifier = Modifier.padding(horizontal = 2.dp),
+        ) {
+          Icon(
+            Icons.Filled.ContentCopy,
+            contentDescription = "复制",
+            modifier = Modifier.size(24.dp),
+            tint =
+              if (selectedCount > 0) {
+                MaterialTheme.colorScheme.secondary
+              } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+              },
+          )
+        }
+      }
+      if (onMove != null) {
+        IconButton(
+          onClick = onMove,
+          enabled = selectedCount > 0,
+          modifier = Modifier.padding(horizontal = 2.dp),
+        ) {
+          Icon(
+            Icons.AutoMirrored.Filled.DriveFileMove,
+            contentDescription = "移动到",
+            modifier = Modifier.size(24.dp),
+            tint =
+              if (selectedCount > 0) {
+                MaterialTheme.colorScheme.secondary
+              } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+              },
           )
         }
       }

@@ -613,6 +613,39 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     }
 
   /**
+   * `POST /api/fs/copy`：复制（同一次调用可以带多个名字）。
+   *
+   * 请求体与 [move] **完全同构**（`src_dir` / `dst_dir` / `names[]`），
+   * 这是 AList 官方 `fs/copy` 的契约 —— 两个接口本来就是一对。
+   *
+   * @param srcDir 源**目录**（相对 base path）
+   * @param dstDir 目标**目录**
+   * @param names 要复制的**文件名 / 目录名**列表（不是完整路径）
+   *
+   * ⚠️ **目标重名时的行为取决于底层驱动**（同 [move]）：覆盖 / 报错 / 自动改名都有。
+   *    重名一律在调用方先处理（[app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkFileOps]
+   *    用「临时目录中转 + 改名」的办法拿到 `name(1).ext`），**绝不把「要不要覆盖」
+   *    这件不可逆的事交给服务端猜**。
+   */
+  suspend fun copy(srcDir: String, dstDir: String, names: List<String>): Result<Unit> =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        require(names.isNotEmpty()) { "没有要复制的文件" }
+        withAuthRetry {
+          postJsonChecked(
+            endpoint = "fs/copy",
+            body = buildJsonObject {
+              put("src_dir", fsPath(srcDir))
+              put("dst_dir", fsPath(dstDir))
+              putJsonArray("names") { names.forEach { add(it) } }
+            },
+          )
+        }
+        Unit
+      }
+    }
+
+  /**
    * `PUT /api/fs/put`：**流式上传**一个文件。
    *
    * ## 契约（容易踩的两点）

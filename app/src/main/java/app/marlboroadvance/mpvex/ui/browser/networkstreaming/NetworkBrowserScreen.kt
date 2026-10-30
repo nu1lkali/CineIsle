@@ -2,6 +2,9 @@ package app.marlboroadvance.mpvex.ui.browser.networkstreaming
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
@@ -36,10 +39,12 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -91,6 +96,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -130,6 +136,10 @@ import app.marlboroadvance.mpvex.ui.browser.cards.NetworkOtherFileRow
 import app.marlboroadvance.mpvex.ui.browser.cards.NetworkPhotoRow
 import app.marlboroadvance.mpvex.ui.browser.cards.NetworkVideoCard
 import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
+import app.marlboroadvance.mpvex.ui.browser.selection.SelectionState
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkFolderPickerSheet
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkOpProgressDialog
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkTransferMode
 import app.marlboroadvance.mpvex.ui.browser.emby.components.VideoFeedIcon
 import app.marlboroadvance.mpvex.ui.browser.states.EmptyState
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.download.NetworkDownloadBarHost
@@ -140,6 +150,7 @@ import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.NetworkUploa
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkToolboxSheet
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.NetworkUploadSheet
 import app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen
+import app.marlboroadvance.mpvex.ui.theme.LocalCardCorner
 import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LazyListSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
@@ -370,6 +381,29 @@ data class NetworkBrowserScreen(
     // 只有 AList 有写接口，入口跟「上传」「新建文件夹」同一条 supportsWrite 门禁。
     var showToolbox by remember { mutableStateOf(false) }
 
+    // ── 多选（批量复制 / 移动 / 删除）──
+    // ⭐ 为什么要**独立的 selectionMode**，而不是照 Emby 那样「选中集非空 = 在多选态」：
+    //    多选态的入口必须能在「一个都没选」时成立。⋮ 菜单里的「批量选择」就是要
+    //    「先进场、再逐条挑」（从零开始挑才是批量操作的常态）；若模式由选中集派生，
+    //    这个入口点下去必然是「没反应」——只能先替你选一个，那是替用户做决定。
+    //    因此：selectionMode 是显式的开关，selection 只是它的内容。
+    var selectionMode by remember { mutableStateOf(false) }
+    var selection by remember { mutableStateOf(SelectionState<String>()) }
+
+    // 复制 / 移动的目标目录选择器（null = 关）。值 = 这次要做的动作（复制 or 移动）。
+    var pickerMode by remember { mutableStateOf<NetworkTransferMode?>(null) }
+    // 这次要搬的条目。**单条与批量共用同一条路** —— 长按菜单里选「复制到…」时
+    // 就是 listOf(那一个)，批量时是选中集。分两条路写，重名/自身嵌套那些边界
+    // 迟早只在一边修。
+    var transferTargets by remember { mutableStateOf<List<NetworkFile>>(emptyList()) }
+
+    // 批量写操作的进行状态（null = 没在跑）。AList 没有中止接口，所以只有进度、没有取消。
+    var opLabel by remember { mutableStateOf<String?>(null) }
+    var opProgress by remember { mutableStateOf(0 to 0) }
+
+    // 批量删除的二次确认（AList 没有回收站，删了就是没了 —— 与单条删除同一规矩）
+    var showDeleteSelected by remember { mutableStateOf(false) }
+
     // ── 属性面板（右侧抽屉）──
     // null = 收起。属性是**只读**的，所以不设 supportsWrite 门禁 ——
     // SMB / WebDAV / FTP 的用户同样有「这个文件夹多大、它在哪」的疑问。
@@ -397,6 +431,38 @@ data class NetworkBrowserScreen(
     fun toast(msg: String) {
       toastRef.value?.cancel()
       toastRef.value = Toast.makeText(context, msg, Toast.LENGTH_SHORT).also { it.show() }
+    }
+
+    /** 退出多选（连同清空选中集 —— 两者必须一起动，否则下次进来会带着旧勾选） */
+    fun exitSelection() {
+      selectionMode = false
+      selection = SelectionState<String>()
+    }
+
+    /**
+     * 跑一次复制 / 移动。
+     *
+     * 单条（长按菜单）与批量（选中态顶栏）**共用这一个入口**，差别只在
+     * [transferTargets] 里放了几个 —— 重名处理、自身嵌套检查都在执行器里，
+     * 这里只负责进度与回执。
+     */
+    fun startTransfer(mode: NetworkTransferMode, dstDir: String) {
+      val items = transferTargets
+      if (items.isEmpty()) return
+      opLabel = "正在${mode.verb} ${items.size} 个条目"
+      opProgress = 0 to items.size
+      viewModel.transferFiles(
+        files = items,
+        dstDir = dstDir,
+        mode = mode,
+        onProgress = { done, total -> opProgress = done to total },
+      ) { result ->
+        opLabel = null
+        toast(result.summaryText(mode.doneVerb))
+        // 成功了就退出多选：搬走的条目已经不在本层，留着勾选只会让人以为没生效
+        if (result.succeeded > 0 && selectionMode) exitSelection()
+        transferTargets = emptyList()
+      }
     }
 
     // 当前目录显示名（查看器标题 / 收藏名 / 顶栏标题同一口径）。
@@ -494,11 +560,14 @@ data class NetworkBrowserScreen(
     }
 
     // 返回键：属性面板先关（它是整页高的模态抽屉，用户把它当一层），
-    // 其次搜索态（清词 + 收键盘），最后才退出页面 —— 与 Emby 媒体库同一手势
+    // 其次多选态（用户把它当一层「模式」，按返回该退出来而不是离开目录），
+    // 再次搜索态（清词 + 收键盘），最后才退出页面 —— 与 Emby 媒体库同一手势
     BackHandler {
       if (propertyTarget != null) {
         propertyTarget = null
         viewModel.cancelDirSize()
+      } else if (selectionMode) {
+        exitSelection()
       } else if (searchActive) {
         searchActive = false
         searchQuery = ""
@@ -535,6 +604,35 @@ data class NetworkBrowserScreen(
     val coverTrigger: ((String) -> Unit)? =
       if (folderCoverEnabled) viewModel::ensureFolderCover else null
 
+    // ── 多选：选中集 & 批量动作 ──
+
+    /**
+     * 「确实还在的」选中项。
+     *
+     * 选中集按 path 记，而列表随时会刷新（写操作完成后 loadFiles、下拉刷新）。
+     * 若直接拿选中集去发请求，就会对着**已经不存在的条目**操作 —— 服务端报一堆
+     * 「文件不存在」，用户看到的是「删除了一半」。所以每次动作前都按当前可见列表
+     * 过滤一遍，只动还在的那些。
+     */
+    val selectedFiles =
+      remember(visibleFiles, selection) { visibleFiles.filter { selection.isSelected(it.path) } }
+
+    /** 批量删除（二次确认之后才调，见下方对话框） */
+    fun startDeleteSelected() {
+      val items = selectedFiles
+      if (items.isEmpty()) return
+      opLabel = "正在删除 ${items.size} 个条目"
+      opProgress = 0 to items.size
+      viewModel.deleteFiles(
+        files = items,
+        onProgress = { done, total -> opProgress = done to total },
+      ) { result ->
+        opLabel = null
+        toast(result.summaryText("删除"))
+        exitSelection()
+      }
+    }
+
     // ⚠️ 外面这层 Box 只为**属性面板盖住顶栏**而存在：Scaffold 的 bars 是画在内容
     //    *之上* 的（先 place 内容、再 place topBar），所以面板只要还在内容层里，
     //    就永远顶不到屏幕顶端 —— 只能排到 Scaffold 之后（同一个 Box 里后画的在上）。
@@ -553,12 +651,16 @@ data class NetworkBrowserScreen(
           // 点标题 → 打开「跳转到」导航弹窗（列出全部层级，直达任意一层）。
           // 在连接根目录没有可跳的层级，就不接管点击（回落到默认的「切换深浅色」），
           // 也不显示下拉箭头 —— 不给「点了没反应」的死入口。
-          onTitleClick = if (atConnectionRoot) null else ({ showPathNavigator = true }),
-          isInSelectionMode = false,
-          selectedCount = 0,
-          totalCount = 0,
+          onTitleClick = if (atConnectionRoot || selectionMode) null else ({ showPathNavigator = true }),
+          // ── 多选态 ──
+          // 顶栏整套换成 [SelectionTopBar]：左边的 ✕ 退出、标题变成「已选择 x / y」并
+          // 点开「全选 / 反选 / 取消全选」，右边是复制 / 移动 / 删除。与 Emby 媒体库、
+          // 本地文件夹浏览是**同一个组件**，所以三处观感天然一致。
+          isInSelectionMode = selectionMode,
+          selectedCount = selection.selectedCount,
+          totalCount = visibleFiles.size,
           onBackClick = { backstack.removeLastOrNull() },
-          onCancelSelection = {},
+          onCancelSelection = { exitSelection() },
           // 排序不走顶栏：它要常驻又能显示当前状态，放在内容区顶部（见 NetworkSortRow）。
           // 顶栏图标只有 更多 / 搜索 / 设置 三个（「回到首页」收进「更多」菜单里）。
           onSortClick = null,
@@ -566,15 +668,33 @@ data class NetworkBrowserScreen(
           onSettingsClick = {
             backstack.add(PreferencesScreen)
           },
-          onDeleteClick = null,
+          // 批量删除 / 单条重命名都只有 AList 有写接口
+          onDeleteClick = if (supportsWrite) ({ showDeleteSelected = true }) else null,
           onRenameClick = null,
-          isSingleSelection = false,
+          // 复制 / 移动到另一个远程目录（AList 的 fs/copy、fs/move）
+          onCopyClick = if (supportsWrite) {
+            {
+              transferTargets = selectedFiles
+              pickerMode = NetworkTransferMode.COPY
+            }
+          } else {
+            null
+          },
+          onMoveClick = if (supportsWrite) {
+            {
+              transferTargets = selectedFiles
+              pickerMode = NetworkTransferMode.MOVE
+            }
+          } else {
+            null
+          },
+          isSingleSelection = selection.isSingleSelection,
           onInfoClick = null,
           onShareClick = null,
           onPlayClick = null,
-          onSelectAll = null,
-          onInvertSelection = null,
-          onDeselectAll = null,
+          onSelectAll = { selection = selection.selectAll(visibleFiles.map { it.path }) },
+          onInvertSelection = { selection = selection.invertSelection(visibleFiles.map { it.path }) },
+          onDeselectAll = { selection = selection.clear() },
           additionalActions = {
             // ── 顶栏瘦身：三个入口收进一个竖三点菜单 ──
             // 原先是 5 个平铺图标（收藏 + 随机 + 视图 + 顶栏自带的搜索 + 设置），
@@ -728,6 +848,24 @@ data class NetworkBrowserScreen(
                     onClick = {
                       showOverflowMenu = false
                       showNewFolder = true
+                    },
+                  )
+                }
+
+                // ── 多选（批量复制 / 移动 / 删除）──
+                // 进场之后顶栏**整套换掉**（全选 / 反选 / 复制 / 移动 / 删除都在那儿），
+                // 所以这里只需要「进场」这一个入口 —— 不在这里再摆一遍动作，
+                // 同一件事有两处入口，迟早出现「两处状态不一致」。
+                // 从零个选中开始：批量操作本来就是「先进场、再逐条挑」。
+                if (supportsWrite) {
+                  DropdownMenuItem(
+                    text = { Text("批量选择") },
+                    leadingIcon = { Icon(Icons.Default.Check, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      transferTargets = emptyList()
+                      selection = SelectionState<String>()
+                      selectionMode = true
                     },
                   )
                 }
@@ -1030,10 +1168,28 @@ data class NetworkBrowserScreen(
             },
             // 长按菜单：**所有协议都挂**（属性 / 下载是只读动作，SMB、WebDAV、FTP 一样需要）；
             // 重命名 / 删除两项在菜单内部按 supportsWrite 决定显不显示。
+            // 多选态下长按改为「切换勾选」：此时整页只有一条交互语义（勾 / 不勾），
+            // 再弹单条菜单会让人以为「长按的这一个才是要操作的对象」。
             onFileLongClick = { file, offset ->
-              actionTarget = file
-              actionMenuAnchor = offset
+              if (selectionMode) {
+                selection = selection.toggle(file.path)
+              } else {
+                actionTarget = file
+                actionMenuAnchor = offset
+              }
             },
+            // ── 多选态：勾选语义只在**一处**决定 ──
+            // 卡片自己不知道多选这回事（它们照常回传 onFolderClick / onPhotoClick / …），
+            // 由下面这个 override 在入口处整体接管：多选时点谁都等于「勾一下」。
+            // 这样四种卡型（文件夹 / 照片 / 视频 / 其他）不用各改一遍。
+            selectionMode = selectionMode,
+            selectedPaths = selection.selectedIds,
+            onItemClickOverride =
+              if (selectionMode) {
+                { file: NetworkFile -> selection = selection.toggle(file.path) }
+              } else {
+                null
+              },
             // 未过滤总数（筛选 / 搜索前的 files.size）——空态文案要区分
             // 「目录真空」和「全被滤掉」，只有过滤后的列表看不出来
             totalCount = files.size,
@@ -1084,6 +1240,24 @@ data class NetworkBrowserScreen(
             onDelete = {
               actionTarget = null
               deleteTarget = target
+            },
+            // 单条复制 / 移动：与批量走**同一条路**（transferTargets 里就一个）
+            onCopyTo = {
+              actionTarget = null
+              transferTargets = listOf(target)
+              pickerMode = NetworkTransferMode.COPY
+            },
+            onMoveTo = {
+              actionTarget = null
+              transferTargets = listOf(target)
+              pickerMode = NetworkTransferMode.MOVE
+            },
+            // 「选择」：进入多选态并勾上这一条。批量操作由此展开，
+            // 而不是再在菜单里塞一套「全选 / 反选」—— 那两个在顶栏。
+            onSelect = {
+              actionTarget = null
+              selection = SelectionState<String>().toggle(target.path)
+              selectionMode = true
             },
           )
         }
@@ -1278,6 +1452,71 @@ data class NetworkBrowserScreen(
           },
         )
       }
+
+      // ── 复制 / 移动：目标目录选择器 ──
+      // 单条与批量共用：transferTargets 里放几个就是搬几个。
+      val transferMode = pickerMode
+      if (transferMode != null) {
+        NetworkFolderPickerSheet(
+          title = "${transferMode.verb}到…",
+          confirmLabel = "${transferMode.verb}到这里",
+          // 默认停在当前目录：最常见的操作是「搬到隔壁文件夹」，
+          // 从当前层起跳比从根目录一层层点下来少好几次点击
+          startPath = currentPath,
+          listDir = { path -> viewModel.listDirForPicker(path) },
+          onDismiss = { pickerMode = null },
+          onConfirm = { dst ->
+            pickerMode = null
+            startTransfer(transferMode, dst)
+          },
+        )
+      }
+
+      // ── 批量删除的二次确认 ──
+      // 与单条删除同一规矩：AList 没有回收站，删了就是没了。
+      // 文案里带上**具体数量**，别让用户对着「确定删除？」猜影响范围。
+      if (showDeleteSelected) {
+        val count = selectedFiles.size
+        AlertDialog(
+          onDismissRequest = { showDeleteSelected = false },
+          title = { Text("删除 ${count} 个条目？") },
+          text = {
+            Text(
+              buildString {
+                append("将删除当前目录下选中的 $count 个条目")
+                if (selectedFiles.any { it.isDirectory }) append("（含文件夹，会连同内容一起删除）")
+                append("。\nAList 没有回收站，删除后无法恢复。")
+              },
+            )
+          },
+          confirmButton = {
+            TextButton(
+              onClick = {
+                showDeleteSelected = false
+                startDeleteSelected()
+              },
+            ) {
+              Text(stringResource(R.string.i18n_delete), color = MaterialTheme.colorScheme.error)
+            }
+          },
+          dismissButton = {
+            TextButton(onClick = { showDeleteSelected = false }) {
+              Text(stringResource(R.string.i18n_cancel))
+            }
+          },
+        )
+      }
+
+      // ── 写操作进行中（复制 / 移动 / 批量删除）──
+      // 排在最后 ⇒ 画在其它浮层之上；AList 没有中止接口，所以只报进度、不给取消。
+      val runningLabel = opLabel
+      if (runningLabel != null) {
+        NetworkOpProgressDialog(
+          label = runningLabel,
+          done = opProgress.first,
+          total = opProgress.second,
+        )
+      }
     }
 
       // ── 属性面板（右侧抽屉）──
@@ -1330,13 +1569,18 @@ data class NetworkBrowserScreen(
 @Composable
 private fun NetworkFileActionMenu(
   file: NetworkFile,
-  /** 当前协议是否支持写操作（AList）。false 时不显示重命名 / 删除 */
+  /** 当前协议是否支持写操作（AList）。false 时不显示重命名 / 删除 / 复制 / 移动 */
   canWrite: Boolean,
   onDismissRequest: () -> Unit,
   onProperties: () -> Unit,
   onDownload: () -> Unit,
   onRename: () -> Unit,
   onDelete: () -> Unit,
+  /** 复制 / 移动到另一个远程目录（走目标目录选择器） */
+  onCopyTo: () -> Unit,
+  onMoveTo: () -> Unit,
+  /** 进入多选态并勾上这一条（单条 → 批量的入口） */
+  onSelect: () -> Unit,
 ) {
   DropdownMenu(expanded = true, onDismissRequest = onDismissRequest) {
     MenuHeaderTitle(text = file.name)
@@ -1352,6 +1596,27 @@ private fun NetworkFileActionMenu(
       onClick = onDownload,
     )
     if (canWrite) {
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+      // ── 条目搬运三项（v180）──
+      // 「选择」放在最前：它是**从单条进批量**的入口，语义上比搬运更轻
+      // （只是换个工作模式，不动服务器上的东西）。
+      DropdownMenuItem(
+        text = { Text("选择") },
+        leadingIcon = { Icon(Icons.Default.Check, contentDescription = null) },
+        onClick = onSelect,
+      )
+      DropdownMenuItem(
+        text = { Text("复制到…") },
+        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+        onClick = onCopyTo,
+      )
+      DropdownMenuItem(
+        text = { Text("移动到…") },
+        leadingIcon = {
+          Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null)
+        },
+        onClick = onMoveTo,
+      )
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
       DropdownMenuItem(
         text = { Text(stringResource(R.string.i18n_rename)) },
@@ -1573,8 +1838,22 @@ private fun NetworkBrowserContent(
    * 第二个参数是**手指坐标（root）** —— 菜单要锚定到它旁边（见 Emby 媒体库）。
    */
   onFileLongClick: ((NetworkFile, Offset) -> Unit)? = null,
+  /**
+   * 多选态（**显式开关**，不是「选中集非空」的派生态 —— 理由见调用方
+   * `NetworkBrowserScreen.Content` 里那段注释）。
+   */
+  selectionMode: Boolean = false,
+  /** 已勾选的条目 path 集合（只在 [selectionMode] 为 true 时有意义） */
+  selectedPaths: Set<String> = emptySet(),
+  /**
+   * 非空时**整体接管**条目点击：多选态下点谁都等于「切换勾选」，
+   * 不再打开文件夹 / 查看器 / 播放器。四种卡型共用这一个入口，
+   * 免得「文件夹能勾、照片不能勾」这种半截状态。
+   */
+  onItemClickOverride: ((NetworkFile) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
+
   // Load connection details（走仓库而不是直接读 DAO —— 密码落盘是密文，仓库会负责解密）
   val repository = org.koin.compose.koinInject<NetworkRepository>()
   var connection by remember { mutableStateOf<NetworkConnection?>(null) }
@@ -1707,6 +1986,9 @@ private fun NetworkBrowserContent(
         bucketAscending = bucketAscending,
         typeGrouped = typeGrouped,
         onFileLongClick = onFileLongClick,
+        selectionMode = selectionMode,
+        selectedPaths = selectedPaths,
+        onItemClickOverride = onItemClickOverride,
         modifier = modifier,
       )
     }
@@ -1731,6 +2013,9 @@ private fun NetworkBrowserContent(
         bucketAscending = bucketAscending,
         typeGrouped = typeGrouped,
         onFileLongClick = onFileLongClick,
+        selectionMode = selectionMode,
+        selectedPaths = selectedPaths,
+        onItemClickOverride = onItemClickOverride,
         modifier = modifier,
       )
     }
@@ -1789,6 +2074,10 @@ private fun NetworkBrowserGrid(
   typeGrouped: Boolean,
   /** 长按条目；null = 协议不支持写操作，卡片不挂长按。第二参 = 手指坐标 */
   onFileLongClick: ((NetworkFile, Offset) -> Unit)? = null,
+  /** 多选态（见 [NetworkBrowserContent] 的同名参数） */
+  selectionMode: Boolean = false,
+  selectedPaths: Set<String> = emptySet(),
+  onItemClickOverride: ((NetworkFile) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val navigationBarHeight = LocalNavigationBarHeight.current
@@ -1850,6 +2139,9 @@ private fun NetworkBrowserGrid(
         onFolderClick = onFolderClick,
         onPhotoClick = onPhotoClick,
         onVideoClick = onVideoClick,
+        selectionMode = selectionMode,
+        selected = selectedPaths.contains(file.path),
+        onItemClickOverride = onItemClickOverride,
         modifier = Modifier.animateItem(),
       )
     }
@@ -1925,6 +2217,82 @@ private fun NetworkBrowserGrid(
 }
 
 /**
+ * 多选态下包住任意一种卡片的**选中外壳**：左上角勾选圈 + 选中后整格淡染。
+ *
+ * ## 为什么用「外壳」而不是给四种卡各加一个 `isSelected`
+ *
+ * 网络浏览有四种卡（[NetworkMediaCard] / [NetworkFolderCard] / [NetworkPhotoRow] /
+ * [NetworkVideoCard] / [NetworkOtherFileRow]），其中只有两种恰好带 `isSelected`。
+ * 逐个补参数 = 五处重复的染色 + 五处重复的勾选圈，而且「其他文件」那一行根本没有
+ * 点击入口（它是纯展示行），补到最后必然漏一个 —— 漏掉的那个在多选态里就成了
+ * 「点不动、也看不出选没选」的死格子。包一层外壳一次解决全部。
+ *
+ * ## 为什么不挡触摸
+ *
+ * 染色层与勾选圈都**不带任何 pointerInput**：Compose 的命中测试只认有 pointer
+ * 输入的节点，所以点击照旧落到下面的卡片上（卡片自己决定是「打开」还是「勾选」，
+ * 见 [NetworkGridCell] 与 [NetworkBrowserList] 的点击接管）。
+ * 只有 [onClick] 非空时才在外壳上挂 clickable —— 那是给「本来不能点的行」用的
+ * （其他文件行），让它在多选态里也能被勾中。
+ */
+@Composable
+private fun NetworkSelectableFrame(
+  selected: Boolean,
+  selectionMode: Boolean,
+  modifier: Modifier = Modifier,
+  /** 仅当内容本身没有点击处理时才需要（多选态下补一个「勾选」入口） */
+  onClick: (() -> Unit)? = null,
+  content: @Composable () -> Unit,
+) {
+  Box(
+    modifier =
+      if (onClick != null && selectionMode) {
+        modifier.clickable(onClick = onClick)
+      } else {
+        modifier
+      },
+  ) {
+    content()
+    if (selectionMode) {
+      if (selected) {
+        Box(
+          modifier =
+            Modifier.matchParentSize().background(
+              MaterialTheme.colorScheme.tertiary.copy(alpha = 0.26f),
+              RoundedCornerShape(LocalCardCorner.current),
+            ),
+        )
+      }
+      Box(
+        modifier =
+          Modifier.align(Alignment.TopStart)
+            .padding(6.dp)
+            .size(22.dp)
+            .clip(CircleShape)
+            .background(
+              if (selected) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                // 未选中也用黑底 35%：照片五颜六色，纯描边在一些图上几乎看不见
+                Color.Black.copy(alpha = 0.35f)
+              },
+            ),
+        contentAlignment = Alignment.Center,
+      ) {
+        if (selected) {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = "已选择",
+            modifier = Modifier.size(14.dp),
+            tint = MaterialTheme.colorScheme.onPrimary,
+          )
+        }
+      }
+    }
+  }
+}
+
+/**
  * 网格里的一个条目（1 列宽）：按类型分发点击，其余全交给 [NetworkMediaCard]。
  *
  * 抽出来是因为网格现在有两条渲染路径（文件夹平铺 / 媒体按时间桶）——
@@ -1942,34 +2310,48 @@ private fun NetworkGridCell(
   onFolderClick: (NetworkFile) -> Unit,
   onPhotoClick: (NetworkFile) -> Unit,
   onVideoClick: (NetworkFile) -> Unit,
+  /** 多选态 / 是否被勾选 / 点击接管（三者一起决定这一格的交互语义） */
+  selectionMode: Boolean,
+  selected: Boolean,
+  onItemClickOverride: ((NetworkFile) -> Unit)?,
   /**
    * ⚠️ 必须由调用点传入（`Modifier.animateItem()`）：它是 `LazyGridItemScope` 的扩展，
    *    只有 `items { }` 的 lambda 里拿得到那个接收者 —— 在本函数里写会编译不过。
    */
   modifier: Modifier = Modifier,
 ) {
-  NetworkMediaCard(
-    file = file,
-    connectionId = connectionId,
-    onClick = {
-      when (file.type()) {
-        NetworkFileType.FOLDER -> onFolderClick(file)
-        NetworkFileType.PHOTO -> onPhotoClick(file)
-        NetworkFileType.VIDEO -> onVideoClick(file)
-        NetworkFileType.OTHER -> Unit // 网格里不渲染，兜底
-      }
-    },
-    // 文件夹封面：缓存里有就用（功能关闭时 Map 是空的 ⇒ 全是 null），
-    // 没有就让卡片触发懒加载（coverTrigger 为 null 时不触发）
-    coverPath = if (file.isDirectory) folderCovers[file.path] else null,
-    titleMaxLines = titleMaxLines,
-    showYear = showYear,
-    onCoverNeeded = coverTrigger,
-    onLongClick =
-      if (onFileLongClick == null) null else { { offset -> onFileLongClick(file, offset) } },
-    // 切排序 / 删除条目后平滑重排，而不是整屏硬切
+  // 选中态的外壳：勾选圈与染色都盖在卡片上（卡片自己不知道多选这回事）。
+  // ⚠️ 外壳要挂 animateItem（重排动画是整格的，不是卡片内部的）。
+  NetworkSelectableFrame(
+    selected = selected,
+    selectionMode = selectionMode,
     modifier = modifier,
-  )
+  ) {
+    NetworkMediaCard(
+      file = file,
+      connectionId = connectionId,
+      onClick = {
+        if (onItemClickOverride != null) {
+          onItemClickOverride(file)
+        } else {
+          when (file.type()) {
+            NetworkFileType.FOLDER -> onFolderClick(file)
+            NetworkFileType.PHOTO -> onPhotoClick(file)
+            NetworkFileType.VIDEO -> onVideoClick(file)
+            NetworkFileType.OTHER -> Unit // 网格里不渲染，兜底
+          }
+        }
+      },
+      // 文件夹封面：缓存里有就用（功能关闭时 Map 是空的 ⇒ 全是 null），
+      // 没有就让卡片触发懒加载（coverTrigger 为 null 时不触发）
+      coverPath = if (file.isDirectory) folderCovers[file.path] else null,
+      titleMaxLines = titleMaxLines,
+      showYear = showYear,
+      onCoverNeeded = coverTrigger,
+      onLongClick =
+        if (onFileLongClick == null) null else { { offset -> onFileLongClick(file, offset) } },
+    )
+  }
 }
 
 /**
@@ -2044,6 +2426,10 @@ private fun NetworkBrowserList(
   typeGrouped: Boolean,
   /** 长按条目；null = 协议不支持写操作，卡片不挂长按。第二参 = 手指坐标 */
   onFileLongClick: ((NetworkFile, Offset) -> Unit)? = null,
+  /** 多选态（见 [NetworkBrowserContent] 的同名参数） */
+  selectionMode: Boolean = false,
+  selectedPaths: Set<String> = emptySet(),
+  onItemClickOverride: ((NetworkFile) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val navigationBarHeight = LocalNavigationBarHeight.current
@@ -2163,63 +2549,86 @@ private fun NetworkBrowserList(
                 items = group.files,
                 key = { it.path },
               ) { file ->
+                // 点击接管：多选态下点谁都是「勾一下」（四种行共用同一口径，
+                // 见 NetworkBrowserContent 的 onItemClickOverride）
+                val clickOverride = onItemClickOverride
+                val selected = selectedPaths.contains(file.path)
+                val longPress =
+                  if (onFileLongClick == null) {
+                    null
+                  } else {
+                    { offset: Offset -> onFileLongClick(file, offset) }
+                  }
                 when (section.type) {
                   NetworkFileType.FOLDER ->
-                    NetworkFolderCard(
-                      file = file,
-                      connectionId = connectionId,
-                      onClick = { onFolderClick(file) },
-                      coverPath = folderCovers[file.path],
-                      onCoverNeeded = coverTrigger,
-                      onLongClick =
-                        if (onFileLongClick == null) {
-                          null
-                        } else {
-                          { offset -> onFileLongClick(file, offset) }
-                        },
+                    NetworkSelectableFrame(
+                      selected = selected,
+                      selectionMode = selectionMode,
                       modifier = Modifier.animateItem(),
-                    )
+                    ) {
+                      NetworkFolderCard(
+                        file = file,
+                        connectionId = connectionId,
+                        onClick = {
+                          if (clickOverride != null) clickOverride(file) else onFolderClick(file)
+                        },
+                        coverPath = folderCovers[file.path],
+                        onCoverNeeded = coverTrigger,
+                        onLongClick = longPress,
+                      )
+                    }
 
                   NetworkFileType.PHOTO ->
-                    NetworkPhotoRow(
-                      file = file,
-                      connectionId = connectionId,
-                      onClick = { onPhotoClick(file) },
-                      onLongClick =
-                        if (onFileLongClick == null) {
-                          null
-                        } else {
-                          { offset -> onFileLongClick(file, offset) }
-                        },
+                    NetworkSelectableFrame(
+                      selected = selected,
+                      selectionMode = selectionMode,
                       modifier = Modifier.animateItem(),
-                      showYear = section.hasYear,
-                    )
-
-                  // 连接没加载完就不出视频卡（老行为，别改成占位卡）
-                  NetworkFileType.VIDEO ->
-                    connection?.let { conn ->
-                      NetworkVideoCard(
+                    ) {
+                      NetworkPhotoRow(
                         file = file,
-                        connection = conn,
-                        onClick = { onVideoClick(file) },
-                        onLongClick =
-                          if (onFileLongClick == null) {
-                            null
-                          } else {
-                            { offset -> onFileLongClick(file, offset) }
-                          },
-                        modifier = Modifier.animateItem(),
+                        connectionId = connectionId,
+                        onClick = {
+                          if (clickOverride != null) clickOverride(file) else onPhotoClick(file)
+                        },
+                        onLongClick = longPress,
                         showYear = section.hasYear,
                       )
                     }
 
-                  // 字幕 / nfo 等，纯展示
+                  // 连接没加载完就不出视频卡（老行为，别改成占位卡）
+                  NetworkFileType.VIDEO ->
+                    connection?.let { conn ->
+                      NetworkSelectableFrame(
+                        selected = selected,
+                        selectionMode = selectionMode,
+                        modifier = Modifier.animateItem(),
+                      ) {
+                        NetworkVideoCard(
+                          file = file,
+                          connection = conn,
+                          onClick = {
+                            if (clickOverride != null) clickOverride(file) else onVideoClick(file)
+                          },
+                          onLongClick = longPress,
+                          showYear = section.hasYear,
+                        )
+                      }
+                    }
+
+                  // 字幕 / nfo 等，纯展示。⚠️ 这一行平时**不可点**（点了没有语义），
+                  // 但多选态必须能勾中它 —— 所以把 clickable 挂在外壳上。
                   NetworkFileType.OTHER ->
-                    NetworkOtherFileRow(
-                      file = file,
+                    NetworkSelectableFrame(
+                      selected = selected,
+                      selectionMode = selectionMode,
                       modifier = Modifier.animateItem(),
-                      showYear = section.hasYear,
-                    )
+                      onClick = clickOverride?.let { { it(file) } },
+                    ) {
+                      NetworkOtherFileRow(
+                        file = file,
+                        showYear = section.hasYear,
+                      )
+                    }
                 }
               }
             }
