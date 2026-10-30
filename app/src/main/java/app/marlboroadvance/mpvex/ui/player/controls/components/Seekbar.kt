@@ -9,8 +9,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +35,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.runtime.collectAsState
@@ -161,6 +162,17 @@ private fun SeekbarRow(
     }
   }
 
+  /**
+   * 「最新」的总时长。
+   *
+   * ⚠️ `Modifier.pointerInput(key)` 的 block **只在 key 变化时重启**，而 `duration`
+   * 是每次重组都会变的新参数 —— 闭包抓到的永远是第一次组合那一刻的值。
+   * 换集（时长变了）、时长看守探回真值（`.mts` 先报 0/偏小）、
+   * `safeDuration` 因位置越界被抬高，任何一种都会让那个旧值变成错的，
+   * 表现就是「点 30% 跳到 80%」。所以手势里必须读这个 State，不能读参数本身。
+   */
+  val liveDuration by rememberUpdatedState(duration)
+
   Row(
     modifier = modifier.height(48.dp),
     verticalAlignment = Alignment.CenterVertically,
@@ -176,72 +188,85 @@ private fun SeekbarRow(
       modifier = Modifier.width(92.dp),
     )
 
-    // Seekbar with expanded touch area
+    // 触摸区域就是这整条 48dp。原来这里套了 `padding(vertical = 8.dp)`，
+    // 把里面的「64dp 大触摸区」压成 32dp —— 那条注释从写下那天起就是假的。
     Box(
-      modifier =
-        Modifier
-          .weight(1f)
-          .height(48.dp)
-          .padding(vertical = 8.dp), // Add vertical padding for larger touch area
+      modifier = Modifier.weight(1f).fillMaxHeight(),
       contentAlignment = Alignment.Center,
     ) {
-      // Invisible expanded touch area
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .height(64.dp) // Larger touch area
-          .pointerInput(Unit) {
-            detectTapGestures(
-              onTap = { offset ->
-                val newPosition = (offset.x / size.width) * duration
-                if (!isUserInteracting) isUserInteracting = true
-                userPosition = newPosition.coerceIn(0f, duration)
-                onValueChange(userPosition)
-                scope.launch { 
-                  // Snap to user position immediately to prevent jumping
-                  animatedPosition.snapTo(userPosition)
-                  isUserInteracting = false
-                  onValueChangeFinished()
+      // 触摸接管层：**只有波浪样式需要它**（SquigglySeekbar 是自己画的，不处理手势）。
+      // Standard / Thick 用的是真的 `Slider`，它自己就能点、能拖；再叠一层必然打架。
+      if (seekbarStyle == SeekbarStyle.Wavy) {
+        Box(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .height(48.dp)
+              .pointerInput(Unit) {
+                awaitEachGesture {
+                  val down = awaitFirstDown(requireUnconsumed = false)
+                  val width = size.width.toFloat()
+                  // ⚠️ 必须读「最新」时长。block 只在 key 变化时重启，闭包直接抓
+                  // `duration` 会拿到第一次组合时的旧值 —— 换集 / 时长看守纠正之后
+                  // 那个值就错了，点 30% 会算成 80%（旧时长 ÷ 新时长 的放大）。
+                  val total = liveDuration
+                  if (width <= 0f || total <= 0f) return@awaitEachGesture
+
+                  fun targetAt(x: Float): Float = ((x / width) * total).coerceIn(0f, total)
+
+                  // 按下即到位：和 YouTube / 系统播放器一致，先给反馈再谈拖动
+                  isUserInteracting = true
+                  userPosition = targetAt(down.position.x)
+                  onValueChange(userPosition)
+                  down.consume()
+
+                  // 一条手势循环走到底。原来是 tap / drag 两个 detector 并存，
+                  // 一次轻点常常同时满足「tap」和「位移过 slop 的 drag」，
+                  // 两个分支各算一遍位置，谁最后落地取决于手指抖了几像素 ——
+                  // 「不是每次都这样」就是这么来的。
+                  var dragging = false
+                  while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) break
+                    if (!dragging &&
+                      (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+                    ) {
+                      dragging = true
+                    }
+                    if (dragging) {
+                      userPosition = targetAt(change.position.x)
+                      onValueChange(userPosition)
+                      change.consume()
+                    }
+                  }
+
+                  // 收尾统一一条路：先 snap 到最终位置，再交还控制权
+                  val settled = userPosition
+                  scope.launch {
+                    animatedPosition.snapTo(settled)
+                    isUserInteracting = false
+                    onValueChangeFinished()
+                  }
                 }
-              }
-            )
-          }
-          .pointerInput(Unit) {
-            detectDragGestures(
-              onDragStart = { 
-                isUserInteracting = true 
               },
-              onDragEnd = { 
-                scope.launch { 
-                  // Allow a tiny window for mpv/viewModel to sync back before releasing control
-                  delay(50) 
-                  animatedPosition.snapTo(userPosition)
-                  isUserInteracting = false
-                  onValueChangeFinished()
-                }
-              },
-              onDragCancel = { 
-                scope.launch { 
-                  delay(50)
-                  animatedPosition.snapTo(userPosition)
-                  isUserInteracting = false
-                  onValueChangeFinished()
-                }
-              },
-            ) { change, _ ->
-              change.consume()
-              val newPosition = (change.position.x / size.width) * duration
-              userPosition = newPosition.coerceIn(0f, duration)
-              onValueChange(userPosition)
-            }
-          }
-      )
+        )
+      }
       
       // Visual seekbar (smaller, centered)
       Box(
         modifier = Modifier
           .fillMaxWidth()
-          .height(32.dp),
+          .then(
+            // Standard / Thick 的 Slider 要占满这条 48dp：它自己就是触摸入口，
+            // 被压在 32dp 里意味着上下的边点不到（之前靠外层手势兜，现在不兜了）。
+            // 波浪条仍按 32dp 画，波形高度是按它算的。
+            if (seekbarStyle == SeekbarStyle.Wavy) {
+              Modifier.height(32.dp)
+            } else {
+              Modifier.fillMaxHeight()
+            }
+          ),
         contentAlignment = Alignment.Center,
       ) {
       when (seekbarStyle) {
