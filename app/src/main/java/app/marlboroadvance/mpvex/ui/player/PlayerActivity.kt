@@ -3145,7 +3145,10 @@ private fun cancelAutoplayCountdown() {
    *
    * @param eventId The MPV event ID
    */
-  internal fun event(eventId: Int) {
+  internal fun event(
+    eventId: Int,
+    data: MPVNode? = null,
+  ) {
     when (eventId) {
       MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
         handleFileLoaded()
@@ -3166,7 +3169,55 @@ private fun cancelAutoplayCountdown() {
         viewModel.onFirstFrameRendered()
         updateRecentlyPlayedDurationIfAvailable()
       }
+
+      MPVLib.MpvEvent.MPV_EVENT_END_FILE -> handleEndFileWithError(data)
     }
+  }
+
+  /**
+   * mpv 放弃了这个文件（`end-file` 且原因是出错）。
+   *
+   * ## 为什么需要它
+   *
+   * 损坏的本地视频有一个非常尴尬的中间态：容器头是好的（mpv 认得出格式、也愿意打开），
+   * 但解复用读到坏包就再也出不来画面，于是 mpv 发一条 `end-file(reason=error)` 收摊。
+   * 我们原来对这个事件**什么都不做** ⇒ 界面上既没有画面也没有提示，加载层一圈一圈
+   * 转到天荒地老，用户只能以为 App 卡死了。
+   *
+   * 现在把它翻成那张 [PlaybackErrorCard]：告诉用户「文件坏了」，并给出「重试 / 返回」。
+   *
+   * ## 为什么两道闸
+   *
+   *  ① **只认 `reason=error`**：`eof`（正常播完，走 `eof-reached`）、`stop` / `quit`
+   *     （退出播放页）、`redirect`（换片）都不是失败，误报会天天弹卡片。
+   *  ② **只在这一条一帧都没出过时才弹**：已经出过画面的文件半路挂掉属于「播放中断」，
+   *     那是另一个问题；这里只负责「打不开」。
+   *
+   * ⚠️ `reason` 的节点形态由 libmpv 的 JNI 层拼出来，字符串 / 整数两种都见过 ⇒ 两种都认，
+   *    认不出来就当没发生（宁可少弹一张卡，也不能把正常播放判成失败）。
+   */
+  private fun handleEndFileWithError(data: MPVNode?) {
+    if (isFinishing || isDestroyed) return
+    if (engineKind != EngineKind.MPV) return
+
+    val reasonNode = runCatching { data?.asMap()?.get("reason") }.getOrNull()
+    val reasonText = runCatching { reasonNode?.asString() }.getOrNull()
+    val reasonInt = runCatching { reasonNode?.asInt() }.getOrNull()
+    // mpv_end_file_reason: EOF=0, STOP=2, QUIT=3, ERROR=4, REDIRECT=5
+    val failed = reasonText?.contains("error", ignoreCase = true) == true || reasonInt == 4L
+    // 认不出形态时留一条诊断，下次有用户报「文件坏了没提示」能直接对上
+    dipLog(
+      "end-file",
+      "reason=${reasonText ?: reasonInt} failed=$failed " +
+        "firstFrame=${viewModel.firstFrameRendered.value} node=${runCatching { data?.toJson() }.getOrNull()}",
+    )
+    if (!failed) return
+    if (viewModel.firstFrameRendered.value) return
+
+    viewModel.showPlaybackError(
+      "这个文件的内容可能已经损坏：播放内核连一帧画面都没能解出来。\n" +
+        "可以重试一次，或者换一份文件；也可以在设置里改用 GSY 内核再试。",
+    )
   }
 
   /**

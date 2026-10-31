@@ -347,10 +347,13 @@ fun NetworkUploadSheet(
       it.id == claimedBatchId || (it.connectionId == connectionId && it.targetDir == targetDir)
     }
 
-  // 有正在跑的批次就自动进进度页；用户手动点「继续选择」后不再强拉
-  var showTransfer by remember { mutableStateOf(activeBatch?.running == true) }
-  LaunchedEffect(activeBatch?.id, activeBatch?.running) {
-    if (activeBatch?.running == true) showTransfer = true
+  // 有正在跑的批次就自动进进度页；用户手动点「继续选择」后不再强拉。
+  // 暂停的批次同样算「有事没做完」—— 关掉面板再打开要能看到「继续上传」
+  var showTransfer by remember {
+    mutableStateOf(activeBatch?.running == true || activeBatch?.paused == true)
+  }
+  LaunchedEffect(activeBatch?.id, activeBatch?.running, activeBatch?.paused) {
+    if (activeBatch?.running == true || activeBatch?.paused == true) showTransfer = true
   }
 
   ModalBottomSheet(
@@ -372,7 +375,7 @@ fun NetworkUploadSheet(
           context = context,
           scope = scope,
           targetLabel = targetLabel,
-          hasRunningBatch = batch?.running == true,
+          hasRunningBatch = batch?.running == true || batch?.paused == true,
           onClose = onDismiss,
           onShowTransfer = { showTransfer = true },
           onStart = { picks ->
@@ -1361,7 +1364,13 @@ internal fun TransferPane(
     ) {
       Column(modifier = Modifier.weight(1f)) {
         Text(
-          text = if (batch.running) "正在上传" else "上传结束",
+          // 暂停不能显示成「上传结束」——那会让用户以为要重来
+          text =
+            when {
+              batch.paused -> "已暂停"
+              batch.running -> "正在上传"
+              else -> "上传结束"
+            },
           style = MaterialTheme.typography.titleMedium,
           fontWeight = FontWeight.Medium,
         )
@@ -1409,7 +1418,7 @@ internal fun TransferPane(
         )
       }
       // 「还要多久」——进度条百分比回答不了这个问题，用户真正需要的是这个量级
-      if (batch.running && stats.speedBps > 0) {
+      if (batch.running && !batch.paused && stats.speedBps > 0) {
         Spacer(Modifier.height(4.dp))
         Text(
           // 剩余时间为 null（数据不够 / 完全没在动）时只给速度 —— 起播阶段给一个
@@ -1421,8 +1430,8 @@ internal fun TransferPane(
       }
     }
 
-    // ── 结果（只在结束后出现）──
-    if (!batch.running) {
+    // ── 结果（只在真正结束后出现，暂停时不该看到「完成 / 失败」横幅）──
+    if (!batch.running && !batch.paused) {
       UploadResultBanner(batch)
     }
 
@@ -1454,18 +1463,32 @@ internal fun TransferPane(
           TextButton(onClick = onBack, enabled = !batch.running) { Text("继续选择") }
         }
         Spacer(Modifier.weight(1f))
-        if (batch.running) {
-          OutlinedButton(onClick = { NetworkUploadCenter.cancel() }) { Text("取消上传") }
-        } else {
-          // 失败 / 跳过的都还能重试：只重传那几条，成功的不再走一遍（几 GB 的文件
-          // 重传一次代价太大）。全部成功时不显示 —— 那时「完成」才是唯一动作。
-          if (NetworkUploadCenter.canRetry) {
-            OutlinedButton(onClick = { NetworkUploadCenter.retryFailed() }) {
-              Text(if (batch.retryableCount > 1) "重试 ${batch.retryableCount} 项" else "重试这一项")
-            }
+        when {
+          // 暂停：主按钮换成「继续上传」。「取消上传」留在旁边 ——
+          // 暂停之后想彻底放弃，是同一个位置上的下一步，不该逼人先继续再取消
+          batch.paused -> {
+            OutlinedButton(onClick = { NetworkUploadCenter.cancel() }) { Text("取消上传") }
             Spacer(Modifier.width(8.dp))
+            Button(onClick = { NetworkUploadCenter.resume() }) { Text("继续上传") }
           }
-          Button(onClick = onClose) { Text("完成") }
+          batch.running -> {
+            OutlinedButton(onClick = { NetworkUploadCenter.cancel() }) { Text("取消上传") }
+            Spacer(Modifier.width(8.dp))
+            // 暂停会打断当前文件、恢复时整份重传（AList 没有断点续传）——
+            // 这一点在按钮下面的小字里说清楚，别让人以为「白传了」
+            Button(onClick = { NetworkUploadCenter.pause() }) { Text("暂停") }
+          }
+          else -> {
+            // 失败 / 跳过的都还能重试：只重传那几条，成功的不再走一遍（几 GB 的文件
+            // 重传一次代价太大）。全部成功时不显示 —— 那时「完成」才是唯一动作。
+            if (NetworkUploadCenter.canRetry) {
+              OutlinedButton(onClick = { NetworkUploadCenter.retryFailed() }) {
+                Text(if (batch.retryableCount > 1) "重试 ${batch.retryableCount} 项" else "重试这一项")
+              }
+              Spacer(Modifier.width(8.dp))
+            }
+            Button(onClick = onClose) { Text("完成") }
+          }
         }
       }
     }
@@ -1833,7 +1856,14 @@ internal fun UploadProgressPill(batch: UploadBatch, onClick: () -> Unit) {
         )
         Spacer(Modifier.width(8.dp))
         Text(
-          text = "正在上传 ${batch.finishedCount} / ${batch.tasks.size}",
+          // 暂停了还写「正在上传」就是在骗人：这条胶囊是用户唯一能看到的进度，
+          // 说错状态他会以为卡死了
+          text =
+            if (batch.paused) {
+              "上传已暂停 ${batch.finishedCount} / ${batch.tasks.size}"
+            } else {
+              "正在上传 ${batch.finishedCount} / ${batch.tasks.size}"
+            },
           style = MaterialTheme.typography.labelLarge,
           color = MaterialTheme.colorScheme.onSurface,
           maxLines = 1,
@@ -1857,7 +1887,7 @@ internal fun UploadProgressPill(batch: UploadBatch, onClick: () -> Unit) {
         progress = { batch.progress },
         modifier = Modifier.fillMaxWidth().height(2.dp),
       )
-      if (stats.speedBps > 0) {
+      if (stats.speedBps > 0 && !batch.paused && batch.running) {
         Spacer(Modifier.height(4.dp))
         Text(
           text = formatSpeedLine(stats.speedBps, stats.etaSeconds),

@@ -66,39 +66,49 @@ class UploadForegroundService : Service() {
       scope.launch {
         while (true) {
           val batch = NetworkUploadCenter.batch.value
-          if (batch == null || !batch.running) {
-            // 结束：摆一条可点掉的「结果通知」，然后退出前台。
-            // 直接在通知栏消失会让人以为上传被掐断了。
-            notify(buildNotification(
-              title = resultTitle(batch),
-              text = resultText(batch),
-              permille = 1000,
-              running = false,
-            ))
-            stopForegroundCompat(detach = true)
-            stopSelf()
+          // ⚠️ 三种状态必须分开：结束（进程里没批次了）、暂停、在传。
+          // 把「暂停」当成「结束」会让通知栏在按下暂停的一瞬间变成
+          // 「上传完成」并退出前台 —— 那正是最不该收通知的时刻。
+          if (batch == null) {
+            finishWithResult(resultTitle(null), resultText(null))
             return@launch
           }
-          notify(
-            buildNotification(
-              title = "正在上传 ${batch.finishedCount} / ${batch.tasks.size}",
-              text = formatSpeedLine(
-                NetworkUploadCenter.stats.value.speedBps,
-                NetworkUploadCenter.stats.value.etaSeconds,
+          if (batch.paused) {
+            notify(
+              buildNotification(
+                title = "上传已暂停",
+                text = "已完成 ${batch.finishedCount} / ${batch.tasks.size} · 点「继续」接着传",
+                permille = (batch.progress * 1000).toInt().coerceIn(0, 1000),
+                running = false,
+                paused = true,
               ),
-              permille = (batch.progress * 1000).toInt().coerceIn(0, 1000),
-              running = true,
-            ),
-          )
+            )
+          } else if (!batch.running) {
+            finishWithResult(resultTitle(batch), resultText(batch))
+            return@launch
+          } else {
+            notify(
+              buildNotification(
+                title = "正在上传 ${batch.finishedCount} / ${batch.tasks.size}",
+                text = formatSpeedLine(
+                  NetworkUploadCenter.stats.value.speedBps,
+                  NetworkUploadCenter.stats.value.etaSeconds,
+                ),
+                permille = (batch.progress * 1000).toInt().coerceIn(0, 1000),
+                running = true,
+              ),
+            )
+          }
           delay(1000)
         }
       }
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent?.action == ACTION_CANCEL) {
-      NetworkUploadCenter.cancel()
-      return START_NOT_STICKY
+    when (intent?.action) {
+      ACTION_CANCEL -> NetworkUploadCenter.cancel()
+      ACTION_PAUSE -> NetworkUploadCenter.pause()
+      ACTION_RESUME -> NetworkUploadCenter.resume()
     }
     // 已在跑就不要用 START_STICKY 复活一个空服务（复活后没有批次可显示）
     return START_NOT_STICKY
@@ -109,6 +119,13 @@ class UploadForegroundService : Service() {
     super.onDestroy()
   }
 
+  /** 收尾：摆一条可点掉的「结果通知」，然后退出前台并结束服务 */
+  private fun finishWithResult(title: String, text: String) {
+    notify(buildNotification(title = title, text = text, permille = 1000, running = false))
+    stopForegroundCompat(detach = true)
+    stopSelf()
+  }
+
   // ── 通知 ──
 
   private fun buildNotification(
@@ -116,6 +133,7 @@ class UploadForegroundService : Service() {
     text: String,
     permille: Int?,
     running: Boolean,
+    paused: Boolean = false,
   ): Notification {
     val open =
       PendingIntent.getActivity(
@@ -127,12 +145,9 @@ class UploadForegroundService : Service() {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
       )
     val cancel =
-      PendingIntent.getService(
-        this,
-        1,
-        Intent(this, UploadForegroundService::class.java).setAction(ACTION_CANCEL),
-        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-      )
+      actionIntent(ACTION_CANCEL, requestCode = 1)
+    val pause = actionIntent(ACTION_PAUSE, requestCode = 2)
+    val resume = actionIntent(ACTION_RESUME, requestCode = 3)
 
     return NotificationCompat
       .Builder(this, CHANNEL_ID)
@@ -140,7 +155,8 @@ class UploadForegroundService : Service() {
       .setContentTitle(title)
       .setContentText(text)
       .setOnlyAlertOnce(true)
-      .setOngoing(running)
+      // 暂停也要留在通知栏：它的下一步就是「继续」，收起来等于把按钮藏了
+      .setOngoing(running || paused)
       .setShowWhen(false)
       .setContentIntent(open)
       .apply {
@@ -149,10 +165,16 @@ class UploadForegroundService : Service() {
         } else {
           setProgress(0, 0, true)
         }
-        if (running) {
-          addAction(0, "取消上传", cancel)
-        } else {
-          setAutoCancel(true)
+        when {
+          paused -> {
+            addAction(0, "继续上传", resume)
+            addAction(0, "取消上传", cancel)
+          }
+          running -> {
+            addAction(0, "暂停", pause)
+            addAction(0, "取消上传", cancel)
+          }
+          else -> setAutoCancel(true)
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
           priority = NotificationCompat.PRIORITY_LOW
@@ -160,6 +182,15 @@ class UploadForegroundService : Service() {
       }
       .build()
   }
+
+  /** 通知动作 → 服务自身（服务已在跑，前台状态下给自己发命令不受后台限制） */
+  private fun actionIntent(action: String, requestCode: Int): PendingIntent =
+    PendingIntent.getService(
+      this,
+      requestCode,
+      Intent(this, UploadForegroundService::class.java).setAction(action),
+      PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
   private fun startAsForeground(notification: Notification) {
     val type =
@@ -211,6 +242,8 @@ class UploadForegroundService : Service() {
     private const val CHANNEL_ID = "cineisle_upload_channel"
     private const val NOTIFICATION_ID = 8801
     private const val ACTION_CANCEL = "app.cineisle.player.action.CANCEL_UPLOAD"
+    private const val ACTION_PAUSE = "app.cineisle.player.action.PAUSE_UPLOAD"
+    private const val ACTION_RESUME = "app.cineisle.player.action.RESUME_UPLOAD"
 
     /**
      * 起前台服务。

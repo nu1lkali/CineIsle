@@ -2233,7 +2233,25 @@ android {
     //     ⑫ 速度/剩余时间的采样收成 `NetworkUploadCenter.stats` 一处，
     //        面板与通知读同一份（各算一份会出现两个不一样的数字）。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 189
+    // ── v190（versionCode 190，修复轮不涨名，versionName 仍为 1.6.12）──────────
+    //     用户点名两件事（上传 ×1、播放器崩溃 ×1）：
+    //     ① 上传**可以暂停 / 继续**，并且通知栏能直接按：`UploadBatch.paused` 与
+    //        `CancelToken.paused`；通知动作 `ACTION_PAUSE / ACTION_RESUME / ACTION_CANCEL`。
+    //        ⚠️ AList 的 put 没有断点续传 ⇒ 暂停 = 立刻中断当前文件、退回 Pending，
+    //        恢复时**整份重传**（界面上写清楚）；已传完的不动。
+    //        ⚠️ 暂停中的批次 **不能**当「已结束」：`settle()` 保留 Pending、不 emit
+    //        completed、不清落盘队列，通知停在「上传已暂停」并给「继续上传」。
+    //     ② 分享上传「传完自动回原 App」遇到**手动暂停**时不退（`mine.paused` 拦一道）：
+    //        那一刻用户明确在操作它，退出去等于把人赶走。
+    //     ③ mpv 播**损坏的视频**不再闪退：
+    //        · `PlayerObserver` 每条回调都进 `runCatching` —— 这些回调从 libmpv 的
+    //          native 线程经 JNI 进来，抛出去就是**未捕获异常 = 进程直接死**；
+    //          损坏文件的属性值（缺字段 / 空串 / NaN / 0）本来就不保证合法。
+    //        · `MPV_EVENT_END_FILE(reason=error)` 且这一条**一帧都没出过** ⇒ 翻成
+    //          `PlaybackErrorCard`（原来是黑屏 + 转圈转到天荒地老）。
+    //        · 错误卡底部那句改成对「死链」和「坏文件」都成立的说法。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 190
     versionName = "1.6.12"
 
     vectorDrawables {
