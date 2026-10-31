@@ -2309,7 +2309,24 @@ android {
     //        `LocalCopyCleaner` 的失败原因也改陈述句（「无删除权限，权限可能已被收回」
     //        「存储为只读，无写入权限」），`服务器` 统一为 `服务端`。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 193
+    // ── v194（versionCode 194，修复轮不涨名，versionName 仍为 1.6.13）──────────
+    //     4K 高帧率片源「像 PPT」的排查与修复（用户反馈：2160×3840@60、H.264 Main、
+    //     27.7 Mbps 卡到不可看，切硬件解码无改善；同机其他播放器流畅 ⇒ 设备能吃下这个规格）。
+    //     ① 新增「直出模式」（`DecoderPreferences.directOutput`，默认关）：
+    //        `vo=mediacodec_embed` + `hwdec=mediacodec` 的零拷贝路径。默认的 gpu / gpu-next
+    //        下 mpv 永远选不到零拷贝那一档，只能走 `mediacodec-copy` ——
+    //        4K 每帧 12.4 MB 回拷 + 12.4 MB 纹理上传，2160×3840@60 ≈ 1.5 GB/s，中端 SoC 吃满。
+    //        代价：mpv 侧字幕 / OSD / 着色器 / 截图失效，故默认关且文案写明。
+    //     ② `hwdec` 去掉永远选不上的第一档 `mediacodec`，改 `mediacodec-copy,no`
+    //        （原来那个写法会让人误判「已经在零拷贝硬解」）。
+    //     ③ `vf=format=yuv420p` 收窄到软解路径：硬解下强转是每帧一次全帧 swscale，
+    //        还让 `vd-lavc-dr` 失效。
+    //     ④ 直出模式下不挂 deband / Anime4K：`mediacodec_embed` 没有滤镜链与 GL 渲染器，
+    //        硬挂会让 mpv 判定「该 vo 不支持滤镜」而推翻整条播放链。
+    //     ⑤ 诊断埋点 `steadyStateProbe()`：首帧后 3 秒落盘 `hwdec-current` /
+    //        `estimated-vf-fps` / 解码器与 vo 各自的丢帧计数（详细日志开启时才写）。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 194
     versionName = "1.6.13"
 
     vectorDrawables {

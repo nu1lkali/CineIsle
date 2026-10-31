@@ -23,6 +23,31 @@ class DecoderPreferences(
   val useYUV420P = preferenceStore.getBoolean("use_yuv420p", false)
 
   /**
+   * 直出模式：`vo=mediacodec_embed` + `hwdec=mediacodec`（**零拷贝**硬解）。
+   *
+   * ## 解决什么
+   *
+   * 默认的 `vo=gpu / gpu-next` 拿不到 mpv 的零拷贝硬解 —— `hwdec=mediacodec` 要求
+   * `vo=mediacodec_embed`，所以实际生效的只有 `mediacodec-copy`：解码完把整帧
+   * **回拷到 CPU 内存**，再由 vo 重新上传成纹理。4K 一帧 12.4 MB，
+   * 2160×3840@60 就是每帧 12.4 MB 拷出 + 12.4 MB 上传 ≈ 1.5 GB/s，
+   * 中端 SoC 直接吃满 ⇒ 画面像幻灯片。
+   *
+   * 直出模式把解码器的输出 buffer 直接交给 Surface，**这两次搬运都不存在**，
+   * 与 MX Player / 系统播放器的路径一致。
+   *
+   * ## 代价（所以默认关）
+   *
+   * mpv 侧的所有叠加层全部失效：**外挂/内嵌字幕不显示**、OSD 不显示、
+   * GLSL 着色器（Anime4K / 锐化）无效、`grabThumbnail` 截图失败。
+   * 播放器界面本身是 Compose 独立图层，不受影响。
+   *
+   * ⚠️ 只在「解码器能直接吃下这个规格」时才有意义；若设备拒绝该流
+   * （`hwdec-current` 落到 `no`），直出模式也救不了 —— 那是设备能力问题。
+   */
+  val directOutput = preferenceStore.getBoolean("direct_output", false)
+
+  /**
    * HDR 输出（`target-colorspace-hint`）。
    *
    * ## 为什么要独立于 [gpuNext]

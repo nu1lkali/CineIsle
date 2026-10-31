@@ -123,7 +123,21 @@ class MPVView(
   override fun initOptions() {
     val profile = decoderPreferences.profile.get()
     MPVLib.setOptionString("profile", profile)
-    setVo(if (decoderPreferences.gpuNext.get()) "gpu-next" else "gpu")
+
+    // ── 视频输出（决定「硬解到底走哪一档」）──
+    // `mediacodec_embed` 是**零拷贝直出**：解码器把输出 buffer 直接交给 Surface，
+    // 不经 CPU 内存、也不重新上传纹理。它是 mpv 里唯一能拿到 `hwdec=mediacodec`
+    // （零拷贝档）的 vo —— 用 gpu / gpu-next 时 mpv 会跳过这一档、退到
+    // `mediacodec-copy`（每帧 12.4 MB 回拷 + 12.4 MB 上传，4K60 ≈ 1.5 GB/s）。
+    // 代价见 [DecoderPreferences.directOutput]：字幕 / OSD / 着色器 / 截图全部失效。
+    val directOutput = decoderPreferences.directOutput.get()
+    setVo(
+      when {
+        directOutput -> "mediacodec_embed"
+        decoderPreferences.gpuNext.get() -> "gpu-next"
+        else -> "gpu"
+      },
+    )
 
     // ── 杜比视界 / HDR 输出 ──
     // 1) DV Profile 5 没有 HDR10 兜底层，只有 gpu-next（libplacebo）会解析 HEVC 流里的
@@ -140,7 +154,8 @@ class MPVView(
     //   写成显式二值可以让意图不依赖上游默认值，将来 mpv 改默认也不会连带改变行为。
     //   另见 DecoderPreferences.hdrEnabled：它与 gpuNext 解耦，正是为了这个开关。
     val hdrOn = decoderPreferences.hdrEnabled.get()
-    if (decoderPreferences.gpuNext.get()) {
+    // 直出模式下 vo 是 mediacodec_embed，没有 libplacebo，这个 hint 也无处生效
+    if (decoderPreferences.gpuNext.get() && !directOutput) {
       MPVLib.setOptionString("target-colorspace-hint", if (hdrOn) "yes" else "no")
     }
     
@@ -149,13 +164,18 @@ class MPVView(
       MPVLib.setOptionString("gpu-context", "androidvk")
     }
 
-    // Set hwdec with fallback order: HW+ (mediacodec) -> HW (mediacodec-copy) -> SW (no)
-    // 注：Android 上 `mediacodec`（零拷贝）要求 `--vo=mediacodec_embed`，本项目用的是
-    // gpu / gpu-next，所以这一段实际会被跳过，真正生效的是 `mediacodec-copy`，
-    // 最后兜到 `no`（ffmpeg 软解）。
+    // ⚠️ 这里**不能**写成 `mediacodec,mediacodec-copy,no`：第一档 `mediacodec`（零拷贝）
+    // 只在 `vo=mediacodec_embed` 下才成立，vo 是 gpu / gpu-next 时 mpv 必然跳过它，
+    // 落在 `mediacodec-copy`（解码后整帧回拷 CPU 内存 + 重新上传纹理）。
+    // 把一档永远选不上的值写在第一位，只会让人以为「已经在用零拷贝硬解」——
+    // 排查 4K60 卡顿时就卡在这个错觉上。直出模式下才把 `mediacodec` 单独交给它。
     MPVLib.setOptionString(
       "hwdec",
-      if (decoderPreferences.tryHWDecoding.get()) "mediacodec,mediacodec-copy,no" else "no",
+      when {
+        directOutput -> "mediacodec,no"
+        decoderPreferences.tryHWDecoding.get() -> "mediacodec-copy,no"
+        else -> "no"
+      },
     )
     // 硬解白名单：**这里不能用 `all`**。
     // AVI 里那批老视频编码（Xvid / DivX / MPEG-4 ASP，fourCC 常见为 XVID / DIVX / MP42）
@@ -168,7 +188,13 @@ class MPVView(
     // 名单本身 = mpv 自带的 hwdec-codecs 默认值，只做加法不做减法，不会削弱 H.264 / HEVC 的硬解。
     MPVLib.setOptionString("hwdec-codecs", MPV_HWDEC_CODECS)
 
-    if (decoderPreferences.useYUV420P.get()) {
+    // `vf=format=yuv420p` 只对**软解**有意义。
+    // ⚠️ 挂在硬解路径上是纯亏：MediaCodec 输出的是 NV12（P010 之于 10bit），强转 yuv420p
+    // 会插入一层 swscale —— 4K 每帧是把 12.4 MB 读一遍写一遍，60fps 就是 1.5 GB/s 的额外流量；
+    // 而且任何 `vf` 都会让 `vd-lavc-dr`（direct rendering）失效，等于白丢一层优化。
+    // 直出模式下更不能挂：mediacodec_embed 根本不经过滤镜链。
+    // 真要强制输出格式，把「尝试硬件解码」也关掉 —— 那条路径上这个开关才按字面生效。
+    if (decoderPreferences.useYUV420P.get() && !directOutput && !decoderPreferences.tryHWDecoding.get()) {
       MPVLib.setOptionString("vf", "format=yuv420p")
     }
     
@@ -279,7 +305,11 @@ class MPVView(
   }
 
   override fun postInitOptions() {
-    when (decoderPreferences.debanding.get()) {
+    // 直出模式下**不能**挂任何 `vf`：`mediacodec_embed` 直接把解码器的输出 buffer 交出去，
+    // 没有滤镜链的位置，硬挂一个 deband 会让 mpv 报「这个 vo 不支持滤镜」并把整条
+    // 播放链推翻（表现为黑屏或退回另一档 vo）。GPU 侧的 `deband` 同理 —— 那是 libplacebo 的活。
+    val directOutput = decoderPreferences.directOutput.get()
+    when (if (directOutput) Debanding.None else decoderPreferences.debanding.get()) {
       Debanding.None -> {}
       Debanding.CPU -> MPVLib.command("vf", "add", "@deband:gradfun=radius=12")
       Debanding.GPU -> MPVLib.setOptionString("deband", "yes")
@@ -469,6 +499,9 @@ class MPVView(
    * 本方法只负责「把链路字符串写进 mpv 选项」。
    */
   fun applyAnime4KShaders() {
+    // 直出模式用的是 mediacodec_embed，没有 GL/libplacebo 渲染器：`glsl-shaders` 无处生效，
+    // 顺手设的 `opengl-pbo` 之类 GL 选项也没有宿主 vo。直接跳过，别留一堆无效配置。
+    if (decoderPreferences.directOutput.get()) return
     runCatching {
       val enabled = decoderPreferences.enableAnime4K.get()
       val gpuNextActive = decoderPreferences.gpuNext.get()

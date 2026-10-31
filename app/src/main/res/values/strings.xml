@@ -175,6 +175,9 @@
   <string name="pref_decoder_summary">Hardware decoding, pixel format, debanding</string>
   <string name="pref_decoder_profile_title">MPV Profile</string>
   <string name="pref_decoder_try_hw_dec_title">Try hardware decoding</string>
+  <string name="pref_decoder_direct_output_title">Direct output</string>
+  <string name="pref_decoder_direct_output_summary">Zero-copy hardware decoding: skips the whole-frame copy-back, so 4K and high-frame-rate videos play much smoother. Subtitles are not displayed in this mode, and video filters, shaders and screenshots are unavailable. Takes effect after reopening the player.</string>
+  <string name="player_direct_output_failed">Direct output could not enable zero-copy decoding, so the video may not be displayed. Turn off Direct output in Settings - Decoder and try again.</string>
   <string name="pref_decoder_gpu_next_title">Use gpu-next</string>
   <string name="pref_decoder_gpu_next_summary">A new rendering backend</string>
   <string name="pref_decoder_hdr_title">HDR output</string>

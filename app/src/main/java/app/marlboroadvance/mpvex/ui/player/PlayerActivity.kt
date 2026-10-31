@@ -65,6 +65,7 @@ import app.marlboroadvance.mpvex.domain.playbackstate.repository.PlaybackStateRe
 import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
+import app.marlboroadvance.mpvex.preferences.DecoderPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -149,6 +150,7 @@ open class PlayerActivity :
    * Preferences for player settings.
    */
   private val playerPreferences: PlayerPreferences by inject()
+  private val decoderPreferences: DecoderPreferences by inject()
 
   /** 本次播放使用的内核 */
   private var engineKind: EngineKind = EngineKind.MPV
@@ -2214,6 +2216,72 @@ open class PlayerActivity :
     }.getOrElse { "probe-failed=${it.message}" }
 
   /**
+   * 诊断用：**稳态**下的解码 / 渲染实况（首帧之后 3 秒才拍）。
+   *
+   * 与 [playbackProbe] 的分工：那个是「某一瞬间画面停没停」，这个是「这条片子到底
+   * 跑在什么路径上、卡在哪一级」。四个问题一次答完：
+   *  · `hwdec-current` —— 用户以为在硬解，实际拿到的是 `mediacodec-copy` 还是 `no`。
+   *    本项目 `hwdec=mediacodec,mediacodec-copy,no` 配合 `vo=gpu-next`，第一档
+   *    （零拷贝 mediacodec）**永远选不上**，能拿到的上限就是拷贝回读；
+   *    驱动拒绝这个分辨率/帧率时（4K60 竖屏 AVC 很常见）会静默掉到 `no` = ffmpeg 软解。
+   *  · `estimated-vf-fps` vs `container-fps` —— 解码侧到底交出了多少帧；
+   *  · `decoder-frame-drop-count` vs `frame-drop-count` —— 瓶颈在解码器还是在 vo；
+   *  · `display-fps` —— 屏幕刷新率，用来判断 60fps 片源是不是撞上 60Hz vsync 的抖动。
+   */
+  private fun steadyStateProbe(): String =
+    runCatching {
+      val hwdec = PlayerLib.getPropertyString("hwdec-current") ?: "?"
+      val vo = PlayerLib.getPropertyString("current-vo") ?: "?"
+      val srcFps = PlayerLib.getPropertyDouble("container-fps") ?: -1.0
+      val outFps = PlayerLib.getPropertyDouble("estimated-vf-fps") ?: -1.0
+      val dispFps = PlayerLib.getPropertyDouble("display-fps") ?: -1.0
+      val decDrop = PlayerLib.getPropertyInt("decoder-frame-drop-count") ?: -1
+      val voDrop = PlayerLib.getPropertyInt("frame-drop-count") ?: -1
+      val vw = PlayerLib.getPropertyInt("width") ?: -1
+      val vh = PlayerLib.getPropertyInt("height") ?: -1
+      "hwdec=$hwdec vo=$vo ${vw}x$vh src=%.2ffps out=%.2ffps disp=%.2ffps decDrop=$decDrop voDrop=$voDrop"
+        .format(srcFps, outFps, dispFps)
+    }.getOrElse { "steady-probe-failed=${it.message}" }
+
+  /**
+   * 首帧之后 3 秒做一次「稳态体检」。两件事：
+   *
+   *  ① 把 [steadyStateProbe] 的读数落盘（详细日志关着时 `PlayerDiagLog.log` 自己短路）；
+   *  ② **直出模式的兜底**：用户开了直出、但硬解没真的立起来时，`vo=mediacodec_embed`
+   *    只认硬解帧，结果是**纯黑屏且一条报错都没有**。这种情况必须当场告诉用户
+   *    去把直出模式关掉 —— 否则他只会以为 App 播不了这个视频。
+   *
+   * 为什么延后 3 秒：`PLAYBACK_RESTART` 那一刻计数器还全是 0，`hwdec-current`
+   * 也可能没落定（硬解重协商要走一次 reconfig）。等到稳态才是有意义的读数。
+   */
+  private fun watchSteadyState() {
+    lifecycleScope.launch {
+      kotlinx.coroutines.delay(3000)
+      if (isFinishing || isDestroyed) return@launch
+      if (engineKind != EngineKind.MPV) return@launch
+
+      val probe = steadyStateProbe()
+      PlayerDiagLog.log("steady", probe)
+
+      if (!decoderPreferences.directOutput.get()) return@launch
+      val hwdec = runCatching { PlayerLib.getPropertyString("hwdec-current") }.getOrNull().orEmpty()
+      val vo = runCatching { PlayerLib.getPropertyString("current-vo") }.getOrNull().orEmpty()
+      if (hwdec.startsWith("mediacodec") && vo == "mediacodec_embed") return@launch
+
+      PlayerDiagLog.log("direct-output-failed", probe)
+      runOnUiThread {
+        if (!isFinishing && !isDestroyed) {
+          android.widget.Toast.makeText(
+            this@PlayerActivity,
+            getString(app.marlboroadvance.mpvex.R.string.player_direct_output_failed),
+            android.widget.Toast.LENGTH_LONG,
+          ).show()
+        }
+      }
+    }
+  }
+
+  /**
    * Handles configuration changes by updating video aspect ratio.
    */
   private fun handleConfigurationChange() {
@@ -3168,6 +3236,7 @@ private fun cancelAutoplayCountdown() {
         // 判据为什么用这个事件而不是 vo-configured，见 PlayerViewModel.firstFrameRendered 的注释。
         viewModel.onFirstFrameRendered()
         updateRecentlyPlayedDurationIfAvailable()
+        watchSteadyState()
       }
 
       MPVLib.MpvEvent.MPV_EVENT_END_FILE -> handleEndFileWithError(data)

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Hd
 import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -151,6 +152,33 @@ object DecoderPreferencesScreen : Screen {
                 },
                 modifier = Modifier.settingsAnchor(R.string.pref_decoder_try_hw_dec_title),
                 title = { Text(stringResource(R.string.pref_decoder_try_hw_dec_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+              )
+
+              PreferenceDivider()
+
+              // 直出模式：零拷贝硬解。4K 高帧率片源从「每帧回拷 12.4 MB」降到零拷贝，
+              // 代价是 mpv 侧的字幕 / 着色器 / 截图全部失效，所以默认关、写在文案里。
+              val directOutput by preferences.directOutput.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Speed,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = directOutput,
+                onValueChange = {
+                  preferences.directOutput.set(it)
+                },
+                modifier = Modifier.settingsAnchor(R.string.pref_decoder_direct_output_title),
+                title = { Text(stringResource(R.string.pref_decoder_direct_output_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    stringResource(R.string.pref_decoder_direct_output_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
               )
 
               PreferenceDivider()
