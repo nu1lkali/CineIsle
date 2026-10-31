@@ -6,6 +6,7 @@ import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.domain.network.guessNetworkMimeType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -674,6 +675,27 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
    *   实现里只该更新状态，别做重活（见 `NetworkUploadCenter` 的节流）。
    * @param isCancelled 每次写块前询问一次。返回 true 即抛异常中止 ——
    *   这是**唯一**能打断阻塞读的手段（协程取消打断不了 `InputStream.read`）。
+   *
+   * ## 没传完就把残缺文件删掉（v191）
+   *
+   * `fs/put` 是「服务端从头往目标路径写」，所以上传一旦中断（失败 / 用户取消 /
+   * 跳过 / 暂停 / 网络断 / 进程被杀前那一刻），**那个路径上会留半截文件**：
+   * 云盘里多出一个「看起来完整、点开是坏的」视频，比直接失败更烦人。
+   *
+   * 收尾策略：失败时调 `fs/remove` 把这条删掉，但**只删这一次才出现的文件** ——
+   * 目标位置原本就有东西（同名覆盖）时一律不动：
+   *  · 老文件可能根本没被破坏（对象存储的 PUT 是原子的，中断只让新内容作废）；
+   *  · 万一真被截断，删掉就是**把用户已有的数据弄丢**，比留个坏文件严重得多。
+   *
+   * 所以起传前先问一次 `fs/get`（一条小 JSON 请求，比 `fs/rename` 便宜得多，
+   * 后者在对象存储驱动上是「整文件复制 + 删除」）：
+   *  · 查到 ⇒ [UploadTargetExisted.Before] ⇒ 不删；
+   *  · 明确「不存在」⇒ [UploadTargetExisted.New] ⇒ 失败就删；
+   *  · 查不到（网络 / 鉴权 / 超时）⇒ [UploadTargetExisted.Unknown] ⇒ 保守不删。
+   *
+   * @param onPartialCleaned 真的删掉了残留文件时回调一次（参数是**服务器上的完整路径**，
+   *   形如 `电影/流浪地球.mkv`）。调用方（上传中心）要把它写进那一行的失败原因里 ——
+   *   「失败了 + 为什么 + 已清掉服务器上哪个文件」三句话缺一句，用户就会自己去云盘里翻半天。
    */
   suspend fun upload(
     targetDir: String,
@@ -683,35 +705,116 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     open: () -> InputStream,
     onProgress: (sent: Long) -> Unit = {},
     isCancelled: () -> Boolean = { false },
+    onPartialCleaned: (String) -> Unit = {},
   ): Result<Unit> =
     withContext(Dispatchers.IO) {
       runCatching {
         require(name.isNotBlank()) { "文件名不能为空" }
         val fullPath = joinPath(targetDir, name)
-        var retried = false
-        while (true) {
-          try {
-            putOnce(fullPath, length, contentType, open, onProgress, isCancelled)
-            break
-          } catch (e: AlistApiException) {
-            // 与 withAuthRetry 同一套自愈：token 过期（默认 48h）就重登一次。
-            // ⚠️ 不能直接复用 withAuthRetry：它的 block 是不可重放的普通 lambda，
-            //    而这里重试必须重新 open() 一遍数据源 —— 第一次的流已经写光了。
-            if (e.code == 401 && !retried && token != null) {
-              retried = true
-              Log.w(TAG, "上传 token 失效，重新登录后重试一次: $fullPath")
-              token = null
-              if (connection.username.isNotBlank() || connection.password.isNotBlank()) {
-                runCatching { login() }
+        // 先记一笔「这个位置原本有没有东西」，见上面 KDoc 的三态说明
+        val existed = targetExistedBefore(fullPath)
+        try {
+          var retried = false
+          while (true) {
+            try {
+              putOnce(fullPath, length, contentType, open, onProgress, isCancelled)
+              break
+            } catch (e: AlistApiException) {
+              // 与 withAuthRetry 同一套自愈：token 过期（默认 48h）就重登一次。
+              // ⚠️ 不能直接复用 withAuthRetry：它的 block 是不可重放的普通 lambda，
+              //    而这里重试必须重新 open() 一遍数据源 —— 第一次的流已经写光了。
+              if (e.code == 401 && !retried && token != null) {
+                retried = true
+                Log.w(TAG, "上传 token 失效，重新登录后重试一次: $fullPath")
+                token = null
+                if (connection.username.isNotBlank() || connection.password.isNotBlank()) {
+                  runCatching { login() }
+                }
+                continue
               }
-              continue
+              throw e
             }
-            throw e
           }
+        } catch (t: Throwable) {
+          // ⚠️ 清理失败绝不能盖掉真正的错误：调用方要靠这个异常决定「失败 / 取消 / 待传」
+          if (removePartialIfNew(targetDir, name, fullPath, existed)) {
+            runCatching { onPartialCleaned(fullPath) }
+          }
+          throw t
         }
         Unit
       }
     }
+
+  /** 目标文件在上传前是否已存在（见 [upload] 的 KDoc 三态） */
+  enum class UploadTargetExisted {
+    /** 原本就有 ⇒ 中断时**不动**远端文件 */
+    Before,
+
+    /** 原本没有 ⇒ 这次是我们造的，中断时可以放心删 */
+    New,
+
+    /** 没问出来（网络 / 鉴权 / 超时）⇒ 保守起见不删 */
+    Unknown,
+  }
+
+  /**
+   * 起传前问一次 `fs/get`：目标路径原本有没有东西。
+   *
+   * 只认「明确的 not found」为 [UploadTargetExisted.New]；其余失败一律
+   * [UploadTargetExisted.Unknown] —— 把「网络抖了一下」当成「文件不存在」，
+   * 就等于允许后面删掉一个我们其实没问清楚的文件。
+   */
+  private fun targetExistedBefore(fullPath: String): UploadTargetExisted =
+    runCatching { getFileMeta(fullPath) }.fold(
+      onSuccess = { UploadTargetExisted.Before },
+      onFailure = { e ->
+        val msg = e.message.orEmpty()
+        val notFound =
+          e is AlistApiException &&
+            (e.code == 404 || msg.contains("not found", true) || msg.contains("not exist", true) ||
+              msg.contains("不存在"))
+        if (notFound) UploadTargetExisted.New else UploadTargetExisted.Unknown
+      },
+    )
+
+  /**
+   * 删掉「这次上传才出现的」残缺文件。
+   *
+   * ⚠️ 用 [NonCancellable] 包住：整批取消时若外层协程已经被 cancel，
+   * 普通的 `withContext` 会立刻抛 `CancellationException` ⇒ 清理静默变成空操作，
+   * 用户看到的就是「取消了，云盘里还留着半截」。
+   *
+   * @return true = 真的删掉了一个文件（调用方要据此告诉用户「清掉了什么」）
+   */
+  private suspend fun removePartialIfNew(
+    targetDir: String,
+    name: String,
+    fullPath: String,
+    existed: UploadTargetExisted,
+  ): Boolean {
+    when (existed) {
+      UploadTargetExisted.Before -> {
+        Log.w(TAG, "上传中断，但目标原本已存在 ⇒ 保留远端文件不动: $fullPath")
+        return false
+      }
+
+      UploadTargetExisted.Unknown -> {
+        Log.w(TAG, "上传中断，且无法确认目标原本是否存在 ⇒ 保守起见不删: $fullPath")
+        return false
+      }
+
+      UploadTargetExisted.New -> Unit
+    }
+    val removed =
+      withContext(NonCancellable) {
+        runCatching { remove(targetDir, listOf(name)) }
+      }
+    return removed
+      .onSuccess { Log.i(TAG, "已清理未传完的残缺文件: $fullPath") }
+      .onFailure { Log.w(TAG, "清理残缺文件失败（只能留给用户手动删）: $fullPath", it) }
+      .isSuccess
+  }
 
   /** 真正发一次 `fs/put`，并校验业务码（HTTP 200 但 `code != 200` 是 AList 的常见失败形态） */
   private fun putOnce(

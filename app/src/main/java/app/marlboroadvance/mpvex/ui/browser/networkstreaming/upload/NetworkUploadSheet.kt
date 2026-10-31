@@ -49,7 +49,9 @@ import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -347,13 +349,10 @@ fun NetworkUploadSheet(
       it.id == claimedBatchId || (it.connectionId == connectionId && it.targetDir == targetDir)
     }
 
-  // 有正在跑的批次就自动进进度页；用户手动点「继续选择」后不再强拉。
-  // 暂停的批次同样算「有事没做完」—— 关掉面板再打开要能看到「继续上传」
-  var showTransfer by remember {
-    mutableStateOf(activeBatch?.running == true || activeBatch?.paused == true)
-  }
-  LaunchedEffect(activeBatch?.id, activeBatch?.running, activeBatch?.paused) {
-    if (activeBatch?.running == true || activeBatch?.paused == true) showTransfer = true
+  // 有正在跑的批次就自动进进度页；用户手动点「继续选择」后不再强拉
+  var showTransfer by remember { mutableStateOf(activeBatch?.running == true) }
+  LaunchedEffect(activeBatch?.id, activeBatch?.running) {
+    if (activeBatch?.running == true) showTransfer = true
   }
 
   ModalBottomSheet(
@@ -375,7 +374,7 @@ fun NetworkUploadSheet(
           context = context,
           scope = scope,
           targetLabel = targetLabel,
-          hasRunningBatch = batch?.running == true || batch?.paused == true,
+          hasRunningBatch = batch?.running == true,
           onClose = onDismiss,
           onShowTransfer = { showTransfer = true },
           onStart = { picks ->
@@ -1348,6 +1347,15 @@ internal fun TransferPane(
   var previewDeck by remember { mutableStateOf<PreviewDeck?>(null) }
 
   /**
+   * 待确认的取消动作（整批 / 单条）。
+   *
+   * 取消**不可逆**（网盘没有断点续传），必须先把代价讲明白再动手 ——
+   * 一张写着「已传的部分会作废、服务端残留会被清掉」的确认框，比一个点下去就没了
+   * 的按钮诚实得多。
+   */
+  var pendingCancel by remember { mutableStateOf<CancelTarget?>(null) }
+
+  /**
    * 实时速度与「还剩多少**秒**」。
    *
    * 采样在 [NetworkUploadCenter.stats] 里（6 秒滑动窗口 + 起播突发保护），
@@ -1364,13 +1372,7 @@ internal fun TransferPane(
     ) {
       Column(modifier = Modifier.weight(1f)) {
         Text(
-          // 暂停不能显示成「上传结束」——那会让用户以为要重来
-          text =
-            when {
-              batch.paused -> "已暂停"
-              batch.running -> "正在上传"
-              else -> "上传结束"
-            },
+          text = if (batch.running) "正在上传" else "上传结束",
           style = MaterialTheme.typography.titleMedium,
           fontWeight = FontWeight.Medium,
         )
@@ -1418,7 +1420,7 @@ internal fun TransferPane(
         )
       }
       // 「还要多久」——进度条百分比回答不了这个问题，用户真正需要的是这个量级
-      if (batch.running && !batch.paused && stats.speedBps > 0) {
+      if (batch.running && stats.speedBps > 0) {
         Spacer(Modifier.height(4.dp))
         Text(
           // 剩余时间为 null（数据不够 / 完全没在动）时只给速度 —— 起播阶段给一个
@@ -1430,8 +1432,8 @@ internal fun TransferPane(
       }
     }
 
-    // ── 结果（只在真正结束后出现，暂停时不该看到「完成 / 失败」横幅）──
-    if (!batch.running && !batch.paused) {
+    // ── 结果（只在真正结束后出现）──
+    if (!batch.running) {
       UploadResultBanner(batch)
     }
 
@@ -1444,7 +1446,8 @@ internal fun TransferPane(
           task = task,
           running = batch.running,
           onPreview = { previewDeck = deckOfTasks(batch.tasks, task) },
-          onSkip = { NetworkUploadCenter.skipTask(task.id) },
+          // 取消不可逆（网盘没有断点续传）⇒ 先弹确认框，用户点了「取消这一条」才真取消
+          onCancel = { pendingCancel = CancelTarget.One(task) },
           onRetry = { NetworkUploadCenter.retryTask(task.id) },
         )
       }
@@ -1463,40 +1466,130 @@ internal fun TransferPane(
           TextButton(onClick = onBack, enabled = !batch.running) { Text("继续选择") }
         }
         Spacer(Modifier.weight(1f))
-        when {
-          // 暂停：主按钮换成「继续上传」。「取消上传」留在旁边 ——
-          // 暂停之后想彻底放弃，是同一个位置上的下一步，不该逼人先继续再取消
-          batch.paused -> {
-            OutlinedButton(onClick = { NetworkUploadCenter.cancel() }) { Text("取消上传") }
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = { NetworkUploadCenter.resume() }) { Text("继续上传") }
+        if (batch.running) {
+          // ⚠️ 这里**没有「暂停」**：AList 的 fs/put 没有断点续传，停下来就等于放弃
+          // 已经传上去的那部分（服务端残留还会被清掉）。叫「暂停」会让人以为回头能接着传，
+          // 所以按钮就叫取消，并且先给一张把代价写清楚的确认框。
+          OutlinedButton(
+            onClick = { pendingCancel = CancelTarget.All(batch) },
+            colors =
+              ButtonDefaults.outlinedButtonColors(
+                contentColor = MaterialTheme.colorScheme.error,
+              ),
+          ) {
+            Text("取消这批上传任务")
           }
-          batch.running -> {
-            OutlinedButton(onClick = { NetworkUploadCenter.cancel() }) { Text("取消上传") }
-            Spacer(Modifier.width(8.dp))
-            // 暂停会打断当前文件、恢复时整份重传（AList 没有断点续传）——
-            // 这一点在按钮下面的小字里说清楚，别让人以为「白传了」
-            Button(onClick = { NetworkUploadCenter.pause() }) { Text("暂停") }
-          }
-          else -> {
-            // 失败 / 跳过的都还能重试：只重传那几条，成功的不再走一遍（几 GB 的文件
-            // 重传一次代价太大）。全部成功时不显示 —— 那时「完成」才是唯一动作。
-            if (NetworkUploadCenter.canRetry) {
-              OutlinedButton(onClick = { NetworkUploadCenter.retryFailed() }) {
-                Text(if (batch.retryableCount > 1) "重试 ${batch.retryableCount} 项" else "重试这一项")
-              }
-              Spacer(Modifier.width(8.dp))
+        } else {
+          // 失败 / 单条取消的都还能重试：只重传那几条，成功的不再走一遍（几 GB 的文件
+          // 重传一次代价太大）。全部成功时不显示 —— 那时「完成」才是唯一动作。
+          if (NetworkUploadCenter.canRetry) {
+            OutlinedButton(onClick = { NetworkUploadCenter.retryFailed() }) {
+              Text(if (batch.retryableCount > 1) "重试 ${batch.retryableCount} 项" else "重试这一项")
             }
-            Button(onClick = onClose) { Text("完成") }
+            Spacer(Modifier.width(8.dp))
           }
+          Button(onClick = onClose) { Text("完成") }
         }
       }
+    }
+
+    pendingCancel?.let { target ->
+      CancelUploadConfirmDialog(
+        target = target,
+        onDismiss = { pendingCancel = null },
+        onConfirm = {
+          when (target) {
+            is CancelTarget.All -> NetworkUploadCenter.cancel()
+            is CancelTarget.One -> NetworkUploadCenter.cancelTask(target.task.id)
+          }
+          pendingCancel = null
+        },
+      )
     }
 
     previewDeck?.let { deck ->
       MediaPreviewDialog(deck = deck, onDismiss = { previewDeck = null })
     }
   }
+}
+
+/** 「取消上传」的两种作用域：整批 / 单条 */
+private sealed interface CancelTarget {
+  data class All(
+    val batch: UploadBatch,
+  ) : CancelTarget
+
+  data class One(
+    val task: UploadTask,
+  ) : CancelTarget
+}
+
+/**
+ * 取消上传前的确认框。
+ *
+ * ## 为什么必须拦一道
+ *
+ * AList 的 `fs/put` **没有断点续传**（服务端只接受一条从头开始的完整流，见
+ * `AlistClient.upload` 的 KDoc）。所以「取消」不是一个可以随时撤消的开关：
+ * 正在传的那一个已经发出去的字节全部作废，服务端那半截文件还要被删掉，
+ * 下次只能从头再来。这个代价必须**在动手之前**说清楚，而不是事后弹一句「已取消」。
+ *
+ * 已经传完的文件不受影响 —— 这一点也要写进正文，否则用户会以为整批白干。
+ */
+@Composable
+private fun CancelUploadConfirmDialog(
+  target: CancelTarget,
+  onDismiss: () -> Unit,
+  onConfirm: () -> Unit,
+) {
+  val title =
+    when (target) {
+      is CancelTarget.All -> "取消这批上传任务？"
+      is CancelTarget.One -> "取消这个文件的上传？"
+    }
+  val body =
+    when (target) {
+      is CancelTarget.All ->
+        buildString {
+          val left =
+            target.batch.tasks.count {
+              it.state == UploadTaskState.Pending || it.state == UploadTaskState.Uploading
+            }
+          append("还有 $left 个文件没有传完，取消后都不会再继续。\n\n")
+          append("网盘不支持断点续传：正在传的那一个已经发出去的部分会作废，")
+          append("服务器上的残留文件会被删掉，下次只能从头再传一遍。")
+          if (target.batch.successCount > 0) {
+            append("\n\n已经传完的 ${target.batch.successCount} 个文件会保留，不受影响。")
+          }
+        }
+      is CancelTarget.One ->
+        buildString {
+          append("「${target.task.relativePath}」")
+          if (target.task.state == UploadTaskState.Uploading) {
+            append("已经传到 ${(target.task.progress * 100).toInt()}%，")
+            append("取消后这部分作废、服务器上的残留会被删掉，")
+          } else {
+            append("还没有开始传，")
+          }
+          append("之后想传可以点这一行的「重试」。")
+        }
+    }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text(title) },
+    text = { Text(body) },
+    confirmButton = {
+      TextButton(onClick = onConfirm) {
+        Text("确认取消", color = MaterialTheme.colorScheme.error)
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text(if (target is CancelTarget.All) "继续上传" else "继续传")
+      }
+    },
+  )
 }
 
 /**
@@ -1543,15 +1636,15 @@ private fun UploadResultBanner(batch: UploadBatch) {
           if (isNotEmpty()) append(" · ")
           append("失败 ${batch.failedCount} 个")
         }
-        // 「跳过」与「取消」分开报：前者用户还会想补传，后者是他自己不要了
-        if (batch.skippedCount > 0) {
+        // 「单独取消」与「整批没轮到」分开报：前者用户还会想补传，后者是他自己不要了
+        if (batch.cancelledByUserCount > 0) {
           if (isNotEmpty()) append(" · ")
-          append("跳过 ${batch.skippedCount} 个")
+          append("取消 ${batch.cancelledByUserCount} 个")
         }
-        val cancelled = batch.cancelledCount - batch.skippedCount
-        if (cancelled > 0) {
+        val neverStarted = batch.cancelledCount - batch.cancelledByUserCount
+        if (neverStarted > 0) {
           if (isNotEmpty()) append(" · ")
-          append("已取消 $cancelled 个")
+          append("未传 $neverStarted 个")
         }
         if (isNotEmpty()) append(" · ")
         append(MediaFormatUtils.formatFileSize(batch.sentBytes))
@@ -1559,6 +1652,20 @@ private fun UploadResultBanner(batch: UploadBatch) {
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    // 失败原因直接摆在横幅里（含「已清理服务器残留文件「路径」」那句）：
+    // 任务列表可能有几十行，让用户自己在里面找那条红的太不厚道。
+    val firstError = batch.tasks.firstOrNull { it.state == UploadTaskState.Failed }?.error
+    if (!firstError.isNullOrBlank()) {
+      Spacer(Modifier.height(8.dp))
+      Text(
+        text = firstError,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.error,
+        textAlign = TextAlign.Center,
+        maxLines = 3,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
   }
 }
 
@@ -1566,7 +1673,7 @@ private fun summaryText(batch: UploadBatch): String =
   when {
     batch.running -> "${batch.finishedCount} / ${batch.tasks.size} 个文件"
     batch.failedCount > 0 -> "成功 ${batch.successCount} · 失败 ${batch.failedCount}"
-    batch.skippedCount > 0 -> "成功 ${batch.successCount} · 跳过 ${batch.skippedCount}"
+    batch.cancelledByUserCount > 0 -> "成功 ${batch.successCount} · 取消 ${batch.cancelledByUserCount}"
     batch.cancelledCount > 0 -> "已取消（成功 ${batch.successCount}）"
     else -> "全部完成 · ${batch.successCount} 个文件"
   }
@@ -1574,10 +1681,10 @@ private fun summaryText(batch: UploadBatch): String =
 @Composable
 private fun TaskRow(
   task: UploadTask,
-  /** 整批还在跑：此时给「跳过」，不给「重试」 */
+  /** 整批还在跑：此时给「取消这一条」，不给「重试」 */
   running: Boolean,
   onPreview: () -> Unit,
-  onSkip: () -> Unit,
+  onCancel: () -> Unit,
   onRetry: () -> Unit,
 ) {
   Row(
@@ -1640,14 +1747,16 @@ private fun TaskRow(
             overflow = TextOverflow.Ellipsis,
           )
         }
-        task.state == UploadTaskState.Failed && task.error != null -> {
+        (task.state == UploadTaskState.Failed || (task.state == UploadTaskState.Cancelled && task.cancelledByUser)) &&
+          task.error != null -> {
           Spacer(Modifier.height(2.dp))
           Text(
             text = task.error.orEmpty(),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.error,
-            // 失败原因是「下一步怎么办」的唯一线索，截成一行等于什么都没说
-            maxLines = 2,
+            // 失败原因是「下一步怎么办」的唯一线索，截成一行等于什么都没说。
+            // 三行：里面除了原因还挂着「已清理服务器上的残留文件「路径」」那一句。
+            maxLines = 3,
             overflow = TextOverflow.Ellipsis,
           )
         }
@@ -1661,10 +1770,10 @@ private fun TaskRow(
           task.state == UploadTaskState.Uploading -> "${(task.progress * 100).toInt()}%"
           task.state == UploadTaskState.Success -> "已上传"
           task.state == UploadTaskState.Failed -> "失败"
-          // 「跳过」和「整批取消」都不是成功，但下一步完全不同：
+          // 「单独取消」和「整批取消」都不是成功，但下一步完全不同：
           // 前者只欠这一条（给重试），后者是用户不要了（不给）
-          task.skipped -> "已跳过"
-          else -> "已取消"
+          task.cancelledByUser -> "已取消"
+          else -> "未传"
         },
       style = MaterialTheme.typography.labelSmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1673,13 +1782,16 @@ private fun TaskRow(
     // 有 200 张照片时「第 3 张卡住」是常事，只能整批取消重来是不可接受的。
     // 图标按钮 28dp 盒子 + 36dp 触摸区：这一行已经有状态文字与缩略图，
     // 再塞标准 48dp 的按钮会把文件名挤成两三个字。
-    val canSkip = running && (task.state == UploadTaskState.Pending || task.state == UploadTaskState.Uploading)
-    val canRetry = !running && (task.state == UploadTaskState.Failed || (task.state == UploadTaskState.Cancelled && task.skipped))
-    if (canSkip) {
-      IconButton(onClick = onSkip, modifier = Modifier.size(30.dp)) {
+    val canCancel = running && (task.state == UploadTaskState.Pending || task.state == UploadTaskState.Uploading)
+    val canRetry =
+      !running &&
+        (task.state == UploadTaskState.Failed ||
+          (task.state == UploadTaskState.Cancelled && task.cancelledByUser))
+    if (canCancel) {
+      IconButton(onClick = onCancel, modifier = Modifier.size(30.dp)) {
         Icon(
           imageVector = Icons.Default.Close,
-          contentDescription = "跳过这个文件",
+          contentDescription = "取消这个文件的上传",
           modifier = Modifier.size(15.dp),
           tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1856,14 +1968,7 @@ internal fun UploadProgressPill(batch: UploadBatch, onClick: () -> Unit) {
         )
         Spacer(Modifier.width(8.dp))
         Text(
-          // 暂停了还写「正在上传」就是在骗人：这条胶囊是用户唯一能看到的进度，
-          // 说错状态他会以为卡死了
-          text =
-            if (batch.paused) {
-              "上传已暂停 ${batch.finishedCount} / ${batch.tasks.size}"
-            } else {
-              "正在上传 ${batch.finishedCount} / ${batch.tasks.size}"
-            },
+          text = "正在上传 ${batch.finishedCount} / ${batch.tasks.size}",
           style = MaterialTheme.typography.labelLarge,
           color = MaterialTheme.colorScheme.onSurface,
           maxLines = 1,
@@ -1887,7 +1992,7 @@ internal fun UploadProgressPill(batch: UploadBatch, onClick: () -> Unit) {
         progress = { batch.progress },
         modifier = Modifier.fillMaxWidth().height(2.dp),
       )
-      if (stats.speedBps > 0 && !batch.paused && batch.running) {
+      if (stats.speedBps > 0 && batch.running) {
         Spacer(Modifier.height(4.dp))
         Text(
           text = formatSpeedLine(stats.speedBps, stats.etaSeconds),

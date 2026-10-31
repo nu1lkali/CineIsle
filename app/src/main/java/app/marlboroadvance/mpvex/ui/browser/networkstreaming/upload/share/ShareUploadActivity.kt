@@ -246,10 +246,10 @@ private fun ShareUploadScreen(
   var startedBatchId by remember { mutableStateOf<Long?>(null) }
   val mine = batch?.takeIf { it.id == startedBatchId }
 
-  // 暂停也算「还在进行」：这时 finish() 会释放 content:// 读权限，
-  // 之后按「继续上传」只会得到一串 SecurityException
-  LaunchedEffect(mine?.running, mine?.paused) {
-    onRunningChange(mine?.running == true || mine?.paused == true)
+  // 还在传就不能 finish()：那会释放 content:// 读权限，上传线程下一次 read 直接
+  // 得到 SecurityException（整批就这么废了）
+  LaunchedEffect(mine?.running) {
+    onRunningChange(mine?.running == true)
   }
 
   var showConnectionPicker by remember { mutableStateOf(false) }
@@ -275,13 +275,13 @@ private fun ShareUploadScreen(
   // 已经开传：整屏交给进度页（它自带标题行与关闭键，不再套一层 Scaffold）
   if (mine != null) {
     // 传完自动回原 App：分享入口本来就是「传过去就完事」，留在这里还得用户自己按关闭。
-    // 四种情况**不**自动退：关了开关、还在传、**被手动暂停**、有失败/跳过 ——
-    // 后三种正是用户需要留在这页的时候（暂停还等着按「继续」，失败要看原因）。
+    // 三种情况**不**自动退：关了开关、还在传、有失败/取消/未传 ——
+    // 后两种正是用户需要留在这页的时候（要看失败原因、要重试）。
     // 停 1.1 秒是为了让「完成」这个状态真的被看见，而不是一闪而过。
-    LaunchedEffect(mine.id, mine.running, mine.paused, autoBack) {
+    LaunchedEffect(mine.id, mine.running, autoBack) {
       if (!autoBack || mine.running) return@LaunchedEffect
-      if (mine.paused) return@LaunchedEffect
-      if (mine.failedCount > 0 || mine.skippedCount > 0) return@LaunchedEffect
+      if (mine.failedCount > 0 || mine.cancelledByUserCount > 0) return@LaunchedEffect
+      if (mine.cancelledCount > mine.cancelledByUserCount) return@LaunchedEffect
       delay(1100)
       onFinish()
     }

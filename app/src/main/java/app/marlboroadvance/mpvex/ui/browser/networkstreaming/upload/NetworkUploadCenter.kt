@@ -49,13 +49,13 @@ data class UploadTask(
   val previewUri: Uri? = null,
   val isVideo: Boolean = false,
   /**
-   * 这条是**用户主动跳过**的（不是取消整批）。
+   * 这条是**用户单独取消的**（不是取消整批）。
    *
-   * 和 `Cancelled` 分不开的话，界面上「你点了跳过」和「你取消了整批」会长得一样，
+   * 和 `Cancelled` 分不开的话，界面上「你只取消了这一条」和「你取消了整批」会长得一样，
    * 而两者的下一步完全不同：前者只是这一条没传（重试它就好），
    * 后者是整批都不要了（不该再提示重试）。
    */
-  val skipped: Boolean = false,
+  val cancelledByUser: Boolean = false,
 ) {
   val progress: Float
     get() =
@@ -80,15 +80,6 @@ data class UploadBatch(
   val targetLabel: String,
   val tasks: List<UploadTask>,
   val running: Boolean,
-  /**
-   * 用户点了「暂停」。
-   *
-   * 与 `running = false` **不是一回事**：`running=false` 且 `paused=false` 才是「这一批结束了」，
-   * 而 `paused=true` 表示「还有没传完的，只是现在不动」——
-   * 它决定三件事：① 未轮到的不标「已取消」（保持待传）；
-   * ② 通知栏留在前台并换成「继续上传」；③ 分享页不自动退回原 App。
-   */
-  val paused: Boolean = false,
 ) {
   val totalBytes: Long get() = tasks.sumOf { it.sizeBytes }
   val sentBytes: Long get() = tasks.sumOf { it.sentBytes }
@@ -113,12 +104,14 @@ data class UploadBatch(
   val successCount: Int get() = tasks.count { it.state == UploadTaskState.Success }
   val failedCount: Int get() = tasks.count { it.state == UploadTaskState.Failed }
   val cancelledCount: Int get() = tasks.count { it.state == UploadTaskState.Cancelled }
-  val skippedCount: Int get() = tasks.count { it.state == UploadTaskState.Cancelled && it.skipped }
+
+  /** 用户单独取消的条数（取消整批的那部分不算，见 [UploadTask.cancelledByUser]） */
+  val cancelledByUserCount: Int get() = tasks.count { it.state == UploadTaskState.Cancelled && it.cancelledByUser }
   val finishedCount: Int get() = successCount + failedCount + cancelledCount
 
-  /** 还能重试的条数：失败 + 主动跳过的（取消整批的不算，那是「我不要了」） */
+  /** 还能重试的条数：失败 + 用户单独取消的（整批取消的不算，那是「我不要了」） */
   val retryableCount: Int
-    get() = tasks.count { it.state == UploadTaskState.Failed || (it.state == UploadTaskState.Cancelled && it.skipped) }
+    get() = tasks.count { it.state == UploadTaskState.Failed || (it.state == UploadTaskState.Cancelled && it.cancelledByUser) }
 
   /** 按**字节**算的总进度。全部文件都是 0 字节时退化为按条数算，免得永远停在 0 */
   val progress: Float
@@ -263,12 +256,12 @@ object NetworkUploadCenter {
   val stats: StateFlow<UploadStats> = _stats.asStateFlow()
 
   /**
-   * 被要求跳过的任务号（正在传的那些）。
+   * 被要求「单独取消」的任务号（正在传的那些）。
    *
-   * 待传的可以直接标成「已跳过」，但**已经在传的那一条**没法从外面掐断 ——
+   * 待传的可以直接标成「已取消」，但**已经在传的那一条**没法从外面掐断 ——
    * 它的取消判据在 `AlistClient.upload` 的写循环里，只能靠这个集合让它自己退出。
    */
-  private val skipIds = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
+  private val cancelIds = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
 
   private val jobRef = AtomicReference<Job?>(null)
 
@@ -293,12 +286,6 @@ object NetworkUploadCenter {
 
   private class CancelToken {
     @Volatile var cancelled = false
-
-    /**
-     * 暂停标志。和 [cancelled] 一样跟着批次走（换批/恢复都换新令牌），
-     * 区别在**结算结果**：暂停把当前文件退回「待传」，取消则标成「已取消」。
-     */
-    @Volatile var paused = false
   }
 
   /**
@@ -339,7 +326,7 @@ object NetworkUploadCenter {
     // 上一批还在跑：先请它停（新任务优先，不排队 —— 排队会让用户以为点了没反应）
     tokenRef.get()?.cancelled = true
     jobRef.getAndSet(null)?.cancel()
-    skipIds.clear()
+    cancelIds.clear()
 
     val token = CancelToken()
     tokenRef.set(token)
@@ -404,7 +391,7 @@ object NetworkUploadCenter {
         .filter {
           (only == null || it.id in only) &&
             (it.state == UploadTaskState.Failed ||
-              (it.state == UploadTaskState.Cancelled && it.skipped))
+              (it.state == UploadTaskState.Cancelled && it.cancelledByUser))
         }
         .map { it.id }
     if (ids.isEmpty()) return
@@ -414,7 +401,7 @@ object NetworkUploadCenter {
 
     val token = CancelToken()
     tokenRef.set(token)
-    skipIds.clear()
+    cancelIds.clear()
     _batch.value =
       current.copy(
         running = true,
@@ -425,7 +412,7 @@ object NetworkUploadCenter {
                 state = UploadTaskState.Pending,
                 sentBytes = 0,
                 error = null,
-                skipped = false,
+                cancelledByUser = false,
               )
             } else {
               it
@@ -441,24 +428,34 @@ object NetworkUploadCenter {
   }
 
   /**
-   * 跳过一条。
+   * 取消**单个**文件的上传（整批还在跑的时候用）。
    *
-   * - 待传的：直接标成「已跳过」（队列还没碰它，立刻生效）；
-   * - 正在传的：塞进 [skipIds]，`AlistClient.upload` 下一次检查时自己退出。
+   * - 待传的：直接标成「已取消」（队列还没碰它，立刻生效）；
+   * - 正在传的：塞进 [cancelIds]，`AlistClient.upload` 下一次检查时自己退出。
    *   ⚠️ 不能在这里直接把状态改成 Cancelled —— 写循环还在跑，它会紧接着把
-   *   success/failed 写回来，界面上就会出现「已跳过」和「已完成」互相覆盖。
+   *   success/failed 写回来，界面上就会出现「已取消」和「已完成」互相覆盖。
+   *
+   * ⚠️ 已经在传的那一条被掐断后，**服务端那半截文件由 `AlistClient.upload` 自己清掉**
+   * （见那里的「没传完就把残缺文件删掉」）。所以这一条之后要重传就得从头来。
+   *
+   * @return 是否真的动了状态（界面上要据此关掉确认框）
    */
-  fun skipTask(taskId: Int) {
-    val current = _batch.value ?: return
-    if (!current.running) return
-    val task = current.tasks.getOrNull(taskId) ?: return
-    when (task.state) {
-      UploadTaskState.Pending ->
+  fun cancelTask(taskId: Int): Boolean {
+    val current = _batch.value ?: return false
+    if (!current.running) return false
+    val task = current.tasks.getOrNull(taskId) ?: return false
+    return when (task.state) {
+      UploadTaskState.Pending -> {
         updateTask(current.id, taskId) {
-          it.copy(state = UploadTaskState.Cancelled, skipped = true)
+          it.copy(state = UploadTaskState.Cancelled, cancelledByUser = true, sentBytes = 0)
         }
-      UploadTaskState.Uploading -> skipIds.add(taskId)
-      else -> Unit
+        true
+      }
+      UploadTaskState.Uploading -> {
+        cancelIds.add(taskId)
+        true
+      }
+      else -> false
     }
   }
 
@@ -466,99 +463,34 @@ object NetworkUploadCenter {
   val canRetry: Boolean
     get() {
       val current = _batch.value ?: return false
-      if (current.paused) return false
       return !current.running && current.retryableCount > 0 && appContextRef.get() != null
     }
 
   /**
-   * 暂停这一批。
+   * 取消这一批上传。
    *
-   * ## 为什么「正在传的那一个」会被**中断重来**
+   * ## 为什么没有「暂停」
    *
-   * AList 的 put 是整文件一条流，没有断点续传 —— 无法把半个文件接上。
-   * 所以暂停只有两种语义：让当前文件传完（2GB 时要等十分钟以上，那不叫暂停），
-   * 或者立刻中断、把它退回「待传」（恢复时整份重传）。
-   * 取后者：暂停必须是**立即生效**的动作，用户按了就要看到它停下。
-   * 代价写在界面上（进度页与通知都显示「已暂停」，恢复时这一条从头开始）。
+   * AList 的 `fs/put` 是「服务端从头往目标路径写一条完整流」，**没有断点续传**：
+   * 一旦停下，已经传上去的那部分字节在服务端就没有任何凭据可以接上（详见
+   * [AlistClient.upload] 的 KDoc）。所以「暂停 / 继续」在这里是假的 ——
+   * 恢复必然整份重传，叫「暂停」只会让人以为回头能接着传。
+   * 现在一律叫「取消」，并在界面上**先警告、再执行**。
    *
-   * 已经传完的文件不受影响，服务器上就是有了。
+   * 语义：已传完的保留（服务器上就是有了），没传完的标成已取消；
+   * 正在传的那一个由写循环中断，服务端残留的半截文件由 `AlistClient.upload` 清掉。
    */
-  fun pause() {
-    val current = _batch.value ?: return
-    if (!current.running || current.paused) return
-    // ① 先让写循环自己退出（它每写一块前问一次）；
-    // ② 立刻把 paused 打到批次上，界面与通知**不用等**写循环收尾就能显示「已暂停」
-    tokenRef.get()?.paused = true
-    _batch.update { if (it == null || it.id != current.id) it else it.copy(paused = true) }
-  }
-
-  /** 暂停之后继续：从剩下的「待传」项接着跑（同批，不换批次号） */
-  fun resume() {
-    val current = _batch.value ?: return
-    if (current.running || !current.paused) return
-    val ctx = appContextRef.get() ?: return
-    val picks = lastPicksRef.get()
-    val ids = current.tasks.filter { it.state == UploadTaskState.Pending }.map { it.id }
-    if (ids.isEmpty()) return
-    val items = ids.mapNotNull { id -> picks.getOrNull(id)?.let { id to it } }
-    if (items.isEmpty()) return
-
-    val token = CancelToken()
-    tokenRef.set(token)
-    skipIds.clear()
-    _batch.value =
-      current.copy(
-        running = true,
-        paused = false,
-        tasks =
-          current.tasks.map {
-            if (it.id in ids) {
-              it.copy(state = UploadTaskState.Pending, sentBytes = 0, error = null, skipped = false)
-            } else {
-              it
-            }
-          },
-      )
-    _stats.value = UploadStats()
-    persistLeftover(ctx, current.connectionId, current.targetDir, current.targetLabel)
-    UploadForegroundService.start(ctx)
-    launchRunner(ctx, current.id, token, current.connectionId, current.targetDir, items)
-  }
-
-  /** 取消当前批次。已传完的保留（服务器上就是有了），未开始的标成已取消 */
   fun cancel() {
     val current = _batch.value ?: return
-    if (!current.running && !current.paused) return
-    skipIds.clear()
-    val token = tokenRef.get()
-    if (current.running && token != null) {
-      // 运行器还活着：让它自己走 settle 收尾（那里才有落盘与通知的完整处理）
-      token.cancelled = true
-      return
-    }
-    // 已暂停、运行器早已退出：没人会再调 settle，必须在这里自己收尾
-    _batch.update { cur ->
-      cur?.copy(
-        running = false,
-        paused = false,
-        tasks =
-          cur.tasks.map {
-            if (it.state == UploadTaskState.Pending || it.state == UploadTaskState.Uploading) {
-              it.copy(state = UploadTaskState.Cancelled)
-            } else {
-              it
-            }
-          },
-      )
-    }
-    _stats.value = UploadStats()
-    appContextRef.get()?.let { UploadQueueStore.clear(it) }
+    if (!current.running) return
+    cancelIds.clear()
+    // 运行器还活着：让它自己走 settle 收尾（那里才有落盘与通知的完整处理）
+    tokenRef.get()?.cancelled = true
   }
 
   /** 清掉已完成批次的记录（界面关掉时用，避免下次打开还看到上一批的进度） */
   fun clearFinished() {
-    // 暂停中的批次不是「已完成」：记录留着，用户回来还能点「继续上传」
-    if (running || _batch.value?.paused == true) return
+    if (running) return
     _batch.value = null
   }
 
@@ -638,12 +570,12 @@ object NetworkUploadCenter {
       }
 
       for ((index, pick) in items) {
-        // 暂停与取消都让队列停在这里：暂停由 settle 把没轮到的保留成「待传」
-        if (token.cancelled || token.paused) return
-        // 排队期间被跳过的：不碰网络，直接越过
+        // 整批被取消：队列停在这里，剩下的由 settle 标成「已取消」
+        if (token.cancelled) return
+        // 排队期间被单独取消的：不碰网络，直接越过
         val queued = _batch.value?.tasks?.getOrNull(index)
         if (queued == null || queued.state == UploadTaskState.Cancelled) continue
-        skipIds.remove(index)
+        cancelIds.remove(index)
         updateTask(batchId, index) {
           it.copy(state = UploadTaskState.Uploading, sentBytes = 0, error = null)
         }
@@ -654,6 +586,8 @@ object NetworkUploadCenter {
         val uploadDir = if (parentRel.isEmpty()) targetDir else join(targetDir, parentRel)
 
         var lastEmit = 0L
+        // 服务端残留文件被清掉时由 [AlistClient.upload] 回调回来，写进这一行的失败原因
+        var cleanedPartial: String? = null
         val result =
           client.upload(
             targetDir = uploadDir,
@@ -670,14 +604,12 @@ object NetworkUploadCenter {
                 updateTask(batchId, index) { it.copy(sentBytes = sent) }
               }
             },
-            // 整批取消 / 这一条被跳过 / 用户暂停 —— 写循环下一次检查就退出
-            isCancelled = { token.cancelled || token.paused || skipIds.contains(index) },
+            // 整批取消 / 这一条被单独取消 —— 写循环下一次检查就退出
+            isCancelled = { token.cancelled || cancelIds.contains(index) },
+            onPartialCleaned = { cleanedPartial = it },
           )
 
-        val skipped = skipIds.remove(index)
-        // 暂停那一刻正在传的文件：`upload` 抛的是「已取消」，但语义是**没传成**，
-        // 要退回「待传」等恢复时重来，绝不能标成「已取消」（那会让用户以为放弃了它）
-        val paused = token.paused && !token.cancelled
+        val cancelledHere = cancelIds.remove(index)
         result
           .onSuccess {
             updateTask(batchId, index) {
@@ -685,16 +617,20 @@ object NetworkUploadCenter {
             }
           }
           .onFailure { e ->
+            val detail = failureText(e, cleanedPartial)
             updateTask(batchId, index) {
               when {
-                paused -> it.copy(state = UploadTaskState.Pending, sentBytes = 0)
-                skipped -> it.copy(state = UploadTaskState.Cancelled, skipped = true)
-                token.cancelled || e is CancellationException -> it.copy(state = UploadTaskState.Cancelled)
-                else -> it.copy(state = UploadTaskState.Failed, error = e.message ?: "上传失败")
+                // 这一条是用户自己按「取消」掐断的：记成「已取消」但**可重试**
+                // （他只是不想现在传这一个，不代表整批不要了）
+                cancelledHere ->
+                  it.copy(state = UploadTaskState.Cancelled, cancelledByUser = true, error = detail)
+                token.cancelled || e is CancellationException ->
+                  it.copy(state = UploadTaskState.Cancelled)
+                else -> it.copy(state = UploadTaskState.Failed, error = detail)
               }
             }
           }
-        if (token.cancelled || token.paused) return
+        if (token.cancelled) return
         // ② 每传完一个就更新一次落盘队列：进程若在下一个文件的传输中被回收，
         //    恢复时最多多列一条「其实已经传完的」，重传一次即可（远端同名会改写，
         //    不会产生两个文件）。反之若不更新，恢复时会把已传完的全都再传一遍。
@@ -727,29 +663,39 @@ object NetworkUploadCenter {
   }
 
   /**
+   * 失败原因的人话（进度页那一行显示的就是它）。
+   *
+   * 除了内核给的原文，还要**把清理结果说出来，而且要说清是哪一个路径**：
+   * 用户看到「失败」之后第一反应是「云盘里是不是留了半个文件」，只说「已清理」
+   * 他也没法核对；给出完整路径（`电影/xxx.mkv`）才能自己去确认那一份没了。
+   */
+  private fun failureText(e: Throwable, cleanedPartial: String?): String {
+    val reason = e.message?.takeIf { it.isNotBlank() } ?: "上传失败（没有更多信息）"
+    return if (cleanedPartial != null) {
+      "上传失败：$reason\n已清理服务器上的残留文件「$cleanedPartial」"
+    } else {
+      "上传失败：$reason"
+    }
+  }
+
+  /**
    * 收尾：把没跑到的标成已取消、发「完成」事件、决定落盘队列留不留、撤掉通知。
    *
    * ⚠️ 这段在协程被取消时也会执行，所以只能做非挂起操作。
    */
   private fun settle(batchId: Long, token: CancelToken, connectionId: Long) {
-    // 暂停不是「结束」：没轮到的那几条要留在「待传」，等 resume 接着跑
-    val paused = token.paused && !token.cancelled
     _batch.update { current ->
       if (current == null || current.id != batchId) {
         current
       } else {
         current.copy(
           running = false,
-          paused = paused,
           tasks =
             current.tasks.map {
-              when {
-                paused &&
-                  (it.state == UploadTaskState.Pending || it.state == UploadTaskState.Uploading) ->
-                  it.copy(state = UploadTaskState.Pending, sentBytes = 0)
-                it.state == UploadTaskState.Pending || it.state == UploadTaskState.Uploading ->
-                  it.copy(state = UploadTaskState.Cancelled)
-                else -> it
+              if (it.state == UploadTaskState.Pending || it.state == UploadTaskState.Uploading) {
+                it.copy(state = UploadTaskState.Cancelled)
+              } else {
+                it
               }
             },
         )
@@ -758,15 +704,15 @@ object NetworkUploadCenter {
     _stats.value = UploadStats()
     val finished = _batch.value
     if (finished?.id == batchId) {
-      // 暂停时**不**发 completed：目录没新增完整文件，浏览页不该因此重列
-      if (!token.cancelled && !paused && finished.successCount > 0) {
+      // 有成功的才让浏览页重列目录（全失败/全取消时目录没变，不该白刷一次）
+      if (!token.cancelled && finished.successCount > 0) {
         _completed.tryEmit(connectionId)
       }
       val ctx = appContextRef.get()
       if (ctx != null) {
-        // 还有没传完的（失败 / 跳过 / 取消 / 暂停）就把它们留在落盘队列里，
+        // 还有没传完的（失败 / 单独取消）就把它们留在落盘队列里，
         // 没剩下就直接清空 —— 下次上传不该看到一条「还有 0 个未完成」的横幅
-        if (unfinishedIds(finished).isEmpty() && !paused) {
+        if (unfinishedIds(finished).isEmpty()) {
           UploadQueueStore.clear(ctx)
         } else {
           persistLeftover(ctx, finished.connectionId, finished.targetDir, finished.targetLabel)
@@ -776,13 +722,13 @@ object NetworkUploadCenter {
     // ⚠️ 这里**不**停前台服务：服务自己每秒看一眼批次，发现不在跑就补一条
     // 「上传完成 / 有失败项」的结果通知再退出前台。在这里 stopService 会把它
     // 连那一条结果通知一起掐掉 —— 通知栏无声消失，看起来像上传被系统杀了。
-    // （暂停同理：服务看到 paused 会换成「已暂停」并继续留在前台等「继续上传」。）
   }
 
   private fun unfinishedIds(batch: UploadBatch): List<Int> =
     batch.tasks
-      .filter { it.state == UploadTaskState.Pending || it.state == UploadTaskState.Failed || it.skipped }
-      .map { it.id }
+      .filter {
+        it.state == UploadTaskState.Pending || it.state == UploadTaskState.Failed || it.cancelledByUser
+      }.map { it.id }
 
   /** 把「还没传完」的那几条写进落盘队列（[UploadQueueStore]），供下次恢复 */
   private fun persistLeftover(context: Context, connectionId: Long, targetDir: String, targetLabel: String) {

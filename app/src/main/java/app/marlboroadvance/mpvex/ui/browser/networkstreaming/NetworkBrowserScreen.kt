@@ -1037,7 +1037,7 @@ data class NetworkBrowserScreen(
           // 上传面板关掉后，进度缩成这里的一条：点一下还原完整面板。
           // 「面板一关就不知道传到哪了」是上传大文件时最常见的一句抱怨。
           // 暂停的批次也要留在底栏：那条胶囊是回到「继续上传」的唯一入口
-          val runningUpload = uploadBatch?.running == true || uploadBatch?.paused == true
+          val runningUpload = uploadBatch?.running == true
           if (runningUpload && !showUpload) {
             UploadProgressPill(batch = uploadBatch!!, onClick = { showUpload = true })
           }
