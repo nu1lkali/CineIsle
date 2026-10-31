@@ -147,6 +147,7 @@ import app.marlboroadvance.mpvex.ui.browser.networkstreaming.download.NetworkDow
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.DirSizeUiState
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.NetworkFilePropertiesOverlay
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.NetworkUploadCenter
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.UploadProgressPill
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkToolboxSheet
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.NetworkUploadSheet
 import app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen
@@ -373,6 +374,10 @@ data class NetworkBrowserScreen(
 
     // 上传面板（本地文件 / 文件夹 → AList 当前目录）。只有支持写操作的协议给入口。
     var showUpload by remember { mutableStateOf(false) }
+
+    // 当前（或最近一次）上传批次：底栏那条「最小化进度」读它。
+    // 队列是进程级的，所以面板关掉、甚至离开这一页，这个值照样在更新。
+    val uploadBatch by NetworkUploadCenter.batch.collectAsState()
 
     // 新建文件夹的输入框（与「重命名」同一套：输入框 + 确认）
     var showNewFolder by remember { mutableStateOf(false) }
@@ -1028,13 +1033,21 @@ data class NetworkBrowserScreen(
       // 下载进度条挂在底栏：bottomBar 是**占位**的（内容会被顶上去），
       // 不是浮在列表上 —— 最后一行永远不会被这条盖住。
       bottomBar = {
-        NetworkDownloadBarHost(
-          progress = downloadProgress,
-          onCancel = { NetworkDownloadCenter.cancel() },
-          onDismiss = { NetworkDownloadCenter.clear() },
-          // 重试要用同一个 context；引擎自己记着上一次的源条目
-          onRetry = { NetworkDownloadCenter.retry(context) },
-        )
+        Column {
+          // 上传面板关掉后，进度缩成这里的一条：点一下还原完整面板。
+          // 「面板一关就不知道传到哪了」是上传大文件时最常见的一句抱怨。
+          val runningUpload = uploadBatch?.running == true
+          if (runningUpload && !showUpload) {
+            UploadProgressPill(batch = uploadBatch!!, onClick = { showUpload = true })
+          }
+          NetworkDownloadBarHost(
+            progress = downloadProgress,
+            onCancel = { NetworkDownloadCenter.cancel() },
+            onDismiss = { NetworkDownloadCenter.clear() },
+            // 重试要用同一个 context；引擎自己记着上一次的源条目
+            onRetry = { NetworkDownloadCenter.retry(context) },
+          )
+        }
       },
     ) { padding ->
       // ⚠️ 这层 Box 是**为长按菜单的锚定**而包的（不是排版需要）：
@@ -1469,6 +1482,8 @@ data class NetworkBrowserScreen(
             pickerMode = null
             startTransfer(transferMode, dst)
           },
+          // 非 AList 协议没有 fs/mkdir ⇒ 传 null，抽屉里就不显示「新建」
+          createFolder = { viewModel.createFolderAt(it) },
         )
       }
 

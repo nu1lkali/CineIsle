@@ -489,7 +489,10 @@ internal fun AlbumPickerGrid(
         }
       } else {
         LazyVerticalGrid(
-          columns = GridCells.Fixed(3),
+          // 按「一格至少 108dp」自适应列数：手机竖屏仍是 3 列（336 / 108 = 3.1），
+          // 横屏、折叠屏展开、平板上自动变 5~7 列 —— 以前写死 3 列，大屏上每格
+          // 被拉到 180dp 宽，一屏只看得到三张，翻半天还没手机看得快
+          columns = GridCells.Adaptive(minSize = 108.dp),
           modifier = Modifier.weight(1f).fillMaxWidth(),
           contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
           horizontalArrangement = Arrangement.spacedBy(3.dp),
@@ -757,7 +760,9 @@ private fun AlbumGridPanel(
       }
     } else {
       LazyVerticalGrid(
-        columns = GridCells.Fixed(3),
+        // 与照片网格同一套自适应：手机竖屏 3 列（328 / 104 = 3.1），
+        // 平板 / 折叠屏展开能排到 6 列，相册几十个也不用一直滑
+        columns = GridCells.Adaptive(minSize = 104.dp),
         modifier = Modifier.weight(1f).fillMaxWidth(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),

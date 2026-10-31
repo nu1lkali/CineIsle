@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Button
@@ -297,21 +298,6 @@ private suspend fun collectFileHits(
 }
 
 /**
- * 剩余时间的口语化写法。
- *
- * 上传速度一直在变，给一个精确到秒的倒计时是假精确 —— 这里只用
- * 「x 分 y 秒 / x 小时 y 分」这种量级表达，用户要的是「还要不要等」。
- */
-private fun formatEta(seconds: Long): String =
-  when {
-    seconds <= 0 -> "即将完成"
-    seconds < 60 -> "$seconds 秒"
-    seconds < 3600 -> "${seconds / 60} 分 ${seconds % 60} 秒"
-    else -> "${seconds / 3600} 小时 ${(seconds % 3600) / 60} 分"
-  }
-
-
-/**
  * 网络位置（AList）→ 上传面板：**本地文件 / 文件夹选择器 + 上传进度**。
  *
  * ## 为什么自己做选择器而不是系统 SAF
@@ -347,9 +333,19 @@ fun NetworkUploadSheet(
 
   val batch by NetworkUploadCenter.batch.collectAsState()
 
+  /**
+   * 强行认领的批次号（恢复未完成队列时用）。
+   *
+   * 「继续上次没传完的」可能指向**另一台服务器 / 另一个目录**（用户上次在 B 站传的），
+   * 那批的 `connectionId` 与当前页对不上，下面按目录过滤就永远显示不出来。
+   */
+  var claimedBatchId by remember { mutableStateOf<Long?>(null) }
+
   // 只认「本次目标目录」的批次：换了个目录，旧批次的进度不该出现在这里
   val activeBatch =
-    batch?.takeIf { it.connectionId == connectionId && it.targetDir == targetDir }
+    batch?.takeIf {
+      it.id == claimedBatchId || (it.connectionId == connectionId && it.targetDir == targetDir)
+    }
 
   // 有正在跑的批次就自动进进度页；用户手动点「继续选择」后不再强拉
   var showTransfer by remember { mutableStateOf(activeBatch?.running == true) }
@@ -387,6 +383,20 @@ fun NetworkUploadSheet(
               targetLabel = targetLabel,
               picks = picks,
             )
+            claimedBatchId = NetworkUploadCenter.batch.value?.id
+            showTransfer = true
+          },
+          onResume = { snap ->
+            // 上次没传完的那批：连接与目录都用**它自己的**（用户可能换了一台服务器在翻），
+            // 只有连接已经不在了才退回当前页的连接
+            NetworkUploadCenter.start(
+              context = context,
+              connectionId = snap.connectionId.takeIf { it > 0 } ?: connectionId,
+              targetDir = snap.targetDir,
+              targetLabel = snap.targetLabel.ifEmpty { targetLabel },
+              picks = snap.picks,
+            )
+            claimedBatchId = NetworkUploadCenter.batch.value?.id
             showTransfer = true
           },
         )
@@ -406,6 +416,8 @@ private fun PickerPane(
   onClose: () -> Unit,
   onShowTransfer: () -> Unit,
   onStart: (List<UploadPick>) -> Unit,
+  /** 「继续上次没传完的」：参数里带着**那一批**的连接与目标目录 */
+  onResume: (UploadQueueStore.Snapshot) -> Unit,
 ) {
   // 落回上次用的档位（进程内记忆）。默认仍是「相册」—— 那是打开即能选到东西的那一档
   var mode by remember { mutableStateOf(NetworkUploadCenter.lastMode ?: UploadMode.Album) }
@@ -590,6 +602,79 @@ private fun PickerPane(
     }
 
     Spacer(Modifier.height(10.dp))
+
+    // ── 「上次没传完」──
+    // 队列活在进程上，进程被系统回收（传大文件时锁屏、切走、内存吃紧）之后，
+    // 只剩落盘的那份清单能把人捞回来。有批次在跑时不提示：此刻屏幕上的进度
+    // 才是用户关心的，多一条「上次还有 3 个没传完」只会让他以为这单出问题了。
+    var pendingResume by remember {
+      mutableStateOf(if (hasRunningBatch) null else UploadQueueStore.load(context))
+    }
+    LaunchedEffect(hasRunningBatch) {
+      if (!hasRunningBatch) pendingResume = UploadQueueStore.load(context)
+    }
+    val resume = pendingResume
+    if (resume != null) {
+      Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 2.dp),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Refresh,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.secondary,
+          )
+          Spacer(Modifier.width(10.dp))
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = "上次有 ${resume.picks.size} 个文件没传完",
+              style = MaterialTheme.typography.labelLarge,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              // 目标路径写全一点：同一批可能传到另一台服务器的另一个目录，
+              // 只写「12 个文件」用户不敢点
+              text = buildString {
+                append(MediaFormatUtils.formatFileSize(resume.sizeBytes))
+                if (resume.targetLabel.isNotEmpty()) {
+                  append(" · ")
+                  append(resume.targetLabel)
+                }
+                if (resume.targetDir.isNotEmpty()) {
+                  append(" · /")
+                  append(resume.targetDir)
+                }
+              },
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+          TextButton(onClick = { onResume(resume) }, enabled = !hasRunningBatch) { Text("继续") }
+          IconButton(
+            onClick = {
+              UploadQueueStore.clear(context)
+              pendingResume = null
+            },
+          ) {
+            Icon(
+              imageVector = Icons.Default.Close,
+              contentDescription = "忽略未完成的队列",
+              modifier = Modifier.size(16.dp),
+              tint = MaterialTheme.colorScheme.outline,
+            )
+          }
+        }
+      }
+      Spacer(Modifier.height(8.dp))
+    }
 
     if (!hasPermission) {
       NoPermissionPane(
@@ -1067,7 +1152,9 @@ private fun PickerRow(
       Text(
         text = title,
         style = MaterialTheme.typography.bodyMedium,
-        maxLines = 1,
+        // 大字体下允许折到两行：这一行是「这是哪个文件」的唯一标识，
+        // 单行省略在 1.5~2 倍字体时会变成「IMG_20…」这种认不出的东西
+        maxLines = 2,
         overflow = TextOverflow.Ellipsis,
       )
       if (subtitle != null) {
@@ -1258,33 +1345,14 @@ internal fun TransferPane(
   var previewDeck by remember { mutableStateOf<PreviewDeck?>(null) }
 
   /**
-   * 实时速度（字节/秒）与「还剩多少**秒**」，只用来算「剩余约 x」。
+   * 实时速度与「还剩多少**秒**」。
    *
-   * 为什么不放进 [UploadBatch]：速度是纯展示量，每秒往状态流里塞一次会让整张
-   * 任务列表跟着重组；这里 1 秒采一次、本地持有就够，且关掉面板自然停。
-   *
-   * 算法在 [UploadSpeedometer] 里（滑动窗口 + 起播突发保护），这里只负责喂采样点。
-   * ⚠️ 存的是**秒**不是毫秒：`字节 ÷ (字节/秒)` 就是秒，早年那版多乘了 1000，
-   * 于是 300MB 传 7MB/s 能显示「剩余约 2 小时」（整整放大一千倍）。
+   * 采样在 [NetworkUploadCenter.stats] 里（6 秒滑动窗口 + 起播突发保护），
+   * 面板与通知栏读的是**同一份** —— 各采一次会出现两个不一样的剩余时间。
+   * ⚠️ 单位是秒：`字节 ÷ (字节/秒)`。早年这里多乘了 1000，300MB 传 7MB/s
+   * 会显示「剩余约 2 小时」。
    */
-  val speedometer = remember(batch.id) { UploadSpeedometer() }
-  var speedBps by remember(batch.id) { mutableStateOf(0L) }
-  var etaSeconds by remember(batch.id) { mutableStateOf<Long?>(null) }
-  LaunchedEffect(batch.id) {
-    // 先立刻记一笔起点：否则窗口里的第一个点是 1 秒后才落的，要等到第 3 秒才凑够
-    // 跨度、界面白白空两秒（用户刚点上传正是最想看「大概要多久」的时候）
-    NetworkUploadCenter.batch.value?.takeIf { it.id == batch.id }?.let {
-      speedometer.sample(SystemClock.elapsedRealtime(), it.sentBytes)
-    }
-    while (true) {
-      delay(1000)
-      val now = NetworkUploadCenter.batch.value ?: break
-      if (now.id != batch.id || !now.running) break
-      speedometer.sample(SystemClock.elapsedRealtime(), now.sentBytes)
-      speedBps = speedometer.speedBps
-      etaSeconds = speedometer.etaSeconds(now.remainingBytes)
-    }
-  }
+  val stats by NetworkUploadCenter.stats.collectAsState()
 
   Column(modifier = Modifier.fillMaxSize()) {
     Row(
@@ -1341,21 +1409,12 @@ internal fun TransferPane(
         )
       }
       // 「还要多久」——进度条百分比回答不了这个问题，用户真正需要的是这个量级
-      if (batch.running && speedBps > 0) {
+      if (batch.running && stats.speedBps > 0) {
         Spacer(Modifier.height(4.dp))
         Text(
-          text =
-            buildString {
-              append(MediaFormatUtils.formatFileSize(speedBps))
-              append("/s")
-              // etaSeconds 为 null = 数据还不够（起播头两秒）/ 完全没在动，
-              // 这时宁可不给时间也不给一个会被自己打脸的数
-              val eta = etaSeconds
-              if (eta != null) {
-                append(" · 剩余约 ")
-                append(formatEta(eta))
-              }
-            },
+          // 剩余时间为 null（数据不够 / 完全没在动）时只给速度 —— 起播阶段给一个
+          // 必然被自己打脸的数，比晚两秒给更糟
+          text = formatSpeedLine(stats.speedBps, stats.etaSeconds),
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1372,7 +1431,13 @@ internal fun TransferPane(
 
     LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
       items(items = batch.tasks, key = { it.id }) { task ->
-        TaskRow(task = task, onPreview = { previewDeck = deckOfTasks(batch.tasks, task) })
+        TaskRow(
+          task = task,
+          running = batch.running,
+          onPreview = { previewDeck = deckOfTasks(batch.tasks, task) },
+          onSkip = { NetworkUploadCenter.skipTask(task.id) },
+          onRetry = { NetworkUploadCenter.retryTask(task.id) },
+        )
       }
     }
 
@@ -1392,11 +1457,11 @@ internal fun TransferPane(
         if (batch.running) {
           OutlinedButton(onClick = { NetworkUploadCenter.cancel() }) { Text("取消上传") }
         } else {
-          // 失败项重试：只重传失败的，成功的不再走一遍（几 GB 的文件重传一次代价太大）。
-          // 成功全部走完时不显示 —— 那时「完成」才是唯一动作。
+          // 失败 / 跳过的都还能重试：只重传那几条，成功的不再走一遍（几 GB 的文件
+          // 重传一次代价太大）。全部成功时不显示 —— 那时「完成」才是唯一动作。
           if (NetworkUploadCenter.canRetry) {
             OutlinedButton(onClick = { NetworkUploadCenter.retryFailed() }) {
-              Text("重试失败项")
+              Text(if (batch.retryableCount > 1) "重试 ${batch.retryableCount} 项" else "重试这一项")
             }
             Spacer(Modifier.width(8.dp))
           }
@@ -1455,9 +1520,15 @@ private fun UploadResultBanner(batch: UploadBatch) {
           if (isNotEmpty()) append(" · ")
           append("失败 ${batch.failedCount} 个")
         }
-        if (batch.cancelledCount > 0) {
+        // 「跳过」与「取消」分开报：前者用户还会想补传，后者是他自己不要了
+        if (batch.skippedCount > 0) {
           if (isNotEmpty()) append(" · ")
-          append("已取消 ${batch.cancelledCount} 个")
+          append("跳过 ${batch.skippedCount} 个")
+        }
+        val cancelled = batch.cancelledCount - batch.skippedCount
+        if (cancelled > 0) {
+          if (isNotEmpty()) append(" · ")
+          append("已取消 $cancelled 个")
         }
         if (isNotEmpty()) append(" · ")
         append(MediaFormatUtils.formatFileSize(batch.sentBytes))
@@ -1472,12 +1543,20 @@ private fun summaryText(batch: UploadBatch): String =
   when {
     batch.running -> "${batch.finishedCount} / ${batch.tasks.size} 个文件"
     batch.failedCount > 0 -> "成功 ${batch.successCount} · 失败 ${batch.failedCount}"
+    batch.skippedCount > 0 -> "成功 ${batch.successCount} · 跳过 ${batch.skippedCount}"
     batch.cancelledCount > 0 -> "已取消（成功 ${batch.successCount}）"
     else -> "全部完成 · ${batch.successCount} 个文件"
   }
 
 @Composable
-private fun TaskRow(task: UploadTask, onPreview: () -> Unit) {
+private fun TaskRow(
+  task: UploadTask,
+  /** 整批还在跑：此时给「跳过」，不给「重试」 */
+  running: Boolean,
+  onPreview: () -> Unit,
+  onSkip: () -> Unit,
+  onRetry: () -> Unit,
+) {
   Row(
     modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 9.dp),
     verticalAlignment = Alignment.CenterVertically,
@@ -1500,7 +1579,9 @@ private fun TaskRow(task: UploadTask, onPreview: () -> Unit) {
       Text(
         text = task.relativePath,
         style = MaterialTheme.typography.bodySmall,
-        maxLines = 1,
+        // 两行：大字体（系统字体放大到 1.5 倍以上）时一行只放得下十来个字，
+        // 文件名全被省略号吃掉就分不清传的是哪一个
+        maxLines = 2,
         overflow = TextOverflow.Ellipsis,
         color =
           if (task.state == UploadTaskState.Cancelled) {
@@ -1542,7 +1623,8 @@ private fun TaskRow(task: UploadTask, onPreview: () -> Unit) {
             text = task.error.orEmpty(),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.error,
-            maxLines = 1,
+            // 失败原因是「下一步怎么办」的唯一线索，截成一行等于什么都没说
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
           )
         }
@@ -1551,16 +1633,44 @@ private fun TaskRow(task: UploadTask, onPreview: () -> Unit) {
     Spacer(Modifier.width(12.dp))
     Text(
       text =
-        when (task.state) {
-          UploadTaskState.Pending -> MediaFormatUtils.formatFileSize(task.sizeBytes)
-          UploadTaskState.Uploading -> "${(task.progress * 100).toInt()}%"
-          UploadTaskState.Success -> "已上传"
-          UploadTaskState.Failed -> "失败"
-          UploadTaskState.Cancelled -> "已取消"
+        when {
+          task.state == UploadTaskState.Pending -> MediaFormatUtils.formatFileSize(task.sizeBytes)
+          task.state == UploadTaskState.Uploading -> "${(task.progress * 100).toInt()}%"
+          task.state == UploadTaskState.Success -> "已上传"
+          task.state == UploadTaskState.Failed -> "失败"
+          // 「跳过」和「整批取消」都不是成功，但下一步完全不同：
+          // 前者只欠这一条（给重试），后者是用户不要了（不给）
+          task.skipped -> "已跳过"
+          else -> "已取消"
         },
       style = MaterialTheme.typography.labelSmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    // ── 单条操作：跳过 / 重试 ──
+    // 有 200 张照片时「第 3 张卡住」是常事，只能整批取消重来是不可接受的。
+    // 图标按钮 28dp 盒子 + 36dp 触摸区：这一行已经有状态文字与缩略图，
+    // 再塞标准 48dp 的按钮会把文件名挤成两三个字。
+    val canSkip = running && (task.state == UploadTaskState.Pending || task.state == UploadTaskState.Uploading)
+    val canRetry = !running && (task.state == UploadTaskState.Failed || (task.state == UploadTaskState.Cancelled && task.skipped))
+    if (canSkip) {
+      IconButton(onClick = onSkip, modifier = Modifier.size(30.dp)) {
+        Icon(
+          imageVector = Icons.Default.Close,
+          contentDescription = "跳过这个文件",
+          modifier = Modifier.size(15.dp),
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    } else if (canRetry) {
+      IconButton(onClick = onRetry, modifier = Modifier.size(30.dp)) {
+        Icon(
+          imageVector = Icons.Default.Refresh,
+          contentDescription = "重试这个文件",
+          modifier = Modifier.size(15.dp),
+          tint = MaterialTheme.colorScheme.primary,
+        )
+      }
+    }
     // 预览入口只给「有预览器」的格式：pdf / 字幕 / 压缩包摆一个眼睛图标，
     // 点开只会得到一句看不懂的解码错误，不如干脆不提供
     val previewKind =
@@ -1684,3 +1794,80 @@ private fun TaskPreviewThumb(task: UploadTask, kind: PreviewKind, onClick: () ->
     onClick = onClick,
   )
 }
+
+// ─────────────────────────── 最小化后的悬浮进度条 ───────────────────────────
+
+/**
+ * 上传面板关掉之后，挂在浏览页底栏上的一条紧凑进度。
+ *
+ * ## 为什么需要
+ *
+ * 面板是底部弹层，关掉就等于「进度消失」—— 用户去看了一眼别的目录，就再也不知道
+ * 传完没有，只能重新点开上传入口翻回来。这条把「还在传、多少、多快」一直摆在
+ * 视线边缘，点一下还原完整面板。
+ *
+ * ## 为什么高度压到两行
+ *
+ * 它占的是底栏的**布局空间**（不是浮层），多一行就少一行目录。所以百分比与速度并进
+ * 同一行，进度条只给 2dp —— 在这个尺寸上，「有没有在动」比精确读数重要。
+ */
+@Composable
+internal fun UploadProgressPill(batch: UploadBatch, onClick: () -> Unit) {
+  val stats by NetworkUploadCenter.stats.collectAsState()
+  Surface(
+    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    shape = RoundedCornerShape(14.dp),
+    modifier =
+      Modifier.fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 6.dp)
+        .clip(RoundedCornerShape(14.dp))
+        .clickable(onClick = onClick),
+  ) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+          imageVector = Icons.Default.ArrowUpward,
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+          tint = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+          text = "正在上传 ${batch.finishedCount} / ${batch.tasks.size}",
+          style = MaterialTheme.typography.labelLarge,
+          color = MaterialTheme.colorScheme.onSurface,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.weight(1f),
+        )
+        Text(
+          text = "${(batch.progress * 100).toInt()}%",
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.primary,
+        )
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+          tint = MaterialTheme.colorScheme.outline,
+        )
+      }
+      Spacer(Modifier.height(4.dp))
+      LinearProgressIndicator(
+        progress = { batch.progress },
+        modifier = Modifier.fillMaxWidth().height(2.dp),
+      )
+      if (stats.speedBps > 0) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+          text = formatSpeedLine(stats.speedBps, stats.etaSeconds),
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+    }
+  }
+}
+

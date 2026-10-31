@@ -2,6 +2,7 @@ package app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import app.marlboroadvance.mpvex.repository.NetworkRepository
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.AlistClient
@@ -11,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -46,6 +48,14 @@ data class UploadTask(
   val error: String? = null,
   val previewUri: Uri? = null,
   val isVideo: Boolean = false,
+  /**
+   * 这条是**用户主动跳过**的（不是取消整批）。
+   *
+   * 和 `Cancelled` 分不开的话，界面上「你点了跳过」和「你取消了整批」会长得一样，
+   * 而两者的下一步完全不同：前者只是这一条没传（重试它就好），
+   * 后者是整批都不要了（不该再提示重试）。
+   */
+  val skipped: Boolean = false,
 ) {
   val progress: Float
     get() =
@@ -94,7 +104,12 @@ data class UploadBatch(
   val successCount: Int get() = tasks.count { it.state == UploadTaskState.Success }
   val failedCount: Int get() = tasks.count { it.state == UploadTaskState.Failed }
   val cancelledCount: Int get() = tasks.count { it.state == UploadTaskState.Cancelled }
+  val skippedCount: Int get() = tasks.count { it.state == UploadTaskState.Cancelled && it.skipped }
   val finishedCount: Int get() = successCount + failedCount + cancelledCount
+
+  /** 还能重试的条数：失败 + 主动跳过的（取消整批的不算，那是「我不要了」） */
+  val retryableCount: Int
+    get() = tasks.count { it.state == UploadTaskState.Failed || (it.state == UploadTaskState.Cancelled && it.skipped) }
 
   /** 按**字节**算的总进度。全部文件都是 0 字节时退化为按条数算，免得永远停在 0 */
   val progress: Float
@@ -106,6 +121,17 @@ data class UploadBatch(
         else -> finishedCount.toFloat() / tasks.size
       }
 }
+
+/**
+ * 实时速度与剩余时间（纯展示量）。
+ *
+ * **不放进 [UploadBatch]**：每一秒往批次里塞一次会让整张任务列表重组（列表有几十行时
+ * 每秒几十次无谓重组）。单独一条流，只有「这一行文字」的两个观察者会动：
+ * 进度面板的那行小字、以及通知栏。
+ *
+ * @param etaSeconds null = 还不可信（起播头两秒）或完全没在动
+ */
+data class UploadStats(val speedBps: Long = 0L, val etaSeconds: Long? = null)
 
 /**
  * 待上传的一个本地文件 + 它在上传根下的相对路径。
@@ -218,6 +244,23 @@ object NetworkUploadCenter {
    */
   val completed: SharedFlow<Long> = _completed.asSharedFlow()
 
+  private val _stats = MutableStateFlow(UploadStats())
+
+  /**
+   * 实时速度 / 剩余时间。**由中心统一采样**（而不是进度面板自己数）：
+   * 面板关掉、应用退到后台时，通知栏还要继续更新同一套数字 —— 两处各采一次
+   * 只会得到两个互相打架的「剩余时间」。
+   */
+  val stats: StateFlow<UploadStats> = _stats.asStateFlow()
+
+  /**
+   * 被要求跳过的任务号（正在传的那些）。
+   *
+   * 待传的可以直接标成「已跳过」，但**已经在传的那一条**没法从外面掐断 ——
+   * 它的取消判据在 `AlistClient.upload` 的写循环里，只能靠这个集合让它自己退出。
+   */
+  private val skipIds = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
+
   private val jobRef = AtomicReference<Job?>(null)
 
   /**
@@ -281,6 +324,7 @@ object NetworkUploadCenter {
     // 上一批还在跑：先请它停（新任务优先，不排队 —— 排队会让用户以为点了没反应）
     tokenRef.get()?.cancelled = true
     jobRef.getAndSet(null)?.cancel()
+    skipIds.clear()
 
     val token = CancelToken()
     tokenRef.set(token)
@@ -307,45 +351,112 @@ object NetworkUploadCenter {
         tasks = tasks,
         running = true,
       )
+    _stats.value = UploadStats()
 
     val app = context.applicationContext
     appContextRef.set(app)
     lastPicksRef.set(picks)
-    jobRef.set(scope.launch { runBatch(app, id, token, connectionId, targetDir, picks) })
+    // ① 队列落盘：进程被系统回收后还能问一句「上次还有 12 个没传完，继续吗」
+    UploadQueueStore.save(app, connectionId, targetDir, targetLabel, picks)
+    // ② 前台服务：锁屏 / 切走后系统不再当它是「可随时回收的后台任务」，
+    //    同时把进度摆进通知栏（见 UploadForegroundService）
+    UploadForegroundService.start(app)
+    launchRunner(app, id, token, connectionId, targetDir, picks.mapIndexed { index, pick -> index to pick })
   }
 
   /**
-   * 重试**失败**的那几条（其余成功/取消的不再传一遍）。
+   * 重试**失败 / 跳过**的那几条（成功与「取消整批」的不再传一遍）。
    *
-   * 开一批新批次（新 id、新取消令牌），目标目录沿用上一批。
-   * 拿不到上下文（进程被系统回收后又被页面唤起）或没有失败项时静默返回 ——
+   * ⚠️ 在**同一批**里重跑，不新开批次：
+   * 新开批次会让整块进度页的统计清零（已经成功的几十个文件从列表里消失），
+   * 而且分享页靠 `batch.id` 判断「这一批是不是我开的」，一换 id 就会被踢回选择页。
+   *
+   * 拿不到上下文（进程被回收后又被页面唤起）或没有可重试项时静默返回 ——
    * 这属于「没什么可重试」而不是错误，不该弹提示。
-   *
-   * ⚠️ 用上一批的**原始 picks**按下标挑，而不是拿 `UploadTask` 反推：
-   * 任务里没有可重新打开的数据源（见 [appContextRef] 的说明）。
    */
-  fun retryFailed() {
+  fun retryFailed() = retryTasks(null)
+
+  /** 只重试某一条（进度页每行的「重试」） */
+  fun retryTask(taskId: Int) = retryTasks(setOf(taskId))
+
+  private fun retryTasks(only: Set<Int>?) {
     val current = _batch.value ?: return
     if (current.running) return
     val ctx = appContextRef.get() ?: return
-    val failedIndexes =
-      current.tasks.filter { it.state == UploadTaskState.Failed }.map { it.id }.toSet()
-    if (failedIndexes.isEmpty()) return
     val picks = lastPicksRef.get()
-    val retry = picks.filterIndexed { index, _ -> index in failedIndexes }
-    if (retry.isEmpty()) return
-    start(ctx, current.connectionId, current.targetDir, current.targetLabel, retry)
+    val ids =
+      current.tasks
+        .filter {
+          (only == null || it.id in only) &&
+            (it.state == UploadTaskState.Failed ||
+              (it.state == UploadTaskState.Cancelled && it.skipped))
+        }
+        .map { it.id }
+    if (ids.isEmpty()) return
+    // 用上一批的**原始 picks**按下标挑：任务里没有可重新打开的数据源
+    val items = ids.mapNotNull { id -> picks.getOrNull(id)?.let { id to it } }
+    if (items.isEmpty()) return
+
+    val token = CancelToken()
+    tokenRef.set(token)
+    skipIds.clear()
+    _batch.value =
+      current.copy(
+        running = true,
+        tasks =
+          current.tasks.map {
+            if (it.id in ids) {
+              it.copy(
+                state = UploadTaskState.Pending,
+                sentBytes = 0,
+                error = null,
+                skipped = false,
+              )
+            } else {
+              it
+            }
+          },
+      )
+    _stats.value = UploadStats()
+    // 只把「还没传完的」写进落盘队列：这一批里已成功的不该再出现在恢复清单里
+    // （写全量的话，进程在重试途中被回收，恢复时会连已传完的一起重传一遍）
+    persistLeftover(ctx, current.connectionId, current.targetDir, current.targetLabel)
+    UploadForegroundService.start(ctx)
+    launchRunner(ctx, current.id, token, current.connectionId, current.targetDir, items)
+  }
+
+  /**
+   * 跳过一条。
+   *
+   * - 待传的：直接标成「已跳过」（队列还没碰它，立刻生效）；
+   * - 正在传的：塞进 [skipIds]，`AlistClient.upload` 下一次检查时自己退出。
+   *   ⚠️ 不能在这里直接把状态改成 Cancelled —— 写循环还在跑，它会紧接着把
+   *   success/failed 写回来，界面上就会出现「已跳过」和「已完成」互相覆盖。
+   */
+  fun skipTask(taskId: Int) {
+    val current = _batch.value ?: return
+    if (!current.running) return
+    val task = current.tasks.getOrNull(taskId) ?: return
+    when (task.state) {
+      UploadTaskState.Pending ->
+        updateTask(current.id, taskId) {
+          it.copy(state = UploadTaskState.Cancelled, skipped = true)
+        }
+      UploadTaskState.Uploading -> skipIds.add(taskId)
+      else -> Unit
+    }
   }
 
   /** 有没有可重试的失败项（界面据此决定显不显示「重试」按钮） */
   val canRetry: Boolean
     get() {
       val current = _batch.value ?: return false
-      return !current.running && current.failedCount > 0 && appContextRef.get() != null
+      return !current.running && current.retryableCount > 0 && appContextRef.get() != null
     }
   /** 取消当前批次。已传完的保留（服务器上就是有了），未开始的标成已取消 */
   fun cancel() {
     if (!running) return
+    skipIds.clear()
     tokenRef.get()?.cancelled = true
   }
 
@@ -357,13 +468,61 @@ object NetworkUploadCenter {
 
   // ── 执行 ──
 
-  private suspend fun runBatch(
+  /**
+   * 起一条运行器 + 一个统计采样协程。
+   *
+   * 统计与传输**分开**：传输的 `finally` 里要立刻把状态收尾（界面不能卡在「正在上传」），
+   * 而统计每秒写一次、由 `stats` 流单独承担；两者生命周期用同一个 job 绑住，
+   * 传输结束统计自然停（否则后台会有一个每秒钟醒一次的协程跟着进程活到天荒地老）。
+   *
+   * @param items `任务号 to 原始 file` —— 重试时只带其中几条，任务号必须原样保留
+   *   （进度页按 id 定位那一行；重新编号会把进度写到别的文件上）
+   */
+  private fun launchRunner(
     app: Context,
     batchId: Long,
     token: CancelToken,
     connectionId: Long,
     targetDir: String,
-    picks: List<UploadPick>,
+    items: List<Pair<Int, UploadPick>>,
+  ) {
+    jobRef.set(
+      scope.launch {
+        val ticker = launch { trackStats(batchId) }
+        try {
+          runTasks(app, batchId, token, connectionId, targetDir, items)
+        } finally {
+          ticker.cancel()
+          settle(batchId, token, connectionId)
+        }
+      },
+    )
+  }
+
+  /** 每秒采一次，写进 [stats]。数据不够（起播头两秒）时速度给 0、剩余时间给 null */
+  private suspend fun trackStats(batchId: Long) {
+    val meter = UploadSpeedometer()
+    // 先记起点：否则第一个点在 1 秒后才落，要等到第 3 秒才凑够跨度
+    _batch.value?.takeIf { it.id == batchId }?.let {
+      meter.sample(SystemClock.elapsedRealtime(), it.sentBytes)
+    }
+    while (true) {
+      delay(1000)
+      val now = _batch.value ?: break
+      if (now.id != batchId || !now.running) break
+      meter.sample(SystemClock.elapsedRealtime(), now.sentBytes)
+      _stats.value = UploadStats(meter.speedBps, meter.etaSeconds(now.remainingBytes))
+    }
+    _stats.value = UploadStats()
+  }
+
+  private suspend fun runTasks(
+    app: Context,
+    batchId: Long,
+    token: CancelToken,
+    connectionId: Long,
+    targetDir: String,
+    items: List<Pair<Int, UploadPick>>,
   ) {
     try {
       val koin = GlobalContext.getOrNull() ?: error("Koin 未初始化")
@@ -377,14 +536,20 @@ object NetworkUploadCenter {
       // ① 先建齐子目录（文件夹上传时相对路径里带层级）。
       //    ⚠️ mkdir 失败**不中断**：目标目录已存在时 AList 会报「文件已存在」，
       //    那不是错误。真正的判据是随后的 put —— 目录没建出来，put 自己会报。
-      collectDirs(picks).forEach { sub ->
+      collectDirs(items.map { it.second }).forEach { sub ->
         val full = join(targetDir, sub)
         client.mkdir(full).onFailure { Log.d(TAG, "mkdir 忽略（可能已存在）: $full | ${it.message}") }
       }
 
-      picks.forEachIndexed { index, pick ->
-        if (token.cancelled) return@forEachIndexed
-        updateTask(batchId, index) { it.copy(state = UploadTaskState.Uploading) }
+      for ((index, pick) in items) {
+        if (token.cancelled) return
+        // 排队期间被跳过的：不碰网络，直接越过
+        val queued = _batch.value?.tasks?.getOrNull(index)
+        if (queued == null || queued.state == UploadTaskState.Cancelled) continue
+        skipIds.remove(index)
+        updateTask(batchId, index) {
+          it.copy(state = UploadTaskState.Uploading, sentBytes = 0, error = null)
+        }
 
         // 文件落在「目标目录 + 它在选择里的父目录」下：选整个 DCIM 时不能把几百张
         // 照片平铺进当前目录，那会把用户的目标目录搞乱。
@@ -408,9 +573,11 @@ object NetworkUploadCenter {
                 updateTask(batchId, index) { it.copy(sentBytes = sent) }
               }
             },
-            isCancelled = { token.cancelled },
+            // 整批取消 or 这一条被跳过 —— 写循环下一次检查就退出
+            isCancelled = { token.cancelled || skipIds.contains(index) },
           )
 
+        val skipped = skipIds.remove(index)
         result
           .onSuccess {
             updateTask(batchId, index) {
@@ -419,14 +586,18 @@ object NetworkUploadCenter {
           }
           .onFailure { e ->
             updateTask(batchId, index) {
-              if (token.cancelled || e is CancellationException) {
-                it.copy(state = UploadTaskState.Cancelled)
-              } else {
-                it.copy(state = UploadTaskState.Failed, error = e.message ?: "上传失败")
+              when {
+                skipped -> it.copy(state = UploadTaskState.Cancelled, skipped = true)
+                token.cancelled || e is CancellationException -> it.copy(state = UploadTaskState.Cancelled)
+                else -> it.copy(state = UploadTaskState.Failed, error = e.message ?: "上传失败")
               }
             }
           }
-        if (token.cancelled) return@forEachIndexed
+        if (token.cancelled) return
+        // ② 每传完一个就更新一次落盘队列：进程若在下一个文件的传输中被回收，
+        //    恢复时最多多列一条「其实已经传完的」，重传一次即可（远端同名会改写，
+        //    不会产生两个文件）。反之若不更新，恢复时会把已传完的全都再传一遍。
+        persistLeftover(app, connectionId, targetDir, _batch.value?.targetLabel.orEmpty())
       }
     } catch (e: CancellationException) {
       throw e
@@ -451,29 +622,69 @@ object NetworkUploadCenter {
           )
         }
       }
-    } finally {
-      // ⚠️ 这段在协程被取消时也会执行，所以只能做非挂起操作
-      _batch.update { current ->
-        if (current == null || current.id != batchId) {
-          current
-        } else {
-          current.copy(
-            running = false,
-            tasks =
-              current.tasks.map {
-                if (it.state == UploadTaskState.Pending || it.state == UploadTaskState.Uploading) {
-                  it.copy(state = UploadTaskState.Cancelled)
-                } else {
-                  it
-                }
-              },
-          )
-        }
+    }
+  }
+
+  /**
+   * 收尾：把没跑到的标成已取消、发「完成」事件、决定落盘队列留不留、撤掉通知。
+   *
+   * ⚠️ 这段在协程被取消时也会执行，所以只能做非挂起操作。
+   */
+  private fun settle(batchId: Long, token: CancelToken, connectionId: Long) {
+    _batch.update { current ->
+      if (current == null || current.id != batchId) {
+        current
+      } else {
+        current.copy(
+          running = false,
+          tasks =
+            current.tasks.map {
+              if (it.state == UploadTaskState.Pending || it.state == UploadTaskState.Uploading) {
+                it.copy(state = UploadTaskState.Cancelled)
+              } else {
+                it
+              }
+            },
+        )
       }
-      val finished = _batch.value
-      if (!token.cancelled && finished?.id == batchId && finished.successCount > 0) {
+    }
+    _stats.value = UploadStats()
+    val finished = _batch.value
+    if (finished?.id == batchId) {
+      if (!token.cancelled && finished.successCount > 0) {
         _completed.tryEmit(connectionId)
       }
+      val ctx = appContextRef.get()
+      if (ctx != null) {
+        // 还有没传完的（失败 / 跳过 / 取消）就把它们留在落盘队列里，
+        // 没剩下就直接清空 —— 下次上传不该看到一条「还有 0 个未完成」的横幅
+        if (unfinishedIds(finished).isEmpty()) {
+          UploadQueueStore.clear(ctx)
+        } else {
+          persistLeftover(ctx, finished.connectionId, finished.targetDir, finished.targetLabel)
+        }
+      }
+    }
+    // ⚠️ 这里**不**停前台服务：服务自己每秒看一眼批次，发现不在跑就补一条
+    // 「上传完成 / 有失败项」的结果通知再退出前台。在这里 stopService 会把它
+    // 连那一条结果通知一起掐掉 —— 通知栏无声消失，看起来像上传被系统杀了。
+  }
+
+  private fun unfinishedIds(batch: UploadBatch): List<Int> =
+    batch.tasks
+      .filter { it.state == UploadTaskState.Pending || it.state == UploadTaskState.Failed || it.skipped }
+      .map { it.id }
+
+  /** 把「还没传完」的那几条写进落盘队列（[UploadQueueStore]），供下次恢复 */
+  private fun persistLeftover(context: Context, connectionId: Long, targetDir: String, targetLabel: String) {
+    val batch = _batch.value ?: return
+    val picks = lastPicksRef.get()
+    val left =
+      unfinishedIds(batch).mapNotNull { id -> picks.getOrNull(id)?.let { id to it } }
+    if (left.isEmpty()) {
+      UploadQueueStore.clear(context)
+    } else {
+      UploadQueueStore.save(context, connectionId, targetDir, targetLabel, left.map { it.second })
     }
   }
 

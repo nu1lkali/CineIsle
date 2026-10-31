@@ -7,6 +7,7 @@ import android.net.Uri
 import android.widget.VideoView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -43,6 +44,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -58,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.album.AlbumImageLoader
 import app.marlboroadvance.mpvex.utils.storage.FileTypeUtils
 import coil3.compose.AsyncImage
@@ -66,6 +70,7 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import org.koin.compose.koinInject
 
 /**
  * 预览器的三种内容，各有一个专门实现：
@@ -101,6 +106,15 @@ data class PreviewItem(val uri: Uri?, val kind: PreviewKind, val title: String)
  */
 data class PreviewDeck(val items: List<PreviewItem>, val index: Int)
 
+/**
+ * 混排连播时，一张图片停留多久再翻下一张。
+ *
+ * 视频/音频都有「播完」这个事件，图片没有（[ImagePreview] 一直在那儿），
+ * 混排一叠里「播完自动下一条」走到图片就断了。留 3 秒：够看清是什么，
+ * 又不至于让人以为卡住了。
+ */
+private const val PHOTO_DWELL_MS = 3000L
+
 /** 图片扩展名。**只用于判断「有没有预览器」**，不参与 MIME 判定 */
 private val PREVIEW_IMAGE_EXTENSIONS =
   setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "avif", "dng", "tif", "tiff")
@@ -134,6 +148,30 @@ fun MediaPreviewDialog(deck: PreviewDeck, onDismiss: () -> Unit) {
   var index by remember(deck) { mutableIntStateOf(deck.index) }
   val item = deck.items.getOrNull(index) ?: return
   val total = deck.items.size
+  val canPrev = index > 0
+  val canNext = index < total - 1
+
+  val preferences: BrowserPreferences = koinInject()
+  // 播完自动下一条：开关落偏好，下次点开预览还是这个口径
+  var autoAdvance by remember { mutableStateOf(preferences.previewAutoAdvance.get()) }
+
+  // 左右滑动翻页的累计位移。阈值按 dp 给，不按屏宽百分比 ——
+  // 预览窗在小屏上只有 300dp 出头，按比例算会让「轻轻一划」就翻页
+  var dragAccum by remember { mutableStateOf(0f) }
+
+  // 这一叠里有没有「会自己播完」的内容。两个用途：
+  // ① 连播开关出不出现（全是图片时不出现）；② 照片页要不要跟着自动翻。
+  // 照片永远不会有「播完」事件，混排（视频/照片/音频同叠）时不给它计时，
+  // 连播走到一张图上就再也不会动了 —— 这是「混排下连播不工作」的根因。
+  val hasPlayable = deck.items.any { it.kind != PreviewKind.Image }
+
+  LaunchedEffect(index, autoAdvance, hasPlayable) {
+    if (!autoAdvance || !hasPlayable) return@LaunchedEffect
+    if (item.kind != PreviewKind.Image) return@LaunchedEffect
+    if (index >= total - 1) return@LaunchedEffect
+    delay(PHOTO_DWELL_MS)
+    index++
+  }
 
   Dialog(
     onDismissRequest = onDismiss,
@@ -148,21 +186,47 @@ fun MediaPreviewDialog(deck: PreviewDeck, onDismiss: () -> Unit) {
       Column {
         Box(
           modifier =
-            Modifier.fillMaxWidth().then(
-              when (item.kind) {
-                // 视频**自己不锁高度**：画面 16:9 由 VideoPreview 内部固定，
-                // 底下还有一条固定高度的控件栏 —— 在本层再套 aspectRatio 会把
-                // 控件栏挤到框外（或者压成一条线），这正是「控件显示不全」的老毛病。
-                PreviewKind.Video -> Modifier
-                // 音频是一块固定高度的「封面 + 控件」：高度随封面变会让控件条上下跳
-                PreviewKind.Audio -> Modifier.height(240.dp)
-                // 图片不锁比例：手机竖拍塞进 16:9 只剩中间一条，看不出是什么
-                PreviewKind.Image -> Modifier.heightIn(min = 180.dp, max = 440.dp)
+            Modifier.fillMaxWidth()
+              .then(
+                when (item.kind) {
+                  // 视频**自己不锁高度**：画面 16:9 由 VideoPreview 内部固定，
+                  // 底下还有一条固定高度的控件栏 —— 在本层再套 aspectRatio 会把
+                  // 控件栏挤到框外（或者压成一条线），这正是「控件显示不全」的老毛病。
+                  PreviewKind.Video -> Modifier
+                  // 音频是一块固定高度的「封面 + 控件」：高度随封面变会让控件条上下跳
+                  PreviewKind.Audio -> Modifier.height(240.dp)
+                  // 图片不锁比例：手机竖拍塞进 16:9 只剩中间一条，看不出是什么
+                  PreviewKind.Image -> Modifier.heightIn(min = 180.dp, max = 440.dp)
+                },
+              )
+              // 左右滑动翻页。只认水平方向（`detectHorizontalDragGestures` 先过横向
+              // slop），所以音频那条进度条照旧能拖 —— Slider 自己会消费掉拖动。
+              .pointerInput(index, total) {
+                val threshold = 56.dp.toPx()
+                detectHorizontalDragGestures(
+                  onHorizontalDrag = { _, delta -> dragAccum += delta },
+                  onDragEnd = {
+                    when {
+                      dragAccum <= -threshold && canNext -> index++
+                      dragAccum >= threshold && canPrev -> index--
+                    }
+                    dragAccum = 0f
+                  },
+                  onDragCancel = { dragAccum = 0f },
+                )
               },
-            ),
           contentAlignment = Alignment.Center,
         ) {
-          PreviewContent(item = item)
+          PreviewContent(
+            item = item,
+            // 关了连播、或者已经是这一叠的最后一条 ⇒ 单条循环
+            // （最后一条没有「下一条」可跳，停住不如重播，看一遍就能判断值不值得留）
+            loop = !autoAdvance || !canNext,
+            onCompleted = {
+              // 用 index/total 现算而不是闭包里的 canNext：翻页过程中 canNext 会变
+              if (autoAdvance && index < total - 1) index++
+            },
+          )
         }
 
         Row(
@@ -170,7 +234,6 @@ fun MediaPreviewDialog(deck: PreviewDeck, onDismiss: () -> Unit) {
           verticalAlignment = Alignment.CenterVertically,
         ) {
           if (total > 1) {
-            val canPrev = index > 0
             IconButton(onClick = { if (canPrev) index-- }, enabled = canPrev) {
               Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
@@ -196,8 +259,22 @@ fun MediaPreviewDialog(deck: PreviewDeck, onDismiss: () -> Unit) {
               )
             }
           }
+          // 连播开关：这一叠里有视频/音频才出现。混排时照片页也要出现 ——
+          // 否则用户在照片上想关掉幻灯片只能先翻到别处
+          if (total > 1 && hasPlayable) {
+            TextButton(
+              onClick = {
+                autoAdvance = !autoAdvance
+                preferences.previewAutoAdvance.set(autoAdvance)
+              },
+            ) {
+              Text(
+                text = if (autoAdvance) "连播·开" else "连播·关",
+                color = if (autoAdvance) Color.White else Color.White.copy(alpha = 0.45f),
+              )
+            }
+          }
           if (total > 1) {
-            val canNext = index < total - 1
             IconButton(onClick = { if (canNext) index++ }, enabled = canNext) {
               Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -222,7 +299,7 @@ fun MediaPreviewDialog(deck: PreviewDeck, onDismiss: () -> Unit) {
  * 用户看到的就是那条红字错误（v187 修的就是这个）。
  */
 @Composable
-private fun PreviewContent(item: PreviewItem) {
+private fun PreviewContent(item: PreviewItem, loop: Boolean, onCompleted: () -> Unit) {
   val uri = item.uri
   if (uri == null) {
     Text(text = "无法预览", style = MaterialTheme.typography.bodySmall, color = Color.White)
@@ -231,8 +308,9 @@ private fun PreviewContent(item: PreviewItem) {
   when (item.kind) {
     // key(uri)：AndroidView / DisposableEffect 的 factory 只跑一次，
     // 不给 key 时翻到下一项仍在播上一项
-    PreviewKind.Video -> key(uri) { VideoPreview(uri = uri) }
-    PreviewKind.Audio -> key(uri) { AudioPreview(uri = uri) }
+    PreviewKind.Video -> key(uri) { VideoPreview(uri = uri, loop = loop, onCompleted = onCompleted) }
+    PreviewKind.Audio -> key(uri) { AudioPreview(uri = uri, loop = loop, onCompleted = onCompleted) }
+    // 图片没有「播完」这回事：翻页只走按钮与滑动
     PreviewKind.Image -> ImagePreview(uri = uri, title = item.title)
   }
 }
@@ -321,11 +399,18 @@ private fun ImagePreview(uri: Uri, title: String) {
  * `VideoView` 只有 `getCurrentPosition()`，没有任何进度回调。500ms 读一次够用
  * （进度条 1px 的移动肉眼分辨不出更细的粒度），也不会费电。拖动时跳过轮询 ——
  * 否则手指还没松，轮询就把滑块拽回播放位置，滑块会「抖」。
+ *
+ * @param loop true = 单条循环（关了「连播」时用）；false = 播完调 [onCompleted]（交给外框翻下一条）
  */
 @Composable
-private fun VideoPreview(uri: Uri) {
+private fun VideoPreview(uri: Uri, loop: Boolean = false, onCompleted: () -> Unit = {}) {
   // 关窗必须显式停播：VideoView 不在 Compose 的生命周期里，不主动停会一直占着解码器
   var player by remember { mutableStateOf<VideoView?>(null) }
+  // 循环开关与「播完」回调都随时可能变（用户中途按连播开关），factory 只跑一次，
+  // 所以监听器里必须读最新值，不能直接闭包捕获初次组合时的入参
+  val loopNow = rememberUpdatedState(loop)
+  val completedNow = rememberUpdatedState(onCompleted)
+  var mp by remember { mutableStateOf<MediaPlayer?>(null) }
   var prepared by remember(uri) { mutableStateOf(false) }
   var playing by remember(uri) { mutableStateOf(false) }
   var durationMs by remember(uri) { mutableStateOf(0L) }
@@ -348,6 +433,11 @@ private fun VideoPreview(uri: Uri) {
     }
   }
 
+  // 播放中按下连播开关也要立即生效（否则要关掉预览重开才认）
+  LaunchedEffect(loop) {
+    runCatching { mp?.isLooping = loop }
+  }
+
   Column(modifier = Modifier.fillMaxWidth()) {
     Box(
       modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
@@ -358,14 +448,19 @@ private fun VideoPreview(uri: Uri) {
         factory = { ctx ->
           VideoView(ctx).apply {
             val view = this
-            setOnPreparedListener { mp ->
-              mp.isLooping = true
+            setOnPreparedListener { p ->
+              p.isLooping = loopNow.value
+              mp = p
               // 时长在这里取一次就够了：本地文件不会中途改长度
-              durationMs = mp.duration.toLong().coerceAtLeast(0L)
+              durationMs = p.duration.toLong().coerceAtLeast(0L)
               prepared = true
               playing = true
             }
-            setOnCompletionListener { playing = false }
+            setOnCompletionListener {
+              playing = false
+              // 循环时系统自己会重播，不该往下一集跳
+              if (!loopNow.value) completedNow.value()
+            }
             setOnErrorListener { _, _, _ ->
               prepared = false
               true
@@ -425,8 +520,10 @@ private fun VideoPreview(uri: Uri) {
  *    `IllegalStateException`，而轮询协程与 UI 回调的时序不保证。
  */
 @Composable
-private fun AudioPreview(uri: Uri) {
+private fun AudioPreview(uri: Uri, loop: Boolean = false, onCompleted: () -> Unit = {}) {
   val context = LocalContext.current
+  val loopNow = rememberUpdatedState(loop)
+  val completedNow = rememberUpdatedState(onCompleted)
   var player by remember(uri) { mutableStateOf<MediaPlayer?>(null) }
   var prepared by remember(uri) { mutableStateOf(false) }
   var playing by remember(uri) { mutableStateOf(false) }
@@ -440,13 +537,18 @@ private fun AudioPreview(uri: Uri) {
     val mp = MediaPlayer()
     runCatching {
       mp.setDataSource(context, uri)
-      mp.isLooping = true
+      mp.isLooping = loopNow.value
     }
     mp.setOnPreparedListener { p ->
       prepared = true
       durationMs = runCatching { p.duration.toLong() }.getOrDefault(0L).coerceAtLeast(0L)
       runCatching { p.start() }
       playing = true
+    }
+    mp.setOnCompletionListener {
+      playing = false
+      // 循环时系统自己会重播，不该往下一首跳
+      if (!loopNow.value) completedNow.value()
     }
     mp.setOnErrorListener { _, _, _ ->
       prepared = false
@@ -472,6 +574,11 @@ private fun AudioPreview(uri: Uri) {
         positionMs = runCatching { mp.currentPosition.toLong() }.getOrDefault(positionMs)
       }
     }
+  }
+
+  // 播放中按下连播开关也要立即生效（DisposableEffect 只在换片时重跑）
+  LaunchedEffect(loop) {
+    runCatching { player?.isLooping = loop }
   }
 
   // 内嵌封面是纯 IO（要解 ID3/MP4 atom），必须在 IO 线程；失败就退回音符图标

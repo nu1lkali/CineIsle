@@ -17,22 +17,27 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
+import kotlinx.coroutines.launch
 
 /**
  * 「选择目标文件夹」抽屉（复制 / 移动共用）。
@@ -61,6 +67,8 @@ import app.marlboroadvance.mpvex.domain.network.NetworkFile
  *
  * @param listDir 列一个目录（接 `ViewModel.listDirForPicker`）
  * @param startPath 打开时停在哪一层（调用方传当前目录 —— 最常见的操作是「复制到隔壁」）
+ * @param createFolder 新建子目录（传**完整相对路径**，如 `电影/新片`）。为 null 时不显示
+ *   「新建文件夹」入口 —— 非 AList 协议没有 `fs/mkdir`
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,17 +81,27 @@ fun NetworkFolderPickerSheet(
   listDir: suspend (String) -> Result<List<NetworkFile>>,
   onDismiss: () -> Unit,
   onConfirm: (String) -> Unit,
+  createFolder: (suspend (String) -> Result<Unit>)? = null,
 ) {
   val sheetState = rememberModalBottomSheetState()
+  val scope = rememberCoroutineScope()
   // 抽屉内部自己的当前位置（相对路径，根目录 = 空串）
   var path by remember { mutableStateOf(startPath.trim('/')) }
   var folders by remember { mutableStateOf<List<NetworkFile>>(emptyList()) }
   var loading by remember { mutableStateOf(true) }
   var error by remember { mutableStateOf<String?>(null) }
 
+  // 新建文件夹的小弹窗
+  var creating by remember { mutableStateOf(false) }
+  var newName by remember { mutableStateOf("") }
+  var createBusy by remember { mutableStateOf(false) }
+  var createError by remember { mutableStateOf<String?>(null) }
+  // 手动刷新计数：建完目录要重列一次，而 path 没变 ⇒ 只能靠这个 key 踢一脚
+  var reloadTick by remember { mutableIntStateOf(0) }
+
   // 每换一层就重列一次。⚠️ 用 path 当 key：返回上一层时也会重新列（不复用旧结果），
   // 因为「刚才可能在里面建了目录 / 删了东西」，过期的空列表会让人以为目录没了。
-  LaunchedEffect(path) {
+  LaunchedEffect(path, reloadTick) {
     loading = true
     error = null
     listDir(path)
@@ -142,6 +160,23 @@ fun NetworkFolderPickerSheet(
           Spacer(Modifier.width(6.dp))
           Text("上一级")
         }
+        // 新建目录：以前只能退出去、在浏览页建好再回来选 —— 而「想放到一个还不存在的
+        // 文件夹里」正是最常见的念头（按片名/日期归档就这么来的）
+        if (createFolder != null) {
+          TextButton(
+            onClick = {
+              createError = null
+              newName = ""
+              creating = true
+            },
+            enabled = !loading,
+          ) {
+            Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            // 只写「新建」：这一行已经有三颗按钮，大字体下长文案会互相挤
+            Text("新建")
+          }
+        }
       }
 
       Box(
@@ -192,6 +227,75 @@ fun NetworkFolderPickerSheet(
         TextButton(onClick = { onConfirm(path) }) { Text(confirmLabel) }
       }
     }
+  }
+
+  // 新建子目录的小弹窗。只收**一段名字**：父路径由当前层决定，
+  // 让用户在这里输 `a/b/c` 只会制造「路径拼错」这类自找的失败。
+  if (creating && createFolder != null) {
+    AlertDialog(
+      onDismissRequest = { if (!createBusy) creating = false },
+      title = { Text("新建文件夹") },
+      text = {
+        Column {
+          Text(
+            text = if (path.isEmpty()) "建在根目录" else "建在 /$path",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+          )
+          Spacer(Modifier.height(10.dp))
+          OutlinedTextField(
+            value = newName,
+            onValueChange = { newName = it },
+            singleLine = true,
+            label = { Text("文件夹名") },
+            isError = createError != null,
+            modifier = Modifier.fillMaxWidth(),
+          )
+          if (createError != null) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+              text = createError.orEmpty(),
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.error,
+            )
+          }
+        }
+      },
+      confirmButton = {
+        TextButton(
+          enabled = !createBusy && newName.isNotBlank(),
+          onClick = {
+            val name = newName.trim().trim('/')
+            if (name.isEmpty()) return@TextButton
+            createBusy = true
+            createError = null
+            scope.launch {
+              val target = if (path.isEmpty()) name else "$path/$name"
+              createFolder(target)
+                .onSuccess {
+                  createBusy = false
+                  creating = false
+                  // 建好就**进去**：用户建这个目录就是为了往里面放东西，
+                  // 停在原地等于让他再点一次自己的新目录
+                  path = target
+                  reloadTick++
+                }
+                .onFailure {
+                  createBusy = false
+                  createError = it.message ?: "新建文件夹失败"
+                }
+            }
+          },
+        ) {
+          Text(if (createBusy) "创建中…" else "创建")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { creating = false }, enabled = !createBusy) { Text("取消") }
+      },
+    )
   }
 }
 

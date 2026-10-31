@@ -1,5 +1,7 @@
 package app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload
 
+import app.marlboroadvance.mpvex.utils.media.MediaFormatUtils
+
 /**
  * 上传速度的滑动窗口估算器。
  *
@@ -92,3 +94,33 @@ internal class UploadSpeedometer(
     const val BURST_GUARD_HISTORY_MS = 4_000L
   }
 }
+
+/**
+ * 剩余时间的口语化写法（**参数是秒**）。
+ *
+ * 上传速度一直在变，给一个精确到秒的倒计时是假精确 —— 这里只用
+ * 「x 分 y 秒 / x 小时 y 分」这种量级表达，用户要的是「还要不要等」。
+ *
+ * ⚠️ 调用方算的是 `剩余字节 ÷ 速度`，结果本来就是**秒**。v187 及以前在调用点
+ * 多乘了一个 1000（当成毫秒做换算），于是 300MB 传 7MB/s 会显示「剩余约 2 小时」。
+ * 这个函数只此一份，进度面板与通知栏都调它，别再各写一份。
+ */
+internal fun formatEta(seconds: Long): String =
+  when {
+    seconds <= 0 -> "即将完成"
+    seconds < 60 -> "$seconds 秒"
+    seconds < 3600 -> "${seconds / 60} 分 ${seconds % 60} 秒"
+    else -> "${seconds / 3600} 小时 ${(seconds % 3600) / 60} 分"
+  }
+
+/** 速度 / 剩余时间拼成一行（`7.2 MB/s · 剩余约 1 分 20 秒`），进度面板与通知栏共用 */
+internal fun formatSpeedLine(speedBps: Long, etaSeconds: Long?): String =
+  buildString {
+    append(MediaFormatUtils.formatFileSize(speedBps))
+    append("/s")
+    if (etaSeconds != null) {
+      append(" · 剩余约 ")
+      append(formatEta(etaSeconds))
+    }
+  }
+

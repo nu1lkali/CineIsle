@@ -48,6 +48,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -77,6 +78,7 @@ import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.repository.NetworkRepository
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.AlistClient
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkFolderPickerSheet
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.NetworkUploadCenter
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.TransferPane
@@ -91,6 +93,7 @@ import app.marlboroadvance.mpvex.ui.theme.DarkMode
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import app.marlboroadvance.mpvex.utils.media.MediaFormatUtils
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -215,6 +218,14 @@ private fun ShareUploadScreen(
   var connectionId by remember { mutableStateOf<Long?>(null) }
   var targetDir by remember { mutableStateOf("") }
 
+  /**
+   * 「传完自动回原 App」的当前值。
+   *
+   * 提到屏幕层而不是只在进度页里读偏好：开关就摆在本页底栏上 —— 分享是个
+   * 「顺手传一下就回去」的动作，为了改这一个开关把人赶去设置页是荒谬的。
+   */
+  var autoBack by remember { mutableStateOf(preferences.shareUploadAutoBack.get()) }
+
   // 连接列表到手后落一次默认选择：上次用过的那台优先，没有就用第一台
   LaunchedEffect(connections) {
     val list = connections ?: return@LaunchedEffect
@@ -259,6 +270,15 @@ private fun ShareUploadScreen(
 
   // 已经开传：整屏交给进度页（它自带标题行与关闭键，不再套一层 Scaffold）
   if (mine != null) {
+    // 传完自动回原 App：分享入口本来就是「传过去就完事」，留在这里还得用户自己按关闭。
+    // 三种情况**不**自动退：关了开关、还在传、有失败/跳过 —— 那时候用户正需要看结果。
+    // 停 1.1 秒是为了让「完成」这个状态真的被看见，而不是一闪而过。
+    LaunchedEffect(mine.id, mine.running, autoBack) {
+      if (!autoBack || mine.running) return@LaunchedEffect
+      if (mine.failedCount > 0 || mine.skippedCount > 0) return@LaunchedEffect
+      delay(1100)
+      onFinish()
+    }
     Surface(modifier = Modifier.fillMaxSize()) {
       Box(modifier = Modifier.statusBarsPadding()) {
         TransferPane(
@@ -314,55 +334,71 @@ private fun ShareUploadScreen(
     bottomBar = {
       if (media.isNotEmpty()) {
         Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
-          Row(
+          Column(
             modifier =
-              Modifier.fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+              Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 10.dp),
           ) {
-            Column(modifier = Modifier.weight(1f)) {
+            // 「传完自动回原 App」开关就在这儿：传完要不要被送回相册，是这一页的事，
+            // 藏进设置页等于没人找得到
+            Row(verticalAlignment = Alignment.CenterVertically) {
               Text(
-                text = if (targetDir.isEmpty()) "目标 · 根目录" else "目标 · /$targetDir",
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Spacer(Modifier.height(2.dp))
-              Text(
-                text = connection?.name ?: "未选择网络位置",
-                style = MaterialTheme.typography.labelSmall,
+                text = "传完自动回原 App",
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+              )
+              Switch(
+                checked = autoBack,
+                onCheckedChange = {
+                  autoBack = it
+                  preferences.shareUploadAutoBack.set(it)
+                },
               )
             }
-            Spacer(Modifier.width(12.dp))
-            Button(
-              onClick = {
-                val target = connection ?: return@Button
-                preferences.shareUploadConnectionId.set(target.id)
-                preferences.shareUploadDir.set(targetDir)
-                NetworkUploadCenter.start(
-                  context = context,
-                  connectionId = target.id,
-                  targetDir = targetDir,
-                  targetLabel = targetLabel(target, targetDir),
-                  picks =
-                    media.map {
-                      UploadPick(
-                        file = null,
-                        relativePath = it.name,
-                        contentUri = it.uri,
-                        sizeHint = it.sizeBytes,
-                      )
-                    },
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = if (targetDir.isEmpty()) "目标 · 根目录" else "目标 · /$targetDir",
+                  style = MaterialTheme.typography.labelLarge,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
                 )
-                startedBatchId = NetworkUploadCenter.batch.value?.id
-              },
-              enabled = connection != null,
-            ) {
-              Text("上传")
+                Spacer(Modifier.height(2.dp))
+                Text(
+                  text = connection?.name ?: "未选择网络位置",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+              Spacer(Modifier.width(12.dp))
+              Button(
+                onClick = {
+                  val target = connection ?: return@Button
+                  preferences.shareUploadConnectionId.set(target.id)
+                  preferences.shareUploadDir.set(targetDir)
+                  NetworkUploadCenter.start(
+                    context = context,
+                    connectionId = target.id,
+                    targetDir = targetDir,
+                    targetLabel = targetLabel(target, targetDir),
+                    picks =
+                      media.map {
+                        UploadPick(
+                          file = null,
+                          relativePath = it.name,
+                          contentUri = it.uri,
+                          sizeHint = it.sizeBytes,
+                        )
+                      },
+                  )
+                  startedBatchId = NetworkUploadCenter.batch.value?.id
+                },
+                enabled = connection != null,
+              ) {
+                Text("上传")
+              }
             }
           }
         }
@@ -484,6 +520,15 @@ private fun ShareUploadScreen(
       onConfirm = { picked ->
         targetDir = picked.trim('/')
         showFolderPicker = false
+      },
+      // 「传到一个还不存在的目录」是这个入口最常见的念头，所以这里必须能建目录
+      createFolder = { path ->
+        val client = runCatching { repository.clientFor(connection) }.getOrNull() as? AlistClient
+        if (client == null) {
+          Result.failure(IllegalStateException("当前协议不支持新建文件夹"))
+        } else {
+          client.mkdir(path.trim().trim('/'))
+        }
       },
     )
   }

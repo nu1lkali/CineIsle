@@ -141,6 +141,23 @@ class BrowserPreferences(
   val shareUploadDir = preferenceStore.getString("share_upload_dir", "")
 
   /**
+   * 分享上传**全部成功**后是否自动退回原来的 App（默认开）。
+   *
+   * 分享是「在相册里顺手传一下」的动作，传完停在结果页等于把人扣在这里 ——
+   * 用户手上还在相册里挑下一批。只在**没有失败、没有取消**时自动回：
+   * 有失败项的时候，结果页正是他要看的东西。
+   */
+  val shareUploadAutoBack = preferenceStore.getBoolean("share_upload_auto_back", true)
+
+  /**
+   * 预览器里视频 / 音频**播完自动翻到下一条**（默认开）。
+   *
+   * 连着看十几段剪辑时不用手点；但只想反复看同一段的人（对时间点、看细节）
+   * 会被自动跳走，所以给开关，并在预览器底部直接可切。
+   */
+  val previewAutoAdvance = preferenceStore.getBoolean("preview_auto_advance", true)
+
+  /**
    * 网络浏览在**宽屏**（≥720dp）下是否启用双栏：左栏列上一级的文件夹，右栏是当前目录。
    *
    * 默认 true —— 平板上「进 A 看一眼 → 退回 → 进 B」是最常见的动作，双栏省一半点击。

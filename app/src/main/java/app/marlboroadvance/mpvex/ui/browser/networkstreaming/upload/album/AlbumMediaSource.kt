@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.album
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
+import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
@@ -10,6 +11,7 @@ import android.util.Log
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 
 /**
  * 相册里的一个媒体条目（图片或视频）。
@@ -141,6 +143,9 @@ object AlbumMediaSource {
 
   /** 一次读完全部图片 + 视频，按时间倒序 */
   suspend fun load(context: Context): AlbumLibrary {
+    // 「最近使用」要落盘，而记账的方法（[rememberAlbumUsed]）拿不到 Context ——
+    // 在这里顺手记下 applicationContext（不会泄漏，且首屏一定先走 load）
+    appContext = context.applicationContext
     cached?.let { if (System.currentTimeMillis() - it.loadedAt < CACHE_TTL_MS) return it }
     val loaded =
       withContext(Dispatchers.IO) {
@@ -273,31 +278,81 @@ object AlbumMediaSource {
       )
   }
 
-  // ── 最近使用（进程内，最多 [RECENT_ALBUMS] 个）────────────────────────────
+  // ── 最近使用（落盘，最多 [RECENT_ALBUMS] 个）──────────────────────────────
   //
   // 「最近用过的」和「最近有新照片的」是两件事：前者是你主动挑过的，
   // 后者只是时间顺序。相册几十个时，前者才是真正省事的那个快捷入口
   // （Google 相册 / 三星相册的相册页顶部都有这一档）。
   //
-  // 只记进程内存：一次上传会话里够用；落盘反而会出现「半年前挑过一次的相册
-  // 永远挂在最上面」这种尴尬。
+  // v189 起**落盘并带时间戳**：
+  // - 进程内只记 3 个时，一次上传会话关掉 App 就全忘了 —— 而「我常传的那个相册」
+  //   恰恰是跨会话稳定的偏好；
+  // - 光落盘 id 会烂掉：半年前挑过一次的相册会永远挂在最上面。所以每条记
+  //   「最后一次用它的时间」，超过 [RECENT_MAX_AGE_MS] 自动出场（衰减），
+  //   剩下的按时间倒序 —— 新用的永远压在上面，久不用的自然沉底直到消失。
 
-  private const val RECENT_ALBUMS = 3
+  private const val RECENT_ALBUMS = 6
+  private const val RECENT_PREFS = "album_recent"
+  private const val RECENT_KEY = "entries"
 
-  private val recentIds = ArrayList<Long>(RECENT_ALBUMS)
+  /** 衰减窗口：超过这么久没再挑过的相册不再占「最近使用」的位置 */
+  private const val RECENT_MAX_AGE_MS = 30L * 24 * 60 * 60 * 1000
 
-  /** 记一次「用户挑了这个相册」。重复挑会把它提到最前 */
+  /** 落盘用的 SharedPreferences。没走过 [load] 时为 null（纯内存兜底） */
+  @Volatile private var appContext: Context? = null
+
+  /** (bucketId, 最后使用时间) 列表，最近的在前；null = 还没读过盘 */
+  @Volatile private var recentCache: List<Pair<Long, Long>>? = null
+
+  private fun recentPrefs(): SharedPreferences? =
+    appContext?.getSharedPreferences(RECENT_PREFS, Context.MODE_PRIVATE)
+
+  private fun readRecent(): List<Pair<Long, Long>> {
+    recentCache?.let { return it }
+    val now = System.currentTimeMillis()
+    val out = ArrayList<Pair<Long, Long>>(RECENT_ALBUMS)
+    val raw = recentPrefs()?.getString(RECENT_KEY, null)
+    if (!raw.isNullOrBlank()) {
+      runCatching {
+          val arr = JSONArray(raw)
+          for (i in 0 until arr.length()) {
+            // 存成 "id|时间戳"：两个数字用 JSONObject 反而更容易写坏
+            val line = arr.optString(i, "")
+            val id = line.substringBefore('|').toLongOrNull() ?: continue
+            val usedAt = line.substringAfter('|', "").toLongOrNull() ?: continue
+            if (id <= 0L) continue
+            // 衰减：太久没碰过的不再占位
+            if (now - usedAt > RECENT_MAX_AGE_MS) continue
+            if (out.any { it.first == id }) continue
+            out.add(id to usedAt)
+          }
+        }
+        .onFailure { Log.w(TAG, "读取「最近使用相册」失败", it) }
+    }
+    val sorted = out.sortedByDescending { it.second }
+    recentCache = sorted
+    return sorted
+  }
+
+  /** 记一次「用户挑了这个相册」。重复挑会把它提到最前并刷新时间 */
   @Synchronized
   fun rememberAlbumUsed(bucketId: Long) {
     if (bucketId <= 0L) return
-    recentIds.remove(bucketId)
-    recentIds.add(0, bucketId)
-    while (recentIds.size > RECENT_ALBUMS) recentIds.removeAt(recentIds.lastIndex)
+    val merged = readRecent().filter { it.first != bucketId }.toMutableList()
+    merged.add(0, bucketId to System.currentTimeMillis())
+    while (merged.size > RECENT_ALBUMS) merged.removeAt(merged.lastIndex)
+    recentCache = merged
+    runCatching {
+        val arr = JSONArray()
+        merged.forEach { (id, usedAt) -> arr.put("$id|$usedAt") }
+        recentPrefs()?.edit()?.putString(RECENT_KEY, arr.toString())?.apply()
+      }
+      .onFailure { Log.w(TAG, "保存「最近使用相册」失败", it) }
   }
 
   /** 最近用过的相册 id，最近的在前 */
   @Synchronized
-  fun recentAlbumIds(): List<Long> = recentIds.toList()
+  fun recentAlbumIds(): List<Long> = readRecent().map { it.first }
 
   @Suppress("LongParameterList")
   private fun query(

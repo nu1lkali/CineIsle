@@ -459,6 +459,24 @@ class NetworkBrowserViewModel(
   // ── 复制 / 移动 / 批量删除（只有 AList 有写接口）──
 
   /**
+   * 给「选择目标文件夹」弹窗新建子目录。
+   *
+   * 与 [createFolder] 分开而不复用：那个是「在**当前目录**建，只收一段名字」，
+   * 而弹窗里可以下钻到任意一层，路径必须由弹窗拼好（`当前层/名字`）传进来。
+   * 重名判据在服务端 —— 这里不做「已存在就换名」，选目录时撞名应当直接报错。
+   *
+   * @param path 完整相对路径（如 `电影/新片`）
+   */
+  suspend fun createFolderAt(path: String): Result<Unit> {
+    val client =
+      writeClient()
+        ?: return Result.failure(IllegalStateException("当前协议不支持新建文件夹"))
+    val trimmed = path.trim().trim('/')
+    if (trimmed.isEmpty()) return Result.failure(IllegalArgumentException("名称不能为空"))
+    return client.mkdir(trimmed).onSuccess { NetworkDirSizeStore.invalidate(connectionId) }
+  }
+
+  /**
    * 给「选择目标文件夹」弹窗列目录（只读，但用 [writeClient]）：
    *
    * 这个弹窗只会在 `supportsWrite` 的协议下出现，用写客户端既能顺带判「还能不能写」，
