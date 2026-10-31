@@ -16,6 +16,17 @@ object FileTypeUtils {
   )
 
   /**
+   * 音频扩展名。
+   *
+   * 与视频分开列：**预览**要按类型分流（音频没有画面，交给图片解码器只会得到
+   * `Failed to create image decoder`），所以「是不是音频」必须能单独判，
+   * 不能写成「不是视频就当图片」。
+   */
+  val AUDIO_EXTENSIONS: Set<String> = setOf(
+    "mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "ape", "wma", "alac", "aiff", "amr"
+  )
+
+  /**
    * Checks if a file is a video based on extension
    */
   fun isVideoFile(file: File): Boolean {
@@ -28,6 +39,11 @@ object FileTypeUtils {
    */
   fun isVideoExtension(extension: String): Boolean {
     return VIDEO_EXTENSIONS.contains(extension.lowercase(Locale.getDefault()))
+  }
+
+  /** 扩展名是不是音频（见 [AUDIO_EXTENSIONS]） */
+  fun isAudioExtension(extension: String): Boolean {
+    return AUDIO_EXTENSIONS.contains(extension.lowercase(Locale.getDefault()))
   }
 
   /**

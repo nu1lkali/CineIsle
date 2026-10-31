@@ -6,7 +6,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
-import android.widget.VideoView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,7 +24,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -43,10 +40,8 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -63,8 +58,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -74,7 +67,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -96,20 +88,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import app.marlboroadvance.mpvex.ui.browser.components.NetworkSearchField
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.album.AlbumImageLoader
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.album.AlbumItem
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.album.AlbumPickerGrid
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.preview.MediaPreviewDialog
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.preview.PreviewDeck
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.preview.PreviewItem
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.preview.PreviewKind
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.upload.preview.previewKindOf
 import app.marlboroadvance.mpvex.utils.media.MediaFormatUtils
 import app.marlboroadvance.mpvex.utils.permission.PermissionUtils
 import app.marlboroadvance.mpvex.utils.storage.FileTypeUtils
 import app.marlboroadvance.mpvex.utils.storage.StorageVolumeUtils
 import coil3.compose.AsyncImage
-import coil3.compose.AsyncImagePainter
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -125,44 +119,47 @@ import kotlinx.coroutines.withContext
  */
 internal enum class UploadMode { Album, Files, Folder }
 
-/** 预览器里的一项。[uri] 为 null 时只能显示「无法预览」。 */
-private data class PreviewItem(val uri: Uri?, val isVideo: Boolean, val title: String)
+// 预览器（PreviewItem / PreviewDeck / MediaPreviewDialog）已抽到
+// `upload/preview/MediaPreview.kt`：图片 / 视频 / 音频各有一个专门实现，
+// **没有预览器的格式（pdf / txt / 字幕…）不提供预览入口**，分享上传页也复用它。
 
 /**
- * 预览器的内容 + 当前页。
+ * 可预览 = [previewKindOf] 认得（图片 / 视频 / 音频）。
  *
- * 为什么是一「叠」而不是单个：用户点开一张图往往要看前后几张（这组是不是完整、
- * 下一个视频是不是那一集）。所以预览器自带翻页，**只在当前上下文里翻** ——
- * 相册模式翻当前筛选出的网格，文件模式翻同级可预览文件，进度页翻这一批任务。
+ * ⚠️ 不能写成「不是视频就当图片」：那样 pdf、字幕、压缩包都会走进图片解码器，
+ * 用户拿到的是一句 `Failed to create image decoder`。
  */
-private data class PreviewDeck(val items: List<PreviewItem>, val index: Int)
+private fun File.isPreviewable(): Boolean = previewKindOf(name) != null
 
-private val PREVIEW_IMAGE_EXTENSIONS =
-  setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "avif")
-
-private fun File.isImageFile(): Boolean = extension.lowercase() in PREVIEW_IMAGE_EXTENSIONS
-
-private fun File.isPreviewable(): Boolean = isImageFile() || FileTypeUtils.isVideoFile(this)
-
-/** 一批本地文件 → 预览 deck（只收图片/视频）。[current] 不在其中时退到第 0 项 */
+/** 一批本地文件 → 预览 deck（只收有预览器的）。[current] 不在其中时退到第 0 项 */
 private fun deckOfFiles(files: List<File>, current: File): PreviewDeck {
   val list = files.filter { it.isFile && it.isPreviewable() }
   val index = list.indexOfFirst { it.absolutePath == current.absolutePath }.coerceAtLeast(0)
   return PreviewDeck(
     items =
-      list.map { PreviewItem(Uri.fromFile(it), FileTypeUtils.isVideoFile(it), it.name) },
+      list.mapNotNull { file ->
+        previewKindOf(file.name)?.let { kind ->
+          PreviewItem(uri = Uri.fromFile(file), kind = kind, title = file.name)
+        }
+      },
     index = index,
   )
 }
 
-/** 一批上传任务 → 预览 deck（只收拿得到本地源的项） */
+/** 一批上传任务 → 预览 deck（只收拿得到本地源、且有预览器的项） */
 private fun deckOfTasks(tasks: List<UploadTask>, current: UploadTask): PreviewDeck {
   val list = tasks.filter { it.previewUri != null }
-  val index = list.indexOfFirst { it.id == current.id }.coerceAtLeast(0)
-  return PreviewDeck(
-    items = list.map { PreviewItem(it.previewUri, it.isVideo, it.relativePath.substringAfterLast('/')) },
-    index = index,
-  )
+  val items =
+    list.mapNotNull { task ->
+      val name = task.relativePath.substringAfterLast('/')
+      previewKindOf(name)?.let { kind ->
+        PreviewItem(uri = task.previewUri, kind = kind, title = name)
+      }
+    }
+  // 下标要落在**过滤后**的那一叠里：拿 list 的下标去索引 items 会错位
+  val currentName = current.relativePath.substringAfterLast('/')
+  val index = items.indexOfFirst { it.uri == current.previewUri && it.title == currentName }
+  return PreviewDeck(items = items, index = index.coerceAtLeast(0))
 }
 
 // ────────────────────────── 本地文件搜索（v181）──────────────────────────
@@ -610,9 +607,16 @@ private fun PickerPane(
           hint = null
         },
         onPreview = { index, items ->
+          // 相册网格里只有图片/视频，但仍然走同一套判别：`previewKindOf` 认不出的
+          // （理论上不会有）直接不进 deck，免得翻页停在一张空屏上
           previewDeck =
             PreviewDeck(
-              items = items.map { PreviewItem(it.uri, it.isVideo, it.name) },
+              items =
+                items.mapNotNull { item ->
+                  previewKindOf(item.name)?.let { kind ->
+                    PreviewItem(uri = item.uri, kind = kind, title = item.name)
+                  }
+                },
               index = index,
             )
         },
@@ -1129,6 +1133,7 @@ private fun PickerEntryRow(
             uri = Uri.fromFile(file),
             isVideo = FileTypeUtils.isVideoFile(file),
             size = 40.dp,
+            isAudio = FileTypeUtils.isAudioExtension(file.extension),
           )
         }
       } else {
@@ -1552,9 +1557,13 @@ private fun TaskRow(task: UploadTask, onPreview: () -> Unit) {
       style = MaterialTheme.typography.labelSmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    if (task.previewUri != null) {
+    // 预览入口只给「有预览器」的格式：pdf / 字幕 / 压缩包摆一个眼睛图标，
+    // 点开只会得到一句看不懂的解码错误，不如干脆不提供
+    val previewKind =
+      task.previewUri?.let { previewKindOf(task.relativePath.substringAfterLast('/')) }
+    if (previewKind != null) {
       Spacer(Modifier.width(10.dp))
-      TaskPreviewThumb(task = task, onClick = onPreview)
+      TaskPreviewThumb(task = task, kind = previewKind, onClick = onPreview)
     }
   }
 }
@@ -1612,6 +1621,8 @@ private fun LocalMediaThumb(
   isVideo: Boolean,
   size: Dp,
   modifier: Modifier = Modifier,
+  /** 音频没有画面：交给 Coil 只会得到「Failed to create image decoder」，这里直接画图标 */
+  isAudio: Boolean = false,
   onClick: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
@@ -1624,13 +1635,22 @@ private fun LocalMediaThumb(
         .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
     contentAlignment = Alignment.Center,
   ) {
-    AsyncImage(
-      model = uri,
-      contentDescription = null,
-      imageLoader = loader,
-      contentScale = ContentScale.Crop,
-      modifier = Modifier.fillMaxSize(),
-    )
+    if (isAudio) {
+      Icon(
+        imageVector = Icons.Default.AudioFile,
+        contentDescription = null,
+        modifier = Modifier.size(size * 0.55f),
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    } else {
+      AsyncImage(
+        model = uri,
+        contentDescription = null,
+        imageLoader = loader,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.fillMaxSize(),
+      )
+    }
     if (isVideo) {
       // 黑底白三角压在缩略图上：底下是画面而不是 UI 表面，所以不跟随主题
       val badge = size * 0.5f
@@ -1651,369 +1671,12 @@ private fun LocalMediaThumb(
 
 /** 任务行左侧的缩略图（进度页用），点一下开预览 */
 @Composable
-private fun TaskPreviewThumb(task: UploadTask, onClick: () -> Unit) {
+private fun TaskPreviewThumb(task: UploadTask, kind: PreviewKind, onClick: () -> Unit) {
   LocalMediaThumb(
     uri = task.previewUri,
-    isVideo = task.isVideo,
+    isVideo = kind == PreviewKind.Video,
     size = 40.dp,
+    isAudio = kind == PreviewKind.Audio,
     onClick = onClick,
   )
-}
-
-/**
- * 预览器（选择器与进度页共用）：黑底卡片，图片按比例完整显示、视频用 [VideoView]
- * 循环播且可拖进度；一叠里有多项时底部给左右翻页与序号。
- *
- * ## 为什么图片不锁 16:9，视频的 16:9 交给 [VideoPreview] 自己锁
- *
- * 手机竖拍的照片塞进 16:9 只剩中间一条，看不出拍的是什么；图片改用「屏宽 + 高度
- * 夹在 180~440dp」的自由比例（`ContentScale.Fit`），横竖都够看。视频画面本身是
- * 横向的，锁 16:9 让控件位置稳定 —— 但**锁在 [VideoPreview] 内部**：那一层只包
- * 画面，下面还要留出固定高度的控件条；在外面这层锁比例会把控件条一起算进 16:9，
- * 结果就是控件被压扁（用户报的「控件显示不全」）。
- *
- * ## 为什么用 Dialog 而不是内嵌一个 Box
- *
- * [VideoView] 底层是 `SurfaceView`，它默认在**窗口**层级、不在 View 树里 ——
- * 内嵌在 Compose 的 Surface 上会被 Compose 画的内容盖住（或者反过来盖住别人）。
- * 独立 Dialog 有自己的窗口，层级天然正确，且关窗就停播。
- *
- * ## 为什么不用项目里的 mpv 内核
- *
- * 这里只需要"看一眼是不是这个视频"，要的是秒开和零状态；拉一整套播放器
- * （内核初始化、渲染线程、字幕/轨道菜单）会让一个预览窗变成第二个播放页。
- */
-@Composable
-private fun MediaPreviewDialog(deck: PreviewDeck, onDismiss: () -> Unit) {
-  // 页码跟着 deck 走：从别的行点开是「另一叠」，必须回到它自己的起点
-  var index by remember(deck) { mutableIntStateOf(deck.index) }
-  val item = deck.items.getOrNull(index) ?: return
-  val total = deck.items.size
-
-  Dialog(
-    onDismissRequest = onDismiss,
-    properties = DialogProperties(usePlatformDefaultWidth = false),
-  ) {
-    Surface(
-      modifier = Modifier.fillMaxWidth(0.92f),
-      shape = RoundedCornerShape(16.dp),
-      color = Color.Black,
-      tonalElevation = 6.dp,
-    ) {
-      Column {
-        Box(
-          modifier =
-            Modifier.fillMaxWidth().then(
-              if (item.isVideo) {
-                // 视频**自己不锁高度**：画面 16:9 由 [VideoPreview] 内部固定，
-                // 底下还有一条固定高度的控件栏 —— 在本层再套一个 aspectRatio 会
-                // 把控件栏挤到框外（或者压成一条线），这正是「控件显示不全」的老毛病。
-                Modifier
-              } else {
-                // 图片不锁比例：手机竖拍塞进 16:9 只剩中间一条，看不出是什么
-                Modifier.heightIn(min = 180.dp, max = 440.dp)
-              },
-            ),
-          contentAlignment = Alignment.Center,
-        ) {
-          PreviewContent(item = item)
-        }
-
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, bottom = 4.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          if (total > 1) {
-            val canPrev = index > 0
-            IconButton(onClick = { if (canPrev) index-- }, enabled = canPrev) {
-              Icon(
-                imageVector = Icons.Default.KeyboardArrowLeft,
-                contentDescription = "上一个",
-                modifier = Modifier.size(24.dp),
-                tint = Color.White.copy(alpha = if (canPrev) 0.95f else 0.25f),
-              )
-            }
-          }
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = item.title,
-              style = MaterialTheme.typography.labelMedium,
-              color = Color.White,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            if (total > 1) {
-              Text(
-                text = "${index + 1} / $total",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.55f),
-              )
-            }
-          }
-          if (total > 1) {
-            val canNext = index < total - 1
-            IconButton(onClick = { if (canNext) index++ }, enabled = canNext) {
-              Icon(
-                imageVector = Icons.Default.KeyboardArrowRight,
-                contentDescription = "下一个",
-                modifier = Modifier.size(24.dp),
-                tint = Color.White.copy(alpha = if (canNext) 0.95f else 0.25f),
-              )
-            }
-          }
-          TextButton(onClick = onDismiss) { Text(text = "关闭", color = Color.White) }
-        }
-      }
-    }
-  }
-}
-
-/**
- * 预览器里的一屏内容。
- *
- * 图片必须自己回填加载态：黑底上「还没解码完」和「解码失败」都是黑屏，
- * 不给转圈和失败文案，用户只能猜是不是卡死了。
- */
-@Composable
-private fun PreviewContent(item: PreviewItem) {
-  val uri = item.uri
-  if (uri == null) {
-    Text(text = "无法预览", style = MaterialTheme.typography.bodySmall, color = Color.White)
-    return
-  }
-  if (item.isVideo) {
-    // key(uri)：AndroidView 的 factory 只跑一次，不给 key 时翻到下一个视频仍在播上一个
-    key(uri) { VideoPreview(uri = uri) }
-    return
-  }
-
-  val context = LocalContext.current
-  val loader = remember(context) { AlbumImageLoader.get(context) }
-  var ready by remember(uri) { mutableStateOf(false) }
-  var failure by remember(uri) { mutableStateOf<String?>(null) }
-
-  AsyncImage(
-    model = uri,
-    contentDescription = item.title,
-    imageLoader = loader,
-    contentScale = ContentScale.Fit,
-    modifier = Modifier.fillMaxSize(),
-    onState = { state ->
-      when (state) {
-        is AsyncImagePainter.State.Success -> {
-          ready = true
-          failure = null
-        }
-        is AsyncImagePainter.State.Error -> {
-          ready = false
-          failure = state.result.throwable.message ?: "未知原因"
-        }
-        else -> Unit
-      }
-    },
-  )
-
-  if (!ready) {
-    val reason = failure
-    if (reason == null) {
-      CircularProgressIndicator(
-        modifier = Modifier.size(22.dp),
-        strokeWidth = 2.dp,
-        color = Color.White,
-      )
-    } else {
-      Text(
-        text = "图片加载失败：$reason",
-        style = MaterialTheme.typography.labelSmall,
-        color = Color.White.copy(alpha = 0.75f),
-        textAlign = TextAlign.Center,
-        modifier = Modifier.padding(horizontal = 24.dp),
-      )
-    }
-  }
-}
-
-/**
- * 上传预览里的视频（画面 + **自绘控件条**）。
- *
- * ## 为什么不用 `MediaController`（这是用户报的那个 bug 的根因）
- *
- * 原先挂的是 `VideoView.setMediaController(MediaController(ctx).setAnchorView(view))`。
- * `MediaController` 是 Android 十多年前的控件，它的尺寸完全由**系统主题里的
- * `@dimen/mediacontroller_*`** 与锚点窗口决定，我们一行都改不了。这里的具体表现：
- *
- * - 它是「浮在画面底部的一层」，锚点就是那个 16:9 的画面框；
- *   框本身不高（手机竖屏下约 200dp），控件层按比例压下来就只剩一条；
- * - 时长很长时，两边的时间文本从 `01:23` 变成 `12:34:56`，**把中间的进度条挤没了** ——
- *   用户看到的正是「控件显示不全、过小」；
- * - 而且它显示/隐藏靠点画面切换，预览这种「只想看一眼」的场景经常一半控件在外面。
- *
- * 所以这里换成**自己排的一条控件栏**：固定 56dp 高、图标按钮 44dp 触摸区、
- * 时间文本给最小宽度、进度条吃剩余空间。时长是 3 分钟还是 30 小时，布局都一样。
- *
- * ## 为什么控件放在画面**下方**而不是浮在上面
- *
- * [VideoView] 底层是 `SurfaceView`：它直接在自己的 surface 上出画面，**Compose 画在
- * 同一层的内容盖不住它**（这正是本文件顶部 KDoc 说的「必须用独立 Dialog 窗口」的
- * 同一个原因）。浮层想稳，只能再开一个子窗口 —— 为一条控件栏不值。放在下方是纯
- * 布局关系，谁也不会盖住谁，且永远可见（不需要「点一下才出来」）。
- *
- * ## 为什么位置靠轮询
- *
- * `VideoView` 只有 `getCurrentPosition()`，没有任何进度回调。500ms 读一次够用
- * （进度条 1px 的移动肉眼分辨不出更细的粒度），也不会费电。拖动时跳过轮询 ——
- * 否则手指还没松，轮询就把滑块拽回播放位置，滑块会「抖」。
- */
-@Composable
-private fun VideoPreview(uri: Uri) {
-  // 关窗必须显式停播：VideoView 不在 Compose 的生命周期里，不主动停会一直占着解码器
-  var player by remember { mutableStateOf<VideoView?>(null) }
-  var prepared by remember(uri) { mutableStateOf(false) }
-  var playing by remember(uri) { mutableStateOf(false) }
-  var durationMs by remember(uri) { mutableStateOf(0L) }
-  var positionMs by remember(uri) { mutableStateOf(0L) }
-  // 拖动中：此时滑块位置由手指决定，轮询让位
-  var scrubbing by remember(uri) { mutableStateOf(false) }
-  var scrubMs by remember(uri) { mutableStateOf(0L) }
-
-  DisposableEffect(uri) { onDispose { player?.stopPlayback() } }
-
-  LaunchedEffect(prepared) {
-    if (!prepared) return@LaunchedEffect
-    while (true) {
-      delay(500)
-      val view = player ?: continue
-      playing = runCatching { view.isPlaying }.getOrDefault(false)
-      if (!scrubbing) {
-        positionMs = runCatching { view.currentPosition.toLong() }.getOrDefault(0L)
-      }
-    }
-  }
-
-  val shownPosition = if (scrubbing) scrubMs else positionMs
-  val total = durationMs.coerceAtLeast(1L)
-
-  Column(modifier = Modifier.fillMaxWidth()) {
-    Box(
-      modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
-      contentAlignment = Alignment.Center,
-    ) {
-      AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-          VideoView(ctx).apply {
-            val view = this
-            setOnPreparedListener { mp ->
-              mp.isLooping = true
-              // 时长在这里取一次就够了：本地文件不会中途改长度
-              durationMs = mp.duration.toLong().coerceAtLeast(0L)
-              prepared = true
-              playing = true
-            }
-            setOnCompletionListener { playing = false }
-            setOnErrorListener { _, _, _ ->
-              prepared = false
-              true
-            }
-            setVideoURI(uri)
-            start()
-            player = this
-          }
-        },
-      )
-    }
-
-    // ── 控件条：高度固定，与时长无关 ──
-    Row(
-      modifier =
-        Modifier.fillMaxWidth().padding(start = 6.dp, end = 12.dp, top = 2.dp, bottom = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      // 44dp = Material 的最小触摸目标，比图标本身大一圈，指头不容易点空
-      IconButton(
-        onClick = {
-          val view = player ?: return@IconButton
-          if (view.isPlaying) {
-            view.pause()
-            playing = false
-          } else {
-            // 播完了再点播放：回到开头，否则「点了没反应」（停在末尾）
-            if (durationMs > 0 && positionMs >= durationMs - 200) view.seekTo(0)
-            view.start()
-            playing = true
-          }
-        },
-        modifier = Modifier.size(44.dp),
-        enabled = prepared,
-      ) {
-        Icon(
-          imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-          contentDescription = if (playing) "暂停" else "播放",
-          modifier = Modifier.size(28.dp),
-          tint = Color.White.copy(alpha = if (prepared) 0.95f else 0.35f),
-        )
-      }
-
-      // 时间文本给最小宽度：否则「0:03」和「12:34:56」宽度跳变，滑块会左右抖
-      Text(
-        text = formatPlaybackTime(shownPosition),
-        style = MaterialTheme.typography.labelMedium,
-        color = Color.White.copy(alpha = 0.9f),
-        maxLines = 1,
-        modifier = Modifier.widthIn(min = 54.dp),
-      )
-
-      Slider(
-        value = shownPosition.coerceIn(0L, total).toFloat(),
-        onValueChange = {
-          scrubbing = true
-          scrubMs = it.toLong()
-        },
-        onValueChangeFinished = {
-          player?.seekTo(scrubMs.toInt())
-          positionMs = scrubMs
-          scrubbing = false
-        },
-        valueRange = 0f..total.toFloat(),
-        enabled = prepared,
-        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-        // 黑底上必须显式给颜色：默认的 inactive track 在纯黑上几乎看不见
-        colors =
-          SliderDefaults.colors(
-            thumbColor = Color.White,
-            activeTrackColor = Color.White,
-            inactiveTrackColor = Color.White.copy(alpha = 0.28f),
-            disabledThumbColor = Color.White.copy(alpha = 0.35f),
-            disabledActiveTrackColor = Color.White.copy(alpha = 0.35f),
-            disabledInactiveTrackColor = Color.White.copy(alpha = 0.15f),
-          ),
-      )
-
-      Text(
-        text = if (prepared) formatPlaybackTime(durationMs) else "--:--",
-        style = MaterialTheme.typography.labelMedium,
-        color = Color.White.copy(alpha = 0.9f),
-        maxLines = 1,
-        modifier = Modifier.widthIn(min = 54.dp),
-      )
-    }
-  }
-}
-
-/**
- * 毫秒 → `mm:ss` / `h:mm:ss`。
- *
- * 超过 1 小时才补小时段：几十分钟的视频显示成 `00:12:34` 只是白占宽度
- * （而预览窗的控件条宽度是有限的，这几十 dp 直接决定进度条长短）。
- */
-private fun formatPlaybackTime(ms: Long): String {
-  val totalSeconds = (ms / 1000).coerceAtLeast(0)
-  val hours = totalSeconds / 3600
-  val minutes = (totalSeconds % 3600) / 60
-  val seconds = totalSeconds % 60
-  return if (hours > 0) {
-    String.format("%d:%02d:%02d", hours, minutes, seconds)
-  } else {
-    String.format("%02d:%02d", minutes, seconds)
-  }
 }
