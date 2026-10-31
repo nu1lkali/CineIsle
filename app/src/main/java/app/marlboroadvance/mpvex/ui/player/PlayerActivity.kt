@@ -2266,14 +2266,26 @@ open class PlayerActivity :
       if (!decoderPreferences.directOutput.get()) return@launch
       val hwdec = runCatching { PlayerLib.getPropertyString("hwdec-current") }.getOrNull().orEmpty()
       val vo = runCatching { PlayerLib.getPropertyString("current-vo") }.getOrNull().orEmpty()
-      if (hwdec.startsWith("mediacodec") && vo == "mediacodec_embed") return@launch
+      val zeroCopy = hwdec.startsWith("mediacodec") && vo == "mediacodec_embed"
+      // 这两行**特意绕过**「详细日志」开关：把日志开起来本身就会加 msg-level=all=v
+      // 和 log-file 落盘，用它去测「还卡不卡」等于带着沙袋跑步。这里一次播放只写一行。
+      PlayerDiagLog.forceLog(if (zeroCopy) "direct-ok" else "direct-failed", probe)
 
-      PlayerDiagLog.log("direct-output-failed", probe)
+      // 直出模式是用户主动开的，就把读数直接摆出来 —— 否则「到底走没走到零拷贝」
+      // 只能靠猜（`hwdec-current` 是 mediacodec 还是 mediacodec-copy 差着一个数量级的拷贝量）。
       runOnUiThread {
         if (!isFinishing && !isDestroyed) {
+          val head =
+            getString(
+              if (zeroCopy) {
+                app.marlboroadvance.mpvex.R.string.player_direct_output_ok
+              } else {
+                app.marlboroadvance.mpvex.R.string.player_direct_output_failed
+              },
+            )
           android.widget.Toast.makeText(
             this@PlayerActivity,
-            getString(app.marlboroadvance.mpvex.R.string.player_direct_output_failed),
+            "$head\n$probe",
             android.widget.Toast.LENGTH_LONG,
           ).show()
         }

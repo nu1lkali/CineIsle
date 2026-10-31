@@ -61,7 +61,9 @@ internal object PlayerDiagLog {
     on: Boolean,
   ) {
     enabled = on
-    target = if (on) File(dirOf(context), FILE_NAME) else null
+    // 路径**总是**备好：`log()` 仍按 [enabled] 短路，但 [forceLog] 要在
+    // 「详细日志关着」的情况下也能落盘（见 forceLog 的说明）。
+    target = File(dirOf(context), FILE_NAME)
   }
 
   /** mpv 的 `log-file` 目标路径；未启用详细日志时返回 null（= 不设这个选项）。 */
@@ -80,6 +82,31 @@ internal object PlayerDiagLog {
     message: String,
   ) {
     if (!enabled) return
+    write(tag, message)
+  }
+
+  /**
+   * 无视「详细日志」开关，强制写一行。
+   *
+   * ## 为什么需要一条绕过开关的通道
+   *
+   * 有些故障**只在关着详细日志时复现**：打开详细日志本身会给 mpv 加 `msg-level=all=v`
+   * 和 `log-file`，每秒几十上百行落盘，本身就可能是卡顿源 —— 拿它去测「卡不卡」
+   * 等于带着沙袋跑步。可「解码器到底立没立起来」这种关键结论又必须落盘。
+   *
+   * 所以只给**少数几个关键节点**（首帧后 3 秒的解码/渲染实况）开这条通道：
+   * 一次播放只写一两行，代价可以忽略，又不会污染测量。
+   */
+  @Synchronized
+  fun forceLog(
+    tag: String,
+    message: String,
+  ) = write(tag, message)
+
+  private fun write(
+    tag: String,
+    message: String,
+  ) {
     val line = "${stamp.format(Date())} [$tag] $message"
     Log.d(TAG, line)
     val file = target ?: return

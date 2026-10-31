@@ -2326,7 +2326,21 @@ android {
     //     ⑤ 诊断埋点 `steadyStateProbe()`：首帧后 3 秒落盘 `hwdec-current` /
     //        `estimated-vf-fps` / 解码器与 vo 各自的丢帧计数（详细日志开启时才写）。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 194
+    // ── v195（versionCode 195，修复轮不涨名，versionName 仍为 1.6.13）──────────
+    //     v194 的真机反馈：开了直出模式、也弹了「直出未生效」，画面依旧均匀地慢；
+    //     同机 media3（GSY/ExoPlayer 内核）流畅 ⇒ 设备能吃下，问题在 mpv 这条链。
+    //     ① 把读数搬到明面上：直出模式下首帧 3 秒弹一次 Toast，内容就是
+    //        `hwdec=… vo=… WxH src/out fps disp fps decDrop/voDrop`。
+    //        「直出没生效」到底是 vo 没切过去、还是 hwdec 掉回软解，一行字就能分清 ——
+    //        这两种原因的修法完全相反，再猜就是浪费用户时间。
+    //     ② `PlayerDiagLog.forceLog()`：这条路绕过「详细日志」开关。开着详细日志会给
+    //        mpv 加 `msg-level=all=v` + `log-file`，本身就可能拖慢播放，拿它测「还卡不卡」
+    //        是自欺；关键结论必须能在关着日志时落盘。一次播放只写一两行。
+    //     ③ `opengl-pbo=yes` + `opengl-early-flush=no` 提到通用段：纹理上传改走 PBO，
+    //        削掉 copyback 路径上同步上传带来的周期性停顿。原先只写在
+    //        `applyAnime4KShaders()` 里 ⇒ 不开 Anime4K 就等于没有这层优化。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 195
     versionName = "1.6.13"
 
     vectorDrawables {

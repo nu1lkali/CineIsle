@@ -288,6 +288,17 @@ class MPVView(
     //    `gpu` 把这一步交给 shader（本项目默认 gpu-next，支持），效果等价、代价低得多；
     //    显卡不支持时会自动退化为不合成而不是报错。
     MPVLib.setOptionString("vd-lavc-film-grain", "gpu")
+    // ③ 纹理上传走 PBO（异步上传）。
+    //    copyback 硬解每帧都要把整帧重新上传成纹理，同步的 glTexSubImage2D 会让渲染线程
+    //    在驱动里等 DMA 完成；PBO 把它变成「先塞进缓冲、下一帧再取」，4K 高帧率下能削掉
+    //    一大截周期性停顿。`opengl-early-flush=no` 配套：别每帧强制 flush，让驱动自己攒批。
+    //    ⚠️ 这两项原先只写在 `applyAnime4KShaders()` 里 —— 也就是**不开 Anime4K 就白丢**，
+    //    与 `vd-lavc-dr` 当初被埋在那儿是同一个毛病。挪到通用段，全场生效。
+    //    Vulkan 后端不吃这两项，开了 Vulkan 就别设。
+    if (!decoderPreferences.useVulkan.get()) {
+      MPVLib.setOptionString("opengl-pbo", "yes")
+      MPVLib.setOptionString("opengl-early-flush", "no")
+    }
 
     val preciseSeek = playerPreferences.usePreciseSeeking.get()
     MPVLib.setOptionString("hr-seek", if (preciseSeek) "yes" else "no")
