@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -1257,30 +1258,31 @@ internal fun TransferPane(
   var previewDeck by remember { mutableStateOf<PreviewDeck?>(null) }
 
   /**
-   * 实时速度（字节/秒），只用来算「剩余约 x」。
+   * 实时速度（字节/秒）与「还剩多少**秒**」，只用来算「剩余约 x」。
    *
    * 为什么不放进 [UploadBatch]：速度是纯展示量，每秒往状态流里塞一次会让整张
    * 任务列表跟着重组；这里 1 秒采一次、本地持有就够，且关掉面板自然停。
+   *
+   * 算法在 [UploadSpeedometer] 里（滑动窗口 + 起播突发保护），这里只负责喂采样点。
+   * ⚠️ 存的是**秒**不是毫秒：`字节 ÷ (字节/秒)` 就是秒，早年那版多乘了 1000，
+   * 于是 300MB 传 7MB/s 能显示「剩余约 2 小时」（整整放大一千倍）。
    */
+  val speedometer = remember(batch.id) { UploadSpeedometer() }
   var speedBps by remember(batch.id) { mutableStateOf(0L) }
+  var etaSeconds by remember(batch.id) { mutableStateOf<Long?>(null) }
   LaunchedEffect(batch.id) {
-    var lastAt = System.currentTimeMillis()
-    var lastSent = NetworkUploadCenter.batch.value?.sentBytes ?: 0L
+    // 先立刻记一笔起点：否则窗口里的第一个点是 1 秒后才落的，要等到第 3 秒才凑够
+    // 跨度、界面白白空两秒（用户刚点上传正是最想看「大概要多久」的时候）
+    NetworkUploadCenter.batch.value?.takeIf { it.id == batch.id }?.let {
+      speedometer.sample(SystemClock.elapsedRealtime(), it.sentBytes)
+    }
     while (true) {
       delay(1000)
       val now = NetworkUploadCenter.batch.value ?: break
       if (now.id != batch.id || !now.running) break
-      val at = System.currentTimeMillis()
-      val elapsed = at - lastAt
-      val sent = now.sentBytes
-      if (elapsed > 0) {
-        val instant = (sent - lastSent) * 1000 / elapsed
-        // 指数平滑：单次采样会被缓冲冲刷和网络抖动放到很大（能看到 0 与几十 MB/s
-        // 交替出现），原样显示等于让数字乱跳
-        speedBps = if (speedBps <= 0) instant else (speedBps * 2 + instant) / 3
-      }
-      lastAt = at
-      lastSent = sent
+      speedometer.sample(SystemClock.elapsedRealtime(), now.sentBytes)
+      speedBps = speedometer.speedBps
+      etaSeconds = speedometer.etaSeconds(now.remainingBytes)
     }
   }
 
@@ -1341,15 +1343,17 @@ internal fun TransferPane(
       // 「还要多久」——进度条百分比回答不了这个问题，用户真正需要的是这个量级
       if (batch.running && speedBps > 0) {
         Spacer(Modifier.height(4.dp))
-        val remaining = (batch.totalBytes - batch.sentBytes).coerceAtLeast(0L)
         Text(
           text =
             buildString {
               append(MediaFormatUtils.formatFileSize(speedBps))
               append("/s")
-              if (remaining > 0) {
+              // etaSeconds 为 null = 数据还不够（起播头两秒）/ 完全没在动，
+              // 这时宁可不给时间也不给一个会被自己打脸的数
+              val eta = etaSeconds
+              if (eta != null) {
                 append(" · 剩余约 ")
-                append(formatEta(remaining * 1000 / speedBps))
+                append(formatEta(eta))
               }
             },
           style = MaterialTheme.typography.labelSmall,

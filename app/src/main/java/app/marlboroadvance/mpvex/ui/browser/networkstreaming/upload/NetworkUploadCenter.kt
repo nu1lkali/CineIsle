@@ -73,6 +73,24 @@ data class UploadBatch(
 ) {
   val totalBytes: Long get() = tasks.sumOf { it.sizeBytes }
   val sentBytes: Long get() = tasks.sumOf { it.sentBytes }
+
+  /**
+   * 「还要传多少字节」—— 只算**还没结束**的任务。
+   *
+   * 不能用 `totalBytes - sentBytes`：失败/取消的任务永远不会再涨，那部分字节会
+   * 一直挂在「剩余」里 ⇒ 剩余时间永远收不到 0（失败一个 2GB 的文件，界面就敢
+   * 告诉你「剩余约 5 分钟」挂到最后）。
+   */
+  val remainingBytes: Long
+    get() =
+      tasks.sumOf {
+        when (it.state) {
+          UploadTaskState.Pending -> it.sizeBytes
+          UploadTaskState.Uploading -> (it.sizeBytes - it.sentBytes).coerceAtLeast(0L)
+          else -> 0L
+        }
+      }
+
   val successCount: Int get() = tasks.count { it.state == UploadTaskState.Success }
   val failedCount: Int get() = tasks.count { it.state == UploadTaskState.Failed }
   val cancelledCount: Int get() = tasks.count { it.state == UploadTaskState.Cancelled }
