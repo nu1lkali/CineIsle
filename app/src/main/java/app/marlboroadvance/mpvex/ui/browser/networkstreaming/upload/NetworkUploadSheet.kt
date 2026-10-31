@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.SystemClock
 import android.provider.Settings
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -52,6 +53,7 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -63,6 +65,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -335,6 +338,9 @@ fun NetworkUploadSheet(
 
   val batch by NetworkUploadCenter.batch.collectAsState()
 
+  // 开关是落盘的偏好，进面板先读一次（幂等，重复进不会重复读）
+  LaunchedEffect(Unit) { NetworkUploadCenter.loadSettings(context) }
+
   /**
    * 强行认领的批次号（恢复未完成队列时用）。
    *
@@ -426,6 +432,12 @@ private fun PickerPane(
   var hasPermission by remember { mutableStateOf(PermissionUtils.hasStoragePermission(context)) }
   var preparing by remember { mutableStateOf(false) }
   var hint by remember { mutableStateOf<String?>(null) }
+
+  // ── 上传后的本机副本（v192）──
+  // 开关状态挂在 NetworkUploadCenter 上：它要活过这次面板的开关，这里只做展示与转发。
+  val autoDelete by NetworkUploadCenter.autoDeleteAfterUpload.collectAsState()
+  /** 首次打开开关时那张说明弹窗（只弹一次，见 markAutoDeleteWarned） */
+  var confirmAutoDelete by remember { mutableStateOf(false) }
 
   // ── 搜索（文件 / 文件夹模式）──
   // 相册模式的搜索在 AlbumPickerGrid 里（那边走 MediaStore 的名字索引），
@@ -920,6 +932,41 @@ private fun PickerPane(
             .navigationBarsPadding()
             .padding(horizontal = 16.dp, vertical = 10.dp),
       ) {
+        // ── 传完就删本机原文件（只在真选了东西时占位）──
+        // 位置在底栏最上方：它和「上传 N 项」是同一件事的两面（传上去 / 传完删掉），
+        // 摆在一起不用为它单独找入口；没选东西时整行不出现，不占版面。
+        val pickedCount =
+          when (mode) {
+            UploadMode.Album -> albumSelected.size
+            UploadMode.Files -> selected.size
+            UploadMode.Folder -> if (isVolumeRoot) 0 else 1
+          }
+        val pickedBytes =
+          when (mode) {
+            UploadMode.Album -> albumBytes
+            UploadMode.Files -> selectedBytes
+            // 文件夹要先扫完才知道总量，这里不编一个数字出来
+            UploadMode.Folder -> 0L
+          }
+        AnimatedVisibility(visible = pickedCount > 0) {
+          AutoDeleteRow(
+            checked = autoDelete,
+            capacityText =
+              if (pickedBytes > 0) {
+                "可释放 ${MediaFormatUtils.formatFileSize(pickedBytes)} 空间"
+              } else {
+                null
+              },
+            onCheckedChange = { wanted ->
+              // 打开时要先讲清代价（云盘变唯一副本），关掉则不用拦
+              if (wanted && !NetworkUploadCenter.autoDeleteWarned(context)) {
+                confirmAutoDelete = true
+              } else {
+                NetworkUploadCenter.setAutoDelete(context, wanted)
+              }
+            },
+          )
+        }
         Text(
           text =
             hint
@@ -1024,10 +1071,74 @@ private fun PickerPane(
       }
     }
 
+    if (confirmAutoDelete) {
+      AlertDialog(
+        onDismissRequest = { confirmAutoDelete = false },
+        title = { Text("上传后自动删除本机文件？") },
+        text = {
+          Text(
+            "传完一个就删一个，手机里不再留着这些文件 —— 云盘上的那一份会成为唯一的一份。\n\n" +
+              "网盘账号异常、文件被平台清理、空间超限，任何一样都会直接变成数据丢失，" +
+              "而且手机里删掉之后无法恢复。\n\n" +
+              "不放心就保持关闭：传完之后可以在结果页里自己挑着删。",
+          )
+        },
+        confirmButton = {
+          TextButton(
+            onClick = {
+              NetworkUploadCenter.setAutoDelete(context, true)
+              NetworkUploadCenter.markAutoDeleteWarned(context)
+              confirmAutoDelete = false
+            },
+          ) {
+            Text("仍然开启", color = MaterialTheme.colorScheme.error)
+          }
+        },
+        dismissButton = {
+          TextButton(onClick = { confirmAutoDelete = false }) { Text("保持关闭") }
+        },
+      )
+    }
+
     // 预览器挂在面板层级：放进列表项里会随滚动被回收，且每个 item 各持一份状态
     previewDeck?.let { deck ->
       MediaPreviewDialog(deck = deck, onDismiss = { previewDeck = null })
     }
+  }
+}
+
+/**
+ * 底栏上方那一行「上传后删除本机原文件」（v192）。
+ *
+ * 用 [Switch] 而不是复选框：这是**持续生效的偏好**（下次打开面板还是这个状态），
+ * 不是「这一次」的选择。用复选框会让人以为关掉面板就复原了。
+ *
+ * 副标题优先给「可释放多少」—— 那才是用户开这个开关的理由；
+ * 拿不到总字节数（文件夹模式还没扫）时退回一句中性的说明，绝不编一个「0 B」出来。
+ */
+@Composable
+private fun AutoDeleteRow(
+  checked: Boolean,
+  capacityText: String?,
+  onCheckedChange: (Boolean) -> Unit,
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Column(modifier = Modifier.weight(1f)) {
+      Text(
+        text = "上传后删除本机原文件",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurface,
+      )
+      Text(
+        text = capacityText ?: "云盘里会保留完整副本",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+    Switch(checked = checked, onCheckedChange = onCheckedChange)
   }
 }
 
@@ -1355,6 +1466,15 @@ internal fun TransferPane(
    */
   var pendingCancel by remember { mutableStateOf<CancelTarget?>(null) }
 
+  // ── 结束态的多选清理（v192）──
+  // 「刚传的这批里想删第 1、3 个、留第 2 个」就发生在这里：列表本身就是这一批文件，
+  // **不需要任何跨会话记录** —— UploadBatch 就是那份名单，state 就是那份结论。
+  // 用 remember(batch.id) 记住批次号：换了一批要自动复位，否则会带着上一批的勾选。
+  var selecting by remember(batch.id) { mutableStateOf(false) }
+  var selectedIds by remember(batch.id) { mutableStateOf<Set<Int>>(emptySet()) }
+  var confirmDelete by remember { mutableStateOf(false) }
+  val scope = rememberCoroutineScope()
+
   /**
    * 实时速度与「还剩多少**秒**」。
    *
@@ -1372,13 +1492,29 @@ internal fun TransferPane(
     ) {
       Column(modifier = Modifier.weight(1f)) {
         Text(
-          text = if (batch.running) "正在上传" else "上传结束",
+          text =
+            when {
+              selecting -> "选择要删除的本机文件"
+              batch.running -> "正在上传"
+              else -> "上传结束"
+            },
           style = MaterialTheme.typography.titleMedium,
           fontWeight = FontWeight.Medium,
         )
         Spacer(Modifier.height(2.dp))
         Text(
-          text = "目标 · ${batch.targetLabel}",
+          text =
+            if (selecting) {
+              val picked = batch.tasks.filter { it.id in selectedIds }
+              if (picked.isEmpty()) {
+                "勾选要删掉的文件"
+              } else {
+                "已选 ${picked.size} 个 · " +
+                  MediaFormatUtils.formatFileSize(picked.sumOf { it.sizeBytes })
+              }
+            } else {
+              "目标 · ${batch.targetLabel}"
+            },
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           maxLines = 1,
@@ -1434,7 +1570,24 @@ internal fun TransferPane(
 
     // ── 结果（只在真正结束后出现）──
     if (!batch.running) {
-      UploadResultBanner(batch)
+      if (selecting) {
+        // 横幅换成一句说明：为什么不给每个成功行都打勾 —— 失败的本地是唯一副本，
+        // 而且重试还要靠它重新 open()，删了就没得重试了
+        SelectionHintRow()
+      } else {
+        UploadResultBanner(
+          batch = batch,
+          // 只要还剩「能删的本地副本」就给入口：自动删除开着时已经删光的行自然不算，
+          // 但**自动删失败的那些仍然可删** —— 不给入口它们就成了死局（文件在手机上，
+          // 却没有任何地方能再删一次）
+          onCleanup =
+            if (batch.tasks.any { it.canDeleteLocal }) {
+              { selecting = true }
+            } else {
+              null
+            },
+        )
+      }
     }
 
     Spacer(Modifier.height(8.dp))
@@ -1449,6 +1602,20 @@ internal fun TransferPane(
           // 取消不可逆（网盘没有断点续传）⇒ 先弹确认框，用户点了「取消这一条」才真取消
           onCancel = { pendingCancel = CancelTarget.One(task) },
           onRetry = { NetworkUploadCenter.retryTask(task.id) },
+          // 多选态：只有「成功 + 服务端确认过 + 本地还在」的行能勾，其余行保留原来的状态文字
+          selection =
+            if (selecting) {
+              RowSelection(
+                selectable = task.canDeleteLocal,
+                selected = task.id in selectedIds,
+                onToggle = {
+                  selectedIds =
+                    if (task.id in selectedIds) selectedIds - task.id else selectedIds + task.id
+                },
+              )
+            } else {
+              null
+            },
         )
       }
     }
@@ -1462,35 +1629,84 @@ internal fun TransferPane(
             .padding(horizontal = 20.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        if (onBack != null) {
-          TextButton(onClick = onBack, enabled = !batch.running) { Text("继续选择") }
-        }
-        Spacer(Modifier.weight(1f))
-        if (batch.running) {
-          // ⚠️ 这里**没有「暂停」**：AList 的 fs/put 没有断点续传，停下来就等于放弃
-          // 已经传上去的那部分（服务端残留还会被清掉）。叫「暂停」会让人以为回头能接着传，
-          // 所以按钮就叫取消，并且先给一张把代价写清楚的确认框。
+        if (selecting) {
+          // 多选态：底栏整套换掉（跟浏览页「批量选择」进场是同一个做法），
+          // 只留「退出」和「删除」两个动作，不给任何会分心的次要按钮。
+          TextButton(
+            onClick = {
+              selecting = false
+              selectedIds = emptySet()
+            },
+          ) {
+            Text("取消")
+          }
+          Spacer(Modifier.weight(1f))
           OutlinedButton(
-            onClick = { pendingCancel = CancelTarget.All(batch) },
+            enabled = selectedIds.isNotEmpty(),
+            onClick = { confirmDelete = true },
             colors =
               ButtonDefaults.outlinedButtonColors(
                 contentColor = MaterialTheme.colorScheme.error,
               ),
           ) {
-            Text("取消这批上传任务")
+            val picked = batch.tasks.filter { it.id in selectedIds }
+            Text(
+              if (picked.isEmpty()) {
+                "删除"
+              } else {
+                "删除 ${picked.size} 个 · " + MediaFormatUtils.formatFileSize(picked.sumOf { it.sizeBytes })
+              },
+            )
           }
         } else {
-          // 失败 / 单条取消的都还能重试：只重传那几条，成功的不再走一遍（几 GB 的文件
-          // 重传一次代价太大）。全部成功时不显示 —— 那时「完成」才是唯一动作。
-          if (NetworkUploadCenter.canRetry) {
-            OutlinedButton(onClick = { NetworkUploadCenter.retryFailed() }) {
-              Text(if (batch.retryableCount > 1) "重试 ${batch.retryableCount} 项" else "重试这一项")
-            }
-            Spacer(Modifier.width(8.dp))
+          if (onBack != null) {
+            TextButton(onClick = onBack, enabled = !batch.running) { Text("继续选择") }
           }
-          Button(onClick = onClose) { Text("完成") }
+          Spacer(Modifier.weight(1f))
+          if (batch.running) {
+            // ⚠️ 这里**没有「暂停」**：AList 的 fs/put 没有断点续传，停下来就等于放弃
+            // 已经传上去的那部分（服务端残留还会被清掉）。叫「暂停」会让人以为回头能接着传，
+            // 所以按钮就叫取消，并且先给一张把代价写清楚的确认框。
+            OutlinedButton(
+              onClick = { pendingCancel = CancelTarget.All(batch) },
+              colors =
+                ButtonDefaults.outlinedButtonColors(
+                  contentColor = MaterialTheme.colorScheme.error,
+                ),
+            ) {
+              Text("取消这批上传任务")
+            }
+          } else {
+            // 失败 / 单条取消的都还能重试：只重传那几条，成功的不再走一遍（几 GB 的文件
+            // 重传一次代价太大）。全部成功时不显示 —— 那时「完成」才是唯一动作。
+            if (NetworkUploadCenter.canRetry) {
+              OutlinedButton(onClick = { NetworkUploadCenter.retryFailed() }) {
+                Text(if (batch.retryableCount > 1) "重试 ${batch.retryableCount} 项" else "重试这一项")
+              }
+              Spacer(Modifier.width(8.dp))
+            }
+            Button(onClick = onClose) { Text("完成") }
+          }
         }
       }
+    }
+
+    if (confirmDelete) {
+      DeleteLocalConfirmDialog(
+        selected = batch.tasks.filter { it.id in selectedIds },
+        targetLabel = batch.targetLabel,
+        onDismiss = { confirmDelete = false },
+        onConfirm = {
+          confirmDelete = false
+          val ids = selectedIds
+          scope.launch {
+            NetworkUploadCenter.deleteLocalCopies(ids)
+            // 删完就退出多选：留在一个「没有可勾项」的选择态里比退出去更让人困惑
+            selecting = false
+            selectedIds = emptySet()
+          }
+        },
+      )
     }
 
     pendingCancel?.let { target ->
@@ -1511,6 +1727,69 @@ internal fun TransferPane(
       MediaPreviewDialog(deck = deck, onDismiss = { previewDeck = null })
     }
   }
+}
+
+/**
+ * 多选态里一行右侧的勾选控件（v192）。
+ *
+ * 打包成一个**可空对象**而不是拆三个参数：`null` 就是「这一行不在多选态」，
+ * [TaskRow] 内部据此决定右端画复选框、还是原来的状态文字 + 操作图标 + 预览缩略图。
+ */
+private data class RowSelection(
+  val selectable: Boolean,
+  val selected: Boolean,
+  val onToggle: () -> Unit,
+)
+
+/**
+ * 多选态顶部那句说明（占用原结果横幅的位置，不新增高度）。
+ *
+ * 必须写：用户看到「失败的那一行没有勾选框」第一反应是 bug，
+ * 而真实原因是「本地是唯一副本 + 重试还要靠它重新打开」——
+ * 不解释的话，他只会觉得这个功能坏了。
+ */
+@Composable
+private fun SelectionHintRow() {
+  Text(
+    text = "只有上传成功的文件能删。失败的还要用原文件重试，所以不给删。",
+    style = MaterialTheme.typography.labelSmall,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
+  )
+}
+
+/**
+ * 删除本机文件的二次确认。
+ *
+ * 和 [CancelUploadConfirmDialog] 用**同一套模板**（AlertDialog + 说清代价 + 破坏性动作走
+ * error 色）：这个 App 里所有不可逆操作长得一样，用户不必为每一个重新辨认。
+ */
+@Composable
+private fun DeleteLocalConfirmDialog(
+  selected: List<UploadTask>,
+  targetLabel: String,
+  onDismiss: () -> Unit,
+  onConfirm: () -> Unit,
+) {
+  val totalBytes = selected.sumOf { it.sizeBytes }
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("删除本机 ${selected.size} 个文件？") },
+    text = {
+      Text(
+        buildString {
+          append("这 ${selected.size} 个文件都已经传到了「$targetLabel」，")
+          append("云盘上各有一份完整副本，不会跟着一起没掉。\n\n")
+          append("将从手机删除 ${MediaFormatUtils.formatFileSize(totalBytes)}，")
+          append("删掉之后手机里就没有了，无法恢复。")
+        },
+      )
+    },
+    confirmButton = {
+      TextButton(onClick = onConfirm) { Text("删除", color = MaterialTheme.colorScheme.error) }
+    },
+    dismissButton = { TextButton(onClick = onDismiss) { Text("保留") } },
+  )
 }
 
 /** 「取消上传」的两种作用域：整批 / 单条 */
@@ -1599,7 +1878,7 @@ private fun CancelUploadConfirmDialog(
  * 回来时先看到的是**图**（大图标）而不是一行标题 —— 「✓ 上传完成」扫一眼就够了。
  */
 @Composable
-private fun UploadResultBanner(batch: UploadBatch) {
+private fun UploadResultBanner(batch: UploadBatch, onCleanup: (() -> Unit)? = null) {
   val failed = batch.failedCount > 0
   val cancelledOnly = !failed && batch.cancelledCount > 0
   val icon =
@@ -1666,6 +1945,15 @@ private fun UploadResultBanner(batch: UploadBatch) {
         overflow = TextOverflow.Ellipsis,
       )
     }
+    // 「清理本机副本」只在真的有可删项时出现（见调用点：自动删除开着时压根不传进来）。
+    // 它是 OutlinedButton 而不是 filled —— 「完成」才是这一页的主动作，清理是顺手做的事。
+    if (onCleanup != null) {
+      val deletable = batch.tasks.filter { it.canDeleteLocal }
+      Spacer(Modifier.height(12.dp))
+      OutlinedButton(onClick = onCleanup) {
+        Text("清理本机副本 · ${MediaFormatUtils.formatFileSize(deletable.sumOf { it.sizeBytes })}")
+      }
+    }
   }
 }
 
@@ -1686,6 +1974,8 @@ private fun TaskRow(
   onPreview: () -> Unit,
   onCancel: () -> Unit,
   onRetry: () -> Unit,
+  /** 非 null = 多选态（见 [RowSelection]）。此刻右端只留一个控件，不显示操作图标与缩略图 */
+  selection: RowSelection? = null,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 9.dp),
@@ -1747,6 +2037,29 @@ private fun TaskRow(
             overflow = TextOverflow.Ellipsis,
           )
         }
+        // 上传成功、但本地副本有了变化（被删掉 / 没删成）。
+        // 这是 Success 行原本空着的那一行副标题 —— 不新增行高，也不会和上传状态混在一起。
+        task.state == UploadTaskState.Success && task.localCopy != LocalCopyState.Kept -> {
+          Spacer(Modifier.height(2.dp))
+          Text(
+            text =
+              when (task.localCopy) {
+                LocalCopyState.Deleted ->
+                  "已从本机删除 · 释放 ${MediaFormatUtils.formatFileSize(task.sizeBytes)}"
+                LocalCopyState.DeleteFailed -> "本机文件没删掉：${task.localDeleteError ?: "未知原因"}"
+                LocalCopyState.Kept -> ""
+              },
+            style = MaterialTheme.typography.labelSmall,
+            color =
+              if (task.localCopy == LocalCopyState.DeleteFailed) {
+                MaterialTheme.colorScheme.error
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
         (task.state == UploadTaskState.Failed || (task.state == UploadTaskState.Cancelled && task.cancelledByUser)) &&
           task.error != null -> {
           Spacer(Modifier.height(2.dp))
@@ -1763,59 +2076,87 @@ private fun TaskRow(
       }
     }
     Spacer(Modifier.width(12.dp))
-    Text(
-      text =
-        when {
-          task.state == UploadTaskState.Pending -> MediaFormatUtils.formatFileSize(task.sizeBytes)
-          task.state == UploadTaskState.Uploading -> "${(task.progress * 100).toInt()}%"
-          task.state == UploadTaskState.Success -> "已上传"
-          task.state == UploadTaskState.Failed -> "失败"
-          // 「单独取消」和「整批取消」都不是成功，但下一步完全不同：
-          // 前者只欠这一条（给重试），后者是用户不要了（不给）
-          task.cancelledByUser -> "已取消"
-          else -> "未传"
-        },
-      style = MaterialTheme.typography.labelSmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    // ── 单条操作：跳过 / 重试 ──
-    // 有 200 张照片时「第 3 张卡住」是常事，只能整批取消重来是不可接受的。
-    // 图标按钮 28dp 盒子 + 36dp 触摸区：这一行已经有状态文字与缩略图，
-    // 再塞标准 48dp 的按钮会把文件名挤成两三个字。
-    val canCancel = running && (task.state == UploadTaskState.Pending || task.state == UploadTaskState.Uploading)
-    val canRetry =
-      !running &&
-        (task.state == UploadTaskState.Failed ||
-          (task.state == UploadTaskState.Cancelled && task.cancelledByUser))
-    if (canCancel) {
-      IconButton(onClick = onCancel, modifier = Modifier.size(30.dp)) {
-        Icon(
-          imageVector = Icons.Default.Close,
-          contentDescription = "取消这个文件的上传",
-          modifier = Modifier.size(15.dp),
-          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+    if (selection != null) {
+      // 多选态：右端只留一个控件。能勾的给复选框；不能勾的（失败 / 取消 / 没通过服务端
+      // 校验）保留原来的状态文字 —— 复选框的缺席本身就是「不能删」的信号，
+      // 「为什么不能」由 SelectionHintRow 统一解释，不必每行都写一遍。
+      if (selection.selectable) {
+        Checkbox(
+          checked = selection.selected,
+          onCheckedChange = { selection.onToggle() },
+          modifier = Modifier.size(30.dp),
+        )
+      } else {
+        Text(
+          text = statusLabel(task),
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       }
-    } else if (canRetry) {
-      IconButton(onClick = onRetry, modifier = Modifier.size(30.dp)) {
-        Icon(
-          imageVector = Icons.Default.Refresh,
-          contentDescription = "重试这个文件",
-          modifier = Modifier.size(15.dp),
-          tint = MaterialTheme.colorScheme.primary,
-        )
+    } else {
+      Text(
+        text = statusLabel(task),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      // ── 单条操作：跳过 / 重试 ──
+      // 有 200 张照片时「第 3 张卡住」是常事，只能整批取消重来是不可接受的。
+      // 图标按钮 28dp 盒子 + 36dp 触摸区：这一行已经有状态文字与缩略图，
+      // 再塞标准 48dp 的按钮会把文件名挤成两三个字。
+      val canCancel =
+        running && (task.state == UploadTaskState.Pending || task.state == UploadTaskState.Uploading)
+      val canRetry =
+        !running &&
+          (task.state == UploadTaskState.Failed ||
+            (task.state == UploadTaskState.Cancelled && task.cancelledByUser))
+      if (canCancel) {
+        IconButton(onClick = onCancel, modifier = Modifier.size(30.dp)) {
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "取消这个文件的上传",
+            modifier = Modifier.size(15.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      } else if (canRetry) {
+        IconButton(onClick = onRetry, modifier = Modifier.size(30.dp)) {
+          Icon(
+            imageVector = Icons.Default.Refresh,
+            contentDescription = "重试这个文件",
+            modifier = Modifier.size(15.dp),
+            tint = MaterialTheme.colorScheme.primary,
+          )
+        }
       }
-    }
-    // 预览入口只给「有预览器」的格式：pdf / 字幕 / 压缩包摆一个眼睛图标，
-    // 点开只会得到一句看不懂的解码错误，不如干脆不提供
-    val previewKind =
-      task.previewUri?.let { previewKindOf(task.relativePath.substringAfterLast('/')) }
-    if (previewKind != null) {
-      Spacer(Modifier.width(10.dp))
-      TaskPreviewThumb(task = task, kind = previewKind, onClick = onPreview)
+      // 预览入口只给「有预览器」的格式：pdf / 字幕 / 压缩包摆一个眼睛图标，
+      // 点开只会得到一句看不懂的解码错误，不如干脆不提供
+      val previewKind =
+        task.previewUri?.let { previewKindOf(task.relativePath.substringAfterLast('/')) }
+      if (previewKind != null) {
+        Spacer(Modifier.width(10.dp))
+        TaskPreviewThumb(task = task, kind = previewKind, onClick = onPreview)
+      }
     }
   }
 }
+
+/**
+ * 行右端那两个字。
+ *
+ * 抽出来是因为多选态下「不可勾的行」还要用它 —— 那时状态文字的样式和位置跟平时一模一样，
+ * 只有可勾的行才换成复选框。
+ */
+private fun statusLabel(task: UploadTask): String =
+  when {
+    task.state == UploadTaskState.Pending -> MediaFormatUtils.formatFileSize(task.sizeBytes)
+    task.state == UploadTaskState.Uploading -> "${(task.progress * 100).toInt()}%"
+    task.state == UploadTaskState.Success -> "已上传"
+    task.state == UploadTaskState.Failed -> "失败"
+    // 「单独取消」和「整批取消」都不是成功，但下一步完全不同：
+    // 前者只欠这一条（给重试），后者是用户不要了（不给）
+    task.cancelledByUser -> "已取消"
+    else -> "未传"
+  }
 
 private fun stateIcon(state: UploadTaskState): ImageVector =
   when (state) {

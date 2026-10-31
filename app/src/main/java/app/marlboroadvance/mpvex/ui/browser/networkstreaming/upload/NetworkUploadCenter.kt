@@ -32,6 +32,24 @@ import java.util.concurrent.atomic.AtomicReference
 enum class UploadTaskState { Pending, Uploading, Success, Failed, Cancelled }
 
 /**
+ * 手机里那份原文件的下场（v192）。
+ *
+ * 和 [UploadTaskState] 是**两件事**：上传成功不等于本地还在，本地被删也不代表上传失败。
+ * 合并成一个状态机的话，「已上传但没删」「已上传且已删」「上传成功但没删掉（失败）」
+ * 三种情况会被压成两种，界面就没法如实告诉用户手机里到底还剩没剩。
+ */
+enum class LocalCopyState {
+  /** 还在手机上（默认；没开自动删除、或者这一条还没轮到） */
+  Kept,
+
+  /** 已经删掉了 */
+  Deleted,
+
+  /** 想删但没删成（权限、外置卡、文件被占用…）—— 文件还在，可以再试 */
+  DeleteFailed,
+}
+
+/**
  * 队列里的一条任务（一个文件）。
  *
  * @param relativePath **相对上传根**的路径，文件夹上传时带子目录（如 `DCIM/2024/a.jpg`），
@@ -56,6 +74,26 @@ data class UploadTask(
    * 后者是整批都不要了（不该再提示重试）。
    */
   val cancelledByUser: Boolean = false,
+  /**
+   * 相册来源的 `content://`，删除本机文件时用它。
+   *
+   * ⚠️ 不能只靠 [previewUri] 反推：`Uri.fromFile()` 在路径含中文/空格/特殊字符时
+   * 来回转换容易出岔子，而删除是不可逆的 —— 建任务时多存两个引用，比事后猜安全得多。
+   */
+  val contentUri: Uri? = null,
+  /** 文件/文件夹来源，删除本机文件时用它 */
+  val localFile: File? = null,
+  /**
+   * 服务端回查过字节数（[AlistClient.UploadVerify.Confirmed]）。
+   *
+   * **只有它为 true 才允许删本地** —— 「fs/put 返回 200」和「服务器上确实有这么大一个
+   * 文件」是两件事，拿前者当依据删本地，等于赌驱动不会骗人。
+   */
+  val verified: Boolean = false,
+  /** 手机里那份原文件的下场（与上传状态无关，见 [LocalCopyState]） */
+  val localCopy: LocalCopyState = LocalCopyState.Kept,
+  /** 删除失败的原因（[localCopy] 为 [LocalCopyState.DeleteFailed] 时有值） */
+  val localDeleteError: String? = null,
 ) {
   val progress: Float
     get() =
@@ -64,6 +102,22 @@ data class UploadTask(
         sizeBytes <= 0 -> 0f
         else -> (sentBytes.toFloat() / sizeBytes).coerceIn(0f, 1f)
       }
+
+  /**
+   * 这一条现在能不能删手机里的原文件。
+   *
+   * 四个条件缺一不可：上传成功、服务端确认过字节数、本地还没删、本地来源还在。
+   * 失败 / 取消的行**永远不能删** —— 那时本地是唯一副本，而且重试还要靠它重新 open()。
+   *
+   * ⚠️ [LocalCopyState.DeleteFailed] 也算「能删」：自动删除失败的那一条必须还能在结果页
+   * 里手动补删一次。否则「自动删失败」就是死局 —— 文件明明还在手机上，却没有任何入口再试。
+   */
+  val canDeleteLocal: Boolean
+    get() =
+      state == UploadTaskState.Success &&
+        verified &&
+        localCopy != LocalCopyState.Deleted &&
+        (contentUri != null || localFile != null)
 }
 
 /**
@@ -308,6 +362,47 @@ object NetworkUploadCenter {
 
   val running: Boolean get() = _batch.value?.running == true
 
+  // ────────────────────── 本机副本（v192）──────────────────────
+
+  private const val SETTINGS_PREFS = "upload_settings"
+  private const val KEY_AUTO_DELETE = "auto_delete_after_upload"
+  private const val KEY_WARNED = "auto_delete_warned"
+
+  private val _autoDelete = MutableStateFlow(false)
+
+  /**
+   * 「上传成功后删除本机原文件」开关。
+   *
+   * 默认**关**，而且是刻意的：删掉本地之后云盘就是唯一副本 —— 账号出问题、文件被审核
+   * 删掉、空间超限被清理，任何一样都会直接变成数据丢失。这种事只能由用户主动选择。
+   */
+  val autoDeleteAfterUpload: StateFlow<Boolean> = _autoDelete.asStateFlow()
+
+  @Volatile private var settingsLoaded = false
+
+  /** 从落盘读一次开关状态。幂等 —— 面板每次打开都会调 */
+  fun loadSettings(context: Context) {
+    if (settingsLoaded) return
+    val prefs = context.applicationContext.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+    _autoDelete.value = prefs.getBoolean(KEY_AUTO_DELETE, false)
+    settingsLoaded = true
+  }
+
+  fun setAutoDelete(context: Context, enabled: Boolean) {
+    _autoDelete.value = enabled
+    prefs(context).edit().putBoolean(KEY_AUTO_DELETE, enabled).apply()
+  }
+
+  /** 首次打开开关时的说明只弹一次 —— 之后用户已经知道代价，再拦就是打扰 */
+  fun autoDeleteWarned(context: Context): Boolean = prefs(context).getBoolean(KEY_WARNED, false)
+
+  fun markAutoDeleteWarned(context: Context) {
+    prefs(context).edit().putBoolean(KEY_WARNED, true).apply()
+  }
+
+  private fun prefs(context: Context) =
+    context.applicationContext.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+
   /**
    * 开一批上传。
    *
@@ -342,6 +437,9 @@ object NetworkUploadCenter {
           // 文件/文件夹来源是 file://
           previewUri = pick.contentUri ?: pick.file?.let { Uri.fromFile(it) },
           isVideo = FileTypeUtils.isVideoExtension(pick.relativePath.substringAfterLast('.', "")),
+          // 删本地要靠它们 —— 不能从 previewUri 反推（见 UploadTask.contentUri 的注释）
+          contentUri = pick.contentUri,
+          localFile = pick.file,
         )
       }
     _batch.value =
@@ -611,9 +709,19 @@ object NetworkUploadCenter {
 
         val cancelledHere = cancelIds.remove(index)
         result
-          .onSuccess {
+          .onSuccess { verify ->
             updateTask(batchId, index) {
-              it.copy(state = UploadTaskState.Success, sentBytes = it.sizeBytes)
+              it.copy(
+                state = UploadTaskState.Success,
+                sentBytes = it.sizeBytes,
+                // 服务端回查过字节数才允许删本地，见 UploadTask.verified
+                verified = verify == AlistClient.UploadVerify.Confirmed,
+              )
+            }
+            // 自动删除：开关开 + 服务端确认过，两个都满足才动手机里的文件。
+            // 删失败不影响这一条的上传结果，只把原因记在行上（用户还能手动再删一次）。
+            if (autoDeleteAfterUpload.value && verify == AlistClient.UploadVerify.Confirmed) {
+              applyLocalDelete(batchId, index, pick.contentUri, pick.file)
             }
           }
           .onFailure { e ->
@@ -676,6 +784,60 @@ object NetworkUploadCenter {
     } else {
       "上传失败：$reason"
     }
+  }
+
+  /**
+   * 删掉一条任务的本地副本，并把结果写回这一行。
+   *
+   * 自动删除和手动清理**共用这一条路**：两边若各写一套判定和文案，会出现
+   * 「自动删失败说 A、手动删失败说 B」的分裂。
+   */
+  private suspend fun applyLocalDelete(
+    batchId: Long,
+    taskId: Int,
+    contentUri: Uri?,
+    file: File?,
+  ) {
+    val app = appContextRef.get() ?: return
+    val result = LocalCopyCleaner.delete(app, contentUri, file)
+    updateTask(batchId, taskId) {
+      if (result.isSuccess) {
+        it.copy(
+          localCopy = LocalCopyState.Deleted,
+          localDeleteError = null,
+          // 本地没了，预览入口必须一起失效 —— 否则点开就是一个打不开的文件
+          previewUri = null,
+        )
+      } else {
+        it.copy(
+          localCopy = LocalCopyState.DeleteFailed,
+          localDeleteError = result.exceptionOrNull()?.message ?: "未知原因",
+        )
+      }
+    }
+  }
+
+  /**
+   * 结束态的「手动清理」：删掉指定任务的本地副本，返回真的删掉了几个。
+   *
+   * 逐条删、逐条写结果 —— 一条失败不能让其余全停：批量删 50 张照片时第 3 张被别的
+   * App 占着，剩下 47 张照样得删掉。
+   *
+   * 只认 [UploadTask.canDeleteLocal]：正在传的、传失败的、已经删过的都会被跳过，
+   * 所以调用方把整批 id 丢进来也不会出事。
+   */
+  suspend fun deleteLocalCopies(taskIds: Collection<Int>): Int {
+    val current = _batch.value ?: return 0
+    var deleted = 0
+    for (id in taskIds) {
+      val task = current.tasks.firstOrNull { it.id == id } ?: continue
+      if (!task.canDeleteLocal) continue
+      applyLocalDelete(current.id, id, task.contentUri, task.localFile)
+      if (_batch.value?.tasks?.firstOrNull { it.id == id }?.localCopy == LocalCopyState.Deleted) {
+        deleted++
+      }
+    }
+    return deleted
   }
 
   /**

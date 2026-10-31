@@ -679,7 +679,7 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
    * ## 没传完就把残缺文件删掉（v191）
    *
    * `fs/put` 是「服务端从头往目标路径写」，所以上传一旦中断（失败 / 用户取消 /
-   * 跳过 / 暂停 / 网络断 / 进程被杀前那一刻），**那个路径上会留半截文件**：
+   * 单条取消 / 网络断 / 进程被杀前那一刻），**那个路径上会留半截文件**：
    * 云盘里多出一个「看起来完整、点开是坏的」视频，比直接失败更烦人。
    *
    * 收尾策略：失败时调 `fs/remove` 把这条删掉，但**只删这一次才出现的文件** ——
@@ -696,6 +696,9 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
    * @param onPartialCleaned 真的删掉了残留文件时回调一次（参数是**服务器上的完整路径**，
    *   形如 `电影/流浪地球.mkv`）。调用方（上传中心）要把它写进那一行的失败原因里 ——
    *   「失败了 + 为什么 + 已清掉服务器上哪个文件」三句话缺一句，用户就会自己去云盘里翻半天。
+   * @return [UploadVerify]：`Confirmed` = 传完回查过服务端字节数且一致 —— **这是手机里那份
+   *   原文件可以删除的唯一前提**；`Unverified` = 传上去了但没问出来（照常算成功，
+   *   本地那份必须留着）。大小对不上时直接抛错，不会返回。
    */
   suspend fun upload(
     targetDir: String,
@@ -706,7 +709,7 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     onProgress: (sent: Long) -> Unit = {},
     isCancelled: () -> Boolean = { false },
     onPartialCleaned: (String) -> Unit = {},
-  ): Result<Unit> =
+  ): Result<UploadVerify> =
     withContext(Dispatchers.IO) {
       runCatching {
         require(name.isNotBlank()) { "文件名不能为空" }
@@ -735,6 +738,9 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
               throw e
             }
           }
+          // 回查（见 [verifyUploaded]）：把「驱动收下了」变成「服务端确实有这么大一个文件」。
+          // 抛异常时会被下面的 catch 接住，残缺文件照样清掉。
+          verifyUploaded(fullPath, length)
         } catch (t: Throwable) {
           // ⚠️ 清理失败绝不能盖掉真正的错误：调用方要靠这个异常决定「失败 / 取消 / 待传」
           if (removePartialIfNew(targetDir, name, fullPath, existed)) {
@@ -742,9 +748,17 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
           }
           throw t
         }
-        Unit
       }
     }
+
+  /** 上传结束后对服务端副本的确认程度（见 [verifyUploaded]） */
+  enum class UploadVerify {
+    /** 回查到字节数一致 —— 本地文件可以删除的唯一前提 */
+    Confirmed,
+
+    /** 没问出来（网络 / 鉴权 / 长度未知）—— 算成功，但本地那份必须留着 */
+    Unverified,
+  }
 
   /** 目标文件在上传前是否已存在（见 [upload] 的 KDoc 三态） */
   enum class UploadTargetExisted {
@@ -814,6 +828,36 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
       .onSuccess { Log.i(TAG, "已清理未传完的残缺文件: $fullPath") }
       .onFailure { Log.w(TAG, "清理残缺文件失败（只能留给用户手动删）: $fullPath", it) }
       .isSuccess
+  }
+
+  /**
+   * 上传后回查服务端字节数。
+   *
+   * `fs/put` 返回业务码 200 只代表**驱动收下了**这次写请求，不代表落盘的就是这么多字节：
+   * 本地盘 / SMB / FTP 都是流式写，连接在最后一段断掉时驱动未必报错。而这个结果直接决定
+   * 「能不能删掉手机里的原文件」—— 判错的代价是用户丢一个文件（网盘里那个还是坏的），
+   * 所以必须多问一次，不能拿 200 当结论。
+   *
+   * 三态，**关键是不把「问不出来」当成失败**：
+   *  · 查得到且字节数一致 ⇒ [UploadVerify.Confirmed]（唯一允许删本地的状态）；
+   *  · 查得到但字节数对不上 ⇒ 抛错（判这一条失败，残缺文件交给调用方清掉）；
+   *  · 查不到（网络 / 鉴权 / 超时 / 个别驱动落盘有延迟）⇒ [UploadVerify.Unverified]，
+   *    照常算成功但不许删本地 —— 宁可多留一份，不可少留一份。
+   *
+   * 本地长度未知（`length <= 0`，chunked 上传）时无从比对，直接 Unverified。
+   */
+  private fun verifyUploaded(fullPath: String, expected: Long): UploadVerify {
+    if (expected <= 0) return UploadVerify.Unverified
+    val actual =
+      runCatching { getFileMeta(fullPath).size }.getOrElse { e ->
+        Log.w(TAG, "上传后回查失败（照常算成功，但不允许删本地）: $fullPath", e)
+        return UploadVerify.Unverified
+      }
+    if (actual != expected) {
+      Log.e(TAG, "上传后回查大小不一致: $fullPath 服务器=$actual 本地=$expected")
+      error("服务器上的文件大小与本地不一致（服务器 $actual / 本地 $expected 字节）")
+    }
+    return UploadVerify.Confirmed
   }
 
   /** 真正发一次 `fs/put`，并校验业务码（HTTP 200 但 `code != 200` 是 AList 的常见失败形态） */
