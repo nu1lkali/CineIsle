@@ -41,7 +41,7 @@ internal object LocalCopyCleaner {
           when {
             contentUri != null -> deleteUri(context, contentUri)
             file != null -> deleteFile(file)
-            else -> error("没有本地来源，无法删除")
+            else -> error("缺少本机来源引用")
           }
         }
         .onFailure { Log.w(TAG, "删除本机文件失败: ${contentUri ?: file?.absolutePath}", it) }
@@ -53,12 +53,12 @@ internal object LocalCopyCleaner {
         .getOrElse { e ->
           // 权限被系统收回（用户关掉「所有文件访问权限」）时是 SecurityException，
           // 这时候要说人话，别把异常类名甩给用户
-          if (e is SecurityException) error("没有删除权限（可能已被系统收回）") else throw e
+          if (e is SecurityException) error("无删除权限，权限可能已被收回") else throw e
         }
     // 个别 ROM 删成功了也返回 0（条目已经不在媒体库里）——
     // 回查一次再判，别把「本来就没有」报成失败
     if (rows <= 0 && stillExists(context, uri)) {
-      error("系统没有删除这个文件")
+      error("系统未删除该条目")
     }
   }
 
@@ -68,7 +68,7 @@ internal object LocalCopyCleaner {
     if (file.delete()) return
     // delete() 返回 false 但其实没了（少见，某些 FUSE 实现会这样）
     if (!file.exists()) return
-    error(if (file.canWrite()) "文件正在被其他应用使用" else "没有写入权限（可能在只读存储上）")
+    error(if (file.canWrite()) "文件被其他进程占用" else "存储为只读，无写入权限")
   }
 
   private fun stillExists(context: Context, uri: Uri): Boolean =

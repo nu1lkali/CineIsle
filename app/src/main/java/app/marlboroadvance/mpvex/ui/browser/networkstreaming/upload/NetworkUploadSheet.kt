@@ -953,7 +953,7 @@ private fun PickerPane(
             checked = autoDelete,
             capacityText =
               if (pickedBytes > 0) {
-                "可释放 ${MediaFormatUtils.formatFileSize(pickedBytes)} 空间"
+                "预计释放 ${MediaFormatUtils.formatFileSize(pickedBytes)}"
               } else {
                 null
               },
@@ -1074,13 +1074,13 @@ private fun PickerPane(
     if (confirmAutoDelete) {
       AlertDialog(
         onDismissRequest = { confirmAutoDelete = false },
-        title = { Text("上传后自动删除本机文件？") },
+        title = { Text("启用上传后自动删除？") },
         text = {
           Text(
-            "传完一个就删一个，手机里不再留着这些文件 —— 云盘上的那一份会成为唯一的一份。\n\n" +
-              "网盘账号异常、文件被平台清理、空间超限，任何一样都会直接变成数据丢失，" +
-              "而且手机里删掉之后无法恢复。\n\n" +
-              "不放心就保持关闭：传完之后可以在结果页里自己挑着删。",
+            "每个文件上传完成并通过服务端大小校验后，删除对应的本机文件。\n\n" +
+              "删除后远程副本即为唯一副本：账号异常、平台清理、配额超限都会造成数据丢失，" +
+              "本机文件不可恢复。\n\n" +
+              "保持关闭时，可在上传结束后手动选择删除。",
           )
         },
         confirmButton = {
@@ -1091,11 +1091,11 @@ private fun PickerPane(
               confirmAutoDelete = false
             },
           ) {
-            Text("仍然开启", color = MaterialTheme.colorScheme.error)
+            Text("启用", color = MaterialTheme.colorScheme.error)
           }
         },
         dismissButton = {
-          TextButton(onClick = { confirmAutoDelete = false }) { Text("保持关闭") }
+          TextButton(onClick = { confirmAutoDelete = false }) { Text("取消") }
         },
       )
     }
@@ -1108,13 +1108,13 @@ private fun PickerPane(
 }
 
 /**
- * 底栏上方那一行「上传后删除本机原文件」（v192）。
+ * 底栏上方那一行「上传完成后删除本机文件」（v192）。
  *
  * 用 [Switch] 而不是复选框：这是**持续生效的偏好**（下次打开面板还是这个状态），
  * 不是「这一次」的选择。用复选框会让人以为关掉面板就复原了。
  *
- * 副标题优先给「可释放多少」—— 那才是用户开这个开关的理由；
- * 拿不到总字节数（文件夹模式还没扫）时退回一句中性的说明，绝不编一个「0 B」出来。
+ * 副标题优先给「预计释放多少」—— 那才是用户开这个开关的理由；
+ * 拿不到总字节数（文件夹模式还没扫）时退回一句中性的结论，绝不编一个「0 B」出来。
  */
 @Composable
 private fun AutoDeleteRow(
@@ -1128,12 +1128,12 @@ private fun AutoDeleteRow(
   ) {
     Column(modifier = Modifier.weight(1f)) {
       Text(
-        text = "上传后删除本机原文件",
+        text = "上传完成后删除本机文件",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface,
       )
       Text(
-        text = capacityText ?: "云盘里会保留完整副本",
+        text = capacityText ?: "远程副本不受影响",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
@@ -1476,6 +1476,13 @@ internal fun TransferPane(
   val scope = rememberCoroutineScope()
 
   /**
+   * 「能删的」= 「能勾的」。全选只圈这些：失败 / 取消的行本来就没有勾选框，
+   * 全选把它们也塞进集合的话，底栏数字会比屏幕上看得见的勾多出来。
+   */
+  val deletableIds = batch.tasks.filter { it.canDeleteLocal }.map { it.id }.toSet()
+  val allSelected = deletableIds.isNotEmpty() && selectedIds.containsAll(deletableIds)
+
+  /**
    * 实时速度与「还剩多少**秒**」。
    *
    * 采样在 [NetworkUploadCenter.stats] 里（6 秒滑动窗口 + 起播突发保护），
@@ -1507,9 +1514,9 @@ internal fun TransferPane(
             if (selecting) {
               val picked = batch.tasks.filter { it.id in selectedIds }
               if (picked.isEmpty()) {
-                "勾选要删掉的文件"
+                "请选择要删除的文件"
               } else {
-                "已选 ${picked.size} 个 · " +
+                "已选 ${picked.size} 项 · " +
                   MediaFormatUtils.formatFileSize(picked.sumOf { it.sizeBytes })
               }
             } else {
@@ -1521,8 +1528,23 @@ internal fun TransferPane(
           overflow = TextOverflow.Ellipsis,
         )
       }
-      IconButton(onClick = onClose) {
-        Icon(Icons.Default.Close, contentDescription = "关闭", modifier = Modifier.size(20.dp))
+      IconButton(
+        onClick = {
+          // 多选态下 × 是「退出选择」而不是关面板：多选是一项模态操作，退一层比
+          // 一路关掉整个面板（再想删还得重进）更符合预期
+          if (selecting) {
+            selecting = false
+            selectedIds = emptySet()
+          } else {
+            onClose()
+          }
+        },
+      ) {
+        Icon(
+          Icons.Default.Close,
+          contentDescription = if (selecting) "退出选择" else "关闭",
+          modifier = Modifier.size(20.dp),
+        )
       }
     }
 
@@ -1630,15 +1652,21 @@ internal fun TransferPane(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         if (selecting) {
-          // 多选态：底栏整套换掉（跟浏览页「批量选择」进场是同一个做法），
-          // 只留「退出」和「删除」两个动作，不给任何会分心的次要按钮。
+          // 多选态：底栏整套换掉（跟浏览页「批量选择」进场是同一个做法）。
+          // 左侧只放「全选」：它和右边的「删除」是同一组动作（选择 → 执行），
+          // 而「退出多选」交给头部的 × —— 底栏再塞第三个控件就要挤了。
           TextButton(
             onClick = {
-              selecting = false
-              selectedIds = emptySet()
+              selectedIds =
+                if (allSelected) {
+                  emptySet()
+                } else {
+                  // 只选「能删的」那些：失败 / 取消的行本来就不能删，全选也不该把它们圈进来
+                  deletableIds
+                }
             },
           ) {
-            Text("取消")
+            Text(if (allSelected) "取消全选" else "全选")
           }
           Spacer(Modifier.weight(1f))
           OutlinedButton(
@@ -1654,7 +1682,7 @@ internal fun TransferPane(
               if (picked.isEmpty()) {
                 "删除"
               } else {
-                "删除 ${picked.size} 个 · " + MediaFormatUtils.formatFileSize(picked.sumOf { it.sizeBytes })
+                "删除 ${picked.size} 项 · " + MediaFormatUtils.formatFileSize(picked.sumOf { it.sizeBytes })
               },
             )
           }
@@ -1751,7 +1779,7 @@ private data class RowSelection(
 @Composable
 private fun SelectionHintRow() {
   Text(
-    text = "只有上传成功的文件能删。失败的还要用原文件重试，所以不给删。",
+    text = "仅上传成功且校验通过的文件可删除；失败项需保留本机文件用于重试。",
     style = MaterialTheme.typography.labelSmall,
     color = MaterialTheme.colorScheme.onSurfaceVariant,
     modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
@@ -1774,21 +1802,20 @@ private fun DeleteLocalConfirmDialog(
   val totalBytes = selected.sumOf { it.sizeBytes }
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text("删除本机 ${selected.size} 个文件？") },
+    title = { Text("删除 ${selected.size} 个本机文件？") },
     text = {
       Text(
         buildString {
-          append("这 ${selected.size} 个文件都已经传到了「$targetLabel」，")
-          append("云盘上各有一份完整副本，不会跟着一起没掉。\n\n")
-          append("将从手机删除 ${MediaFormatUtils.formatFileSize(totalBytes)}，")
-          append("删掉之后手机里就没有了，无法恢复。")
+          append("以下 ${selected.size} 项在「$targetLabel」已有大小校验通过的远程副本。\n\n")
+          append("删除将释放本机空间 ${MediaFormatUtils.formatFileSize(totalBytes)}。")
+          append("本机文件不可恢复，远程副本不受影响。")
         },
       )
     },
     confirmButton = {
       TextButton(onClick = onConfirm) { Text("删除", color = MaterialTheme.colorScheme.error) }
     },
-    dismissButton = { TextButton(onClick = onDismiss) { Text("保留") } },
+    dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
   )
 }
 
@@ -1945,13 +1972,13 @@ private fun UploadResultBanner(batch: UploadBatch, onCleanup: (() -> Unit)? = nu
         overflow = TextOverflow.Ellipsis,
       )
     }
-    // 「清理本机副本」只在真的有可删项时出现（见调用点：自动删除开着时压根不传进来）。
-    // 它是 OutlinedButton 而不是 filled —— 「完成」才是这一页的主动作，清理是顺手做的事。
+    // 「删除本机文件」只在真的有可删项时出现（见调用点：没有可删项时压根不传进来）。
+    // 它是 OutlinedButton 而不是 filled —— 「完成」才是这一页的主动作，删除是顺手做的事。
     if (onCleanup != null) {
       val deletable = batch.tasks.filter { it.canDeleteLocal }
       Spacer(Modifier.height(12.dp))
       OutlinedButton(onClick = onCleanup) {
-        Text("清理本机副本 · ${MediaFormatUtils.formatFileSize(deletable.sumOf { it.sizeBytes })}")
+        Text("删除本机文件 · ${MediaFormatUtils.formatFileSize(deletable.sumOf { it.sizeBytes })}")
       }
     }
   }
@@ -2045,8 +2072,9 @@ private fun TaskRow(
             text =
               when (task.localCopy) {
                 LocalCopyState.Deleted ->
-                  "已从本机删除 · 释放 ${MediaFormatUtils.formatFileSize(task.sizeBytes)}"
-                LocalCopyState.DeleteFailed -> "本机文件没删掉：${task.localDeleteError ?: "未知原因"}"
+                  "本机文件已删除 · 释放 ${MediaFormatUtils.formatFileSize(task.sizeBytes)}"
+                LocalCopyState.DeleteFailed ->
+                  "本机文件删除失败：${task.localDeleteError ?: "未知原因"}"
                 LocalCopyState.Kept -> ""
               },
             style = MaterialTheme.typography.labelSmall,

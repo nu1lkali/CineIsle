@@ -780,7 +780,7 @@ object NetworkUploadCenter {
   private fun failureText(e: Throwable, cleanedPartial: String?): String {
     val reason = e.message?.takeIf { it.isNotBlank() } ?: "上传失败（没有更多信息）"
     return if (cleanedPartial != null) {
-      "上传失败：$reason\n已清理服务器上的残留文件「$cleanedPartial」"
+      "上传失败：$reason\n已清理服务端残留文件「$cleanedPartial」"
     } else {
       "上传失败：$reason"
     }

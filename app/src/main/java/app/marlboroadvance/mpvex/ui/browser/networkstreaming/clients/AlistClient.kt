@@ -855,7 +855,7 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
       }
     if (actual != expected) {
       Log.e(TAG, "上传后回查大小不一致: $fullPath 服务器=$actual 本地=$expected")
-      error("服务器上的文件大小与本地不一致（服务器 $actual / 本地 $expected 字节）")
+      error("服务端文件大小与本地不一致（服务端 $actual / 本地 $expected 字节）")
     }
     return UploadVerify.Confirmed
   }
