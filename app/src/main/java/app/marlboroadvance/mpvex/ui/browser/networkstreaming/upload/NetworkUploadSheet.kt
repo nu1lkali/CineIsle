@@ -1229,10 +1229,20 @@ private fun NoPermissionPane(
 
 // ────────────────────────────── 进度 ──────────────────────────────
 
+/**
+ * 上传进度页（一批任务的实时清单 + 总进度 + 取消/重试/完成）。
+ *
+ * `internal` 而不是 private：**系统分享进来的上传**（`ShareUploadActivity`）没有
+ * 「继续选择」这一步 —— 那一批文件是别的 App 一次性塞进来的，没有选择器可回，
+ * 所以它传 `onBack = null` 复用同一个进度页，避免两套进度 UI 各写一遍、
+ * 各自长歪（速度估算 / 重试 / 预览这些细节只应该有一份实现）。
+ *
+ * @param onBack 为 null 时**不显示**左下角那颗「继续选择」
+ */
 @Composable
-private fun TransferPane(
+internal fun TransferPane(
   batch: UploadBatch,
-  onBack: () -> Unit,
+  onBack: (() -> Unit)?,
   onClose: () -> Unit,
 ) {
   // 点缩略图放大看的那一条。放在这里而不是 TaskRow 里：Dialog 必须挂在窗口级，
@@ -1366,11 +1376,21 @@ private fun TransferPane(
             .padding(horizontal = 20.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        TextButton(onClick = onBack, enabled = !batch.running) { Text("继续选择") }
+        if (onBack != null) {
+          TextButton(onClick = onBack, enabled = !batch.running) { Text("继续选择") }
+        }
         Spacer(Modifier.weight(1f))
         if (batch.running) {
           OutlinedButton(onClick = { NetworkUploadCenter.cancel() }) { Text("取消上传") }
         } else {
+          // 失败项重试：只重传失败的，成功的不再走一遍（几 GB 的文件重传一次代价太大）。
+          // 成功全部走完时不显示 —— 那时「完成」才是唯一动作。
+          if (NetworkUploadCenter.canRetry) {
+            OutlinedButton(onClick = { NetworkUploadCenter.retryFailed() }) {
+              Text("重试失败项")
+            }
+            Spacer(Modifier.width(8.dp))
+          }
           Button(onClick = onClose) { Text("完成") }
         }
       }

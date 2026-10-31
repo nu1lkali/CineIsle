@@ -1050,8 +1050,6 @@ private enum class FavoriteSort(
   val descHint: String,
   /** 没手动切过方向时的自然方向（与媒体库页同一套规则） */
   val naturalAsc: Boolean,
-  /** 菜单里的第二行补充说明：说清这一项**到底按什么排**。null = 不需要 */
-  val note: String? = null,
   /**
    * 下推给服务端的 `SortBy` 取值。null = 服务端没有这个排序（只能本地排）。
    * 取值必须是 Emby `ItemSortBy` 的合法值，写错服务端会 400。
@@ -1063,23 +1061,10 @@ private enum class FavoriteSort(
   RATING("评分", "低 → 高", "高 → 低", naturalAsc = false, serverSortBy = "CommunityRating"),
   // 原来叫「最新添加」，但它排的是媒体的入库时间（DateCreated），与「收藏」无关 ——
   // 名字必须说实话，否则用户会把它当成「我最近收藏的」。
-  ADDED(
-    label = "入库时间",
-    ascHint = "旧 → 新",
-    descHint = "新 → 旧",
-    naturalAsc = false,
-    note = "媒体加入媒体库的时间，不是收藏时间",
-    serverSortBy = "DateCreated",
-  ),
+  ADDED("入库时间", "旧 → 新", "新 → 旧", naturalAsc = false, serverSortBy = "DateCreated"),
   // 服务端没有收藏时间戳，只能读本机账本；没记过的（别的客户端收藏的 / 本功能上线前收藏的）
   // 退回入库时间当近似值 —— 它不会比「刚收藏的」更晚，所以新收藏永远排在前头。
-  FAVORITED(
-    label = "收藏时间",
-    ascHint = "旧 → 新",
-    descHint = "新 → 旧",
-    naturalAsc = false,
-    note = "本机记录的收藏时间；旧收藏按入库时间估算",
-  ),
+  FAVORITED("收藏时间", "旧 → 新", "新 → 旧", naturalAsc = false),
   // 随机：不分升降序，再点一次换一批
   RANDOM("随机", "再点一次换一批", "再点一次换一批", naturalAsc = true),
   ;
@@ -1260,16 +1245,6 @@ private fun FavoriteSearchSortRow(
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.outline,
                 )
-                // 第三行只说一件事：这一项**排的到底是什么**。
-                // 「入库时间」必须点明它不是收藏时间，「收藏时间」必须点明旧收藏是估算值 ——
-                // 这两处含糊会让用户以为排序坏了。
-                option.note?.let { note ->
-                  Text(
-                    text = note,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                  )
-                }
               }
             },
             // 勾放尾部（M3 惯例），再用主色文字强化，不靠位置飘忽的首位图标表达选中

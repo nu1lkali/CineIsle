@@ -2164,7 +2164,21 @@ android {
     //        换排序即按新口径重拉首页，并把排序口径并进页内缓存 key；
     //        「收藏时间」服务端排不了 ⇒ 先自动补拉至多 10 页再本地排。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 185
+    // ── v186（versionCode 186，功能轮不涨名，versionName 仍为 1.6.12）──────────
+    //     用户需求：「把系统相册分享的功能落盘」——相册/文件管理器里选好素材，
+    //     直接「分享」到本应用，落进 AList 的某个目录（不用先开 App 再翻目录选文件）。
+    //     ① 新增 `ShareUploadActivity` + SEND / SEND_MULTIPLE filter（image/video/audio）：
+    //        `SharedUploadIntent.parse` 收 EXTRA_STREAM（单/多）+ ClipData 三路来源，
+    //        按批去重、清洗文件名、缺扩展名时按 MIME 补。
+    //     ② ⚠️ content:// 的读权限绑在接收它的 Activity 上 ⇒ 解析在 `onCreate` 当场做，
+    //        上传期间返回键改成 `moveTaskToBack`（不 finish、权限不释放），
+    //        否则多文件串行传到第 5 个时前 4 个成功、后面全 SecurityException。
+    //     ③ 目标位置（连接 + 目录）落偏好（`share_upload_connection_id` / `share_upload_dir`）：
+    //        分享是冷启动入口，每次都重选等于没有这个功能；换连接时目录自动作废。
+    //     ④ 进度直接复用 `TransferPane`（`onBack` 改成可空 ⇒ 分享这批没有「选择器」可回，
+    //        不再显示「继续选择」），并补上「重试失败项」只重传失败的那几条。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 186
     versionName = "1.6.12"
 
     vectorDrawables {

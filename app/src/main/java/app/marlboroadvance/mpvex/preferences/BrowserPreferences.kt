@@ -125,6 +125,22 @@ class BrowserPreferences(
   val networkRandomDrillDown = preferenceStore.getBoolean("network_random_drill_down", false)
 
   /**
+   * 「从系统相册/文件管理器分享进来上传」的**上次目标**：连接 id（-1 = 还没传过）。
+   *
+   * 与 [shareUploadDir] 成对使用、**必须一起读**：目录是某台服务器上的路径，
+   * 换一台服务器之后同一个路径可能根本不存在（甚至指向别的目录），
+   * 所以只在「连接 id 与记忆一致」时才恢复目录，否则回落到根目录。
+   *
+   * 为什么要落盘而不是只放内存：分享上传是**冷启动入口**（从相册直接分享，
+   * App 可能是被杀掉的状态），进程内记忆永远是空的 —— 每次都要重新选连接、
+   * 再点进目标目录，两步操作把「分享上传」的便利抵消掉了。
+   */
+  val shareUploadConnectionId = preferenceStore.getLong("share_upload_connection_id", -1L)
+
+  /** 「从系统分享上传」上次的目标目录（相对连接根，空串 = 根目录），见 [shareUploadConnectionId] */
+  val shareUploadDir = preferenceStore.getString("share_upload_dir", "")
+
+  /**
    * 网络浏览在**宽屏**（≥720dp）下是否启用双栏：左栏列上一级的文件夹，右栏是当前目录。
    *
    * 默认 true —— 平板上「进 A 看一眼 → 退回 → 进 B」是最常见的动作，双栏省一半点击。

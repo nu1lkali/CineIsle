@@ -203,6 +203,16 @@ object NetworkUploadCenter {
   private val jobRef = AtomicReference<Job?>(null)
 
   /**
+   * 最近一批的「原始原料」：应用上下文 + 待传清单。
+   *
+   * 只为 [retryFailed] 服务 —— `UploadBatch` 里只有已经展开成任务的结果（路径/大小/预览地址），
+   * 没有可以重新打开的数据源（`UploadPick` 持有 `content://` 与 `File`）。
+   * 不保留就重试不了，除非让用户重新选一遍文件，那就不叫「重试」了。
+   */
+  private val appContextRef = AtomicReference<Context?>(null)
+  private val lastPicksRef = AtomicReference<List<UploadPick>>(emptyList())
+
+  /**
    * 当前批次的取消令牌。
    *
    * ⚠️ **不能用一个全局 boolean**：用户「取消 → 立刻重新上传」时，上一批的
@@ -281,8 +291,40 @@ object NetworkUploadCenter {
       )
 
     val app = context.applicationContext
+    appContextRef.set(app)
+    lastPicksRef.set(picks)
     jobRef.set(scope.launch { runBatch(app, id, token, connectionId, targetDir, picks) })
   }
+
+  /**
+   * 重试**失败**的那几条（其余成功/取消的不再传一遍）。
+   *
+   * 开一批新批次（新 id、新取消令牌），目标目录沿用上一批。
+   * 拿不到上下文（进程被系统回收后又被页面唤起）或没有失败项时静默返回 ——
+   * 这属于「没什么可重试」而不是错误，不该弹提示。
+   *
+   * ⚠️ 用上一批的**原始 picks**按下标挑，而不是拿 `UploadTask` 反推：
+   * 任务里没有可重新打开的数据源（见 [appContextRef] 的说明）。
+   */
+  fun retryFailed() {
+    val current = _batch.value ?: return
+    if (current.running) return
+    val ctx = appContextRef.get() ?: return
+    val failedIndexes =
+      current.tasks.filter { it.state == UploadTaskState.Failed }.map { it.id }.toSet()
+    if (failedIndexes.isEmpty()) return
+    val picks = lastPicksRef.get()
+    val retry = picks.filterIndexed { index, _ -> index in failedIndexes }
+    if (retry.isEmpty()) return
+    start(ctx, current.connectionId, current.targetDir, current.targetLabel, retry)
+  }
+
+  /** 有没有可重试的失败项（界面据此决定显不显示「重试」按钮） */
+  val canRetry: Boolean
+    get() {
+      val current = _batch.value ?: return false
+      return !current.running && current.failedCount > 0 && appContextRef.get() != null
+    }
   /** 取消当前批次。已传完的保留（服务器上就是有了），未开始的标成已取消 */
   fun cancel() {
     if (!running) return

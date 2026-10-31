@@ -380,6 +380,45 @@
 
         <activity android:name=".presentation.crash.CrashActivity" />
 
+        <!--
+          系统「分享」→ 上传到 AList。
+
+          ⚠️ 必须是独立 activity + 自己的 SEND filter：分享进来的 content:// 读权限
+            绑在接收它的那个 Activity 上，所以只能在 onCreate 里当场解析、并且
+            上传期间不能 finish（详见 ShareUploadActivity 的类注释）。
+          ⚠️ 只注册 image/video/audio：这三个就是相册与文件管理器会分享的东西，
+            再宽（application/*）只会让分享面板里多出一堆用不上的入口。
+          ⚠️ label 与 MediaInfoActivity 的 "Media Info" 区分开 —— 同一个分享来源会
+            同时出现在两个 app 入口里，名字一样就分不清点了会怎样。
+        -->
+        <activity
+            android:name=".ui.browser.networkstreaming.upload.share.ShareUploadActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize"
+            android:exported="true"
+            android:label="上传到网络位置"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.mpvex">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
+        </activity>
+
+
         <activity
             android:name=".ui.mediainfo.MediaInfoActivity"
             android:exported="true"
