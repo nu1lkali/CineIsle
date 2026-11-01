@@ -198,30 +198,48 @@ class MPVView(
       MPVLib.setOptionString("vf", "format=yuv420p")
     }
     
-    // Cap demuxer cache for mobile to prevent memory issues
+    // ── demuxer 内存缓冲（v196 起按设备分档加深）──
     // ⚠️ **字节上限才是这里真正的闸门**（秒数只是另一个上限，谁先到算谁）。
-    // 下面 64MB 这条线决定了「大文件播起来到底会不会卡」，原因是 mpv 的
-    // `demuxer-max-bytes` 一旦被打满，主线程上的 demux 线程会**停下来等消费者**，
-    // 表现为「拉不动 / 反复 rebuffer / 播放像幻灯片」。
-    val cacheMegs = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) 64 else 32
+    // `demuxer-max-bytes` 一旦被打满，demux 线程会停下来等消费者；反过来，
+    // 池子太浅时任何一次供给波动（WiFi 深衰落两三秒很常见）就会把池子抽干
+    // ⇒ 反复 rebuffer，「放两三秒卡一下」。
+    //
+    // 真机证据链（v194~v195）：同一条 2160×3840@60 / 27.7Mbps 的片子，
+    // media3（ExoPlayer）流畅、mpv 卡 —— 直出生效后两边都是 MediaCodec 零拷贝，
+    // 解码与输出路径已对齐，剩下的最大差异就是**缓冲深度**：
+    // ExoPlayer 默认 50 秒内存池（DEFAULT_MAX_BUFFER_MS=50000，纯内存不落盘），
+    // 这边原先只有 64MB / 8 秒 —— 27.7Mbps 下 8 秒 ≈ 27.7MB，池子永远贴地飞行。
+    // 192MB ≈ 55 秒（27.7Mbps）／24 秒（8MB/s 的原盘），这才与 media3 站在同一起跑线。
+    //
+    // 低内存设备（isLowRamDevice）维持旧值：192MB 的 demux 缓冲对它们是灾难。
+    val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+    val lowRamDevice = activityManager.isLowRamDevice
+    val cacheMegs = if (lowRamDevice) 64 else 192
+    val cacheSecs = if (lowRamDevice) "8" else "45"
     MPVLib.setOptionString("demuxer-max-bytes", "${cacheMegs * 1024 * 1024}")
-    MPVLib.setOptionString("demuxer-max-back-bytes", "${cacheMegs * 1024 * 1024}")
+    // 回退缓冲（seek 之后回看用）不跟着翻倍：64MB 足够，省下的内存留给正向预读。
+    MPVLib.setOptionString("demuxer-max-back-bytes", "${64 * 1024 * 1024}")
 
     // ── 远程流（Emby 直连、strm 指向的远端地址…）的缓冲与重连 ──
     // 这些片子的瓶颈通常在「取数据」而不是「解码」：源是远端 AVI 时，
     // AVI 的索引在文件尾部，播放器要反复回头读；一旦中间那层（Emby 中转、远端服务器）
     // 抖动或断一下，画面就卡住甚至再也不动 —— 观感上就是「软解卡得动不了」。
     // 所以把预读和重连都拉起来：抖动能自愈，不要一路卡到用户重进页面。
-    // ⚠️ **单位是「秒」，但真正的上限是上面那 64MB 字节**。
-    // 这两个 30 秒在 5Mbps 的番剧上只占 ~19MB（无害），而在用户那种
-    // **70GB / 4K 原盘（如 6~15MB/s = 50~120Mbps）** 上，
-    // 30 秒 ≈ 180MB ~ 450MB —— 远远超过 64MB 的字节闸门，
-    // 于是 mpv 永远处于「缓存被打满」的状态：readahead 反复停等、
-    // 播放位置一抖就整段重新取数据，观感就是**卡成幻灯片**。
-    // 所以秒数要跟着字节上限一起收：8 秒 × 64MB 的字节闸门正好能容纳
-    // 「码率高到 8MB/s 的 4K 原盘」，同时低码率流仍然拿到充足的抖动量。
-    MPVLib.setOptionString("cache-secs", "8")
-    MPVLib.setOptionString("demuxer-readahead-secs", "8")
+    // ⚠️ **单位是「秒」，但真正的上限是上面那个字节闸门**（谁先到算谁）。
+    // 45 秒在 27.7Mbps 下 ≈ 155MB（< 192MB 闸门，秒数先到）；在 8MB/s 的
+    // 4K 原盘上 45 秒 ≈ 360MB（> 闸门，字节先到，实际停在 ~24 秒）。
+    // 无论哪种，都比旧的 8 秒 / 64MB 深一个量级 —— 波动被池子平均掉，
+    // 而不是直接打穿到播放头上。readahead 拉满同一口径，让 mpv 尽快把池子填满。
+    MPVLib.setOptionString("cache-secs", cacheSecs)
+    MPVLib.setOptionString("demuxer-readahead-secs", cacheSecs)
+    // 起播前先攒一小段（ExoPlayer 的 bufferForPlayback 同款思路）：
+    // 旧行为是「来一点就播」，起播瞬间池子是空的，等于贴地起飞 —— 首段网络
+    // 一抖就是「放两三秒就卡住」。攒 4 秒再播，起播慢这么一下，换来后面稳定。
+    // ⚠️ 只敢开 4 秒：连播切集每集都要多等这么多，再长切集就明显拖沓了。
+    // （注意这不是上面注释掉 `cache-pause` 的那个坑 —— 那是「缓冲中永久暂停」的死局，
+    // 这个只是起播门槛，且前提是服务器可断流续拉；不可续拉的源 mpv 自己会忽略。）
+    MPVLib.setOptionString("cache-pause-initial", "yes")
+    MPVLib.setOptionString("cache-pause-wait", "4")
     // 单次网络读取的缓冲区（默认仅 128KiB，高延迟链路上吞吐会很难看）
     MPVLib.setOptionString("stream-buffer-size", "4MiB")
     MPVLib.setOptionString("network-timeout", "30")

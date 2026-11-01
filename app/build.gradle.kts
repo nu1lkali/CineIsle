@@ -2340,7 +2340,21 @@ android {
     //        削掉 copyback 路径上同步上传带来的周期性停顿。原先只写在
     //        `applyAnime4KShaders()` 里 ⇒ 不开 Anime4K 就等于没有这层优化。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 195
+    // ── v196（versionCode 196，修复轮不涨名，versionName 仍为 1.6.13）──────────
+    //     v195 真机回报：Toast 显示「直出已生效」，但症状变成「放两三秒就卡住」。
+    //     直出生效 ⇒ 解码与输出路径已与 media3 对齐（同为 MediaCodec 零拷贝），
+    //     且「卡住」是 rebuffer 形态而非丢帧形态 ⇒ 剩下的差异只剩**缓冲深度**：
+    //     ExoPlayer 默认 50 秒纯内存池，这边 64MB / 8 秒，27.7Mbps 下 8 秒池子
+    //     一次网络抖动就抽干。对齐措施：
+    //     ① demuxer-max-bytes 64→192MB（isLowRamDevice 维持 64），back 固定 64MB；
+    //     ② cache-secs / demuxer-readahead-secs 8→45（低内存设备维持 8）；
+    //     ③ cache-pause-initial=yes + wait=4：起播前先攒 4 秒，别贴地起飞
+    //        （与被注释掉的 `cache-pause` 死局不同：这只是起播门槛）；
+    //     ④ 落盘缓存默认开→关（PlayerPreferences.diskCacheEnabled）：写穿模式让
+    //        每个字节都过一次「写+读」IO，还跟后台上传抢盘，media3 纯内存对照组
+    //        流畅 ⇒ 实时性优先，跨会话复用降级为手动开关。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 196
     versionName = "1.6.13"
 
     vectorDrawables {

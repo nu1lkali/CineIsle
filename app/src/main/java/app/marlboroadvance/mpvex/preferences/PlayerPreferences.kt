@@ -234,16 +234,23 @@ class PlayerPreferences(
   // 下面这三项就是为了把落盘缓存打开、并把上限交给用户控制。
 
   /**
-   * 是否把网络流缓存**落盘**（`cache-dir` + `cache-persize`），默认**开**。
+   * 是否把网络流缓存**落盘**（`cache-dir` + `cache-persize`），默认**关**（v196 起）。
    *
-   * 关掉后 mpv 退回纯内存缓冲：起播更快、不占存储，但**每次播都要重拉**，
-   * 且网速一抖就卡（内存缓存被冲掉后没有后备）。适合「只看不重复看、
-   * 存储紧张」的用户。
+   * ## 为什么从「默认开」改成「默认关」
+   *
+   * 落盘缓存的工作方式是**写穿**：每个字节先写进 cache 文件、再读回 demuxer，
+   * 播放期间每秒都有「写 + 读」两路 IO 挂在实时路径上。高码率流（4K60 @ 27.7Mbps
+   * ≈ 3.5MB/s）本身就把供给绷得很紧，再叠一层磁盘写入（还要跟后台上传任务抢 IO），
+   * 预读速率跟不上码率 ⇒ 池子永远填不满 ⇒「放两三秒就卡住」。
+   * 真机对照组就是 media3：纯内存路径，同一条片子流畅。
+   *
+   * v196 把内存缓冲加深到 192MB（≈55 秒）之后，实时性优先于跨会话复用 ——
+   * 想要「重看不用重拉」的用户仍可手动打开这个开关（收 4K 长片前留意存储余量）。
    *
    * 只对**网络流**生效 —— mpv 走 `file://` 读本地文件时本来就不经过缓存层，
    * 所以这里不必（也无法）按片源区分。
    */
-  val diskCacheEnabled = preferenceStore.getBoolean("mpv_disk_cache_enabled", true)
+  val diskCacheEnabled = preferenceStore.getBoolean("mpv_disk_cache_enabled", false)
 
   /**
    * 每条流落盘缓存的上限（MB，`cache-persize`），范围 64~2048，默认 512。
