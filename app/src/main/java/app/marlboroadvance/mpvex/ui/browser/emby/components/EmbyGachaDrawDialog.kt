@@ -9,21 +9,28 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,9 +38,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
@@ -44,6 +54,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,13 +66,20 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -72,7 +90,12 @@ import kotlin.math.sin
  * Emby 媒体库「随机抽卡」全屏揭晓层。
  *
  * 流程：抽取中的召唤法阵（旋转环 + 刻度 + 粒子内聚 + 卡背）→ 白光爆发 + 冲击波
- * → 卡牌翻转展开 → 结果卡（封面 / 标题 / 简介 / 稀有度）+ 播放 / 重抽 / 取消。
+ * → 卡牌翻转展开 → 结果。**结果分两种形态**：
+ *  · 抽 1 张（默认）：一张大卡直接给出封面 / 标题 / 简介 + 播放 / 重抽 / 取消；
+ *  · 抽 N 张（设置里「抽卡数量」= 3 / 5 / 10）：N 张小卡按 [GRID_STAGGER_MS] 错峰翻牌，
+ *    排成网格；底部「再抽 N 张 / 关闭」，点某一张才展开它的详情卡（播放 / 返回列表）。
+ *    为什么不一上来就给 N 张详情：10 张卡要 10 段简介，屏幕根本排不下，也不符合
+ *    「先看抽到了什么，再决定深看哪一张」的顺序。
  *
  * ## 为什么要独立一个 Dialog 而不是在页面里叠一层 Box
  * 页面里已经有网格、顶栏、工具行和取数遮罩，再叠一层全屏动画要反复处理「谁盖谁」；
@@ -88,7 +111,7 @@ import kotlin.math.sin
  * ## 稀有度
  * 见 [embyGachaRarityOf]：评分 ≥ 8 直接 SSR，其余用条目 Id 的哈希当种子分配 ——
  * 同一部片子每次抽到的稀有度一致（重抽不会莫名其妙「降级」），又不会让没评分的库
- * 全变 R。
+ * 全变 R。多抽时光效取**这一批里最高的稀有度**（抽到 SSR 就得有 SSR 的排场）。
  */
 
 /** 抽卡层专用配色：暗底 + 中性暖白（抽取中）/ 稀有度色（揭晓后）。 */
@@ -105,7 +128,6 @@ private object GachaInk {
 
   /** 结果卡底色（半透明深紫黑） */
   val Card = Color(0xFF14101F)
-  val CardEdge = Color(0xFF2C2440)
 
   /** 卡面文字：主 / 次 */
   val TextPrimary = Color(0xFFF3EEFF)
@@ -130,6 +152,20 @@ internal enum class EmbyGachaRarity(
 }
 
 /**
+ * 抽卡层的一张卡：条目本体 + 卡面要用的文字与图地址。
+ *
+ * 为什么由调用方（媒体库页）构造而不是在这里算：标题要走 `viewModel.displayTitle`
+ * （剧集要拼 `SxxExx` 前缀）、图片地址要走 `viewModel.imageUrl`（带 api_key 与
+ * Primary 重定向），这两件事都只有 ViewModel 知道。
+ */
+internal data class GachaCard(
+  val item: EmbyItem,
+  val title: String,
+  val posterUrl: String?,
+  val backdropUrl: String?,
+)
+
+/**
  * 判定稀有度。
  *
  * ① 评分 ≥ 8 的一律 SSR —— 用户对「这片好不好」有直觉，抽到高分片的仪式感要对得上；
@@ -149,45 +185,151 @@ internal fun embyGachaRarityOf(item: EmbyItem?): EmbyGachaRarity {
   }
 }
 
+/** 多抽网格里「番号」那一行占的总高（含与海报之间的 4dp 间隙）。 */
+private val GACHA_CAPTION_HEIGHT = 20.dp
+
+/**
+ * 标题最前面的「番号」：`ABC-123` / `ABP_123` / `FC2-PPV-1234567` / `SSIS-001-C`。
+ *
+ * ## 为什么强制要求分隔符
+ *
+ * 不加 `[-_]` 的话，普通片名里的「字母 + 数字」也会被当成番号（`Blade2049`、
+ * `BladeRunner2049`…）。宁可漏掉少数没写分隔符的条目，也不要满屏乱标 ——
+ * 这一行是给用户「认片」用的，标错了比不标更糟。
+ *
+ * ## 支持的形态
+ *
+ * · `[A-Za-z]{2,8}` 开头，**后面可以跟最多两位数字**（`FC2-PPV-1234567` 的 `FC2`）；
+ * · 再接可选的字母段（`-PPV`），最后 `[-_]\d{2,7}` 才是真正的编号；
+ * · 尾部可选 `[-_][A-Za-z0-9]{1,4}`（`SSIS-001-C`）。中文标题紧跟其后（`ABP-123 标题`）
+ *   不受影响 —— 后缀段只收 ASCII 字母数字。
+ *
+ * ## 全角
+ *
+ * 日文源的标题常把字母 / 数字 / 连字符写成全角，先折成半角再匹配。
+ * ⚠️ **不折 `ー`（片假名长音）**：它长得像连字符，但折成 `-` 会把片名切坏。
+ */
+private val GACHA_CODE_REGEX = Regex(
+  "^\\s*(?:[\\[【(（]\\s*)?" +
+    "([A-Za-z]{2,8}\\d{0,2}(?:[-_][A-Za-z]{1,4})?[-_]\\d{2,7}(?:[-_][A-Za-z0-9]{1,4})?)",
+)
+
+/**
+ * 标题开头常见的**标签**（`【中文字幕】`、`[4K]`），匹配番号前先摘掉一层。
+ * 只摘一个、最多 24 字：再往后的括号多半是片名本身的一部分，不是标签。
+ */
+private val GACHA_LEADING_TAG = Regex("^\\s*[\\[【(（][^\\]】)）]{0,24}[\\]】)）]\\s*")
+
+/** 把全角字母 / 数字 / 几种「像连字符」的符号折成半角（见 [GACHA_CODE_REGEX] 的说明）。 */
+private fun normalizeGachaCodeSource(raw: String): String {
+  val sb = StringBuilder(raw.length)
+  for (ch in raw) {
+    sb.append(
+      when {
+        ch in '０'..'９' -> '0' + (ch - '０')
+        ch in 'Ａ'..'Ｚ' -> 'A' + (ch - 'Ａ')
+        ch in 'ａ'..'ｚ' -> 'a' + (ch - 'ａ')
+        ch == '－' || ch == '‐' || ch == '–' || ch == '—' -> '-'
+        else -> ch
+      },
+    )
+  }
+  return sb.toString()
+}
+
+/**
+ * 取标题最前面的番号（大写）；认不出来返回 null。
+ *
+ * 多抽网格在卡下方显示它 —— 小卡只有海报，十张排一起很难分辨是哪一部，
+ * 番号是最短的身份标识（用户原话「番号能从标题中提取出来，最前面的就是」）。
+ */
+internal fun gachaCodeOf(title: String?): String? {
+  val text = title?.trim().orEmpty()
+  if (text.isEmpty()) return null
+  val normalized = normalizeGachaCodeSource(text)
+  // 两种写法各试一次：
+  //  ① `[ABP-123] 标题` —— 番号自己在括号里（正则允许吃掉一个开括号）；
+  //  ② `【中文字幕】ABP-123` —— 括号里是标签，得先整段摘掉再匹配。
+  // 顺序不能反：① 先试，失败再摘标签（摘完 `[ABP-123]` 就什么都不剩了）。
+  GACHA_CODE_REGEX.find(normalized)?.let { return it.groupValues[1].uppercase() }
+  val bare = GACHA_LEADING_TAG.replace(normalized, "")
+  if (bare == normalized) return null
+  return GACHA_CODE_REGEX.find(bare)?.groupValues?.get(1)?.uppercase()
+}
+
 /** 动画阶段（决定画哪一层）。 */
 private enum class GachaPhase { Awaiting, Charging, Burst, Card }
 
 /** 法阵蓄能时长 */
 private const val ROLL_MS = 1250
 
-/** 卡牌翻转时长 */
+/** 单张卡牌的翻转时长 */
 private const val REVEAL_MS = 700
 
+/** 多抽时第一张卡的翻转时长 */
+private const val GRID_REVEAL_BASE_MS = 620
+
+/** 多抽时相邻两张卡的起翻间隔 */
+private const val GRID_STAGGER_MS = 80
+
 /**
- * @param item 抽到的条目；null = 还在取数（此时只播「准备中」的法阵，不揭晓）
+ * @param cards 抽到的卡；**空列表 = 还在取数**（只播「准备中」的法阵，不揭晓）
  * @param rollId 每次抽取自增。**动画重启只认它**：同一个条目重抽也可能再抽回来，
  *               用 `item.Id` 当 key 的话「又抽到上一条」时动画不会重播，看起来像没反应。
- * @param title 展示标题（由调用方用 `viewModel.displayTitle` 生成，剧集带 SxxExx 前缀）
- * @param posterUrl 竖版封面
- * @param backdropUrl 横版剧照（缺失时 [EmbyImage] 自动回退到 [posterUrl]）
+ * @param resolveDetail 点上某张小卡时补一次详情（列表接口不保证带 `Overview`）。
+ *                      null = 用列表里的数据直接展示。失败请返回原卡片而不是抛异常。
  */
 @Composable
-fun EmbyGachaDrawDialog(
-  item: EmbyItem?,
+internal fun EmbyGachaDrawDialog(
+  cards: List<GachaCard>,
   rollId: Int,
-  title: String,
-  posterUrl: String?,
-  backdropUrl: String?,
-  onPlay: () -> Unit,
+  onPlay: (GachaCard) -> Unit,
   onReroll: () -> Unit,
   onDismiss: () -> Unit,
+  /**
+   * 把**这一批**整批丢进播放队列：默认第 1 张起播，其余按揭晓顺序排在后面。
+   *
+   * 与「随机一张」是两个不同的意图：那个是「帮我挑一个」，这个是「这十张我都要看」。
+   * 所以这里**不 shuffle** —— 顺序就是用户刚看到的顺序，别自作主张打乱。
+   */
+  onPlayAll: (List<GachaCard>) -> Unit = {},
+  resolveDetail: (suspend (GachaCard) -> GachaCard)? = null,
 ) {
-  val itemId = item?.Id
-  val rarity = remember(itemId, item?.CommunityRating) { embyGachaRarityOf(item) }
+  val count = cards.size
+  // 多抽的「主色」取这一批里最高的稀有度：抽到 SSR 时整场都是金色排场
+  val bestRarity = remember(cards) {
+    cards.map { embyGachaRarityOf(it.item) }.minByOrNull { it.ordinal } ?: EmbyGachaRarity.R
+  }
 
   val charge = remember { Animatable(0f) }
   val flash = remember { Animatable(0f) }
   val shock = remember { Animatable(0f) }
   val flip = remember { Animatable(0f) }
+  val grid = remember { Animatable(0f) }
   val detailIn = remember { Animatable(0f) }
   var phase by remember { mutableStateOf(GachaPhase.Awaiting) }
 
-  // 取数等待期（item == null）没有 charge 可读，用一个循环量驱动法阵的缓慢转动，
+  /**
+   * 「准备卡池」→「祈愿中」的**进度接力点**。
+   *
+   * 等待期法阵由 idle（无穷循环）驱动，进度 p = idle×0.4；一取到卡就切成
+   * p = charge（0→1）。若直接切，p 会从「idle 当时停在哪」**跳回 0** ——
+   * 用户看到的就是刻度环、卡背摆动、中心核一起「闪一下重来」。
+   * 所以切相位的那一刻先把 idle 的当前值记下来，之后一律
+   * p = spinBase + charge×(1-spinBase)：
+   * 起点就是等待期停下的那个值（无跳变），终点仍然是 1（蓄能打满的亮度不超调）。
+   * 角度连续、亮度连续，动画是一条线走完的。
+   */
+  var spinBase by remember { mutableStateOf(0f) }
+
+  // 多抽：点开的那一张（null = 看网格）
+  var focused by remember { mutableStateOf<GachaCard?>(null) }
+  // 补完详情的副本：网格上的小卡用列表数据，展开后才换成带简介的那一份
+  var focusedDetail by remember { mutableStateOf<GachaCard?>(null) }
+  var detailLoading by remember { mutableStateOf(false) }
+  val scope = rememberCoroutineScope()
+
+  // 取数等待期（cards 为空）没有 charge 可读，用一个循环量驱动法阵的缓慢转动，
   // 否则那段时间画面是**静止**的，看着像卡死。
   // ⚠️ 只在这里 remember State 对象、**不在组合期读 .value**：下面的 Canvas 在绘制阶段
   //    读它，每帧只失效绘制，不触发整棵树重组。
@@ -199,8 +341,10 @@ fun EmbyGachaDrawDialog(
     label = "gacha-idle-ring",
   )
 
-  LaunchedEffect(rollId, itemId) {
-    if (item == null) {
+  val gridTotalMs = GRID_REVEAL_BASE_MS + (count - 1).coerceAtLeast(0) * GRID_STAGGER_MS
+
+  LaunchedEffect(rollId, count) {
+    if (cards.isEmpty()) {
       phase = GachaPhase.Awaiting
       return@LaunchedEffect
     }
@@ -208,14 +352,19 @@ fun EmbyGachaDrawDialog(
     flash.snapTo(0f)
     shock.snapTo(0f)
     flip.snapTo(0f)
+    grid.snapTo(0f)
     detailIn.snapTo(0f)
+    focused = null
+    focusedDetail = null
 
+    // 接力：把等待期法阵停下的位置接过来，蓄能从这里继续（见 spinBase 的说明）
+    spinBase = idle.value * 0.4f
     phase = GachaPhase.Charging
     charge.animateTo(1f, tween(ROLL_MS, easing = LinearEasing))
 
-    // ── 揭晓：闪白 + 冲击波 + 卡牌翻转三件事同时起 ──
+    // ── 揭晓：闪白 + 冲击波 + 翻牌三件事同时起 ──
     // 闪光先极快地打满再淡出（「爆发」就是这一下），冲击波慢一点铺开，
-    // 卡牌翻转在闪光淡出后才完全展开，三者的错峰就是「炸开 → 看见卡」的层次。
+    // 翻牌在闪光淡出后才完全展开，三者的错峰就是「炸开 → 看见卡」的层次。
     phase = GachaPhase.Burst
     launch {
       flash.animateTo(1f, tween(70, easing = LinearEasing))
@@ -224,7 +373,14 @@ fun EmbyGachaDrawDialog(
     launch {
       shock.animateTo(1f, tween(760, easing = LinearOutSlowInEasing))
     }
-    flip.animateTo(1f, tween(REVEAL_MS, easing = FastOutSlowInEasing))
+    if (count == 1) {
+      flip.animateTo(1f, tween(REVEAL_MS, easing = FastOutSlowInEasing))
+    } else {
+      // 多抽用一条总时间轴，每张卡从自己的位移算局部进度（见 GachaMiniCard）——
+      // 给每张卡各起一个 Animatable 也行，但 N 个动画协程的调度顺序不保证，
+      // 一条时间轴才能保证「从左到右、从上到下」严格依次翻开。
+      grid.animateTo(1f, tween(gridTotalMs, easing = LinearEasing))
+    }
 
     phase = GachaPhase.Card
     detailIn.animateTo(1f, tween(260))
@@ -248,7 +404,7 @@ fun EmbyGachaDrawDialog(
           Brush.radialGradient(
             colors = listOf(
               if (phase == GachaPhase.Card || phase == GachaPhase.Burst) {
-                rarity.deep
+                bestRarity.deep
               } else {
                 Color(0xFF170F22)
               },
@@ -264,14 +420,18 @@ fun EmbyGachaDrawDialog(
         val base = minOf(size.width, size.height)
         val rolling = phase == GachaPhase.Awaiting || phase == GachaPhase.Charging
         if (rolling) {
-          val p = if (phase == GachaPhase.Awaiting) idle.value * 0.4f else charge.value
+          // ⚠️ 蓄能段必须带上 spinBase：否则切相位那一下 p 归零，法阵会「重来一遍」
+          // 蓄能部分按 (1 - spinBase) 归一化：终点仍然是 1。直接写 spinBase + charge
+          // 会冲到 1.4 —— 法阵那边对 heighten 做了 coerceIn 看不出来，但卡背的呼吸
+          // 缩放（0.92+0.08p）与描边 alpha 都是按 [0,1] 调的，会停在「过头」的亮度上。
+          val p = if (phase == GachaPhase.Awaiting) idle.value * 0.4f else spinBase + charge.value * (1f - spinBase)
           drawSummonCircle(center = center, base = base, p = p, accent = GachaInk.Spark)
         }
         val s = shock.value
         // 只在 0→1 的进行中画：跑完后 shock 停在 1，再画一遍只会是一堆 alpha=0 的
         // 路径（白算 20 个三角形 + 3 个圈），没有必要
         if (s > 0f && s < 1f) {
-          drawBurstRays(center = center, base = base, s = s, accent = rarity.accent)
+          drawBurstRays(center = center, base = base, s = s, accent = bestRarity.accent)
         }
         // 揭晓后卡片背后常驻的稀有度光晕（缓慢明暗，暗示这是「活着」的卡）
         if (phase == GachaPhase.Card) {
@@ -279,7 +439,7 @@ fun EmbyGachaDrawDialog(
           drawCircle(
             brush = Brush.radialGradient(
               colors = listOf(
-                rarity.accent.copy(alpha = 0.16f * pulse),
+                bestRarity.accent.copy(alpha = 0.16f * pulse),
                 Color.Transparent,
               ),
               center = center,
@@ -293,51 +453,374 @@ fun EmbyGachaDrawDialog(
 
       // ── 2. 抽取中：卡背 ──
       if (phase == GachaPhase.Awaiting || phase == GachaPhase.Charging) {
-        val p = if (phase == GachaPhase.Awaiting) idle.value else charge.value
+        // 与上面 Canvas 那一份同口径（含归一化）—— 两处必须算出同一个 p，否则
+        // 法阵转到的角度和卡背摆动的角度对不上，切相位时会看出「两层各走各的」
+        val p = if (phase == GachaPhase.Awaiting) idle.value * 0.4f else spinBase + charge.value * (1f - spinBase)
         GachaCardBack(
           progress = p,
           modifier = Modifier.align(Alignment.Center),
         )
       }
 
-      // ── 3. 揭晓：卡牌正面（从侧面翻转展开）──
-      if (item != null && (phase == GachaPhase.Burst || phase == GachaPhase.Card)) {
-        val f = flip.value
-        // ⚠️ 卡面尺寸必须在**这里**按可用空间算，不能在卡片内部用
-        //   `fillMaxWidth(0.88f) + widthIn(max=380.dp)` —— 约束类修饰符要写在尺寸类
-        //   修饰符**之前**才生效，反过来写 widthIn 会被 fillMaxWidth 已经固定的
-        //   min=max 顶掉：平板上卡片被拉成一整屏宽，横屏时高度还会超出屏幕。
-        BoxWithConstraints(modifier = Modifier.align(Alignment.Center)) {
-          val cardWidth = minOf(maxWidth * 0.88f, 380.dp)
-          // 留 14% 给顶部说明与上下呼吸空间；横屏（屏幕只有 360dp 高）时卡片内部自己滚动
-          val cardMaxHeight = maxHeight * 0.86f
-          Box(
+      // ── 3. 揭晓 ──
+      if (cards.isNotEmpty() && (phase == GachaPhase.Burst || phase == GachaPhase.Card)) {
+        if (count == 1) {
+          // 3a. 单抽：一张大卡，自 -82° 翻正
+          val f = flip.value
+          // ⚠️ 卡面尺寸必须在**这里**按可用空间算，不能在卡片内部用
+          //   `fillMaxWidth(0.88f) + widthIn(max=380.dp)` —— 约束类修饰符要写在尺寸类
+          //   修饰符**之前**才生效，反过来写 widthIn 会被 fillMaxWidth 已经固定的
+          //   min=max 顶掉：平板上卡片被拉成一整屏宽，横屏时高度还会超出屏幕。
+          BoxWithConstraints(
             modifier = Modifier
-              .align(Alignment.Center)
-              .graphicsLayer {
-                // 起始 -82°：卡片几乎是「一张纸的侧边」，翻到 0° 才是正面
-                rotationY = (1f - f) * -82f
-                // cameraDistance 影响透视强度：太小会畸变，太大就看不出来在翻转
-                cameraDistance = 18f * density
-                scaleX = 0.86f + 0.14f * f
-                scaleY = 0.86f + 0.14f * f
-                alpha = if (f < 0.06f) 0f else 1f
-              },
+              .fillMaxSize()
+              // Dialog 是 edge-to-edge（decorFitsSystemWindows=false）⇒ 不显式让开
+              // 状态栏和顶部那行「本次抽到」，卡面会被顶到状态栏/挖孔下面。
+              // padding(top=44) 是那行 13sp 说明 + 16dp 余量。
+              .statusBarsPadding()
+              .padding(top = 44.dp, bottom = 16.dp),
           ) {
-            GachaResultCard(
-              item = item,
-              title = title,
-              rarity = rarity,
-              posterUrl = posterUrl,
-              backdropUrl = backdropUrl,
-              detailAlpha = detailIn.value,
+            val cardWidth = minOf(maxWidth * 0.88f, 380.dp)
+            // 上下留白已经从上面扣掉了，这里再留 6% 呼吸空间；
+            // 横屏（屏幕只有 360dp 高）时卡片内部自己滚动
+            val cardMaxHeight = maxHeight * 0.94f
+            val card = cards.first()
+            Box(
               modifier = Modifier
-                .width(cardWidth)
-                .heightIn(max = cardMaxHeight),
-              onPlay = onPlay,
-              onReroll = onReroll,
-              onDismiss = onDismiss,
-            )
+                .align(Alignment.Center)
+                .graphicsLayer {
+                  // 起始 -82°：卡片几乎是「一张纸的侧边」，翻到 0° 才是正面
+                  rotationY = (1f - f) * -82f
+                  // cameraDistance 影响透视强度：太小会畸变，太大就看不出来在翻转
+                  cameraDistance = 18f * density
+                  scaleX = 0.86f + 0.14f * f
+                  scaleY = 0.86f + 0.14f * f
+                  alpha = if (f < 0.06f) 0f else 1f
+                },
+            ) {
+              GachaResultCard(
+                item = card.item,
+                title = card.title,
+                rarity = embyGachaRarityOf(card.item),
+                posterUrl = card.posterUrl,
+                backdropUrl = card.backdropUrl,
+                detailAlpha = detailIn.value,
+                secondaryLabel = "重抽",
+                onSecondary = onReroll,
+                onPlay = { onPlay(card) },
+                onDismiss = onDismiss,
+                modifier = Modifier
+                  .width(cardWidth)
+                  .heightIn(max = cardMaxHeight),
+              )
+            }
+          }
+        } else {
+          // 3b. 多抽：网格 + 底部操作条
+          //
+          // ## 列数是**算出来的**，不是写死的
+          //
+          // 原来 `count >= 5 -> 5`：400dp 宽的机器上每张只剩 68dp（(376-32)/5），
+          // 海报看不清、屏幕上下还空着一大半 —— 用户原话「一行要塞 5 张，卡很小」。
+          // 现在从 2 列一路试到 6 列，每一档都按**宽高两边**分别算能放下多大
+          // （`byWidth` 按列均分、`byHeight` 按行均分，取小值才是真塞得下的），
+          // 再挑能给出最大卡片的那一档。10 张 → 3 列（111dp/张），
+          // 6 张 → 2 列（147dp/张），比原来大一倍上下。
+          //
+          // 为什么上限 6 列：再多只会把卡压成缩略图，用户还得歪头认脸；
+          // 10 张排 4 列（86dp）算出来就是比 3 列（111dp）小，自然会落到 3 列。
+          BoxWithConstraints(
+            modifier = Modifier
+              .fillMaxSize()
+              // 顶部状态栏 + 「本次抽到 N 张」那行、底部导航栏，都必须让开：
+              // 10 张时网格几乎顶满整屏，不留边就会压在状态栏和标题上（真机反馈）。
+              // 让开之后 `maxHeight` 本身就是可用区，下面的列数试算直接基于它。
+              .statusBarsPadding()
+              .navigationBarsPadding()
+              .padding(top = 44.dp),
+          ) {
+            // 底栏（四个键）自身的高度：竖屏是两行（40 + 8 + 40 + 24dp 下边距 ≈ 112），
+            // 横屏是一行。导航栏已经由上面的 navigationBarsPadding 让开了。
+            val bottomReserve = if (maxHeight < 420.dp) 72.dp else 120.dp
+            val gap = 10.dp
+            // 海报比例（宽:高 = 1:1.5），与单抽卡面同源
+            val cellAspect = 1.5f
+            val availW = maxWidth * 0.94f
+            val availH = (maxHeight - bottomReserve - 16.dp).coerceAtLeast(96.dp)
+
+            // 番号：从标题最前面抠（见 [gachaCodeOf]）。**只要这一批里有一张有**，
+            // 每张卡都留出这一行的高度 —— 只有有的有有的没有时，行高会参差不齐，
+            // 网格看着像没对齐；留空的那张只是少一行字。
+            val codes = cards.map { gachaCodeOf(it.title) }
+            val captionH = if (codes.any { it != null }) GACHA_CAPTION_HEIGHT else 0.dp
+
+            // 逐档试算，同时记两个候选：
+            //  · best = 卡最大（不管尾排剩几张）；
+            //  · tidy = 尾排**不只剩一张**的候选里卡最大的。
+            // 只要 tidy 不比 best 小太多（≥ 78%）就用 tidy：5 张从「2+2+1」变「3+2」、
+            // 10 张从「3+3+3+1」变「4+4+2」，用一个孤零零的尾排换来整批看起来是「一批」，
+            // 尺寸只掉 10% 左右。7 张那种换法要掉两成多（3+3+1 → 4+3），
+            // 那就老实保持最大卡 —— 大小优先。
+            var bestColumns = 2
+            var bestWidth = 0.dp
+            var tidyColumns = 0
+            var tidyWidth = 0.dp
+            for (c in 2..minOf(count, 6)) {
+              val rows = (count + c - 1) / c
+              val byWidth = (availW - gap * (c - 1)) / c
+              // 每格高度 = 海报高(cellW×比例) + 番号行，所以要先扣掉 captionH 再折成宽度
+              val byHeight = (((availH - gap * (rows - 1)) / rows) - captionH) / cellAspect
+              // 260dp 封顶：2 张 / 4 张在大屏上会算出一张巨卡，看着不像「一批」
+              val w = minOf(minOf(byWidth, byHeight), 260.dp)
+              if (w > bestWidth) {
+                bestWidth = w
+                bestColumns = c
+              }
+              val tail = count % c
+              if ((tail == 0 || tail >= 2) && w > tidyWidth) {
+                tidyWidth = w
+                tidyColumns = c
+              }
+            }
+            val useTidy = tidyColumns > 0 && tidyWidth >= bestWidth * 0.78f
+            val columns = if (useTidy) tidyColumns else bestColumns
+            val cellWidth = if (useTidy) tidyWidth else bestWidth
+            val cellHeight = cellWidth * cellAspect
+            Column(
+              modifier = Modifier
+                .align(Alignment.Center)
+                // 底部把操作条的位置让出来；整体居中后网格自然落在上半屏，
+                // 不会压在「再抽 / 关闭」上
+                .padding(bottom = bottomReserve),
+              verticalArrangement = Arrangement.spacedBy(gap),
+              horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+              // 最后一排不满时用 Row 居中（Column 的 CenterHorizontally 会把它摆正）
+              cards.chunked(columns).forEachIndexed { rowIndex, row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                  row.forEachIndexed { colIndex, card ->
+                    GachaMiniCard(
+                      card = card,
+                      rarity = embyGachaRarityOf(card.item),
+                      code = codes[rowIndex * columns + colIndex],
+                      captionHeight = captionH,
+                      progress = { grid.value },
+                      totalRevealMs = gridTotalMs,
+                      index = rowIndex * columns + colIndex,
+                      width = cellWidth,
+                      height = cellHeight,
+                      interactive = phase == GachaPhase.Card && focused == null,
+                      // 长按直接播：这条不补详情（播放只需要 Id，Overview 用不上），
+                      // 也就少一次 /Items 往返。
+                      onPlayDirect = { onPlay(card) },
+                      onClick = {
+                        focused = card
+                        focusedDetail = card
+                        val resolver = resolveDetail ?: return@GachaMiniCard
+                        detailLoading = true
+                        scope.launch {
+                          val enriched = runCatching { resolver(card) }.getOrNull()
+                          // 用户可能已经点了别的一张：只有还停在它上面才回填
+                          if (focused?.item?.Id == card.item.Id) {
+                            focusedDetail = enriched ?: card
+                            detailLoading = false
+                          }
+                        }
+                      },
+                    )
+                  }
+                }
+              }
+            }
+          }
+
+          // ── 底部操作区：随机一张 / 全部入队 / 再抽 / 关闭 ──
+          //
+          // 四个出口挤成一行，360dp 宽的机器放不下（带图标的按钮一个就要 100dp 上下）：
+          // 竖屏拆两行，横屏高度宝贵、宽度富裕，反倒一行更合适。
+          //
+          // ⚠️ 「关闭」也用 OutlinedButton，不再是 TextButton：一行光秃秃的字摆在
+          //    另外三个有包裹的按钮旁边，看着像没做完（用户原话）。
+          //    用次要前景色（TextSecondary）+ 同样的形状 / 内边距，层级仍然最弱。
+          val actionsAlpha = detailIn.value
+          val actionsEnabled = actionsAlpha > 0.99f
+          val randomAction: @Composable () -> Unit = {
+            OutlinedButton(
+              onClick = { onPlay(cards.random()) },
+              enabled = actionsEnabled,
+              shape = RoundedCornerShape(14.dp),
+              colors = ButtonDefaults.outlinedButtonColors(contentColor = GachaInk.TextPrimary),
+              contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+              Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(Modifier.size(6.dp))
+              Text("随机一张", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
+          }
+          val queueAllAction: @Composable () -> Unit = {
+            OutlinedButton(
+              // 整批入队：第 1 张起播，其余按揭晓顺序排队（不打乱 —— 顺序就是刚看到的顺序）
+              onClick = { onPlayAll(cards) },
+              enabled = actionsEnabled,
+              shape = RoundedCornerShape(14.dp),
+              colors = ButtonDefaults.outlinedButtonColors(contentColor = GachaInk.TextPrimary),
+              contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+              Icon(
+                Icons.Default.PlaylistAdd,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+              )
+              Spacer(Modifier.size(6.dp))
+              Text("全部入队", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
+          }
+          val rerollAction: @Composable () -> Unit = {
+            Button(
+              onClick = onReroll,
+              enabled = actionsEnabled,
+              shape = RoundedCornerShape(14.dp),
+              colors = ButtonDefaults.buttonColors(
+                containerColor = bestRarity.accent,
+                contentColor = Color(0xFF17110A),
+              ),
+              contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+              Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+              Spacer(Modifier.size(6.dp))
+              Text("再抽 $count 张", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
+          }
+          val closeAction: @Composable () -> Unit = {
+            OutlinedButton(
+              onClick = onDismiss,
+              enabled = actionsEnabled,
+              shape = RoundedCornerShape(14.dp),
+              colors = ButtonDefaults.outlinedButtonColors(contentColor = GachaInk.TextSecondary),
+              contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+              Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(Modifier.size(6.dp))
+              Text("关闭", fontSize = 13.sp)
+            }
+          }
+          if (LocalConfiguration.current.screenHeightDp < 420) {
+            // 横屏 / 矮窗口：四个排一排
+            Row(
+              modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 12.dp)
+                .padding(bottom = 20.dp)
+                .graphicsLayer { alpha = actionsAlpha },
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              randomAction()
+              queueAllAction()
+              rerollAction()
+              closeAction()
+            }
+          } else {
+            Column(
+              modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
+                .graphicsLayer { alpha = actionsAlpha },
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                randomAction()
+                queueAllAction()
+              }
+              Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                rerollAction()
+                closeAction()
+              }
+            }
+          }
+
+          // 点开某一张：半透明遮罩 + 详情卡（与单抽同一张卡，只是按钮换文案）
+          val focus = focused
+          if (focus != null) {
+            val shown = focusedDetail ?: focus
+            // ⚠️ 遮罩 + 详情卡整体包一层并抬 `zIndex`：网格里每张卡都带 `graphicsLayer`
+            //   （3D 翻转层），真机上出现过详情卡被网格盖住的情况 —— 显式抬层比依赖
+            //   「后声明者在上」稳。
+            Box(
+              modifier = Modifier
+                .fillMaxSize()
+                .zIndex(1f),
+            ) {
+              Box(
+                modifier = Modifier
+                  .fillMaxSize()
+                  // 0.62 太透：10 张亮海报透上来，会让人以为详情卡浮在网格后面
+                  .background(Color.Black.copy(alpha = 0.82f))
+                  .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                  ) {
+                    // 点卡面外的空白 = 返回列表（不是关闭抽卡）
+                    focused = null
+                    focusedDetail = null
+                    detailLoading = false
+                  },
+              )
+              BoxWithConstraints(
+                modifier = Modifier
+                  .fillMaxSize()
+                  // 与网格同一套安全区：详情卡也不许压住状态栏 / 顶部说明
+                  .statusBarsPadding()
+                  .padding(top = 44.dp, bottom = 24.dp),
+              ) {
+                val cardWidth = minOf(maxWidth * 0.88f, 380.dp)
+                val cardMaxHeight = maxHeight * 0.94f
+                Box(
+                  modifier = Modifier
+                    .align(Alignment.Center)
+                    .graphicsLayer {
+                      val v = detailIn.value
+                      scaleX = 0.94f + 0.06f * v
+                      scaleY = 0.94f + 0.06f * v
+                    },
+                ) {
+                  GachaResultCard(
+                    // ⚠️ 元信息 / 海报 / 稀有度一律取**列表里的那条**（focus），只有简介用
+                    //   后补到的（shown）：详情接口会带出列表没有的字段（OfficialRating、
+                    //   Genres…），换源会让海报右侧那一列变高，卡片整体跳一下。
+                    item = focus.item,
+                    title = focus.title,
+                    rarity = embyGachaRarityOf(focus.item),
+                    posterUrl = shown.posterUrl,
+                    backdropUrl = shown.backdropUrl,
+                    overview = shown.item.Overview,
+                    detailAlpha = 1f,
+                    overviewLoading = detailLoading,
+                    secondaryLabel = "返回列表",
+                    onSecondary = {
+                      focused = null
+                      focusedDetail = null
+                      detailLoading = false
+                    },
+                    // 多抽的详情卡不摆「取消」：这一层是「看某一张」，退出就是返回列表，
+                    // 关掉整个抽卡由底部的「关闭」负责（两层各有各的出口）
+                    dismissLabel = null,
+                    onPlay = { onPlay(shown) },
+                    onDismiss = {},
+                    modifier = Modifier
+                      .width(cardWidth)
+                      .heightIn(max = cardMaxHeight),
+                  )
+                }
+              }
+            }
           }
         }
       }
@@ -358,23 +841,156 @@ fun EmbyGachaDrawDialog(
       Text(
         text = when (phase) {
           GachaPhase.Awaiting -> "正在准备卡池…"
-          GachaPhase.Charging -> "祈愿中…"
-          GachaPhase.Burst, GachaPhase.Card -> "本次抽到"
+          GachaPhase.Charging -> if (count > 1) "祈愿中… · $count 连" else "祈愿中…"
+          GachaPhase.Burst, GachaPhase.Card -> if (count > 1) "本次抽到 $count 张" else "本次抽到"
         },
         color = GachaInk.TextSecondary,
         fontSize = 13.sp,
         letterSpacing = 2.sp,
         modifier = Modifier
           .align(Alignment.TopCenter)
-          .padding(top = 56.dp),
+          .statusBarsPadding()
+          .padding(top = 16.dp),
       )
       IconButton(
         onClick = onDismiss,
         modifier = Modifier
           .align(Alignment.TopEnd)
-          .padding(top = 40.dp, end = 8.dp),
+          .statusBarsPadding(),
       ) {
         Icon(Icons.Default.Close, contentDescription = "关闭", tint = GachaInk.TextSecondary)
+      }
+    }
+  }
+}
+
+/**
+ * 多抽网格里的一张**小卡**：只有封面 + 稀有度角标，点上才展开详情。
+ *
+ * 翻牌进度不通过参数传 Float —— 那会让整张网格每帧重组一次。这里传的是
+ * `progress: () -> Float`（读 [Animatable] 的值），**在 `graphicsLayer` 里读**：
+ * 快照系统只会让这一层失效，重组一次都不会发生。
+ */
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun GachaMiniCard(
+  card: GachaCard,
+  rarity: EmbyGachaRarity,
+  code: String?,
+  captionHeight: Dp,
+  progress: () -> Float,
+  totalRevealMs: Int,
+  index: Int,
+  width: Dp,
+  height: Dp,
+  interactive: Boolean,
+  onClick: () -> Unit,
+  /** 长按 = 跳过详情层，直接播这张。 */
+  onPlayDirect: () -> Unit,
+) {
+  val haptic = LocalHapticFeedback.current
+  val shape = RoundedCornerShape(10.dp)
+  // 总时间轴 → 这张卡自己的局部进度：起点 = index * 间隔，时长 = BASE。
+  // 海报的翻转和下方番号的淡入共用同一条，卡片翻完番号刚好亮起来。
+  // ⚠️ 只在 graphicsLayer 里读 progress()（绘制阶段），不在组合期读 ⇒ 每帧只失效图层。
+  val easedOf: () -> Float = {
+    val elapsed = progress() * totalRevealMs
+    val local = ((elapsed - index * GRID_STAGGER_MS) / GRID_REVEAL_BASE_MS.toFloat())
+      .coerceIn(0f, 1f)
+    FastOutSlowInEasing.transform(local)
+  }
+  Column(
+    horizontalAlignment = Alignment.CenterHorizontally,
+    modifier = Modifier.width(width),
+  ) {
+    Box(
+      modifier = Modifier
+        .graphicsLayer {
+          val eased = easedOf()
+          rotationY = (1f - eased) * -82f
+          cameraDistance = 18f * density
+          scaleX = 0.88f + 0.12f * eased
+          scaleY = 0.88f + 0.12f * eased
+          alpha = if (eased < 0.04f) 0f else 1f
+        }
+        .width(width)
+        .height(height)
+        .clip(shape)
+        .background(GachaInk.Card)
+        .border(
+          width = if (rarity == EmbyGachaRarity.SSR) 2.dp else 1.dp,
+          color = rarity.accent.copy(alpha = 0.9f),
+          shape = shape,
+        )
+        // 点 = 看详情，长按 = 直接播放（跳过详情层）。
+        // ⚠️ 用 `combinedClickable` 而不是「clickable + pointerInput 长按检测」：
+        //   后者会和 clickable 抢同一个手势，松手时两个回调都触发（既开详情又起播）。
+        // 长按震动少不了 —— 没有触感反馈时用户分不清「按住了」和「点轻了没反应」。
+        .combinedClickable(
+          enabled = interactive,
+          onClick = onClick,
+          onLongClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            onPlayDirect()
+          },
+        ),
+    ) {
+      EmbyImage(
+        url = card.posterUrl,
+        contentDescription = card.title,
+        fallbackUrl = card.backdropUrl,
+        maxWidth = 240,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.fillMaxSize(),
+      )
+      // 稀有度角标：放左上角，不压海报下沿的字幕 / 标题
+      Box(
+        modifier = Modifier
+          .align(Alignment.TopStart)
+          .padding(4.dp)
+          .clip(RoundedCornerShape(5.dp))
+          .background(Color.Black.copy(alpha = 0.62f))
+          .border(0.8.dp, rarity.accent.copy(alpha = 0.85f), RoundedCornerShape(5.dp))
+          .padding(horizontal = 4.dp, vertical = 1.dp),
+      ) {
+        Text(
+          text = rarity.label,
+          color = rarity.accent,
+          // 角标随卡宽缩放：列数不再是写死的 5，同一套 9sp 在 111dp 的卡上刚好、
+          // 在 183dp 的卡上就像个小点。10~14sp 之间夹住，两端都不难看。
+          fontSize = (width.value * 0.085f).coerceIn(10f, 14f).sp,
+          fontWeight = FontWeight.Black,
+          letterSpacing = 0.6.sp,
+        )
+      }
+    }
+
+    // ── 番号（卡下方一行）──
+    // 小卡只有海报，十张并排时很难分辨是哪一部；番号是最短的身份标识。
+    // 高度由调用方按 GACHA_CAPTION_HEIGHT 统一预留（有的条目认不出番号时留空），
+    // 保证每一行网格等高 —— 否则行高参差，看着像没对齐。
+    if (captionHeight > 0.dp) {
+      Spacer(Modifier.height(4.dp))
+      Box(
+        modifier = Modifier
+          .width(width)
+          .height(captionHeight - 4.dp)
+          .graphicsLayer { alpha = easedOf() },
+        contentAlignment = Alignment.Center,
+      ) {
+        Text(
+          text = code.orEmpty(),
+          color = GachaInk.TextPrimary.copy(alpha = 0.9f),
+          fontSize = (width.value * 0.078f).coerceIn(10f, 13f).sp,
+          fontWeight = FontWeight.SemiBold,
+          // 等宽数字（`123` 与 `456` 同宽）让一排番号看起来是梳齐的。
+          // ⚠️ material3 的 Text 没有 fontFeatureSettings 参数，只能走 style。
+          style = TextStyle(fontFeatureSettings = "tnum"),
+          letterSpacing = 0.8.sp,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          textAlign = TextAlign.Center,
+        )
       }
     }
   }
@@ -442,10 +1058,14 @@ private fun GachaCardBack(progress: Float, modifier: Modifier = Modifier) {
 }
 
 /**
- * 结果卡：封面 + 稀有度 + 标题 + 元信息 + 简介 + 三个操作。
+ * 结果卡：封面 + 稀有度 + 标题 + 元信息 + 简介 + 操作。
  *
  * [detailAlpha] 用来做「卡先出来、字后浮现」的错峰：卡牌翻转结束时文字才淡入，
  * 直接一次性全画会显得糊成一团。
+ *
+ * [secondaryLabel] / [dismissLabel] 让同一张卡在两处复用：单抽是「重抽 / 取消」，
+ * 多抽点开的详情是「返回列表 / 无」。别看只有两个字符串 —— 抽卡的两层出口必须
+ * 各说各的，否则用户分不清「返回」是回网格还是关掉抽卡。
  */
 @Composable
 private fun GachaResultCard(
@@ -456,8 +1076,17 @@ private fun GachaResultCard(
   backdropUrl: String?,
   detailAlpha: Float,
   modifier: Modifier = Modifier,
+  /**
+   * 简介正文。默认取 [item] 自己的 —— 多抽「点开某张」时**基础信息用列表里的那条**、
+   * 只把后补到的简介传进来：否则详情里多出来的字段（OfficialRating / Genres…）
+   * 会让海报右侧那一列变高，卡片照样跳一下。
+   */
+  overview: String? = item.Overview,
+  overviewLoading: Boolean = false,
+  secondaryLabel: String = "重抽",
+  onSecondary: () -> Unit = {},
+  dismissLabel: String? = "取消",
   onPlay: () -> Unit,
-  onReroll: () -> Unit,
   onDismiss: () -> Unit,
 ) {
   val shape = RoundedCornerShape(24.dp)
@@ -574,23 +1203,53 @@ private fun GachaResultCard(
     Spacer(Modifier.height(14.dp))
 
     // ── 简介 ──
-    Text(
-      text = item.Overview?.trim()?.takeIf { it.isNotEmpty() } ?: "这部作品还没有简介。",
-      color = if (item.Overview.isNullOrBlank()) {
-        GachaInk.TextSecondary.copy(alpha = 0.6f)
+    // 多抽点开详情时要现补一次 `/Items/{id}`：补的过程中说「正在加载」，补不到再说「没有」，
+    // 否则用户会以为这条真的没有简介（这两种情况要能分清）。
+    //
+    // ⚠️ 这一块**固定 3 行高**（3×18sp），不随内容伸缩，`maxLines` 也压到 3：
+    //   简介是**异步**到位的，按内容自适应的话，文字一到卡片就长高；而整张卡是
+    //   `align(Center)` 居中的 ⇒ 连同上下的海报、播放键一起「跳一下」。
+    //   预留高度 + 同值 maxLines ⇒ 换字不换框，位置纹丝不动。
+    Box(
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 54.dp),
+      contentAlignment = Alignment.TopStart,
+    ) {
+      if (overviewLoading && overview.isNullOrBlank()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            strokeWidth = 1.5.dp,
+            color = rarity.accent,
+          )
+          Spacer(Modifier.size(8.dp))
+          Text(
+            text = "正在加载简介…",
+            color = GachaInk.TextSecondary.copy(alpha = 0.75f),
+            fontSize = 12.sp,
+          )
+        }
       } else {
-        GachaInk.TextSecondary
-      },
-      fontSize = 12.sp,
-      lineHeight = 18.sp,
-      maxLines = 5,
-      overflow = TextOverflow.Ellipsis,
-    )
+        Text(
+          text = overview?.trim()?.takeIf { it.isNotEmpty() } ?: "这部作品还没有简介。",
+          color = if (overview.isNullOrBlank()) {
+            GachaInk.TextSecondary.copy(alpha = 0.6f)
+          } else {
+            GachaInk.TextSecondary
+          },
+          fontSize = 12.sp,
+          lineHeight = 18.sp,
+          maxLines = 3,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+    }
 
     Spacer(Modifier.height(16.dp))
 
     // ── 操作 ──
-    // 三个键的层级：播放是主操作（实心稀有度色），重抽是次操作（描边），取消最弱（纯文字）
+    // 三个键的层级：播放是主操作（实心稀有度色），次操作（描边），退出最弱（纯文字）
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -613,7 +1272,7 @@ private fun GachaResultCard(
         Text("立即播放", fontWeight = FontWeight.Bold, fontSize = 14.sp)
       }
       OutlinedButton(
-        onClick = onReroll,
+        onClick = onSecondary,
         enabled = detailAlpha > 0.99f,
         shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = GachaInk.TextPrimary),
@@ -621,17 +1280,19 @@ private fun GachaResultCard(
       ) {
         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(Modifier.size(4.dp))
-        Text("重抽", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+        Text(secondaryLabel, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
       }
     }
-    TextButton(
-      onClick = onDismiss,
-      enabled = detailAlpha > 0.5f,
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(top = 2.dp),
-    ) {
-      Text("取消", color = GachaInk.TextSecondary, fontSize = 13.sp)
+    if (dismissLabel != null) {
+      TextButton(
+        onClick = onDismiss,
+        enabled = detailAlpha > 0.5f,
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(top = 2.dp),
+      ) {
+        Text(dismissLabel, color = GachaInk.TextSecondary, fontSize = 13.sp)
+      }
     }
   }
 }

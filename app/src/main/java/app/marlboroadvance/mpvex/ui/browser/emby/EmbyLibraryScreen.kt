@@ -133,6 +133,7 @@ import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefresh
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyFavoriteRandomIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyGachaDrawDialog
+import app.marlboroadvance.mpvex.ui.browser.emby.components.GachaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyProgressBar
 import app.marlboroadvance.mpvex.ui.browser.emby.components.MEDIA_BADGE_BG
@@ -1553,29 +1554,31 @@ data class EmbyLibraryScreen(
 
     // ── 随机抽卡：状态 ──
     // gachaOpen   = 全屏揭晓层是否打开
-    // gachaItem   = 抽到的条目（null = 还在取数，此时只播「准备中」的法阵）
+    // gachaCards  = 这一抽抽到的卡（**空列表 = 还在取数**，此时只播「准备中」的法阵）
     // gachaRollId = 抽取次数，**动画重启只认它**：重抽有可能又抽回同一条，
     //               以 item.Id 为 key 的话那次动画不会重播，看起来像点了没反应
+    val gachaDrawCountPref by browserPreferences.embyGachaDrawCount.collectAsState()
     var gachaOpen by remember { mutableStateOf(false) }
-    var gachaItem by remember { mutableStateOf<EmbyItem?>(null) }
+    var gachaCards by remember { mutableStateOf<List<GachaCard>>(emptyList()) }
     var gachaRollId by remember { mutableIntStateOf(0) }
     var gachaRolling by remember { mutableStateOf(false) }
 
     /**
-     * 抽一次：从**当前视图**的范围里随机取一条视频，交给抽卡层去揭晓。
+     * 抽一次：从**当前视图**的范围里随机取 [gachaDrawCountPref] 条视频，交给抽卡层去揭晓。
      *
      * 范围与「随机播放」完全同源（[loadRandomForView]）：分类档位、筛选、搜索词都照旧生效 ——
      * 用户在「收藏」分类里点抽卡，抽到的就该是收藏里的片子，不能偷偷扩到整个库。
      *
-     * @param excludeId 上一张卡上的条目，能避开就避开（池子里只有它时仍然返回它）
+     * @param excludeId 上一张卡上的条目，能避开就避开（只在**单抽**时用：多抽要的是
+     *                  「这一批里别重复」，跨批重复无所谓，强行排除反而会让池子变小）
      */
     fun rollGacha(excludeId: String? = null) {
       // 取数期间连点没有意义：多打一次网络，还会把刚起的动画重启掉
       if (gachaRolling) return
       gachaRolling = true
-      // 立刻清掉上一张卡 → 界面马上回到「法阵」态。重抽时若等网络回来才动，
+      // 立刻清空上一批卡 → 界面马上回到「法阵」态。重抽时若等网络回来才动，
       // 那半秒到一秒的空窗看着就像「点了没反应」。
-      gachaItem = null
+      gachaCards = emptyList()
       scope.launch {
         try {
           val current = viewModel.currentServerOrAwait()
@@ -1586,10 +1589,25 @@ data class EmbyLibraryScreen(
             gachaOpen = false
             return@launch
           }
-          // 池子给 20 条（远多于卡面要的 1 条）：重抽要能真的换片
-          val pool = loadRandomForView(current, drillDown = true, limitOverride = GACHA_POOL_SIZE)
-          val pick = pool.filter { it.Id != excludeId }.ifEmpty { pool }.randomOrNull()
-          if (pick == null) {
+          // 设置值在别处被手改过也可能越界，取数前再夹一次（与设置页同一口径）
+          val count = gachaDrawCountPref.coerceIn(1, GACHA_MAX_DRAW)
+          // 池子至少 20 条：单抽要能「重抽换片」，多抽更得留够余量（同批内先去重再取 N）
+          val pool = loadRandomForView(
+            current,
+            drillDown = true,
+            limitOverride = maxOf(GACHA_POOL_SIZE, count),
+          )
+          val distinct = pool.filter { it.Id != null }.distinctBy { it.Id }
+          val picked = (
+            if (count == 1 && excludeId != null) {
+              distinct.filter { it.Id != excludeId }.ifEmpty { distinct }
+            } else {
+              distinct
+            }
+            )
+            .shuffled()
+            .take(count)
+          if (picked.isEmpty()) {
             android.widget.Toast
               .makeText(
                 context,
@@ -1604,14 +1622,25 @@ data class EmbyLibraryScreen(
             gachaOpen = false
             return@launch
           }
-          // 列表接口给的条目不一定带 Overview（取决于服务端与 Fields），卡面要展示简介，
-          // 所以补一次详情。**失败就用列表里的版本**：少一段简介也远好过「抽完什么都不显示」。
-          val detail = pick.Id
-            ?.let { id -> runCatching { viewModel.loadItemDetail(current, id) }.getOrNull() }
-            ?: pick
-          // ⚠️ 顺序：先落 item、再自增 rollId。反过来的话 LaunchedEffect 会带着旧 item
-          //    （甚至是 null）重启，这一抽的动画就白跑了。
-          gachaItem = detail
+          var cards = picked.map { item ->
+            GachaCard(
+              item = item,
+              title = viewModel.displayTitle(item),
+              posterUrl = viewModel.imageUrl(current, item, "Primary", 480),
+              backdropUrl = viewModel.imageUrl(current, item, "Backdrop", 960),
+            )
+          }
+          // 单抽才预取简介：卡面就那么一张，多等一次 /Items 值得；
+          // 多抽的 N 条详情留到「点开某一张」时再补（10 条 = 10 次请求，不该在揭晓前打）。
+          if (cards.size == 1) {
+            val only = cards.first()
+            val full = only.item.Id
+              ?.let { id -> runCatching { viewModel.loadItemDetail(current, id) }.getOrNull() }
+            if (full != null) cards = listOf(only.copy(item = full))
+          }
+          // ⚠️ 顺序：先落 cards、再自增 rollId。反过来的话 LaunchedEffect 会带着旧数据
+          //    （甚至是空列表）重启，这一抽的动画就白跑了。
+          gachaCards = cards
           gachaRollId++
         } catch (e: CancellationException) {
           throw e
@@ -1622,6 +1651,35 @@ data class EmbyLibraryScreen(
           gachaOpen = false
         } finally {
           gachaRolling = false
+        }
+      }
+    }
+
+    /**
+     * 起播抽到的卡：1 张 = 「随机一张 / 长按某张」，N 张 = 「全部入队」。
+     *
+     * 三件事必须一起做：
+     *  · **先关抽卡层** —— 播放页会压在本页之上，卡面留在下面没有意义；
+     *  · **同一帧挂上「正在打开」遮罩** —— 起播前最多要探 2 秒直链（`warmStream`），
+     *    不挂遮罩就是光秃秃的媒体库，用户以为刚才那一下点空了。遮罩复用随机播放那一个
+     *    （同一个 `AppLoadingIndicator` 入口、同一个吞重复点击的行为），不另造；
+     *  · **用可等待的起播**（[EmbyViewModel.launchRandomPlaybackAwait]）—— fire-and-forget
+     *    那版立刻返回，`finally` 当场就把遮罩撤了，空窗照样露出来。
+     *
+     * 多张时 `launchRandomPlaybackAwait` 会把它当成播放列表：第 1 张起播，其余排队，
+     * 顺序就是揭晓顺序（这里不打乱）。
+     */
+    fun playGachaCards(batch: List<GachaCard>) {
+      if (batch.isEmpty()) return
+      gachaOpen = false
+      if (randomLaunching) return
+      randomLaunching = true
+      scope.launch {
+        try {
+          val current = viewModel.currentServerOrAwait() ?: return@launch
+          viewModel.launchRandomPlaybackAwait(current, batch.map { it.item })
+        } finally {
+          randomLaunching = false
         }
       }
     }
@@ -1791,8 +1849,8 @@ data class EmbyLibraryScreen(
           if (!searchActive && !isActorListMode && personId == null) {
             IconButton(onClick = {
               releaseInputFocus()
-              // 先清掉上一张卡：取数期间只该看到法阵，不能让人瞥见上次的结果
-              gachaItem = null
+              // 先清掉上一批卡：取数期间只该看到法阵，不能让人瞥见上次的结果
+              gachaCards = emptyList()
               gachaOpen = true
               rollGacha()
             }) {
@@ -2659,38 +2717,40 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
       }
     }
 
-      // ── 随机抽卡：全屏揭晓层（v194）──
+      // ── 随机抽卡：全屏揭晓层（v194，v197 起支持多抽）──
       // 用 Dialog（而不是在本页里叠一层 Box）是为了天然盖住顶栏 / 工具行 / 网格，
-      // 返回键也天然走 onDismiss。取数中 item 为 null，那一层自己播「准备中」的法阵。
+      // 返回键也天然走 onDismiss。取数中 cards 为空，那一层自己播「准备中」的法阵。
       if (gachaOpen) {
-        val rolled = gachaItem
-        val rollingServer = server
         EmbyGachaDrawDialog(
-          item = rolled,
+          cards = gachaCards,
           rollId = gachaRollId,
-          title = rolled?.let { viewModel.displayTitle(it) } ?: "",
-          // 卡面用竖版海报（更贴近抽卡的卡牌比例），缺图时 EmbyImage 会回退到剧照
-          posterUrl = rolled?.let { item ->
-            rollingServer?.let { srv -> viewModel.imageUrl(srv, item, "Primary", 600) }
+          onPlay = { card -> playGachaCards(listOf(card)) },
+          // 整批入队：第 1 张起播，其余按**揭晓顺序**排进播放队列（不打乱）。
+          onPlayAll = { batch -> playGachaCards(batch) },
+          // 单抽才排除「刚抽到的那一条」（重抽要真能换片）；多抽不排除 —— 那会把
+          // 刚看见的第 1 张从下一批池子里无故拿掉，而多抽本来就有「跨批重复」的心理预期。
+          onReroll = {
+            rollGacha(excludeId = if (gachaCards.size == 1) gachaCards.first().item.Id else null)
           },
-          backdropUrl = rolled?.let { item ->
-            rollingServer?.let { srv -> viewModel.imageUrl(srv, item, "Backdrop", 960) }
-          },
-          onPlay = {
-            val target = rolled
-            // 先关层再起播：播放页会压在本页之上，卡面留在下面没有意义
-            gachaOpen = false
-            if (target != null) {
-              scope.launch {
-                val current = viewModel.currentServerOrAwait() ?: rollingServer ?: return@launch
-                // 走「随机播放」同一条起播路径：起播前只给首条探一次直链（strm 条目不会
-                // 干等），整场从头播（抽到的可能是看了一半的老片，续播会直接跳到片尾）。
-                viewModel.launchRandomPlayback(current, listOf(target))
+          onDismiss = { gachaOpen = false },
+          // 多抽点开某一张时才补简介：10 条详情 = 10 次 /Items，不该在揭晓前打。
+          // 失败就返回原卡片（列表数据够画卡面），不让一次补详情把整个详情页顶掉。
+          resolveDetail = { card ->
+            val id = card.item.Id
+            if (id == null) {
+              card
+            } else {
+              val current = viewModel.currentServerOrAwait()
+              if (current == null) {
+                card
+              } else {
+                runCatching { viewModel.loadItemDetail(current, id) }
+                  .getOrNull()
+                  ?.let { card.copy(item = it) }
+                  ?: card
               }
             }
           },
-          onReroll = { rollGacha(excludeId = rolled?.Id) },
-          onDismiss = { gachaOpen = false },
         )
       }
 
@@ -4346,6 +4406,14 @@ private val PLAYABLE_TYPES = listOf("Movie", "Episode", "Video", "MusicVideo")
  * 20 条在列表接口上只是多几百字节，换来的是重抽真的能换片。
  */
 private const val GACHA_POOL_SIZE = 20
+
+/**
+ * 「随机抽卡」一次最多揭晓几张。
+ *
+ * 与设置页那个 `ListPreference`（1 / 3 / 5 / 10）必须同口径：设置值被手改、
+ * 或被旧版本写进越界值时，这里兜住 —— 否则一抽 40 张，网格要翻好几屏。
+ */
+private const val GACHA_MAX_DRAW = 10
 
 /**
  * 搜索结果的**客户端排序**。

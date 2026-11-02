@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.Audiotrack
 // ⚠️ material icons 的 `Icons.Outlined.X` 是**顶层扩展属性**，不是成员 ——
 // 每个用到的图标都必须单独 `import androidx.compose.material.icons.outlined.X`，
 // 漏了就是「Unresolved reference 'X'」（图标在库里明明存在）。
+import androidx.compose.material.icons.outlined.Casino
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Folder
@@ -1410,6 +1411,46 @@ object PreferencesScreen : Screen {
                   browserPreferences.randomPlayCount.set(value)
                 },
                 onCancel = { showRandomDialog = false },
+              )
+            }
+          }
+
+          // ── Emby 随机抽卡 ──────────────────────────────────────────
+          // 抽卡是「随机」这一族的独立入口（媒体库顶栏的骰子键），但它的**数量**语义
+          // 与「随机播放视频数量」完全不同：那边是一次取多少条进播放队列，这边是一次
+          // 开几张卡。混在同一张卡里，用户看到两个「数量」根本分不清谁管谁，所以单开一节。
+          item {
+            PreferenceSectionHeader(title = "Emby 随机抽卡")
+          }
+
+          item {
+            val browserPreferences = koinInject<BrowserPreferences>()
+            val drawCount by browserPreferences.embyGachaDrawCount.collectAsState()
+            PreferenceCard {
+              // 固定四档 1 / 3 / 5 / 10：抽卡是成批语义（单抽 / 十连），
+              // 填任意数字既没有仪式感、卡面网格也排不齐（见 BrowserPreferences 里的说明）。
+              // 摘要把「可选范围 / 默认值 / 上限」一次写全，用户不用点开才知道边界。
+              ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Casino,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = drawCount.coerceIn(1, 10),
+                onValueChange = { browserPreferences.embyGachaDrawCount.set(it.coerceIn(1, 10)) },
+                values = listOf(1, 3, 5, 10),
+                valueToText = { AnnotatedString(if (it == 1) "1 张（单抽）" else "$it 张") },
+                modifier = Modifier.settingsAnchor("抽卡数量"),
+                title = { Text(text = "抽卡数量", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = "当前 ${drawCount.coerceIn(1, 10)} 张 · 可选 1 / 3 / 5 / 10 张，" +
+                      "默认 1 张，上限 10 张；多张时结果页点某一张看详情并播放",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
               )
             }
           }

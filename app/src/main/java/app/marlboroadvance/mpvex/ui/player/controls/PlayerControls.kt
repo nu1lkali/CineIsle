@@ -316,6 +316,9 @@ fun PlayerControls(
   val areControlsLocked by viewModel.areControlsLocked.collectAsState()
   val seekBarShown by viewModel.seekBarShown.collectAsState()
   val pausedForCache by PlayerLib.propBoolean["paused-for-cache"].collectAsState()
+  // 首帧是否已经上屏。只用于下面缓冲转圈的**去重**（见那一支的注释）：
+  // 首帧未出时屏幕中央已经有 PlayerFirstFrameLoading 在转，再叠一个就是两个圈。
+  val firstFrameRendered by viewModel.firstFrameRendered.collectAsState()
   val paused by PlayerLib.propBoolean["pause"].collectAsState()
   val duration by PlayerLib.propInt["duration"].collectAsState()
   val position by PlayerLib.propInt["time-pos"].collectAsState()
@@ -857,13 +860,28 @@ fun PlayerControls(
           val interaction = remember { MutableInteractionSource() }
 
           when {
-            pausedForCache == true && showLoadingCircle -> {
+            // ⚠️ `firstFrameRendered` 这一项是**去重**用的，别删。
+            //    首帧还没上屏时，屏幕中央已经有 `PlayerFirstFrameLoading`
+            //    （PlayerActivity.setupPlayerControls 里，刻意挂在**控件层之外**，
+            //    不受 controlsShown 影响）在转，还带一行「正在加载…」。
+            //    而 mpv 在网络流起播阶段几乎必然把 `paused-for-cache` 置 yes，
+            //    用户这时点一下屏幕（想看看到底怎么了）⇒ 控件显示 ⇒ 两个圈同时成立：
+            //    一个在正中、一个被上方文字顶起半个行高，看着就是「两个加载动画」。
+            //    两者语义完全一样（都在等画面），留带文字的那个更清楚；首帧一上屏，
+            //    这一支接管缓冲（中途卡顿 / seek 后缓冲仍然只由这里表示）。
+            pausedForCache == true && showLoadingCircle && firstFrameRendered -> {
               // 走统一入口 ⇒ 「外观 → 加载动画」的选择对缓冲指示也生效。
               // ⚠️ 96dp 是**基准**尺寸（还会乘用户设的缩放系数，默认 1.1×）；
               //    用 size 参数而不是 Modifier.size，否则缩放对它不生效。
               //    与原来的 LoadingIndicator 同尺寸，切换时画面不会跳。
+              // ⚠️ tint 必须给，且与首帧层（PlayerActivity.PlayerFirstFrameLoading）
+              //    同一个白色 0.85：这一层原来没传 tint ⇒ Lottie 播自己的原色
+              //    （「小恐龙」是浅绿身体 + 蓝线条），于是同一个播放器里
+              //    「起播时白色小恐龙、中途缓冲时绿色小恐龙」，看着像两套图标。
+              //    压在画面上硬性白色半透明也对：彩色动画在亮画面上基本看不见。
               app.marlboroadvance.mpvex.ui.theme.AppLoadingIndicator(
                 size = 96.dp,
+                tint = Color.White.copy(alpha = 0.85f),
               )
             }
 

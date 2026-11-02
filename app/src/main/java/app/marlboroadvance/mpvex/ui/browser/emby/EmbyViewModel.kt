@@ -1761,46 +1761,66 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     engine: EngineKind? = resolveEngine(false),
   ) {
     if (items.isEmpty()) return
-    viewModelScope.launch {
-      val firstId = items.firstOrNull()?.Id
-      // ── 起播前只处理**首条**，而且**不跟 302**（v142）──
-      //
-      // 这套服务器的形态是「Emby 只存 .strm，真实文件在网盘 CDN 上」。所以口径必须
-      // 分得很清：**凡是跟随 302 的请求，都等于往网盘 CDN 打一次**，批量预取会直接
-      // 触发网盘风控。于是这里只用 [EmbyClient.warmStream]：
-      //
-      // · `followRedirects=false` ⇒ 请求**只到我们自己的 Emby 服务器**，拿到那个
-      //   302 就结束，客户端**一个字节都不打网盘 CDN**；
-      // · 而「服务端读远端文件把大小时长写库」这一步照样会发生 —— 这正是起播慢的
-      //   根因（v140），也就被提前掉了；
-      // · 它不取直链，所以这里**不再**产出 `directUrls`。即使用户开了「预解析直链」，
-      //   随机入口也不为了一个地址去多打一次 CDN —— 播放器自己跟 302 只需要一次，
-      //   而预解析会变成两次（解析一次 + 播放一次）。想看直链的场景（详情页点播）
-      //   仍然走原来那条 opt-in 的路。
-      //
-      // 只发**一次**、只针对**首条**、2 秒硬预算（超时按原地址起播）。后面的条目一律
-      // 不在这里探测 —— 由播放器按「播这条时预热下一条」串行处理
-      // （见 EmbyPlaybackReporter.warmNextItem）。
-      if (firstId != null) {
-        withTimeoutOrNull(RANDOM_PREWARM_BUDGET_MS) {
-          withContext(Dispatchers.IO) {
-            // 阻塞调用，所以把上限交给 OkHttp 自己（2 秒），别指望协程超时能打断它
-            EmbyClient.warmStream(
-              server = server,
-              itemId = firstId,
-              callTimeoutMs = RANDOM_PREWARM_BUDGET_MS,
-            )
-          }
+    viewModelScope.launch { launchRandomPlaybackAwait(server, items, engine) }
+  }
+
+  /**
+   * [launchRandomPlayback] 的**可等待**版本：函数返回时播放页已经 `startActivity` 了。
+   *
+   * ## 为什么要有这一版
+   *
+   * 起播前那次 `warmStream` 最长要 2 秒（见上面那段说明）。fire-and-forget 那版立刻返回，
+   * 调用方（抽卡层）关掉自己的遮罩后，用户会对着光秃秃的媒体库干等一两秒，然后播放页
+   * 才「突然」弹出来 —— 这段空窗必须有人负责。挂起版本把「已经起播」这个时刻交还给
+   * 调用方，它就能一直挂着「正在打开」遮罩，直到播放页真的起来。
+   *
+   * ⚠️ 本体只有一份（下面这段），不要在这里复制粘贴一份探测逻辑 —— 那份 302 / 网盘
+   * 风控的口径（只探首条、不跟跳转、2 秒硬预算）是踩过坑的，分叉出去必然走样。
+   */
+  suspend fun launchRandomPlaybackAwait(
+    server: EmbyServer,
+    items: List<EmbyItem>,
+    engine: EngineKind? = resolveEngine(false),
+  ) {
+    if (items.isEmpty()) return
+    val firstId = items.firstOrNull()?.Id
+    // ── 起播前只处理**首条**，而且**不跟 302**（v142）──
+    //
+    // 这套服务器的形态是「Emby 只存 .strm，真实文件在网盘 CDN 上」。所以口径必须
+    // 分得很清：**凡是跟随 302 的请求，都等于往网盘 CDN 打一次**，批量预取会直接
+    // 触发网盘风控。于是这里只用 [EmbyClient.warmStream]：
+    //
+    // · `followRedirects=false` ⇒ 请求**只到我们自己的 Emby 服务器**，拿到那个
+    //   302 就结束，客户端**一个字节都不打网盘 CDN**；
+    // · 而「服务端读远端文件把大小时长写库」这一步照样会发生 —— 这正是起播慢的
+    //   根因（v140），也就被提前掉了；
+    // · 它不取直链，所以这里**不再**产出 `directUrls`。即使用户开了「预解析直链」，
+    //   随机入口也不为了一个地址去多打一次 CDN —— 播放器自己跟 302 只需要一次，
+    //   而预解析会变成两次（解析一次 + 播放一次）。想看直链的场景（详情页点播）
+    //   仍然走原来那条 opt-in 的路。
+    //
+    // 只发**一次**、只针对**首条**、2 秒硬预算（超时按原地址起播）。后面的条目一律
+    // 不在这里探测 —— 由播放器按「播这条时预热下一条」串行处理
+    // （见 EmbyPlaybackReporter.warmNextItem）。
+    if (firstId != null) {
+      withTimeoutOrNull(RANDOM_PREWARM_BUDGET_MS) {
+        withContext(Dispatchers.IO) {
+          // 阻塞调用，所以把上限交给 OkHttp 自己（2 秒），别指望协程超时能打断它
+          EmbyClient.warmStream(
+            server = server,
+            itemId = firstId,
+            callTimeoutMs = RANDOM_PREWARM_BUDGET_MS,
+          )
         }
       }
-      launchPlaylist(
-        server = server,
-        items = items,
-        // 随机列表常混着看过的剧，切到下一条时恢复续播会直接跳到片尾就结束
-        playFromStartAll = true,
-        engine = engine,
-      )
     }
+    launchPlaylist(
+      server = server,
+      items = items,
+      // 随机列表常混着看过的剧，切到下一条时恢复续播会直接跳到片尾就结束
+      playFromStartAll = true,
+      engine = engine,
+    )
   }
 
   fun launchPlaylist(

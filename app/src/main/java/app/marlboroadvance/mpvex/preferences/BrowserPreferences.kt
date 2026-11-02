@@ -45,6 +45,23 @@ class BrowserPreferences(
    */
   val embyRandomGestureToast = preferenceStore.getBoolean("emby_random_gesture_toast", true)
 
+  /**
+   * 随机抽卡一次抽几张：**1（默认）/ 3 / 5 / 10（上限）**，单位「张」。
+   *
+   * 为什么给固定档位而不是让人随便填：抽卡这个动作本身就是**成批**语义（单抽 / 十连），
+   * 填个 7 张既没有仪式感、卡面网格也排不出整齐的行；而且数量直接影响请求数，
+   * 固定档位才好把代价写清楚。
+   *
+   * 为什么上限是 10：多抽的每张卡都要补一次详情（`/Items/{id}`），20 张在网盘库上
+   * 就是 20 次请求；10 张在列表接口里只多几百字节，卡面（5 列 × 2 行）也还排得下。
+   * 另外 10 是「再抽一次」的成本上限 —— 重抽按钮的文案直接写「再抽 10 张」，
+   * 用户点之前就知道要花多少。
+   *
+   * ⚠️ 读取处一律 `coerceIn(1, 10)`：偏好是明文存的，手改过 / 旧版本残留都可能越界，
+   *    越界的值会让抽卡界面按 0 张或 30 张去取数。
+   */
+  val embyGachaDrawCount = preferenceStore.getInt("emby_gacha_draw_count", 1)
+
   // Video sorting preferences
   val videoSortType = preferenceStore.getEnum("video_sort_type", VideoSortType.Title)
   val videoSortOrder = preferenceStore.getEnum("video_sort_order", SortOrder.Ascending)
