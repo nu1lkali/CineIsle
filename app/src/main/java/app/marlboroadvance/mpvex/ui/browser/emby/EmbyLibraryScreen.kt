@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
@@ -1562,6 +1563,15 @@ data class EmbyLibraryScreen(
     var gachaCards by remember { mutableStateOf<List<GachaCard>>(emptyList()) }
     var gachaRollId by remember { mutableIntStateOf(0) }
     var gachaRolling by remember { mutableStateOf(false) }
+    // 上一批：抽完关掉就再也看不到的那些卡（v202）。
+    // ⚠️ 存的是**上一批**，不是当前这一批 —— 当前这一批就在 gachaCards 里，
+    //    再存一份只会让「上一批」在重抽的瞬间变成「这一批自己」。
+    //    重抽（rollId 自增）成功后才把它顶掉，仍能按 ← → 来回看。
+    var gachaPrevCards by remember { mutableStateOf<List<GachaCard>>(emptyList()) }
+    var gachaPrevRollId by remember { mutableIntStateOf(0) }
+    // 「上一批」入口只在**抽完之后**才有意义：抽之前它是空的，点了只会弹个空法阵。
+    // 判据用「有没有上一批」而不是「有没有抽过」，省一个状态。
+    val gachaHasPrev = gachaPrevCards.isNotEmpty()
 
     /**
      * 抽一次：从**当前视图**的范围里随机取 [gachaDrawCountPref] 条视频，交给抽卡层去揭晓。
@@ -1592,6 +1602,11 @@ data class EmbyLibraryScreen(
           // 设置值在别处被手改过也可能越界，取数前再夹一次（与设置页同一口径）
           val count = gachaDrawCountPref.coerceIn(1, GACHA_MAX_DRAW)
           // 池子至少 20 条：单抽要能「重抽换片」，多抽更得留够余量（同批内先去重再取 N）
+          //
+          // ⚠️ `drillDown = true` 是硬性的，**不跟**「随机播放手势」那个设置
+          //    （`embyRandomDrillDownOnTap`）：抽卡是要「从这一片里抽点东西出来」，
+          //    只扫当前这一层的话，面对「每部片一个文件夹」的库会抽出来空的 ——
+          //    用户原话「抽卡可以抽到子文件夹的视频」。
           val pool = loadRandomForView(
             current,
             drillDown = true,
@@ -1626,7 +1641,12 @@ data class EmbyLibraryScreen(
             GachaCard(
               item = item,
               title = viewModel.displayTitle(item),
-              posterUrl = viewModel.imageUrl(current, item, "Primary", 480),
+              // 海报按**实际显示尺寸**向服务端要（v202）：网格小卡 111~180dp 宽、
+              // 详情里的缩略图 96dp，480px 是纯浪费 —— Emby 的 `maxWidth` 就是
+              // 服务端缩放宽度，传小一档服务端直接给更小的图，省一半上下流量。
+              // 单抽大卡宽度封顶 380dp，480px 仍然够（密度 2x 时才勉强到 760，
+              // 但海报是 Crop 到卡面的，2x 屏上 480 已接近观感上限，不值得翻倍）。
+              posterUrl = viewModel.imageUrl(current, item, "Primary", GACHA_POSTER_WIDTH),
               backdropUrl = viewModel.imageUrl(current, item, "Backdrop", 960),
             )
           }
@@ -1640,6 +1660,12 @@ data class EmbyLibraryScreen(
           }
           // ⚠️ 顺序：先落 cards、再自增 rollId。反过来的话 LaunchedEffect 会带着旧数据
           //    （甚至是空列表）重启，这一抽的动画就白跑了。
+          //    同理，「上一批」也必须在这一步就顶掉 —— 放在后面的话重抽的动画里
+          //    「上一批」还会指着本批自己。
+          if (gachaCards.isNotEmpty()) {
+            gachaPrevCards = gachaCards
+            gachaPrevRollId = gachaRollId
+          }
           gachaCards = cards
           gachaRollId++
         } catch (e: CancellationException) {
@@ -1656,7 +1682,7 @@ data class EmbyLibraryScreen(
     }
 
     /**
-     * 起播抽到的卡：1 张 = 「随机一张 / 长按某张」，N 张 = 「全部入队」。
+     * 起播抽到的卡：1 张 = 「随机一张 / 长按某张」，N 张 = 「队列播放」。
      *
      * 三件事必须一起做：
      *  · **先关抽卡层** —— 播放页会压在本页之上，卡面留在下面没有意义；
@@ -1666,8 +1692,10 @@ data class EmbyLibraryScreen(
      *  · **用可等待的起播**（[EmbyViewModel.launchRandomPlaybackAwait]）—— fire-and-forget
      *    那版立刻返回，`finally` 当场就把遮罩撤了，空窗照样露出来。
      *
-     * 多张时 `launchRandomPlaybackAwait` 会把它当成播放列表：第 1 张起播，其余排队，
-     * 顺序就是揭晓顺序（这里不打乱）。
+     * ⚠️ 多张时这是**替换**现有队列，不是追加：`launchRandomPlaybackAwait` 起的是一个
+     *    新播放列表。所以按钮文案写「队列播放」而不是「全部入队」—— 「入队」会让人
+     *    以为在原有队列后面接着排（v202 改文案，用户确认）。
+     *    顺序就是揭晓顺序，这里不打乱。
      */
     fun playGachaCards(batch: List<GachaCard>) {
       if (batch.isEmpty()) return
@@ -1855,6 +1883,27 @@ data class EmbyLibraryScreen(
               rollGacha()
             }) {
               Icon(Icons.Default.Casino, contentDescription = "随机抽卡")
+            }
+            // 「上一批」：抽完关掉之后，这批卡就再也找不回来了（v202）。
+            // 只抽过、且现在没有正在抽的时候才出现 —— 平时不占顶栏的位置。
+            // 图标用 History：它表达的是「翻回刚才那次结果」，不是「再来一次」
+            // （再来一次已经是抽卡键自己）。
+            if (gachaHasPrev && !gachaRolling) {
+              IconButton(onClick = {
+                releaseInputFocus()
+                val prev = gachaPrevCards
+                if (prev.isEmpty()) return@IconButton
+                gachaCards = prev
+                // ⚠️ rollId 必须换成**那一批自己的**：沿用当前值的话上次动画的
+                //    LaunchedEffect 因为 key 没变而不会重播，画面会停在上一批的终态
+                //    （或者更糟 —— 直接闪成空法阵）。
+                gachaRollId = gachaPrevRollId
+                // 开回来时不再和当前批互换：来回翻会让 gachaPrevRollId 与
+                // gachaRollId 变成同一批，越翻越乱。要看下一批就再抽一次。
+                gachaOpen = true
+              }) {
+                Icon(Icons.Default.History, contentDescription = "上一批抽取结果")
+              }
             }
           }
           // 图标跟着搜索态走：没搜时是放大镜，进搜索后换成「放大镜 + 斜杠」。
@@ -2725,14 +2774,23 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
           cards = gachaCards,
           rollId = gachaRollId,
           onPlay = { card -> playGachaCards(listOf(card)) },
-          // 整批入队：第 1 张起播，其余按**揭晓顺序**排进播放队列（不打乱）。
+          // 整批起播：第 1 张起播，其余按**揭晓顺序**排进播放队列（不打乱）。
+          // ⚠️ 这是**替换**现有队列，不是追加 —— 所以按钮文案是「队列播放」不是「入队」。
           onPlayAll = { batch -> playGachaCards(batch) },
           // 单抽才排除「刚抽到的那一条」（重抽要真能换片）；多抽不排除 —— 那会把
           // 刚看见的第 1 张从下一批池子里无故拿掉，而多抽本来就有「跨批重复」的心理预期。
           onReroll = {
             rollGacha(excludeId = if (gachaCards.size == 1) gachaCards.first().item.Id else null)
           },
-          onDismiss = { gachaOpen = false },
+          // 关掉时把这一批存成「上一批」（v202）：否则这批卡关掉就再也找不回来。
+          // 只存非空的 —— 取数失败 / 还在取数时关掉，不该用空列表顶掉上一批。
+          onDismiss = {
+            gachaOpen = false
+            if (gachaCards.isNotEmpty()) {
+              gachaPrevCards = gachaCards
+              gachaPrevRollId = gachaRollId
+            }
+          },
           // 多抽点开某一张时才补简介：10 条详情 = 10 次 /Items，不该在揭晓前打。
           // 失败就返回原卡片（列表数据够画卡面），不让一次补详情把整个详情页顶掉。
           resolveDetail = { card ->
@@ -4414,6 +4472,18 @@ private const val GACHA_POOL_SIZE = 20
  * 或被旧版本写进越界值时，这里兜住 —— 否则一抽 40 张，网格要翻好几屏。
  */
 private const val GACHA_MAX_DRAW = 10
+
+/**
+ * 抽卡海报向服务端要的宽度（px，Emby 的 `maxWidth` 是**服务端缩放宽度**）。
+ *
+ * 原来是 480，但实际显示尺寸对不上：
+ *  · 多抽网格小卡 111~180dp 宽（10 张 3 列时约 111dp，1.5 比例）；
+ *  · 详情里的缩略图 96dp；单抽大卡封顶 380dp。
+ * 2x 屏上 180dp 卡片最多需要 360px，480 已是余量；3x 屏极端情况才会略软，
+ * 但海报是 `ContentScale.Crop` 到卡面的，观感上限远低于理论值。
+ * 10 张一次性下载时，480 → 320 大约省四成流量，而网格上肉眼看不出差别。
+ */
+private const val GACHA_POSTER_WIDTH = 320
 
 /**
  * 搜索结果的**客户端排序**。

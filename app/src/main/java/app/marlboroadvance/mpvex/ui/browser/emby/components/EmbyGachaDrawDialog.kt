@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.browser.emby.components
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -36,9 +37,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
@@ -272,6 +273,12 @@ private const val GRID_REVEAL_BASE_MS = 620
 /** 多抽时相邻两张卡的起翻间隔 */
 private const val GRID_STAGGER_MS = 80
 
+/** 「共鸣」回缩时长（蓄满 → 炸开之间的那一下吸气） */
+private const val GATHER_MS = 160
+
+/** 第二道「回声」冲击波的铺开时长（比第一道慢约一倍） */
+private const val ECHO_MS = 1100
+
 /**
  * @param cards 抽到的卡；**空列表 = 还在取数**（只播「准备中」的法阵，不揭晓）
  * @param rollId 每次抽取自增。**动画重启只认它**：同一个条目重抽也可能再抽回来，
@@ -307,6 +314,18 @@ internal fun EmbyGachaDrawDialog(
   val flip = remember { Animatable(0f) }
   val grid = remember { Animatable(0f) }
   val detailIn = remember { Animatable(0f) }
+  /**
+   * 「共鸣」（v202）：蓄能打满之后、白光爆开之前的**那一下回缩**。
+   *
+   * 0 → 1 的过程里法阵整体向内收（半径 ×0.80、刻度线变短、中心核压小），
+   * 收到位的一瞬间才炸开。加这一段是因为原来「蓄能拉满 → 直接闪白」太直 ——
+   * 蓄能段走完时画面已经是最亮的一张，再闪白只是「亮上更亮」，看不出「要放了」。
+   * 先收一下再炸，观感上有「吸一口气」的蓄势感，总时长只多 [GATHER_MS]（160ms），
+   * 不做成大幅缩放/旋转，避免变成放烟花。
+   */
+  val gather = remember { Animatable(0f) }
+  /** 第二道「回声」冲击波（见 [drawBurstRays] 的 echo 说明）。 */
+  val echo = remember { Animatable(0f) }
   var phase by remember { mutableStateOf(GachaPhase.Awaiting) }
 
   /**
@@ -343,6 +362,35 @@ internal fun EmbyGachaDrawDialog(
 
   val gridTotalMs = GRID_REVEAL_BASE_MS + (count - 1).coerceAtLeast(0) * GRID_STAGGER_MS
 
+  // ── 重抽时「法阵闪回 0」的修复（v202）──
+  //
+  // 时序：`rollGacha` 先把 `gachaCards` 清空 → 本组件的 `count` 变 0 →
+  // `LaunchedEffect(rollId, count)` 抢先重跑，而首行 `if (cards.isEmpty()) return` 让
+  // **六个 Animatable 的 snapTo(0) 全被跳过**（idle 也在下面被 restart）。
+  // 等新数据回来、effect 再跑一次时才 snapTo —— 此刻画面上法阵早已停在原来的角度，
+  // 用户看到的就是刻度环「亮一下、转回去、重新转」。
+  // 修法：在**组合期**发现「卡已清空但旧批的进度还在」就把进度归零。
+  // 组合期改 Animatable 只能 `snapTo`（挂起函数），所以包一层 `LaunchedEffect(Unit)`；
+  // 判据用 `phase != Awaiting`，只在「Card/Burst 态遇到清空」时触发一次，不会每帧重来。
+  if (cards.isEmpty() && phase != GachaPhase.Awaiting) {
+    LaunchedEffect(rollId) {
+      charge.snapTo(0f)
+      flash.snapTo(0f)
+      shock.snapTo(0f)
+      flip.snapTo(0f)
+      grid.snapTo(0f)
+      detailIn.snapTo(0f)
+      gather.snapTo(0f)
+      echo.snapTo(0f)
+      focused = null
+      focusedDetail = null
+      detailLoading = false
+      // 归零后 idle 的接力点才有意义（下面 effect 里读到的才是「从头开始的那圈」）
+      spinBase = 0f
+      phase = GachaPhase.Awaiting
+    }
+  }
+
   LaunchedEffect(rollId, count) {
     if (cards.isEmpty()) {
       phase = GachaPhase.Awaiting
@@ -354,13 +402,20 @@ internal fun EmbyGachaDrawDialog(
     flip.snapTo(0f)
     grid.snapTo(0f)
     detailIn.snapTo(0f)
+    gather.snapTo(0f)
+    echo.snapTo(0f)
     focused = null
     focusedDetail = null
 
     // 接力：把等待期法阵停下的位置接过来，蓄能从这里继续（见 spinBase 的说明）
     spinBase = idle.value * 0.4f
     phase = GachaPhase.Charging
-    charge.animateTo(1f, tween(ROLL_MS, easing = LinearEasing))
+    charge.animateTo(1f, tween(ROLL_MS, easing = FastOutSlowInEasing))
+
+    // ── 共鸣：蓄满后先向内收一下（法阵半径缩到 0.80、中心核压小）──
+    // 收的过程本身很慢（EaseIn），收到位才炸。只多 160ms，但「亮 → 收 → 炸」
+    // 三个动作读得出来，比「亮 → 更亮 → 炸」有层次。
+    gather.animateTo(1f, tween(GATHER_MS, easing = FastOutLinearInEasing))
 
     // ── 揭晓：闪白 + 冲击波 + 翻牌三件事同时起 ──
     // 闪光先极快地打满再淡出（「爆发」就是这一下），冲击波慢一点铺开，
@@ -372,6 +427,11 @@ internal fun EmbyGachaDrawDialog(
     }
     launch {
       shock.animateTo(1f, tween(760, easing = LinearOutSlowInEasing))
+    }
+    // 回声波（v202）：第二道慢一倍、细一半的冲击波，跟着第一道一起铺开。
+    // 只有这一层薄薄的回声，不加第二组放射线 —— 加了就成烟花了。
+    launch {
+      echo.animateTo(1f, tween(ECHO_MS, easing = LinearOutSlowInEasing))
     }
     if (count == 1) {
       flip.animateTo(1f, tween(REVEAL_MS, easing = FastOutSlowInEasing))
@@ -425,13 +485,35 @@ internal fun EmbyGachaDrawDialog(
           // 会冲到 1.4 —— 法阵那边对 heighten 做了 coerceIn 看不出来，但卡背的呼吸
           // 缩放（0.92+0.08p）与描边 alpha 都是按 [0,1] 调的，会停在「过头」的亮度上。
           val p = if (phase == GachaPhase.Awaiting) idle.value * 0.4f else spinBase + charge.value * (1f - spinBase)
-          drawSummonCircle(center = center, base = base, p = p, accent = GachaInk.Spark)
+          // 「共鸣」只影响画法阵的**尺寸**，不影响它的进度 p ——
+          // 转到的角度必须连续（见 spinBase），只有半径 / 刻度长度会收回来。
+          drawSummonCircle(
+            center = center,
+            base = base,
+            p = p,
+            accent = GachaInk.Spark,
+            gather = gather.value,
+          )
         }
         val s = shock.value
         // 只在 0→1 的进行中画：跑完后 shock 停在 1，再画一遍只会是一堆 alpha=0 的
         // 路径（白算 20 个三角形 + 3 个圈），没有必要
         if (s > 0f && s < 1f) {
           drawBurstRays(center = center, base = base, s = s, accent = bestRarity.accent)
+        }
+        // 回声波：第二道细而慢的冲击波。不画放射线，只画圈 —— 多一层薄环让
+        // 「炸开」有余韵，而不会变成连续两轮烟花。
+        val e = echo.value
+        if (e > 0f && e < 1f) {
+          val fade = (1f - e).coerceIn(0f, 1f)
+          for (i in 0 until 2) {
+            drawCircle(
+              color = bestRarity.accent.copy(alpha = (0.22f - i * 0.09f) * fade),
+              radius = base * (0.10f + 0.62f * e) * (1f + i * 0.16f),
+              center = center,
+              style = Stroke(width = (1.6f - i * 0.6f).dp.toPx()),
+            )
+          }
         }
         // 揭晓后卡片背后常驻的稀有度光晕（缓慢明暗，暗示这是「活着」的卡）
         if (phase == GachaPhase.Card) {
@@ -551,7 +633,13 @@ internal fun EmbyGachaDrawDialog(
             // 番号：从标题最前面抠（见 [gachaCodeOf]）。**只要这一批里有一张有**，
             // 每张卡都留出这一行的高度 —— 只有有的有有的没有时，行高会参差不齐，
             // 网格看着像没对齐；留空的那张只是少一行字。
-            val codes = cards.map { gachaCodeOf(it.title) }
+            //
+            // ⚠️ 必须 `remember(cards)`：这里是 `BoxWithConstraints` 的 content lambda，
+            //    它在**测量阶段**执行，外层任何状态变化（单抽的 detailIn、详情层的
+            //    focused、底栏的 actionsAlpha…）都会把它重跑一遍。而 gachaCodeOf 里
+            //    是「一次全角归一（逐字符遍历）+ 最多两次正则」× 10 张 —— 不 remember
+            //    就等于每次重组白跑 10 遍字符串归一，纯浪费（v202 实测发现）。
+            val codes = remember(cards) { cards.map { gachaCodeOf(it.title) } }
             val captionH = if (codes.any { it != null }) GACHA_CAPTION_HEIGHT else 0.dp
 
             // 逐档试算，同时记两个候选：
@@ -659,7 +747,11 @@ internal fun EmbyGachaDrawDialog(
           }
           val queueAllAction: @Composable () -> Unit = {
             OutlinedButton(
-              // 整批入队：第 1 张起播，其余按揭晓顺序排队（不打乱 —— 顺序就是刚看到的顺序）
+              // 整批起播：第 1 张起播，其余按揭晓顺序排队（不打乱 —— 顺序就是刚看到的顺序）
+              //
+              // ⚠️ 文案是「队列播放」不是「全部入队」（v202）：`launchPlaylist` 起的是
+              //    **新**播放列表，原有队列会被整批替换。「入队」会让人以为在旧队列后面
+              //    接着排，名不副实。
               onClick = { onPlayAll(cards) },
               enabled = actionsEnabled,
               shape = RoundedCornerShape(14.dp),
@@ -667,12 +759,14 @@ internal fun EmbyGachaDrawDialog(
               contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
             ) {
               Icon(
-                Icons.Default.PlaylistAdd,
+                // AutoMirrored 版：RTL 下箭头方向要跟着翻，非镜像版在阿拉伯语等
+                // RTL 语言里箭头会反着指（虽然本项目只有中文，但一条 import 的事）
+                Icons.AutoMirrored.Filled.PlaylistPlay,
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
               )
               Spacer(Modifier.size(6.dp))
-              Text("全部入队", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+              Text("队列播放", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
           }
           val rerollAction: @Composable () -> Unit = {
@@ -838,10 +932,20 @@ internal fun EmbyGachaDrawDialog(
 
       // ── 5. 顶部说明 + 关闭 ──
       // 关闭键**全程可用**：抽卡是锦上添花的功能，任何阶段都得让人能退出
+      //
+      // 文案跟着共鸣走（v202）：蓄满收那一下写「共鸣」，炸开前的那 160ms 是有内容的，
+      // 一直写「祈愿中…」会让人以为卡住了。共鸣结束就进 Burst，文字随即切到「本次抽到」。
       Text(
         text = when (phase) {
           GachaPhase.Awaiting -> "正在准备卡池…"
-          GachaPhase.Charging -> if (count > 1) "祈愿中… · $count 连" else "祈愿中…"
+          GachaPhase.Charging ->
+            if (gather.value > 0.01f) {
+              "共鸣 · 即将揭晓"
+            } else if (count > 1) {
+              "祈愿中… · $count 连"
+            } else {
+              "祈愿中…"
+            }
           GachaPhase.Burst, GachaPhase.Card -> if (count > 1) "本次抽到 $count 张" else "本次抽到"
         },
         color = GachaInk.TextSecondary,
@@ -1311,8 +1415,19 @@ private fun gachaRuntimeText(ticks: Long?): String? {
  *
  * 所有尺寸都按 [base]（屏幕短边）取比例，横竖屏 / 平板都能铺满不留半截。
  */
-private fun DrawScope.drawSummonCircle(center: Offset, base: Float, p: Float, accent: Color) {
-  val outer = base * 0.29f
+private fun DrawScope.drawSummonCircle(
+  center: Offset,
+  base: Float,
+  p: Float,
+  accent: Color,
+  /** 0 = 正常尺寸，1 = 收到最小（见 [GATHER_MS] 的说明）。 */
+  gather: Float = 0f,
+) {
+  val g = gather.coerceIn(0f, 1f)
+  // 半径整体收 20%，刻度线按 (1 - 0.55g) 缩短，中心核压到 0.70 ——
+  // 三处一起收才有「吸气」的体积感；只缩外圈会像镜头拉远。
+  val shrink = 1f - 0.20f * g
+  val outer = base * 0.29f * shrink
   val heighten = p.coerceIn(0f, 1f)
 
   for (i in 0 until 3) {
@@ -1329,12 +1444,15 @@ private fun DrawScope.drawSummonCircle(center: Offset, base: Float, p: Float, ac
   // 外圈刻度：每 5 格一根长线，方向随 p 转，转起来才像「法阵在跑」
   val ticks = 60
   val rot = p * 320f
+  // 刻度长度也参与回缩：共鸣时线头往回收，读起来像法阵被「吸」了一下
+  val tickScale = 1f - 0.55f * g
   for (i in 0 until ticks) {
     val ang = (i * 360.0 / ticks + rot) * PI / 180.0
     val r1 = outer * 1.0f
-    val r2 = r1 + (if (i % 5 == 0) 9f else 4f).dp.toPx()
+    val r2 = r1 + (if (i % 5 == 0) 9f else 4f).dp.toPx() * tickScale
     drawLine(
-      color = accent.copy(alpha = (0.14f + 0.34f * heighten).coerceIn(0f, 1f)),
+      // 共鸣时光尘环也提一点亮度，配合「收」的动作（收的时候更亮，放开才炸）
+      color = accent.copy(alpha = (0.14f + 0.34f * heighten + 0.18f * g).coerceIn(0f, 1f)),
       start = Offset(center.x + (cos(ang) * r1).toFloat(), center.y + (sin(ang) * r1).toFloat()),
       end = Offset(center.x + (cos(ang) * r2).toFloat(), center.y + (sin(ang) * r2).toFloat()),
       strokeWidth = 1.dp.toPx(),
@@ -1356,8 +1474,8 @@ private fun DrawScope.drawSummonCircle(center: Offset, base: Float, p: Float, ac
     )
   }
 
-  // 中心核：越抽越亮
-  val coreR = base * (0.06f + 0.10f * heighten)
+  // 中心核：越抽越亮；共鸣时再压小一点，炸开瞬间它才是「从这一点炸出来」的
+  val coreR = base * (0.06f + 0.10f * heighten) * (1f - 0.30f * g)
   drawCircle(
     brush = Brush.radialGradient(
       colors = listOf(
