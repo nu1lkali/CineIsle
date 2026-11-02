@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
@@ -131,6 +132,7 @@ import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshGridBox
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyFavoriteRandomIcon
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyGachaDrawDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyProgressBar
 import app.marlboroadvance.mpvex.ui.browser.emby.components.MEDIA_BADGE_BG
@@ -1418,6 +1420,13 @@ data class EmbyLibraryScreen(
        * false = 只取当前这一层（长按入口用），目录里没有直接可播条目时自然为空。
        */
       drillDown: Boolean = true,
+      /**
+       * 覆盖「随机播放数量」这个设置项（null = 照设置取）。
+       *
+       * 「随机抽卡」要用它：卡面只展示一条，但**池子必须比一条大** —— 否则重抽大概率
+       * 又抽回同一部片子。抽卡入口传 [GACHA_POOL_SIZE]，客户端从这一批里挑一条。
+       */
+      limitOverride: Int? = null,
     ): List<EmbyItem> {
       // 搜索 / 「中文字幕」扫描：结果集已经整批在手上 → 直接洗牌
       if (searchQuery.isNotBlank() || chineseSubsOnly) {
@@ -1427,7 +1436,7 @@ data class EmbyLibraryScreen(
         val playable = pool.filter { item -> PLAYABLE_TYPES.any { it == item.Type } }
         return (playable.ifEmpty { pool })
           .shuffled()
-          .take(browserPreferences.randomPlayCount.randomPlayLimit())
+          .take(limitOverride ?: browserPreferences.randomPlayCount.randomPlayLimit())
       }
 
       // 随机只能落在「能直接播」的条目上。当前分类若只含 Series / BoxSet / Folder
@@ -1436,8 +1445,8 @@ data class EmbyLibraryScreen(
       val playableOfView = (effectiveTypes ?: PLAYABLE_TYPES).filter { it in PLAYABLE_TYPES }
       val randomTypes = playableOfView.takeIf { it.isNotEmpty() } ?: PLAYABLE_TYPES
 
-      // 随机播放 / 视界流取多少条：统一读设置项
-      val randomLimit = browserPreferences.randomPlayCount.randomPlayLimit()
+      // 随机播放 / 视界流 / 抽卡取多少条：设置项与调用方覆盖，前者优先
+      val randomLimit = limitOverride ?: browserPreferences.randomPlayCount.randomPlayLimit()
 
       return viewModel.loadItems(
         server = current,
@@ -1538,6 +1547,81 @@ data class EmbyLibraryScreen(
           // 起播探测也在这一层里（launchRandomPlayback 是挂起的），所以转圈一直转到
           // 播放器真要起来为止 —— 动画消失与画面切换是同一瞬间，中间不再有空窗期。
           randomLaunching = false
+        }
+      }
+    }
+
+    // ── 随机抽卡：状态 ──
+    // gachaOpen   = 全屏揭晓层是否打开
+    // gachaItem   = 抽到的条目（null = 还在取数，此时只播「准备中」的法阵）
+    // gachaRollId = 抽取次数，**动画重启只认它**：重抽有可能又抽回同一条，
+    //               以 item.Id 为 key 的话那次动画不会重播，看起来像点了没反应
+    var gachaOpen by remember { mutableStateOf(false) }
+    var gachaItem by remember { mutableStateOf<EmbyItem?>(null) }
+    var gachaRollId by remember { mutableIntStateOf(0) }
+    var gachaRolling by remember { mutableStateOf(false) }
+
+    /**
+     * 抽一次：从**当前视图**的范围里随机取一条视频，交给抽卡层去揭晓。
+     *
+     * 范围与「随机播放」完全同源（[loadRandomForView]）：分类档位、筛选、搜索词都照旧生效 ——
+     * 用户在「收藏」分类里点抽卡，抽到的就该是收藏里的片子，不能偷偷扩到整个库。
+     *
+     * @param excludeId 上一张卡上的条目，能避开就避开（池子里只有它时仍然返回它）
+     */
+    fun rollGacha(excludeId: String? = null) {
+      // 取数期间连点没有意义：多打一次网络，还会把刚起的动画重启掉
+      if (gachaRolling) return
+      gachaRolling = true
+      // 立刻清掉上一张卡 → 界面马上回到「法阵」态。重抽时若等网络回来才动，
+      // 那半秒到一秒的空窗看着就像「点了没反应」。
+      gachaItem = null
+      scope.launch {
+        try {
+          val current = viewModel.currentServerOrAwait()
+          if (current == null) {
+            android.widget.Toast
+              .makeText(context, "还没有连接到 Emby 服务器", android.widget.Toast.LENGTH_SHORT)
+              .show()
+            gachaOpen = false
+            return@launch
+          }
+          // 池子给 20 条（远多于卡面要的 1 条）：重抽要能真的换片
+          val pool = loadRandomForView(current, drillDown = true, limitOverride = GACHA_POOL_SIZE)
+          val pick = pool.filter { it.Id != excludeId }.ifEmpty { pool }.randomOrNull()
+          if (pick == null) {
+            android.widget.Toast
+              .makeText(
+                context,
+                if (searchQuery.isNotBlank() || chineseSubsOnly) {
+                  "当前搜索结果里没有可抽取的视频"
+                } else {
+                  "当前范围内没有可抽取的视频"
+                },
+                android.widget.Toast.LENGTH_SHORT,
+              )
+              .show()
+            gachaOpen = false
+            return@launch
+          }
+          // 列表接口给的条目不一定带 Overview（取决于服务端与 Fields），卡面要展示简介，
+          // 所以补一次详情。**失败就用列表里的版本**：少一段简介也远好过「抽完什么都不显示」。
+          val detail = pick.Id
+            ?.let { id -> runCatching { viewModel.loadItemDetail(current, id) }.getOrNull() }
+            ?: pick
+          // ⚠️ 顺序：先落 item、再自增 rollId。反过来的话 LaunchedEffect 会带着旧 item
+          //    （甚至是 null）重启，这一抽的动画就白跑了。
+          gachaItem = detail
+          gachaRollId++
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          android.widget.Toast
+            .makeText(context, "抽取失败：${e.message ?: "未知错误"}", android.widget.Toast.LENGTH_SHORT)
+            .show()
+          gachaOpen = false
+        } finally {
+          gachaRolling = false
         }
       }
     }
@@ -1698,6 +1782,23 @@ data class EmbyLibraryScreen(
           }
         },
         actions = {
+          // 「随机抽卡」挂在搜索键**左边**：抽卡是「看点什么」，搜索是「找一个」，
+          // 浏览场景下先抽后搜更顺；两个都是「在当前库上做动作」，并排放在顶栏也合理。
+          //
+          // 三种页面不给这个键：搜索态（顶栏此时是「退出搜索」，再塞一个入口会挤）、
+          // 演员列表与「某演员作品」子页（这两页没有可播放的视频语义，
+          // 与工具行收掉随机播放按钮的判据保持一致）。
+          if (!searchActive && !isActorListMode && personId == null) {
+            IconButton(onClick = {
+              releaseInputFocus()
+              // 先清掉上一张卡：取数期间只该看到法阵，不能让人瞥见上次的结果
+              gachaItem = null
+              gachaOpen = true
+              rollGacha()
+            }) {
+              Icon(Icons.Default.Casino, contentDescription = "随机抽卡")
+            }
+          }
           // 图标跟着搜索态走：没搜时是放大镜，进搜索后换成「放大镜 + 斜杠」。
           // 图标一直不变的话，用户进了搜索界面就找不到退出来的入口 ——
           // 同一个位置既是「进入」又是「退出」，长得却一模一样。
@@ -2557,6 +2658,41 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
         }
       }
     }
+
+      // ── 随机抽卡：全屏揭晓层（v194）──
+      // 用 Dialog（而不是在本页里叠一层 Box）是为了天然盖住顶栏 / 工具行 / 网格，
+      // 返回键也天然走 onDismiss。取数中 item 为 null，那一层自己播「准备中」的法阵。
+      if (gachaOpen) {
+        val rolled = gachaItem
+        val rollingServer = server
+        EmbyGachaDrawDialog(
+          item = rolled,
+          rollId = gachaRollId,
+          title = rolled?.let { viewModel.displayTitle(it) } ?: "",
+          // 卡面用竖版海报（更贴近抽卡的卡牌比例），缺图时 EmbyImage 会回退到剧照
+          posterUrl = rolled?.let { item ->
+            rollingServer?.let { srv -> viewModel.imageUrl(srv, item, "Primary", 600) }
+          },
+          backdropUrl = rolled?.let { item ->
+            rollingServer?.let { srv -> viewModel.imageUrl(srv, item, "Backdrop", 960) }
+          },
+          onPlay = {
+            val target = rolled
+            // 先关层再起播：播放页会压在本页之上，卡面留在下面没有意义
+            gachaOpen = false
+            if (target != null) {
+              scope.launch {
+                val current = viewModel.currentServerOrAwait() ?: rollingServer ?: return@launch
+                // 走「随机播放」同一条起播路径：起播前只给首条探一次直链（strm 条目不会
+                // 干等），整场从头播（抽到的可能是看了一半的老片，续播会直接跳到片尾）。
+                viewModel.launchRandomPlayback(current, listOf(target))
+              }
+            }
+          },
+          onReroll = { rollGacha(excludeId = rolled?.Id) },
+          onDismiss = { gachaOpen = false },
+        )
+      }
 
       // ── 长按操作框：文件夹走「扫描 / 刷新元数据」，媒体走完整的那一套 ──
       val target = actionTarget
@@ -4202,6 +4338,14 @@ private val RATING_OPTIONS: List<Pair<String, Float?>> = listOf(
 
 /** 可播放的媒体类型（随机播放时使用） */
 private val PLAYABLE_TYPES = listOf("Movie", "Episode", "Video", "MusicVideo")
+
+/**
+ * 「随机抽卡」一次取的候选条数。
+ *
+ * 卡面只展示一条，但池子给小了（例如跟着「随机播放数量」= 1）重抽就会一直抽回同一部 ——
+ * 20 条在列表接口上只是多几百字节，换来的是重抽真的能换片。
+ */
+private const val GACHA_POOL_SIZE = 20
 
 /**
  * 搜索结果的**客户端排序**。
