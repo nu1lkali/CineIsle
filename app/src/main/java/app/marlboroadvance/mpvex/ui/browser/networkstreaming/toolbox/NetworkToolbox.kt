@@ -41,46 +41,59 @@ enum class NetworkTool(
    * 让用户对一份「什么都不会改」的报告点「确认执行」是纯噪声，还会让人怀疑它要动手。
    */
   val readOnly: Boolean = false,
+  /**
+   * 是否递归遍历子目录（走 `planWithWalk`）。
+   *
+   * 卡片描述的末尾会带上「（递归）」：同样是「清理空文件」，只清当前层和连子目录一起清，
+   * 后果差一个数量级 —— 这件事必须在点进去之前就看得见。标记由这个字段渲染，
+   * 不在 [description] 里手写，免得文案与规划器实际走的路径各说各话。
+   */
+  val recursive: Boolean = false,
 ) {
   ORGANIZE_BY_TYPE(
     title = "按类型归类",
-    description = "图片 / 视频 / 音频 / 文档 归位",
+    description = "按扩展名归入 图片 / 视频 / 音频 / 文档 子目录",
     destructive = false,
   ),
   EXTRACT_AND_ORGANIZE(
     title = "提取并整理",
-    description = "子文件夹文件提取到当前层再归档",
+    description = "子目录文件提至当前层归档，再清理空目录",
     destructive = true,
+    recursive = true,
   ),
   CLEAN_EMPTY_DIRS(
     title = "清理空目录",
-    description = "递归删除空文件夹",
+    description = "删除全部空目录，含嵌套产生的空目录",
     destructive = true,
+    recursive = true,
   ),
   CLEAN_EMPTY_FILES(
     title = "清理空文件",
-    description = "删除 0 字节空壳文件",
+    description = "删除 0 字节文件，多为中断的下载残留",
     destructive = true,
+    recursive = true,
   ),
   CLEAN_JUNK_FILES(
     title = "清理垃圾文件",
-    description = "删除系统 / 同步残留文件",
+    description = "删除 Thumbs.db、.DS_Store 等同步残留",
     destructive = true,
+    recursive = true,
   ),
   ARCHIVE_BY_MONTH(
     title = "按月份归档",
-    description = "按修改月份建文件夹",
+    description = "按修改时间归入 2026-10 形式的月份子目录",
     destructive = false,
   ),
   BIG_FILE_RANKING(
     title = "大文件排行",
-    description = "只读统计，不处理文件",
+    description = "按体积排序列出最大文件，不产生写操作",
     destructive = false,
     readOnly = true,
+    recursive = true,
   ),
   BATCH_RENAME(
     title = "批量重命名",
-    description = "按规则批量改名",
+    description = "按规则链重命名，执行前生成对照清单",
     destructive = false,
   ),
 }

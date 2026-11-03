@@ -464,7 +464,10 @@ private fun ToolCard(
       )
       Spacer(Modifier.height(3.dp))
       Text(
-        text = tool.description,
+        // 递归工具在表述末尾直接带上「（递归）」：同样叫「清理空文件」，
+        // 只清当前层和连子目录一起清，后果差一个数量级 —— 这句话必须在点进去之前读得到。
+        // 标记来自枚举的 recursive 字段（与规划器走 walk 的那批一一对应），不在文案里手写。
+        text = if (tool.recursive) "${tool.description}（递归）" else tool.description,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         // minLines 让描述较短的卡片也占两行，整排文案基线对齐；
