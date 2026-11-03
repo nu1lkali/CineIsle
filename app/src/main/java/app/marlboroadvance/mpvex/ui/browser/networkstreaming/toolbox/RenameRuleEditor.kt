@@ -41,18 +41,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/** 批量重命名的两步流程：先定规则，再看对照预览，最后才出正式清单。 */
+/** 批量重命名的两步流程：先定规则，再确认清单（前 8 项样例 → 扫全目录出正式清单）。 */
 private enum class RenameStep(
   val number: Int,
   val label: String,
 ) {
   RULES(1, "设置规则"),
-  PREVIEW(2, "对照预览"),
+  PREVIEW(2, "确认清单"),
 }
 
 /**
@@ -63,11 +64,11 @@ private enum class RenameStep(
  * - 卡片 = 同一套 `surfaceContainerHigh` + 16dp 圆角；
  * - 按钮只用 `TextButton` / `FilledTonalButton` / `Button`，参数编辑只用现成的 `AlertDialog`；
  * - 颜色一律取自 `MaterialTheme.colorScheme`，无硬编码色；
- * - 抽屉不关、不跳新窗口，返回键沿「预览 → 规则 → 工具列表」逐级回。
+ * - 抽屉不关、不跳新窗口，返回键沿「清单 → 规则 → 工具列表」逐级回。
  *
  * ## 分步多页面（v205）
  *
- * 旧版把「添加规则 / 范围开关 / 随机种子 / 整条规则链 / 8 项预览 / 主按钮」全塞进
+ * 旧版把「添加规则 / 范围开关 / 随机种子 / 整条规则链 / 8 项样例 / 主按钮」全塞进
  * 一个 `verticalScroll` 里：东西越堆越多，主按钮被埋在最末尾要滚到底才看得见，
  * 而且它是个 `FilledTonalButton`（secondaryContainer 和卡片底色接近），第一眼就像点不了。
  *
@@ -75,12 +76,16 @@ private enum class RenameStep(
  *
  * ```
  * 第 1 步 设置规则：添加 / 范围 / 随机串设置 / 规则链（限高自滚，两行一张卡）
- * 第 2 步 对照预览：改动统计 / 「修改前 → 修改后」双栏对照（限高自滚）
+ * 第 2 步 确认清单：改动统计 / 前 8 项「修改前 / 修改后」上下两行（限高自滚）
  * ```
  *
- * 底部是一条**常驻**的主行动条：第 1 步「下一步：对照预览」、第 2 步「生成预览清单」，
+ * 底部是一条**常驻**的主行动条：第 1 步「下一步：确认清单」、第 2 步「扫描全目录生成清单」，
  * 都是 primary 填充的大按钮，永远点得到。两页各自只有一小块列表需要局部滚动，
  * 不做整页嵌套滚动（两层 `verticalScroll` 会互抢手势，反而更涩）。
+ *
+ * ⚠️ 「样例」与「清单」是同一件事的两半，别再命名成两个都叫预览的东西：
+ * 第 2 步页内的 8 项只是本地样例（不联网），点底部按钮**才**扫全目录，
+ * 扫完进入工具箱原有的结果页 —— 那页才叫清单、才有「执行重命名」。
  *
  * 规则按顺序依次作用（对应它的 ReorderableListView），每次增删改立刻
  * [onBookChange] 落盘（对应它的 `saveRules`），[RenameRuleBook.lastAddedType]
@@ -91,8 +96,8 @@ private enum class RenameStep(
  * 真正执行时若目录里新出现了同名文件，执行器会再让一次名加 (1) 后缀以免覆盖，
  * 这是防并发上传的兜底，不是另一套算法。
  *
- * ⚠️ 这里仍然不直接改服务器：点「生成预览清单」只是交给 ViewModel 扫描、
- * 出对照清单，用户还要在确认框里再点一次「确认执行」。AList 没有回收站。
+ * ⚠️ 这里仍然不直接改服务器：点「扫描全目录生成清单」只是交给 ViewModel 扫描、
+ * 出正式清单，用户还要在确认框里再点一次「确认执行」。AList 没有回收站。
  */
 @Composable
 fun RenameRulePane(
@@ -104,16 +109,19 @@ fun RenameRulePane(
   onBack: () -> Unit,
 ) {
   var editingIndex by remember { mutableStateOf<Int?>(null) }
+  // 待新增的规则类型。**先不落盘**：点「添加规则」只记住类型并打开参数框，
+  // 点「取消」就整个丢掉。以前的写法是「先 append 空规则、再编辑最后一条」，
+  // 于是取消只关窗、那条空规则早就进了链 —— 用户看到的就是「点取消还新建一条」。
+  var pendingNewType by remember { mutableStateOf<RenameRuleType?>(null) }
   var addMenuOpen by remember { mutableStateOf(false) }
   // 随机串是进阶能力，默认收起：常驻会白占两行高度
   var advancedOpen by remember { mutableStateOf(false) }
   var step by remember { mutableStateOf(RenameStep.RULES) }
 
-  /** 加一条空白规则并立刻打开参数框；同时记住这次选的类型 */
+  /** 加一条规则：只记住类型并打开参数框，**点确定时才真正入链** */
   fun add(type: RenameRuleType) {
-    val next = book.copy(rules = book.rules + type.blank(), lastAddedType = type.name)
-    onBookChange(next)
-    editingIndex = next.rules.lastIndex
+    pendingNewType = type
+    editingIndex = null
   }
 
   // ⭐ 必须 remember：computeRenameBatch 会把 takenNames 整份灌进 HashSet 再逐条跑
@@ -132,7 +140,7 @@ fun RenameRulePane(
   val changedCount = remember(preview) { preview.count { it.second != null } }
   val ruleCount = book.rules.size
 
-  /** 返回键：预览页先回规则页，规则页才回工具列表 */
+  /** 返回键：清单页先回规则页，规则页才回工具列表 */
   fun back() {
     if (step == RenameStep.PREVIEW) step = RenameStep.RULES else onBack()
   }
@@ -288,13 +296,13 @@ fun RenameRulePane(
         }
       }
 
-      // ── 第 2 步：对照预览 ──────────────────────────────────────────────
+      // ── 第 2 步：确认清单（页内先给前 8 项样例）────────────────────────
       RenameStep.PREVIEW -> {
         // 与规划器共用同一个纯函数：ordinal 基准、撞名避让的演化完全一致，预览才不会骗人。
         // 只算前 8 项也不影响一致性 —— 前面条目的 taken 演化与规划器全量遍历时逐帧相同。
         Row(verticalAlignment = Alignment.CenterVertically) {
           Text(
-            text = "预览 · 前 8 项",
+            text = "样例 · 前 8 项",
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.weight(1f),
           )
@@ -316,7 +324,7 @@ fun RenameRulePane(
           modifier = Modifier.fillMaxWidth().height(4.dp),
         )
         Spacer(Modifier.height(6.dp))
-        // 一行一条「修改前 → 修改后」双栏对照，不再把 old → new 挤成一坨文字。
+        // 一条一块「修改前 / 修改后」上下两行，不再把 old → new 挤成一坨文字。
         Column(
           modifier =
             Modifier
@@ -350,7 +358,7 @@ fun RenameRulePane(
         }
         Spacer(Modifier.height(6.dp))
         Text(
-          text = "本地即时预览，不联网。点下方按钮才会扫全目录、出正式对照清单。",
+          text = "以上只是当前目录前 8 项的样例，不联网。点下方按钮才会扫全目录、生成正式清单。",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -365,7 +373,7 @@ fun RenameRulePane(
     Text(
       text =
         when {
-          ruleCount == 0 -> "先添加一条规则，才能进入对照预览"
+          ruleCount == 0 -> "先添加一条规则，才能进入确认清单"
           step == RenameStep.PREVIEW -> "确认无误后生成正式清单；AList 没有回收站，确认执行后不可撤销"
           else -> "已设 $ruleCount 条规则 · 按顺序依次作用在当前目录这一层"
         },
@@ -398,7 +406,7 @@ fun RenameRulePane(
         modifier = Modifier.weight(1f).height(48.dp),
       ) {
         Text(
-          text = if (step == RenameStep.RULES) "下一步：对照预览" else "生成预览清单",
+          text = if (step == RenameStep.RULES) "下一步：确认清单" else "扫描全目录生成清单",
           style = MaterialTheme.typography.bodyLarge,
         )
         Spacer(Modifier.width(8.dp))
@@ -413,18 +421,32 @@ fun RenameRulePane(
   }
 
   // ── 单条规则的参数编辑：沿用工具箱确认清单那个 AlertDialog，不另起窗口 ──
+  // 两种来源：pendingNewType（新增，确定才入链）与 editingIndex（改已有，原地覆盖）。
+  val newType = pendingNewType
   val index = editingIndex
-  if (index != null && index in book.rules.indices) {
-    RuleEditDialog(
-      rule = book.rules[index],
-      onDismiss = { editingIndex = null },
-      onSave = { updated ->
-        val next = book.rules.toMutableList()
-        next[index] = updated
-        onBookChange(book.copy(rules = next))
-        editingIndex = null
-      },
-    )
+  val draftRule = remember(newType) { newType?.blank() }
+  when {
+    newType != null && draftRule != null ->
+      RuleEditDialog(
+        rule = draftRule,
+        onDismiss = { pendingNewType = null },
+        onSave = { updated ->
+          onBookChange(book.copy(rules = book.rules + updated, lastAddedType = newType.name))
+          pendingNewType = null
+        },
+      )
+
+    index != null && index in book.rules.indices ->
+      RuleEditDialog(
+        rule = book.rules[index],
+        onDismiss = { editingIndex = null },
+        onSave = { updated ->
+          val next = book.rules.toMutableList()
+          next[index] = updated
+          onBookChange(book.copy(rules = next))
+          editingIndex = null
+        },
+      )
   }
 }
 
@@ -504,62 +526,69 @@ private fun RuleCard(
   }
 }
 
-/** 预览里的一行：左「修改前」、右「修改后」，中间箭头，长名各自省略不糊成一坨。 */
+/**
+ * 清单里的一条：**上下两行**。
+ *
+ * 第一行「修改前」、第二行「修改后」。标签定宽 42dp，两行的文件名左缘对齐成一条竖线；
+ * 文件名拿剩余整行宽度，且允许换到第 2 行。
+ * 以前是左右双栏挤一行（中间还塞箭头），长文件名两边各占半行宽 ⇒ 必然被截成省略号。
+ */
 @Composable
 private fun RenamePreviewRow(
   old: String,
   new: String?,
 ) {
   val changed = new != null
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    Column(modifier = Modifier.weight(1f)) {
-      Text(
-        text = "修改前",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Spacer(Modifier.height(2.dp))
-      Text(
-        text = old,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-    }
-    Icon(
-      imageVector = Icons.Default.ArrowForward,
-      contentDescription = null,
-      tint =
+  Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp)) {
+    PreviewLine(
+      label = "修改前",
+      text = old,
+      labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+      textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+      emphasis = false,
+    )
+    Spacer(Modifier.height(3.dp))
+    PreviewLine(
+      label = if (changed) "修改后" else "未改动",
+      text = new ?: "保持原名",
+      labelColor =
         if (changed) MaterialTheme.colorScheme.primary
         else MaterialTheme.colorScheme.onSurfaceVariant,
-      modifier = Modifier.padding(horizontal = 10.dp).size(16.dp),
+      textColor =
+        if (changed) MaterialTheme.colorScheme.onSurface
+        else MaterialTheme.colorScheme.onSurfaceVariant,
+      emphasis = changed,
     )
-    Column(modifier = Modifier.weight(1f)) {
-      Text(
-        text = if (changed) "修改后" else "不改动",
-        style = MaterialTheme.typography.labelSmall,
-        color =
-          if (changed) MaterialTheme.colorScheme.primary
-          else MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Spacer(Modifier.height(2.dp))
-      Text(
-        text = new ?: "保持原名",
-        style =
-          if (changed) MaterialTheme.typography.bodyMedium
-          else MaterialTheme.typography.bodySmall,
-        fontWeight = if (changed) FontWeight.Medium else FontWeight.Normal,
-        color =
-          if (changed) MaterialTheme.colorScheme.onSurface
-          else MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-    }
+  }
+}
+
+/** 清单里的一行：小标签 + 文件名。标签定宽，文件名最多两行，超长才省略。 */
+@Composable
+private fun PreviewLine(
+  label: String,
+  text: String,
+  labelColor: Color,
+  textColor: Color,
+  emphasis: Boolean,
+) {
+  Row(modifier = Modifier.fillMaxWidth()) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelSmall,
+      color = labelColor,
+      modifier = Modifier.width(42.dp).padding(top = 2.dp),
+    )
+    Text(
+      text = text,
+      style =
+        if (emphasis) MaterialTheme.typography.bodyMedium
+        else MaterialTheme.typography.bodySmall,
+      fontWeight = if (emphasis) FontWeight.Medium else FontWeight.Normal,
+      color = textColor,
+      maxLines = 2,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.weight(1f),
+    )
   }
 }
 

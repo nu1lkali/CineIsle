@@ -333,7 +333,7 @@ private fun ToolListPane(
           "根目录只开放「大文件排行」（只读）。整理 / 清理类会把整块存储顶层的文件搬走或删掉，" +
             "先进到具体目录再用。"
         } else {
-          "先扫描目录、把要做的改动列成清单，确认之后才处理。「大文件排行」只读，只出报告。"
+          "先扫描目录、把要做的改动列成清单，确认之后才会向服务器发送请求。「大文件排行」只读，只出报告。"
         },
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -401,9 +401,10 @@ private fun ToolCard(
     modifier =
       Modifier
         .fillMaxWidth()
-        // 固定高度让同一行卡片严格等高。LazyGrid 的 item 高度是 wrap content，
-        // 不给确定高度就会出现「一行里卡片长短不齐」；描述最多两行，超长省略。
-        .height(150.dp)
+        // 只给**最小**高度，不写死：LazyGrid 的 item 是 wrap content，没有下限时
+        // 同一行卡片会长短不齐；但一旦写死高度，文案一长就被裁成省略号。
+        // 描述本身已压到 15 字内（2 列最多 2 行），这里留 3 行护栏负责「将来改长也不裁」。
+        .heightIn(min = 150.dp)
         // 置灰用整体透明度而不是改色：图标底色、标题、描述、箭头一次性都淡下去，
         // 不会出现「卡片是灰的但字是全黑」的半灰状态
         .alpha(if (enabled || scanning) 1f else 0.45f)
@@ -466,9 +467,10 @@ private fun ToolCard(
         text = tool.description,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        // minLines 让没有副标题 / 描述较短的卡片也占两行，整排文案基线对齐
+        // minLines 让描述较短的卡片也占两行，整排文案基线对齐；
+        // maxLines 只是护栏（文案本就在 2 行内），写 3 行免得哪天改长就被裁掉。
         minLines = 2,
-        maxLines = 2,
+        maxLines = 3,
         overflow = TextOverflow.Ellipsis,
       )
       if (note != null) {

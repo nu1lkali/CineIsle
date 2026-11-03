@@ -44,43 +44,43 @@ enum class NetworkTool(
 ) {
   ORGANIZE_BY_TYPE(
     title = "按类型归类",
-    description = "当前目录里的文件移进 图片 / 视频 / 音频 / 文档 四个子文件夹，认不出类型的留在原处",
+    description = "图片 / 视频 / 音频 / 文档 归位",
     destructive = false,
   ),
   EXTRACT_AND_ORGANIZE(
     title = "提取并整理",
-    description = "把子文件夹里的文件全部提到当前目录、按类型归档（含「其他」），随后删除空文件夹",
+    description = "子文件夹文件提取到当前层再归档",
     destructive = true,
   ),
   CLEAN_EMPTY_DIRS(
     title = "清理空目录",
-    description = "递归删除当前目录下所有空文件夹（套着空文件夹的也会一起清）",
+    description = "递归删除空文件夹",
     destructive = true,
   ),
   CLEAN_EMPTY_FILES(
     title = "清理空文件",
-    description = "递归删除 0 字节的文件，多是下载中断 / 上传失败留下的空壳（跳过隐藏文件）",
+    description = "删除 0 字节空壳文件",
     destructive = true,
   ),
   CLEAN_JUNK_FILES(
     title = "清理垃圾文件",
-    description = "递归删除系统 / 同步残留：Thumbs.db、.DS_Store、._* 资源叉、@eaDir 缩略图目录等",
+    description = "删除系统 / 同步残留文件",
     destructive = true,
   ),
   ARCHIVE_BY_MONTH(
     title = "按月份归档",
-    description = "当前目录里的文件按修改时间移进「2026-10」这样的月份文件夹",
+    description = "按修改月份建文件夹",
     destructive = false,
   ),
   BIG_FILE_RANKING(
     title = "大文件排行",
-    description = "只读统计：列出当前目录及子目录里最大的文件（不移动、不删除）",
+    description = "只读统计，不处理文件",
     destructive = false,
     readOnly = true,
   ),
   BATCH_RENAME(
     title = "批量重命名",
-    description = "按可保存的规则给当前目录的文件改名（查找替换 / 前后缀 / 模板编号），先出对照清单再执行",
+    description = "按规则批量改名",
     destructive = false,
   ),
 }
