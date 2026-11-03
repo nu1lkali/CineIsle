@@ -2447,7 +2447,7 @@ android {
     //        只扫当前层的话，「每部片一个文件夹」的库会抽出空。KDoc 里写明了，
     //        改之前先想清楚这个反例。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 202
+    versionCode = 203
     versionName = "1.6.14"
 
     vectorDrawables {
@@ -2743,6 +2743,10 @@ dependencies {
   implementation(libs.haze)
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.ui)
+  // 视界流的 FFmpeg 软解兜底（音频 DTS/TrueHD/AC3/EAC3 + 视频 H264/HEVC/MPEG-2/VP8/VP9）。
+  // 只在平台解码器不支持/不吐帧时由 ExoPlayer 的扩展渲染器接管；不会抢平台硬解。
+  // ⚠️ 该库为 GPL-3.0（见 libs.versions.toml 注释），发布前要确认分发义务。
+  implementation(libs.nextlib.media3ext)
   implementation(libs.mediasession)
   implementation(libs.androidx.documentfile)
   implementation(libs.saveable)

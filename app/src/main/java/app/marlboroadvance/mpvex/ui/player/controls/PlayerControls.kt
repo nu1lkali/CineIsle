@@ -145,6 +145,16 @@ import kotlin.math.abs
 val LocalPlayerButtonsClickEvent = staticCompositionLocalOf { {} }
 
 /**
+ * 首帧刚上屏时，`paused-for-cache` 往往还会滞后一段时间才变 no。
+ *
+ * 这段时间里 [PlayerFirstFrameLoading] 正在淡出，如果缓冲圈立刻按
+ * `pausedForCache && firstFrameRendered` 出现，就会形成「带文字的首帧圈淡出、
+ * 裸缓冲圈接上」的第二次 loading。给它一个交接窗口：窗口内继续由首帧层负责；
+ * 只有窗口结束仍处于缓存等待（真卡住）才允许缓冲圈接管。
+ */
+private const val FIRST_FRAME_BUFFER_GUARD_MS = 1_500L
+
+/**
  * 竖屏顶栏右侧的「快捷开关」集合。
  *
  * 这几个都是「设一次就不用再碰」的低频项：解码器 / 音轨 / 字幕 / 收藏 / 更多。
@@ -319,6 +329,21 @@ fun PlayerControls(
   // 首帧是否已经上屏。只用于下面缓冲转圈的**去重**（见那一支的注释）：
   // 首帧未出时屏幕中央已经有 PlayerFirstFrameLoading 在转，再叠一个就是两个圈。
   val firstFrameRendered by viewModel.firstFrameRendered.collectAsState()
+  // 缓冲圈是否已「接管」当前文件。换片时清零；首帧后先让首帧层完成淡出，
+  // 只有 paused-for-cache 已经消失（或真卡住超过交接窗口）才允许它出现。
+  var bufferIndicatorArmed by remember { mutableStateOf(false) }
+  LaunchedEffect(firstFrameRendered) {
+    if (!firstFrameRendered) bufferIndicatorArmed = false
+  }
+  LaunchedEffect(firstFrameRendered, pausedForCache) {
+    if (!firstFrameRendered) return@LaunchedEffect
+    if (pausedForCache != true) {
+      bufferIndicatorArmed = true
+    } else if (!bufferIndicatorArmed) {
+      delay(FIRST_FRAME_BUFFER_GUARD_MS)
+      bufferIndicatorArmed = true
+    }
+  }
   val paused by PlayerLib.propBoolean["pause"].collectAsState()
   val duration by PlayerLib.propInt["duration"].collectAsState()
   val position by PlayerLib.propInt["time-pos"].collectAsState()
@@ -869,7 +894,10 @@ fun PlayerControls(
             //    一个在正中、一个被上方文字顶起半个行高，看着就是「两个加载动画」。
             //    两者语义完全一样（都在等画面），留带文字的那个更清楚；首帧一上屏，
             //    这一支接管缓冲（中途卡顿 / seek 后缓冲仍然只由这里表示）。
-            pausedForCache == true && showLoadingCircle && firstFrameRendered -> {
+            // ⚠️ `bufferIndicatorArmed` 是**接力闸**：首帧后 paused-for-cache 常会
+            //    滞后几百毫秒才变 no，只靠 firstFrameRendered 会让裸圈紧接着首帧层
+            //    出现（用户看到的就是第二个 loading）。闸门见文件顶部常量与状态注释。
+            pausedForCache == true && showLoadingCircle && firstFrameRendered && bufferIndicatorArmed -> {
               // 走统一入口 ⇒ 「外观 → 加载动画」的选择对缓冲指示也生效。
               // ⚠️ 96dp 是**基准**尺寸（还会乘用户设的缩放系数，默认 1.1×）；
               //    用 size 参数而不是 Modifier.size，否则缩放对它不生效。

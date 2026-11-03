@@ -22,6 +22,7 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import app.marlboroadvance.mpvex.R
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -246,21 +247,31 @@ internal class ExoPlayerPool(
   }
 
   private fun build(url: String, softOnly: Boolean = false): ExoPlayer {
-    val builder = ExoPlayer.Builder(context)
-      .setRenderersFactory(
-        DefaultRenderersFactory(context)
-          // ── 解码能力的第一项：允许解码器回退 ──
-          // ⚠️ 这一项**默认是 false**（media3 的 `DefaultRenderersFactory` 里
-          // `enableDecoderFallback = false`）⇒ 首选解码器（通常是硬解）建不起来时
-          // 直接抛 `DECODER_INIT_FAILED`，**不会**再试列表里后面的候选，其中就包括
-          // 软件解码器。打开之后才会逐个回退 —— 这一类「本机没有可用的解码器」
-          // 其实还有软解可用，只是从来没被尝试过。
-          .setEnableDecoderFallback(true)
-          // ── 解码能力的第二项：硬解失败后只准软解重建一次 ──
-          // 见 [beginSoftwareRetry]。硬解「建得起来但吐不出帧」（AVI 里的 Xvid、
-          // 部分 10bit HEVC）不会报错，只会黑屏有声 —— 那种场景换软解往往就好了。
-          .apply { if (softOnly) setMediaCodecSelector(SoftwareOnlyCodecSelector) },
-      )
+    // ── 解码能力的三层 ──
+    // 1) 正常路径：平台 MediaCodec 优先，NextLib 的 FFmpeg Renderer 只在平台
+    //    不支持该格式时兜底（EXTENSION_RENDERER_MODE_ON）。这样 H.264/HEVC 仍然
+    //    走硬解，不会因为引入软解就整体变慢。
+    // 2) 软解重试：把 FFmpeg 提到平台前面（PREFER），专治「硬解建得起来但不吐帧」
+    //    （10bit HEVC、部分 AVI/MPEG-2）。平台侧的 SoftwareOnlyCodecSelector 仍然
+    //    保留，FFmpeg 不支持的编码还能再试一次系统软解。
+    // 3) 两者都不行：Activity 切 mpv（RMVB/WMV/VP6/Xvid 这类 NextLib 也没编进去的）。
+    val extensionMode =
+      if (softOnly) {
+        DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+      } else {
+        DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+      }
+    val renderersFactory =
+      NextRenderersFactory(context)
+        // ⚠️ 这一项**默认是 false**（media3 的 `DefaultRenderersFactory` 里
+        // `enableDecoderFallback = false`）⇒ 首选解码器建不起来时直接抛
+        // `DECODER_INIT_FAILED`，不会试后面的候选。打开后才会逐个回退。
+        .setEnableDecoderFallback(true)
+        .setExtensionRendererMode(extensionMode)
+    if (softOnly) {
+      renderersFactory.setMediaCodecSelector(SoftwareOnlyCodecSelector)
+    }
+    val builder = ExoPlayer.Builder(context).setRenderersFactory(renderersFactory)
     // 请求头必须挂在这里（DefaultHttpDataSource），而不是 `MediaItem` 的
     // `MediaItem.LocalConfiguration`—— 那些 header 只对**本地文件**的
     // `setDataSource(path, headers)` 有意义，http(s) 走的是 DataSource 层，
@@ -552,20 +563,27 @@ internal class ExoPlayerPool(
    *
    * 只有解码层与容器层的失败算 —— IO / 网络 / DRM 那些换什么都没用，
    * 硬要重试只会让用户多等一轮。
+   *
+   * ⚠️ `PARSING_CONTAINER_UNSUPPORTED` **不算**：软解重试走的是
+   * `EXTENSION_RENDERER_MODE_PREFER`（把 FfmpegAudio/VideoRenderer 提到平台前面），
+   * 而 NextLib 的扩展只接管**解码**，解复用仍然是 ExoPlayer 自带的 Extractor。
+   * 容器不认识的时候换解码器不可能变好 ⇒ 白白重建一次播放器再失败，
+   * 用户看到的就是「转一圈、黑一下、又转一圈」最后才切 mpv。
+   * 这一类直接交给 Activity 切 mpv 才是对的路径。
    */
   private fun isDecoderError(error: PlaybackException): Boolean =
     error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
       error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
       error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
       error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
-      error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
-      error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED
+      error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
 
   private fun describeError(error: PlaybackException): String =
     when {
-      // 容器层面就不认识（wmv / asf / rmvb / 某些 avi 变种…）——
-      // ExoPlayer 只自带 mp4 / mkv / webm / ts / flv 这一批解复用器，
-      // 剩下全靠 ffmpeg 扩展（本构建没打包）⇒ 只能换内核（mpv）。
+      // 容器层面就不认识（wmv / asf / rmvb / 某些 avi 变体…）——
+      // ExoPlayer 只自带 mp4 / mkv / webm / ts / flv 这一批解复用器。
+      // ⚠️ NextLib 的 FFmpeg 扩展**只补解码器（libavcodec），不补解复用器（libavformat）**
+      //    ⇒ 容器不认识这条路上软解一点用都没有，只能换内核（mpv），它的 lavf 是全的。
       error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
         error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ||
         error.errorCode == PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED ->
