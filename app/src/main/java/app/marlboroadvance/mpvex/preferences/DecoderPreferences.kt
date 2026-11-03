@@ -48,24 +48,51 @@ class DecoderPreferences(
   val directOutput = preferenceStore.getBoolean("direct_output", false)
 
   /**
-   * HDR 输出（`target-colorspace-hint`）。
+   * 杜比视界 Profile 5 颜色修正（硬解路径下自动生效）。
    *
-   * ## 为什么要独立于 [gpuNext]
+   * ## 根因：Android 硬解拿不到 DV RPU
    *
-   * 原先这个行为是**隐式绑在 gpuNext 上的**：只要 gpu-next 开着就自动
-   * `target-colorspace-hint=yes`，用户没有任何开关能关掉它（见 `MPVView.initOptions`）。
-   * 但它和渲染器其实是**两件事**：
-   *  · 渲染器（gpu-next / gpu）决定「能不能正确解码并映射 HDR 片源」；
-   *  · colorspace hint 决定「**要不要**把屏幕切进 HDR 亮度区间」。
+   * P5 是单层、**没有 HDR10 兼容层**的 IPTPQc2 流。要还原正确颜色，必须读码流里
+   * 每帧的 DV RPU 元数据交给 gpu-next / libplacebo 做重塑；而 Android 的
+   * MediaCodec 解码器**不会把 RPU 挂到输出帧上**（`AV_FRAME_DATA_DOVI_METADATA`
+   * 只有软解路径拿得到）。所以 `hwdec=mediacodec-copy` 播 P5 必然整屏紫绿反色，
+   * 这不是调色调映射参数能补的 —— 硬解帧上根本没有那份元数据。
    *
-   * 二者拆开才说得通：
-   *  · **默认开启**（沿用原行为，老用户观感不变）；
-   *  · 不支持 HDR 的屏幕 —— 开了也无害，Android 会忽略这个 hint；
-   *  · 但**部分设备/系统版本上这个 hint 会让画面明显偏暗或发灰**
-   *    （屏幕本身没到 HDR 亮度却按 HDR 路径输出），这时就需要能手动关掉。
+   * ## 做法：只让 P5 让路，不全局关硬解
    *
-   * ⚠️ 只在 gpu-next 下有意义：旧版 gpu 没有这条通路，设了也无效。
-   *   见 `MPVView.initOptions` 里对 gpu-next / libplacebo 的说明。
+   * 开片时读 `track-list` 各条的 `dolby-vision-profile`，命中 5 就把 `hwdec` 临时改成
+   * `no`（软解 + gpu-next 重塑）；换到非 P5 片源立刻恢复 [defaultHwdec]。
+   * 于是普通片、Profile 7 / 8（8 有 HDR10 兜底层，硬解也正确）全部继续走硬解，
+   * 只有真正会偏色的 P5 付软解代价 —— 这是「正确色彩」与「硬解性能」的分界线，
+   * 用户也不必为了看一部 P5 手动去关全局硬解开关。
+   *
+   * ⚠️ 依赖 gpu-next（libplacebo 才解析 RPU），且直出模式
+   *    （`vo=mediacodec_embed`，没有 GPU 渲染链）下无法生效。
+   */
+  val dolbyVisionColorFix = preferenceStore.getBoolean("dv_p5_color_fix", true)
+
+  /**
+   * HDR 显示输出。
+   *
+   * ## 旧实现为什么「开着没效果」
+   *
+   * 之前只给 mpv 设了 `target-colorspace-hint=yes`：那是 `vo=gpu-next` 的
+   * libplacebo 提示，在 Android 上**只有 Vulkan 后端（`gpu-context=androidvk`）**
+   * 会把它转成 Surface 的 HDR dataspace，默认 OpenGL 后端直接忽略。
+   * 更要紧的是：它既不检查设备是否支持 HDR，也从不把 **Window** 切进 HDR
+   * 色彩模式 —— 系统压根没收到「现在要按 HDR 输出」的信号，屏幕亮度自然不会变。
+   *
+   * ## 现在的实现
+   *
+   * 由 [app.marlboroadvance.mpvex.ui.player.PlaybackColorPolicy] 在片源首帧后
+   * 判定（PQ / HLG / DV / 静态峰值元数据）并调
+   * `Window.setColorMode(COLOR_MODE_HDR)`：这是 Android 官方让系统切换 HDR
+   * 显示模式的接口（API 26+，本项目 minSdk 26）。设备不报告任何 HDR 类型时不开，
+   * SDR 片源 / 退出播放页时恢复 `COLOR_MODE_DEFAULT`，避免 Compose 控件层被
+   * 拉进 HDR 亮度后发白。`target-colorspace-hint` 保留为辅助（Vulkan 后端下继续生效）。
+   *
+   * 保留手动开关的理由：部分设备切进 HDR 后 SDR 画面或播放器控件会偏暗 / 发灰，
+   * 这是屏幕与系统能力差异，只能由用户按观感决定。
    */
   val hdrEnabled = preferenceStore.getBoolean("hdr_enabled", true)
 
@@ -86,4 +113,15 @@ class DecoderPreferences(
   val enableAnime4K = preferenceStore.getBoolean("enable_anime4k", false)
   val anime4kMode = preferenceStore.getString("anime4k_mode", "OFF")
   val anime4kQuality = preferenceStore.getString("anime4k_quality", "FAST")
+
+  /**
+   * `hwdec` 的基准值：初始化（`MPVView.initOptions`）与「P5 修正结束后恢复」
+   * 必须共用这一份口径。谁在别处再手写一遍三态，将来改了一边就会串味。
+   */
+  fun defaultHwdec(): String =
+    when {
+      directOutput.get() -> "mediacodec,no"
+      tryHWDecoding.get() -> "mediacodec-copy,no"
+      else -> "no"
+    }
 }

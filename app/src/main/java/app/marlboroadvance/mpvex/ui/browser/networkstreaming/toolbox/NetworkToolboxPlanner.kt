@@ -43,17 +43,96 @@ object NetworkToolboxPlanner {
     root: String,
     list: suspend (String) -> List<NetworkFile>,
     onPhase: (String) -> Unit = {},
+    /** 仅 [NetworkTool.BATCH_RENAME] 用：整条规则链 + 范围开关（见 flut-renamer 的 rules_page） */
+    renameBook: RenameRuleBook? = null,
+    /**
+     * 仅 [NetworkTool.BATCH_RENAME] 用：UI 当前显示的同一份列表。
+     * 批量重命名是「所见即所得」的操作，若这里重新 list(root) 拉服务端，顺序可能和
+     * 用户在规则页看到的列表不同，递增编号的预览就会与正式清单对不上。
+     */
+    renameEntries: List<NetworkFile>? = null,
   ): ToolPlan {
-    val rootEntries = list(root)
+    val rootEntries =
+      if (tool == NetworkTool.BATCH_RENAME && renameEntries != null) renameEntries else list(root)
     return when (tool) {
       NetworkTool.ORGANIZE_BY_TYPE -> planOrganizeByType(root, rootEntries)
       NetworkTool.ARCHIVE_BY_MONTH -> planArchiveByMonth(root, rootEntries)
+      NetworkTool.BATCH_RENAME -> planBatchRename(root, rootEntries, renameBook ?: RenameRuleBook())
       NetworkTool.EXTRACT_AND_ORGANIZE,
       NetworkTool.CLEAN_EMPTY_DIRS,
       NetworkTool.CLEAN_EMPTY_FILES,
       NetworkTool.CLEAN_JUNK_FILES,
       NetworkTool.BIG_FILE_RANKING -> planWithWalk(tool, root, rootEntries, list, onPhase)
     }
+  }
+
+  // ────────────────────── 批量重命名（只看当前层） ──────────────────────
+
+  /**
+   * 把规则链跑在目录里每一条上，算出「原名 → 新名」对照表。
+   *
+   * ## 为什么不做递归
+   *
+   * 目录名一改，子文件路径全变，`fs/rename` 只改名字不动父路径，递归改名
+   * 会先让深层文件的 path 失效。工具箱里其余「移动类」工具也是同样口径：
+   * 只处理当前层，用户想整理哪层就进哪层点一次。
+   *
+   * ## 预览与执行同源
+   *
+   * 整批结果（规则链 + ordinal + 撞名避让）统一由 [computeRenameBatch] 算出，
+   * 规则编辑器里那份即时预览调用的也是它；两边都喂同一份目录名单、同一个顺序，
+   * 否则「递增编号」会预览一个号、正式清单另一个号。
+   * 执行器还会再兜一层撞名，那是防执行期间别的会话新传了同名文件，不是另一套口径。
+   */
+  private fun planBatchRename(
+    root: String,
+    entries: List<NetworkFile>,
+    book: RenameRuleBook,
+  ): ToolPlan {
+    // 与规则页即时预览共用同一个纯函数：ordinal 基准、撞名避让的演化完全一致
+    val allNames = entries.map { it.name }
+    val targets = entries.filter { book.includeDirs || !it.isDirectory }
+    val computed = computeRenameBatch(allNames, targets.map { it.name }, book.rules, book.randomSeed)
+    val actions = mutableListOf<ToolAction>()
+    val changes = mutableListOf<Pair<String, String>>()
+    var unchanged = 0
+
+    computed.forEach { (name, newName) ->
+      if (newName == null) {
+        unchanged++
+      } else {
+        actions += ToolAction.Rename(root, name, newName)
+        changes += name to newName
+      }
+    }
+
+    val summary = buildList {
+      if (book.rules.isEmpty()) {
+        add("还没有添加任何规则 —— 请先在「批量重命名」面板里添加规则")
+      } else {
+        add("规则链（${book.rules.size} 条，按列表顺序依次生效）：")
+        book.rules.forEachIndexed { i, rule -> add("  ${i + 1}. ${rule.describe()}") }
+      }
+      add(
+        if (book.includeDirs) "范围：当前目录的文件 + 文件夹（不递归）"
+        else "范围：仅当前目录的文件（不递归）",
+      )
+      if (changes.isEmpty()) {
+        add("没有任何文件会被改动：规则链为空、未命中、正则无效，或算出的新名与原名相同")
+      } else {
+        add("将重命名 ${changes.size} 项：")
+        changes.take(12).forEach { (old, new) -> add("· $old → $new") }
+        if (changes.size > 12) add("· 其余 ${changes.size - 12} 项略")
+      }
+      if (unchanged > 0) add("$unchanged 项规则未改动，保持原名")
+      add("撞名的会自动加「(1)」，不会覆盖同名文件")
+    }
+    return ToolPlan(
+      tool = NetworkTool.BATCH_RENAME,
+      root = root,
+      actions = actions,
+      summary = summary,
+    )
   }
 
   // ────────────────────────── 按类型归类（只看当前层） ──────────────────────────

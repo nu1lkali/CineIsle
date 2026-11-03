@@ -140,24 +140,20 @@ class MPVView(
     )
 
     // ── 杜比视界 / HDR 输出 ──
-    // 1) DV Profile 5 没有 HDR10 兜底层，只有 gpu-next（libplacebo）会解析 HEVC 流里的
-    //    DV RPU 元数据做色彩映射，旧版 gpu 播 P5 必然紫绿反色（gpuNext 默认已开，见
-    //    DecoderPreferences.gpuNext 的说明）；Profile 7 / 8 的 RPU 同样走这条路。
-    // 2) target-colorspace-hint：HDR / DV 内容时让 libplacebo 按片源提示把显示切进
-    //    HDR 色彩空间（Android 9+ 支持），避免 HDR 片被压到 SDR 亮度区间灰成一片。
-    //    仅 gpu-next 有效；老设备不支持时 mpv 会忽略该提示，无副作用。
-    // ⚠️ 这里**必须显式写 yes / no 两支**，不能只在开启时设一次：
-    //   `setOptionString` 只对 mpv 内部的当前实例生效，而本项目每次进入播放页
-    //   都新建 MPVView，理论上不会串味 —— 但用户中途改设置再进播放器时，
-    //   「没写」与「写了 no」在 mpv 内部走的分支完全不同（前者落回默认值，
-    //   mpv 6.x 的 target-colorspace-hint 默认是 no，两者恰好一致）。
-    //   写成显式二值可以让意图不依赖上游默认值，将来 mpv 改默认也不会连带改变行为。
-    //   另见 DecoderPreferences.hdrEnabled：它与 gpuNext 解耦，正是为了这个开关。
+    // 1) DV Profile 5 的硬解颜色修正**不在这里**：片源信息要等开片后才有，
+    //    由 PlaybackColorPolicy 在 file-loaded / playback-restart 时按
+    //    track-list 的 dolby-vision-profile 临时把 hwdec 降到软解（其余片保留硬解）。
+    //    这里只保证渲染器是 gpu-next —— 只有 libplacebo 会读 HEVC 流里的 DV RPU
+    //    做重塑，旧版 gpu 播 P5 必然紫绿反色。
+    // 2) target-colorspace-hint 只是 libplacebo 的「提示」，**不是** Android 系统
+    //    HDR 模式的开关：Android 上只有 Vulkan 后端（gpu-context=androidvk）会把
+    //    它转成 Surface 的 HDR dataspace，默认 OpenGL 后端直接忽略 —— 这正是旧版
+    //    「HDR 开关开着没效果」的根因。真正让系统切 HDR 显示模式的是
+    //    Window.setColorMode(COLOR_MODE_HDR)，同样由 PlaybackColorPolicy 按片源做。
+    //    这里保留 hint 作为 Vulkan 后端下的辅助；显式写 yes/no 二值，不依赖上游默认值
+    //    （mpv 6.x 默认 no），将来改默认也不会连带改变行为。
     val hdrOn = decoderPreferences.hdrEnabled.get()
-    // 直出模式下 vo 是 mediacodec_embed，没有 libplacebo，这个 hint 也无处生效
-    if (decoderPreferences.gpuNext.get() && !directOutput) {
-      MPVLib.setOptionString("target-colorspace-hint", if (hdrOn) "yes" else "no")
-    }
+    MPVLib.setOptionString("target-colorspace-hint", if (hdrOn) "yes" else "no")
     
     // Set GPU API context (Vulkan or OpenGL)
     if (decoderPreferences.useVulkan.get()) {
@@ -169,14 +165,7 @@ class MPVView(
     // 落在 `mediacodec-copy`（解码后整帧回拷 CPU 内存 + 重新上传纹理）。
     // 把一档永远选不上的值写在第一位，只会让人以为「已经在用零拷贝硬解」——
     // 排查 4K60 卡顿时就卡在这个错觉上。直出模式下才把 `mediacodec` 单独交给它。
-    MPVLib.setOptionString(
-      "hwdec",
-      when {
-        directOutput -> "mediacodec,no"
-        decoderPreferences.tryHWDecoding.get() -> "mediacodec-copy,no"
-        else -> "no"
-      },
-    )
+    MPVLib.setOptionString("hwdec", decoderPreferences.defaultHwdec())
     // 硬解白名单：**这里不能用 `all`**。
     // AVI 里那批老视频编码（Xvid / DivX / MPEG-4 ASP，fourCC 常见为 XVID / DIVX / MP42）
     // 就是被 `all` 坑得最狠的一类：AVI 容器不会把编码的 codec-specific data（VOL 头）

@@ -32,11 +32,20 @@ class NetworkToolboxExecutor(private val client: AlistClient) {
    */
   suspend fun execute(
     plan: ToolPlan,
-    onProgress: (phase: String, done: Int, total: Int, current: String, failed: Int) -> Unit,
+    onProgress: (
+      phase: String,
+      done: Int,
+      total: Int,
+      current: String,
+      failed: Int,
+      lastError: String?,
+    ) -> Unit,
   ): ToolResult {
     var done = 0
     var failed = 0
     var firstError: String? = null
+    var lastError: String? = null
+    val failures = mutableListOf<ToolFailure>()
     val total = plan.actions.size
 
     fun step(action: ToolAction, ok: Boolean, error: String? = null) {
@@ -44,9 +53,15 @@ class NetworkToolboxExecutor(private val client: AlistClient) {
       if (!ok) {
         failed++
         if (firstError == null) firstError = error
+        failures += ToolFailure(action, error)
+        lastError =
+          buildString {
+            append(action.label)
+            if (!error.isNullOrBlank()) append("：").append(error)
+          }
       }
       // ⚠️ 回调是函数类型，实参必须按位置传（命名实参对函数类型不合法）
-      onProgress(phaseOf(action), done, total, action.label, failed)
+      onProgress(phaseOf(action), done, total, action.label, failed, lastError)
     }
 
     for (action in plan.actions) {
@@ -61,6 +76,20 @@ class NetworkToolboxExecutor(private val client: AlistClient) {
         is ToolAction.Move -> {
           val outcome = moveWithUniqueName(action)
           step(action, ok = outcome.first, error = outcome.second)
+        }
+
+        is ToolAction.Rename -> {
+          // 规划阶段已经按「全目录原名 + 已生成的新名」避过一次撞名，这里再兜一层：
+          // 执行期间目录下可能新出现了同名文件（别的会话同时在传），`fs/rename`
+          // 没有冲突策略，撞上可能直接覆盖，不能只信规划时的快照。
+          val existing = namesIn(action.dir)
+          val target = toolboxUniqueName(action.newName, existing - action.name)
+          val result = client.rename(toolboxJoinPath(action.dir, action.name), target)
+          if (result.isSuccess) {
+            existing -= action.name
+            existing += target
+          }
+          step(action, ok = result.isSuccess, error = result.exceptionOrNull()?.message)
         }
 
         is ToolAction.DeleteFile -> {
@@ -84,7 +113,7 @@ class NetworkToolboxExecutor(private val client: AlistClient) {
     // ── 收尾：搬空的子文件夹 ──
     var swept = 0
     if (plan.sweepEmptyDirs) {
-      onProgress("清理空目录…", done, total, "正在检查空文件夹", failed)
+      onProgress("清理空目录…", done, total, "正在检查空文件夹", failed, lastError)
       val sweepPlan =
         runCatching {
           NetworkToolboxPlanner.plan(
@@ -106,6 +135,7 @@ class NetworkToolboxExecutor(private val client: AlistClient) {
       failed = failed,
       firstError = firstError,
       sweptDirs = swept,
+      failures = failures,
     )
   }
 
@@ -159,6 +189,7 @@ class NetworkToolboxExecutor(private val client: AlistClient) {
     when (action) {
       is ToolAction.Mkdir -> "准备目标文件夹…"
       is ToolAction.Move -> "正在移动文件…"
+      is ToolAction.Rename -> "正在重命名文件…"
       is ToolAction.DeleteFile -> "正在删除空文件…"
       is ToolAction.DeleteDir -> "正在删除空目录…"
       is ToolAction.DeleteTree -> "正在删除垃圾目录…"

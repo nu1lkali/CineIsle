@@ -242,6 +242,8 @@ data class NetworkBrowserScreen(
     val supportsWrite by viewModel.supportsWrite.collectAsState()
     // 整理工具箱的执行状态（挂在 ViewModel 上：抽屉关掉，任务照跑）
     val toolProgress by viewModel.toolProgress.collectAsState()
+    // 批量重命名的规则链：挂在 ViewModel 上，抽屉关掉再开 / 换目录 / 重启都还在
+    val renameBook by viewModel.renameBook.collectAsState()
 
     // 视图模式：与本地文件夹浏览共用同一偏好（AlbumView=网格 / FileManager=列表）
     val browserPreferences = koinInject<BrowserPreferences>()
@@ -1448,17 +1450,33 @@ data class NetworkBrowserScreen(
       // 抽屉只负责「选工具 / 看清单 / 看进度」，真正的任务是 ViewModel 上的
       // toolJob —— 抽屉关掉它也继续跑，再打开还能接着看进度与结果。
       if (showToolbox) {
+        // ⭐ 名单必须 remember 缓存：大目录可能有几百上千条，抽屉每重组一次就
+        // map/filter 全量跑一遍会拖慢滚动；files 引用不变直接复用上次的 List。
+        // 更重要的是它是规则页 remember(preview) 的 key —— 每次都新建 List 会
+        // 让缓存永远失效，computeRenameBatch 逐条正则重算，滚动就掉帧。
+        val renameTakenNames = remember(files) { files.map { it.name } }
+        val renameTargetNames =
+          remember(files, renameBook.includeDirs) {
+            files.filter { renameBook.includeDirs || !it.isDirectory }.map { it.name }
+          }
         NetworkToolboxSheet(
           dirTitle = dirTitle,
           progress = toolProgress,
           // 根目录只留只读工具：这一层往往是所有网盘挂载的汇合处，
           // 「按类型归类」在这儿建个「视频」就等于把整块存储顶层搬空
           atRoot = currentPath.trim('/').isEmpty(),
+          renameBook = renameBook,
+          // 规则编辑器做即时预览用，不额外发网络请求（列表本身已经在手上了）
+          // takenNames = 全目录原名（撞名避让基准）；targetNames = 按范围开关过滤后的执行名单
+          renameTakenNames = renameTakenNames,
+          renameTargetNames = renameTargetNames,
+          onRenameBookChange = viewModel::saveRenameBook,
           onScan = { tool, onResult -> viewModel.scanToolbox(tool, onResult) },
           onRun = { plan ->
             viewModel.runToolbox(plan) { message -> toast(message) }
           },
           onCancel = { viewModel.cancelToolbox() },
+          onRetryFailed = { viewModel.retryFailed { message -> toast(message) } },
           onDismiss = {
             showToolbox = false
             // 只清「已经跑完」的状态；任务还在跑就保留，重开抽屉能继续看

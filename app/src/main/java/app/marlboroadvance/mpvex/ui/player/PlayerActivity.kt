@@ -1146,6 +1146,10 @@ open class PlayerActivity :
   override fun onDestroy() {
     Log.d(TAG, "PlayerActivity onDestroy")
 
+    // 播放页退出：把 Window 从 HDR 色彩模式复位，别把系统亮度留在 HDR 区间。
+    // 普通 SDR 播放不碰 Window（reset 内部判过 appliedHdr）。
+    PlaybackColorPolicy.reset(this)
+
     // 页面都没了就别再倒计时切集了
     cancelAutoplayCountdown()
 
@@ -2341,6 +2345,10 @@ open class PlayerActivity :
 
         // Re-apply Anime4K shaders (check for resolution limit) —— mpv 专属
         if (engineKind == EngineKind.MPV) player.applyAnime4KShaders()
+
+        // 解码器重协商（例如 P5 从硬解降软解）会再报一次 video-params/w，
+        // 此刻色彩元数据才稳定 ⇒ 补一次策略判定（幂等，状态没变就不碰 Window）。
+        if (engineKind == EngineKind.MPV) PlaybackColorPolicy.apply(this, decoderPreferences)
       }
     }
   }
@@ -3237,6 +3245,11 @@ private fun cancelAutoplayCountdown() {
         // ⚠️ 必须在每次 loadfile 后复位：`isReady` 换片时不会清零，
         //    拿它当加载判据会导致「只有第一集有加载动画」。
         viewModel.onLoadingNewFile()
+
+        // 换片：track-list 此刻已就绪 ⇒ 先判 DV Profile 5（硬解颜色修正），
+        // 同时把上一部 HDR 片的 Window 色彩模式复位（video-params 还没出来，
+        // 这次判定必然是 SDR）。等首帧后再判一次就会把 HDR 片切回去。
+        PlaybackColorPolicy.apply(this, decoderPreferences)
       }
 
       MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
@@ -3249,6 +3262,10 @@ private fun cancelAutoplayCountdown() {
         viewModel.onFirstFrameRendered()
         updateRecentlyPlayedDurationIfAvailable()
         watchSteadyState()
+
+        // 首帧出来后 video-params（gamma / sig-peak）才可读 ⇒ 这里才是
+        // 「要不要让系统切进 HDR 显示模式」的正式判定时机。
+        PlaybackColorPolicy.apply(this, decoderPreferences)
       }
 
       MPVLib.MpvEvent.MPV_EVENT_END_FILE -> handleEndFileWithError(data)

@@ -78,6 +78,11 @@ enum class NetworkTool(
     destructive = false,
     readOnly = true,
   ),
+  BATCH_RENAME(
+    title = "批量重命名",
+    description = "按可保存的规则给当前目录的文件改名（查找替换 / 前后缀 / 模板编号），先出对照清单再执行",
+    destructive = false,
+  ),
 }
 
 /** 归类目标文件夹名。前四类与 AlistClientN 完全一致，`其他` 只给「提取并整理」用 */
@@ -239,6 +244,17 @@ sealed interface ToolAction {
     override val label: String get() = "$name → $dstDir"
   }
 
+  /**
+   * 同目录内改一个名字（`fs/rename`）。
+   *
+   * 与 [Move] 分开是必要的：`fs/rename` 只改**名字**、不动父目录，也没有
+   * 「目标目录」参数；混进 Move 会让执行器去调 `fs/move`，把文件搬进一个
+   * 根本不存在的路径。
+   */
+  data class Rename(val dir: String, val name: String, val newName: String) : ToolAction {
+    override val label: String get() = "$name → $newName"
+  }
+
   /** 删除一个文件（`fs/remove`） */
   data class DeleteFile(val dir: String, val name: String) : ToolAction {
     override val label: String get() = "删除文件 $name"
@@ -281,11 +297,21 @@ data class ToolPlan(
 ) {
   val mkdirCount: Int get() = actions.count { it is ToolAction.Mkdir }
   val moveCount: Int get() = actions.count { it is ToolAction.Move }
+  val renameCount: Int get() = actions.count { it is ToolAction.Rename }
   val deleteCount: Int
     get() = actions.count { it is ToolAction.DeleteFile || it is ToolAction.DeleteDir || it is ToolAction.DeleteTree }
 
-  val isEmpty: Boolean get() = mkdirCount == 0 && moveCount == 0 && deleteCount == 0
+  // ⚠️ 漏掉 renameCount 会让「批量重命名」的计划被判成空 —— 确认框显示「无可处理」，
+  //    用户看着满屏的对照清单却点不了执行。
+  val isEmpty: Boolean
+    get() = mkdirCount == 0 && moveCount == 0 && renameCount == 0 && deleteCount == 0
 }
+
+/** 一条失败明细：结果页靠它列出「哪些没改成」，重试时按 action 原样重放 */
+data class ToolFailure(
+  val action: ToolAction,
+  val error: String?,
+)
 
 /** 执行结果。UI 拿它拼最后那句「完成：移动 12 个，失败 1 个」 */
 data class ToolResult(
@@ -294,7 +320,11 @@ data class ToolResult(
   val firstError: String?,
   /** 「提取并整理」收尾时顺带删掉的空目录数 */
   val sweptDirs: Int = 0,
-)
+  val failures: List<ToolFailure> = emptyList(),
+) {
+  /** 只重放失败的那些动作，已成功的不重跑 */
+  val failedActions: List<ToolAction> get() = failures.map { it.action }
+}
 
 /**
  * 工具箱的实时状态。
@@ -311,6 +341,8 @@ data class ToolProgress(
   val total: Int,
   val current: String = "",
   val failed: Int = 0,
+  /** 最近一条失败的「动作 + 原因」，进度页实时显示，不用等结束才知道哪条挂了 */
+  val lastError: String? = null,
   /** 非 null 表示已经结束（成功或失败），UI 切成结果态 */
   val result: ToolResult? = null,
   val errorMessage: String? = null,

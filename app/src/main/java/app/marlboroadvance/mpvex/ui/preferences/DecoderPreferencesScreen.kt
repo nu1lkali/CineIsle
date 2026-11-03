@@ -54,6 +54,7 @@ import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.player.Debanding
 import app.marlboroadvance.mpvex.ui.player.MPVProfile
+import app.marlboroadvance.mpvex.ui.player.PlaybackColorPolicy
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import app.marlboroadvance.mpvex.ui.preferences.VulkanUtils
 import kotlinx.serialization.Serializable
@@ -71,6 +72,9 @@ object DecoderPreferencesScreen : Screen {
     val backstack = LocalBackStack.current
     val context = LocalContext.current
     val isVulkanSupported = remember { VulkanUtils.isVulkanSupported(context) }
+    // 设备是否报告 HDR 显示能力：HDR 输出开关据此决定是否可用，
+    // 避免「开着没效果」却看不出原因（旧实现的痛点）。
+    val isHdrDevice = remember { PlaybackColorPolicy.deviceSupportsHdr(context) }
     var showGpuNextWarning by remember { mutableStateOf(false) }
     Scaffold(
       topBar = {
@@ -261,9 +265,42 @@ object DecoderPreferencesScreen : Screen {
 
               PreferenceDivider()
 
-              // HDR 输出：与 gpu-next 解耦的独立开关。
-              // 关掉 gpu-next 时本项无意义（只有 libplacebo 有这条通路），
-              // 所以直接 disable —— 摆在那儿却怎么点都不生效是最糟的（红线 29）。
+              // 杜比视界 Profile 5 颜色修正：只对 P5 让路，其余片源继续硬解。
+              // 依赖 gpu-next（libplacebo 才读 DV RPU）+ 非直出（要有 GPU 渲染链），
+              // 条件不满足时置灰并写明原因 —— 摆在那儿却点不动是最糟的。
+              val dvP5Fix by preferences.dolbyVisionColorFix.collectAsState()
+              val dvP5Usable = gpuNext && !directOutput
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ColorLens,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = dvP5Fix,
+                onValueChange = { preferences.dolbyVisionColorFix.set(it) },
+                enabled = dvP5Usable,
+                modifier = Modifier.settingsAnchor(R.string.pref_decoder_dv_p5_title),
+                title = { Text(stringResource(R.string.pref_decoder_dv_p5_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    if (dvP5Usable) {
+                      stringResource(R.string.pref_decoder_dv_p5_summary)
+                    } else {
+                      stringResource(R.string.pref_decoder_dv_p5_needs_gpu_next)
+                    },
+                    color = if (dvP5Usable) MaterialTheme.colorScheme.outline
+                            else MaterialTheme.colorScheme.error,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              // HDR 显示输出：按片源切 Window 的 COLOR_MODE_HDR，与渲染器无关。
+              // 设备不报告 HDR 能力时置灰 —— 这正是旧实现「开着没效果」时
+              // 最该直接告诉用户的事，而不是让人反复重进播放器试。
               val hdrEnabled by preferences.hdrEnabled.collectAsState()
               SwitchPreference(
                 icon = {
@@ -275,19 +312,18 @@ object DecoderPreferencesScreen : Screen {
                 },
                 value = hdrEnabled,
                 onValueChange = { preferences.hdrEnabled.set(it) },
-                enabled = gpuNext,
+                enabled = isHdrDevice,
                 modifier = Modifier.settingsAnchor(R.string.pref_decoder_hdr_title),
                 title = { Text(stringResource(R.string.pref_decoder_hdr_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
-                    if (gpuNext) {
+                    if (isHdrDevice) {
                       stringResource(R.string.pref_decoder_hdr_summary)
                     } else {
-                      // 与上面 Vulkan「不支持」时用 error 色的做法一致：说清为什么不能开。
-                      stringResource(R.string.pref_decoder_hdr_needs_gpu_next)
+                      stringResource(R.string.pref_decoder_hdr_no_device_support)
                     },
-                    color = if (gpuNext) MaterialTheme.colorScheme.outline
-                           else MaterialTheme.colorScheme.error,
+                    color = if (isHdrDevice) MaterialTheme.colorScheme.outline
+                            else MaterialTheme.colorScheme.error,
                   )
                 },
               )

@@ -27,6 +27,8 @@ import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.NetworkD
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkTool
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkToolboxExecutor
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.NetworkToolboxPlanner
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.RenameRuleBook
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.RenameRuleStore
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.ToolPlan
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.ToolProgress
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.ToolResult
@@ -65,6 +67,7 @@ class NetworkBrowserViewModel(
   KoinComponent {
   private val repository: NetworkRepository by inject()
   private val browserPreferences: BrowserPreferences by inject()
+  private val renameRuleStore: RenameRuleStore by inject()
 
   /**
    * 列目录的**原始结果**（未按用户排序重排，但已按「文件夹优先 + 名称」归一，
@@ -563,6 +566,22 @@ class NetworkBrowserViewModel(
    */
   val toolProgress: StateFlow<ToolProgress?> = _toolProgress.asStateFlow()
 
+  /**
+   * 批量重命名的规则本（命名预设 + 当前选中的规则）。
+   *
+   * ⚠️ 挂在 ViewModel 上而不是面板的 `remember`：面板关掉再开、换目录、甚至
+   * 进程重启后，用户上次编辑的规则照旧 —— 这就是「规则能够记忆」。落盘由
+   * [RenameRuleStore] 负责，这里只做 UI 与扫描之间的唯一数据源。
+   */
+  private val _renameBook = MutableStateFlow(renameRuleStore.book())
+  val renameBook: StateFlow<RenameRuleBook> = _renameBook.asStateFlow()
+
+  /** 面板改完规则就调它：先落盘、再推给订阅者，扫描时读到的永远是最新的一份 */
+  fun saveRenameBook(book: RenameRuleBook) {
+    renameRuleStore.save(book)
+    _renameBook.value = book
+  }
+
   /** 同一时刻只允许一个整理任务：两个任务同时搬同一个目录，冲突处理会互相打架 */
   private var toolJob: kotlinx.coroutines.Job? = null
 
@@ -601,6 +620,9 @@ class NetworkBrowserViewModel(
               root = currentPath.trim('/'),
               // 必须写成具名实参：尾随 lambda 会绑到最后一个参数 onPhase 上
               list = { path -> client.listFiles(path).getOrThrow() },
+              renameBook = _renameBook.value,
+              // 批量重命名用 UI 当前这份列表，保证规则页预览与正式清单同源同序
+              renameEntries = files.value,
             )
           onResult(plan, null)
         } catch (e: CancellationException) {
@@ -645,7 +667,7 @@ class NetworkBrowserViewModel(
         }
         try {
           val result =
-            NetworkToolboxExecutor(client).execute(plan) { phase, done, total, current, failed ->
+            NetworkToolboxExecutor(client).execute(plan) { phase, done, total, current, failed, lastError ->
               _toolProgress.value =
                 ToolProgress(
                   tool = plan.tool,
@@ -654,6 +676,7 @@ class NetworkBrowserViewModel(
                   total = total,
                   current = current,
                   failed = failed,
+                  lastError = lastError,
                 )
             }
           _toolProgress.value = _toolProgress.value?.copy(result = result) ?: ToolProgress(
@@ -678,6 +701,35 @@ class NetworkBrowserViewModel(
           loadFiles()
         }
       }
+  }
+
+  /**
+   * 只重跑上一轮失败的动作，已成功的不重来。
+   *
+   * 重试是重放用户已经确认过的动作，所以不再弹一次确认清单；但进度条会从 0
+   * 重新跑到失败项总数，结果页仍列出新的失败明细，可以接着重试。
+   * 每次都是新的 Executor 实例 ⇒ 目录名缓存重新拉一遍，不会拿上轮的旧名单判撞名。
+   */
+  fun retryFailed(onFinished: (String) -> Unit) {
+    val current =
+      _toolProgress.value ?: run {
+        onFinished("没有可重试的记录")
+        return
+      }
+    val actions = current.result?.failedActions.orEmpty()
+    if (actions.isEmpty()) {
+      onFinished("没有需要重试的失败项")
+      return
+    }
+    runToolbox(
+      ToolPlan(
+        tool = current.tool,
+        root = "",
+        actions = actions,
+        summary = listOf("重试上一轮失败的 ${actions.size} 项（已成功的不重跑）"),
+      ),
+      onFinished,
+    )
   }
 
   private fun toolResultText(tool: NetworkTool, result: ToolResult): String {

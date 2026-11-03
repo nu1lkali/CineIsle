@@ -182,8 +182,11 @@
   <string name="pref_decoder_gpu_next_title">Use gpu-next</string>
   <string name="pref_decoder_gpu_next_summary">A new rendering backend</string>
   <string name="pref_decoder_hdr_title">HDR output</string>
-  <string name="pref_decoder_hdr_summary">Switch the screen into HDR mode when playing HDR video. Turn off if HDR video looks too dark or washed out. Applies after re-entering the player.</string>
-  <string name="pref_decoder_hdr_needs_gpu_next">Requires gpu-next to be enabled first</string>
+  <string name="pref_decoder_hdr_summary">Switch the screen into the system HDR display mode while playing HDR video on HDR-capable devices; restores SDR for all other content. Turn off if HDR video looks too dark or washed out.</string>
+  <string name="pref_decoder_hdr_no_device_support">This device does not report HDR display support, so enabling this has no effect</string>
+  <string name="pref_decoder_dv_p5_title">Dolby Vision color correction</string>
+  <string name="pref_decoder_dv_p5_summary">Fixes the purple/green tint on Dolby Vision Profile 5 by decoding only those titles in software so gpu-next can apply the DV metadata. All other titles keep hardware decoding. Requires gpu-next with direct output off.</string>
+  <string name="pref_decoder_dv_p5_needs_gpu_next">Requires gpu-next and direct output off</string>
   <string name="pref_decoder_gpu_next_enable_title">Enable gpu-next?</string>
   <string name="pref_decoder_gpu_next_warning">Enabling gpu-next may cause purple screen issues during playback on some devices.</string>
   <string name="pref_decoder_gpu_next_purple_screen_fix">If you experience purple screens, try to disable opengl-pbo in Advanced settings (mpv.conf):</string>

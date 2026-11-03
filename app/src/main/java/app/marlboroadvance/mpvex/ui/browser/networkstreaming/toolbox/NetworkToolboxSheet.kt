@@ -4,7 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,6 +16,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -25,6 +30,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material3.AlertDialog
@@ -85,6 +91,14 @@ fun NetworkToolboxSheet(
   onRun: (ToolPlan) -> Unit,
   onCancel: () -> Unit,
   onDismiss: () -> Unit,
+  /** 批量重命名的规则链（ViewModel 持有一份持久化的，重启后仍在） */
+  renameBook: RenameRuleBook = RenameRuleBook(),
+  /** 当前目录的全部原名，给规则编辑器做撞名避让基准（零请求即时预览） */
+  renameTakenNames: List<String> = emptyList(),
+  /** 按范围开关过滤后的执行名单，顺序必须与规划器一致 */
+  renameTargetNames: List<String> = emptyList(),
+  onRenameBookChange: (RenameRuleBook) -> Unit = {},
+  onRetryFailed: () -> Unit = {},
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   val scope = rememberCoroutineScope()
@@ -93,6 +107,8 @@ fun NetworkToolboxSheet(
   var scanning by remember { mutableStateOf<NetworkTool?>(null) }
   var pendingPlan by remember { mutableStateOf<ToolPlan?>(null) }
   var scanError by remember { mutableStateOf<String?>(null) }
+  // 「批量重命名」不直接扫描：先开规则链编辑器（对齐 flut-renamer 的 rules_page）
+  var renameEditorOpen by remember { mutableStateOf(false) }
 
   /** 结束态：有结果 / 有错误 / 被取消，三者任一都算跑完了 */
   val finished = progress != null && (progress.result != null || progress.errorMessage != null || progress.cancelled)
@@ -114,7 +130,13 @@ fun NetworkToolboxSheet(
       ) {
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = if (running) "正在整理" else if (finished) "整理结果" else "整理工具箱",
+            text =
+              when {
+                running -> "正在整理"
+                finished -> "整理结果"
+                renameEditorOpen -> "批量重命名"
+                else -> "整理工具箱"
+              },
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Medium,
           )
@@ -139,9 +161,29 @@ fun NetworkToolboxSheet(
       // 三个分支收在一处读
       val active = progress
       when {
+        // 批量重命名：规则链编辑就是抽屉里的一页，不另弹窗口，返回键直接回工具列表
+        renameEditorOpen ->
+          RenameRulePane(
+            book = renameBook,
+            takenNames = renameTakenNames,
+            targetNames = renameTargetNames,
+            onBookChange = onRenameBookChange,
+            onPreview = {
+              renameEditorOpen = false
+              scanError = null
+              scanning = NetworkTool.BATCH_RENAME
+              onScan(NetworkTool.BATCH_RENAME) { plan, error ->
+                scanning = null
+                if (plan != null) pendingPlan = plan else scanError = error ?: "扫描失败"
+              }
+            },
+            onBack = { renameEditorOpen = false },
+          )
+
         active != null && running -> ProgressPane(progress = active, onCancel = onCancel)
 
-        active != null && finished -> ResultPane(progress = active, onClose = onDismiss)
+        active != null && finished ->
+          ResultPane(progress = active, onClose = onDismiss, onRetryFailed = onRetryFailed)
 
         else ->
           ToolListPane(
@@ -151,13 +193,18 @@ fun NetworkToolboxSheet(
             onScanErrorShown = { scanError = null },
             onPick = { tool ->
               scanError = null
-              scanning = tool
-              onScan(tool) { plan, error ->
-                scanning = null
-                if (plan != null) {
-                  pendingPlan = plan
-                } else {
-                  scanError = error ?: "扫描失败"
+              if (tool == NetworkTool.BATCH_RENAME) {
+                // 批量重命名要先定规则链，点一下就去扫描等于拿着空规则白跑一趟
+                renameEditorOpen = true
+              } else {
+                scanning = tool
+                onScan(tool) { plan, error ->
+                  scanning = null
+                  if (plan != null) {
+                    pendingPlan = plan
+                  } else {
+                    scanError = error ?: "扫描失败"
+                  }
                 }
               }
             },
@@ -257,7 +304,19 @@ fun NetworkToolboxSheet(
   }
 }
 
-/** 工具清单：一行一个，图标 + 标题 + 一句话副作用 */
+/**
+ * 工具清单：网格卡片。
+ *
+ * ⭐ 用 `LazyVerticalGrid` 而不是 `Column + verticalScroll`，两件事一起解决：
+ * 1. 工具攒到八个之后，一列一行要滚很久；两列一屏基本看全。
+ * 2. 旧写法一次组合全部卡片，且内层 `verticalScroll` 与 `ModalBottomSheet` 的
+ *    拖拽手势靠 nestedScroll 抢事件，滚动发涩。Lazy 容器只组合可见项，也是
+ *    BottomSheet 官方推荐的可滚动内容形态。
+ *
+ * 列数按抽屉实际可用宽度反推：窄屏两列、平板三列。这里固定列数而不用
+ * `GridCells.Adaptive`，是因为 Adaptive 在窄屏会退化成一列、大屏又会挤成四列窄条，
+ * 卡片里的两行描述就没法读了。
+ */
 @Composable
 private fun ToolListPane(
   scanning: NetworkTool?,
@@ -266,21 +325,15 @@ private fun ToolListPane(
   onScanErrorShown: () -> Unit,
   onPick: (NetworkTool) -> Unit,
 ) {
-  Column(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .heightIn(max = 520.dp)
-        .verticalScroll(rememberScrollState())
-        .padding(horizontal = 16.dp),
-  ) {
+  // 说明和错误条放在网格外面：它们是固定的头部，不该跟着卡片一起滚。
+  Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
     Text(
       text =
         if (atRoot) {
           "根目录只开放「大文件排行」（只读）。整理 / 清理类会把整块存储顶层的文件搬走或删掉，" +
             "先进到具体目录再用。"
         } else {
-          "先扫描目录、把要做的改动列成清单，确认之后才动手。「大文件排行」只读，只出报告。"
+          "先扫描目录、把要做的改动列成清单，确认之后才处理。「大文件排行」只读，只出报告。"
         },
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -308,22 +361,33 @@ private fun ToolListPane(
       }
     }
 
-    NetworkTool.entries.forEach { tool ->
-      val blocked = atRoot && !tool.readOnly
-      ToolRow(
-        tool = tool,
-        scanning = scanning == tool,
-        enabled = scanning == null && !blocked,
-        note = if (blocked) "根目录下不开放" else null,
-        onClick = { onPick(tool) },
-      )
-      Spacer(Modifier.height(8.dp))
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
+      val columns = if (maxWidth >= 600.dp) 3 else 2
+      LazyVerticalGrid(
+        columns = GridCells.Fixed(columns),
+        modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp),
+        contentPadding = PaddingValues(bottom = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        // 稳定 key：扫描中 / 置灰状态变化时，Lazy 能按 key 复用卡片而不是整表重组。
+        items(NetworkTool.entries, key = { it.name }) { tool ->
+          val blocked = atRoot && !tool.readOnly
+          ToolCard(
+            tool = tool,
+            scanning = scanning == tool,
+            enabled = scanning == null && !blocked,
+            note = if (blocked) "根目录下不开放" else null,
+            onClick = { onPick(tool) },
+          )
+        }
+      }
     }
   }
 }
 
 @Composable
-private fun ToolRow(
+private fun ToolCard(
   tool: NetworkTool,
   scanning: Boolean,
   enabled: Boolean,
@@ -337,73 +401,84 @@ private fun ToolRow(
     modifier =
       Modifier
         .fillMaxWidth()
-        // 置灰用整体透明度而不是改色：图标底色、标题、副标题、箭头一次性都淡下去，
+        // 固定高度让同一行卡片严格等高。LazyGrid 的 item 高度是 wrap content，
+        // 不给确定高度就会出现「一行里卡片长短不齐」；描述最多两行，超长省略。
+        .height(150.dp)
+        // 置灰用整体透明度而不是改色：图标底色、标题、描述、箭头一次性都淡下去，
         // 不会出现「卡片是灰的但字是全黑」的半灰状态
         .alpha(if (enabled || scanning) 1f else 0.45f)
         .clickable(enabled = enabled && !scanning, onClick = onClick),
   ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Box(
-        modifier =
-          Modifier
-            .size(38.dp)
-            .background(
-              color =
-                if (tool.destructive) {
-                  MaterialTheme.colorScheme.errorContainer
-                } else {
-                  MaterialTheme.colorScheme.secondaryContainer
-                },
-              shape = RoundedCornerShape(12.dp),
-            ),
-        contentAlignment = Alignment.Center,
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
       ) {
-        Icon(
-          imageVector = icon,
-          contentDescription = null,
-          tint =
-            if (tool.destructive) {
-              MaterialTheme.colorScheme.onErrorContainer
-            } else {
-              MaterialTheme.colorScheme.onSecondaryContainer
-            },
-          modifier = Modifier.size(20.dp),
-        )
-      }
-      Spacer(Modifier.width(12.dp))
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = tool.title,
-          style = MaterialTheme.typography.bodyLarge,
-          fontWeight = FontWeight.Medium,
-        )
-        Spacer(Modifier.height(2.dp))
-        Text(
-          text = tool.description,
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (note != null) {
-          Spacer(Modifier.height(3.dp))
-          Text(
-            text = note,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.error,
+        Box(
+          modifier =
+            Modifier
+              .size(38.dp)
+              .background(
+                color =
+                  if (tool.destructive) {
+                    MaterialTheme.colorScheme.errorContainer
+                  } else {
+                    MaterialTheme.colorScheme.secondaryContainer
+                  },
+                shape = RoundedCornerShape(12.dp),
+              ),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint =
+              if (tool.destructive) {
+                MaterialTheme.colorScheme.onErrorContainer
+              } else {
+                MaterialTheme.colorScheme.onSecondaryContainer
+              },
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        Spacer(Modifier.weight(1f))
+        if (scanning) {
+          CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+        } else {
+          Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
           )
         }
       }
-      Spacer(Modifier.width(8.dp))
-      if (scanning) {
-        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-      } else {
-        Icon(
-          imageVector = Icons.Default.ChevronRight,
-          contentDescription = null,
-          tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.size(20.dp),
+      Spacer(Modifier.height(10.dp))
+      Text(
+        text = tool.title,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+      Spacer(Modifier.height(3.dp))
+      Text(
+        text = tool.description,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // minLines 让没有副标题 / 描述较短的卡片也占两行，整排文案基线对齐
+        minLines = 2,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+      )
+      if (note != null) {
+        Spacer(Modifier.height(3.dp))
+        Text(
+          text = note,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.error,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
         )
       }
     }
@@ -434,7 +509,7 @@ private fun ProgressPane(progress: ToolProgress, onCancel: () -> Unit) {
     )
     Spacer(Modifier.height(10.dp))
     Text(
-      text = progress.current.ifBlank { "…" },
+      text = if (progress.current.isBlank()) "…" else "当前：${progress.current}",
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
       maxLines = 2,
@@ -447,6 +522,16 @@ private fun ProgressPane(progress: ToolProgress, onCancel: () -> Unit) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.error,
       )
+      progress.lastError?.let {
+        Spacer(Modifier.height(4.dp))
+        Text(
+          text = "最近失败：$it",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.error,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
     }
     Spacer(Modifier.height(14.dp))
     Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
@@ -457,7 +542,11 @@ private fun ProgressPane(progress: ToolProgress, onCancel: () -> Unit) {
 
 /** 结束态：成功数 / 失败数 / 取消 / 出错 */
 @Composable
-private fun ResultPane(progress: ToolProgress, onClose: () -> Unit) {
+private fun ResultPane(
+  progress: ToolProgress,
+  onClose: () -> Unit,
+  onRetryFailed: () -> Unit,
+) {
   Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
     // 取局部 val 再判空：对参数属性判空会被智能转换吃掉（`?: ""` 被判「永远取左边」）
     val errorMessage = progress.errorMessage
@@ -491,8 +580,38 @@ private fun ResultPane(progress: ToolProgress, onClose: () -> Unit) {
           MaterialTheme.colorScheme.onSurfaceVariant
         },
     )
+    val failures = progress.result?.failures.orEmpty()
+    if (failures.isNotEmpty()) {
+      Spacer(Modifier.height(10.dp))
+      Text(
+        text = "失败明细（可只重试这些）：",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.error,
+      )
+      Spacer(Modifier.height(4.dp))
+      failures.take(5).forEach { failure ->
+        Text(
+          text = "· ${failure.action.label}${if (failure.error.isNullOrBlank()) "" else "：${failure.error}"}",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      if (failures.size > 5) {
+        Text(
+          text = "· 其余 ${failures.size - 5} 项略",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
     Spacer(Modifier.height(14.dp))
     Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+      if (failures.isNotEmpty()) {
+        TextButton(onClick = onRetryFailed) { Text("重试失败 ${failures.size} 项") }
+        Spacer(Modifier.width(8.dp))
+      }
       FilledTonalButton(onClick = onClose) { Text("完成") }
     }
   }
@@ -508,4 +627,5 @@ private fun NetworkTool.icon(): ImageVector =
     NetworkTool.CLEAN_JUNK_FILES -> Icons.Default.AutoDelete
     NetworkTool.ARCHIVE_BY_MONTH -> Icons.Default.CalendarMonth
     NetworkTool.BIG_FILE_RANKING -> Icons.Default.Leaderboard
+    NetworkTool.BATCH_RENAME -> Icons.Default.Edit
   }

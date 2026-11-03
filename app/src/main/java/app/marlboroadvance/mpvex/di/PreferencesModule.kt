@@ -16,6 +16,7 @@ import app.marlboroadvance.mpvex.preferences.SettingsManager
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import app.marlboroadvance.mpvex.preferences.preference.AndroidPreferenceStore
 import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.RenameRuleStore
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.singleOf
 import org.koin.dsl.bind
@@ -38,4 +39,6 @@ val PreferencesModule =
     singleOf(::DanmakuPreferences)
     singleOf(::AppLockPreferences)
     singleOf(::SettingsManager)
+    // 批量重命名的规则链记忆（单例，构造只依赖 PreferenceStore）
+    singleOf(::RenameRuleStore)
   }
