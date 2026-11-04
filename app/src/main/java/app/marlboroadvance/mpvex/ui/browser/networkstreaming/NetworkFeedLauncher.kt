@@ -234,6 +234,13 @@ object NetworkFeedLauncher {
           title = file.name,
           url = uri.toString(),
           isFavorite = false,
+          // 网盘没有 Emby 那套元数据，但容器可以从文件名拿 —— rmvb / wmv 这类
+          // 内置内核拆不开的容器，靠它就能在起播前直接交给 mpv。
+          container = file.name
+            .substringAfterLast('.', "")
+            .trim()
+            .lowercase()
+            .takeIf { it.isNotEmpty() },
         ),
       )
     }

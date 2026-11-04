@@ -2489,7 +2489,43 @@ android {
     //     在表述末尾标「（递归）」—— 标记由枚举的 recursive 字段渲染，与规划器走
     //     planWithWalk 的那批一一对应，不在文案里手写。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 207
+    // ── v208（versionCode 208，修复轮不涨名，versionName 仍为 1.6.14）──────────
+    //     视界流「有声无画面 / 无法播放」的兼容性一轮（根因经反编译 AAR 确证）：
+    //     ① 容器类失败（PARSING_CONTAINER_*）不再只弹错误卡片，直接交接 mpv——
+    //        NextLib 只补解码器、不补解复用器（AAR 内无 libavformat），换解码器必然没用。
+    //     ② 视频轨「没有任何渲染器支持」（isSupported=false）单独成判据，阈值 1.5s，
+    //        不再等满 4 秒；这是「有声、零报错、无画面」最主要的成因。
+    //     ③ 首帧账本拆成两份：frameOnScreen 只认真上屏（故障判据），兜底定时器改写
+    //        revealNotified（界面判据）—— 原来兜底会把 stall 判据永久掩盖。
+    //     ④ 软解重试改就地切（DecoderManager.selectVideoDecoder(FFMPEG)），不再
+    //        release+rebuild；切之前先过 FfmpegLibrary.supportsFormat(mime)，
+    //        表外编码切过去等于主动制造「有声无画面」。FFMPEG 模式下 media3 走
+    //        「禁用平台渲染器 + 重选轨道」，AUTO 与旧 ON 行为等价，硬解不退化。
+    //     ⑤ 起播前预判（FeedStartPlan）：rm/rmvb/wmv/asf/ogm/ogv 与
+    //        wmv1/2/3、vc1、rv30/40、vp6、msmpeg4v2/v3、h263 直接交给 mpv，不弹提示；
+    //        元数据取自已请求的 MediaSources，零额外网络开销；mpv 起不来则退回内置内核。
+    //     仍存的天花板：容器能拆到的范围 = media3 的 Extractor 清单，编码能解到的
+    //     范围 = NextLib 那张 25 条 mime 表；要扩容只能 fork 该 AAR。
+    // ────────────────────────────────────────────────────────────────────────
+    // ── v209（versionCode 209，修复轮不涨名，versionName 仍为 1.6.14）──────────
+    //     v208 的判据回归（真机反馈「播得好好的却被判无法播放、还换了内核」）：
+    //     ① 根因：`detectNoVideoStall` 拿**位置绝对值**当「在推进」，且 v208 把兜底
+    //        定时器从 `frameOnScreen` 里摘了出去 —— 暂停 / 拖动进度停住 / 旋转后暂停
+    //        这三种情况首帧账本是空的、位置又大于阈值，于是被判成「解码器不吐帧」，
+    //        随即盖遮罩 + 切渲染器 + 换 mpv。旧代码里 1.2s 兜底顺手写 frameOnScreen，
+    //        恰好把这类误判全挡住了；拆开后暴露出判据本身不成立。
+    //     ② 改成四道闸：出过帧的证据（firstFrameRendered / frameOnScreen）→ 真的在播
+    //        （READY + playWhenReady）→ 位置**持续增加**且不是 seek 跳跃（>3s 视为 seek）
+    //        → 连续推进够时长（正常 3s、视频轨没人认 1.2s）才判。暂停与 seek 一律不判。
+    //     ③ Surface 重建/销毁不再抹掉 `firstFrameRendered`（那是实例级事实）：
+    //        否则旋转后继续播会被判死（onRenderedFirstFrame 未必再回调一次）。
+    //     ④ 容器类失败增加否决：这一条**已经出过画面**就不换内核（偶发的解析失败
+    //        换内核救不了，还会把能放的片子推给旁路），只报错让用户点重试。
+    //     ⑤ 预判收窄：多版本条目（MediaSources.size > 1）一律不预判 —— 播放地址不带
+    //        MediaSourceId，服务器给的默认版本未必是 MediaSources[0]；编码名单去掉
+    //        wmv1/wmv2/msmpeg4v2/h263（个别机型能兼容，误判代价远大于省一轮）。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 209
     versionName = "1.6.14"
 
     vectorDrawables {

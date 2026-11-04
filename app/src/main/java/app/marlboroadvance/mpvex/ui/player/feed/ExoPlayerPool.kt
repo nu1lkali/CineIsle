@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.SurfaceTexture
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.TextureView
 import android.view.View
@@ -22,6 +23,9 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import app.marlboroadvance.mpvex.R
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderManager
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderMode
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegLibrary
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -74,13 +78,16 @@ import kotlin.math.roundToInt
 internal class ExoPlayerPool(
   private val context: Context,
   /**
-   * 某一条出错。[decoderRelated] 表示「换解码器可能救回来」—— 调用方据此决定
-   * 要不要先拿软解重试一次（[beginSoftwareRetry]），而不是直接把错误摆给用户。
+   * 某一条出错。[kind] 决定调用方走哪条兜底路：
+   * - [FeedFailureKind.DECODER] 换解码器可能救回来 ⇒ 先就地切 FFmpeg，再换内核；
+   * - [FeedFailureKind.CONTAINER] 容器拆不开 ⇒ **换解码器一定没用**，直接换内核；
+   * - [FeedFailureKind.OTHER] 网络 / IO / DRM ⇒ 换什么都不管用，只报错。
    *
-   * 网络类错误（连不上 / 403 / 404）换软解毫无意义，所以必须区分开：
-   * 只看 [reason] 的中文文案来猜是不可靠的。
+   * 为什么不给一个「是否可恢复」的布尔：容器失败恰恰是"可恢复"的（mpv 能放），
+   * 只是**恢复手段不同**。一个布尔会把这两条完全不同的路压成同一条，
+   * 于是要么白重建一次播放器，要么把能播的片子报成放不了。
    */
-  private val onError: (index: Int, reason: String, decoderRelated: Boolean) -> Unit,
+  private val onError: (index: Int, reason: String, kind: FeedFailureKind) -> Unit,
   /**
    * `index` 这一条的**帧真的画到了屏幕上**时回调一次（同一个 index 只回调一次）。
    *
@@ -144,6 +151,19 @@ internal class ExoPlayerPool(
   private val listeners = HashMap<Int, Player.Listener>()
 
   /**
+   * index → 这条实例的解码模式控制器。
+   *
+   * NextLib 从 0.14 起带了 `DecoderManager`：在**不重建播放器**的前提下，把视频解码
+   * 在「平台解码器」和「FFmpeg 软解」之间来回切。它靠的是把落选那个渲染器的
+   * `supportsFormat` 全部压成 0，再让 `DefaultTrackSelector` 重选一次轨道 ——
+   * 这条路径没有 release/rebuild，所以不会有 `reloadCurrent` 那一下黑屏转圈。
+   *
+   * 只在 [build] 里 `attach` 成功后才登记（`attach` 会校验它的 controller 确实拥有
+   * 这个 player，失败就不该假装能用）。
+   */
+  private val decoders = HashMap<Int, DecoderManager>()
+
+  /**
    * index → 渲染器是否已经**产出过**第一帧（`Player.Listener.onRenderedFirstFrame`）。
    *
    * ⚠️ 它**不等于「用户看到了」**。这个回调是 ExoPlayer 把这一帧**交给输出面**的那一刻
@@ -152,7 +172,7 @@ internal class ExoPlayerPool(
    * 硬件层合成上屏 —— 中间隔着若干个 vsync。
    *
    * 曾经直接拿它撤加载圈，结果就是「转圈消失 → 一段黑屏 → 画面浮现」：圈撤掉了，可
-   * 屏幕上还没有东西。所以它现在只用来给 [frameOnScreen] 排一个兜底定时器。
+   * 屏幕上还没有东西。所以它现在只用来给 [revealNotified] 排一个兜底定时器。
    */
   private val firstFrameRendered = HashSet<Int>()
 
@@ -165,6 +185,27 @@ internal class ExoPlayerPool(
    * 差的就是这几个 vsync。
    */
   private val frameOnScreen = HashSet<Int>()
+
+  /**
+   * index → **这一条的加载态已经结束**（对外只通知过一次 `onFrameVisible`）。
+   *
+   * ⚠️ 它跟 [frameOnScreen] **不是一回事**，这个区分是刻意的：
+   *
+   * · [frameOnScreen] 是**故障判据**，只有在 TextureView 真的收到帧时才写；
+   * · 本集合是**界面判据**，兜底定时器到点也会写（不能让加载圈永远转）。
+   *
+   * 合在一起写过一次，代价是：「渲染器交出了首帧、但 TextureView 一直没收到」这种故障
+   * 会被兜底当成「画面已好」，而 `detectNoVideoStall` 的第一条判据正是
+   * `idx in frameOnScreen` ⇒ 此后它永远返回 null，**这条片子就再也没人管了**，
+   * 用户看到的是一圈撤掉之后的永久黑屏。拆开之后，兜底只管撤圈，故障判定仍然有效。
+   */
+  private val revealNotified = HashSet<Int>()
+
+  /** index → 上一次心跳读到的播放位置。用来判断「时间轴是真的在走」而不是「停在某个位置」 */
+  private val probePos = HashMap<Int, Long>()
+
+  /** index → 「时间轴开始连续推进」的时刻。暂停 / 回退 / seek 都会把它清掉 */
+  private val advanceSince = HashMap<Int, Long>()
 
   /**
    * index → 兜底定时器：渲染器说「第一帧交出去了」，可 TextureView 迟迟没回报「我画上去了」。
@@ -234,7 +275,7 @@ internal class ExoPlayerPool(
   private fun acquire(index: Int, url: String): ExoPlayer? {
     if (index in skipped) return null
     players[index]?.let { return it }
-    val player = build(url, softOnly = index in forceSoftware)
+    val player = build(index, url, softOnly = index in forceSoftware)
     val listener = listenerFor(index)
     player.addListener(listener)
     // 记下这一对，释放时成对摘掉（清单 #20 建议项）。
@@ -246,7 +287,13 @@ internal class ExoPlayerPool(
     return player
   }
 
-  private fun build(url: String, softOnly: Boolean = false): ExoPlayer {
+  /**
+   * 建一个播放实例并登记它的解码模式控制器。
+   *
+   * @param softOnly 已经确定硬解出不了画面，这一条**从头就用 FFmpeg 软解**
+   *   （见 [retryInSoftware] 的 REBUILD 分支；就地切换那条路不走这里）。
+   */
+  private fun build(index: Int, url: String, softOnly: Boolean = false): ExoPlayer {
     // ── 解码能力的三层 ──
     // 1) 正常路径：平台 MediaCodec 优先，NextLib 的 FFmpeg Renderer 只在平台
     //    不支持该格式时兜底（EXTENSION_RENDERER_MODE_ON）。这样 H.264/HEVC 仍然
@@ -261,8 +308,22 @@ internal class ExoPlayerPool(
       } else {
         DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
       }
+    // 解码模式控制器：正常路径给 AUTO。
+    // ⚠️ AUTO **不是**「偏向某一方」，它的语义是「两个渲染器都启用、按能力值竞争」——
+    //    也就是跟不加控制器时的 ON 行为完全一致（反编译 `enables()` 确认：
+    //    `mode == AUTO || (mode == FFMPEG) == isFfmpeg`）。所以换成它不会让硬解退化。
+    val decoderManager = DecoderManager(
+      if (softOnly) DecoderMode.FFMPEG else DecoderMode.AUTO,
+      // 音频不动：软解救「有声无画面」从来不需要动音频，动它反而会多一次重缓冲。
+      DecoderMode.AUTO,
+    )
     val renderersFactory =
       NextRenderersFactory(context)
+        // 必须在 `build()` **之前**设进工厂：控制器要靠它接管渲染器集合。
+        // ⚠️ 这一句必须是链上的**第一**个：`setEnableDecoderFallback` /
+        // `setExtensionRendererMode` 都是父类方法、返回的是 `DefaultRenderersFactory`
+        // 的静态类型，放在它们后面就调不到 `setDecoderManager` 了。
+        .setDecoderManager(decoderManager)
         // ⚠️ 这一项**默认是 false**（media3 的 `DefaultRenderersFactory` 里
         // `enableDecoderFallback = false`）⇒ 首选解码器建不起来时直接抛
         // `DECODER_INIT_FAILED`，不会试后面的候选。打开后才会逐个回退。
@@ -289,7 +350,7 @@ internal class ExoPlayerPool(
           .setReadTimeoutMs(30_000)
       builder.setMediaSourceFactory(DefaultMediaSourceFactory(context).setDataSourceFactory(httpFactory))
     }
-    return builder
+    val player = builder
       .setAudioAttributes(
         AudioAttributes.Builder()
           .setUsage(C.USAGE_MEDIA)
@@ -307,6 +368,12 @@ internal class ExoPlayerPool(
         playWhenReady = false
         prepare()
       }
+    // attach 必须在 `build()` 之后、且在 player 自己的 application 线程上
+    // （本池全部方法都在主线程，见类注释）。它会做两件事：接管 trackSelector、
+    // 把当前模式应用到渲染器能力上。失败就别登记 —— 假装能用比不能用更糟。
+    runCatching { decoderManager.attach(player) }
+      .onSuccess { decoders[index] = decoderManager }
+    return player
   }
 
   private fun listenerFor(index: Int) = object : Player.Listener {
@@ -329,7 +396,7 @@ internal class ExoPlayerPool(
     }
 
     override fun onPlayerError(error: PlaybackException) {
-      onError(index, describeError(error), isDecoderError(error))
+      onError(index, describeError(error), failureKindOf(error))
     }
   }
 
@@ -416,13 +483,25 @@ internal class ExoPlayerPool(
    */
   private fun markFrameOnScreen(index: Int) {
     revealFallbacks.remove(index)?.let { mainHandler.removeCallbacks(it) }
-    if (frameOnScreen.add(index)) {
-      // 撤遮罩必须放在「这一帧真的上屏」这一刻，而不是 `onVideoSizeChanged`：
-      // 后者只说明拿到了宽高比、矩形即将被改写，那时撤掉就会把这次几何变化露出来 ——
-      // 正是用户抱怨的「切条时画面缩一下」。上屏之后矩形一定已经摆好，露出来就是对的。
-      unveil(index)
-      onFrameVisible(index)
-    }
+    // 只有这条路径能写故障判据 —— 它意味着像素真的进到 View 的硬件层里了
+    frameOnScreen.add(index)
+    notifyRevealed(index)
+  }
+
+  /**
+   * 告诉上层「这一条的加载态可以结束了」——每个 index 只通知一次。
+   *
+   * 触发点有两个：真的出帧（[markFrameOnScreen]）、兜底定时器到点。后者**不写**
+   * [frameOnScreen]，所以「兜底撤了圈、但其实一帧都没上屏」这种情况仍然会被
+   * [detectNoVideoStall] 抓出来，交给兜底链处理。
+   */
+  private fun notifyRevealed(index: Int) {
+    if (!revealNotified.add(index)) return
+    // 撤遮罩必须放在「这一帧真的上屏」这一刻，而不是 `onVideoSizeChanged`：
+    // 后者只说明拿到了宽高比、矩形即将被改写，那时撤掉就会把这次几何变化露出来 ——
+    // 正是用户抱怨的「切条时画面缩一下」。上屏之后矩形一定已经摆好，露出来就是对的。
+    unveil(index)
+    onFrameVisible(index)
   }
 
   /**
@@ -476,21 +555,36 @@ internal class ExoPlayerPool(
    * 还在被裁剪），也不能让用户对着一个永远转的圈。
    */
   private fun scheduleRevealFallback(index: Int) {
-    if (index in frameOnScreen || revealFallbacks.containsKey(index)) return
-    val runnable = Runnable { markFrameOnScreen(index) }
+    if (index in revealNotified || revealFallbacks.containsKey(index)) return
+    // 兜底只负责「别让圈永远转」：它**不写** `frameOnScreen`，
+    // 所以这一条若其实一帧都没上屏，故障判据仍然成立（见 [revealNotified]）。
+    val runnable = Runnable {
+      revealFallbacks.remove(index)
+      notifyRevealed(index)
+    }
     revealFallbacks[index] = runnable
     mainHandler.postDelayed(runnable, REVEAL_FALLBACK_MS)
   }
 
   /**
-   * 把某个 index 的两份首帧账本连同兜底定时器一起作废。
+   * 把某个 index 的首帧账本连同兜底定时器一起作废。
    *
    * 触发点有三类，共同点是「之前那份『画面已经好了』的结论不再成立」：
-   * 实例被释放（[releaseSlot]）、SurfaceTexture 被重建或被销毁。
+   * 实例被释放（[releaseSlot]）、SurfaceTexture 被重建或被销毁、以及就地切软解。
+   *
+   * @param keepRendererEvidence true = **保留** [firstFrameRendered]。
+   *   只有「Surface 重建 / 销毁」该用 true：换一块 SurfaceTexture 不代表渲染器没出过帧 ——
+   *   恰恰相反，它出过帧才会在这里。真正的判据是「这个实例有没有解出过帧」，
+   *   那是实例级的事实，不该被界面上换一块画布抹掉。
+   *   抹掉的后果很具体：旋转后继续播，渲染器证据没了、而 `onRenderedFirstFrame`
+   *   未必再回调一次 ⇒ 3 秒后把一条正在正常播放的片子判成「解码器不吐帧」。
    */
-  private fun forgetFrameLedgers(index: Int) {
-    firstFrameRendered.remove(index)
+  private fun forgetFrameLedgers(index: Int, keepRendererEvidence: Boolean = false) {
+    if (!keepRendererEvidence) firstFrameRendered.remove(index)
     frameOnScreen.remove(index)
+    // 「已经撤过圈」这条也要一起作废：新实例/新解码模式下画面要重新出帧，
+    // 留着它会让加载圈再也不出现（用户对着黑屏，界面上却像已经播起来了）。
+    revealNotified.remove(index)
     // 「这条没有画面」的结论同样跟着实例走：换了实例（软解重试 / 重载）就要重新判，
     // 否则第一次的判决会一直压着，软解成功了却还挂着错误卡片。
     // ⚠️ 刻意**不**清 softRetried：那个是「已经给过一次软解机会」的闸门，
@@ -522,7 +616,9 @@ internal class ExoPlayerPool(
         // 「已经上屏」这个结论属于**上一块** SurfaceTexture：它连同上面那一帧一起
         // 没了。不抹掉的话，旋转 / 重新 attach 之后加载圈会以为画面早就好了，
         // 撤掉圈露出的就是一片黑 —— 又是一次一模一样的闪烁。
-        forgetFrameLedgers(index)
+        // ⚠️ 但渲染器出过帧这件事要留着（`keepRendererEvidence`）：它证明解码链路是通的，
+        // 抹掉它会把「旋转后继续播放」误判成「解码器不吐帧」。
+        forgetFrameLedgers(index, keepRendererEvidence = true)
         players[index]?.let { player -> bind(index, player) }
         applyVideoLayout(index)
       }
@@ -550,7 +646,7 @@ internal class ExoPlayerPool(
           boundTextures.remove(index)
           players[index]?.let { player -> runCatching { player.clearVideoTextureView(texture) } }
         }
-        forgetFrameLedgers(index)
+        forgetFrameLedgers(index, keepRendererEvidence = true)
         return true
       }
     }
@@ -559,24 +655,30 @@ internal class ExoPlayerPool(
   // ══════════════════ 接线 ══════════════════
 
   /**
-   * 这个错误是不是「换解码器/换内核可能救回来」的那一类。
+   * 这个错误属于哪一类 —— 决定调用方走哪条兜底路。
    *
-   * 只有解码层与容器层的失败算 —— IO / 网络 / DRM 那些换什么都没用，
-   * 硬要重试只会让用户多等一轮。
+   * ⚠️ `PARSING_CONTAINER_UNSUPPORTED` 归到 [FeedFailureKind.CONTAINER] 而不是解码类：
+   * 软解重试走的是「换渲染器」，而 NextLib 的扩展只接管**解码**，解复用仍然是
+   * ExoPlayer 自带的 Extractor（AAR 里没有 libavformat）。容器不认识时换解码器不可能
+   * 变好 ⇒ 白重建一次再失败，用户看到「转一圈、黑一下、又转一圈」才轮到 mpv。
    *
-   * ⚠️ `PARSING_CONTAINER_UNSUPPORTED` **不算**：软解重试走的是
-   * `EXTENSION_RENDERER_MODE_PREFER`（把 FfmpegAudio/VideoRenderer 提到平台前面），
-   * 而 NextLib 的扩展只接管**解码**，解复用仍然是 ExoPlayer 自带的 Extractor。
-   * 容器不认识的时候换解码器不可能变好 ⇒ 白白重建一次播放器再失败，
-   * 用户看到的就是「转一圈、黑一下、又转一圈」最后才切 mpv。
-   * 这一类直接交给 Activity 切 mpv 才是对的路径。
+   * 但它也**不是**「报错完事」：这类失败换**内核**就能过（mpv 的 lavf 是全的），
+   * 所以它必须被识别出来、并且直接指向 mpv —— 这正是 [FeedFailureKind] 存在的理由。
    */
-  private fun isDecoderError(error: PlaybackException): Boolean =
-    error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
-      error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
-      error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
-      error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
-      error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+  private fun failureKindOf(error: PlaybackException): FeedFailureKind =
+    when (error.errorCode) {
+      PlaybackException.ERROR_CODE_DECODING_FAILED,
+      PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+      PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+      PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+      PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES -> FeedFailureKind.DECODER
+
+      PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+      PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+      PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED -> FeedFailureKind.CONTAINER
+
+      else -> FeedFailureKind.OTHER
+    }
 
   private fun describeError(error: PlaybackException): String =
     when {
@@ -674,8 +776,19 @@ internal class ExoPlayerPool(
   /** 当前这条是不是竖屏内容（UI 据此决定「翻转」按钮是否可用） */
   fun activeIsPortrait(): Boolean = isPortraitAt(activeIndex)
 
-  /** 当前活动页的帧是否已经真的画到了屏幕上（加载态的判据） */
-  fun activeFrameVisible(): Boolean = activeIndex in frameOnScreen
+  /** 当前活动页的加载态是否已经结束（真出帧或兜底撤圈，见 [revealNotified]） */
+  fun activeFrameVisible(): Boolean = activeIndex in revealNotified
+
+  /**
+   * 这一条有没有「真的出过画面」的证据（渲染器交付过帧，或那一帧画上过屏）。
+   *
+   * 用途只有一个：**换内核之前的最后一道否决**。出过画面说明解码链路本身是通的，
+   * 此时报出来的失败更可能是偶发（seek 到损坏段、网络抖动导致解析失败）——
+   * 换内核既不一定救得了，还会把一条本来能放的片子推给旁路，用户看到的是
+   * 「好好的突然换了内核」。
+   */
+  fun hasPictureEvidence(index: Int): Boolean =
+    index in frameOnScreen || index in firstFrameRendered
 
   // ══════════════════ 解码兜底 ══════════════════
 
@@ -693,44 +806,171 @@ internal class ExoPlayerPool(
    * 后者在视界流里的表现是**加载圈永远在转**（[frameOnScreen] 一直等不到），
    * 或者用户切到别的界面才发现「刚才那条只有声音」。
    *
-   * ## 判据为什么是「位置在走 + 零帧上屏」
+   * ## 判据：时间轴真的在走 + 渲染器一帧都没交付
    *
-   * 位置能往前走说明容器与音频链路都是好的（拉流没问题、时间轴在推进），
-   * 此时一帧都没画上屏，只可能是视频轨解不出来。所以它不会误伤「网络慢还在缓冲」
-   * （那种情况位置不走，且 `playbackState` 是 BUFFERING）。
+   * 这两个条件缺一不可，理由是上一版各踩了一次：
+   *
+   * · **不能看「有没有上屏」**。`onSurfaceTextureUpdated` 只在有帧更新时回调，而
+   *   `onSurfaceTextureAvailable/Destroyed` 会把上屏账本清空（旋转、重绑、
+   *   `onSurfaceTextureDestroyed` 后再回来）。于是一条**暂停中的正常片子**账本是空的 ——
+   *   拿它当判据就会「播得好好的被判死」，正是 v208 的真机反馈。
+   *   渲染器侧的 `onRenderedFirstFrame`（[firstFrameRendered]）不会被 Surface 重建抹掉，
+   *   它才是「解码器确实解出帧了」的硬证据。
+   * · **不能用位置绝对值**。暂停在 5 分钟处、拖完进度停住，位置都大于任何阈值，
+   *   但时间轴根本没在走。必须用「连续两次心跳位置都在增加」来证明它在播。
+   *
+   * 所以判定链是四道闸：渲染器没交过帧 → 正在播（READY + playWhenReady）→
+   * 位置持续推进且不是 seek 跳跃 → 推进时长够了。前两道闸保证**绝不误伤已出帧的片子**，
+   * 后两道保证「真的在走却没帧」这一种情况仍然会被抓出来。
    *
    * @return 首次判定时返回 [NoVideoStall]；同一个 index 只返回一次（去重见
-   *   [noVideoReported]），已出过画面 / 还没播到阈值 / 没有实例都返回 null。
+   *   [noVideoReported]），已出过帧 / 时间轴没在走 / 没有实例都返回 null。
    */
   fun detectNoVideoStall(): NoVideoStall? {
     val idx = activeIndex
-    if (idx < 0 || idx in frameOnScreen || idx in noVideoReported) return null
-    val player = players[idx] ?: return null
-    // 只有「已经就绪且在推进」才作数：BUFFERING 说明还在等数据，不是解码问题
-    if (player.playbackState != Player.STATE_READY) return null
-    if (player.currentPosition < NO_VIDEO_STALL_MS) return null
-    val hasVideoTrack =
-      runCatching {
-        player.currentTracks.groups.any { it.type == C.TRACK_TYPE_VIDEO }
-      }.getOrDefault(true)
+    if (idx < 0 || idx in noVideoReported) return null
+    val player = players[idx] ?: run {
+      resetAdvanceProbe(idx)
+      return null
+    }
+
+    // ── 闸一：有过「帧真的出来了」的证据 ⇒ 解码链路是通的 ──
+    // 两个来源都算：`onRenderedFirstFrame`（渲染器确实解出并交出了一帧，实例级事实）
+    // 与 `onSurfaceTextureUpdated`（那一帧确实画到了这面 View 上）。
+    // 它一旦成立，就**不可能**是「解码器不吐帧」—— 画面没显示属于 Surface 绑定 / 上屏问题，
+    // 那是 `ensureActiveBound` 与首帧账本复位的活，不该换内核。
+    // ⚠️ 这一闸是上一版最致命的遗漏：`onSurfaceTextureAvailable/Destroyed` 会把上屏账本
+    // 清空（旋转、重绑、暂停），于是「画面正常但在暂停」的片子被当成「零帧」判死。
+    if (idx in firstFrameRendered || idx in frameOnScreen) {
+      resetAdvanceProbe(idx)
+      return null
+    }
+
+    // ── 闸二：必须真的在播 ──
+    // BUFFERING 是在等数据；playWhenReady=false 是用户自己暂停 / 相邻页没起播。
+    if (player.playbackState != Player.STATE_READY || !player.playWhenReady) {
+      resetAdvanceProbe(idx)
+      return null
+    }
+
+    // ── 闸三：位置必须**持续在走**，且是「播放推进」而不是「seek 跳跃」 ──
+    // 两次心跳之间正常只推进 ~250ms；一次跳几秒说明发生了 seek，重新起算。
+    val pos = player.currentPosition
+    val last = probePos[idx]
+    probePos[idx] = pos
+    if (last == null || pos <= last || pos - last > NO_VIDEO_MAX_TICK_ADVANCE_MS) {
+      resetAdvanceProbe(idx, keepPos = true)
+      return null
+    }
+    val now = SystemClock.elapsedRealtime()
+    val advancingSince = advanceSince.getOrPut(idx) { now }
+
+    // ── 闸四：推进时长够了，才结合「轨道有没有人认」选阈值 ──
+    val videoGroups =
+      runCatching { player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO } }
+        .getOrNull()
+    // 查不到轨道就按「有视频、且被支持」处理：宁可退回长阈值，
+    // 也不要因为一次查询失败就宣布「这不含视频」—— 那会把能放的片子判死。
+    val hasVideoTrack = videoGroups?.isNotEmpty() ?: true
+    val videoSupported = videoGroups?.any { it.isSupported } ?: true
+    val neededAdvance =
+      if (hasVideoTrack && !videoSupported) {
+        NO_VIDEO_UNSUPPORTED_ADVANCE_MS
+      } else {
+        NO_VIDEO_STALL_ADVANCE_MS
+      }
+    if (now - advancingSince < neededAdvance) return null
+
     noVideoReported.add(idx)
+    resetAdvanceProbe(idx)
     return NoVideoStall(idx, hasVideoTrack)
   }
 
   /**
-   * 允许「当前这条」用**纯软件解码**重建一次。返回 false = 已经试过，别再试了。
+   * 清掉「时间轴在不在走」的探针。
    *
-   * 调用方（Activity）拿到 true 之后走 `reloadCurrent(url)` 重建实例 ——
-   * [acquire] 会看到 [forceSoftware] 并换用软解选择器。同一 index 只放行一次，
-   * 所以「软解也不行」的最终结论一定能落到错误卡片上，不会无限重建。
+   * @param keepPos true = 保留上一次位置（只重置推进起点）。用在「这次看不出在走」的分支，
+   *   否则下一次心跳会因为 `last == null` 又白丢一拍。
    */
-  fun beginSoftwareRetry(): Boolean {
-    val idx = activeIndex
-    if (idx < 0) return false
-    if (!softRetried.add(idx)) return false
-    forceSoftware.add(idx)
-    return true
+  private fun resetAdvanceProbe(index: Int, keepPos: Boolean = false) {
+    advanceSince.remove(index)
+    if (!keepPos) probePos.remove(index)
   }
+
+  /**
+   * 让「当前这条」改用**软件解码**再试一次。
+   *
+   * ── 为什么不再一律重建播放器 ──
+   *
+   * 旧实现在这里只置一个标记，然后由调用方 `reloadCurrent` 整个重建：`release` +
+   * `build` + `prepare`，用户看到的是「黑一下 → 转圈 → 再起播」。软解救不回来的片子
+   * 还要再走一遍同样的代价才轮到 mpv，等于连续黑两次。
+   *
+   * NextLib 的 `DecoderManager` 允许**就地**把视频解码从平台切到 FFmpeg：它把落选渲染器
+   * 的能力压成 0，让 trackSelector 重选一次轨道，播放器实例、缓冲、位置全都还在。
+   * 所以现在优先走就地切换，只有控制器没 attach 上时才退回重建。
+   *
+   * ── 一个必须先挡掉的坑 ──
+   *
+   * `DecoderMode.FFMPEG` 会把**平台渲染器整个关掉**。如果这个编码不在
+   * `FfmpegLibrary` 的 mime 表里（表很小，视频只有 avc/hevc/mpeg/mpeg2/vp8/vp9/av01），
+   * 切过去的结果是「一个视频渲染器都没有」⇒ 视频轨被丢掉、**有声无画面**。
+   * 那正是我们想修的症状，不能自己再造一个。所以切之前先问一次
+   * [FfmpegLibrary.supportsFormat]，不支持就直接判死交给 mpv —— 那一步不可救。
+   *
+   * @return [FeedSwRetry.IN_PLACE] 已就地切到软解（**不要**重建）；
+   *   [FeedSwRetry.REBUILD] 需要调用方重建一次实例；
+   *   [FeedSwRetry.NONE] 这条已经没救（或已经试过），只能换内核。
+   */
+  fun retryInSoftware(): FeedSwRetry {
+    val idx = activeIndex
+    if (idx < 0) return FeedSwRetry.NONE
+    val player = players[idx] ?: return FeedSwRetry.NONE
+    // 同一个 index 只放行一次：否则「硬解失败 → 软解也失败」会变成无限重建，
+    // 用户看到的是画面一直闪。
+    if (!softRetried.add(idx)) return FeedSwRetry.NONE
+
+    val mime = videoMimeOf(player)
+    if (mime != null && !ffmpegHandles(mime)) {
+      noVideoReported.add(idx)
+      return FeedSwRetry.NONE
+    }
+
+    val manager = decoders[idx] ?: run {
+      forceSoftware.add(idx)
+      return FeedSwRetry.REBUILD
+    }
+    val switched =
+      runCatching { manager.selectVideoDecoder(DecoderMode.FFMPEG) }.isSuccess
+    if (!switched) {
+      forceSoftware.add(idx)
+      return FeedSwRetry.REBUILD
+    }
+    // 换了渲染器 ⇒ 要重新出帧：首帧账本作废、遮罩重新盖上，
+    // 否则旧的「已经出过画面」会压着加载态，而画面上什么都没有。
+    forgetFrameLedgers(idx)
+    return FeedSwRetry.IN_PLACE
+  }
+
+  /** 当前选中的视频轨 mime；拿不到就 null（调用方据此选择「乐观地试一次」） */
+  private fun videoMimeOf(player: ExoPlayer): String? =
+    runCatching {
+      player.currentTracks.groups
+        .firstOrNull { it.type == C.TRACK_TYPE_VIDEO && it.length > 0 }
+        ?.getTrackFormat(0)
+        ?.sampleMimeType
+    }.getOrNull()
+
+  /**
+   * NextLib 的 FFmpeg 扩展认不认这个 mime。
+   *
+   * 这张表是**扩展渲染器的唯一入口**：表里没有的 mime，`FfmpegVideoRenderer.supportsFormat`
+   * 直接返回「不支持」，跟 FFmpeg 到底编进了多少解码器无关（打进包里的 libavcodec 是
+   * mpv 那份，解码器是全的 —— 缺的只是这张映射表）。
+   */
+  private fun ffmpegHandles(mime: String): Boolean =
+    runCatching { FfmpegLibrary.isAvailable() && FfmpegLibrary.supportsFormat(mime) }
+      .getOrDefault(false)
 
   /**
    * 抄一份 [index] 实例此刻的播放状态。
@@ -748,7 +988,7 @@ internal class ExoPlayerPool(
       durationMs = player.duration.takeIf { it > 0L } ?: 0L,
       positionMs = player.currentPosition.coerceAtLeast(0L),
       playing = player.playWhenReady,
-      frameVisible = index in frameOnScreen,
+      frameVisible = index in revealNotified,
     )
   }
 
@@ -871,8 +1111,12 @@ internal class ExoPlayerPool(
   private fun releaseSlot(index: Int) {
     val player = players.remove(index) ?: return
     val texture = boundTextures.remove(index)
+    // 解码模式控制器绑在这个实例上，实例没了它就没有意义 —— 不 detach 会留着
+    // 一份指向已释放 player 的 trackSelector 引用
+    decoders.remove(index)?.let { manager -> runCatching { manager.detach() } }
     // 首帧账本跟着实例走：实例都没了，它渲染过、上屏过的那一帧自然也不作数了
     forgetFrameLedgers(index)
+    resetAdvanceProbe(index)
   runCatching {
     if (texture != null) player.clearVideoTextureView(texture)
       // 先摘 listener 再 release：listener 闭包捕获了 index 与本池，
@@ -889,17 +1133,22 @@ internal class ExoPlayerPool(
     runCatching {
         boundTextures[index]?.let { player.clearVideoTextureView(it) }
         listeners.remove(index)?.let { player.removeListener(it) }
+        decoders.remove(index)?.let { manager -> runCatching { manager.detach() } }
       player.stop()
         player.release()
       }
     }
     listeners.clear()
+    decoders.clear()
     surfaces.clear()
     containers.clear()
     videoSizes.clear()
     boundTextures.clear()
     firstFrameRendered.clear()
     frameOnScreen.clear()
+    revealNotified.clear()
+    probePos.clear()
+    advanceSince.clear()
     revealFallbacks.clear()
     noVideoReported.clear()
     softRetried.clear()
@@ -953,7 +1202,61 @@ private const val VEIL_FADE_MS = 140L
  * （视界流直接给人切软解，反而更慢）；太长用户已经对着黑屏听了好几秒声音。
  * 判据里还额外要求 `playbackState == STATE_READY`，所以真实缓冲中不会走到这里。
  */
-private const val NO_VIDEO_STALL_MS = 4_000L
+/**
+ * 「时间轴连续推进了多久、且渲染器一帧都没交付」才判定解码器不吐帧。
+ *
+ * ⚠️ 这里刻意**不用位置绝对值**，而是用心跳之间的推进量累计（见 [ExoPlayerPool.detectNoVideoStall]）。
+ * 用绝对值判会误伤三种完全正常的情况：
+ * - **暂停**在 5 分钟处：位置 > 阈值，但时间轴根本没在走；
+ * - **拖动进度**后停住：同上；
+ * - **旋转 / 重绑 SurfaceTexture** 之后暂停：首帧账本刚被清空，新帧要等恢复播放才有。
+ * 上一版就是拿绝对位置判的，结果是「播放正常的片子被判死、还去切内核」。
+ */
+private const val NO_VIDEO_STALL_ADVANCE_MS = 3_000L
+
+/**
+ * 视频轨**没有任何渲染器支持**时的推进阈值 —— 比 [NO_VIDEO_STALL_ADVANCE_MS] 短。
+ *
+ * 这一类的结论在轨道映射那一刻就成立了（`Tracks.Group.isSupported == false`），
+ * 不会因为多播几秒而变好，等的只是「起播 / seek 后轨道重选」那段未定态。
+ */
+private const val NO_VIDEO_UNSUPPORTED_ADVANCE_MS = 1_200L
+
+/** 两次心跳之间不可能推进这么多 —— 超过就说明是 seek，不是播放（见 [ExoPlayerPool.detectNoVideoStall]） */
+private const val NO_VIDEO_MAX_TICK_ADVANCE_MS = 3_000L
+
+/**
+ * 一次失败的**归属** —— 决定兜底链怎么走。
+ *
+ * 分三类而不是「可恢复 / 不可恢复」两类的理由见 [ExoPlayerPool] 构造函数里 `onError` 的说明。
+ */
+internal enum class FeedFailureKind {
+  /** 解码层：换解码器（就地切 FFmpeg）可能救回来 */
+  DECODER,
+
+  /** 解复用层：容器拆不开，换解码器一定没用，只能换内核 */
+  CONTAINER,
+
+  /** 网络 / IO / DRM：换什么都没用，如实报错 */
+  OTHER,
+}
+
+/**
+ * [ExoPlayerPool.retryInSoftware] 的结果。
+ *
+ * 三个状态是必要的：调用方要据此决定「什么都不做」「重建一次」还是「换内核」，
+ * 用一个布尔表达不了「已经就地切好了、别再动它」这个中间态。
+ */
+internal enum class FeedSwRetry {
+  /** 这条没救了（或已经试过一次），直接换内核 */
+  NONE,
+
+  /** 已经就地切到 FFmpeg 软解，**不要**重建实例 */
+  IN_PLACE,
+
+  /** 需要调用方重建一次实例（控制器没接上时的退路） */
+  REBUILD,
+}
 
 /**
  * 「有声音、没画面」的一次判定结果。

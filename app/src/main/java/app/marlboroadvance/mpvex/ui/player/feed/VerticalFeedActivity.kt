@@ -209,14 +209,18 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
 
     pool = ExoPlayerPool(
       context = this,
-      // 解码类失败先换软解试一次（池里对同一条只放行一次），软解也不行才换内核。
-      // ⚠️ 只对**当前这条**重试：相邻页的失败等它成为当前条再说 —— 用户还没看到它，
+      // 三类失败三条路（见 FeedFailureKind）：
+      // · 解码类 → 先就地切 FFmpeg 软解，不行再换内核；
+      // · 容器类 → **跳过软解**直接换内核。NextLib 只补解码器、不补解复用器，
+      //   容器拆不开时换解码器不可能变好，多走一轮只是让用户多看一次「转圈 → 黑一下」；
+      // · 其它（网络 / IO / DRM）→ 换什么都没用，如实报错。
+      // ⚠️ 只对**当前这条**兜底：相邻页的失败等它成为当前条再说 —— 用户还没看到它，
       // 提前重建会白占一个解码器，还会把预缓冲攒好的进度丢掉。
-      onError = { index, reason, decoderRelated ->
-        if (decoderRelated) {
-          handleDecodeFailure(index, reason)
-        } else {
+      onError = { index, reason, kind ->
+        if (kind == FeedFailureKind.OTHER) {
           viewModel.errors[index] = reason
+        } else {
+          handlePlaybackFailure(index, reason, kind)
         }
       },
       // 帧**真的画到屏幕上**了（不是「渲染器交出去了」）→ 整份状态一起抄回来：
@@ -258,6 +262,13 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
           // 两边同时出声就是双音轨。**必须先停 mpv 再让池子起播** —— 顺序反了会有
           // 一小段两条音轨叠在一起的时刻（ExoPlayer 起播只要几毫秒）。
           leaveMpvFor(page)
+          // 起播前预判：内置内核必解不了的容器/编码在这里就交给 mpv，
+          // 用户不必先看两轮失败（判据见 startPlanOf）。必须先于 onPageChanged：
+          // 那一调会把这一页标记成 skipped，池子才不会白建一个必然失败的实例。
+          // ⚠️ 横竖屏切换期间不做：那几帧里 Pager 的页码是布局副作用带出来的漂移值，
+          // 照它起 mpv 会「先响一下别的片子」。漂移窗口只有两帧，不预判不影响结果 ——
+          // 兜底链照样会把这一条送到 mpv，只是多花一轮。
+          if (!orientationLock) preRouteToMpv(page)
           pool.onPageChanged(page) { index -> viewModel.items.getOrNull(index)?.url }
           if (!orientationLock) {
             // 相邻那条在用户滑过来之前就已经 prepare 完，它的真实时长、进度、首帧
@@ -566,10 +577,16 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     // ── 有声音、没画面 ──
     // 硬解「建得起来但一帧都不吐」不会报错（AVI 里的 Xvid、部分 10bit HEVC），
     // 只能靠「位置在推进 + 零帧上屏」这个判据抓出来（见 ExoPlayerPool.detectNoVideoStall）。
-    // 抓到之后走同一套兜底链：先软解重建一次，还不行就换 mpv 内核。
+    // 另一类更早成立：视频轨没有任何渲染器认它（`isSupported == false`）—— 那条轨
+    // 根本不会被选，音频照放、零报错，池子会给它更短的判定阈值。
+    // 两种情况都走同一套兜底链：先就地切软解，还不行就换 mpv 内核。
     pool.detectNoVideoStall()?.let { stall ->
       if (stall.hasVideoTrack) {
-        handleDecodeFailure(stall.index, "无法显示画面：本机解码器未能输出视频帧")
+        handlePlaybackFailure(
+          stall.index,
+          "无法显示画面：本机解码器未能输出视频帧",
+          FeedFailureKind.DECODER,
+        )
       } else {
         // 纯音频文件：换内核也不会有画面，别白切一次
         viewModel.errors[stall.index] = "此文件不包含可显示的视频画面"
@@ -620,17 +637,24 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
   }
 
   /**
-   * 解码失败的三级兜底：**当前这条**先软解重建一次，还不行就切 mpv 内核。
+   * 播放失败的三级兜底：**当前这条**先就地切软解，不行再切 mpv 内核。
    *
-   * 为什么分两级而不是直接换内核：软解重建只花几百毫秒，画面位置、队列、手势全都
-   * 还在原地；换内核要重新初始化一套解码链路，能不用就不用。但软解救不回来的那批
-   * （容器本身不认识 / 本机压根没有这个编码的解码器）**只有** mpv 能过 ——
-   * 内置内核的解复用器就那几个，MediaCodec 里没有的东西再做多少次重建也变不出来。
+   * ── 容器类为什么跳过软解这一步 ──
+   *
+   * 软解重试换的只是**渲染器**（解码器），而解复用仍然是 ExoPlayer 自带的 Extractor。
+   * NextLib 的 AAR 里只有 libavcodec / libavutil / libswresample / libswscale，
+   * **没有 libavformat** —— 容器不认识的时候换解码器不可能变好。这类失败只有换内核
+   * 能过（mpv 的 lavf 是全的），所以直接跳到最后一步。
+   *
+   * ── 为什么不再一律重建播放器 ──
+   *
+   * 见 [ExoPlayerPool.retryInSoftware]：能就地切就不重建，代价从「黑一下 + 转圈」
+   * 降到「换一次渲染器」。只有控制器没接上时才退回重建。
    *
    * 非当前条不解不碰：用户还没翻到它，此刻重建是白占解码器，交给它自己的错误卡片
    * （「重试」/「用 mpv 播放」两个按钮）就好。
    */
-  private fun handleDecodeFailure(index: Int, reason: String) {
+  private fun handlePlaybackFailure(index: Int, reason: String, kind: FeedFailureKind) {
     if (index < 0) return
     if (index != viewModel.index) {
       viewModel.errors[index] = reason
@@ -638,11 +662,35 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     }
     // 已经在由 mpv 负责的条目：没必要再走 ExoPlayer 的兜底链
     if (index in mpvServed) return
-    if (pool.beginSoftwareRetry()) {
-      viewModel.errors.remove(index)
-      viewModel.showHint("当前视频无法使用硬件解码，正在尝试软件解码")
-      viewModel.requestReload()
+
+    // ── 换内核前的否决 ──
+    // 这一条**已经出过画面**说明解码链路是通的：此刻报「容器解析失败」更可能是
+    // 偶发（seek 到损坏段、网络抖动把包读坏了），不是「本机放不了这个容器」。
+    // 换内核既不一定救得了，还会把一条本来能放的片子推给旁路 —— 用户看到的就是
+    // 「播得好好的，突然被判不能播、还换了内核」。所以只报错、不复用那句文案之外的
+    // 任何自动动作，让用户点「重试」自己决定。
+    if (kind == FeedFailureKind.CONTAINER && pool.hasPictureEvidence(index)) {
+      viewModel.errors[index] = reason
       return
+    }
+
+    if (kind == FeedFailureKind.DECODER) {
+      when (pool.retryInSoftware()) {
+        FeedSwRetry.IN_PLACE -> {
+          viewModel.errors.remove(index)
+          viewModel.showHint("当前视频无法使用硬件解码，已切换至软件解码")
+          return
+        }
+
+        FeedSwRetry.REBUILD -> {
+          viewModel.errors.remove(index)
+          viewModel.showHint("当前视频无法使用硬件解码，正在尝试软件解码")
+          viewModel.requestReload()
+          return
+        }
+
+        FeedSwRetry.NONE -> Unit
+      }
     }
     switchToMpv(index)
   }
@@ -674,17 +722,10 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     if (index in mpvServed) return
 
     // ① 画面层：第一次用到时建（初始化必须发生在 surface attach 之前，见 FeedMpvEngine）
-    if (!mpvHostReady) {
-      val host = mpvEngine.ensureHost(layoutInflater)
-      if (host == null) {
-        // mpv 起不来（设备 / 内核初始化失败）：如实报错，不要静默黑屏
-        viewModel.errors[index] = "无法播放：mpv 内核初始化失败"
-        return
-      }
-      mpvHostReady = true
-      // 请求头必须与 ExoPlayer 侧同一套（UA + 服务器 origin 作 Referer）：
-      // 换了内核但拉流口径不能变，否则网盘直链的签名校验对不上，切过去就是 403。
-      mpvEngine.applyHeaders(feedStreamHeaders(viewModel.items))
+    if (!ensureMpvHost()) {
+      // mpv 起不来（设备 / 内核初始化失败）：如实报错，不要静默黑屏
+      viewModel.errors[index] = "无法播放：mpv 内核初始化失败"
+      return
     }
 
     // ② 结算：池子放手，这一条从此由 mpv 负责
@@ -693,13 +734,65 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     viewModel.errors.remove(index)
 
     // ③ 接管
+    startMpvPlayback(index, item, preemptive = false)
+  }
+
+  /**
+   * 起播前预判：容器拆不开 / 编码两边都没有解码器时，**提前**把这一条交给 mpv。
+   *
+   * 不做这一步，用户要付出的代价是「转圈 → 黑一下 → 又转圈」才走到同一条路上
+   * （判据见 [startPlanOf]）。做了之后，这一类片子第一次就落在能放它的内核上。
+   *
+   * ⚠️ 顺序不能反：先 `handOffToOtherEngine`（把这一条记进 skipped）再 `onPageChanged`。
+   * 反过来池子会先为它建一个必然失败的实例、白占一个解码器，再马上释放掉 ——
+   * 既浪费一次 `prepare`，又可能把 mpv 要用的解码器额度抢走。
+   *
+   * @return true = 这一页已经交给 mpv，调用方不必再指望池子为它出画面
+   */
+  private fun preRouteToMpv(index: Int): Boolean {
+    if (index !in viewModel.items.indices) return false
+    // 已经在由 mpv 负责的条目：起播交给 syncMpvWithIndex（它会带续播位置），
+    // 这里再 play 一次会把这个位置冲掉。
+    if (index in mpvServed) return false
+    val item = viewModel.items[index]
+    if (startPlanOf(item) != FeedStartPlan.MPV) return false
+    // mpv 起不来就退回内置内核：预判的目的是「省一轮」，不是「唯一出路」——
+    // 不能因为想省一轮，把本来也许能放的片子判死。
+    if (!ensureMpvHost()) return false
+    mpvServed.add(index)
+    pool.handOffToOtherEngine(index)
+    startMpvPlayback(index, item, preemptive = true)
+    return true
+  }
+
+  /**
+   * 把 mpv 的画面层准备好（建一次，之后常驻）。
+   *
+   * 请求头必须与 ExoPlayer 侧同一套（UA + 服务器 origin 作 Referer）：换了内核但
+   * 拉流口径不能变，否则网盘直链的签名校验对不上，切过去就是 403。
+   */
+  private fun ensureMpvHost(): Boolean {
+    if (mpvHostReady) return true
+    mpvEngine.ensureHost(layoutInflater) ?: return false
+    mpvHostReady = true
+    mpvEngine.applyHeaders(feedStreamHeaders(viewModel.items))
+    return true
+  }
+
+  /**
+   * 真正把某一条交给 mpv 播。
+   *
+   * @param preemptive true = 起播前预判进来的（用户没看到任何失败），此时**不弹提示** ——
+   *   一个满是 rmvb 的库会弹到用户手软，而这对用户来说就是正常播放。
+   */
+  private fun startMpvPlayback(index: Int, item: FeedItem, preemptive: Boolean) {
     mpvIndex = index
     mpvVisible = true
     // 换内核那一刻重置加载计时：mpv 要重新 create/init、再走一遍取流，这套开销与
     // ExoPlayer 那一轮无关。沿用旧起点会让看门狗在内核还没起来时就判「源不可用」。
     loadStartedAt = SystemClock.elapsedRealtime()
     mpvEngine.play(item.url)
-    viewModel.showHint("当前视频无法由内置解码器播放，已切换至 mpv 内核")
+    if (!preemptive) viewModel.showHint("当前视频无法由内置解码器播放，已切换至 mpv 内核")
   }
 
   /**

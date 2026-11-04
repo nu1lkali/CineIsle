@@ -154,8 +154,8 @@ import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoBrowserScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoCard
 import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoGridScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.photo.photoSubtitle
-import app.marlboroadvance.mpvex.ui.player.feed.FeedItem
 import app.marlboroadvance.mpvex.ui.player.feed.VerticalFeedActivity
+import app.marlboroadvance.mpvex.ui.player.feed.feedItemOf
 import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import app.marlboroadvance.mpvex.ui.utils.scrollToTop
@@ -1775,11 +1775,11 @@ data class EmbyLibraryScreen(
           loadRandomForView(current, favoritesOnly = favoritesOnly, drillDown = drillDown)
         val items = random.mapNotNull { item ->
           val id = item.Id ?: return@mapNotNull null
-          FeedItem(
-            itemId = id,
+          // 容器 / 编码元数据由 feedItemOf 一起带上：起播前据此预判该走哪个内核
+          feedItemOf(
+            item = item,
             title = viewModel.displayTitle(item),
             url = viewModel.getStreamUrl(current, id),
-            isFavorite = item.UserData?.IsFavorite == true,
           )
         }
         if (items.isEmpty()) {

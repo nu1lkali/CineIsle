@@ -301,11 +301,12 @@ class FeedViewModel(
         val added = result.Items.mapNotNull { item ->
           val id = item.Id ?: return@mapNotNull null
           if (id in existing) return@mapNotNull null
-          FeedItem(
-            itemId = id,
+          // 用工厂而不是逐字构造：容器 / 编码这两个元数据决定「起播时该用哪个内核」，
+          // 漏掉不会报错，只会让用户多等两轮失败 —— 正是最容易一直漏的那种。
+          feedItemOf(
+            item = item,
             title = item.Name ?: "未命名",
             url = embyRepository.videoStreamUrl(server, id, static = true),
-            isFavorite = item.UserData?.IsFavorite == true,
           )
         }
         nextStartIndex += result.Items.size
