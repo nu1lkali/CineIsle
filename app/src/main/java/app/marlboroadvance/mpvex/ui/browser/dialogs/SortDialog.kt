@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -97,6 +98,10 @@ fun SortDialog(
         modifier =
           Modifier
             .fillMaxWidth()
+            // 选项一多（排序类型 + 顺序 + 视图 + 布局）时，不限高的 Column 会把
+            // AlertDialog 撑到贴边，底部按钮被顶出屏幕。限高之后这一块自己滚，
+            // 标题与按钮始终可见。
+            .heightIn(max = 420.dp)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp),
       ) {

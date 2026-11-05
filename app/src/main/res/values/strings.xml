@@ -1233,4 +1233,11 @@
   <string name="cine_action_more_from_unknown">More from the lead actor</string>
   <string name="cine_action_more_directed">More directed by %1$s</string>
   <string name="cine_action_more_directed_unknown">More from the director</string>
+  <string name="emby_section_libraries">Libraries</string>
+  <string name="emby_section_resume">Continue watching</string>
+  <string name="emby_section_latest">Recently added</string>
+  <string name="emby_section_mix">Surprise me</string>
+  <string name="emby_action_refresh_batch">Shuffle</string>
+  <string name="emby_action_more">More</string>
+  <string name="emby_search_scope_here">This folder</string>
 </resources>

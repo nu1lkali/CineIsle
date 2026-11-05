@@ -1233,4 +1233,11 @@
   <string name="cine_action_more_from_unknown">更多该演员的作品</string>
   <string name="cine_action_more_directed">更多 %1$s 执导的作品</string>
   <string name="cine_action_more_directed_unknown">更多该导演的作品</string>
+  <string name="emby_section_libraries">媒体库</string>
+  <string name="emby_section_resume">继续观看</string>
+  <string name="emby_section_latest">最新加入</string>
+  <string name="emby_section_mix">随便看看</string>
+  <string name="emby_action_refresh_batch">换一批</string>
+  <string name="emby_action_more">更多</string>
+  <string name="emby_search_scope_here">仅本目录</string>
 </resources>

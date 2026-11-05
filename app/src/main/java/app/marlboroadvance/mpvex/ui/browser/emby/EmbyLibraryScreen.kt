@@ -32,7 +32,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Casino
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
@@ -258,6 +257,21 @@ data class EmbyLibraryScreen(
     var pendingSearchRestore by remember { mutableStateOf(false) }
     // 类型筛选：空集合 = 「全部」= 不加类型限制
     var searchFilters by remember { mutableStateOf(emptySet<EmbySearchFilter>()) }
+    /**
+     * 搜索范围：「仅本目录」开关。
+     *
+     * false（默认）= 全服搜索，与改造前完全一致 —— 请求参数、结果、缓存桶都不变，
+     * 对没碰过这个开关的用户是**零差异**。
+     *
+     * true = 给请求加 `ParentId = 当前目录` + `Recursive = false`，只在这一层的
+     * 直接子项里按名字找。解决的问题是「进到文件夹里想找其中一个子目录，
+     * 全库搜索返回的却是别处的同名条目」。
+     *
+     * 为什么**不持久化**：这是个一次性的临时口径。若记进偏好，用户下次进来
+     * 发现库根页搜不到东西（库根往下大多是子目录，recursive=false 基本为空），
+     * 会当成搜索坏了。默认关 + 每次进来重置，行为永远可预期。
+     */
+    var searchLocalOnly by remember { mutableStateOf(false) }
     // 上一次「由输入触发」的搜索词。用来区分这次重查是打字引起的（要 400ms 防抖），
     // 还是切排序 / 换类型筛选引起的（离散操作，立即重查）。
     var lastTypedQuery by remember { mutableStateOf("") }
@@ -350,6 +364,19 @@ data class EmbyLibraryScreen(
      * 再把他弹回「全部」就成了抢方向盘。
      */
     var autoFellBackToAll by remember(libraryId) { mutableStateOf(false) }
+    /**
+     * 「这个页面有没有『本目录』可言」—— 决定搜索框旁要不要摆「仅本目录」开关。
+     *
+     * 只有两种页面有：点进真实文件夹的下钻页，以及「文件夹」分类这一档（它铺的就是
+     * 这一层的子目录）。库根页不给 —— 库根往下大多还是子目录，`Recursive = false`
+     * 基本等于搜不到，摆一个「一开就没结果」的开关比不摆更糟。
+     */
+    val canScopeSearch = isFolderDive || category == EmbyCategory.FOLDER
+    // 开关藏起来时必须把状态收回默认：否则切了档位后开关虽然不见了，
+    // 搜索仍然悄悄带着 ParentId 走（cacheKey 里还有 scope=1），结果与界面说的不一致。
+    LaunchedEffect(canScopeSearch) {
+      if (!canScopeSearch) searchLocalOnly = false
+    }
 
     // ── 「照片视频混合库」的处置：内容原样铺开，不再让用户手选档位 ──
     // 家庭视频 / 照片这类库（collectionType = homevideos / mixed / 未知）里，同一个
@@ -489,7 +516,11 @@ data class EmbyLibraryScreen(
       "cmarks=${chineseMarks.signature()}|" +
       "m=$minRating|fav=$favoriteOnly|" +
       // 搜索筛选也算条件：换类型的结果是另一批，不能复用同一桶缓存
-      "st=${searchFilters.map { it.name }.sorted().joinToString(",")}"
+      "st=${searchFilters.map { it.name }.sorted().joinToString(",")}|" +
+      // 搜索范围也算条件：同一个词在「全库 / 仅本目录」下是两批结果，不能共用一个桶。
+      // 只在**搜索态**参与拼接 —— 浏览态的 key 必须与本轮改造前逐字节一致，
+      // 否则升级后旧缓存全部失效、每个库都要重拉一遍。
+      "scope=${if (searchQuery.isNotBlank() && searchLocalOnly) 1 else 0}"
     val cachedEntry = remember(cacheKey) { EmbyLibraryCache.get(cacheKey) }
 
     // 搜索路径不从这里起值：搜索的「退出再进」由上面的快照（词+结果+滚动位置）回放，
@@ -559,6 +590,23 @@ data class EmbyLibraryScreen(
       mutableIntStateOf(if (searchQuery.isBlank()) cachedEntry?.scannedCount ?: 0 else 0)
     }
     var isScanning by remember(cacheKey) { mutableStateOf(false) }
+    /**
+     * 「这一层浏览列表」的最后一份快照，**刻意不随 cacheKey 重置**。
+     *
+     * 为什么需要它：`items` 是 `remember(cacheKey)`，而 cacheKey 里含搜索词 ——
+     * 用户一敲字，key 就变，`items` 当场被重置成空。搜索分支原先拿 `items` 当
+     * 「眼前这一层」做本地兜底，实际拿到的是**空列表**，于是那条兜底从来没生效过
+     * （用户反馈「开了仅本目录还是搜不到那个文件夹」的真因）。
+     *
+     * 口径：进入搜索前的那一份浏览数据 = 这一层真实装了什么。
+     * 只在浏览态更新（搜索态一律不碰），按 libraryId 重置 —— 换目录就是另一层了。
+     */
+    var layerItems by remember(libraryId) { mutableStateOf(emptyList<EmbyItem>()) }
+    // 浏览态每落一批数据就记一次；搜索态**不碰**（那时 items 装的是搜索命中，不是这一层）。
+    // 不用 `remember(items)`：那会在 cacheKey 变化时跟着丢，就失去意义了。
+    LaunchedEffect(items, searchQuery) {
+      if (searchQuery.isBlank() && items.isNotEmpty()) layerItems = items
+    }
     // 正在跑的扫描任务：换筛选条件 / 退出页面时取消，避免旧扫描继续拉数据
     val scanJob = remember { mutableStateOf<Job?>(null) }
     // 长按选中的条目：非空时弹操作框（文件夹与媒体是两套菜单）
@@ -751,8 +799,13 @@ data class EmbyLibraryScreen(
       val scanned = viewModel.scanItems(
         server = current,
         query = EmbyScanQuery(
-          // 搜索时保持原来的**全服**范围（不传 ParentId），不悄悄缩到当前库
-          parentId = if (searching) null else libraryId,
+          // 搜索时默认保持原来的**全服**范围（不传 ParentId），不悄悄缩到当前库；
+          // 只有用户显式打开「仅本目录」才缩到这一层（见 searchLocalOnly）。
+          parentId = if (searching) {
+            if (searchLocalOnly) libraryId else null
+          } else {
+            libraryId
+          },
           // 类型同理沿用搜索那套（用户在搜索筛选里勾的），不套库视图的 effectiveTypes
           includeItemTypes = if (searching) {
             EmbySearchFilter.toItemTypes(searchFilters)
@@ -770,7 +823,8 @@ data class EmbyLibraryScreen(
           searchTerm = searchQuery.takeIf { it.isNotBlank() },
           sortBy = sortBy,
           sortOrder = sortOrder,
-          recursive = recursive,
+          // 「仅本目录」= 不递归：只扫这一层的直接子项。浏览态照旧用算出来的 [recursive]。
+          recursive = if (searching && searchLocalOnly) false else recursive,
           // 类型 / 标签刻意**不传给服务端**：这两个「按名字筛」的参数会让部分 Emby
           // 服务端的 /Items 直接抛 SQLiteException（500），且不同版本表现不一。
           // 改为拉回来之后在客户端按 item.Genres / item.Tags 过滤，结果一致但不再炸。
@@ -931,6 +985,13 @@ data class EmbyLibraryScreen(
             studioIds = selectedStudioIds.toList().takeIf { it.isNotEmpty() },
           )
         } else {
+          // 发起搜索前先取「这一层浏览列表」：Emby 的 SearchTerm 不索引容器（兼容服务端
+          // 更是常常只搜可播放媒体），于是「在文件夹视图里按名字找子目录」永远为空。
+          // 但那些子目录就在用户眼前摆着，直接按名字补进来即可 —— 零请求、零浏览态改动。
+          // ⚠️ 必须用 [layerItems] 而不是 `items`：后者是 remember(cacheKey) 的，敲第一个字
+          //    的那一刻就被重置成空列表，用它做兜底等于什么都没补（这是 v211 第一版的真 bug）。
+          // 局限写在明处：只补当前已加载的这一层，还没翻到的分页不保证。
+          val layerSnapshot = layerItems
           val result = viewModel.search(
             server = current,
             term = searchQuery,
@@ -941,13 +1002,28 @@ data class EmbyLibraryScreen(
             sortOrder = sortOrder,
             // 搜索不分页、整批返回，所以把上限提到一页的量，客户端排序才有足够样本
             limit = PAGE_SIZE,
+            // 「仅本目录」：缩到当前这一层的直接子项。关着就是全服，两个参数都取默认值。
+            parentId = if (searchLocalOnly) libraryId else null,
+            recursive = !searchLocalOnly,
           )
           EmbyItemsPage(
             // 排序放到后台线程做：几百上千条的比较是纯 CPU 活，不该占主线程。
             // 排完连同渲染一起交给 UI —— 中间没有「先出一版乱序的再跳一遍」的过程。
             // 类型 / 标签同样在客户端筛（搜索接口没有 GenreIds / TagIds）。
             withContext(Dispatchers.Default) {
-              val kept = result.filter { matchesGenreTagFilter(it) }
+              val localFolderHits = if (isFolderDive || category == EmbyCategory.FOLDER) {
+                val term = searchQuery.trim()
+                layerSnapshot.filter { candidate ->
+                  isFolderLike(candidate) &&
+                    candidate.Name?.contains(term, ignoreCase = true) == true
+                }
+              } else {
+                emptyList()
+              }
+              // 服务端结果与本地补充可能同一条；网格 key 是「Id ?: Name」，不去重会直接崩。
+              val kept = (result + localFolderHits)
+                .distinctBy { it.Id ?: it.Name ?: "" }
+                .filter { matchesGenreTagFilter(it) }
               applyClientSort(kept, sortBy, sortOrder)
             },
             result.size,
@@ -1228,6 +1304,9 @@ data class EmbyLibraryScreen(
       contentAsIs,
       // 穿透模式下容器要整体滤掉（见下），换模式必须重算
       folderDiveRecursive,
+      // 「仅本目录」参与的是下面那条本地搜索的范围判断，必须一起当依赖
+      searchLocalOnly,
+      libraryId,
     ) {
       (if (lastRemovedItemId != null) items.filterNot { it.Id == lastRemovedItemId } else items)
         // 顺手剔掉服务端混进来的幽灵条目（详见 isGhostItem）：它与官方客户端的条目数对不上，
@@ -1243,8 +1322,14 @@ data class EmbyLibraryScreen(
         // 这份数据已经是「整个库翻完 + 按路径判过中文字幕」的完整结果，
         // 搜索只是取它的子集 —— 不联网、不重扫，所以「筛得到的就一定搜得到」。
         // 非中文字幕模式（localSearch = false）这一层恒真，行为与从前完全一致。
+        // 这条本地路径上的「仅本目录」只能按 `ParentId == 当前目录` 判：扫描是带着
+        // 当前目录跑过的，两个口径等价（都不下钻），不必为此重扫一次库。
         .filter { item ->
-          !localSearch || item.Name?.contains(searchQuery.trim(), ignoreCase = true) == true
+          !localSearch ||
+            (
+              item.Name?.contains(searchQuery.trim(), ignoreCase = true) == true &&
+                (!searchLocalOnly || item.ParentId == libraryId)
+              )
         }
         // 本地再按同一口径剔一遍。
         // 为什么不能只靠服务端：MediaTypes / ExcludeItemTypes / IsFolder 这些参数
@@ -1260,10 +1345,21 @@ data class EmbyLibraryScreen(
           // 在媒体库里一个人都搜不到」的原因（首页没有这层过滤）。
           // 只在搜索时放行：浏览路径服务端本来就不会返回 Person（`/Users/{id}/Items`
           // 那条端点拿不到人物），放行它没有副作用。
-          val isPersonHit = searchQuery.isNotBlank() && type.equals("Person", ignoreCase = true)
+            val isPersonHit = searchQuery.isNotBlank() && type.equals("Person", ignoreCase = true)
+          // 搜索命中的**文件夹**同样是合法结果：用户在文件夹视图里按名字找子目录，
+          // 要的就是这条。effectiveTypes 是按「浏览档位」算的（例如「全部」只留可播放类型），
+          // 可搜索结果来自全库 —— 不放行的话服务端明明返回了那个文件夹，网格里却一条不剩。
+          // ⚠️ 只在搜索态放行，浏览路径一行都不改（与 isPersonHit 完全同一口径）。
+          val isFolderHit = searchQuery.isNotBlank() && isFolderLike(item)
+          // effectiveExclude 里通常就写着 FOLDER_TYPES（「全部」视图要挡掉容器），
+          // 搜索态也要为文件夹让开这一刀，否则上面的白名单放行等于白放。
           if (type != null) {
-            if (effectiveExclude?.any { it.equals(type, ignoreCase = true) } == true) return@filter false
-            if (!isPersonHit && effectiveTypes?.none { it.equals(type, ignoreCase = true) } == true) {
+            if (!isFolderHit && effectiveExclude?.any { it.equals(type, ignoreCase = true) } == true) {
+              return@filter false
+            }
+            if (!isPersonHit && !isFolderHit &&
+              effectiveTypes?.none { it.equals(type, ignoreCase = true) } == true
+            ) {
               return@filter false
             }
           }
@@ -1290,7 +1386,7 @@ data class EmbyLibraryScreen(
             // 容器本身不再作为卡片出现 —— 否则「4 个文件夹 + 它们下面全部视频」混排，
             // 用户看到的仍是一堆重复入口。要浏览目录结构请切「文件夹」分类。
             // 服务端也传了 ExcludeItemTypes 做同一件事，这里是兼容层不认参数时的兜底。
-            if (folderDiveRecursive && isContainer) return@filter false
+            if (folderDiveRecursive && isContainer && !isFolderHit) return@filter false
             val isPhoto = type.equals("Photo", ignoreCase = true) ||
               mediaType?.equals("Photo", ignoreCase = true) == true
             val isVideoLike = mediaType?.equals("Video", ignoreCase = true) == true ||
@@ -1304,7 +1400,7 @@ data class EmbyLibraryScreen(
           if (type != null && want != null && effectiveTypes == null) {
             val playable = PLAYABLE_TYPES.any { it.equals(type, ignoreCase = true) }
             val isVideo = mediaType?.equals("Video", ignoreCase = true) == true
-            if (!playable && !isVideo && !isPersonHit) return@filter false
+            if (!playable && !isVideo && !isPersonHit && !isFolderHit) return@filter false
           }
           true
         }
@@ -2000,6 +2096,12 @@ data class EmbyLibraryScreen(
             // （「命中 813 项 · 已扫 12345 / 12345」一行根本放不下，看到的是「命中 813…」）。
             // 命中数是这时候唯一要紧的数，让它短到任何数量级都一行放得下。
             chineseSubsOnly -> "命中 ${visibleItems.size} 项"
+            // ⚠️ 搜索态的数量必须按**过滤后真正可见**的条目算，不能用服务端的 totalCount：
+            // 搜索结果还要过本地类型白名单 / 去重 / 幽灵条目几道闸，服务端给了 1 条、
+            // 本地剔光是完全正常的。以前这里显示服务端条数，于是「网格空空如也，
+            // 左上角却写着 1 项」—— 数量行和网格说的根本不是同一批数据。
+            searchQuery.isNotBlank() ->
+              if (visibleItems.isNotEmpty()) "${visibleItems.size} 项" else ""
             totalCount > 0 -> "$totalCount 项"
             else -> ""
           },
@@ -2247,6 +2349,10 @@ data class EmbyLibraryScreen(
         EmbySearchFilterRow(
           selected = searchFilters,
           onSelectedChange = { searchFilters = it },
+          // 「仅本目录」并进这一排的最前面（用竖线隔开）：不新增行、不挤输入框。
+          // 没有「本目录」概念的页面传 null，这一项整条不出现。
+          localOnly = if (canScopeSearch) searchLocalOnly else null,
+          onLocalOnlyChange = { searchLocalOnly = it },
         )
       }
 
@@ -3163,11 +3269,8 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                   selected = mode == viewMode,
                   onClick = { browserPreferences.embyLibraryViewMode.set(mode.key) },
                   label = { Text(mode.label) },
-                  leadingIcon = if (mode == viewMode) {
-                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                  } else {
-                    null
-                  },
+                  // 不放对勾：勾选时左侧多出图标会让 chip 宽度跳动，一排跟着抖。
+                  // 选中只看底色（用户原话：「开启了之后多个√ 尺寸会变化」）。
                 )
               }
             }
@@ -3183,11 +3286,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                     selected = style == cardStyle,
                     onClick = { browserPreferences.embyLibraryCardStyle.set(style.name) },
                     label = { Text(style.label) },
-                    leadingIcon = if (style == cardStyle) {
-                      { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                    } else {
-                      null
-                    },
+                    // 同上：不加对勾，避免宽度跳动
                   )
                 }
               }
@@ -3898,17 +3997,8 @@ private fun CategoryChips(
           selected = unwatchedOnly,
           onClick = onToggleUnwatched,
           label = { Text("只看未看") },
-          leadingIcon = if (unwatchedOnly) {
-            {
-              Icon(
-                imageVector = Icons.Filled.Check,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-              )
-            }
-          } else {
-            null
-          },
+          // 同一排的分类 chip 本来就没有对勾（见上面 EmbyCategory 那组），
+          // 这里跟着统一：选中只看底色，宽度恒定。
         )
       }
     }

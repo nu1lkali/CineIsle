@@ -1,7 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.emby.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -137,12 +137,16 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
     }
 
     Column(modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp)) {
+      // 长片名不再靠无限跑马灯「滚给你看」：窄列里一行只放得下 10 个字左右，
+      // 滚起来既读不全、又让整排卡片一直在动。改成两行 + 省略号，
+      // 并用 heightIn(min) 给文字区一个稳定高度 —— 一行和两行的卡片同排时底部对齐，
+      // 不写死 height()，所以更长的字号/字体设置也顶不破版式。
       Text(
         text = title,
         style = MaterialTheme.typography.bodyMedium,
-        maxLines = 1,
+        maxLines = 2,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE),
+        modifier = Modifier.heightIn(min = 40.dp),
       )
       if (!subtitle.isNullOrBlank()) {
         Text(

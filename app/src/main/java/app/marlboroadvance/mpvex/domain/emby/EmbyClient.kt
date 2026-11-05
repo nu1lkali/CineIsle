@@ -1447,14 +1447,28 @@ object EmbyClient {
      */
     sortBy: String? = "SortName",
     sortOrder: String? = null,
+    /**
+     * 搜索范围限定在某个目录下。
+     *
+     * null = 全服搜索（老口径，默认值，所有既有调用一行不改）。
+     * 非 null + [recursive] = false 就是界面上的「仅本目录」：
+     * 只在这一层的直接子项里按名字找。
+     *
+     * 为什么必须同时给 recursive：Emby 的 `ParentId` 默认是**带递归**的，
+     * 单给 ParentId 等于「在这个子树里搜」，与「仅本目录」不是一回事。
+     */
+    parentId: String? = null,
+    recursive: Boolean = true,
   ): EmbyItemsResult = getItems(
     server,
+    parentId = parentId,
     sortBy = sortBy,
     sortOrder = sortOrder,
     includeItemTypes = includeItemTypes,
     searchTerm = term,
     startIndex = 0,
     limit = limit,
+    recursive = recursive,
   )
 
   /**

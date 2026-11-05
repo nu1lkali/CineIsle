@@ -1118,8 +1118,20 @@ class EmbyRepository(
     limit: Int = 60,
     sortBy: String? = "SortName",
     sortOrder: String? = null,
+    /** 搜索范围：null = 全服；非 null + [recursive] = false 即「仅本目录」 */
+    parentId: String? = null,
+    recursive: Boolean = true,
   ): EmbyItemsResult = withContext(Dispatchers.IO) {
-    EmbyClient.searchItems(server, term, includeItemTypes, limit, sortBy, sortOrder)
+    EmbyClient.searchItems(
+      server = server,
+      term = term,
+      includeItemTypes = includeItemTypes,
+      limit = limit,
+      sortBy = sortBy,
+      sortOrder = sortOrder,
+      parentId = parentId,
+      recursive = recursive,
+    )
   }
 
   /**

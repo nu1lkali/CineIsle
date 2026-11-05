@@ -28,6 +28,7 @@ import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -75,6 +76,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
 import app.marlboroadvance.mpvex.ui.browser.emby.ExternalPlayerOption
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.ExternalPlayerPickerDialog
+import app.marlboroadvance.mpvex.ui.browser.emby.components.rememberDominantColor
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarRecommendationViewModel
 import app.marlboroadvance.mpvex.ui.cine.CineMediaUi
 import app.marlboroadvance.mpvex.ui.cine.CineTheme
@@ -93,6 +95,8 @@ import app.marlboroadvance.mpvex.ui.cine.rememberCinePlayController
 import app.marlboroadvance.mpvex.ui.cine.rememberCineScreenHeightDp
 import app.marlboroadvance.mpvex.ui.cine.rememberCineWide
 import app.marlboroadvance.mpvex.ui.cine.toCineMedia
+import app.marlboroadvance.mpvex.ui.cine.tokens.LocalCineColors
+import app.marlboroadvance.mpvex.ui.cine.tokens.cineColorsForPoster
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import app.marlboroadvance.mpvex.ui.utils.pressDownScale
 import kotlinx.coroutines.delay
@@ -141,7 +145,7 @@ fun CineDetailScreen(
 
   val wide = rememberCineWide()
   val space = CineTheme.space
-  val colors = CineTheme.colors
+  val baseColors = CineTheme.colors
   val screenHeight = rememberCineScreenHeightDp()
 
   var item by remember(itemId) { mutableStateOf<EmbyItem?>(null) }
@@ -276,6 +280,15 @@ fun CineDetailScreen(
     }
   }
 
+  // ── 海报主色 → 一整页的强调色 ──
+  // 取色源与 CineDetailHero 上真正显示的那张图一致（剧照优先、海报兜底），
+  // 这样「看到什么颜色，页面就往什么颜色偏」，不会图文不符。
+  // rememberDominantColor 自带全局缓存 + 并发去重：和 Classic 详情页看过同一张图时不重复下载。
+  val posterColor = rememberDominantColor(mediaUi?.heroUrl ?: mediaUi?.posterUrl)
+  val colors = remember(baseColors, posterColor) {
+    cineColorsForPoster(baseColors, posterColor)
+  }
+
   val listState = rememberLazyListState()
   val backdropHeight: Dp = if (wide) {
     minOf(340.dp, (screenHeight * 0.42f).dp).coerceAtLeast(240.dp)
@@ -402,11 +415,15 @@ fun CineDetailScreen(
         ?.Id
   }
 
-  Box(
-    modifier = modifier
-      .fillMaxSize()
-      .background(colors.surface),
-  ) {
+  // 染色只作用于详情页这一棵子树。派生规则全在 cineColorsForPoster 里，
+  // 组件依旧只读 CineTheme.colors —— 没有一处散着写色值。
+  // 弹层（功能菜单 / 外部播放器选择）刻意留在 provider 之外：它们不是「这部片的页面」。
+  CompositionLocalProvider(LocalCineColors provides colors) {
+    Box(
+      modifier = modifier
+        .fillMaxSize()
+        .background(colors.surface),
+    ) {
     when {
       loading && item == null -> CineDetailSkeleton(
         backdropHeight = backdropHeight,
@@ -624,6 +641,7 @@ fun CineDetailScreen(
       onMore = mediaUi?.let { media -> { actionSheet.show(media) } },
       modifier = Modifier.align(Alignment.TopCenter),
     )
+    }
   }
 
   // ── 完整功能菜单（刮削 / 刷新 / 编辑元数据 / 编辑图片 / 删除 / 下载 / 不喜欢 / 外部播放器）──

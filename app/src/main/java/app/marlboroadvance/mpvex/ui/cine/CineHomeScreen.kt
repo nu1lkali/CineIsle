@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -29,6 +31,7 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -43,12 +46,17 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
@@ -75,6 +83,7 @@ import app.marlboroadvance.mpvex.ui.cine.components.CineWideHeader
 import app.marlboroadvance.mpvex.ui.cine.components.CineWideRow
 import app.marlboroadvance.mpvex.ui.cine.components.LocalCineHaze
 import app.marlboroadvance.mpvex.ui.cine.components.cineHazeSource
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -375,6 +384,58 @@ fun CineHomeScreen(
                 // Pager 状态放在 item 里：只有 Hero 这一块持有它。
                 // 提到页面级的话，切 tab 再回来还停在第三张 —— 首页应当回到第一张。
                 val pagerState = rememberPagerState(pageCount = { heroList.size })
+
+                // ── 静置自动轮播 ──
+                // 退后台 / 锁屏立刻停。切 tab 时首页这个组合会被销毁，LaunchedEffect
+                // 随之取消，所以不需要额外的「当前 tab」状态。
+                val heroLifecycleOwner = LocalLifecycleOwner.current
+                var heroResumed by remember {
+                  mutableStateOf(
+                    heroLifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+                  )
+                }
+                DisposableEffect(heroLifecycleOwner) {
+                  val observer = LifecycleEventObserver { _, event ->
+                    heroResumed = event.targetState.isAtLeast(Lifecycle.State.RESUMED)
+                  }
+                  heroLifecycleOwner.lifecycle.addObserver(observer)
+                  onDispose { heroLifecycleOwner.lifecycle.removeObserver(observer) }
+                }
+
+                // 已经滚下去了就别在背后翻页。derivedStateOf 让滚动过程中只在跨过
+                // 第 0 项时重组一次，不会每帧把 Hero 重画一遍。
+                val heroVisible by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 } }
+
+                // 手指按住期间暂停：只**观察**、绝不 consume，且走 Initial pass，
+                // HorizontalPager 与卡片点击层照常拿到完整事件（与视界流手势层同一口径）。
+                var heroHolding by remember { mutableStateOf(false) }
+                val holdObserver = Modifier.pointerInput(Unit) {
+                  awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    heroHolding = true
+                    while (true) {
+                      val event = awaitPointerEvent(PointerEventPass.Initial)
+                      if (event.changes.none { it.pressed }) break
+                    }
+                    heroHolding = false
+                  }
+                }
+
+                // 所有开关都作为 key：状态一变 effect 立刻重启、计时器从头给足 6 秒，
+                // 既不会「刚松手 0.2 秒就翻页」，也不会在闭包里读到僵住的旧值。
+                LaunchedEffect(heroResumed, heroVisible, heroHolding, pagerState, heroList.size) {
+                  if (!heroResumed || !heroVisible || heroHolding || heroList.size <= 1) {
+                    return@LaunchedEffect
+                  }
+                  while (true) {
+                    delay(HERO_AUTO_ADVANCE_MS)
+                    // 用户正在拖 / 上一页动画还没结束：这一拍让过去，下一拍再看
+                    if (pagerState.isScrollInProgress) continue
+                    pagerState.animateScrollToPage((pagerState.currentPage + 1) % heroList.size)
+                  }
+                }
+
+                Box(modifier = Modifier.fillMaxWidth().then(holdObserver)) {
                 HorizontalPager(
                   state = pagerState,
                   modifier = Modifier.fillMaxWidth(),
@@ -399,6 +460,7 @@ fun CineHomeScreen(
                     pageCount = if (wide) 0 else heroList.size,
                     currentPage = pagerState.currentPage,
                   )
+                }
                 }
               } else {
                 // 有内容但没有可当 Hero 的条目（比如只有音乐库）：留一块与顶栏等高的空白，
@@ -546,6 +608,14 @@ fun CineHomeScreen(
 
 /** Hero 轮播最多 4 页（与设计稿的 4 个指示点对齐，也避免首屏占满内存） */
 private const val HERO_MAX_PAGES = 4
+
+/**
+ * Hero 静置多久自动换一页。
+ *
+ * 6 秒是「够读完标题 + 决定是否点进去」和「不至于盯着不动」之间的折中；
+ * 任何一次交互（按下 / 拖动 / 翻页）之后都重新给足一整轮，见下面那条 LaunchedEffect。
+ */
+private const val HERO_AUTO_ADVANCE_MS = 6_000L
 
 /** 顶部工具栏占位：给出「状态面板别钻到顶栏下面」的统一内缩 */
 @Composable

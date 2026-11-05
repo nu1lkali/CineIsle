@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -74,6 +75,8 @@ fun PlaylistActionSheet(
         Modifier
           .fillMaxWidth()
           .padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 16.dp)
+          // 同 PlayLinkSheet：内层限高自滚，别让两层滚动容器抢 BottomSheet 的手势。
+          .heightIn(max = 520.dp)
           .verticalScroll(rememberScrollState()),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {

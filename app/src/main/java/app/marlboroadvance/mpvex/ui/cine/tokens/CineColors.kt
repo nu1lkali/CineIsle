@@ -99,6 +99,13 @@ data class CineColors(
   val glassHighlight: Color,
   /** 玻璃投影色（浅色主题下要淡得多，否则一条黑边压在浅底上像污渍） */
   val glassShadow: Color,
+  /**
+   * 详情页主行动按钮的底色。默认是 [onSurface]（反相实心，全屏对比度最高）；
+   * 命中海报主色时换成「带该片色相、但仍保持反相」的版本。
+   */
+  val heroActionSurface: Color,
+  /** 压在 [heroActionSurface] 上的图标 / 文字色，始终取页面底色 [surface]。 */
+  val onHeroAction: Color,
 )
 
 /**
@@ -177,9 +184,84 @@ fun rememberCineColors(scheme: ColorScheme = MaterialTheme.colorScheme): CineCol
         Color.White.copy(alpha = 0.06f)
       },
       glassShadow = Color.Black.copy(alpha = if (isLight) 0.16f else 0.55f),
+      heroActionSurface = scheme.onSurface,
+      onHeroAction = scheme.surface,
     )
   }
 }
+
+/**
+ * 详情页「随海报变色」：只换强调色，中性阶梯一个像素都不动。
+ *
+ * rememberDominantColor 返回的是 soften 之后的**浅色**（向白混 45% 再提亮），
+ * 那是给 Classic 详情页的浅色渐变用的；直接铺到 Cine 的近黑底上会发灰发白。
+ * 所以先把色相拉开，再把亮度调到各自该在的档位。
+ *
+ * ## 三条不变量
+ * 1. `surface` / `onSurface` / `onSurfaceVariant` 一律不动 —— 它们是全页文字与底色，
+ *    染上去一张浅色海报就能让正文整片消失。
+ * 2. `detailScrim` 的最后一档仍是 `base.surface`：剧照与页面底色之间必须无缝，
+ *    只在中间档混一点主色。
+ * 3. 取色失败 / 还在算（[posterColor] 为 null）时**原样返回** [base]。
+ *    半页变了色、另一半没变，比整页不变更难看。
+ *
+ * 浅色主题下 `ratingAccent` / `sectionAction` 不染：中亮色压在白底上做小字对比度不够。
+ * Cine 的主视觉本来就是暗底影院，浅色主题只保证不退化。
+ */
+fun cineColorsForPoster(base: CineColors, posterColor: Color?): CineColors {
+  if (posterColor == null) return base
+  val saturated = saturatePosterColor(posterColor)
+  val accent = toneAtPeak(saturated, if (base.isLight) 0.34f else 0.72f)
+  // 主按钮仍是「反相实心」：深色主题亮底深字、浅色主题暗底亮字，只是色相来自海报。
+  // 文字色恒为页面底色，两个主题都成立。
+  val action = toneAtPeak(saturated, if (base.isLight) 0.34f else 0.88f)
+  val darkEnoughForSmallText = !base.isLight
+  return base.copy(
+    ratingAccent = if (darkEnoughForSmallText) accent else base.ratingAccent,
+    sectionAction = if (darkEnoughForSmallText) accent else base.sectionAction,
+    progressFill = accent,
+    chipBorder = mix(base.chipBorder, accent, 0.45f),
+    glassTint = mix(base.glassTint, accent, 0.10f),
+    detailScrim = Brush.verticalGradient(
+      0f to Color.Transparent,
+      0.5f to mix(base.surface, accent, 0.18f).copy(alpha = 0.55f),
+      1f to base.surface,
+    ),
+    heroActionSurface = action,
+    onHeroAction = base.surface,
+  )
+}
+
+/** soften 把颜色往白里混过，色相被压得很淡；这里相对灰点把差重新拉开。 */
+private fun saturatePosterColor(source: Color): Color {
+  val gray = (source.red + source.green + source.blue) / 3f
+  val gain = 1.9f
+  return Color(
+    red = (gray + (source.red - gray) * gain).coerceIn(0f, 1f),
+    green = (gray + (source.green - gray) * gain).coerceIn(0f, 1f),
+    blue = (gray + (source.blue - gray) * gain).coerceIn(0f, 1f),
+    alpha = 1f,
+  )
+}
+
+/** 等比缩放到指定峰值亮度，保留色相；用来生成「亮强调」与「亮按钮」两档。 */
+private fun toneAtPeak(color: Color, peak: Float): Color {
+  val current = maxOf(color.red, color.green, color.blue).coerceAtLeast(0.01f)
+  val scale = peak / current
+  return Color(
+    red = (color.red * scale).coerceIn(0f, 1f),
+    green = (color.green * scale).coerceIn(0f, 1f),
+    blue = (color.blue * scale).coerceIn(0f, 1f),
+    alpha = 1f,
+  )
+}
+
+private fun mix(a: Color, b: Color, fraction: Float): Color = Color(
+  red = a.red + (b.red - a.red) * fraction,
+  green = a.green + (b.green - a.green) * fraction,
+  blue = a.blue + (b.blue - a.blue) * fraction,
+  alpha = a.alpha + (b.alpha - a.alpha) * fraction,
+)
 
 /**
  * Cine 的**影院基底配色**。

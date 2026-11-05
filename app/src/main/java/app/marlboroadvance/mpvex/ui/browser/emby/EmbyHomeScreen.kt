@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.browser.emby
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -43,6 +45,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -59,6 +63,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -67,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.database.repository.AggregateLibraryRepository
 import app.marlboroadvance.mpvex.database.repository.SearchHistoryRepository
+import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.domain.emby.LibraryOrdering
@@ -829,7 +835,7 @@ fun EmbyHomeScreen(
             if (visibleLibraries.isNotEmpty() || aggregates.isNotEmpty()) {
               item {
                 EmbySectionHeader(
-                  title = "媒体库",
+                  title = stringResource(R.string.emby_section_libraries),
                   modifier = Modifier.padding(top = 10.dp),
                 )
                 LazyRow(
@@ -876,7 +882,7 @@ fun EmbyHomeScreen(
 
             if (resumeItems.isNotEmpty()) {
               item {
-                EmbySectionHeader(title = "继续观看")
+                EmbySectionHeader(title = stringResource(R.string.emby_section_resume))
                 LazyRow(
                   contentPadding = PaddingValues(horizontal = 16.dp),
                   horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -904,7 +910,7 @@ fun EmbyHomeScreen(
 
             if (latestItems.isNotEmpty()) {
               item {
-                EmbySectionHeader(title = "最新加入")
+                EmbySectionHeader(title = stringResource(R.string.emby_section_latest))
                 LazyRow(
                   contentPadding = PaddingValues(horizontal = 16.dp),
                   horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -933,16 +939,21 @@ fun EmbyHomeScreen(
             if (showHomeMix && mixItems.isNotEmpty()) {
               item {
                 EmbySectionHeader(
-                  title = "随便看看",
+                  title = stringResource(R.string.emby_section_mix),
                   action = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                      TextButton(onClick = {
-                        val current = server ?: return@TextButton
+                    Row(
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                      SectionActionPill(onClick = {
+                        val current = server ?: return@SectionActionPill
                         // 换一批沿用当前条数设置，不然用户设了 12 条、
                         // 点一下「换一批」突然变成 100 条，视觉上像是坏了
                         mixViewModel.loadMix(current, seed = null, limit = homeMixCount)
-                      }) { Text("换一批") }
-                      TextButton(onClick = onOpenDiscover) { Text("更多") }
+                      }) { Text(stringResource(R.string.emby_action_refresh_batch)) }
+                      SectionActionPill(onClick = onOpenDiscover) {
+                        Text(stringResource(R.string.emby_action_more))
+                      }
                     }
                   },
                 )
@@ -1067,8 +1078,45 @@ fun EmbyErrorBanner(
       color = MaterialTheme.colorScheme.error,
       textAlign = TextAlign.Center,
     )
-    TextButton(onClick = onRetry) {
+    Button(onClick = onRetry) {
       Text("重试")
+    }
+  }
+}
+
+/**
+ * 分区标题右侧的小操作钮（「换一批」「更多」）。
+ *
+ * 形态：胶囊 + 主题色 12% 底 + 主题色文字，**无描边**。
+ * - 不用描边钮（`OutlinedButton`）：在这个位置读起来像「一个带框的输入框」，
+ *   细边线和旁边海报卡的边线互相打架，整行显得毛糙。
+ * - 不用实心 `primary` 填充：那是主行动条的重量；分区标题旁边摆两块实心，
+ *   「换一批」会比标题还抢眼。
+ * - 12% 的主题色底足够让人看出「这是一块可点的东西」，又不至于压过标题。
+ *
+ * ⚠️ 弹窗里的「确定 / 取消」**不要**用这个 —— 那两处走 `TextButton`（平台惯例），
+ * 早期把两者混成一个组件，结果是弹窗按钮像个分区工具。
+ */
+@Composable
+private fun SectionActionPill(
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  content: @Composable RowScope.() -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    modifier = modifier,
+    shape = RoundedCornerShape(percent = 50),
+    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+    contentColor = MaterialTheme.colorScheme.primary,
+  ) {
+    ProvideTextStyle(MaterialTheme.typography.labelLarge) {
+      Row(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        content = content,
+      )
     }
   }
 }

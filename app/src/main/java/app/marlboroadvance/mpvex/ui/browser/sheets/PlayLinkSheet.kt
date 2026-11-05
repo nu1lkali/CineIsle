@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -97,6 +98,10 @@ fun PlayLinkSheet(
         Modifier
           .fillMaxWidth()
           .padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 16.dp)
+          // 内层限高自滚：不设上限时 Column 会把整份内容一次组合进
+          // ModalBottomSheet 的滚动容器，两层的 nestedScroll 抢手势 ⇒ 拖动发涩。
+          // 口径与 NetworkToolboxSheet 的分页 + 限高一致。
+          .heightIn(max = 480.dp)
           .verticalScroll(rememberScrollState()),
       verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {

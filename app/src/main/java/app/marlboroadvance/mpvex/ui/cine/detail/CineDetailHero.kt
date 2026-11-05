@@ -414,7 +414,7 @@ private fun HeroPlayButton(
       .height(50.dp)
       .shadow(elevation = 12.dp, shape = shape, spotColor = colors.glassShadow)
       .clip(shape)
-      .background(colors.onSurface)
+      .background(colors.heroActionSurface)
       .pressDownScale()
       .clickable(onClick = onClick),
   ) {
@@ -448,13 +448,13 @@ private fun HeroPlayButton(
       Icon(
         imageVector = Icons.Filled.PlayArrow,
         contentDescription = null,
-        tint = colors.surface,
+        tint = colors.onHeroAction,
         modifier = Modifier.size(19.dp),
       )
       Text(
         text = label,
         style = type.button.copy(fontSize = 15.sp),
-        color = colors.surface,
+        color = colors.onHeroAction,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )

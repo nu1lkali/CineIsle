@@ -86,7 +86,7 @@ fun DangerConfirmDialog(
         title,
         style = MaterialTheme.typography.headlineSmall,
         fontWeight = FontWeight.Bold,
-        color = DANGER_RED,
+        color = dangerAccent(),
       )
     },
     text = {
@@ -136,7 +136,7 @@ fun DangerConfirmDialog(
               .fillMaxWidth()
               .height(48.dp)
               .clip(RoundedCornerShape(8.dp))
-              .background(DANGER_RED)
+              .background(dangerAccent())
               .pointerInput(Unit) {
                 detectTapGestures(
                   onPress = {
@@ -246,8 +246,15 @@ fun DangerConfirmDialog(
   )
 }
 
-/** 高饱和亮红，用于破坏性操作的标题与按钮底色。 */
-private val DANGER_RED = Color(0xFFFF2D2D)
+/**
+ * 破坏性操作的警示色：取主题的 `error`，不再写死一个高饱和亮红。
+ *
+ * 写死的那一版在浅色主题下过艳、在暖色动态取色下又和整页调色板打架；
+ * 而 `error` 本身就是「这件事不可撤销」的语义色，两个主题下都已经调好对比度。
+ * 抽成函数而不是常量：`MaterialTheme.colorScheme` 只能在组合里读。
+ */
+@Composable
+private fun dangerAccent(): Color = MaterialTheme.colorScheme.error
 
 /** 按压保持达到该时长（毫秒）才解锁删除；中途松手即回退。当前为 2.5 秒。 */
 private const val HOLD_TO_DELETE_MS = 2500L

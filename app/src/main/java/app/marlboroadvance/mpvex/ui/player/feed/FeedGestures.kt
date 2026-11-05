@@ -146,6 +146,16 @@ internal interface FeedGestureHost {
   fun setBrightness(fraction: Float)
   fun setVolume(fraction: Float)
 
+  /**
+   * 亮度手势结束，把最终值落盘（是否真的记，由「记住亮度」开关裁决）。
+   *
+   * 为什么不在 [setBrightness] 里直接写：拖动过程中它是**每帧**被调用的，
+   * 每帧一次 `SharedPreferences.edit()` 会连着复制几百次内存 map。
+   * 拖动只改窗口，松手才记一次 —— 落盘次数从「几百」降到「一次」，
+   * 而用户能感知到的唯一差别是「下次进来还是这个亮度」，正是我们要的。
+   */
+  fun commitBrightness(fraction: Float)
+
   /** 显示对应的竖向指示条；[kind] 传 null 表示收起 */
   fun showVerticalIndicator(kind: VerticalZone?, fraction: Float)
 
@@ -320,7 +330,14 @@ internal fun Modifier.feedGestures(
     // ── 松手收尾 ──
     when (intent) {
       GestureIntent.SEEK -> if (!edgeBack) host.commitSeek(targetMs)
-      GestureIntent.BRIGHTNESS, GestureIntent.VOLUME -> host.showVerticalIndicator(null, 0f)
+      // 亮度要在收指示条**之前**落盘：commitBrightness 取的是 host 上已经生效的值，
+      // 顺序反了倒是也不影响（指示条不碰 brightnessFraction），但让「先定值、再撤 UI」
+      // 这个顺序和 commitSeek 保持一致，以后改这段不会想当然。
+      GestureIntent.BRIGHTNESS -> {
+        host.commitBrightness(host.brightnessFraction)
+        host.showVerticalIndicator(null, 0f)
+      }
+      GestureIntent.VOLUME -> host.showVerticalIndicator(null, 0f)
       GestureIntent.PAGER, GestureIntent.PENDING -> Unit
     }
   }

@@ -765,15 +765,33 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     sortBy: String? = "SortName",
     sortOrder: String? = null,
     limit: Int = 60,
+    /**
+     * 搜索范围：null = 全服（默认，既有调用不受影响）；
+     * 非 null 时只在该目录下找，配合 [recursive] = false 即「仅本目录」。
+     */
+    parentId: String? = null,
+    recursive: Boolean = true,
   ): List<EmbyItem> {
+    // 「仅本目录」下不查演员：Person 是全局实体，并不挂任何目录下。
+    // 把它一起返回等于绕过了范围限定 —— 搜索框明写着「仅本目录」却蹦出全库演员。
+    val scoped = parentId != null
     // 演员必须走 /Persons：`/Users/{id}/Items` 不返回 Person，
     // 勾了「演员」筛选却搜不到人就是因为原先二者混在同一条请求里。
-    val persons = searchPersons(server, term, limit, itemTypes)
+    val persons = if (scoped) emptyList() else searchPersons(server, term, limit, itemTypes)
     val mediaTypes = itemTypes?.filter { it != PERSON_TYPE }?.takeIf { it.isNotEmpty() }
     // 只勾了「演员」：媒体那一路就不用查了
     if (itemTypes != null && mediaTypes == null) return persons
     val media = runCatching {
-      repository.searchItems(server, term, mediaTypes, limit, sortBy, sortOrder).Items
+      repository.searchItems(
+        server = server,
+        term = term,
+        includeItemTypes = mediaTypes,
+        limit = limit,
+        sortBy = sortBy,
+        sortOrder = sortOrder,
+        parentId = parentId,
+        recursive = recursive,
+      ).Items
     }.getOrDefault(emptyList())
     return persons + media
   }

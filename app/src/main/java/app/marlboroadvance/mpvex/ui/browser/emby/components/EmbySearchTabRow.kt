@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -18,11 +19,14 @@ import app.marlboroadvance.mpvex.ui.browser.emby.EmbySearchTab
 /**
  * 搜索结果的分类页签条（清单 4.1）。
  *
- * 视觉上刻意做成和 [EmbySearchFilterRow] 一样的 chip 条 —— 两者在同一屏上下相邻
- * （筛选 chip 在搜索框下面，页签在结果区上面），长得一样才能让用户读出
- * 「上面那排决定搜什么、这排决定看哪堆」是同一种控件的两层。
- * 区别在交互：[EmbySearchFilterRow] 是**多选复选**（可同时勾电影+剧集），
- * 本组件是**单选**（一次只看一堆），所以这里不显示对勾图标，只靠 chip 的选中底色区分。
+ * 与 [EmbySearchFilterRow] 在同一屏上下相邻：筛选 chip 在搜索框下面，本页签在结果区上面。
+ * 两者语义不同 —— 上面那排是**多选复选**（决定问服务端要什么，改一次重发一次请求），
+ * 这排是**单选**（在已拿到的结果里先看哪一堆，切一下零请求）。
+ *
+ * ⚠️ 两排标签用词故意保持一致（全部 / 电影 / 剧集 / 单集 / 合集 / 演员），
+ * 所以「长得一模一样」反而成了困惑源：用户分不清哪排才算数。
+ * 现在靠**形状**区分：筛选 chip 是默认胶囊，这一排改成 10dp 小圆角方块，
+ * 一眼能分出「上排是条件、下排是结果分组」。交互与数据一行没动。
  *
  * @param counts 各页签的条数（[EmbySearchTab.countByTab] 的结果）；用于角标与显隐
  * @param total 全部结果条数；[EmbySearchTab.ALL] 的角标
@@ -59,6 +63,7 @@ fun EmbySearchTabRow(
       FilterChip(
         selected = tab == selected,
         onClick = { if (tab != selected) onSelectedChange(tab) },
+        shape = RoundedCornerShape(10.dp),
         label = {
           // 角标用「标签 12」而不是把数字塞进括号：中文标签 + 半角括号在 chip 里容易挤，
           // 空格分隔的写法在标题栏/横排 chip 这种窄容器里更耐挤（见 ui-patterns 的 FlowRow 结论）。

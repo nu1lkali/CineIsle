@@ -52,6 +52,7 @@ import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.dislike.DislikeRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
+import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -106,6 +107,15 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
 
   /** 「标记为不喜欢」的仓库。ViewModel 靠它读快照 / 写标记，UI 不直接碰。 */
   private val dislikeRepository: DislikeRepository by inject()
+
+  /**
+   * 亮度记忆的存放处。
+   *
+   * 只用它的全局那一路（`remember_brightness` + `default_brightness`），
+   * **不接按剧记忆**：视界流是滑着刷的场景，滑过去的那条下次基本不会滑回来，
+   * 按剧记在这里没有意义（同类开关仍在，主播放器那边照旧生效）。
+   */
+  private val playerPreferences: PlayerPreferences by inject()
 
   private lateinit var viewModel: FeedViewModel
   private lateinit var pool: ExoPlayerPool
@@ -234,7 +244,13 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
       // 否则网盘直链的签名校验对不上，服务器直接 403（现象：「strm 提示服务器拒绝」）。
       defaultHttpHeaders = feedStreamHeaders(items),
     )
-    brightnessValue = readSystemBrightness()
+    // 亮度：记忆过就用记忆值，并且**窗口也要真的压下去** ——
+    // 光把指示条的起点改成记忆值没用，屏幕还是系统亮度，用户看到的仍是「没记住」。
+    // 没记忆时保持 window 的 screenBrightness = BRIGHTNESS_OVERRIDE_NONE（跟随系统），
+    // 这才是「不动系统设置」的实际含义：只在有明确意图时才接管。
+    val rememberedBrightness = rememberedBrightness()
+    brightnessValue = rememberedBrightness ?: readSystemBrightness()
+    if (rememberedBrightness != null) applyWindowBrightness(rememberedBrightness)
     volumeValue = readSystemVolume()
     mpvEngine = FeedMpvEngine(this)
 
@@ -1053,15 +1069,54 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
    * 这与 Flutter 版那套 `setScreenBrightness` 有本质区别：后者是系统级写入，用户退出
    * 页面之后整台手机还停留在刚才那个亮度。窗口级亮度随着 Activity 销毁自动失效，
    * 零残留，也不需要任何权限。
+   *
+   * 拖动过程中**只到这里为止**，不落盘（每帧一次 `edit()` 太贵）——
+   * 落盘在松手时走一次 [commitBrightness]。
    */
   override fun setBrightness(fraction: Float) {
     brightnessValue = fraction.coerceIn(0.01f, 1f)
+    applyWindowBrightness(brightnessValue)
+  }
+
+  /**
+   * 松手落盘：让「下次进来还是这个亮度」成立。
+   *
+   * 写的是主播放器同一个键（[PlayerPreferences.defaultBrightness]），所以两边是**同一份**
+   * 记忆：主播放器里调暗过，进视界流也是暗的，反之亦然。
+   *
+   * ⚠️ 开关关着就什么都不写。这是「用户明确说了不要记」的唯一含义，
+   * 不因为我们这层是新加的就可以绕过它。
+   */
+  override fun commitBrightness(fraction: Float) {
+    if (!playerPreferences.rememberBrightness.get()) return
+    playerPreferences.defaultBrightness.set(fraction.coerceIn(0.01f, 1f))
+  }
+
+  private fun applyWindowBrightness(fraction: Float) {
     val lp = window.attributes
-    lp.screenBrightness = brightnessValue
+    lp.screenBrightness = fraction
     window.attributes = lp
   }
 
-  /** 读一次系统亮度作为指示条的起点，之后就不再碰系统设置了 */
+  /**
+   * 记住的全局亮度；`null` = 没有可用的记忆，调用方回退到系统亮度。
+   *
+   * `default_brightness` 的默认值是 `-1f`（沿用主播放器的 `BRIGHTNESS_NOT_SET` 约定），
+   * 所以这里必须**范围校验**而不是只判非空 —— 直接拿 `-1` 去写
+   * `screenBrightness` 在部分机型上等于「最暗」，比「不接管」更糟。
+   */
+  private fun rememberedBrightness(): Float? {
+    if (!playerPreferences.rememberBrightness.get()) return null
+    val value = playerPreferences.defaultBrightness.get()
+    return value.takeIf { it in 0.01f..1f }
+  }
+
+  /**
+   * 读一次系统亮度作为指示条的起点，之后就不再碰系统设置了。
+   *
+   * 只在「没有记忆」时用（见 [rememberedBrightness]）：本窗口上已经有值时优先用它 ——
+   * 那是用户这一刻眼睛看到的值（横竖屏重建会走到这里），比系统设置更贴近事实。
+   */
   private fun readSystemBrightness(): Float =
     window.attributes.screenBrightness.takeIf { it in 0f..1f }
       ?: runCatching {
