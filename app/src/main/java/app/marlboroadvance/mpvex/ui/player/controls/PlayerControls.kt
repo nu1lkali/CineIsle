@@ -1216,11 +1216,18 @@ fun PlayerControls(
               viewModel.beginSeekPause()
               isSeeking = true
               resetControlsTimestamp = System.currentTimeMillis()
-              viewModel.seekTo(it.toInt())
+              // v217：拖动期间走节流版（150ms 一次真 seek）。这里每帧都进来，
+              // 直接调 seekTo 会在网络流上打出每秒几十条 seek —— 缓存被反复
+              // 清空重拉，观感就是「拖一下卡好久」。
+              viewModel.scrubTo(it.toInt())
             },
             onValueChangeFinished = {
               isSeeking = false
               resetControlsTimestamp = System.currentTimeMillis()
+              // v217：松手**必须补发最终 seek**。节流跳过的那些帧里可能正好
+              // 包含最终位置；不补的话落点依赖「最后一条 onValueChange 恰好
+              // 没被节流吞掉」，并发下顺序不保证，会停错位置。
+              viewModel.commitScrubSeek()
               // 幂等恢复：只有「这次 seek 里我们自己打上的暂停」才撤销，
               // 用户自己按的暂停永远不动。三条手势路径重复进来也不会误恢复。
               viewModel.endSeekPause()

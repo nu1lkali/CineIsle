@@ -208,6 +208,11 @@ class MPVView(
     MPVLib.setOptionString("demuxer-max-bytes", "${cacheMegs * 1024 * 1024}")
     // 回退缓冲（seek 之后回看用）不跟着翻倍：64MB 足够，省下的内存留给正向预读。
     MPVLib.setOptionString("demuxer-max-back-bytes", "${64 * 1024 * 1024}")
+    // ⭐ v217：让**已缓存的回看区间可寻址**。不开的话，往回拖进度条哪怕只回退
+    // 几十秒、数据明明还在内存里，mpv 也要走一遍「丢缓存 → HTTP Range 重连 →
+    // 重新定位」—— 拖回去比拖往前还慢就是这个原因。开了之后落在缓存区间内的
+    // seek 是纯内存操作，网络流上肉眼可见地「秒落」。
+    MPVLib.setOptionString("demuxer-seekable-cache", "yes")
 
     // ── 远程流（Emby 直连、strm 指向的远端地址…）的缓冲与重连 ──
     // 这些片子的瓶颈通常在「取数据」而不是「解码」：源是远端 AVI 时，

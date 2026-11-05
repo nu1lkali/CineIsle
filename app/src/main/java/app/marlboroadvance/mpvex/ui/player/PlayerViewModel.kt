@@ -655,6 +655,15 @@ class PlayerViewModel(
     const val SEEK_COALESCE_DELAY_MS = 60L
 
     /**
+     * 拖动进度条期间，两次**真正下发**的 mpv seek 之间的最小间隔。
+     *
+     * 视界流 `previewSeek` 同款口径（那边是 120ms）：保住「画面跟手」的同时，
+     * 不让每个移动事件都让解码器在网络流上重新定位一遍。拖完的最终落点
+     * 不靠节流那条 —— 由 `commitScrubSeek` 在松手时强制保证。
+     */
+    const val SCRUB_SEEK_INTERVAL_MS = 150L
+
+    /**
      * 「mpv 报的时长超过参照值多少倍就判为离谱」。
      *
      * 4 倍是刻意留宽的：真实片源里 `file-size ÷ bitrate` 对 VBR 的估算误差通常
@@ -1206,12 +1215,69 @@ class PlayerViewModel(
 
   // ==================== Seeking ====================
 
+  // ── 拖动节流（v217）──
+  // 一条在途的绝对 seek（单飞：新的取消旧的，避免乱序落地）
+  private var scrubSeekJob: Job? = null
+  // 上次真正下发拖动 seek 的时刻（毫秒）
+  private var lastScrubCommitAt = 0L
+  // 拖动的最新目标（手指当前指向的位置），松手时用它保证最终落点
+  private var lastScrubTarget = -1
+  // 最近一次已经发给 mpv 的拖动目标（避免收尾重复下发同一位置）
+  private var lastDispatchedScrub = -1
+
   fun seekBy(offset: Int) {
     coalesceSeek(offset)
   }
 
   fun seekTo(position: Int) {
-    // 手还在屏幕上：给 seek 暂停的安全阀续期（最多一秒续一次，别每帧都重建协程）
+    renewSeekPauseSafetyNet()
+    dispatchAbsoluteSeek(position)
+  }
+
+  /**
+   * 拖动进度条期间的 seek —— **每一帧移动都会进来，必须节流**（v217）。
+   *
+   * 为什么不能像 [seekTo] 那样来一次发一次：一次两秒的拖动会打出 60~120 条
+   * `seek` 命令，而网络流上每条 seek 的代价是「丢掉已缓存区间 → HTTP Range
+   * 重连 → 重新定位 → 从关键帧解码」，新命令还会掐掉没跑完的上一条 —— 整个
+   * 过程被反复推倒重来，缓存被反复清空，观感就是「拖一下卡好久」。视界流的
+   * `previewSeek` 早就用 120ms 节流解决过同一个问题（注释原话：「不至于每个
+   * 移动事件都让解码器重新定位一次」），这里照同款口径处理。
+   *
+   * 这里只更新目标并按 [SCRUB_SEEK_INTERVAL_MS] 间隔才真正下发；**最终落点由
+   * [commitScrubSeek] 在松手时保证**。老实现里收尾回调不发 seek、完全依赖
+   * 「最后一条 onValueChange 恰好是最终位置」—— 并发协程下顺序不保证，
+   * 停错位置就是这么来的。
+   */
+  fun scrubTo(position: Int) {
+    renewSeekPauseSafetyNet()
+    lastScrubTarget = position
+    val now = System.currentTimeMillis()
+    if (now - lastScrubCommitAt < SCRUB_SEEK_INTERVAL_MS) return
+    lastScrubCommitAt = now
+    lastDispatchedScrub = position
+    dispatchAbsoluteSeek(position)
+  }
+
+  /**
+   * 松手（或手势收尾）时保证落在最终目标上：节流窗口没到也强制下发一次。
+   * 与 [endSeekPause] 一样幂等 —— 没拖过（`lastScrubTarget` 还是 -1）时是 no-op。
+   */
+  fun commitScrubSeek() {
+    val target = lastScrubTarget
+    lastScrubTarget = -1
+    lastScrubCommitAt = 0L
+    if (target < 0) return
+    // 刚下发过同一个目标（且还在途）：别重复发，mpv 的 seek 队列里它就是最新一条
+    if (target == lastDispatchedScrub) return
+    lastDispatchedScrub = target
+    dispatchAbsoluteSeek(target)
+  }
+
+  /**
+   * 手还在屏幕上：给 seek 暂停的安全阀续期（最多一秒续一次，别每帧都重建协程）。
+   */
+  private fun renewSeekPauseSafetyNet() {
     if (seekPauseApplied) {
       val now = System.currentTimeMillis()
       if (now - seekPauseRenewedAt > SEEK_PAUSE_RENEW_INTERVAL_MS) {
@@ -1219,30 +1285,39 @@ class PlayerViewModel(
         armSeekPauseSafetyNet()
       }
     }
-    viewModelScope.launch(Dispatchers.IO) {
-      val maxDuration = PlayerLib.getPropertyInt("duration") ?: 0
-      var clampedPosition = position.coerceIn(0, maxDuration)
+  }
 
-      // Clamp within AB loop if active
-      val loopA = _abLoopA.value
-      val loopB = _abLoopB.value
-      if (loopA != null && loopB != null) {
-        val min = minOf(loopA.toInt(), loopB.toInt())
-        val max = maxOf(loopA.toInt(), loopB.toInt())
-        clampedPosition = clampedPosition.coerceIn(min, max)
+  /**
+   * 真正把绝对定位发给 mpv（IO 线程，单飞：新 seek 取消旧的）。
+   * [seekTo]（跳章节、跳过片头这类单点跳转）与拖动节流共用这一条路。
+   */
+  private fun dispatchAbsoluteSeek(position: Int) {
+    scrubSeekJob?.cancel()
+    scrubSeekJob =
+      viewModelScope.launch(Dispatchers.IO) {
+        val maxDuration = PlayerLib.getPropertyInt("duration") ?: 0
+        var clampedPosition = position.coerceIn(0, maxDuration)
+
+        // Clamp within AB loop if active
+        val loopA = _abLoopA.value
+        val loopB = _abLoopB.value
+        if (loopA != null && loopB != null) {
+          val min = minOf(loopA.toInt(), loopB.toInt())
+          val max = maxOf(loopA.toInt(), loopB.toInt())
+          clampedPosition = clampedPosition.coerceIn(min, max)
+        }
+
+        if (clampedPosition !in 0..maxDuration) return@launch
+
+        // Cancel pending relative seek before absolute seek
+        seekCoalesceJob?.cancel()
+        pendingSeekOffset = 0
+
+        // Use precise seeking for videos shorter than 2 minutes (120 seconds) or if preference is enabled
+        val shouldUsePreciseSeeking = playerPreferences.usePreciseSeeking.get() || maxDuration < 120
+        val seekMode = if (shouldUsePreciseSeeking) "absolute+exact" else "absolute+keyframes"
+        PlayerLib.command("seek", clampedPosition.toString(), seekMode)
       }
-
-      if (clampedPosition !in 0..maxDuration) return@launch
-
-      // Cancel pending relative seek before absolute seek
-      seekCoalesceJob?.cancel()
-      pendingSeekOffset = 0
-      
-      // Use precise seeking for videos shorter than 2 minutes (120 seconds) or if preference is enabled
-      val shouldUsePreciseSeeking = playerPreferences.usePreciseSeeking.get() || maxDuration < 120
-      val seekMode = if (shouldUsePreciseSeeking) "absolute+exact" else "absolute+keyframes"
-      PlayerLib.command("seek", clampedPosition.toString(), seekMode)
-    }
   }
 
   private fun coalesceSeek(offset: Int) {

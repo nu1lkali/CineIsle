@@ -2654,7 +2654,24 @@ android {
     //       「僵一下 → 瞬间弹回」。现在减速段尾巴直接接回拉段起手（slotSpinSpec）。
     //  · 归位段用 FastOutSlowIn（缓起缓收），不再用起手全速的 LinearOutSlowIn。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 216
+    // ────────────────────────────────────────────────────────────────────────
+    // v217（1.6.14）拖进度条卡顿：seek 风暴治理
+    //  · 症状（真机）：mpv 拖一下进度条「卡好久」，视界流 mpv 同样；yamby 几乎秒播。
+    //  · 根因 ①（主播放器）：进度条 onValueChange **每帧**直发 `PlayerLib.command("seek")`，
+    //    一次拖动 = 60~120 条命令；网络流上每条都要「丢缓存 → Range 重连 → 重定位 →
+    //    关键帧解码」，新命令还掐掉没跑完的旧命令 ⇒ 反复推倒重来，松手后再等最后一条。
+    //    视界流 previewSeek 早有 120ms 节流，主播放器没抄这份作业。
+    //  · 根因 ②（隐藏 bug）：onValueChangeFinished 不发 seek，最终落点全靠
+    //    「最后一条 onValueChange 恰好没被吞」—— 并发下乱序，会停错位置。
+    //  · 根因 ③（视界流 mpv）：mpv 进程级单例，PlayerViewModel 按时长动态改写全局
+    //    `hr-seek`（<2min 切精确 seek），视界流短 clip 全中招；`absolute` 跟着全局走。
+    //  · 根因 ④：`demuxer-seekable-cache` 未显式开启，回退缓冲里的数据不可寻址，
+    //    往回拖也要走网络重连。
+    //  · 修法：`scrubTo()`（150ms 节流 + 单飞 Job）+ `commitScrubSeek()`（松手强制
+    //    落最终位，进度条 / 横滑手势两路都接）；FeedMpvEngine 写死 `absolute+keyframes`；
+    //    `demuxer-seekable-cache=yes`。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 217
     versionName = "1.6.14"
 
     vectorDrawables {

@@ -255,7 +255,12 @@ internal class FeedMpvEngine(
 
   fun seekTo(sec: Double) {
     if (mpvView == null) return
-    runCatching { MPVLib.command("seek", sec.coerceAtLeast(0.0).toString(), "absolute") }
+    // v217：显式 `+keyframes`。mpv 是进程级单例 —— 主播放器的 PlayerViewModel 会
+    // 按时长**动态改写全局 `hr-seek`**（小于 2 分钟的片子会被切成精确 seek），
+    // 视界流的短 clip 恰好全落在这个区间里，等于被那条逻辑误伤：拖一下每条
+    // seek 都要「解到精确帧」。命令级 flag 优先于全局选项，写死 keyframes
+    // 才不受污染；对短视频拖动来说，落点差不到一个 GOP，用户感知不出。
+    runCatching { MPVLib.command("seek", sec.coerceAtLeast(0.0).toString(), "absolute+keyframes") }
   }
 
   /**

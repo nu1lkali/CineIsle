@@ -884,7 +884,9 @@ fun GestureHandler(
                     
                     // Use the same seeking mechanism as seekbar scrubbing
                     // This will update the seekbar position and provide live preview
-                    viewModel.seekTo(clampedPosition.toInt())
+                    // v217：横滑与进度条拖动同口径 —— 走节流版，每帧直发 seek
+                    // 会在网络流上打出一串「掐掉上一条重来」，拖完卡很久。
+                    viewModel.scrubTo(clampedPosition.toInt())
 
                     // ── 横滑快进的震动反馈（issue 反馈新增）─────────────
                     // 每跨过一个「2 秒」档震一次，让用户不看屏幕也知道跳了多少。
@@ -935,6 +937,9 @@ fun GestureHandler(
               // 手势末尾那段 `if (hasStartedSeeking)` 就整段跳过了 —— 以前正是这里
               // 漏了恢复，横滑途中再落一根手指 ⇒ 播放永久停在暂停态。
               // 幂等：这次没打上暂停（用户本来就是暂停的）时是 no-op。
+              // 多指取消也先把最终落点补上（v217）：被节流吞掉的最后一帧
+              // 正好可能是目标位置。
+              viewModel.commitScrubSeek()
               viewModel.endSeekPause()
               break
             }
@@ -942,6 +947,9 @@ fun GestureHandler(
 
           // Apply the final seek when gesture ends
           if (hasStartedSeeking) {
+            // v217：注释写了 Apply the final seek，但老实现其实只恢复暂停、
+            // 不发 seek —— 最终落点全靠最后一条移动事件，节流/乱序下会停错位置。
+            viewModel.commitScrubSeek()
             // 恢复播放：幂等，只有这次 seek 里打上的暂停才撤销
             viewModel.endSeekPause()
             
