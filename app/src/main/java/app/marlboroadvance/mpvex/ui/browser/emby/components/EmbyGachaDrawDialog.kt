@@ -8,6 +8,8 @@ import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.KeyframesSpec
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -29,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -59,33 +62,49 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.random.Random
 
 /**
  * Emby 媒体库「随机抽卡」全屏揭晓层。
@@ -261,11 +280,135 @@ internal fun gachaCodeOf(title: String?): String? {
 /** 动画阶段（决定画哪一层）。 */
 private enum class GachaPhase { Awaiting, Charging, Burst, Card }
 
+/**
+ * 单抽揭晓的动画形态（设置项「抽卡动画」）。
+ *
+ * ⚠️ **只有单抽（1 张）能选滚动揭晓**：卡带的意义是「停在未知的那一张上」，
+ * 十连要的是「一张张翻开、看这一批来了什么」，塞进一个轮盘既看不清也失去批量感。
+ * 所以多抽永远走 [CLASSIC] 的错峰翻牌，与这里选什么无关。
+ *
+ * ⚠️ `getEnum` 存的是枚举 `name`，发布后**不能改名**（改了老用户的偏好看不到）。
+ */
+enum class EmbyGachaStyle(val label: String) {
+  /** 一张大卡从 -82° 翻正（v197 起的默认形态） */
+  CLASSIC("经典翻牌"),
+
+  /** 卡片自右向左滚动的横向卡带，先加速后减速停在中奖卡上 */
+  SLOT("滚动揭晓"),
+}
+
 /** 法阵蓄能时长 */
 private const val ROLL_MS = 1250
 
 /** 单张卡牌的翻转时长 */
 private const val REVEAL_MS = 700
+
+/** 滚动卡带的转动总时长 */
+private const val SLOT_SPIN_MS = 3600
+
+/**
+ * 停稳后的高光扫过时长（单程，不回头）。
+ *
+ * 比 [land] 的脉冲略短：扫光是「叮」的那一下，拖长了会变成「缓慢变色」。
+ */
+private const val SLOT_SWEEP_MS = 460
+
+/** 取景框「对焦」锁定时长（1.12 倍收拢到 1.0） */
+private const val SLOT_LOCK_MS = 150
+
+/**
+ * 停稳时**冲过头**多少格（棘爪回弹）。
+ *
+ * 真实机械转盘停下的那一下不是「刚好卡在齿位上」，而是先冲过去一点、再被棘爪顶回来。
+ * 0.32 格 ≈ 40dp：看得出「弹了一下」，又不会像滚轮在犹豫着找位置。
+ * ⚠️ 过冲段是靠卡带末尾的 [SLOT_TAIL] 张陪跑卡兜住的 —— tail 为 0 时过冲会露出空位。
+ */
+private const val SLOT_OVERSHOOT = 0.32f
+
+/**
+ * 回拉归位时长（冲过头的那 0.32 格退回落点）。
+ *
+ * 180ms 是「被弹簧拽回去」的尺度：再慢就成「慢慢挪回去」，再快就看不清那一下。
+ * 配合 `LinearOutSlowInEasing`（起手就是全速、尾巴才收），才是棘爪那种**顿挫**；
+ * 用 FastOutSlowIn 会先缓后急，读起来像被一根橡皮筋吊着。
+ */
+private const val SLOT_SETTLE_MS = 180
+
+/**
+ * 停稳后、交给结果卡之前**站住**多久。
+ *
+ * 这段是留给用户看清「停在哪一张」的，不能省：0 的话中奖框一闪而过，
+ * 前面 3.6 秒滚动带出来的期待感全落空。但也别给多 —— 落点脉冲本身就占了
+ * 90（上冲）+ 320（回落）≈ 400ms，这里再补 120 就够读完「停在这张」。
+ */
+private const val SLOT_HOLD_MS = 120L
+
+/** 轮盘淡出时长（交接第一段） */
+private const val SLOT_FADE_MS = 200
+
+/** 结果卡从轮盘接手时的翻正时长（交接第二段）。比常规 [REVEAL_MS] 短：前面已经看够了 */
+private const val SLOT_FLIP_MS = 380
+
+/**
+ * 卡池里最多用几张**不同**的陪跑卡。
+ *
+ * 跟「卡带多长」是两件事（后者见 [SLOT_MIN_TRAVEL]）：卡带循环拼接，所以这里只
+ * 决定**要预加载几张封面**。8 张在限并发 4 的情况下 1~2 秒就能全部进内存缓存，
+ * 张数再往上加，「开转前等封面」的时间就会明显变长 —— 而真机反馈的「滚到后面
+ * 就没卡片了」，根因正是预加载没跟上。
+ */
+private const val SLOT_POOL_MAX = 8
+
+/**
+ * 卡带至少要**走多少格**。
+ *
+ * 跟池子大小脱钩：池子只有 4 张时，3.6 秒走 4 格 ≈ 1 格/秒，看起来像卡住不动。
+ * 不足就循环铺满到这一格数，转速才稳定（见 slotStrip 的说明）。
+ */
+private const val SLOT_MIN_TRAVEL = 13
+
+/**
+ * 中奖卡的落点在 `[SLOT_MIN_TRAVEL - jitter, SLOT_MIN_TRAVEL]` 之间随机，
+ * jitter 取 `0..SLOT_WIN_JITTER`。让每次抽的滚动距离不太一样，节奏不至于机械。
+ */
+private const val SLOT_WIN_JITTER = 3
+
+/**
+ * 中奖卡**后面**再摆几张陪跑卡。
+ *
+ * 这三张很关键：一屏看得见三格，中奖卡居中时右侧要还有卡，看上去才是
+ * 「停在卡带中间」。不给的话它永远是最右边那张 —— 用户会读成「总是抽最后一张」。
+ */
+private const val SLOT_TAIL = 3
+
+/**
+ * 陪跑卡最少几张才值得转轮盘。
+ *
+ * 少于这个数，即使循环铺满，重复的封面会连成「同一张卡在眼前晃」——
+ * 那比直接翻牌更像 bug。此时自动退回经典翻牌。
+ */
+private const val SLOT_MIN_POOL = 4
+
+/**
+ * 开转前等封面进内存缓存的**上限**。
+ *
+ * 这里不是「尽力而为」：超时没凑齐就整场退回经典翻牌（见 `slotAbort`）。
+ * 给足 8 秒是因为一次要取 10 张（`EmbyImageLoader` 限并发 4，服务端每张都要缩放），
+ * 局域网通常 1~2 秒就完；慢网宁可多等这 1 秒，也别让用户看一串空框。
+ */
+private const val SLOT_PRELOAD_MS = 8_000L
+
+/** 轮盘卡片的解码宽度。与取图时传的 `maxWidth` 同一档，命中缓存才不会解码两次 */
+private const val SLOT_POSTER_WIDTH = 320
+
+/**
+ * 快阶段加在轮盘上的模糊半径。
+ *
+ * 只在「已经转起来」的那一段给：慢启动时糊着看等于一开始就失焦，反而不像加速。
+ * API < 31 上 `Modifier.blur` 是空实现 —— 那时退回「靠速度本身表达」，
+ * 不加假特效（比如叠半透明残影），免得在低端机上变成三倍绘制。
+ */
+private val SLOT_BLUR = 7.dp
 
 /** 多抽时第一张卡的翻转时长 */
 private const val GRID_REVEAL_BASE_MS = 620
@@ -285,6 +428,11 @@ private const val ECHO_MS = 1100
  *               用 `item.Id` 当 key 的话「又抽到上一条」时动画不会重播，看起来像没反应。
  * @param resolveDetail 点上某张小卡时补一次详情（列表接口不保证带 `Overview`）。
  *                      null = 用列表里的数据直接展示。失败请返回原卡片而不是抛异常。
+ * @param style 单抽的揭晓动画形态；多抽一律走经典翻牌（见 [EmbyGachaStyle]）。
+ * @param reelCards 滚动卡带的**陪跑卡**：同一次取数里没被抽中的那些条目。
+ *                  为空 / 太少时自动退回经典翻牌 —— 只有一张卡的轮盘转不起来。
+ *                  ⚠️ 这是「多拿一份数据」，不是「多打一次网络」：调用方本来就是按
+ *                  20 条取的池子，只用 1 条剩下的全丢了，这里只是把剩下的接过来。
  */
 @Composable
 internal fun EmbyGachaDrawDialog(
@@ -301,8 +449,44 @@ internal fun EmbyGachaDrawDialog(
    */
   onPlayAll: (List<GachaCard>) -> Unit = {},
   resolveDetail: (suspend (GachaCard) -> GachaCard)? = null,
+  style: EmbyGachaStyle = EmbyGachaStyle.CLASSIC,
+  reelCards: List<GachaCard> = emptyList(),
 ) {
   val count = cards.size
+  /** 中奖卡（只有单抽会给出来，多抽时为 null） */
+  val drawnCard = cards.singleOrNull()
+  /**
+   * 陪跑卡**候选**：去打散，但**不铺满**。
+   *
+   * 它只决定「要不要转轮盘」；真正上轮盘的卡带要等封面全部到位才生成（见 [reelStrip]）。
+   * 用 `Random(rollId)` 定种子：重抽时顺序会变（否则每次都是同一排卡停在同一个位置），
+   * 同一次抽取内重组多少次都一样。
+   */
+  val slotCandidates = remember(rollId, cards, reelCards) {
+    val drawn = cards.singleOrNull() ?: return@remember emptyList()
+    (reelCards.ifEmpty { cards })
+      .filter { it.item.Id != drawn.item.Id }
+      .distinctBy { it.item.Id ?: it.title }
+      .shuffled(Random(rollId))
+      // 只留这么几张去预加载：卡带本来就会循环拼接，多用几张并不会显得更热闹，
+      // 只会把「开转前等封面」的时间拉长（真机反馈的根因就在这）。
+      .take(SLOT_POOL_MAX)
+  }
+  // 陪跑卡少于 4 张就别转轮盘了：两三个格子来回晃，比直接翻牌更像 bug
+  val slotMode = style == EmbyGachaStyle.SLOT && count == 1 &&
+    slotCandidates.size >= SLOT_MIN_POOL
+  /**
+   * 真正铺在轮盘上的卡带。**预加载完成并校验之后才填**（空 = 还没到 / 已放弃）。
+   *
+   * ⚠️ 它不能是 `remember` 直接算出来的常量：卡带里的每一张都必须**已经在内存缓存里**，
+   * 否则滚动时半路开始出现空框 —— 真机反馈「滚着滚着就没了，然后在一个空白的地方
+   * 选中了一张卡」就是这么来的（预加载 3 秒超时就带着一堆没下完的图开转了）。
+   * 现在等预加载结束、按 [EmbyImageLoader.peek] 逐个核对，缺图的一律不上轮盘。
+   */
+  var reelStrip by remember(rollId) { mutableStateOf(emptyList<GachaCard>()) }
+  /** 封面凑不齐（服务器慢 / 某张挂了）⇒ 放弃轮盘，退回经典翻牌 */
+  var slotAbort by remember(rollId) { mutableStateOf(false) }
+
   // 多抽的「主色」取这一批里最高的稀有度：抽到 SSR 时整场都是金色排场
   val bestRarity = remember(cards) {
     cards.map { embyGachaRarityOf(it.item) }.minByOrNull { it.ordinal } ?: EmbyGachaRarity.R
@@ -314,6 +498,41 @@ internal fun EmbyGachaDrawDialog(
   val flip = remember { Animatable(0f) }
   val grid = remember { Animatable(0f) }
   val detailIn = remember { Animatable(0f) }
+  /** 轮盘当前位置（单位 = 卡片序号，0 = 第 1 张停在中间）。 */
+  val reel = remember { Animatable(0f) }
+  /** 停稳那一下的高光（0→1→0），只用来让中奖卡「咬合」一下，不再闪白整屏。 */
+  val land = remember { Animatable(0f) }
+  /**
+   * 停稳后的**一次性**高光扫过（0→1，不回头）。
+   *
+   * 为什么不复用 [land]：land 是 0→1→0 的脉冲，拿它驱动扫光会「扫到一半退回来」，
+   * 看着像倒放。扫光是单程的，必须有自己的进度。
+   */
+  val sweep = remember { Animatable(0f) }
+  /**
+   * 取景框的**锁定度**（0→1，**不回退**）。
+   *
+   * 与 [land] 脉冲分开：脉冲要回 0（只闪一下），锁定得留在 1 ——
+   * 滚动过程中画面上只有准星、没有框；停稳那一下框才「对焦」锁上并一直留着，
+   * 直到随轮盘一起淡出。用一个脉冲兼任「出现 + 闪亮」就会闪完又消失。
+   */
+  val lock = remember { Animatable(0f) }
+  /** 轮盘淡出（0 = 还在轮盘，1 = 已换成结果卡）。 */
+  val reelFade = remember { Animatable(0f) }
+  /**
+   * 快阶段模糊半径（dp，0 = 不糊）。
+   *
+   * 用普通 State 而不是每帧插值的 Animatable：模糊只在这一段**开关两次**，
+   * 若按帧取整条渐变，整棵轮盘每帧都要重组一次 —— 收益远小于代价。
+   */
+  var slotBlur by remember { mutableStateOf(0f) }
+  /**
+   * 轮盘是否已经退场。
+   *
+   * 淡出结束后必须**从组合里删掉**：留着的话 16 张海报会一直挂在树上，
+   * 后面结果卡的呼吸光晕每帧重组都会把它们量一遍 —— 白费电。
+   */
+  var reelFinished by remember { mutableStateOf(false) }
   /**
    * 「共鸣」（v202）：蓄能打满之后、白光爆开之前的**那一下回缩**。
    *
@@ -347,6 +566,8 @@ internal fun EmbyGachaDrawDialog(
   var focusedDetail by remember { mutableStateOf<GachaCard?>(null) }
   var detailLoading by remember { mutableStateOf(false) }
   val scope = rememberCoroutineScope()
+  // 停稳的那一下要「叮」一下：视觉之外必须给触感，否则静音环境下只剩「画面停了」
+  val haptic = LocalHapticFeedback.current
 
   // 取数等待期（cards 为空）没有 charge 可读，用一个循环量驱动法阵的缓慢转动，
   // 否则那段时间画面是**静止**的，看着像卡死。
@@ -382,6 +603,13 @@ internal fun EmbyGachaDrawDialog(
       detailIn.snapTo(0f)
       gather.snapTo(0f)
       echo.snapTo(0f)
+      reel.snapTo(0f)
+      land.snapTo(0f)
+      sweep.snapTo(0f)
+      lock.snapTo(0f)
+      reelFade.snapTo(0f)
+      slotBlur = 0f
+      reelFinished = false
       focused = null
       focusedDetail = null
       detailLoading = false
@@ -404,18 +632,73 @@ internal fun EmbyGachaDrawDialog(
     detailIn.snapTo(0f)
     gather.snapTo(0f)
     echo.snapTo(0f)
+    reel.snapTo(0f)
+    land.snapTo(0f)
+    sweep.snapTo(0f)
+    lock.snapTo(0f)
+    reelFade.snapTo(0f)
+    slotBlur = 0f
+    reelFinished = false
     focused = null
     focusedDetail = null
 
     // 接力：把等待期法阵停下的位置接过来，蓄能从这里继续（见 spinBase 的说明）
     spinBase = idle.value * 0.4f
     phase = GachaPhase.Charging
+    /**
+     * 轮盘开转之前必须把**所有封面都拿进内存缓存**，否则转起来是一排空框。
+     *
+     * 为什么现在就发：蓄能段有 [ROLL_MS]（1.25s）可以重叠，等到要转的时候再取就是干等。
+     *
+     * ⚠️ 原来是 `withTimeoutOrNull(3000)` **尽力而为**：3 秒一到就带着一堆没下完的图
+     * 开转 —— 真机现象正是「滚着滚着就没了，最后在一个空白的地方选中了一张卡」。
+     * 用户的要求本来就是「确保所有卡片的封面都已经加载完」，所以这里给它足量时间
+     * （[SLOT_PRELOAD_MS]），并且**拿不到就退回经典翻牌**，绝不让空框上轮盘。
+     */
+    val preload = if (slotMode) {
+      async {
+        withTimeoutOrNull(SLOT_PRELOAD_MS) {
+          preloadGachaPosters((slotCandidates + listOfNotNull(drawnCard)).mapNotNull { it.posterUrl })
+        }
+      }
+    } else {
+      null
+    }
     charge.animateTo(1f, tween(ROLL_MS, easing = FastOutSlowInEasing))
 
     // ── 共鸣：蓄满后先向内收一下（法阵半径缩到 0.80、中心核压小）──
     // 收的过程本身很慢（EaseIn），收到位才炸。只多 160ms，但「亮 → 收 → 炸」
     // 三个动作读得出来，比「亮 → 更亮 → 炸」有层次。
     gather.animateTo(1f, tween(GATHER_MS, easing = FastOutLinearInEasing))
+
+    // ── 先把封面等齐、核对完，再炸开 ──
+    //
+    // ⚠️⚠️ 顺序很关键：等待必须放在**闪白之前**。
+    // 放到闪白之后的话，等待期画面已经是黑的（法阵在 Burst 就退场了、卡带还没出来），
+    // 网络慢时用户会盯着黑屏好几秒。放在这里，等待期画面还是转着的法阵，
+    // 文案「祈愿中…」，等图到位才炸开 —— 观感上就是「蓄力久了点」，不是「卡死了」。
+    //
+    // 另外这段等待通常为零：预加载从蓄能的 1.25 秒之前就已经在并行跑了。
+    var slotWinIndex = -1
+    if (slotMode) {
+      preload?.await()
+      // 只有**真的进了内存缓存**的卡才允许上轮盘。用 `peek` 而不是预加载的返回值：
+      // 缓存才是 `EmbyImage` 第一帧能直接拿到图的唯一依据。
+      // 缺任何一张（包括中奖卡自己）就整场退回经典翻牌 —— 一排空框比不做轮盘难看十倍，
+      // 也正是真机反馈「滚到后面没卡片了、在一个虚空位置选中一张卡」的成因。
+      val drawn = drawnCard
+      val readyCards = slotCandidates.filter { EmbyImageLoader.peek(it.posterUrl) != null }
+      val drawnReady = drawn != null && EmbyImageLoader.peek(drawn.posterUrl) != null
+      if (drawn == null || readyCards.size < SLOT_MIN_POOL || !drawnReady) {
+        // 凑不齐：标记退场，下面走经典翻牌
+        slotAbort = true
+      } else {
+        // 中奖卡的格位由卡带自己决定（随机），不再恒等于末位
+        val (strip, winIndex) = buildSlotStrip(readyCards, drawn, rollId)
+        reelStrip = strip
+        slotWinIndex = winIndex
+      }
+    }
 
     // ── 揭晓：闪白 + 冲击波 + 翻牌三件事同时起 ──
     // 闪光先极快地打满再淡出（「爆发」就是这一下），冲击波慢一点铺开，
@@ -433,7 +716,66 @@ internal fun EmbyGachaDrawDialog(
     launch {
       echo.animateTo(1f, tween(ECHO_MS, easing = LinearOutSlowInEasing))
     }
-    if (count == 1) {
+    if (slotWinIndex >= 0 && reelStrip.isNotEmpty()) {
+      // ── 滚动揭晓：横向卡带 ──
+      // 轮盘阶段 flip 一直是 0：单抽那张大卡此时侧立着（rotationY=-82°、alpha=0），
+      // 屏幕上是卡带；停稳之后才把 flip 从 0 推到 1，让结果卡翻正接过去。
+      // 停的格位 = 卡带自己给的下标（随机），不是 lastIndex —— 见 buildSlotStrip。
+      val last = slotWinIndex.toFloat()
+      // 模糊只在「真的转起来了」那段给：慢启动阶段糊着看等于一开始就失焦。
+      // 两次赋值就够（开 / 关），不按帧插值 —— 见 slotBlur 的说明。
+      launch {
+        delay((SLOT_SPIN_MS * 0.26f).toLong())
+        slotBlur = SLOT_BLUR.value
+      }
+      launch {
+        delay((SLOT_SPIN_MS * 0.80f).toLong())
+        slotBlur = 0f
+      }
+      // 棘爪回弹（v214）：滚动曲线的终点不是落点，而是落点**再加** SLOT_OVERSHOOT ——
+      // 先带着惯性冲过齿位一点点，再单独用一段短促的回拉把它顶回 last。
+      // ⚠️ 不能做成「滚到 last 停住 → 从静止重新加速冲 0.32 格 → 再退回来」：
+      //    从静止起步那一下会让整段读成「犹豫着找位置」，惯性就断了。
+      //    所以过冲必须**裹在同一段减速曲线里**（终点挪到 notch），回拉才是独立的一段。
+      // ⚠️ 过冲段占用的那点空间靠卡带末尾的 SLOT_TAIL 张陪跑卡兜住（见 buildSlotStrip）。
+      val notch = last + SLOT_OVERSHOOT
+      reel.animateTo(notch, slotSpinSpec(notch))
+      slotBlur = 0f
+      // 回拉 0.32 格（≈40dp）走 SLOT_SETTLE_MS：这一下要「咔」，所以用
+      // LinearOutSlowInEasing（起手全速）而不是 FastOutSlowIn（先缓后急）。
+      reel.animateTo(last, tween(SLOT_SETTLE_MS, easing = LinearOutSlowInEasing))
+      // ── 停稳：三件事一起发生 ──
+      // 注意时序：这一整段都在**回拉结束之后**才触发 —— 观感上「咔」的那一声应该落在
+      // 卡片归位的那一刻，而不是刚冲过头的瞬间（那一下卡片还偏着，框就亮了会像错位）。
+      // 1. 中奖框的描边「咬合」（land 脉冲 0→1→0）+ 触感反馈；
+      // 2. 框内一道高光自左向右扫过（sweep 单程 0→1）—— 扫光是一次性的，
+      //    不能挂在 land 上，否则会「扫一半退回来」；
+      // 3. 一圈柔光从中奖卡背后散开（也由 sweep 驱动，是「叮」的那一下。
+      //    这里不再闪白整屏：上面炸开时已经闪过一次，连闪两次会显得廉价）。
+      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+      launch {
+        sweep.animateTo(1f, tween(SLOT_SWEEP_MS, easing = LinearOutSlowInEasing))
+      }
+      // 取景框「对焦」锁上：与脉冲并行，不等它 —— 等它的话框会晚 150ms 才出现，
+      // 那一下的空档正好是最该「啪」的时候
+      launch {
+        lock.animateTo(1f, tween(SLOT_LOCK_MS, easing = FastOutSlowInEasing))
+      }
+      land.animateTo(1f, tween(90, easing = LinearOutSlowInEasing))
+      // 回落只用 320ms（不是 520）：这条尾段的亮度本来就很淡，拖长只是把交接推后，
+      // 用户盯着一个「已经停稳」的框干等，比什么都难受
+      land.animateTo(0f, tween(320, easing = LinearEasing))
+      // 站住一小会儿让人看清停在哪一张，再交接
+      delay(SLOT_HOLD_MS)
+      // 交接：先把轮盘淡掉，再让结果卡翻正（两段**串行**）。
+      // 不能像原来那样 `flip.snapTo(1f)` —— 那一下结果卡是**瞬间出现**的，
+      // 观感上就是「轮盘被一张大卡砸掉」，白瞎了前面 3.6 秒的滚动。
+      // 也不并发：轮盘那张卡只有屏宽 30%、结果卡 88%，两张同时在场会看出尺寸跳变；
+      // 串起来就只是「轮盘退场 → 结果卡登场」，中间那点空档正好给翻牌一个起手。
+      reelFade.animateTo(1f, tween(SLOT_FADE_MS, easing = LinearEasing))
+      reelFinished = true
+      flip.animateTo(1f, tween(SLOT_FLIP_MS, easing = FastOutSlowInEasing))
+    } else if (count == 1) {
       flip.animateTo(1f, tween(REVEAL_MS, easing = FastOutSlowInEasing))
     } else {
       // 多抽用一条总时间轴，每张卡从自己的位移算局部进度（见 GachaMiniCard）——
@@ -546,6 +888,25 @@ internal fun EmbyGachaDrawDialog(
 
       // ── 3. 揭晓 ──
       if (cards.isNotEmpty() && (phase == GachaPhase.Burst || phase == GachaPhase.Card)) {
+        // 3.0 滚动卡带（只在「单抽 + 设置选了滚动揭晓」时）。画在结果卡**下面**：
+        // 停稳后结果卡淡入盖住它，不需要再判断谁在上层。
+        if (slotMode && !slotAbort && reelStrip.isNotEmpty() && !reelFinished) {
+          GachaSlotReel(
+            strip = reelStrip,
+            // ⚠️ 三个会动的量一律传 lambda，不传 `xxx.value`：
+            //   在调用处读 .value 等于在组合期订阅，轮盘每帧都要重组整条卡带
+            //   （16 张海报 + 16 个图片节点）；传 lambda 后只在绘制/图层阶段读，
+            //   快照系统只失效那一层。见 GachaSlotReel 的说明。
+            position = { reel.value },
+            blurDp = slotBlur,
+            accent = bestRarity.accent,
+            land = { land.value },
+            sweep = { sweep.value },
+            lock = { lock.value },
+            pulse = { idle.value },
+            fade = { reelFade.value },
+          )
+        }
         if (count == 1) {
           // 3a. 单抽：一张大卡，自 -82° 翻正
           val f = flip.value
@@ -946,7 +1307,14 @@ internal fun EmbyGachaDrawDialog(
             } else {
               "祈愿中…"
             }
-          GachaPhase.Burst, GachaPhase.Card -> if (count > 1) "本次抽到 $count 张" else "本次抽到"
+          GachaPhase.Burst, GachaPhase.Card ->
+            when {
+              // 滚动揭晓在 Burst 阶段还在转（轮盘是 Burst 一起开始的），
+              // 这时候写「本次抽到」是**提前宣布结果** —— 明明还没停
+              slotMode && !reelFinished -> "祈愿中…"
+              count > 1 -> "本次抽到 $count 张"
+              else -> "本次抽到"
+            }
         },
         color = GachaInk.TextSecondary,
         fontSize = 13.sp,
@@ -965,6 +1333,405 @@ internal fun EmbyGachaDrawDialog(
         Icon(Icons.Default.Close, contentDescription = "关闭", tint = GachaInk.TextSecondary)
       }
     }
+  }
+}
+
+/**
+ * 滚动揭晓的横向卡带。
+ *
+ * ## 会动的量一律传 lambda，在图层 / 绘制阶段读
+ * 轮盘每秒要跑好几张卡。位移若当普通 `Float` 参数传（在调用处读 `.value`），
+ * 等于在**组合期**订阅它 —— 每帧重组整条卡带（16 张卡 + 16 个图片节点）。
+ * 所以 [position] / [land] / [sweep] / [fade] 全部传 `() -> Float`，只在
+ * `graphicsLayer { }` 或 `Canvas` 的绘制块里读：快照系统只让那一层失效，
+ * 重组一次都不发生。与 [GachaMiniCard] 的 `progress: () -> Float` 同一口径。
+ *
+ * ## 视觉由后到前四层
+ * 1. **卡带**：一行等宽卡片，整体左移 `位置 × 步长`；
+ * 2. **两侧压暗**：从窗口边缘向外渐黑，把注意力收到中间那一格；
+ * 3. **准星**：一条竖直中线，只在**框外**上下各露 40dp（框内留一道 0.07 的痕把两截
+ *    连起来）。**不贯穿整屏** —— 亮线切到顶上那行字、再从海报脸上划过去，
+ *    读起来是划痕不是准星。
+ * 4. **取景框**：停稳时才出现，只画**四个角**（L 形括号），不画整圈。
+ *    整圈描边（尤其再套一层白内描边）像「选中态」，把海报压得很闷；
+ *    四角留出中间大片空隙，海报不被框住。锁定瞬间从 1.12 倍收拢到 1.0（对焦）。
+ *
+ * 停稳特效：[land] 脉冲只负责「亮一下」，[sweep] 单程负责扫光 + 一片中心柔光 ——
+ * 柔光用径向渐变，**不**再套一层矩形描边（双层矩形是上一版最丑的地方）。
+ */
+@Composable
+private fun GachaSlotReel(
+  strip: List<GachaCard>,
+  position: () -> Float,
+  blurDp: Float,
+  accent: Color,
+  /** 停稳脉冲 0→1→0，只用来「亮一下」 */
+  land: () -> Float,
+  /** 停稳后的单程扫光 0→1 */
+  sweep: () -> Float,
+  /** 取景框的锁定度 0→1（滚动时 0 = 没有框，停稳才出现且**不回退**） */
+  lock: () -> Float,
+  /**
+   * 常驻循环脉动 0→1（接 `rememberInfiniteTransition`，2.8 秒一圈）。
+   *
+   * 停稳之后画面若是死的，那几秒就很呆（用户原话）。这里用它驱动三样东西一起
+   * 缓慢起伏：取景框的缩放与亮度、中奖卡背后的柔光、准星上那颗滑动的扫描点。
+   */
+  pulse: () -> Float,
+  /** 0 = 还在轮盘；1 = 已完全交给结果卡（同时整体放大 10%，做出「推近」的纵深） */
+  fade: () -> Float,
+  modifier: Modifier = Modifier,
+) {
+  BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+    // 卡宽按可用宽度取 30%：手机竖屏约 3 张满屏、平板/横屏自动变大，
+    // 封顶 170dp 是为了平板上别把一张卡放大成「结果卡」而看不出在滚动。
+    val cardW = minOf(maxWidth * 0.30f, 170.dp)
+    val cardH = cardW * 1.5f
+    val gap = 12.dp
+    val step = cardW + gap
+    // 第 0 张正好落在正中：整条卡带的起点要往右推半个「可用宽 - 卡宽」
+    val startPx = with(LocalDensity.current) { ((maxWidth - cardW) / 2).toPx() }
+    val stepPx = with(LocalDensity.current) { step.toPx() }
+
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .graphicsLayer {
+          alpha = 1f - fade()
+          // 交接时整体推近：轮盘「退后」、结果卡「上前」，两件事一起做才有纵深。
+          // 只放大不动画位置 —— 位置一动，中奖卡就和结果卡对不上了。
+          val s = 1f + 0.10f * fade()
+          scaleX = s
+          scaleY = s
+        },
+    ) {
+      // ── 1. 卡带（会滚动的那一层）──
+      //
+      // ⚠️⚠️⚠️ 这里**绝对不能**写成「一条 Row + graphicsLayer 整体平移」。
+      //
+      // Row 的布局宽受父约束（屏宽 ~400dp）压制，它的绘制图层边界也只跟着一屏；
+      // 第 4 张之后的内容落在图层边界之外 —— 只要这条链上出现任何一次离屏渲染
+      // （`blur` / `alpha < 1` / `scale != 1`，我们三样都有），超出部分的绘制就整段
+      // 被丢掉。真机症状正是：**前三张滚得好好的，滚到后面卡带没了，然后在中央
+      // 一块空白处锁定了一张卡**。（`requiredWidth` 试过，不保险。）
+      //
+      // 现在改成**逐张卡平移自己的节点**：每个节点的 bounds 就是卡片本身，
+      // 永远不存在「内容溢出自身边界」，父级怎么离屏渲染都不会少一张。
+      // 用 lambda 版 `offset { }`：只在布局的放置阶段读 [position]，不触发重组。
+      //
+      // blur 仍然挂在**屏宽**的这层 Box 上（纹理刚好一屏）；卡片在屏内时正常渲染。
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .clipToBounds()
+          .blur(blurDp.dp),
+      ) {
+        strip.forEachIndexed { index, card ->
+          // 卡位必须**先有实体、再等封面**：`EmbyImage` 没图时只铺一层
+          // `surfaceVariant`（暗色主题下几乎与黑底同色），在轮盘上看起来就是
+          // 「虚空里一个位置」。这里给它一块卡底 + 一层画在**最上面**的描边。
+          val shape = RoundedCornerShape(16.dp)
+          Box(
+            modifier = Modifier
+              // CenterStart = 垂直居中、水平贴左；再用 offset 把这张卡放到它的格位上。
+              // 第 0 张居中 ⇒ 起点往右推半个「可用宽 - 卡宽」。
+              .align(Alignment.CenterStart)
+              .offset {
+                IntOffset(
+                  x = (startPx + index * stepPx - position() * stepPx).roundToInt(),
+                  y = 0,
+                )
+              }
+              .size(width = cardW, height = cardH)
+              .clip(shape)
+              .background(GachaInk.Card),
+          ) {
+              EmbyImage(
+                url = card.posterUrl,
+                contentDescription = null,
+                fallbackUrl = card.backdropUrl,
+                maxWidth = SLOT_POSTER_WIDTH,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+              )
+              // ⚠️ 描边单独叠一层：`EmbyImage` 内部会把 `surfaceVariant` 底铺在
+              // 传入 modifier 的**后面**（draw 链上更靠内），直接给它 `.border()`
+              // 会被那层底色盖掉
+              Box(
+                modifier = Modifier
+                  .fillMaxSize()
+                  .border(1.dp, Color.White.copy(alpha = 0.16f), shape),
+              )
+            }
+          }
+        }
+
+      // 覆盖层：两侧压暗 + 准星 + 取景框 + 停稳特效
+      Canvas(modifier = Modifier.fillMaxSize()) {
+        // ⚠️ 动效量都在**绘制阶段**读（不是组合期），只失效这一层绘制
+        val landV = land()
+        val sweepV = sweep()
+        val lockV = lock()
+        // 常驻呼吸 0→1→0：停稳之后画面不能是死的（用户反馈「停住那几秒很呆滞」）。
+        // 用 `sin` 把循环进度掰成平滑的起伏，三处视觉共用同一个相位，节奏才统一。
+        val breathP = pulse()
+        val breathe = ((sin(breathP * 2.0 * PI).toFloat() + 1f) / 2f).coerceIn(0f, 1f)
+
+        val winW = cardW.toPx()
+        val winH = cardH.toPx()
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val cardL = cx - winW / 2f
+        val cardT = cy - winH / 2f
+        val cardR = cx + winW / 2f
+        val cardB = cy + winH / 2f
+        val vault = GachaInk.Vault
+
+        // ── 两侧由外向内«化开»：外侧几乎全黑，到窗口边缘刚好透明 ──
+        val dimL = cardL - 6.dp.toPx()
+        val dimR = cardR + 6.dp.toPx()
+        drawRect(
+          brush = Brush.horizontalGradient(
+            colors = listOf(vault.copy(alpha = 0.97f), Color.Transparent),
+            startX = 0f,
+            endX = dimL,
+          ),
+          topLeft = Offset(0f, 0f),
+          size = Size(dimL.coerceAtLeast(0f), size.height),
+        )
+        drawRect(
+          brush = Brush.horizontalGradient(
+            colors = listOf(Color.Transparent, vault.copy(alpha = 0.97f)),
+            startX = dimR,
+            endX = size.width,
+          ),
+          topLeft = Offset(dimR, 0f),
+          size = Size((size.width - dimR).coerceAtLeast(0f), size.height),
+        )
+
+        // ── 准星：一条竖直中线，在框外上下各露一段 ──
+        // 只画框外两段 + 框内一道几乎看不见的痕：贯穿整屏的亮线会切到顶上
+        // 那行「本次抽到」和关闭键，还会从海报脸上划过去，读起来像划痕而不是准星。
+        val tickLen = 40.dp.toPx()
+        val tickGap = 5.dp.toPx()
+        val tickW = 1.2.dp.toPx()
+        val tickCol = accent.copy(alpha = 0.45f + 0.40f * landV)
+        // 上段：越靠框越亮（顶端化开）
+        drawLine(
+          brush = Brush.verticalGradient(
+            colors = listOf(Color.Transparent, tickCol),
+            startY = cardT - tickGap - tickLen,
+            endY = cardT - tickGap,
+          ),
+          start = Offset(cx, cardT - tickGap - tickLen),
+          end = Offset(cx, cardT - tickGap),
+          strokeWidth = tickW,
+          cap = StrokeCap.Round,
+        )
+        // 下段：从框沿往下渐隐
+        drawLine(
+          brush = Brush.verticalGradient(
+            colors = listOf(tickCol, Color.Transparent),
+            startY = cardB + tickGap,
+            endY = cardB + tickGap + tickLen,
+          ),
+          start = Offset(cx, cardB + tickGap),
+          end = Offset(cx, cardB + tickGap + tickLen),
+          strokeWidth = tickW,
+          cap = StrokeCap.Round,
+        )
+        // 框内那一道：0.07 的 alpha 只为了让上下两段「读成一条线」，
+        // 真按 0.2 以上画就会糊在封面脸上
+        drawLine(
+          color = accent.copy(alpha = 0.07f),
+          start = Offset(cx, cardT),
+          end = Offset(cx, cardB),
+          strokeWidth = 1.dp.toPx(),
+        )
+
+        // ── 取景框：只画四个角，不画整圈 ──
+        // 整圈描边（尤其再套一层白色内描边）像「选中态 / UI 轮廓」，压得海报很闷；
+        // 四角括号留出中间大片空隙，是取景器的语言，海报不被框住。
+        // 滚动时 lock=0 ⇒ 框不出现，画面上只有准星 + 卡片飞过；停稳瞬间才「对焦」锁上。
+        if (lockV > 0.01f) {
+          val pad = 6.dp.toPx() + 4.dp.toPx() * landV
+          // 锁定：从 1.12 倍收拢到 1.0（对焦那一下）；锁上之后继续跟着呼吸微微张缩，
+          // 让「停住」不是定格 —— ±1.4% 刚好能看出来，多了会像在抖
+          val lockScale = (1.12f - 0.12f * lockV) * (1f + 0.014f * breathe * lockV)
+          val halfW = (winW / 2f + pad) * lockScale
+          val halfH = (winH / 2f + pad) * lockScale
+          val l = cx - halfW
+          val t = cy - halfH
+          val r = cx + halfW
+          val b = cy + halfH
+          val arm = minOf(halfW * 0.40f, 24.dp.toPx())
+          // 呼吸也走亮度：0.82~1.0 之间，跟缩放同相位
+          val frameAlpha = (0.55f + 0.45f * landV) * lockV * (0.82f + 0.18f * breathe)
+
+          val frame = Path().apply {
+            moveTo(l, t + arm); lineTo(l, t); lineTo(l + arm, t)
+            moveTo(r - arm, t); lineTo(r, t); lineTo(r, t + arm)
+            moveTo(r, b - arm); lineTo(r, b); lineTo(r - arm, b)
+            moveTo(l + arm, b); lineTo(l, b); lineTo(l, b - arm)
+          }
+          // 先画一层发光的「影子」（同形状、粗、低 alpha），深色底上单根线太干
+          drawPath(
+            path = frame,
+            color = accent.copy(alpha = 0.16f * frameAlpha),
+            style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+          )
+          drawPath(
+            path = frame,
+            color = accent.copy(alpha = frameAlpha),
+            style = Stroke(
+              width = 2.dp.toPx() + 1.dp.toPx() * landV,
+              cap = StrokeCap.Round,
+              join = StrokeJoin.Round,
+            ),
+          )
+
+          // ── 锁定后的常驻动效 ──
+          // a) 中奖卡背后一片缓慢明暗的柔光（与结果卡的呼吸光晕同语言）
+          drawCircle(
+            brush = Brush.radialGradient(
+              colors = listOf(
+                accent.copy(alpha = 0.13f * lockV * (0.45f + 0.55f * breathe)),
+                Color.Transparent,
+              ),
+              center = Offset(cx, cy),
+              radius = winW * 1.05f,
+            ),
+            radius = winW * 1.05f,
+            center = Offset(cx, cy),
+          )
+          // b) 准星上的扫描点：沿竖直中线匀速滑过（含框外两段），
+          //    像读取光一样把「还活着」说清楚 —— 这条最能把呆滞感打掉
+          val spanTop = cardT - tickGap - tickLen
+          val spanBottom = cardB + tickGap + tickLen
+          val dotY = spanTop + (spanBottom - spanTop) * breathP
+          // 首尾各淡入淡出 1/6 行程：不然循环回到顶端时会「跳」一下，比不动更扎眼
+          val edgeFade = ((breathP * 6f).coerceAtMost(1f) * ((1f - breathP) * 6f).coerceAtMost(1f))
+          val dotA = 0.85f * lockV * edgeFade
+          drawCircle(
+            brush = Brush.radialGradient(
+              colors = listOf(accent.copy(alpha = 0.30f * dotA), Color.Transparent),
+              center = Offset(cx, dotY),
+              radius = 13.dp.toPx(),
+            ),
+            radius = 13.dp.toPx(),
+            center = Offset(cx, dotY),
+          )
+          drawCircle(
+            color = accent.copy(alpha = dotA),
+            radius = 2.dp.toPx(),
+            center = Offset(cx, dotY),
+          )
+        }
+
+        // ── 停稳特效：中心柔光 + 框内斜向高光扫过 ──
+        if (sweepV > 0f && sweepV < 1f) {
+          val fade = 1f - sweepV
+          // 一片从中奖卡背后散开的柔光，不做「再套一个矩形」的外扩描边 ——
+          // 那种双层矩形正是上一版最难看的地方
+          drawCircle(
+            brush = Brush.radialGradient(
+              colors = listOf(accent.copy(alpha = 0.22f * fade), Color.Transparent),
+              center = Offset(cx, cy),
+              radius = winW * 0.95f,
+            ),
+            radius = winW * 0.95f,
+            center = Offset(cx, cy),
+          )
+          // 卡片上自左向右扫过的一道斜向高光（单程，不回头 —— 见 sweep 的说明）
+          clipRect(cardL, cardT, cardR, cardB) {
+            val band = winW * 0.62f
+            val x = cardL - band + (winW + band * 2f) * sweepV
+            drawRect(
+              brush = Brush.linearGradient(
+                colors = listOf(
+                  Color.Transparent,
+                  Color.White.copy(alpha = 0.40f * fade),
+                  Color.Transparent,
+                ),
+                start = Offset(x - band / 2f, cardT),
+                end = Offset(x + band / 2f, cardB),
+              ),
+              topLeft = Offset(cardL, cardT),
+              size = Size(winW, winH),
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 轮盘的速度曲线：**慢启动 → 匀速冲刺 → 长减速**，三段在交界处速度对齐。
+ *
+ * 为什么不是「一条 `FastOutSlowInEasing`」：那条曲线中段才最快，起步就明显在动，
+ * 看起来像「被推了一把」而不是一点点上劲的那种。这里按速度分段：
+ *
+ * 设三段时长占比 t1 : t2 : t3 = 0.35 : 0.35 : 0.30，加速度段与减速段的距离
+ * 各为 `v·t/2`、匀速段为 `v·t`（v = 峰值速度），解得
+ * d1 : d2 : d3 = 0.259 : 0.519 : 0.222 —— 就在下面这三个点上。
+ * 交界处只要两段末速/初速相等，画面就不会「顿一下」。
+ */
+private fun slotSpinSpec(last: Float): KeyframesSpec<Float> = keyframes {
+  durationMillis = SLOT_SPIN_MS
+  0f at 0 using FastOutLinearInEasing
+  last * 0.259f at (SLOT_SPIN_MS * 35 / 100) using LinearEasing
+  last * 0.778f at (SLOT_SPIN_MS * 70 / 100) using LinearOutSlowInEasing
+  last at SLOT_SPIN_MS
+}
+
+/**
+ * 把「已验证有封面的陪跑卡」**循环**铺成一条卡带，并把中奖卡插在**随机格位**上。
+ *
+ * 返回 `(卡带, 中奖卡的下标)` —— 下标就是轮盘要停的位置，不再恒等于末位。
+ *
+ * ## 为什么中奖卡不能固定摆末位
+ * 固定末位时，每次都是「滑到尽头才停」，停稳后中奖卡右侧**一片空白**（后面没卡了）。
+ * 屏幕只看得见三格，右边空着就等于告诉用户「这是最后一张」—— 真机反馈就是
+ * 「他总是抽最后一张卡」。另外滚动距离每次一样，节奏也很机械。
+ *
+ * 现在：中奖卡落在 `[MIN_TRAVEL - jitter, MIN_TRAVEL]` 之间随机的一格，
+ * 后面再补 [SLOT_TAIL] 张陪跑卡 —— 停稳时左右都有卡，看上去就是「停在了中间」，
+ * 而且每抽一次的滚动距离也不一样。
+ *
+ * **为什么要循环铺长**：池子只有 4 张时若原样摆上，3.6 秒只走 4 格（≈1 格/秒）——
+ * 那不是「在转」，那是「在挪」。循环铺到十几格之后，转速只与格数有关。
+ * 相邻不会撞同一张：`pool.size >= SLOT_MIN_POOL = 4`，取模不会连出同款。
+ */
+private fun buildSlotStrip(
+  pool: List<GachaCard>,
+  drawn: GachaCard,
+  rollId: Int,
+): Pair<List<GachaCard>, Int> {
+  val cards = pool.take(SLOT_POOL_MAX)
+  if (cards.isEmpty()) return listOf(drawn) to 0
+  // 用 rollId 定种子：重抽时停的格位会变，同一次抽取内怎么重组都一样
+  val jitter = Random(rollId * 31 + 7).nextInt(SLOT_WIN_JITTER + 1)
+  val win = maxOf(SLOT_MIN_TRAVEL - jitter, cards.size)
+  val before = List(win) { cards[it % cards.size] }
+  // 中奖卡后面这几张要和前面连得上（接着 win 继续取模），否则会看出「接缝」
+  val after = List(SLOT_TAIL) { cards[(it + win) % cards.size] }
+  return (before + drawn + after) to win
+}
+
+/**
+ * 把所有陪跑卡的封面**先取进内存**，轮盘开转之后才不会一格一格往外蹦空框。
+ *
+ * 走的是全项目统一的 [EmbyImageLoader]：同一 URL 的并发请求会合并，
+ * 并发数由它内部的信号量压到 4 —— 这里不用自己限流。
+ * 单张失败只当那一张不可用（调用方用 `peek` 核对后把它剔出卡带）。
+ */
+private suspend fun preloadGachaPosters(urls: List<String>) {
+  if (urls.isEmpty()) return
+  coroutineScope {
+    urls.distinct()
+      .map { url -> async { runCatching { EmbyImageLoader.load(url, SLOT_POSTER_WIDTH) } } }
+      .awaitAll()
   }
 }
 

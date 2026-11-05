@@ -6,6 +6,7 @@ import app.marlboroadvance.mpvex.domain.emby.PersonMergeRule
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
 import app.marlboroadvance.mpvex.preferences.preference.getEnum
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyGachaStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarAlgorithm
 
 /**
@@ -61,6 +62,17 @@ class BrowserPreferences(
    *    越界的值会让抽卡界面按 0 张或 30 张去取数。
    */
   val embyGachaDrawCount = preferenceStore.getInt("emby_gacha_draw_count", 1)
+
+  /**
+   * 单抽揭晓的动画形态：经典翻牌 / 滚动揭晓。
+   *
+   * ⚠️ **只有单抽会用到它**：多抽永远走经典翻牌（见 [EmbyGachaStyle] 的说明），
+   * 所以设置项上只写「仅单抽生效」，不按当前抽卡数量去禁用 —— 用户完全可能
+   * 先挑好动画、再去把数量改成 1，禁用会让人以为这个选项坏了。
+   *
+   * ⚠️ 存的是枚举 `name`，发布后不可改名。
+   */
+  val embyGachaStyle = preferenceStore.getEnum("emby_gacha_style", EmbyGachaStyle.CLASSIC)
 
   // Video sorting preferences
   val videoSortType = preferenceStore.getEnum("video_sort_type", VideoSortType.Title)

@@ -133,6 +133,7 @@ import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefresh
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyFavoriteRandomIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyGachaDrawDialog
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyGachaStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.GachaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyProgressBar
@@ -1655,6 +1656,8 @@ data class EmbyLibraryScreen(
     // gachaRollId = 抽取次数，**动画重启只认它**：重抽有可能又抽回同一条，
     //               以 item.Id 为 key 的话那次动画不会重播，看起来像点了没反应
     val gachaDrawCountPref by browserPreferences.embyGachaDrawCount.collectAsState()
+    // 揭晓动画形态（经典翻牌 / 滚动揭晓）。只在单抽生效，见 EmbyGachaStyle 的说明。
+    val gachaStylePref by browserPreferences.embyGachaStyle.collectAsState()
     var gachaOpen by remember { mutableStateOf(false) }
     var gachaCards by remember { mutableStateOf<List<GachaCard>>(emptyList()) }
     var gachaRollId by remember { mutableIntStateOf(0) }
@@ -1665,6 +1668,14 @@ data class EmbyLibraryScreen(
     //    重抽（rollId 自增）成功后才把它顶掉，仍能按 ← → 来回看。
     var gachaPrevCards by remember { mutableStateOf<List<GachaCard>>(emptyList()) }
     var gachaPrevRollId by remember { mutableIntStateOf(0) }
+    /**
+     * 滚动卡带的陪跑卡（单抽 + 选了滚动揭晓时才有值）。
+     *
+     * 不是额外请求：这一抽本来就是按 20 条取的池子（[GACHA_POOL_SIZE]），
+     * 以前只用掉 1 条、剩下 19 条直接丢掉；现在把剩下的接过来铺轮盘。
+     * 只带 `posterUrl` 就够 —— 轮盘上的卡只有封面，没有标题和简介。
+     */
+    var gachaReelCards by remember { mutableStateOf<List<GachaCard>>(emptyList()) }
     // 「上一批」入口只在**抽完之后**才有意义：抽之前它是空的，点了只会弹个空法阵。
     // 判据用「有没有上一批」而不是「有没有抽过」，省一个状态。
     val gachaHasPrev = gachaPrevCards.isNotEmpty()
@@ -1732,6 +1743,23 @@ data class EmbyLibraryScreen(
               .show()
             gachaOpen = false
             return@launch
+          }
+          // ── 滚动卡带的陪跑卡 ──
+          // 只有「单抽 + 设置里选了轮盘」才需要。用刚取回来的池子直接铺，
+          // **不再打一次网络**：`distinct` 本来就有 20 条，被抽中的那条由弹窗
+          // 按 Id 剔掉后摆到轮盘最末位（见 slotStrip）。
+          // 其余情况一律清空 —— 留着 20 张卡的引用没有意义。
+          gachaReelCards = if (gachaStylePref == EmbyGachaStyle.SLOT && count == 1) {
+            distinct.take(GACHA_POOL_SIZE).map { item ->
+              GachaCard(
+                item = item,
+                title = viewModel.displayTitle(item),
+                posterUrl = viewModel.imageUrl(current, item, "Primary", GACHA_POSTER_WIDTH),
+                backdropUrl = viewModel.imageUrl(current, item, "Backdrop", 960),
+              )
+            }
+          } else {
+            emptyList()
           }
           var cards = picked.map { item ->
             GachaCard(
@@ -2915,6 +2943,13 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               }
             }
           },
+          // 揭晓动画形态：只有单抽会走横向卡带（多抽的乐趣在「一张张翻开」，
+          // 塞进一个轮盘既看不清也失去批量感），所以这里只管把偏好传下去，
+          // 「什么情况下用」由弹窗自己按 count 判。
+          style = gachaStylePref,
+          // 轮盘的陪跑卡：就是这一抽**没被选中**的那些池子条目。
+          // 空列表时弹窗会自动退回经典翻牌。
+          reelCards = gachaReelCards,
         )
       }
 

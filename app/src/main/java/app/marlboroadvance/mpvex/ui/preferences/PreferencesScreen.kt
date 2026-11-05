@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ViewQuilt
+import androidx.compose.material.icons.outlined.AutoAwesomeMotion
 import androidx.compose.material.icons.outlined.Audiotrack
 // ⚠️ material icons 的 `Icons.Outlined.X` 是**顶层扩展属性**，不是成员 ——
 // 每个用到的图标都必须单独 `import androidx.compose.material.icons.outlined.X`，
@@ -104,6 +105,7 @@ import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.PersonMergeScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.aggregate.EmbyAggregateLibraryManageScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarAlgorithm
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyGachaStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
 import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoSaver
 import app.marlboroadvance.mpvex.ui.browser.dialogs.FolderPickerDialog
@@ -1448,6 +1450,33 @@ object PreferencesScreen : Screen {
                   Text(
                     text = "当前 ${drawCount.coerceIn(1, 10)} 张 · 可选 1 / 3 / 5 / 10 张，" +
                       "默认 1 张，上限 10 张；多张时结果页点某一张看详情并播放",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+              PreferenceDivider()
+              val gachaStyle by browserPreferences.embyGachaStyle.collectAsState()
+              // 揭晓动画：只在**单抽**生效，这里如实写清楚，不按当前数量去禁用 ——
+              // 用户完全可能先挑动画再改数量，禁用会让人以为选项坏了。
+              ListPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.AutoAwesomeMotion,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = gachaStyle,
+                onValueChange = { browserPreferences.embyGachaStyle.set(it) },
+                values = EmbyGachaStyle.entries,
+                valueToText = { AnnotatedString(it.label) },
+                modifier = Modifier.settingsAnchor("抽卡动画"),
+                title = { Text(text = "抽卡动画", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = "当前「${gachaStyle.label}」 · 仅单抽（1 张）生效；" +
+                      "滚动揭晓是卡片自右向左滚动、先加速后减速停在中奖卡上；" +
+                      "多抽仍走经典翻牌",
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },
