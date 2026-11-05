@@ -320,19 +320,20 @@ private const val SLOT_LOCK_MS = 150
  * 停稳时**冲过头**多少格（棘爪回弹）。
  *
  * 真实机械转盘停下的那一下不是「刚好卡在齿位上」，而是先冲过去一点、再被棘爪顶回来。
- * 0.32 格 ≈ 40dp：看得出「弹了一下」，又不会像滚轮在犹豫着找位置。
+ * 0.36 格 ≈ 45dp：冲出去的那一段要看得清（太小只是「抖了一下」，读不出惯性）。
+ * ⚠️ 距离和 [SLOT_SETTLE_MS] 要一起给：只加距离会重新变硬。两者的乘积感决定手感，
+ *    45dp/320ms ≈ 145dp/s，仍在「柔和滑回」的区间里。
  * ⚠️ 过冲段是靠卡带末尾的 [SLOT_TAIL] 张陪跑卡兜住的 —— tail 为 0 时过冲会露出空位。
  */
-private const val SLOT_OVERSHOOT = 0.32f
+private const val SLOT_OVERSHOOT = 0.36f
 
 /**
- * 回拉归位时长（冲过头的那 0.32 格退回落点）。
+ * 回拉归位时长（冲过头的那 0.36 格退回落点）。
  *
- * 180ms 是「被弹簧拽回去」的尺度：再慢就成「慢慢挪回去」，再快就看不清那一下。
- * 配合 `LinearOutSlowInEasing`（起手就是全速、尾巴才收），才是棘爪那种**顿挫**；
- * 用 FastOutSlowIn 会先缓后急，读起来像被一根橡皮筋吊着。
+ * ⚠️ 180ms 那版真机反馈是「超过之后瞬间弹回去」—— 太硬。现在给到 320ms。
+ * 与滚动**共用同一条 keyframes 曲线**（见 [slotSpinSpec]），所以没有「停住再起」的接缝。
  */
-private const val SLOT_SETTLE_MS = 180
+private const val SLOT_SETTLE_MS = 320
 
 /**
  * 停稳后、交给结果卡之前**站住**多久。
@@ -732,18 +733,13 @@ internal fun EmbyGachaDrawDialog(
         delay((SLOT_SPIN_MS * 0.80f).toLong())
         slotBlur = 0f
       }
-      // 棘爪回弹（v214）：滚动曲线的终点不是落点，而是落点**再加** SLOT_OVERSHOOT ——
-      // 先带着惯性冲过齿位一点点，再单独用一段短促的回拉把它顶回 last。
-      // ⚠️ 不能做成「滚到 last 停住 → 从静止重新加速冲 0.32 格 → 再退回来」：
-      //    从静止起步那一下会让整段读成「犹豫着找位置」，惯性就断了。
-      //    所以过冲必须**裹在同一段减速曲线里**（终点挪到 notch），回拉才是独立的一段。
+      // 棘爪回弹（v216）：滚动 + 过冲 + 归位**画在同一条 keyframes 里**（见 slotSpinSpec）——
+      // 先带着惯性冲过齿位 SLOT_OVERSHOOT，再柔和地滑回落点，中间没有「停住再起」的接缝。
+      // ⚠️ 别拆成两个 `animateTo`：那样两段之间会空一拍，真机读作「僵一下、然后瞬间弹回去」。
       // ⚠️ 过冲段占用的那点空间靠卡带末尾的 SLOT_TAIL 张陪跑卡兜住（见 buildSlotStrip）。
       val notch = last + SLOT_OVERSHOOT
-      reel.animateTo(notch, slotSpinSpec(notch))
+      reel.animateTo(last, slotSpinSpec(notch, last))
       slotBlur = 0f
-      // 回拉 0.32 格（≈40dp）走 SLOT_SETTLE_MS：这一下要「咔」，所以用
-      // LinearOutSlowInEasing（起手全速）而不是 FastOutSlowIn（先缓后急）。
-      reel.animateTo(last, tween(SLOT_SETTLE_MS, easing = LinearOutSlowInEasing))
       // ── 停稳：三件事一起发生 ──
       // 注意时序：这一整段都在**回拉结束之后**才触发 —— 观感上「咔」的那一声应该落在
       // 卡片归位的那一刻，而不是刚冲过头的瞬间（那一下卡片还偏着，框就亮了会像错位）。
@@ -1667,7 +1663,7 @@ private fun GachaSlotReel(
 }
 
 /**
- * 轮盘的速度曲线：**慢启动 → 匀速冲刺 → 长减速**，三段在交界处速度对齐。
+ * 轮盘的速度曲线：**慢启动 → 匀速冲刺 → 长减速 → 冲过齿位 → 柔和归位**，交界处速度对齐。
  *
  * 为什么不是「一条 `FastOutSlowInEasing`」：那条曲线中段才最快，起步就明显在动，
  * 看起来像「被推了一把」而不是一点点上劲的那种。这里按速度分段：
@@ -1676,13 +1672,22 @@ private fun GachaSlotReel(
  * 各为 `v·t/2`、匀速段为 `v·t`（v = 峰值速度），解得
  * d1 : d2 : d3 = 0.259 : 0.519 : 0.222 —— 就在下面这三个点上。
  * 交界处只要两段末速/初速相等，画面就不会「顿一下」。
+ *
+ * ## 棘爪回弹为什么也画在同一段 keyframes 里（v216）
+ * 做成「先 `animateTo(notch)` 停下、再 `animateTo(rest)` 拉回」时，两个 `animateTo`
+ * 之间会空出**一拍**（前一段收尾的那帧 dt=0、后一段重新计时起步）—— 真机手感就是
+ * 「过冲之后先僵一下、再瞬间弹回去」。合进同一条 keyframes 之后，减速段的尾巴直接
+ * 接到回拉段的起手，中间没有接缝，位移才是一条连续的线。
+ *
+ * 参数：`peak` = 冲过头的终点（落点 + [SLOT_OVERSHOOT]），`rest` = 真正的落点。
  */
-private fun slotSpinSpec(last: Float): KeyframesSpec<Float> = keyframes {
-  durationMillis = SLOT_SPIN_MS
+private fun slotSpinSpec(peak: Float, rest: Float): KeyframesSpec<Float> = keyframes {
+  durationMillis = SLOT_SPIN_MS + SLOT_SETTLE_MS
   0f at 0 using FastOutLinearInEasing
-  last * 0.259f at (SLOT_SPIN_MS * 35 / 100) using LinearEasing
-  last * 0.778f at (SLOT_SPIN_MS * 70 / 100) using LinearOutSlowInEasing
-  last at SLOT_SPIN_MS
+  peak * 0.259f at (SLOT_SPIN_MS * 35 / 100) using LinearEasing
+  peak * 0.778f at (SLOT_SPIN_MS * 70 / 100) using LinearOutSlowInEasing
+  peak at SLOT_SPIN_MS using LinearOutSlowInEasing
+  rest at (SLOT_SPIN_MS + SLOT_SETTLE_MS) using FastOutSlowInEasing
 }
 
 /**
