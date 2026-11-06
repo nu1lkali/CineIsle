@@ -324,6 +324,13 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
         screen = AppearancePreferencesScreen,
     ))
     add(SearchablePreference(
+        titleRes = R.string.pref_appearance_hide_nav_labels_title,
+        summaryRes = R.string.pref_appearance_hide_nav_labels_summary,
+        screenKeywords = listOf("导航", "底部导航", "标题", "只显示图标", "navigation", "bottom bar", "labels"),
+        category = "外观",
+        screen = AppearancePreferencesScreen,
+    ))
+    add(SearchablePreference(
         titleRes = R.string.pref_appearance_side_scrollbar_title,
         summaryRes = R.string.pref_appearance_side_scrollbar_summary_on,
         category = "外观",

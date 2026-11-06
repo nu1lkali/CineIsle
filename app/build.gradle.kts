@@ -2696,7 +2696,24 @@ android {
     //  · 迁移：`direct_output=true` → `HardwarePlus`（优先于 `try_hw_dec` 的判断）。
     //  · 顺带修正杜比视界 P5 与诊断 Toast 的文案口径（「关闭直出模式」→「不用零拷贝档」）。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 219
+    // ────────────────────────────────────────────────────────────────────────
+    // v220（1.6.14）默认解码器补两档「自动检测」＋ 外观可隐藏导航栏标题
+    //  · 解码器五档：自动检测（硬件解码优先）/ 自动检测（硬件解码+优先）/ 硬件解码 /
+    //    硬件解码+ / 软件解码。前两档由 `DecoderCapability` 探测设备硬件解码器决定落点 ——
+    //    没有硬解器的机器上 `mediacodec` + `vo=mediacodec_embed` 会**直接黑屏**，
+    //    所以零拷贝那档必须由探测兜住，不能像强制档那样无条件上。
+    //  · 探测走 `MediaCodecList(REGULAR_CODECS)` 数 `isHardwareAccelerated` 的视频解码器，
+    //    几十毫秒，App.onCreate 丢后台预热；未就绪时消费方按「有硬解」处理（＝旧版行为）。
+    //  · `DefaultDecoder` 的 `hwdec` / `directOutput` 两个常量收成 `resolve(capability)`，
+    //    由 `DecoderPreferences.resolvedDecoder()` 统一出口，避免多处各写一遍 when。
+    //  · 枚举 name 是持久化键：只新增 `AutoHardwarePlus`，Auto / Hardware / HardwarePlus /
+    //    Software 沿用旧名，老用户的选择不会失效。
+    //  · 设置页摘要按优先级说三件事：零拷贝的代价 ＞ 自动检测的结果（已检测到 N 个 /
+    //    未检测到）＞ 档位名。
+    //  · 外观设置新增「隐藏导航栏标题」：经典 NavigationBar 走 `label = null`，
+    //    Cine 的 Dock 不再展开选中项文字、Rail 只留图标并居中。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 220
     versionName = "1.6.14"
 
     vectorDrawables {

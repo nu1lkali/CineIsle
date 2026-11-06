@@ -3,7 +3,9 @@ package app.marlboroadvance.mpvex.preferences
 import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
 import app.marlboroadvance.mpvex.preferences.preference.getEnum
 import app.marlboroadvance.mpvex.ui.player.Debanding
+import app.marlboroadvance.mpvex.ui.player.DecoderCapability
 import app.marlboroadvance.mpvex.ui.player.DefaultDecoder
+import app.marlboroadvance.mpvex.ui.player.ResolvedDecoder
 
 class DecoderPreferences(
   preferenceStore: PreferenceStore,
@@ -18,8 +20,10 @@ class DecoderPreferences(
    * 历史上有过两个开关，都必须映射过来，否则老用户升级后行为会变：
    *  - `try_hw_dec`（最早只有它）：关掉的人诉求就是「别硬解」⇒ [DefaultDecoder.Software]。
    *  - `direct_output`（后来单独的「直出模式」开关）：打开的人要的是零拷贝
-   *    ⇒ [DefaultDecoder.HardwarePlus]。它的优先级高于 `try_hw_dec` ——
-   *    直出打开时 [defaultHwdec] 本来就整体覆盖解码档位，迁移后保持同一结果。
+   *    ⇒ [DefaultDecoder.HardwarePlus]。它的优先级高于 `try_hw_dec`。
+   *
+   * 迁移目标用的是**老名字**：`Auto` / `HardwarePlus` / `Software` 这几个枚举 name
+   * 从 v218 就写进了用户机器，改名等于让所有人的选择静默失效。
    *
    * 新键一旦写入，两个老键就再也不参与判断（老键也不用清理，留着无害）。
    */
@@ -114,17 +118,25 @@ class DecoderPreferences(
   val anime4kQuality = preferenceStore.getString("anime4k_quality", "FAST")
 
   /**
-   * 当前是否为零拷贝直出档位（`vo=mediacodec_embed`）。
+   * 把档位 + 设备能力合成为一次解析。
    *
-   * 由 [decoderMode] 派生，**不再是一个独立开关**：vo 与 hwdec 必须同源。
+   * **所有消费方都必须走这里**，不要在别处再写一遍 `when (decoderMode)`：
+   * 「自动检测」两档的结果取决于探测，散落成多份判断必然会有一处漏掉探测。
+   */
+  fun resolvedDecoder(): ResolvedDecoder = decoderMode.get().resolve(DecoderCapability.level.value)
+
+  /**
+   * 当前是否要求零拷贝直出（`vo=mediacodec_embed`）。
+   *
+   * 由 [resolvedDecoder] 派生，**不是一个独立开关**：vo 与 hwdec 必须同源。
    * 分成两个偏好时会出现「档位说要零拷贝、vo 还是 gpu」这种组合 ——
    * mpv 不会报错，只是静默退化成 copyback，用户以为开了零拷贝其实没开。
    */
-  fun isDirectOutput(): Boolean = decoderMode.get() == DefaultDecoder.HardwarePlus
+  fun isDirectOutput(): Boolean = resolvedDecoder().directOutput
 
   /**
    * `hwdec` 的基准值：初始化（`MPVView.initOptions`）与「P5 修正结束后恢复」
    * 必须共用这一份口径。谁在别处再手写一遍三态，将来改了一边就会串味。
    */
-  fun defaultHwdec(): String = decoderMode.get().hwdec
+  fun defaultHwdec(): String = resolvedDecoder().hwdec
 }

@@ -40,6 +40,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.preferences.AppearancePreferences
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.browser.folderlist.FolderListScreen
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.NetworkStreamingScreen
@@ -54,6 +56,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
+import org.koin.compose.koinInject
 
 @Serializable
 object MainScreen : Screen {
@@ -128,6 +131,11 @@ object MainScreen : Screen {
 
     val hideNavigationBar by _shouldHideNavigationBar.collectAsState()
 
+    // 设置 → 外观 →「隐藏导航栏标题」：只留图标。
+    // 标签为 null 时 Material3 会把图标挪到正中，导航条高度不变。
+    val appearancePreferences = koinInject<AppearancePreferences>()
+    val hideNavLabels by appearancePreferences.hideNavigationBarLabels.collectAsState()
+
     // Update persistent state whenever tab changes
     LaunchedEffect(selectedTab) {
       persistentSelectedTab = selectedTab
@@ -162,31 +170,31 @@ object MainScreen : Screen {
           ) {
             NavigationBarItem(
               icon = { Icon(Icons.Filled.Home, contentDescription = "首页") },
-              label = { Text("首页") },
+              label = if (hideNavLabels) null else ({ Text("首页") }),
               selected = selectedTab == 0,
               onClick = { selectedTab = 0 }
             )
             NavigationBarItem(
               icon = { Icon(Icons.Filled.Favorite, contentDescription = "收藏") },
-              label = { Text("收藏") },
+              label = if (hideNavLabels) null else ({ Text("收藏") }),
               selected = selectedTab == 1,
               onClick = { selectedTab = 1 }
             )
             NavigationBarItem(
               icon = { Icon(Icons.Filled.History, contentDescription = "历史") },
-              label = { Text("历史") },
+              label = if (hideNavLabels) null else ({ Text("历史") }),
               selected = selectedTab == 2,
               onClick = { selectedTab = 2 }
             )
             NavigationBarItem(
               icon = { Icon(Icons.Filled.Folder, contentDescription = "本地") },
-              label = { Text("本地") },
+              label = if (hideNavLabels) null else ({ Text("本地") }),
               selected = selectedTab == 3,
               onClick = { selectedTab = 3 }
             )
             NavigationBarItem(
               icon = { Icon(Icons.Filled.Language, contentDescription = "网络") },
-              label = { Text("网络") },
+              label = if (hideNavLabels) null else ({ Text("网络") }),
               selected = selectedTab == 4,
               onClick = { selectedTab = 4 }
             )

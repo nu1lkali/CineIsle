@@ -76,44 +76,51 @@ enum class Decoder(
  *
  * 跟播放中面板里那个 [Decoder]（`hwdec-current` 的实时读数 + 临时切换）是两件事：
  * 那个是「现在这一条片子正在用什么」，这个是「以后每条片子默认用什么」。
- * 这里只留四档 —— 面板里的 `auto` / `auto-copy` 是给排查用的，放进设置页只会让
- * 普通用户不知道该选哪个；四档之间是**能力递进**（回退 → 不回退 → 零拷贝 → 软解），
- * 每一档都有明确的适用场景。
+ *
+ * ## 五档的分工
+ *
+ * - **自动检测** 两档：先问设备有没有硬件视频解码器（[DecoderCapability]），
+ *   有就按题目里的偏好走硬解，没有就干净地落回软解。适合不想研究这些名词的人。
+ * - **硬件解码 / 硬件解码+ / 软件解码**：不问设备，用户说什么就是什么。
+ *   出问题时用来做对照实验 —— 这是排查「花屏是硬解的锅还是软解的锅」最快的办法。
+ *
+ * ⚠️ 枚举的 `name` 是**持久化键**（`getEnum` 存 name），发布后不可改名：
+ * `Auto` / `Hardware` / `HardwarePlus` / `Software` 都是 v218/v219 就写进用户机器里的值，
+ * 这里只新增 `AutoHardwarePlus`，其余三个沿用原名、只改文案。
  */
 enum class DefaultDecoder(
   @StringRes val titleRes: Int,
-  /**
-   * 真正写进 mpv `hwdec` 的值。
-   *
-   * `,no` 是**回退链**：前面那档用不了（编码不被 MediaCodec 支持、设备解码器拒绝这个规格）
-   * 就退到下一档；所以「硬解优先」必须带 `no` 兜底，否则遇到不支持的片子直接播不了。
-   */
-  val hwdec: String,
-  /**
-   * 是否要求**零拷贝直出**（`vo=mediacodec_embed`）。
-   *
-   * ⚠️ 这个标志和一档 `hwdec=mediacodec` 是**绑死的一件事**，不能拆成两个开关：
-   * mpv 的零拷贝档只在 `vo=mediacodec_embed` 下成立，vo 是 gpu / gpu-next 时会
-   * 静默跳过它、退到 `mediacodec-copy`。换句话说「选了零拷贝但没切 vo」等于没选，
-   * 而且没有任何报错 —— 之前它是个单独的「直出模式」开关，与这里的解码档位
-   * 各说各话（开关一开就把档位整体覆盖），同一个决定有两个入口，注定对不上。
-   */
-  val directOutput: Boolean = false,
 ) {
-  /** 硬解优先，用不了自动退软解。默认值，与旧版行为完全一致 */
-  Auto(R.string.pref_decoder_default_auto, "mediacodec-copy,no"),
+  /**
+   * 自动检测，**硬件解码（copyback）优先**。
+   *
+   * 设备有硬解器 ⇒ `mediacodec-copy,no`（编码不支持时由 mpv 的 `,no` 回退软解）；
+   * 没有硬解器 ⇒ 直接 `no`。默认档。
+   */
+  Auto(R.string.pref_decoder_default_auto),
 
   /**
-   * 只用硬解，**不回退**。
+   * 自动检测，**硬件解码+（零拷贝）优先**。
+   *
+   * 设备有硬解器才敢走 `mediacodec` + `vo=mediacodec_embed` —— 没有硬解器的机器上
+   * 这一组合会**直接黑屏**（vo 拿不到解码器的 surface 输出，也没有软解路径），
+   * 所以它必须由探测兜住，不能像 [HardwarePlus] 那样无条件上。
+   *
+   * 没有硬解器时退回软解，vo 也随之回到 gpu-next（字幕 / 着色器恢复正常）。
+   */
+  AutoHardwarePlus(R.string.pref_decoder_default_auto_hwplus),
+
+  /**
+   * 硬件解码，**不回退**，仍然是 copyback。
    *
    * 给两类人：一是排查「这条片子到底是硬解在花屏、还是软解太慢」；
    * 二是某些机型上软解路径本身有问题（比如 10bit 软解发灰），宁可播不了也不想要软解。
    * 代价要说清楚：编码不支持时是**直接不出画面**，不是变慢。
    */
-  Hardware(R.string.pref_decoder_default_hw, "mediacodec-copy"),
+  Hardware(R.string.pref_decoder_default_hw),
 
   /**
-   * 零拷贝硬解（HW+）：`hwdec=mediacodec` + `vo=mediacodec_embed`。
+   * 硬件解码+（零拷贝）：`hwdec=mediacodec` + `vo=mediacodec_embed`。
    *
    * 与 [Hardware] 的差别只在**搬运**：copyback 档是解码器把整帧回拷到 CPU 内存、
    * 再由 vo 重新上传成纹理（4K 一帧 12.4 MB，2160×3840@60 ≈ 1.5 GB/s），
@@ -124,10 +131,64 @@ enum class DefaultDecoder(
    * GLSL 着色器（Anime4K / 锐化）、截图。播放器界面本身是 Compose 独立图层，不受影响。
    * 所以它只能是一个**用户明确选择**的档位，不能做默认值。
    */
-  HardwarePlus(R.string.pref_decoder_default_hwplus, "mediacodec,no", directOutput = true),
+  HardwarePlus(R.string.pref_decoder_default_hwplus),
 
-  /** 只用软解。兼容性最好（解码器不再是变量），代价是功耗、发热与 4K 高帧率可能跟不上 */
-  Software(R.string.pref_decoder_default_sw, "no"),
+  /** 软件解码。兼容性最好（解码器不再是变量），代价是功耗、发热与 4K 高帧率可能跟不上 */
+  Software(R.string.pref_decoder_default_sw),
+  ;
+
+  /** 两档「自动检测」：设置页要据此把探测结果显示在摘要里。 */
+  val isAutoDetect: Boolean
+    get() = this == Auto || this == AutoHardwarePlus
+
+  /**
+   * 结合设备探测结果算出实际要写进 mpv 的值。
+   *
+   * ⚠️ 千万不要把 [DecoderCapability.Level.Unknown] 当成「没有硬解」：
+   * [DecoderCapability.Level.Unknown] 表示「还没探测完」，此处按有硬解处理
+   * （＝旧版固定行为），探测完成后再由调用方自然拿到真值。
+   */
+  fun resolve(capability: DecoderCapability.Level): ResolvedDecoder {
+    val hasHardware = capability != DecoderCapability.Level.None
+    return when (this) {
+      Auto -> if (hasHardware) COPYBACK_WITH_FALLBACK else SOFTWARE_ONLY
+      AutoHardwarePlus -> if (hasHardware) ZERO_COPY_WITH_FALLBACK else SOFTWARE_ONLY
+      Hardware -> COPYBACK_ONLY
+      HardwarePlus -> ZERO_COPY_WITH_FALLBACK
+      Software -> SOFTWARE_ONLY
+    }
+  }
+
+  companion object {
+    /**
+     * `,no` 是**回退链**：前面那档用不了（编码不被 MediaCodec 支持、设备解码器拒绝
+     * 这个规格）就退到下一档；「优先」型档位必须带 `no` 兜底，否则遇到不支持的片子
+     * 直接播不了。
+     */
+    val COPYBACK_WITH_FALLBACK = ResolvedDecoder("mediacodec-copy,no", directOutput = false)
+
+    val ZERO_COPY_WITH_FALLBACK = ResolvedDecoder("mediacodec,no", directOutput = true)
+
+    /** 不回退：编码不支持时是直接不出画面，不是变慢。 */
+    val COPYBACK_ONLY = ResolvedDecoder("mediacodec-copy", directOutput = false)
+
+    val SOFTWARE_ONLY = ResolvedDecoder("no", directOutput = false)
+  }
+}
+
+/**
+ * 一次解码档位解析的结果。
+ *
+ * [directOutput] 与 `hwdec` **必须成对出现**：mpv 的零拷贝档只在
+ * `vo=mediacodec_embed` 下成立，vo 是 gpu / gpu-next 时会静默跳过它、退到
+ * `mediacodec-copy`（不报错）。所以这两件事不能拆成两个独立设置。
+ */
+data class ResolvedDecoder(
+  val hwdec: String,
+  val directOutput: Boolean,
+) {
+  /** 实际落在纯软解路径上（`vf` 这类只对软解有意义的开关用它做闸门）。 */
+  val isSoftware: Boolean get() = hwdec == "no"
 }
 
 enum class Debanding(

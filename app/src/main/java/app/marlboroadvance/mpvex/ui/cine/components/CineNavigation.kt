@@ -87,6 +87,8 @@ enum class CineTab(
  *
  * @param hidden 下滚时收起（设计稿 05）。**只平移不缩小**：缩放会让胶囊里的
  *   文字重新排版，收起来的一瞬间能看到字在跳。
+ * @param showLabels 设置 → 外观 →「隐藏导航栏标题」。false 时选中项也不再展开文字，
+ *   胶囊只剩五个图标（宽度由 SpaceEvenly 平均分，不会塌）。
  */
 @Composable
 fun CineDock(
@@ -94,6 +96,7 @@ fun CineDock(
   onSelect: (CineTab) -> Unit,
   hidden: Boolean,
   modifier: Modifier = Modifier,
+  showLabels: Boolean = true,
 ) {
   val space = CineTheme.space
   val capsule = remember { RoundedCornerShape(32.dp) }
@@ -129,6 +132,7 @@ fun CineDock(
         DockItem(
           tab = tab,
           selected = tab == selected,
+          showLabel = showLabels,
           onClick = { onSelect(tab) },
         )
       }
@@ -140,6 +144,7 @@ fun CineDock(
 private fun DockItem(
   tab: CineTab,
   selected: Boolean,
+  showLabel: Boolean,
   onClick: () -> Unit,
 ) {
   val colors = CineTheme.colors
@@ -161,9 +166,10 @@ private fun DockItem(
       tint = if (selected) colors.onChipSelected else colors.onSurfaceVariant,
       modifier = Modifier.size(20.dp),
     )
-    // 文字只在选中时出现：Dock 上五个都带字会挤成一条导航条，失去「浮起」的轻量感
+    // 文字只在选中时出现：Dock 上五个都带字会挤成一条导航条，失去「浮起」的轻量感。
+    // 开关关掉后选中项也不展开 —— 那正是「只留图标」这个选项要的效果。
     AnimatedVisibility(
-      visible = selected,
+      visible = selected && showLabel,
       enter = expandHorizontally(animationSpec = tween(160)) + fadeIn(tween(120)),
       exit = shrinkHorizontally(animationSpec = tween(140)) + fadeOut(tween(90)),
     ) {
@@ -197,6 +203,7 @@ fun CineRail(
   selected: CineTab,
   onSelect: (CineTab) -> Unit,
   modifier: Modifier = Modifier,
+  showLabels: Boolean = true,
 ) {
   val colors = CineTheme.colors
   val space = CineTheme.space
@@ -226,6 +233,7 @@ fun CineRail(
       RailItem(
         tab = tab,
         selected = tab == selected,
+        showLabel = showLabels,
         onClick = { onSelect(tab) },
       )
     }
@@ -236,6 +244,7 @@ fun CineRail(
 private fun RailItem(
   tab: CineTab,
   selected: Boolean,
+  showLabel: Boolean,
   onClick: () -> Unit,
 ) {
   val colors = CineTheme.colors
@@ -252,7 +261,8 @@ private fun RailItem(
       .clickable(onClick = onClick)
       .padding(vertical = 9.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.spacedBy(5.dp),
+    // 藏掉文字后只剩图标：靠 Center 让它回到方块正中，而不是留在上方那半格
+    verticalArrangement = if (showLabel) Arrangement.spacedBy(5.dp) else Arrangement.Center,
   ) {
     Icon(
       imageVector = tab.icon,
@@ -260,12 +270,14 @@ private fun RailItem(
       tint = if (selected) colors.onChipSelected else colors.onSurfaceVariant,
       modifier = Modifier.size(22.dp),
     )
-    Text(
-      text = label,
-      style = type.badge.copy(fontSize = 10.sp),
-      color = if (selected) colors.onChipSelected else colors.onSurfaceVariant,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
+    if (showLabel) {
+      Text(
+        text = label,
+        style = type.badge.copy(fontSize = 10.sp),
+        color = if (selected) colors.onChipSelected else colors.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
   }
 }

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.Segment
+import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material.icons.outlined.TouchApp
@@ -191,6 +192,37 @@ object AppearancePreferencesScreen : Screen {
                                     end = MaterialTheme.spacing.medium,
                                     bottom = MaterialTheme.spacing.medium,
                                 ),
+                            )
+
+                            PreferenceDivider()
+
+                            // 只留图标的导航栏：图标本身够辨识，文字在窄屏上反而挤。
+                            // 两套界面都要认这个开关（Classic 的 NavigationBar / Cine 的 Dock 与 Rail）。
+                            val hideNavLabels by preferences.hideNavigationBarLabels.collectAsState()
+                            SwitchPreference(
+                                icon = {
+                                    Icon(
+                                        Icons.Outlined.Subtitles,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                },
+                                value = hideNavLabels,
+                                onValueChange = { preferences.hideNavigationBarLabels.set(it) },
+                                modifier = Modifier.settingsAnchor(R.string.pref_appearance_hide_nav_labels_title),
+                                title = {
+                                    Text(
+                                        stringResource(R.string.pref_appearance_hide_nav_labels_title),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                },
+                                summary = {
+                                    Text(
+                                        stringResource(R.string.pref_appearance_hide_nav_labels_summary),
+                                        color = MaterialTheme.colorScheme.outline,
+                                    )
+                                },
                             )
                         }
                     }

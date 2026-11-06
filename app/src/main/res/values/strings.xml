@@ -175,11 +175,15 @@
   <string name="pref_decoder_summary">Hardware decoding, pixel format, debanding</string>
   <string name="pref_decoder_profile_title">MPV Profile</string>
   <string name="pref_decoder_default_title">Default decoder</string>
-  <string name="pref_decoder_default_auto">Prefer hardware, fall back to software</string>
-  <string name="pref_decoder_default_hw">Hardware only (no fallback)</string>
-  <string name="pref_decoder_default_hwplus">Hardware+ (zero-copy)</string>
-  <string name="pref_decoder_default_hwplus_summary">Zero-copy hardware decoding: smoothest for 4K and high-frame-rate videos. Subtitles are not displayed in this mode, and video filters, shaders and screenshots are unavailable. Takes effect after reopening the player.</string>
-  <string name="pref_decoder_default_sw">Software only</string>
+  <string name="pref_decoder_default_auto">Auto-detect (prefer hardware)</string>
+  <string name="pref_decoder_default_auto_hwplus">Auto-detect (prefer hardware+)</string>
+  <string name="pref_decoder_default_hw">Hardware decoding</string>
+  <string name="pref_decoder_default_hwplus">Hardware decoding+</string>
+  <string name="pref_decoder_zero_copy_cost">Zero-copy hardware decoding: smoothest for 4K and high-frame-rate videos. Subtitles are not displayed in this mode, and video filters, shaders and screenshots are unavailable. Takes effect after reopening the player.</string>
+  <string name="pref_decoder_detect_hw_found">%1$d hardware video decoders detected</string>
+  <string name="pref_decoder_detect_none">No hardware decoder found — software decoding will be used</string>
+  <string name="pref_decoder_detect_pending">Detecting device capabilities…</string>
+  <string name="pref_decoder_default_sw">Software decoding</string>
   <string name="player_direct_output_failed">Zero-copy not active (copy this into your report)</string>
   <string name="player_direct_output_ok">Zero-copy active (copy this into your report)</string>
   <string name="pref_decoder_gpu_next_title">Use gpu-next</string>
@@ -188,8 +192,8 @@
   <string name="pref_decoder_hdr_summary">Switch the screen into the system HDR display mode while playing HDR video on HDR-capable devices; restores SDR for all other content. Turn off if HDR video looks too dark or washed out.</string>
   <string name="pref_decoder_hdr_no_device_support">This device does not report HDR display support, so enabling this has no effect</string>
   <string name="pref_decoder_dv_p5_title">Dolby Vision color correction</string>
-  <string name="pref_decoder_dv_p5_summary">Fixes the purple/green tint on Dolby Vision Profile 5 by decoding only those titles in software so gpu-next can apply the DV metadata. All other titles keep hardware decoding. Requires gpu-next and a decoder other than Hardware+ (zero-copy).</string>
-  <string name="pref_decoder_dv_p5_needs_gpu_next">Requires gpu-next and a decoder other than Hardware+</string>
+  <string name="pref_decoder_dv_p5_summary">Fixes the purple/green tint on Dolby Vision Profile 5 by decoding only those titles in software so gpu-next can apply the DV metadata. All other titles keep hardware decoding. Requires gpu-next and a decoder that is not zero-copy.</string>
+  <string name="pref_decoder_dv_p5_needs_gpu_next">Requires gpu-next and a non-zero-copy decoder</string>
   <string name="pref_decoder_gpu_next_enable_title">Enable gpu-next?</string>
   <string name="pref_decoder_gpu_next_warning">Enabling gpu-next may cause purple screen issues during playback on some devices.</string>
   <string name="pref_decoder_gpu_next_purple_screen_fix">If you experience purple screens, try to disable opengl-pbo in Advanced settings (mpv.conf):</string>
@@ -1091,6 +1095,8 @@
   <string name="pref_appearance_ui_style_classic">Classic</string>
   <string name="pref_appearance_ui_style_cine">Cine</string>
   <string name="pref_appearance_ui_style_summary">Cine adds an image-first home page with a hero banner. Favorites, history, local and network keep the classic layout for now; switch back at any time.</string>
+  <string name="pref_appearance_hide_nav_labels_title">Hide navigation labels</string>
+  <string name="pref_appearance_hide_nav_labels_summary">The bottom navigation shows icons only, without the Home / Favorites / History text. Applies to both interface styles.</string>
 
   <!-- Cine interface -->
   <string name="cine_nav_home">Home</string>

@@ -38,6 +38,16 @@ class AppearancePreferences(
 
   val amoledMode = preferenceStore.getBoolean("amoled_mode", false)
   val unlimitedNameLines = preferenceStore.getBoolean("unlimited_name_lines", false)
+
+  /**
+   * 隐藏底部导航的文字标题，只留图标（首页 / 收藏 / 历史 / 本地 / 网络）。
+   *
+   * 两套界面都要遵守：Classic 的 `NavigationBar` 走 `label = null`，
+   * Cine 的胶囊 Dock / 窄屏 Rail 只是不画那行文字。开关是「隐藏」而不是「显示」，
+   * 默认 false ⇒ 升级后界面一个像素都不变。
+   */
+  val hideNavigationBarLabels = preferenceStore.getBoolean("hide_nav_labels", false)
+
   val hidePlayerButtonsBackground = preferenceStore.getBoolean("hide_player_buttons_background", false)
   val showUnplayedOldVideoLabel = preferenceStore.getBoolean("show_unplayed_old_video_label", true)
   val unplayedOldVideoDays = preferenceStore.getInt("unplayed_old_video_days", 7)

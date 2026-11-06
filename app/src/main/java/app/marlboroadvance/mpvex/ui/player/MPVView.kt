@@ -182,10 +182,12 @@ class MPVView(
     // 会插入一层 swscale —— 4K 每帧是把 12.4 MB 读一遍写一遍，60fps 就是 1.5 GB/s 的额外流量；
     // 而且任何 `vf` 都会让 `vd-lavc-dr`（direct rendering）失效，等于白丢一层优化。
     // 直出模式下更不能挂：mediacodec_embed 根本不经过滤镜链。
-    // 真要强制输出格式，把「默认解码器」也切到「仅软件解码」—— 那条路径上这个开关才按字面生效。
+    // 真要强制输出格式，把「默认解码器」也切到「软件解码」—— 那条路径上这个开关才按字面生效。
+    // 判据用**解析后**的结果而不是档位名：自动检测档在没有硬解器的设备上也会落进软解，
+    // 那种情况下这个开关同样该按字面生效。
     if (decoderPreferences.useYUV420P.get() &&
       !directOutput &&
-      decoderPreferences.decoderMode.get() == DefaultDecoder.Software
+      decoderPreferences.resolvedDecoder().isSoftware
     ) {
       MPVLib.setOptionString("vf", "format=yuv420p")
     }

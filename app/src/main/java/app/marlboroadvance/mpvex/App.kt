@@ -129,6 +129,14 @@ class App : Application() {
       }
     }
 
+    // 解码能力探测：设置里「自动检测」两档要据此决定走硬解还是软解。
+    // MediaCodecList 枚举全机编解码器是几十毫秒量级的活，**不能**等到
+    // MPVView.initOptions（主线程）再算，开机就丢到后台预热，播放器侧只读结果。
+    // 探测没跑完时消费方按「有硬解」处理（＝旧版固定行为），所以晚一点也不要紧。
+    applicationScope.launch {
+      app.marlboroadvance.mpvex.ui.player.DecoderCapability.probe(this@App)
+    }
+
     // 凭据加密升级：老版本把 Emby / SMB / FTP / WebDAV 的密码以明文存在库里，
     // 这里启动后一次性改成 Keystore AES-GCM 密文（幂等，已经是密文的会跳过）。
     // 放在后台线程、整体 runCatching —— 升级失败不影响任何功能，下次启动会再试。

@@ -16,6 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
+import app.marlboroadvance.mpvex.preferences.AppearancePreferences
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyDetailScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyDownloadScreen
@@ -39,6 +41,7 @@ import app.marlboroadvance.mpvex.ui.cine.local.CineLocalScreen
 import app.marlboroadvance.mpvex.ui.cine.network.CineNetworkScreen
 import app.marlboroadvance.mpvex.ui.preferences.PreferencesScreen
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import org.koin.compose.koinInject
 
 /**
  * Cine 界面的根容器。
@@ -67,6 +70,10 @@ fun CineRoot(modifier: Modifier = Modifier) {
   val space = CineTheme.space
   val wide = rememberCineWide()
   val backStack = LocalBackStack.current
+
+  // 设置 → 外观 →「隐藏导航栏标题」：Dock 与 Rail 都只是不画那行字，图标与点击区域不变。
+  val appearancePreferences = koinInject<AppearancePreferences>()
+  val showNavLabels = !appearancePreferences.hideNavigationBarLabels.collectAsState().value
 
   // 0 = 首页（Cine），1..4 = 收藏 / 历史 / 本地 / 网络（Classic 实现）。
   // rememberSaveable：转屏、进程被回收后回来还停在原来那个 tab。
@@ -149,6 +156,7 @@ fun CineRoot(modifier: Modifier = Modifier) {
           CineRail(
             selected = selectedTab,
             onSelect = ::selectTab,
+            showLabels = showNavLabels,
             modifier = Modifier.fillMaxHeight(),
           )
           Box(
@@ -186,6 +194,7 @@ fun CineRoot(modifier: Modifier = Modifier) {
             selected = selectedTab,
             onSelect = ::selectTab,
             hidden = dockHidden,
+            showLabels = showNavLabels,
             modifier = Modifier.align(Alignment.BottomCenter),
           )
         }

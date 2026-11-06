@@ -176,11 +176,15 @@
   <string name="pref_decoder_summary">硬解、像素格式、去色带</string>
   <string name="pref_decoder_profile_title">MPV 配置档</string>
   <string name="pref_decoder_default_title">默认解码器</string>
-  <string name="pref_decoder_default_auto">硬解优先，不支持时自动回退软解</string>
-  <string name="pref_decoder_default_hw">仅硬件解码（不回退）</string>
-  <string name="pref_decoder_default_hwplus">硬件解码 +（零拷贝）</string>
-  <string name="pref_decoder_default_hwplus_summary">零拷贝硬解，省掉每帧的整帧回拷，4K、高帧率片源最流畅。此模式下不显示字幕，画质滤镜、着色器与截图均不可用；重新进入播放器后生效。</string>
-  <string name="pref_decoder_default_sw">仅软件解码</string>
+  <string name="pref_decoder_default_auto">自动检测（硬件解码优先）</string>
+  <string name="pref_decoder_default_auto_hwplus">自动检测（硬件解码+优先）</string>
+  <string name="pref_decoder_default_hw">硬件解码</string>
+  <string name="pref_decoder_default_hwplus">硬件解码+</string>
+  <string name="pref_decoder_zero_copy_cost">零拷贝硬解，省掉每帧的整帧回拷，4K、高帧率片源最流畅。此模式下不显示字幕，画质滤镜、着色器与截图均不可用；重新进入播放器后生效。</string>
+  <string name="pref_decoder_detect_hw_found">已检测到 %1$d 个硬件解码器</string>
+  <string name="pref_decoder_detect_none">未检测到硬件解码器，将使用软件解码</string>
+  <string name="pref_decoder_detect_pending">正在检测设备解码能力…</string>
+  <string name="pref_decoder_default_sw">软件解码</string>
   <string name="player_direct_output_failed">零拷贝直出未生效（复制到反馈里即可）</string>
   <string name="player_direct_output_ok">零拷贝直出已生效（复制到反馈里即可）</string>
   <string name="pref_decoder_gpu_next_title">使用 gpu-next</string>
@@ -189,8 +193,8 @@
   <string name="pref_decoder_hdr_summary">播放 HDR 片源时让屏幕切入系统 HDR 显示模式，其他片源恢复 SDR；若 HDR 画面偏暗或发灰可关闭。需设备支持 HDR。</string>
   <string name="pref_decoder_hdr_no_device_support">此设备未报告 HDR 显示能力，开启后不会生效</string>
   <string name="pref_decoder_dv_p5_title">杜比视界颜色修正</string>
-  <string name="pref_decoder_dv_p5_summary">修正杜比视界 Profile 5 的紫绿偏色：仅这一类片源自动改用软解，由 gpu-next 按 DV 元数据重塑色彩，其他片源继续硬解。需开启 gpu-next，且默认解码器不能选「硬件解码 +（零拷贝）」。</string>
-  <string name="pref_decoder_dv_p5_needs_gpu_next">需开启 gpu-next，且不用零拷贝档</string>
+  <string name="pref_decoder_dv_p5_summary">修正杜比视界 Profile 5 的紫绿偏色：仅这一类片源自动改用软解，由 gpu-next 按 DV 元数据重塑色彩，其他片源继续硬解。需开启 gpu-next，且默认解码器不能走零拷贝。</string>
+  <string name="pref_decoder_dv_p5_needs_gpu_next">需开启 gpu-next，且不用零拷贝</string>
   <string name="pref_decoder_gpu_next_enable_title">启用 gpu-next？</string>
   <string name="pref_decoder_gpu_next_warning">在部分设备上启用 gpu-next 可能导致播放时出现紫屏</string>
   <string name="pref_decoder_gpu_next_purple_screen_fix">若出现紫屏，请尝试在高级设置（mpv.conf）中关闭 opengl-pbo：</string>
@@ -1091,6 +1095,8 @@
   <string name="pref_appearance_ui_style_classic">经典</string>
   <string name="pref_appearance_ui_style_cine">Cine</string>
   <string name="pref_appearance_ui_style_summary">Cine 使用新的图像优先首页（大图 Hero + 分区横滑）；收藏、历史、本地、网络四个页面暂时沿用经典布局，可随时切回。</string>
+  <string name="pref_appearance_hide_nav_labels_title">隐藏导航栏标题</string>
+  <string name="pref_appearance_hide_nav_labels_summary">底部导航只显示图标，不显示「首页」「收藏」「历史」这些文字。两种界面风格都生效。</string>
 
   <!-- Cine 界面文案 -->
   <string name="cine_nav_home">首页</string>

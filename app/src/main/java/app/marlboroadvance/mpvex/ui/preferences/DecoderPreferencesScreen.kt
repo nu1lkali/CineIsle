@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Hd
 import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,6 +53,7 @@ import app.marlboroadvance.mpvex.preferences.DecoderPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.player.Debanding
+import app.marlboroadvance.mpvex.ui.player.DecoderCapability
 import app.marlboroadvance.mpvex.ui.player.DefaultDecoder
 import app.marlboroadvance.mpvex.ui.player.MPVProfile
 import app.marlboroadvance.mpvex.ui.player.PlaybackColorPolicy
@@ -141,15 +143,20 @@ object DecoderPreferencesScreen : Screen {
 
               PreferenceDivider()
 
-              // 默认解码器（v218）：把「要不要硬解」从布尔开关升级成四选一。
-              // 旧开关只有「硬解（copyback）／软解」两档，「只用硬解、不回退」这种
-              // 排查与救急场景没有入口 —— 而它恰恰是判断「花屏是硬解的锅还是软解的锅」
-              // 最直接的手段。v219 补上零拷贝档（HW+），并把原来的「直出模式」开关**收进来**：
+              // 默认解码器（v218 起）：把「要不要硬解」从布尔开关升级成选项列表。
+              // v219 补上零拷贝档（HW+），并把原来的「直出模式」开关**收进来**：
               // vo 与 hwdec 必须同源，分成两处必然出现「选了零拷贝、vo 还是 gpu」的组合，
               // 那种组合 mpv 不报错、只是静默退回 copyback。
+              // v220 再补两档「自动检测」：不认识这些名词的人不必做选择题，
+              // 由 DecoderCapability 探测设备有没有硬解器来决定落点。
               // 播放中面板里的那个「解码器」是实时读数，跟这里不是一件事。
               val decoderMode by preferences.decoderMode.collectAsState()
-              val directOutput = decoderMode == DefaultDecoder.HardwarePlus
+              val capability by DecoderCapability.level.collectAsState()
+              val hwDecoderCount by DecoderCapability.hardwareDecoderCount.collectAsState()
+              val resolved = decoderMode.resolve(capability)
+              // 零拷贝档的代价提示、以及杜比视界 P5 的可用性，都看**解析后**的结果：
+              // 「自动检测（硬件解码+优先）」在这台机器上也可能真的走零拷贝。
+              val directOutput = resolved.directOutput
               ListPreference(
                 icon = {
                   Icon(
@@ -165,16 +172,22 @@ object DecoderPreferencesScreen : Screen {
                 modifier = Modifier.settingsAnchor(R.string.pref_decoder_default_title),
                 title = { Text(stringResource(R.string.pref_decoder_default_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
-                  // 零拷贝档是四档里唯一会**丢功能**的（字幕 / 着色器 / 截图），
-                  // 只写在选项名里看不出来 ⇒ 选中时把代价直接摆在标题下方。
-                  Text(
-                    if (directOutput) {
-                      stringResource(R.string.pref_decoder_default_hwplus_summary)
-                    } else {
-                      stringResource(decoderMode.titleRes)
-                    },
-                    color = if (directOutput) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
-                  )
+                  // 摘要按优先级说三件事：零拷贝的代价（会丢功能）＞ 自动检测的结果 ＞ 档位名。
+                  // 前两者只写在选项名里都看不出来。
+                  val warn = MaterialTheme.colorScheme.error
+                  val muted = MaterialTheme.colorScheme.outline
+                  val (text, color) =
+                    when {
+                      directOutput -> stringResource(R.string.pref_decoder_zero_copy_cost) to warn
+                      decoderMode.isAutoDetect && capability == DecoderCapability.Level.None ->
+                        stringResource(R.string.pref_decoder_detect_none) to warn
+                      decoderMode.isAutoDetect && capability == DecoderCapability.Level.Hardware ->
+                        stringResource(R.string.pref_decoder_detect_hw_found, hwDecoderCount) to muted
+                      decoderMode.isAutoDetect ->
+                        stringResource(R.string.pref_decoder_detect_pending) to muted
+                      else -> stringResource(decoderMode.titleRes) to muted
+                    }
+                  Text(text, color = color)
                 },
               )
 

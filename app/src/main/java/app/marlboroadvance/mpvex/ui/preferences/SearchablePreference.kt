@@ -79,6 +79,13 @@ object SearchablePreferences {
                 category = "Appearance",
                 screen = AppearancePreferencesScreen,
             ))
+            add(SearchablePreference(
+                titleRes = R.string.pref_appearance_hide_nav_labels_title,
+                summaryRes = R.string.pref_appearance_hide_nav_labels_summary,
+                keywords = listOf("navigation", "bottom bar", "labels", "icons", "tabs", "hide"),
+                category = "Appearance",
+                screen = AppearancePreferencesScreen,
+            ))
 
             // Layout preferences
             add(SearchablePreference(
