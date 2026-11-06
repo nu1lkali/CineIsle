@@ -181,6 +181,26 @@ fun EmbyHomeScreen(
   val isLoading by viewModel.isLoading.collectAsState()
   val error by viewModel.error.collectAsState()
 
+  // 从播放器 / 详情页回到首页时重拉「继续观看」。
+  // 播放器是**另一个 Activity**，首页这层 Composable 在播放期间并不销毁 ⇒ `LaunchedEffect`
+  // 不会重跑；而播放进度是异步落到服务器的 ⇒ 不补这一下，退回来看到的还是进去之前那条
+  // 旧进度（「刚看完的片子还在原来的位置」）。延迟 800ms 与详情页同口径：等播放器退出时
+  // 那次 Stopped 先落库再拉。去抖在 ViewModel 侧（刚整页拉过就不再问）。
+  val homeLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+  val homeRefreshScope = rememberCoroutineScope()
+  androidx.compose.runtime.DisposableEffect(homeLifecycleOwner) {
+    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+      if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        homeRefreshScope.launch {
+          kotlinx.coroutines.delay(800)
+          viewModel.refreshResumeQuietly()
+        }
+      }
+    }
+    homeLifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { homeLifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
   // 顶栏「更多」菜单（直播电视 / 播放列表 / 猜你喜欢 / 合集）
   var moreMenuExpanded by remember { mutableStateOf(false) }
 

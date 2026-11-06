@@ -91,6 +91,38 @@ object EmbyPlaybackReporter {
   @Volatile
   var idProvider: (() -> String?)? = null
 
+  /**
+   * 由播放页提供的「当前位置」，单位 ticks；读不到返回 null。
+   *
+   * 为什么需要：本类默认读 `PlayerLib.getPropertyInt("time-pos")`，而
+   * `PlayerLib.canTouchNative = isMpv && coreReady` ⇒ **GSY 内核下恒读不到**。
+   * GSY 播放页用 `GSYVideoManager.instance().curPlayerManager.currentPosition` 喂进来。
+   *
+   * ⚠️ 一旦设了就以它的返回值为准（哪怕是 null），**不再回退**到 mpv 属性 ——
+   * 两边同时存在时回退会读到上一个内核的残留位置。
+   */
+  @Volatile
+  var positionProvider: (() -> Long?)? = null
+
+  /**
+   * 由播放页提供的「是否暂停」；读不到返回 null（按「未暂停」处理）。
+   *
+   * 同一个理由：mpv 的 `pause` 属性在 GSY 内核下读不到。
+   */
+  @Volatile
+  var pausedProvider: (() -> Boolean?)? = null
+
+  /**
+   * 当前这场播放的令牌。
+   *
+   * 一场播放一个（见 [EmbyPlaybackLifecycleObserver.token]）。存在的唯一原因：
+   * 切换内核时新旧两个播放页会**短暂共存**（GSY 的 `onCreate` 先于 mpv 的 `onDestroy`），
+   * 两个观察者都指向本单例。没有令牌的话，旧页面退场那次 [stop] 会拿**新页面**刚写进来的
+   * `currentItemId` / `playSessionId` 去发 Stopped —— 把刚开始的那一集结算掉。
+   */
+  @Volatile
+  private var sessionToken: Any? = null
+
   /** 与 [itemIds] **同序同长**的媒体源 Id（多版本条目预热时要用与播放一致的那个） */
   private var mediaSourceIds: List<String> = emptyList()
 
@@ -120,15 +152,57 @@ object EmbyPlaybackReporter {
   private var pendingWarm: Pair<String, String?>? = null
 
   /**
+   * 结算「上一场还没收尾的播放」。
+   *
+   * 只在切换内核时用到：GSY 的 `onCreate` 先于 mpv 的 `onDestroy`，两场会短暂共存。
+   * 不在这里结算的话，mpv 那场发出的 Stopped 会因为令牌不符被 [stop] 拒掉，
+   * 服务端上就一直挂着一条「正在播放」（网页端「正在播放」里那条不走）。
+   *
+   * ⚠️ 位置取 [lastReportedTicks]、**不取实时读数**：此刻新页面已经把 `positionProvider`
+   * 换成它自己的了，读出来是新片的 0 秒 —— 拿它给旧片发 Stopped 等于把旧片续播点清零。
+   * 一次都没成功上报过（ticks ≤ 0）就干脆不发，服务端本来也没有那条记录。
+   */
+  private fun settlePreviousSession() {
+    val itemId = currentItemId ?: return
+    val sid = serverId
+    val sessionId = playSessionId
+    val sourceId = mediaSourceIdOf(itemId)
+    val ticks = lastReportedTicks
+    currentItemId = null
+    playSessionId = ""
+    if (ticks <= 0L) return
+    scope.launch {
+      runCatching {
+        val repository = get<EmbyRepository>(EmbyRepository::class.java)
+        val server = repository.getServer(sid) ?: return@launch
+        repository.reportPlaybackStopped(
+          server = server,
+          itemId = itemId,
+          playSessionId = sessionId,
+          positionTicks = ticks,
+          mediaSourceId = sourceId,
+        )
+      }
+    }
+  }
+
+  /**
    * 播放页创建时调用：上报开始并启动轮询。
    *
+   * @param token 本场播放的令牌；同一个观察者的 [EmbyPlaybackLifecycleObserver.onDestroy]
+   *   会带同一个令牌回来，用来区分「这是不是我那一场」（见 [sessionToken]）。
    * @return true 表示这次播放来自 Emby，已接管上报
    */
-  fun start(intent: Intent?): Boolean {
+  fun start(intent: Intent?, token: Any? = null): Boolean {
     val ids = intent?.getStringArrayListExtra(EXTRA_ITEM_IDS)
     val sid = intent?.getLongExtra(EXTRA_SERVER_ID, -1L) ?: -1L
     if (ids.isNullOrEmpty() || sid <= 0) return false
 
+    // 上一场还没收尾（切内核时新旧两个播放页短暂共存）⇒ 先结算它，再认领这一场。
+    // 顺序不能反：settlePreviousSession 读的是「当前字段」，一旦下面开始覆盖就晚了。
+    if (sessionToken != null && sessionToken !== token) settlePreviousSession()
+    // 认领这一场：之后只有拿着同一令牌的 stop 才能收尾
+    sessionToken = token
     serverId = sid
     itemIds = ids
     currentItemId = ids.firstOrNull()
@@ -187,16 +261,25 @@ object EmbyPlaybackReporter {
     return true
   }
 
-  /** 播放页销毁时调用：上报停止并结束轮询 */
-  fun stop() {
+  /**
+   * 播放页销毁时调用：上报停止并结束轮询。
+   *
+   * @param token 本场播放的令牌。与当前会话不符时**直接返回** —— 那是「上一个内核的
+   *   播放页」在退场，它要结算的是它自己那一集，不能拿新页面刚写进来的字段去收尾。
+   */
+  fun stop(token: Any? = null) {
+    if (token != null && token !== sessionToken) return
+    sessionToken = null
     pollingJob?.cancel()
     pollingJob = null
     // 预热只是优化：用户已经离开播放页了，没必要再占着一条请求
     warmJob?.cancel()
     warmJob = null
     pendingWarm = null
-    // ⚠️ 先摘掉回调再往下走：这个 lambda 捕获着 Activity，不摘就是一条静态引用把它钉住
+    // ⚠️ 先摘掉回调再往下走：这些 lambda 捕获着 Activity，不摘就是静态引用把它钉住
     idProvider = null
+    positionProvider = null
+    pausedProvider = null
     EmbyPlayerActions.release()
 
     val itemId = currentItemId ?: return
@@ -312,7 +395,14 @@ object EmbyPlaybackReporter {
       // 等 mpv 加载完文件再读属性，避免读到空值
       delay(PROGRESS_INTERVAL_MS)
       while (isActive) {
-        reportProgressOnce()
+        // ⚠️ **整轮兜住**。这里是 IO 协程的根：`scope` 用的是 `SupervisorJob` 且没有
+        // CoroutineExceptionHandler ⇒ 任何一条漏兜的异常都会冒到线程的默认处理器，
+        // 也就是「未捕获异常 ⇒ 进程直接死」。而本类恰好在**换片瞬间**读播放器状态
+        // （mpv 正在销毁/重建 core、GSY 的 manager 刚 detach），正是最容易抛的时刻 ——
+        // 用户看到的就是「切下一集偶发闪退」。内部各步该兜的仍然各自兜，但兜漏一处
+        // 不该由用户买单。
+        runCatching { reportProgressOnce() }
+          .onFailure { EmbyLog.warn("进度上报异常（已忽略，下一轮继续）", it) }
         delay(PROGRESS_INTERVAL_MS)
       }
     }
@@ -342,15 +432,23 @@ object EmbyPlaybackReporter {
       val previousSessionId = playSessionId
       val previousSourceId = previousItemId?.let { mediaSourceIdOf(it) }
       currentItemId = playingItemId
+      // ⚠️ 会话必须**紧跟着作废**：这一轮只要在中途抛了（下面几行都是外部调用），
+      //    下一轮就会发现 `playingItemId == currentItemId` 而直接拿这个 sessionId 去发
+      //    新一集的 Progress —— 上一集的会话记新一集的位置，服务端上两集全乱。
+      playSessionId = ""
       // 换条目 ⇒ 上一场补发记录作废；新条目的 Start 马上就来
       sessionRepairFor = null
-      // 同步播放页 UI（收藏按钮等）到新的这一集
-      EmbyPlayerActions.onItemChanged(playingItemId)
+      // 同步播放页 UI（收藏按钮等）到新的这一集。
+      // 各自兜住：任何一处抛都不该让下面的 Start 不发（漏一条 Start，这一集就不进
+      // 「继续观看」了）。
+      runCatching { EmbyPlayerActions.onItemChanged(playingItemId) }
       // 「不喜欢」按钮同样要跟着切。走**内存快照**（一次 HashMap 查找，无 IO），
       // 所以连播时按钮状态与画面在同一帧完成，不会出现"先亮后暗"
-      app.marlboroadvance.mpvex.ui.player.DislikePlayerActions.bind(
-        app.marlboroadvance.mpvex.domain.dislike.DislikeKey(serverId, playingItemId),
-      )
+      runCatching {
+        app.marlboroadvance.mpvex.ui.player.DislikePlayerActions.bind(
+          app.marlboroadvance.mpvex.domain.dislike.DislikeKey(serverId, playingItemId),
+        )
+      }
 
       if (previousItemId != null) {
         runCatching {
@@ -451,17 +549,34 @@ object EmbyPlaybackReporter {
   /**
    * 当前播放位置（ticks）；**读不到返回 null**。
    *
+   * ① 播放页给了 [positionProvider] 就用它（GSY 内核走这条，见那里的注释）；
+   * ② 否则读 mpv 的 `time-pos`。
+   *
    * ⚠️ 读不到绝不能当成 0：`PlayerLib.getPropertyInt` 在内核还没就绪（`coreReady`
    * 未置位）、或当前内核不是 mpv 时返回 null。把这个 null 写成 0 发出去，等于告诉
    * 服务端「这部片从头开始播」—— 服务端于是把续播点清零，「继续观看」里那条记录
    * 就退回到第 0 秒。比「这一轮不报」有害得多，所以宁可跳过本轮。
    */
   private fun readPositionTicks(): Long? {
-    val seconds = PlayerLib.getPropertyInt("time-pos") ?: return null
+    // ⚠️ provider 存在就以它的返回值为准（哪怕是 null），不回退 —— 两边同时存在时
+    //    回退会读到上一个内核残留的位置。provider 抛异常同样按「读不到」处理。
+    positionProvider?.let { provider ->
+      return runCatching { provider() }
+        .onFailure { EmbyLog.warn("positionProvider 异常（已忽略）", it) }
+        .getOrNull()
+    }
+    val seconds = runCatching { PlayerLib.getPropertyInt("time-pos") }.getOrNull() ?: return null
     return EmbyTicks.secondsToTicks(seconds.toLong())
   }
 
-  private fun readIsPaused(): Boolean = PlayerLib.getPropertyBoolean("pause") == true
+  private fun readIsPaused(): Boolean {
+    pausedProvider?.let { provider ->
+      return runCatching { provider() }
+        .onFailure { EmbyLog.warn("pausedProvider 异常（已忽略）", it) }
+        .getOrNull() ?: false
+    }
+    return runCatching { PlayerLib.getPropertyBoolean("pause") }.getOrNull() == true
+  }
 
   /**
    * 当前正在播的 Emby 条目 Id。
@@ -478,8 +593,14 @@ object EmbyPlaybackReporter {
    * 踩过并修好了（见 `PlayerActivity.currentEmbyItemId()` 的 ② 号分支），本类 borrow 它。
    */
   private fun readCurrentItemId(): String? {
-    val resolved = idProvider?.invoke()?.takeIf { it.isNotBlank() }
-      ?: parseItemIdFromPath(PlayerLib.getPropertyString("path"))
+    // ⚠️ provider 是播放页的 lambda（里面读 `playlistIndex` 与 mpv 的 `path`）。
+    //    换片那一瞬间 mpv 正在重建 core，它抛异常是完全可能的 —— 兜住，退回路径反查。
+    //    这条兜底本身就是防「切下一集偶发闪退」的（异常冒到 IO 协程根会直接杀进程）。
+    val fromHost = idProvider
+      ?.let { provider -> runCatching { provider() }.getOrNull() }
+      ?.takeIf { it.isNotBlank() }
+    val resolved = fromHost
+      ?: runCatching { parseItemIdFromPath(PlayerLib.getPropertyString("path")) }.getOrNull()
     // 只认可本次播放列表里的 ID，避免 mpv 自动连播到无关文件时误报
     return resolved?.takeIf { itemIds.contains(it) }
   }
@@ -554,12 +675,21 @@ object EmbyPlaybackReporter {
   class EmbyPlaybackLifecycleObserver(
     private val intent: Intent?,
   ) : DefaultLifecycleObserver {
+    /**
+     * 本场播放的令牌。
+     *
+     * 每个播放页一个。切换内核时新旧页面会短暂共存（GSY 的 `onCreate` 先于 mpv 的
+     * `onDestroy`），两个观察者指向同一个单例 —— 旧页面必须能认出「我要收尾的那一场
+     * 已经不是当前这一场了」，否则会拿新页面刚写进去的条目去发 Stopped。
+     */
+    private val token = Any()
+
     override fun onCreate(owner: LifecycleOwner) {
-      start(intent)
+      start(intent, token)
     }
 
     override fun onDestroy(owner: LifecycleOwner) {
-      stop()
+      stop(token)
     }
   }
 }

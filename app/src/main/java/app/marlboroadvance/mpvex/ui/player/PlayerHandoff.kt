@@ -52,6 +52,14 @@ internal data class PlayerHandoff(
   val embyServerId: Long? = null,
   /** 与 [playlist] 下标一一对应的 Emby ItemId */
   val embyItemIds: List<String> = emptyList(),
+  /**
+   * 与 [embyItemIds] **同序同长**的媒体源 Id（多版本条目：4K / 1080P 各一条）。
+   *
+   * ⚠️ 不交过去的话，切内核之后上报的进度会被服务端记到**默认版本**上：
+   * `reportPlaybackProgress` 靠 `MediaSourceId` 认版本，缺了它服务端只能落到首版。
+   * 注意这张表是启动时那一份，判当前项仍要靠 `index`，两边同序即可。
+   */
+  val embyMediaSourceIds: List<String> = emptyList(),
   /** 网络流请求头，格式与 mpv 侧的 `headers` extra 相同 */
   val headers: Array<String>? = null,
   /**
@@ -115,6 +123,12 @@ internal data class PlayerHandoff(
     if (embyItemIds.isNotEmpty()) {
       putStringArrayListExtra(EmbyPlaybackReporter.EXTRA_ITEM_IDS, ArrayList(embyItemIds))
     }
+    if (embyMediaSourceIds.isNotEmpty()) {
+      putStringArrayListExtra(
+        EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID,
+        ArrayList(embyMediaSourceIds),
+      )
+    }
     headers?.let { putExtra(EXTRA_HEADERS, it) }
     brightness?.let { putExtra(EXTRA_BRIGHTNESS, it) }
   }
@@ -164,6 +178,8 @@ internal data class PlayerHandoff(
         embyServerId =
           intent.getLongExtra(EmbyPlaybackReporter.EXTRA_SERVER_ID, -1L).takeIf { it > 0 },
         embyItemIds = itemIds,
+        embyMediaSourceIds =
+          intent.getStringArrayListExtra(EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID) ?: emptyList(),
         headers = intent.getStringArrayExtra(EXTRA_HEADERS),
         // ⚠️ hasExtra 必须判：getFloatExtra 的默认值 0f 是**合法亮度**（全黑），
         //    拿它当「没有」会把用户切过内核之后整屏压黑。

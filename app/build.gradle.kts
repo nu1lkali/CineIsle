@@ -2772,7 +2772,42 @@ android {
     //  · GSY 内核仍然**完全没有**进度上报（`GsyPlayerActivity` 零个 `/Sessions/Playing*`，
     //    且 `PlayerLib` 的非 mpv 分支读不到 `time-pos`），本轮不动，单独排期。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 223
+    // ────────────────────────────────────────────────────────────────────────
+    // v224（1.6.14，功能轮不涨名）GSY 内核接入进度上报 + 首页续播 onResume 刷新
+    //  · GSY 内核此前**完全没有**上报：`GsyPlayerActivity` 里一个 `/Sessions/Playing*`
+    //    都没有，而且上报器默认读 `PlayerLib`（`canTouchNative = isMpv && coreReady`）
+    //    ⇒ 非 mpv 下 `time-pos` / `pause` 读到的是 null。
+    //  · 修法不是给 GSY 再写一套上报，而是把上报器缺的三个读数做成可注入的点：
+    //    `idProvider`（v223 已有）/ `positionProvider` / `pausedProvider`。
+    //    mpv 侧不设，行为不变；GSY 侧喂 `embyItemIds[currentIndex]`、
+    //    `curPlayerManager.currentPosition`、`!GSYVideoManager.isPlaying`。
+    //  · 位置读数**不能走 `currentPositionMs()`**：它把「manager 为 null」折成 0，
+    //    而上报器把 0 当成「真的在 0 秒」⇒ 起播那一瞬会把服务端续播点覆盖掉。
+    //  · 新增会话令牌（`EmbyPlaybackLifecycleObserver.token`）：切内核时 GSY 的
+    //    `onCreate` 先于 mpv 的 `onDestroy`，两个观察者指向同一单例 —— 没有令牌的话
+    //    旧页面退场会拿新页面刚写进去的条目发 Stopped。现在旧页面的 stop 被拒，
+    //    由新页面的 `start()` 先用 `settlePreviousSession()` 把上一场结算干净。
+    //  · `PlayerHandoff` 补搬 `emby_media_source_id`：切内核后进度仍记在原版本上。
+    //  · 首页「继续观看」加 ON_RESUME 刷新（延迟 800ms 与详情页同口径，等播放器退出时
+    //    那次 Stopped 落库）：播放器是另一个 Activity，首页 Composable 不销毁，
+    //    `LaunchedEffect` 不重跑 ⇒ 以前退回来看到的还是进去之前那条旧进度。
+    //    只重拉续播这一块（`refreshResumeQuietly`），不重发 /Views 与 /Items/Latest，
+    //    带 1.5 秒去抖，失败静默（不把整页标成加载失败）。
+    //  · 崩溃加固（用户报「切下一集偶发闪退，想复现又复现不了」）：
+    //    ① 上报轮询是 IO 协程的根（`SupervisorJob` + 无 `CoroutineExceptionHandler`）
+    //       ⇒ 漏兜一条异常就是进程直接死。整轮 `runCatching`，三个 provider 调用各自兜；
+    //       切集时 `playSessionId` 提前到 `onItemChanged` 之前作废，中途抛也不会拿
+    //       上一集的会话记新一集的位置。
+    //    ② 更关键：`idProvider` 改为**先取平行数组**，不再先读 mpv 的 `path`。轮询
+    //       恰好会在切集那一瞬从 IO 线程读 mpv 属性（core 正在重建），native 层在这种
+    //       时刻可能 SIGSEGV，而 native 崩溃**不走** UncaughtExceptionHandler（无崩溃页、
+    //       无 last_crash.txt、手机侧 logcat 也抓不到）—— 正是「偶发闪退、复现不了」。
+    //       `playlistItemIds` 加 `@Volatile` 保证 IO 线程能看见主线程刚写的新值。
+    //    ③ 切集诊断埋点：`PlayerDiagLog.log("switch", "load index=…")`，配合已有的
+    //       `end-file` / `file-loaded`，崩溃后看最后一条就知道停在「发 loadfile 之前 /
+    //       之后 / 首帧之前」哪一段（设置里开「详细日志」才落盘）。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 224
     versionName = "1.6.14"
 
     vectorDrawables {

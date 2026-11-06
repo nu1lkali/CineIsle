@@ -323,7 +323,12 @@ open class PlayerActivity :
    * 里面根本没有 `/Videos/{id}/stream` 可反查 —— 那时只能按下标取。
    * 与 `playlistTitles` / `playlistMediaSourceNames` 一样是**平行数组**，
    * 队列换位 / 删除时必须同步（见 `movePlaylistItem` / `removePlaylistItem`）。
+   *
+   * ⚠️ `@Volatile`：`EmbyPlaybackReporter` 的轮询协程在 **IO 线程**读它（见
+   * `onCreate` 里 `idProvider` 的注释），主线程切集后必须能立刻看见新值，
+   * 否则会拿上一集的 Id 去发进度。
    */
+  @Volatile
   private var playlistItemIds: List<String> = emptyList()
 
   /**
@@ -603,11 +608,20 @@ open class PlayerActivity :
       //    mpv 的 path 是网盘 CDN 的地址，里面没有 `/Videos/{id}/stream` 可反查，
       //    只靠路径会把它一直认成起播那一条 —— 连播时既不报上一集 Stopped、也不报
       //    新一集 Start，后面几集的进度全被写到第一条的 itemId 上。
-      //    这里把已经处理过「302 直链 / ISO 本地代理」两种情况的 [currentEmbyItemId]
-      //    借给它，不要在 EmbyPlaybackReporter 里再复制一份同样的兜底。
-      //    ⚠️ 必须在 addObserver 之前设：观察者的 onCreate 会立刻调 start()。
+      //
+      // ⚠️⚠️ 但**不能**直接调 currentEmbyItemId()：它第一步是从 **IO 线程**读 mpv 的
+      //    `path` 属性，而轮询恰好会在「切下一集」那一瞬读它 —— 那一刻 mpv 正在
+      //    重建 core。native 层在这种时刻被跨线程读属性是可能 SIGSEGV 的，而 native
+      //    崩溃**不走** UncaughtExceptionHandler：没有崩溃页、没有 last_crash.txt、
+      //    手机侧 logcat 也抓不到，表现就是「偶发闪退、复现不了」。
+      //
+      // 所以先取**平行数组**（`playlistItemIds` 与 `playlist` 同序，且在换位 / 删除时
+      // 同步维护，所以按下标取是准的，与 302 / 本地代理无关），只有它拿不到时才退回
+      // 路径反查 —— 那条路只在非 Emby 播放时会被用到，而那时 `start()` 根本没接管上报，
+      // provider 不会被调用。
       app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.idProvider = {
-        currentEmbyItemId()
+        playlistItemIds.getOrNull(playlistIndex)?.takeIf { it.isNotBlank() }
+          ?: currentEmbyItemId()
       }
       lifecycle.addObserver(
         app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
@@ -2081,6 +2095,12 @@ open class PlayerActivity :
           embyItemIds =
             intent.getStringArrayListExtra(
               app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_ITEM_IDS,
+            ) ?: emptyList(),
+          // 多版本条目：换成 GSY 内核后上报的进度还得记在**同一个版本**上，
+          // 缺了这张表服务端只能落到默认版本（与 itemIds 同序，判当前项仍用 index）
+          embyMediaSourceIds =
+            intent.getStringArrayListExtra(
+              app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID,
             ) ?: emptyList(),
           headers = intent.getStringArrayExtra("headers"),
           // 按剧亮度跨内核带过去（GSY 是另一个 Activity 的 window，不带就弹回默认）
@@ -5082,6 +5102,15 @@ private fun cancelAutoplayCountdown() {
       Log.e(TAG, "Invalid playlist index: $index (playlist size: ${playlist.size})")
       return
     }
+
+    // 诊断：切集阶段落盘。
+    // 「切下一集偶发闪退」这类问题在设备上是查不出堆栈的 —— 手机上的 logcat 应用
+    // 非 root 读不到别的应用的日志（见 PlayerDiagLog 注释）。所以关键阶段各记一笔，
+    // 崩溃后看最后一条就知道停在「发 loadfile 之前 / 之后 / 首帧之前」哪一段。
+    PlayerDiagLog.log(
+      "switch",
+      "load index=$index/${playlist.size} prev='$fileName' uri=${playlist[index]}",
+    )
 
     // Save current video's playback state before switching
     if (fileName.isNotBlank()) {

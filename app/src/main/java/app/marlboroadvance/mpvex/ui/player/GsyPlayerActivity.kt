@@ -215,6 +215,9 @@ class GsyPlayerActivity : ComponentActivity() {
   private var playlistId: Int? = null
   private var embyServerId: Long? = null
   private var embyItemIds: List<String> = emptyList()
+
+  /** 与 [embyItemIds] 同序的媒体源 Id（多版本条目上报进度要用）；空 = 单版本 / 不是 Emby */
+  private var embyMediaSourceIds: List<String> = emptyList()
   private var headers: Array<String>? = null
 
   /** 交接单带来的当前亮度（0~1）；null = 没带。见 [applyRememberedBrightness]。 */
@@ -297,6 +300,15 @@ class GsyPlayerActivity : ComponentActivity() {
   private val activePlayer: CineIsleGsyPlayer?
     get() = (GSYVideoManager.instance().listener() as? CineIsleGsyPlayer) ?: player
 
+  /**
+   * Emby 进度上报的生命周期观察者。
+   *
+   * 留引用只为一件事：本页是 `singleTask`，`onNewIntent` 换片时要先摘掉旧的再挂新的，
+   * 否则每复用一次就多一个观察者，最后一起收尾。
+   */
+  private var embyReporterObserver:
+    app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EmbyPlaybackLifecycleObserver? = null
+
   /** 选外挂字幕：GSYSubtitleLoader 内部对 `content://` 走 ContentResolver，SAF 给的 URI 可直接用 */
   private val pickSubtitleFile =
     registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -371,8 +383,65 @@ class GsyPlayerActivity : ComponentActivity() {
       },
     )
 
+    // ── Emby 播放进度上报（与 mpv 播放页同一套口径）──
+    startEmbyReporting(intent)
+
     // 网速指示器：进页面就开跑（onPause 停、onResume 续）
     netSpeedHandler.post(netSpeedTicker)
+  }
+
+  /**
+   * 挂上 Emby 进度上报：喂三个读数 + 注册生命周期观察者。
+   *
+   * ## 为什么 GSY 要单独喂
+   *
+   * 上报器默认读 mpv 的属性，而 `PlayerLib.canTouchNative = isMpv && coreReady` ——
+   * GSY 内核下恒为 false，`time-pos` / `pause` **读到的是 null，不是 0**。不喂就等于
+   * 整场没有进度（v223 之前 GSY 就是这样：一个 `/Sessions/Playing*` 都没有）。
+   *
+   * ## 只对 Emby 播放生效
+   *
+   * `start()` 在 intent 里没有 `emby_item_ids` / `emby_server_id` 时直接返回 false，
+   * 网络位置、本地文件播放完全不受影响（provider 设了也没人读）。
+   *
+   * ## 复用页面时
+   *
+   * 本页是 `singleTask`，`onNewIntent` 换片要重新来一遍；旧观察者必须先摘掉并
+   * 结算上一场，否则新一轮的 `start()` 会把旧那场的 `itemIds` 覆盖掉。
+   */
+  private fun startEmbyReporting(source: Intent) {
+    runCatching {
+      val reporter = app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
+      // 上一场（onNewIntent 复用的情况）：摘观察者 + 强制收尾。不带令牌的 stop
+      // 一定是「当前这一场」，正是我们要结算的那个。
+      embyReporterObserver?.let {
+        lifecycle.removeObserver(it)
+        reporter.stop()
+      }
+      embyReporterObserver = null
+
+      // 条目：与 `playlist` 同序的平行数组 + 当前下标（`playIndex` 里同步维护）
+      reporter.idProvider = { embyItemIds.getOrNull(currentIndex) }
+      // 位置：直接问 GSY 的 manager。
+      // ⚠️ 不能用 currentPositionMs() —— 它把「manager 为 null」变成 0，
+      //    而上报器把 0 当成「真的在 0 秒」，会把服务端的续播点覆盖掉。
+      //    这里让 null 一路传出去，上报器自己会跳过这一轮。
+      reporter.positionProvider = {
+        runCatching { GSYVideoManager.instance().curPlayerManager?.currentPosition }
+          .getOrNull()
+          ?.let { app.marlboroadvance.mpvex.domain.emby.EmbyTicks.msToTicks(it) }
+      }
+      // 暂停：GSY 的 isPlaying 在缓冲中也是 false ⇒ 会被算成「暂停」。
+      // 代价只是服务端那一条显示成暂停态，不影响位置，可接受。
+      reporter.pausedProvider = {
+        runCatching { !GSYVideoManager.instance().isPlaying }.getOrNull()
+      }
+
+      val observer = app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
+        .EmbyPlaybackLifecycleObserver(source)
+      embyReporterObserver = observer
+      lifecycle.addObserver(observer)
+    }
   }
 
   /**
@@ -399,6 +468,9 @@ class GsyPlayerActivity : ComponentActivity() {
       forceRestore = true,
       playFromStart = intent.getBooleanExtra("play_from_start", false),
     )
+    // 换片了：上一场的进度要结算、新一场要接管。`readSession` 已经把 embyItemIds /
+    // currentIndex 换成新的，所以这一步必须放在它**之后**。
+    startEmbyReporting(intent)
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -423,6 +495,7 @@ class GsyPlayerActivity : ComponentActivity() {
     playlistId = handoff.playlistId
     embyServerId = handoff.embyServerId
     embyItemIds = handoff.embyItemIds
+    embyMediaSourceIds = handoff.embyMediaSourceIds
     headers = handoff.headers
     handoffBrightness = handoff.brightness
 
@@ -652,6 +725,8 @@ class GsyPlayerActivity : ComponentActivity() {
           seriesKey = seriesKeys.getOrNull(currentIndex),
           embyServerId = embyServerId,
           embyItemIds = embyItemIds,
+          // 多版本条目：切回去之后上报的进度也得记在同一个版本上
+          embyMediaSourceIds = embyMediaSourceIds,
           headers = headers,
           // 切回 mpv 时把此刻的亮度交回去：那边 onStart 会按记忆重设，
           // 但记忆里可能还没有这部片（用户从没调过），此时只有交过去的才是对的。
@@ -1021,6 +1096,7 @@ class GsyPlayerActivity : ComponentActivity() {
         seriesKey = seriesKeys.getOrNull(currentIndex),
         embyServerId = embyServerId,
         embyItemIds = embyItemIds,
+        embyMediaSourceIds = embyMediaSourceIds,
         headers = headers,
         // 重建是新 Activity，window 亮度会回到系统值 ⇒ 必须把当前亮度带过去
         brightness = handoffBrightness

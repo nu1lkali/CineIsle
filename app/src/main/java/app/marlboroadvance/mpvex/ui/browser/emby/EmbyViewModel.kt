@@ -340,6 +340,43 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     loadHome(gen)
   }
 
+  /** 上一次同步「继续观看」的时刻（`elapsedRealtime`），用于 [refreshResumeQuietly] 去抖 */
+  @Volatile
+  private var lastResumeSyncAt = 0L
+
+  /**
+   * 只重拉「继续观看」，不动媒体库与最新加入（首页 onResume 用）。
+   *
+   * ## 为什么要单独一条路
+   *
+   * 播放器是**另一个 Activity**，首页这层 Composable 在播放期间不销毁 ⇒ 从播放器退回来时
+   * `LaunchedEffect` 不会重跑，而播放进度是**异步**落到服务器的，于是「继续观看」就停在
+   * 进去之前那条旧快照上。整页走 [refreshHome] 能解决，代价是骨架屏闪一下、还得多发
+   * `/Views` 与 `/Items/Latest` 两发大请求 —— 只为了一块几十条的小数据不值得。
+   *
+   * @param minIntervalMs 去抖：刚才已经同步过就不再打。详情页返回、播放器返回、切 tab
+   *   回来都可能连着触发 ON_RESUME，没必要每次都问服务器。
+   */
+  fun refreshResumeQuietly(minIntervalMs: Long = 1_500L) {
+    val now = android.os.SystemClock.elapsedRealtime()
+    if (now - lastResumeSyncAt < minIntervalMs) return
+    lastResumeSyncAt = now
+    viewModelScope.launch {
+      // 记下代：拉到一半用户切了服务器，这份数据属于上一代，写下去会冲掉新的
+      val gen = homeGeneration
+      val server = runCatching {
+        repository.ensureLoggedIn(repository.awaitCurrentServer())
+      }.getOrNull() ?: return@launch
+      val resume = runCatching { repository.getResumeItems(server, limit = 20) }.getOrNull()
+        ?: return@launch
+      if (gen != homeGeneration) return@launch
+      // ⚠️ 静默：失败不写 `_error`。首页已经有内容了，为「续播没刷新出来」把整页
+      //    标成加载失败是本末倒置（同 loadHome 里那两发失败的处理）。
+      _resumeItems.value = resume
+      lastResumeSyncAt = android.os.SystemClock.elapsedRealtime()
+    }
+  }
+
   /**
    * 首页数据加载。
    *
@@ -407,6 +444,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         val resume = resumeDeferred.await()
         if (gen == homeGeneration) {
           _resumeItems.value = resume.getOrElse { emptyList() }
+          // 记一笔：首页刚整页拉过，紧接着那次 ON_RESUME 不必再问一遍服务器
+          lastResumeSyncAt = android.os.SystemClock.elapsedRealtime()
         }
         val latest = latestDeferred.await()
         if (gen == homeGeneration) {
