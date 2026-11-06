@@ -243,6 +243,10 @@ object EmbyPlaybackReporter {
       ?: return false
 
     val firstId = currentItemId ?: return false
+    // 本地「最近播放」记一笔（起播即记，不等退出：崩溃 / 强杀也算看过）。
+    // 为什么必须自己记：这个服务端的 `Items/Resume` 不按播放时间排序，服务端上也没有
+    // `LastPlayedDate` 可用，首页只能靠这份账本把刚播的排到最前。详见 EmbyRecentPlays。
+    recordRecentPlay(sid, firstId)
     // 用启动时指定的续播位置作为起点
     val startPositionTicks =
       EmbyTicks.secondsToTicks((intent.getIntExtra("position", 0) / 1000).toLong())
@@ -260,16 +264,30 @@ object EmbyPlaybackReporter {
       try {
         runCatching {
           val server = repository.getServer(sid) ?: return@runCatching
+          // ⚠️⚠️ 先用 **服务端签发的** 会话 id 再发 Start（v231）。
+          //   自生成的 UUID 服务端没有对应会话，位置照写（详情页有进度），但收尾那步
+          //   「盖最后播放时间」会被跳过 ⇒ 条目永远留在原来的位次上，刚播完也不往
+          //   「继续观看」前面走。Yamby 是先 PlaybackInfo 再上报，所以它播过的会到最前。
+          //   PlaybackInfo 失败就退回自生成的那个（v226 的老行为）：宁可时间戳不刷新，
+          //   也不能让整场上报断掉。
+          val issued = runCatching { repository.requestPlaybackSession(server, firstId) }
+            .getOrNull()
+          // 取会话期间页面可能已经被下一场接管（singleTask 复用），那就别再往下写了
+          if (sessionToken !== token) return@runCatching
+          val sessionId = issued?.first?.takeIf { it.isNotBlank() } ?: sessionForStart
+          val sourceId = issued?.second?.takeIf { it.isNotBlank() } ?: firstSourceId
+          if (sessionId != sessionForStart) playSessionId = sessionId
           PlayerDiagLog.log(
             "report",
-            "Start item=$firstId ticks=$startPositionTicks session=$sessionForStart",
+            "Start item=$firstId ticks=$startPositionTicks session=$sessionId " +
+              "issued=${issued != null}",
           )
           playSessionId = repository.reportPlaybackStart(
             server = server,
             itemId = firstId,
             positionTicks = startPositionTicks,
-            mediaSourceId = firstSourceId,
-            playSessionId = sessionForStart,
+            mediaSourceId = sourceId,
+            playSessionId = sessionId,
           )
           // 判据是「请求成功返回」（2xx / 204 都算），**不是**「有没有拿到 session id」
           startAcknowledged = true
@@ -370,6 +388,28 @@ object EmbyPlaybackReporter {
         )
       }.onFailure { EmbyLog.warn("上报 Stopped 失败（item=$itemId）", it) }
     }
+  }
+
+  /**
+   * 往本地「最近播放」账本记一笔。
+   *
+   * 记账失败必须无后果：拿不到偏好就静默跳过，首页退化成服务端顺序（也就是加这个功能
+   * 之前的行为），绝不能因为记一笔账把播放搞出问题。
+   */
+  private fun recordRecentPlay(serverId: Long, itemId: String) {
+    runCatching {
+      val prefs = get<app.marlboroadvance.mpvex.preferences.BrowserPreferences>(
+        app.marlboroadvance.mpvex.preferences.BrowserPreferences::class.java,
+      )
+      val ledger = prefs.embyRecentPlays(serverId)
+      ledger.set(
+        app.marlboroadvance.mpvex.domain.emby.EmbyRecentPlays.record(
+          raw = ledger.get(),
+          itemId = itemId,
+          now = System.currentTimeMillis(),
+        ),
+      )
+    }.onFailure { EmbyLog.warn("记录最近播放失败（item=$itemId）", it) }
   }
 
   /**

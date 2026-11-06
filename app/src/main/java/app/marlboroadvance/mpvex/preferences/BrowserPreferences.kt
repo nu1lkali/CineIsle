@@ -339,6 +339,18 @@ class BrowserPreferences(
     preferenceStore.getString("emby_hidden_libraries_$serverId", "")
 
   /**
+   * 「最近播放」账本（`id:时间戳` 逗号分隔，见 [app.marlboroadvance.mpvex.domain.emby.EmbyRecentPlays]）。
+   *
+   * 存在的理由：这个服务端的 `Items/Resume` **不按播放时间排序**，只按库里的固定顺序
+   * 切前 N 条 ⇒ 刚播的条目能不能出现在首页全靠运气。服务端又不记 `LastPlayedDate`，
+   * 所以只能本地记一份，首页据此把最近播过的排到最前。
+   *
+   * **按服务器分开存**：条目 Id 是服务器级标识，混在一起会互相挤名额。
+   */
+  fun embyRecentPlays(serverId: Long): Preference<String> =
+    preferenceStore.getString("emby_recent_plays_$serverId", "")
+
+  /**
    * 「中文字幕」路径标记配置（[ChineseSubtitleMarks] 的 JSON 串，空串 = 用默认标记）。
    *
    * 全局一份、不按库分：标记是**资源命名惯例**，跟具体哪个库无关。

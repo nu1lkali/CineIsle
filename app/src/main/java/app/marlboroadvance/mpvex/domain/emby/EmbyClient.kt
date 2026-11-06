@@ -416,6 +416,34 @@ object EmbyClient {
   )
 
   /**
+   * 按 Id 批量取条目：`GET /Users/{uid}/Items?Ids=a,b,c`。
+   *
+   * 用途只有一个 —— 首页「继续观看」把**本地最近播放、但不在服务端那批结果里**的条目
+   * 补回来。为什么需要补：服务端确实按 `LastPlayedDate` 降序排，但**只有该次播放真的
+   * 刷新了时间戳，条目才会被顶到前面**；我们的上报过去只写了位置没写时间，条目就卡在
+   * 旧位次（实测有一条卡在第 21 位，首页只要 20 条）。详见 [EmbyRecentPlays] 的 KDoc。
+   *
+   * ⚠️ 必须**一次请求取全部**，绝不逐条 `GET /Items/{id}`：账本最多补十几条，
+   * 逐条就是十几个串行往返（`Limit` 显式给 `ids.size`，避免服务端按默认页大小截断）。
+   */
+  fun getItemsByIds(server: EmbyServer, ids: List<String>): EmbyItemsResult {
+    if (ids.isEmpty()) return EmbyItemsResult()
+    return getJson(
+      server,
+      "/Users/${server.userId}/Items",
+      mapOf(
+        "Ids" to ids.joinToString(","),
+        "Recursive" to "true",
+        "Limit" to ids.size.toString(),
+        "Fields" to ITEM_FIELDS,
+        "EnableImages" to "true",
+        "EnableUserData" to "true",
+        "ImageTypeLimit" to "1",
+      ),
+    )
+  }
+
+  /**
    * 最新加入。
    *
    * 默认只取电影与剧集（不含单集），避免单集把整页刷满。
@@ -2664,6 +2692,52 @@ object EmbyClient {
    *   返回值也会在服务端不回显时退回它。
    * @return 本次播放的会话 id —— 服务端回显的就用它的，否则就是传进来的那个。
    */
+  /**
+   * 向服务器要一个**它签发的**播放会话（`POST /Items/{id}/PlaybackInfo`，`IsPlayback=true`）。
+   *
+   * @return `PlaySessionId to MediaSources[0].Id`；拿不到（老版本 / 该条目没有可用源 / 网络失败）
+   *   返回 null，调用方退回自生成的 UUID。
+   *
+   * ## 为什么要这一步（v231）
+   *
+   * v226 起我们是自己造 UUID 当 `PlaySessionId` 的 —— Start / Progress / Stopped 三处一致，
+   * 进度确实能记上（位置、百分比都对）。但「**条目什么时候被顶到继续观看最前面**」取决于
+   * 服务端有没有把 `LastPlayedDate` 刷新，而那是挂在**服务端会话**上的：自己造的 id 服务端
+   * 根本没有这条会话，收尾时就跳过了这一步。
+   *
+   * 现象因此非常割裂：详情页有进度（位置写了）、首页却不往前提（时间没写）。
+   * 实测同一条服务器上，别的播放器（Yamby 先 PlaybackInfo 再上报）播过的片会立刻排到第一。
+   *
+   * 代价：每次起播多一次请求。它和「预解析直链」无关 —— PlaybackInfo 只打到自己的 Emby，
+   * 不碰网盘 CDN，也不会跟 302。
+   */
+  suspend fun requestPlaybackSession(
+    server: EmbyServer,
+    itemId: String,
+  ): Pair<String, String?>? {
+    val payload =
+      jsonObjectOf(
+        mapOf(
+          "UserId" to server.userId.takeIf { it.isNotEmpty() },
+          // IsPlayback=true 才是「我要播了」（false 是探测），会话的语义在这里
+          "IsPlayback" to true,
+          "AutoOpenLiveStream" to false,
+          "EnableDirectPlay" to true,
+          "EnableDirectStream" to true,
+          "EnableTranscoding" to true,
+        ),
+      ).toString()
+    val info = runCatching {
+      execJson<PlaybackInfoResult>(
+        authedRequest(server, "/Items/$itemId/PlaybackInfo")
+          .post(payload.toRequestBody(jsonMedia))
+          .build(),
+      )
+    }.getOrNull() ?: return null
+    val sessionId = info.PlaySessionId?.takeIf { it.isNotBlank() } ?: return null
+    return sessionId to info.MediaSources?.firstOrNull()?.Id
+  }
+
   fun reportPlaybackStart(
     server: EmbyServer,
     itemId: String,

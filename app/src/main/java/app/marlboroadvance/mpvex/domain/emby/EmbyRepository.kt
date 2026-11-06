@@ -1124,6 +1124,21 @@ class EmbyRepository(
     )
   }
 
+  /**
+   * 要一个服务端签发的播放会话（`PlaybackInfo`）。拿不到返回 null，调用方退回自生成 UUID。
+   * 为什么要这一步见 [EmbyClient.requestPlaybackSession] 的 KDoc。
+   */
+  suspend fun requestPlaybackSession(
+    server: EmbyServer,
+    itemId: String,
+  ): Pair<String, String?>? = withContext(Dispatchers.IO) {
+    EmbyClient.requestPlaybackSession(server, itemId)
+  }
+
+  /** 按 Id 批量取条目（首页「继续观看」补本地最近播放用，见 [EmbyRecentPlays]） */
+  suspend fun getItemsByIds(server: EmbyServer, ids: List<String>): List<EmbyItem> =
+    withContext(Dispatchers.IO) { EmbyClient.getItemsByIds(server, ids).Items }
+
   suspend fun reportPlaybackStopped(
     server: EmbyServer,
     itemId: String,

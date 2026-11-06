@@ -22,6 +22,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyItemLookupInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyItemsResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyRemoteImageInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyRemoteSearchResult
+import app.marlboroadvance.mpvex.domain.emby.EmbyRecentPlays
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanChunk
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
@@ -367,7 +368,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       val server = runCatching {
         repository.ensureLoggedIn(repository.awaitCurrentServer())
       }.getOrNull() ?: return@launch
-      val resume = runCatching { repository.getResumeItems(server, limit = 20) }.getOrNull()
+      val resume = runCatching { fetchResume(server, limit = 20) }.getOrNull()
         ?: return@launch
       if (gen != homeGeneration) return@launch
       // ⚠️ 静默：失败不写 `_error`。首页已经有内容了，为「续播没刷新出来」把整页
@@ -426,7 +427,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
 
       coroutineScope {
         val libsDeferred = async { runCatching { repository.getVirtualFolders(server) } }
-        val resumeDeferred = async { runCatching { repository.getResumeItems(server, limit = 20) } }
+        val resumeDeferred = async { runCatching { fetchResume(server, limit = 20) } }
         val latestDeferred = async { runCatching { repository.getLatestItems(server, limit = 24) } }
 
         val libs = libsDeferred.await()
@@ -777,7 +778,62 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   suspend fun loadResume(server: EmbyServer, limit: Int = 60): List<EmbyItem> =
-    repository.getResumeItems(server, limit)
+    fetchResume(server, limit)
+
+  /**
+   * 取「继续观看」= 服务端结果 + 本地最近播放账本。
+   *
+   * ## 为什么要另加账本（v231）
+   *
+   * 服务端 `Items/Resume` **是按 `LastPlayedDate` 降序排的**（实测首页前 8 条时间戳严格递减），
+   * 所以排序本身没问题；问题在**写入端**：条目只有在那次播放刷新了 `LastPlayedDate`
+   * 才会被顶到前面，而我们的上报过去只写了播放位置（详情页有进度、位次不动）。
+   * 实测有一条卡的正是第 21 位 —— 首页只要 20 条，差一位就整条消失。
+   *
+   * 治本那条已经在做（上报改用 PlaybackInfo 的服务端会话），但服务端「什么时候盖时间戳」
+   * 不是我们能保证的，所以客户端再兜一层：最近播过的、服务端那批结果里没有的，
+   * 用一次 `Ids=` 批量请求补回来，并按本地时间排到最前。
+   *
+   * 任何一步失败都退回纯服务端结果 —— 这条兜底绝不能让首页变空或报错。
+   */
+  private suspend fun fetchResume(server: EmbyServer, limit: Int): List<EmbyItem> {
+    val fromServer = repository.getResumeItems(server, limit)
+    return mergeRecentPlays(server, fromServer, limit)
+  }
+
+  private suspend fun mergeRecentPlays(
+    server: EmbyServer,
+    serverItems: List<EmbyItem>,
+    limit: Int,
+  ): List<EmbyItem> {
+    if (limit <= 0) return serverItems
+    return runCatching {
+      val recent = EmbyRecentPlays.recentIds(
+        raw = browserPreferences.embyRecentPlays(server.id).get(),
+        limit = RECENT_MERGE_LIMIT,
+      )
+      if (recent.isEmpty()) return@runCatching serverItems
+      val present = serverItems.mapNotNull { it.Id }.toSet()
+      // 只补「账本里有、服务端这批里没有」的，一次 Ids= 请求取完
+      val missing = recent.filterNot { it in present }.take(RECENT_FETCH_MAX)
+      val fetched =
+        if (missing.isEmpty()) emptyList()
+        else repository.getItemsByIds(server, missing).filter { isResumableItem(it) }
+      if (fetched.isEmpty() && recent.none { it in present }) return@runCatching serverItems
+      val pool = (serverItems + fetched).mapNotNull { item -> item.Id?.let { it to item } }.toMap()
+      // 账本顺序 = 最近在前；已看完（位置归零 / 标记已看）的账本条目不算数
+      val ordered = recent.mapNotNull { pool[it] }.filter { isResumableItem(it) }
+      val orderedIds = ordered.mapNotNull { it.Id }.toSet()
+      val rest = serverItems.filterNot { item -> item.Id != null && item.Id in orderedIds }
+      (ordered + rest).distinctBy { it.Id ?: it.Name ?: "" }.take(limit)
+    }.getOrElse { serverItems }
+  }
+
+  /** 还能续播：有非零播放位置且没被标记已看 */
+  private fun isResumableItem(item: EmbyItem): Boolean {
+    val data = item.UserData ?: return false
+    return !data.Played && data.PlaybackPositionTicks > 0
+  }
 
   suspend fun loadRandom(
     server: EmbyServer,
@@ -3105,6 +3161,17 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
   companion object {
     /** 收藏演员缓存的存活时间：超过就当过期重新拉，防止别处改了收藏状态这里还留着旧数据 */
     private const val FAVORITE_PERSONS_CACHE_TTL_MS = 60_000L
+
+    /** 「继续观看」合并时，本地最近播放账本参与排前的最多条数 */
+    private const val RECENT_MERGE_LIMIT = 20
+
+    /**
+     * 账本里有、服务端这批结果里没有时，一次最多补几条。
+     *
+     * 12 是「一屏看不到但翻了能翻回来」的量：补太多等于替用户决定看什么，
+     * 补太少又救不回刚播的那条。补条目只发**一次** `Ids=` 请求，不逐条取。
+     */
+    private const val RECENT_FETCH_MAX = 12
 
     /**
      * 演员作品数角标缓存的存活时间。
