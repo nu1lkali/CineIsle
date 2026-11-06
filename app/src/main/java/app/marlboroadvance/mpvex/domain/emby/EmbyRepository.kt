@@ -1097,8 +1097,17 @@ class EmbyRepository(
     playSessionId: String,
     positionTicks: Long,
     isPaused: Boolean = false,
+    /** 多版本媒体：正在播的那个版本；漏传会让进度记到默认版本上（见 EmbyClient 注释） */
+    mediaSourceId: String? = null,
   ) = withContext(Dispatchers.IO) {
-    EmbyClient.reportPlaybackProgress(server, itemId, playSessionId, positionTicks, isPaused)
+    EmbyClient.reportPlaybackProgress(
+      server,
+      itemId,
+      playSessionId,
+      positionTicks,
+      isPaused,
+      mediaSourceId = mediaSourceId,
+    )
   }
 
   suspend fun reportPlaybackStopped(
@@ -1106,8 +1115,9 @@ class EmbyRepository(
     itemId: String,
     playSessionId: String,
     positionTicks: Long,
+    mediaSourceId: String? = null,
   ) = withContext(Dispatchers.IO) {
-    EmbyClient.reportPlaybackStopped(server, itemId, playSessionId, positionTicks)
+    EmbyClient.reportPlaybackStopped(server, itemId, playSessionId, positionTicks, mediaSourceId)
   }
 
   /** 搜索媒体（服务端 SearchTerm 匹配），可按指定方式排序 */

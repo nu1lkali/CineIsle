@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
+import app.marlboroadvance.mpvex.domain.emby.EmbyLog
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
@@ -41,9 +42,54 @@ object EmbyPlaybackReporter {
 
   private var serverId: Long = -1L
   private var itemIds: List<String> = emptyList()
-  private var currentItemId: String? = null
-  private var playSessionId: String = ""
-  private var lastReportedTicks: Long = 0L
+
+  /**
+   * 当前正在上报的条目 Id。
+   *
+   * ⚠️ `@Volatile`：写它的是轮询协程（IO），读它的可能是 [stop] 里的另一条协程，
+   * 不加就可能读到旧值，把 Stopped 发到上一集上。
+   */
+  @Volatile private var currentItemId: String? = null
+
+  @Volatile private var playSessionId: String = ""
+  @Volatile private var lastReportedTicks: Long = 0L
+
+  /**
+   * 最近一次「Start 请求」的发出时刻（`SystemClock.elapsedRealtime()`）；0 = 没有在飞。
+   *
+   * 用途只有一个：别在 Start 还在路上时判定「没有 session」又补发一次 —— 那会变成
+   * 同一场播放两个 session，服务端上就是两条并行的「正在播放」。
+   */
+  @Volatile private var startRequestedAt: Long = 0L
+
+  /**
+   * 已经为哪个条目补发过 Start。
+   *
+   * 补发是**兜底**不是重试机制，所以同一条目只准补一次：否则每次轮询都会发现
+   * 「还是空串」再发一次，10 秒一条 Start 打到服务器上，比不修还糟。
+   */
+  @Volatile private var sessionRepairFor: String? = null
+
+  /**
+   * 由播放页提供的「当前正在播的是哪一条」。
+   *
+   * ## 为什么需要这个口子（v223）
+   *
+   * 本类是个 object，拿不到播放页的 `playlistIndex` —— 那是 Compose 状态，而且被
+   * 「拖动重排队列 / 随机播放」改过，与 intent 里的原始顺序早就错位了。播放页的
+   * `PlayerActivity.currentEmbyItemId()` 已经把「路径反查 + 按当前下标兜底」两条路
+   * 都实现了（302 直链、ISO 本地代理两种 path 都覆盖），这里直接借用，不复制逻辑。
+   *
+   * ⚠️ 不接这个口子的后果就是 v222 及之前的线上现象：开了「预解析直链（302）」后
+   * mpv 的 `path` 是网盘 CDN 域名，`/Videos/{id}/stream` 正则恒不命中 ⇒
+   * [readCurrentItemId] 恒 null ⇒ 永远退回起播那一条 ⇒ 连播时检测不到切集，
+   * 上一集不报 Stopped、新一集不报 Start，新一集的时间被以第一条的 itemId 写出去。
+   * 用户侧看到的就是「随机播放后首页继续观看不更新」。
+   *
+   * 返回 null 是正常情况（非 Emby 播放 / 列表还没就绪），此时退回路径反查。
+   */
+  @Volatile
+  var idProvider: (() -> String?)? = null
 
   /** 与 [itemIds] **同序同长**的媒体源 Id（多版本条目预热时要用与播放一致的那个） */
   private var mediaSourceIds: List<String> = emptyList()
@@ -87,6 +133,10 @@ object EmbyPlaybackReporter {
     itemIds = ids
     currentItemId = ids.firstOrNull()
     lastReportedTicks = 0L
+    // ⚠️ 必须清空：上一场播放的 session 留在这两个字段里的话，本场第一条 Progress
+    //    会带着上一场的 PlaySessionId 出去 —— 服务端要么丢弃、要么记到上一场那条上。
+    playSessionId = ""
+    sessionRepairFor = null
     mediaSourceIds =
       intent.getStringArrayListExtra(EXTRA_MEDIA_SOURCE_ID)?.toList() ?: emptyList()
 
@@ -95,15 +145,23 @@ object EmbyPlaybackReporter {
 
     val firstId = currentItemId ?: return false
     // 用启动时指定的续播位置作为起点
-    val startPositionSeconds = intent.getIntExtra("position", 0) / 1000
+    val startPositionTicks =
+      EmbyTicks.secondsToTicks((intent.getIntExtra("position", 0) / 1000).toLong())
+    val firstSourceId = mediaSourceIdOf(firstId)
+    startRequestedAt = android.os.SystemClock.elapsedRealtime()
     scope.launch {
-      runCatching {
-        val server = repository.getServer(sid) ?: return@launch
-        playSessionId = repository.reportPlaybackStart(
-          server = server,
-          itemId = firstId,
-          positionTicks = EmbyTicks.secondsToTicks(startPositionSeconds.toLong()),
-        )
+      try {
+        runCatching {
+          val server = repository.getServer(sid) ?: return@runCatching
+          playSessionId = repository.reportPlaybackStart(
+            server = server,
+            itemId = firstId,
+            positionTicks = startPositionTicks,
+            mediaSourceId = firstSourceId,
+          )
+        }
+      } finally {
+        startRequestedAt = 0L
       }
     }
 
@@ -137,12 +195,20 @@ object EmbyPlaybackReporter {
     warmJob?.cancel()
     warmJob = null
     pendingWarm = null
+    // ⚠️ 先摘掉回调再往下走：这个 lambda 捕获着 Activity，不摘就是一条静态引用把它钉住
+    idProvider = null
     EmbyPlayerActions.release()
 
     val itemId = currentItemId ?: return
-    val ticks = readPositionTicks()
+    // 读不到当前位置就用「最后一次成功上报的位置」，别让 Stopped 把续播点写成 0
+    val ticks = readPositionTicks() ?: lastReportedTicks
+    val stopSourceId = mediaSourceIdOf(itemId)
     val sid = serverId
+    // ⚠️ session 取**快照**：下面那段是异步发出去的，等它真跑起来时字段可能已经被
+    //    下一场播放改写了（快速退出再进入就是这个时序）。
+    val sessionId = playSessionId
     currentItemId = null
+    playSessionId = ""
 
     scope.launch {
       runCatching {
@@ -151,8 +217,9 @@ object EmbyPlaybackReporter {
         repository.reportPlaybackStopped(
           server = server,
           itemId = itemId,
-          playSessionId = playSessionId,
+          playSessionId = sessionId,
           positionTicks = ticks,
+          mediaSourceId = stopSourceId,
         )
       }
     }
@@ -230,6 +297,15 @@ object EmbyPlaybackReporter {
    */
   private const val WARM_DELAY_MS = 6_000L
 
+  /**
+   * 「Start 已经发出去了但还没回来」的宽限期。
+   *
+   * 轮询间隔 10 秒，给两轮的时间：超过这个时长还没有 `PlaySessionId` 就认为那次
+   * Start 真的失败了（没网 / 服务端 500 / 回包字段缺失），[ensureSession] 才补发。
+   * 不设这道闸的话，第一轮轮询时 Start 十有八九还在路上，会白白多开一个 session。
+   */
+  private const val SESSION_START_GRACE_MS = 20_000L
+
   private fun startPolling() {
     pollingJob?.cancel()
     pollingJob = scope.launch {
@@ -245,23 +321,29 @@ object EmbyPlaybackReporter {
   /**
    * 一次进度上报。
    *
-   * 若发现 mpv 当前播放的文件已经变成播放列表里的另一项（播完自动切下一集，
-   * 或用户手动切换），则先结束上一集再开始新一集，让服务端的"正在播放"跟着走。
+   * 若发现当前播放的已经是播放列表里的另一项（播完自动切下一集，或用户手动切换），
+   * 则先结束上一集再开始新一集，让服务端的"正在播放"跟着走。
    */
   private suspend fun reportProgressOnce() {
     val repository = runCatching { get<EmbyRepository>(EmbyRepository::class.java) }.getOrNull()
       ?: return
     val server = repository.getServer(serverId) ?: return
 
-    val positionTicks = readPositionTicks()
+    // 内核还没就绪 / 读不到位置 ⇒ 这一轮整轮跳过（不能当 0 发，见 readPositionTicks 注释）
+    val positionTicks = readPositionTicks() ?: return
     val isPaused = readIsPaused()
     val playingItemId = readCurrentItemId() ?: currentItemId ?: return
+    val playingSourceId = mediaSourceIdOf(playingItemId)
 
     if (playingItemId != currentItemId) {
       // ── 切换了媒体：结束上一集，开始新一集 ──
       val previousItemId = currentItemId
       val previousTicks = lastReportedTicks
+      val previousSessionId = playSessionId
+      val previousSourceId = previousItemId?.let { mediaSourceIdOf(it) }
       currentItemId = playingItemId
+      // 换条目 ⇒ 上一场补发记录作废；新条目的 Start 马上就来
+      sessionRepairFor = null
       // 同步播放页 UI（收藏按钮等）到新的这一集
       EmbyPlayerActions.onItemChanged(playingItemId)
       // 「不喜欢」按钮同样要跟着切。走**内存快照**（一次 HashMap 查找，无 IO），
@@ -275,16 +357,22 @@ object EmbyPlaybackReporter {
           repository.reportPlaybackStopped(
             server = server,
             itemId = previousItemId,
-            playSessionId = playSessionId,
+            playSessionId = previousSessionId,
             positionTicks = previousTicks,
+            mediaSourceId = previousSourceId,
           )
         }
       }
+      // ⚠️ 先清空再赋值：Start 失败会抛异常，`runCatching` 捕获后 `playSessionId` 保持
+      //    **上一集**的值 —— 拿它给新一集发 Progress，服务端就把新一集的进度记到
+      //    上一集上了。清空后即便 Start 没成功，也只会走 [ensureSession] 的补发。
+      playSessionId = ""
       runCatching {
         playSessionId = repository.reportPlaybackStart(
           server = server,
           itemId = playingItemId,
           positionTicks = 0,
+          mediaSourceId = playingSourceId,
         )
       }
       lastReportedTicks = 0
@@ -294,6 +382,9 @@ object EmbyPlaybackReporter {
       return
     }
 
+    // 手上没有可用 session 就先补一次 Start；补不上本轮跳过（带空串发出去等于白打）
+    if (!ensureSession(repository, server, playingItemId, playingSourceId, positionTicks)) return
+
     lastReportedTicks = positionTicks
     runCatching {
       repository.reportPlaybackProgress(
@@ -302,28 +393,106 @@ object EmbyPlaybackReporter {
         playSessionId = playSessionId,
         positionTicks = positionTicks,
         isPaused = isPaused,
+        mediaSourceId = playingSourceId,
       )
     }
   }
 
+  /**
+   * 保证手上有一个可用的 [playSessionId]，没有就补一次 Start。
+   *
+   * ## 为什么需要它
+   *
+   * `PlaySessionId` 是「这条进度往哪个会话里记账」的唯一凭据。[start] 里那次 Start 是
+   * **异步发**的，网络抖动、服务端 500、回包里没有 `PlaySessionId` 三种情况都会让它
+   * 留在空串 —— 之后每一条 Progress 都带着空串出去，服务端既匹配不上会话，也不会走
+   * 「按 ItemId 找当前会话」的兜底，于是整场播放一条进度都没写进去。
+   *
+   * ## 三条自我约束
+   *
+   * · **不在飞时补**：Start 还在路上（[startRequestedAt] 非 0）就等下一轮，
+   *   否则同一场播放会开出两个 session，服务端上就是两条并行的「正在播放」；
+   * · **同一条目只补一次**（[sessionRepairFor]）：这是兜底不是重试，变成每 10 秒
+   *   一条 Start 比不修更糟；
+   * · **补不到就跳过本轮上报**：空串发出去只会污染服务端状态。
+   */
+  private suspend fun ensureSession(
+    repository: EmbyRepository,
+    server: EmbyServer,
+    itemId: String,
+    mediaSourceId: String?,
+    positionTicks: Long,
+  ): Boolean {
+    if (playSessionId.isNotBlank()) return true
+    val requestedAt = startRequestedAt
+    if (requestedAt > 0L && android.os.SystemClock.elapsedRealtime() - requestedAt < SESSION_START_GRACE_MS) {
+      return false
+    }
+    if (sessionRepairFor == itemId) return false
+    sessionRepairFor = itemId
+    val sid = runCatching {
+      repository.reportPlaybackStart(
+        server = server,
+        itemId = itemId,
+        positionTicks = positionTicks,
+        mediaSourceId = mediaSourceId,
+      )
+    }.getOrNull()
+    if (sid.isNullOrBlank()) {
+      EmbyLog.warn("补发 Start 仍未拿到 PlaySessionId（item=$itemId），本次播放跳过进度上报")
+      return false
+    }
+    playSessionId = sid
+    return true
+  }
+
   // ─── mpv 属性读取 ───
 
-  private fun readPositionTicks(): Long {
-    val seconds = PlayerLib.getPropertyInt("time-pos") ?: 0
+  /**
+   * 当前播放位置（ticks）；**读不到返回 null**。
+   *
+   * ⚠️ 读不到绝不能当成 0：`PlayerLib.getPropertyInt` 在内核还没就绪（`coreReady`
+   * 未置位）、或当前内核不是 mpv 时返回 null。把这个 null 写成 0 发出去，等于告诉
+   * 服务端「这部片从头开始播」—— 服务端于是把续播点清零，「继续观看」里那条记录
+   * 就退回到第 0 秒。比「这一轮不报」有害得多，所以宁可跳过本轮。
+   */
+  private fun readPositionTicks(): Long? {
+    val seconds = PlayerLib.getPropertyInt("time-pos") ?: return null
     return EmbyTicks.secondsToTicks(seconds.toLong())
   }
 
   private fun readIsPaused(): Boolean = PlayerLib.getPropertyBoolean("pause") == true
 
   /**
-   * 从当前播放路径里解析出 Emby 媒体 ID（经 PlayerLib 门面读，mpv / Exo 都适用）。
+   * 当前正在播的 Emby 条目 Id。
    *
-   * 播放地址形如 `/emby/Videos/{itemId}/stream?static=true&api_key=...`
+   * ① **先问宿主**（[idProvider]）：播放页知道「现在是队列里的第几条」，它的
+   *   `PlayerActivity.currentEmbyItemId()` 已经把「路径反查 + 按当前下标兜底」两条路
+   *   都做了，302 直链与 ISO 本地代理两种 path 都覆盖；
+   * ② 再退到从 mpv 的 `path` 反查（播放地址形如
+   *   `/emby/Videos/{itemId}/stream?static=true&api_key=...`）。
+   *
+   * ⚠️ 只有 ② 是不够的：开了「预解析直链（302）」之后 `path` 是网盘 CDN 的真实地址，
+   * 没有 `/Videos/{id}/stream` 可反查 ⇒ 恒 null ⇒ [reportProgressOnce] 退回
+   * `currentItemId`（永远是起播那一条）⇒ 连播时永远检测不到切集。这个坑播放页早就
+   * 踩过并修好了（见 `PlayerActivity.currentEmbyItemId()` 的 ② 号分支），本类 borrow 它。
    */
   private fun readCurrentItemId(): String? {
+    val resolved = idProvider?.invoke()?.takeIf { it.isNotBlank() }
+      ?: parseItemIdFromPath(PlayerLib.getPropertyString("path"))
     // 只认可本次播放列表里的 ID，避免 mpv 自动连播到无关文件时误报
-    return parseItemIdFromPath(PlayerLib.getPropertyString("path"))
-      ?.takeIf { itemIds.contains(it) }
+    return resolved?.takeIf { itemIds.contains(it) }
+  }
+
+  /**
+   * 某条目**实际在播的那个版本**的媒体源 Id；单版本 / 不是本次队列里的条目返回 null。
+   *
+   * [mediaSourceIds] 与 [itemIds] **同序同长**（启动侧就是这么写的），所以按下标取。
+   */
+  private fun mediaSourceIdOf(itemId: String): String? {
+    val idx = itemIds.indexOf(itemId)
+    if (idx < 0) return null
+    return mediaSourceIds.getOrNull(idx)?.takeIf { it.isNotBlank() }
   }
 
   /**

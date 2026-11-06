@@ -599,6 +599,16 @@ open class PlayerActivity :
     // Emby：本次播放来自 Emby 时，把播放进度实时回传给服务器
     // （开始 / 进度 / 暂停 / 切下一集 / 退出）。非 Emby 播放不会注册，无任何副作用。
     runCatching {
+      // ⭐ 上报器必须知道「现在播的是队列里的第几条」：开了「预解析直链（302）」之后
+      //    mpv 的 path 是网盘 CDN 的地址，里面没有 `/Videos/{id}/stream` 可反查，
+      //    只靠路径会把它一直认成起播那一条 —— 连播时既不报上一集 Stopped、也不报
+      //    新一集 Start，后面几集的进度全被写到第一条的 itemId 上。
+      //    这里把已经处理过「302 直链 / ISO 本地代理」两种情况的 [currentEmbyItemId]
+      //    借给它，不要在 EmbyPlaybackReporter 里再复制一份同样的兜底。
+      //    ⚠️ 必须在 addObserver 之前设：观察者的 onCreate 会立刻调 start()。
+      app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.idProvider = {
+        currentEmbyItemId()
+      }
       lifecycle.addObserver(
         app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
           .EmbyPlaybackLifecycleObserver(intent),

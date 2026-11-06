@@ -2679,7 +2679,17 @@ object EmbyClient {
     } catch (_: Exception) { "" }
   }
 
-  /** 上报播放进度（建议每 10 秒一次 + 暂停/恢复时） */
+  /**
+   * 上报播放进度（建议每 10 秒一次 + 暂停/恢复时）。
+   *
+   * 两个字段**不能省**，理由都是「服务端要靠它们把这条进度归到哪一集、哪个版本」：
+   *
+   * · `MediaSourceId`：多版本条目（4K / 1080P 各一条）上，Start 带了它、Progress 不带，
+   *   服务端会把这次进度记到**默认版本**上，于是别的版本续播位置一直是旧的。
+   * · `PlaySessionId`：只在**非空**时发送。送一个空串过去，服务端既匹配不上既有会话，
+   *   又不会走「按 ItemId 找当前会话」的兜底，这条 Progress 就被丢掉了；
+   *   整个字段缺席反而能命中兜底。
+   */
   fun reportPlaybackProgress(
     server: EmbyServer,
     itemId: String,
@@ -2687,14 +2697,17 @@ object EmbyClient {
     positionTicks: Long,
     isPaused: Boolean = false,
     isMuted: Boolean = false,
+    /** 多版本媒体：正在播的那个版本（`MediaSources[i].Id`）；null = 未知 / 单版本 */
+    mediaSourceId: String? = null,
   ) {
     val obj = buildMap {
       put("ItemId", itemId)
-      put("PlaySessionId", playSessionId)
+      if (playSessionId.isNotBlank()) put("PlaySessionId", playSessionId)
       put("PositionTicks", positionTicks)
       put("IsPaused", isPaused)
       put("IsMuted", isMuted)
       put("PlayMethod", "DirectStream")
+      mediaSourceId?.let { put("MediaSourceId", it) }
     }
     val body = json.encodeToString(JsonObject.serializer(), jsonObjectOf(obj))
     val req = authedRequest(server, "/Sessions/Playing/Progress")
@@ -2703,17 +2716,19 @@ object EmbyClient {
     execString(req)
   }
 
-  /** 上报播放停止（退出播放页时调用） */
+  /** 上报播放停止（退出播放页时调用）。[playSessionId] / [mediaSourceId] 的取舍同上。 */
   fun reportPlaybackStopped(
     server: EmbyServer,
     itemId: String,
     playSessionId: String,
     positionTicks: Long,
+    mediaSourceId: String? = null,
   ) {
     val obj = buildMap {
       put("ItemId", itemId)
-      put("PlaySessionId", playSessionId)
+      if (playSessionId.isNotBlank()) put("PlaySessionId", playSessionId)
       put("PositionTicks", positionTicks)
+      mediaSourceId?.let { put("MediaSourceId", it) }
     }
     val body = json.encodeToString(JsonObject.serializer(), jsonObjectOf(obj))
     val req = authedRequest(server, "/Sessions/Playing/Stopped")

@@ -2747,7 +2747,32 @@ android {
     //    失败三种情况都不再是纯黑格（原来加载态什么都不画）。
     //  · 提示文案统一工程化表述（事实 + 数量），不用口语化措辞。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 222
+    // ────────────────────────────────────────────────────────────────────────
+    // v223（1.6.14，修复轮不涨名）Emby 进度上报：302 直链下认错条目 + session 兜底
+    //  · 现象：随机播放 / 连播之后，首页「继续观看」不更新（Emby 网页端同期也没有）。
+    //  · 根因一（主）：`EmbyPlaybackReporter.readCurrentItemId()` 只从 mpv 的 `path` 里
+    //    正则抠 `/Videos/{id}/stream`。开了「预解析直链（302）」后 `path` 是网盘 CDN 的
+    //    真实地址，正则恒不命中 ⇒ 恒 null ⇒ 退回 `currentItemId`（永远是起播那一条）
+    //    ⇒ 连播时检测不到切集：上一集不报 Stopped、新一集不报 Start、PlaySessionId
+    //    不刷新，后面几集的时间全被写到第一条的 itemId 上。
+    //    修法：新增 `idProvider` 回调，播放页把已经处理好「302 直链 / ISO 本地代理」
+    //    两条路的 `currentEmbyItemId()` 借给它，不在上报器里再复制一份兜底。
+    //  · 根因二：`start()` 里那次 Start 是异步发的，失败 / 回包缺 `PlaySessionId` 时
+    //    字段留在空串，此后每条 Progress 都带着空串出去（服务端既匹配不上会话、也不走
+    //    「按 ItemId 找会话」的兜底）。现在 `reportPlaybackProgress/Stopped` 在
+    //    `PlaySessionId` 为空时**不发这个字段**，并新增 `ensureSession()`：空串时补一次
+    //    Start（20 秒宽限、同一条目只补一次，避免变成每 10 秒一条 Start 的请求风暴）。
+    //  · 根因三：Start 带 `MediaSourceId`、Progress 不带 ⇒ 多版本条目上进度被记到默认
+    //    版本。现在三个接口都带（可空），按 `itemIds` / `mediaSourceIds` 同序取。
+    //  · 顺带两处会**污染**服务端状态的地方：
+    //    ① 切集时 Start 抛异常，`playSessionId` 会保持上一集的值 ⇒ 改成先清空再赋值；
+    //    ② `readPositionTicks()` 读不到时曾当 0 上报 —— 那等于告诉服务端「从头开始」，
+    //       会把续播点清零。现在读不到返回 null，本轮整轮跳过；Stopped 退回
+    //       `lastReportedTicks`。
+    //  · GSY 内核仍然**完全没有**进度上报（`GsyPlayerActivity` 零个 `/Sessions/Playing*`，
+    //    且 `PlayerLib` 的非 mpv 分支读不到 `time-pos`），本轮不动，单独排期。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 223
     versionName = "1.6.14"
 
     vectorDrawables {
