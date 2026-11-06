@@ -215,6 +215,18 @@ class PlayerPreferences(
   val showPlayerBattery = preferenceStore.getBoolean("show_player_battery", false)
 
   /**
+   * 控制条是否显示**网络加载速度**（默认开）。
+   *
+   * 只有在网络流（http / https）上才有读数，本地文件整条不渲染 —— 判定在
+   * `MpvNetSpeedSampler.sample()` 里，这里只负责「用户要不要看」。
+   *
+   * 默认开而时钟 / 电量默认关，是因为它们不是一类东西：那两个是**设备状态**，
+   * 与片子无关；网速是**这条流能不能跟上码率**的唯一现场证据 ——
+   * 卡顿 / 转圈时第一时间要看的就是它。
+   */
+  val showPlayerNetSpeed = preferenceStore.getBoolean("show_player_net_speed", true)
+
+  /**
    * GIF 录制的输出宽度（px，等比缩放）。
    *
    * GIF 只有 256 色，宽度就是「清晰度 ↔ 体积」的主开关，而体积是**按宽度平方**涨的：

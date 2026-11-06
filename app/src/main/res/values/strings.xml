@@ -595,6 +595,8 @@
   <string name="pref_show_player_clock_summary">Show the current time on the control bar</string>
   <string name="pref_show_player_battery_title">Show battery</string>
   <string name="pref_show_player_battery_summary">Show the battery icon and percentage (turns red below 15%%)</string>
+  <string name="pref_show_player_net_speed_title">Show network speed</string>
+  <string name="pref_show_player_net_speed_summary">Shows the current network loading speed next to the clock and battery. Only network sources have a reading.</string>
   <string name="pref_media_source_pref_title">Preferred version</string>
   <string name="pref_media_source_pref_summary">When a title has multiple versions, pick one automatically by this rule</string>
   <string name="media_source_pref_default">Follow server default</string>

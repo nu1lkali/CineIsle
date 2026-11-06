@@ -943,6 +943,31 @@ object PlayerPreferencesScreen : Screen {
                   )
                 },
               )
+
+              PreferenceDivider()
+
+              // 第三个状态项：网速。紧跟在时钟 / 电量后面 —— 三者在屏幕上就是同一条状态行，
+              // 设置里也放在一起，用户调的时候不用来回找。
+              val showNetSpeed by preferences.showPlayerNetSpeed.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Speed,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = showNetSpeed,
+                onValueChange = preferences.showPlayerNetSpeed::set,
+                modifier = Modifier.settingsAnchor(R.string.pref_show_player_net_speed_title),
+                title = { Text(stringResource(R.string.pref_show_player_net_speed_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    stringResource(R.string.pref_show_player_net_speed_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
             }
           }
           // Gestures Section

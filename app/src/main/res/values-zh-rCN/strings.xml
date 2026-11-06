@@ -578,6 +578,8 @@
   <string name="pref_show_player_clock_summary">在控制栏显示当前时间</string>
   <string name="pref_show_player_battery_title">显示电量</string>
   <string name="pref_show_player_battery_summary">在控制栏显示电池图标与电量百分比（低于 15%% 时标红）</string>
+  <string name="pref_show_player_net_speed_title">显示网络速度</string>
+  <string name="pref_show_player_net_speed_summary">在控制栏的时钟、电量旁显示当前网络加载速度。仅网络片源有读数。</string>
   <string name="pref_media_source_pref_title">多版本优先选择</string>
   <string name="pref_media_source_pref_summary">同一个影片有多个版本时，播放时自动按此规则挑选</string>
   <string name="media_source_pref_default">跟随服务器默认版本</string>

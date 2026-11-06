@@ -321,6 +321,11 @@ fun PlayerControls(
   // 控制条上的系统时钟 / 电量（两个独立开关，默认都关）。
   val showPlayerClock by playerPreferences.showPlayerClock.collectAsState()
   val showPlayerBattery by playerPreferences.showPlayerBattery.collectAsState()
+  val showPlayerNetSpeed by playerPreferences.showPlayerNetSpeed.collectAsState()
+  // 状态行里的网速读数：null = 本地文件 / 非网络流，整段不渲染。
+  // 这是 StateFlow 的 collectAsState（androidx），与上面几条 Preference 的重载同名不同源，
+  // 两个 import 都必须留着。
+  val netSpeedBytesPerSec by viewModel.netSpeedBytesPerSec.collectAsState()
   val interactionSource = remember { MutableInteractionSource() }
   val controlsShown by viewModel.controlsShown.collectAsState()
   val areControlsLocked by viewModel.areControlsLocked.collectAsState()
@@ -1407,7 +1412,9 @@ fun PlayerControls(
         // - 按钮簇**上方**那一带两种朝向都是留白，且属于「控件区」而不是画面主体 ——
         //   白字 + 阴影都成立，且不会被字幕区抢走。
         // 两个开关都关时**整块不创建**（不进 composition），避免无谓的重排。
-        if (showPlayerClock || showPlayerBattery) {
+        // 三个「状态项」任一可见就创建这一块。网速还要看读数是否存在 —— 本地文件上
+        // 采样器给 null，此时就算开关开着也不该为它创建一条空行。
+        if (showPlayerClock || showPlayerBattery || (showPlayerNetSpeed && netSpeedBytesPerSec != null)) {
           AnimatedVisibility(
             visible = controlsShown && !areControlsLocked,
             enter = fadeIn(playerControlsEnterAnimationSpec()),
@@ -1439,6 +1446,8 @@ fun PlayerControls(
             PlayerStatusIndicators(
               showClock = showPlayerClock,
               showBattery = showPlayerBattery,
+              showNetSpeed = showPlayerNetSpeed,
+              netSpeedBytesPerSec = netSpeedBytesPerSec,
             )
           }
         }

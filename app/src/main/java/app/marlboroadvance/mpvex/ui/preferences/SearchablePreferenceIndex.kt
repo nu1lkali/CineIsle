@@ -534,6 +534,13 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
         screen = PlayerPreferencesScreen,
     ))
     add(SearchablePreference(
+        titleRes = R.string.pref_show_player_net_speed_title,
+        summaryRes = R.string.pref_show_player_net_speed_summary,
+        screenKeywords = listOf("网速", "速度", "网络", "加载", "network", "speed", "bandwidth"),
+        category = "pref_player_seeking_title",
+        screen = PlayerPreferencesScreen,
+    ))
+    add(SearchablePreference(
         titleRes = R.string.pref_player_gestures_brightness,
         category = "pref_player_gestures",
         screen = PlayerPreferencesScreen,
