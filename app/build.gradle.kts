@@ -2883,8 +2883,9 @@ android {
     //    条目与会话，会把新条目当成「切集」发一条 `PositionTicks=0` 的 Start。现在抽成
     //    `startEmbyReporting(intent)`，两处都调；先 `stop()` 结算上一场再带新令牌重挂。
     //  · 对照物：Yamby v2.1.0.11（`/emby/Sessions/Playing{,/Progress,/Stopped}` 同一套
-    //    REST）上报体只有 `PositionTicks / IsPaused / PlayMethod` 三个字段，
-    //    `PlaySessionId` 取自 `POST /Items/{Id}/PlaybackInfo` 的响应（我们 v226 起自己生成）。
+    //    REST）上报体 15 个字段，`PositionTicks = positionMs × 10000`，唯一闸是「片长
+    //    ≤ 1000ms 整条不发」，**没有**任何位置回落保护；`PlaySessionId` 取自
+    //    `POST /Items/{Id}/PlaybackInfo` 的响应（我们 v226 起自己生成 UUID）。
     // ────────────────────────────────────────────────────────────────────────
     // ────────────────────────────────────────────────────────────────────────
     // v229（1.6.14，修复轮不涨名）详情页播放的剧集不进「继续观看」
@@ -2898,7 +2899,21 @@ android {
     //    也是这个做法）。`IncludeItemTypes` 参数保留但默认 null，需要收窄时再显式传。
     //  · 顺带：桌面「继续观看」小组件走同一个 `repository.getResumeItems`，一并修好。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 229
+    // ────────────────────────────────────────────────────────────────────────
+    // v230（1.6.14，修复轮不涨名）下拉刷新后「继续观看」回第一条要等 800ms
+    //  · 现象：首页下拉刷新，内容已经换好了，横向的「继续观看」还停在原来的格子上，
+    //    过一会儿才「咔」地跳回第一条（用户原话：item(0) 滚到 item(0) 有延迟）。
+    //  · 根因：v227 的回位 effect 把 key 挂在 `isRefreshing == false` 上，而
+    //    `PullRefreshCore.onRefresh` 在 `onRefresh()` 跑完之后还有一句
+    //    `delay(delayAfterRefresh = 800ms)` 才置 false（那句是「别让转圈一闪就没」的
+    //    观感补偿）⇒ 数据早就落地了，用户还要再看 800ms 的旧横向偏移。
+    //  · 修法：拆成两条 effect —— 刷新**开始**（`true`）就 `scrollToItem(0)`，让新内容
+    //    在 0 格上原地换掉；「第一条 Id 变了」那条留着兜静默刷新（从播放器返回 / onResume
+    //    补拉，不经过 isRefreshing）。
+    //  · 别改成 `animateScrollToItem`：横向甩回 0 的动画在「手指刚松开」这一刻看着像列表
+    //    自己在动，反而更脏；瞬时定位才是「下拉完就在第一个」。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 230
     versionName = "1.6.14"
 
     vectorDrawables {
