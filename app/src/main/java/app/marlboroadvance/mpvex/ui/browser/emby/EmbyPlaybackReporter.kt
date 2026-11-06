@@ -1,6 +1,8 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
+import app.marlboroadvance.mpvex.ui.player.PlayerDiagLog
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
+import android.app.Activity
 import android.content.Intent
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -240,6 +242,10 @@ object EmbyPlaybackReporter {
       try {
         runCatching {
           val server = repository.getServer(sid) ?: return@runCatching
+          PlayerDiagLog.log(
+            "report",
+            "Start item=$firstId ticks=$startPositionTicks session=$sessionForStart",
+          )
           playSessionId = repository.reportPlaybackStart(
             server = server,
             itemId = firstId,
@@ -278,13 +284,32 @@ object EmbyPlaybackReporter {
   }
 
   /**
-   * 播放页销毁时调用：上报停止并结束轮询。
+   * 播放页退出时调用：上报停止并结束轮询。
+   *
+   * ## 调用时机（v227 起的约定）
+   *
+   * **先 `onStop`、后 `onDestroy`**，两次都调，靠令牌去重：
+   * - `onStop` 里只在「Activity 正在 finish」（返回手势 / 返回键 / 点关闭）时报一次 ——
+   *   此刻内核**还活着**，位置读得准，而且比 `onDestroy` 早一个生命周期，
+   *   进程被系统回收前有充裕时间把请求发出去；
+   * - `onDestroy` 是兜底（按 Home 后从最近任务划掉、PiP 关闭等）：那时位置多半已经
+   *   读不到，只能退回 [lastReportedTicks]。
    *
    * @param token 本场播放的令牌。与当前会话不符时**直接返回** —— 那是「上一个内核的
    *   播放页」在退场，它要结算的是它自己那一集，不能拿新页面刚写进来的字段去收尾。
    */
   fun stop(token: Any? = null) {
     if (token != null && token !== sessionToken) return
+
+    // ⚠️ 位置必须在摘掉 provider **之前**读。
+    //    两个 provider 是 GSY 内核唯一的位置来源（`PlayerLib` 在 GSY 下 `canTouchNative`
+    //    恒 false，属性读出来是 null），mpv 这条路进到 `onDestroy` 时内核也已经被
+    //    `cleanupMPV()` 拆掉了。原来「先摘 provider、后读位置」的顺序 ⇒ 两者都读不到
+    //    ⇒ 只能退回 `lastReportedTicks`（最多差 10 秒）；播放不满 10 秒就退出时它还是 0，
+    //    于是 Stopped 把续播点写成 0 —— 用户看到的就是「退出后已观看 0%」。
+    val itemId = currentItemId
+    val liveTicks = if (itemId != null) readPositionTicks() else null
+
     sessionToken = null
     pollingJob?.cancel()
     pollingJob = null
@@ -298,9 +323,9 @@ object EmbyPlaybackReporter {
     pausedProvider = null
     EmbyPlayerActions.release()
 
-    val itemId = currentItemId ?: return
-    // 读不到当前位置就用「最后一次成功上报的位置」，别让 Stopped 把续播点写成 0
-    val ticks = readPositionTicks() ?: lastReportedTicks
+    if (itemId == null) return
+    // 实时读数优先；读不到才用「最后一次成功上报的位置」（别让 Stopped 把续播点写成 0）
+    val ticks = liveTicks ?: lastReportedTicks
     val stopSourceId = mediaSourceIdOf(itemId)
     val sid = serverId
     // ⚠️ session 取**快照**：下面那段是异步发出去的，等它真跑起来时字段可能已经被
@@ -311,6 +336,10 @@ object EmbyPlaybackReporter {
 
     scope.launch {
       runCatching {
+        PlayerDiagLog.log(
+          "report",
+          "Stopped item=$itemId ticks=$ticks live=${liveTicks != null} session=$sessionId",
+        )
         val repository = get<EmbyRepository>(EmbyRepository::class.java)
         val server = repository.getServer(sid) ?: return@launch
         repository.reportPlaybackStopped(
@@ -320,7 +349,7 @@ object EmbyPlaybackReporter {
           positionTicks = ticks,
           mediaSourceId = stopSourceId,
         )
-      }
+      }.onFailure { EmbyLog.warn("上报 Stopped 失败（item=$itemId）", it) }
     }
   }
 
@@ -726,6 +755,28 @@ object EmbyPlaybackReporter {
 
     override fun onCreate(owner: LifecycleOwner) {
       start(intent, token)
+    }
+
+    /**
+     * 退出播放页时**提前**报 Stopped（v227）。
+     *
+     * ## 为什么不能只靠 [onDestroy]
+     *
+     * 1. **内核已经拆了**：`PlayerActivity` 的 `super.onDestroy()` 在最后一行，那时
+     *    `cleanupMPV()` 已经跑过、GSY 那边 `super.onDestroy()` 反而在最前面 ——
+     *    两条路都读不到实时位置，只能退回「最后一次上报的位置」。
+     * 2. **进程随时可能被回收**：返回手势 / 从最近任务划掉之后，系统可以在 `onDestroy`
+     *    刚结束时就杀掉进程，那条才 `launch` 出去的请求根本来不及发出。
+     *
+     * `onStop` 比 `onDestroy` 早一个生命周期，是「用户真的要走了」与「按 Home / 进小窗 /
+     * 转屏」的分界：只有 Activity 已经在 finish 时才报，后三种 `isFinishing` 为 false，
+     * 报上去反而会把「后台继续播放」这条会话掐掉。
+     *
+     * 与 [onDestroy] 不冲突：第一次调完 `sessionToken` 已置空，第二次在令牌那一步直接返回。
+     */
+    override fun onStop(owner: LifecycleOwner) {
+      val activity = owner as? Activity ?: return
+      if (activity.isFinishing) stop(token)
     }
 
     override fun onDestroy(owner: LifecycleOwner) {

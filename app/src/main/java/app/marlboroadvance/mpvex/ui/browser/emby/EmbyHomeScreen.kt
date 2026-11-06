@@ -212,6 +212,20 @@ fun EmbyHomeScreen(
   // 只有列表停在顶部时才允许下拉刷新：滚到中间往下拉，列表自己会往上滚，不该触发刷新
   val homeListState = rememberLazyListState()
 
+  // ── 「继续观看」这一行的滚动状态（v227）──
+  // 原来这行没传 state，用的是 Compose 内部那个 `rememberLazyListState`：横向偏移会一直
+  // 留着 —— 下拉刷新把内容换掉了，位置还停在原处，用户看到的就是「刷了但没回到第一条」。
+  // 两个时机回到开头：
+  //   · 刷新结束（`isRefreshing` 由 true → false，由 PullRefreshBox 自己收尾）；
+  //   · 第一条换了（刚看完的那部被服务端顶到最前）。
+  // ⚠️ 只拿「第一条的 Id」当 key，不做整表 —— 否则列表里任何一条的进度更新都会把用户
+  //    正在横滑的位置弹回去。
+  val resumeRowState = rememberLazyListState()
+  val resumeLeadId = resumeItems.firstOrNull()?.Id
+  LaunchedEffect(isRefreshing.value, resumeLeadId) {
+    if (!isRefreshing.value) resumeRowState.scrollToItem(0)
+  }
+
   // 长按媒体库卡片 → 通知服务器扫描该库（异步任务，只发指令不等结果）
   val scanScope = rememberCoroutineScope()
   // 长按选中的媒体库：非空时弹操作框，用户点「扫描媒体库」后才真的发请求
@@ -904,6 +918,7 @@ fun EmbyHomeScreen(
               item {
                 EmbySectionHeader(title = stringResource(R.string.emby_section_resume))
                 LazyRow(
+                  state = resumeRowState,
                   contentPadding = PaddingValues(horizontal = 16.dp),
                   horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
