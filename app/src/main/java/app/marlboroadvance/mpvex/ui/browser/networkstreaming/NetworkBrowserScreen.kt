@@ -100,10 +100,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
@@ -240,6 +244,8 @@ data class NetworkBrowserScreen(
     val sortChangeTick by viewModel.sortChangeTick.collectAsState()
     // 当前协议是否支持重命名 / 删除（目前只有 AList）—— 决定卡片挂不挂长按
     val supportsWrite by viewModel.supportsWrite.collectAsState()
+    // 本连接已收藏的目录路径（长按菜单里的星形状态）。与列表同源刷新
+    val favoritePaths by viewModel.favoritePaths.collectAsState()
     // 整理工具箱的执行状态（挂在 ViewModel 上：抽屉关掉，任务照跑）
     val toolProgress by viewModel.toolProgress.collectAsState()
     // 批量重命名的规则链：挂在 ViewModel 上，抽屉关掉再开 / 换目录 / 重启都还在
@@ -777,14 +783,24 @@ data class NetworkBrowserScreen(
                 // 状态来自 ViewModel（loadFiles 时同源刷新），主界面「收藏的目录」
                 // section 与这里永远一致。切完弹 toast：一屏那么多条目，
                 // 没提示根本注意不到刚才那下点没点上。
+                //
+                // ⚠️ 文案不能只靠 `maxLines = 1 + Ellipsis` 兜底：省略号会连**闭合的
+                //    」一起吃掉**（`收藏「XXXX…`），看起来像没写完。改成按可用宽度
+                //    主动截名字、括号永远留着（见 [fittedFavoriteName]）。
+                //    「取消收藏」比「收藏」多两个字 ⇒ 名字可用宽度不同，必须按**实际
+                //    动词**各量一次，不能共用一个字符数上限。
+                val favoriteVerb = if (isCurrentFavorite) "取消收藏" else "收藏"
+                val favoriteName = fittedFavoriteName(favoriteVerb, dirTitle)
                 DropdownMenuItem(
                   text = {
-                    // 目录名进来以后也是「任意长度」——同样给上限，别让 ⋮ 菜单被撑成横幅
                     Text(
-                      text = if (isCurrentFavorite) "取消收藏「$dirTitle」" else "收藏「$dirTitle」",
+                      text = "$favoriteVerb「$favoriteName」",
+                      // 与 [fittedFavoriteName] 的测量口径必须一致，否则量出来放得下、
+                      // 实际画上去又差一截
+                      style = MaterialTheme.typography.labelLarge,
                       maxLines = 1,
                       overflow = TextOverflow.Ellipsis,
-                      modifier = Modifier.widthIn(max = 208.dp),
+                      modifier = Modifier.widthIn(max = FAVORITE_LABEL_MAX_WIDTH),
                     )
                   },
                   leadingIcon = {
@@ -803,7 +819,8 @@ data class NetworkBrowserScreen(
                   onClick = {
                     showOverflowMenu = false
                     viewModel.toggleFavoriteCurrent { added ->
-                      toast(if (added) "已收藏「$dirTitle」" else "已取消收藏「$dirTitle」")
+                      // toast 用同一个（已截断的）名字，点的是什么、提示就是什么
+                      toast(if (added) "已收藏「$favoriteName」" else "已取消收藏「$favoriteName」")
                     }
                   },
                 )
@@ -907,7 +924,15 @@ data class NetworkBrowserScreen(
                       toast("当前目录没有视频")
                     } else {
                       if (drillDown) toast("正在抽取视频…")
-                      viewModel.playRandomVideos(drillDown = drillDown) {
+                      viewModel.playRandomVideos(
+                        drillDown = drillDown,
+                        // 抽不满≠出错：要么树里就这么点视频，要么 6 秒预算用完
+                        // （视频散在几百个文件夹里时必然如此）。静默少给会被当成 bug。
+                        onPartial = { found, want, scanned, timedOut ->
+                          val tail = if (timedOut) "（已达时间上限）" else ""
+                          toast("抽取完成：视频 $found/$want，扫描目录 $scanned 个$tail")
+                        },
+                      ) {
                         toast(if (drillDown) "当前目录及其子文件夹里没有视频" else "当前目录没有视频")
                       }
                     }
@@ -924,7 +949,13 @@ data class NetworkBrowserScreen(
                   onClick = {
                     showOverflowMenu = false
                     if (drillDown) toast("正在抽取视频…")
-                    viewModel.startFeedPlayback(drillDown = drillDown) {
+                    viewModel.startFeedPlayback(
+                      drillDown = drillDown,
+                      onPartial = { found, want, scanned, timedOut ->
+                        val tail = if (timedOut) "（已达时间上限）" else ""
+                        toast("抽取完成：视频 $found/$want，扫描目录 $scanned 个$tail")
+                      },
+                    ) {
                       toast(if (drillDown) "当前目录及其子文件夹里没有视频" else "当前目录没有视频")
                     }
                   },
@@ -1233,6 +1264,8 @@ data class NetworkBrowserScreen(
             file = target,
             // 重命名 / 删除只有 AList 有写接口；属性与下载对谁都可用
             canWrite = supportsWrite,
+            // 星形状态：这条路径在本连接的收藏集合里出现过就算已收藏
+            isFavorite = target.path in favoritePaths,
             onDismissRequest = { actionTarget = null },
             onProperties = {
               actionTarget = null
@@ -1247,6 +1280,15 @@ data class NetworkBrowserScreen(
               actionTarget = null
               viewModel.startDownload(target) { started, reason ->
                 if (!started) toast(reason ?: "无法开始下载")
+              }
+            },
+            // 收藏 / 取消收藏这个子文件夹：只写本地 `network_favorites` 表，不动服务器
+            // ⇒ 不受 supportsWrite 限制（SMB / WebDAV / FTP 一样能用）。
+            // toast 用**完整名字**：Toast 自带换行，不需要为它再截一次。
+            onToggleFavorite = {
+              actionTarget = null
+              viewModel.toggleFavoriteFolder(target) { added ->
+                toast(if (added) "已收藏「${target.name}」" else "已取消收藏「${target.name}」")
               }
             },
             onRename = {
@@ -1605,9 +1647,13 @@ private fun NetworkFileActionMenu(
   file: NetworkFile,
   /** 当前协议是否支持写操作（AList）。false 时不显示重命名 / 删除 / 复制 / 移动 */
   canWrite: Boolean,
+  /** 这个条目（只可能是目录）是否已收藏 */
+  isFavorite: Boolean,
   onDismissRequest: () -> Unit,
   onProperties: () -> Unit,
   onDownload: () -> Unit,
+  /** 收藏 / 取消收藏这个目录。**只对目录出现**，且不受 [canWrite] 限制 */
+  onToggleFavorite: () -> Unit,
   onRename: () -> Unit,
   onDelete: () -> Unit,
   /** 复制 / 移动到另一个远程目录（走目标目录选择器） */
@@ -1629,6 +1675,40 @@ private fun NetworkFileActionMenu(
       leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
       onClick = onDownload,
     )
+    if (file.isDirectory) {
+      // ⭐ 收藏是**本地行为**（只写 `network_favorites` 表，服务器完全不知道），
+      //    所以它不受 canWrite 门禁 —— SMB / WebDAV / FTP 用户同样需要这个入口。
+      //    这也是长按菜单里唯一「不碰远程」的"写"操作，放在只读组里不算错位。
+      //
+      // ⚠️ 文案与 ⋮ 菜单里的「收藏当前目录」共用 [fittedFavoriteName]：同一个动作在
+      //    两个入口必须长得一样，且都不能把闭合的」截掉。
+      val verb = if (isFavorite) "取消收藏" else "收藏"
+      val shown = fittedFavoriteName(verb, file.name)
+      DropdownMenuItem(
+        text = {
+          Text(
+            text = "$verb「$shown」",
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = FAVORITE_LABEL_MAX_WIDTH),
+          )
+        },
+        leadingIcon = {
+          Icon(
+            imageVector = if (isFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+            contentDescription = null,
+            tint =
+              if (isFavorite) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.secondary
+              },
+          )
+        },
+        onClick = onToggleFavorite,
+      )
+    }
     if (canWrite) {
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
       // ── 条目搬运三项（v180）──
@@ -1669,6 +1749,74 @@ private fun NetworkFileActionMenu(
         onClick = onDelete,
       )
     }
+  }
+}
+
+/**
+ * 收藏类菜单项里「目录名」的宽度上限。
+ *
+ * 208dp ≈ 一行 12 个汉字：够认出是哪一层，又不至于让 ⋮ 菜单横跨半屏
+ * （与 [MenuHeaderTitle] 同一个口径，两个位置看起来才是一套）。
+ */
+private val FAVORITE_LABEL_MAX_WIDTH = 208.dp
+
+/**
+ * 把目录名截到「`动词「名字」`」这整句放得下，**且闭合的 `」` 必须留着**。
+ *
+ * ## 为什么不交给 `maxLines + Ellipsis`
+ * 省略号是**在末尾加**的：`收藏「一个很长很长…` —— 收尾那个 `」` 被挤掉，
+ * 读起来像话没说完（用户反馈的原话就是「截断变成... 请保留闭合的括号」）。
+ * 而且 `Ellipsis` 只保证「不溢出」，不保证**名字本身**看起来完整。
+ *
+ * ## 为什么必须真的量一遍，不能用固定字数
+ * 同一个 208dp：
+ * - 「收藏」+「取消收藏」两种动词的长度差两个字，名字可用宽度就不一样；
+ * - 中英文混排（`The.Big.Bang.Theory.S01` vs `生活大爆炸第一季`）每字符宽度差一倍；
+ * - 用户还可能放大系统字号。
+ * 按字数猜必然在某些组合上算错，而 `TextMeasurer` 用的是**真实字体 + 真实字号 +
+ * 真实字距**，量出来就是最终渲染色（[CineCards] 的自适应字号也是这个路子）。
+ *
+ * ## 测量口径
+ * 样式固定用 `labelLarge` = `DropdownMenuItem` 的默认正文样式；调用处的 `Text`
+ * 必须显式写同一个 `style`，否则量的是 A 样式、画的是 B 样式，会差一截。
+ *
+ * @param verb 「收藏」/「取消收藏」这类前缀（不含括号）
+ * @return 截断后的名字（不含括号）；放得下就是原名
+ */
+@Composable
+private fun fittedFavoriteName(verb: String, name: String): String {
+  val measurer = rememberTextMeasurer(cacheSize = 8)
+  val density = LocalDensity.current
+  val style = MaterialTheme.typography.labelLarge
+  return remember(verb, name, density, style) {
+    val limit = with(density) { FAVORITE_LABEL_MAX_WIDTH.roundToPx() }
+    fun widthOf(text: String): Int = measurer.measure(
+      text = AnnotatedString(text),
+      style = style,
+      maxLines = 1,
+      softWrap = false,
+    ).size.width
+
+    if (name.isEmpty() || limit <= 0 || widthOf("$verb「$name」") <= limit) {
+      return@remember name
+    }
+    // 从尾部逐字削，把「…」和闭合的」算进每次试量里 —— 这样最后一次成功的长度
+    // 就是「带省略号也放得下」的最大长度，不会出现「削完又溢出」
+    var cut = name.length
+    while (cut > 0) {
+      // 代理对（emoji / 部分生僻字）不能切一半，切一半会渲染成方框
+      if (name[cut - 1].isHighSurrogate()) {
+        cut--
+        continue
+      }
+      val candidate = name.substring(0, cut).trimEnd()
+      if (candidate.isNotEmpty() && widthOf("$verb「$candidate…」") <= limit) {
+        return@remember candidate
+      }
+      cut--
+    }
+    // 极端窄（超长动词 + 超大字号）：只留「…」，括号仍然闭合 ⇒「收藏「…」」
+    "…"
   }
 }
 

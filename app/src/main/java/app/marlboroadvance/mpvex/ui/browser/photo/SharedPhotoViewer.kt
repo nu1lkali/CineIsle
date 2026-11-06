@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -692,9 +693,45 @@ private fun PhotoFilmstrip(
           )
           .clickable { onPageClick(index) },
       ) {
+        // ⭐ 占位底**垫在缩略图下面**，不是「失败时才画」。
+        //    原因：这一格的底色是全页纯黑 + 胶片条 55% 黑，而缩略图在**加载中**
+        //    是「什么都不画」（`NetworkApiThumbnail(showShimmer = false)`、
+        //    `NetworkPhotoThumbnail` 的 shownBefore 分支都是这个行为）、
+        //    加载失败时也只有一个 35% 透明度的破图图标，还要再乘上 55% 的未选中
+        //    alpha ⇒ 实际约 19% 灰，等于看不见。真机上就是「一排纯黑的格子」。
+        //    垫一层浅色 + 图片图标以后，加载中 / 没有封面图 / 加载失败三种情况
+        //    都看得出「这里是一张照片」，图片本身（Crop 铺满、不透明）会把它
+        //    完全盖住，正常显示时看不出这一层的存在。
+        PhotoThumbPlaceholder()
         renderThumbnail(index, Modifier.fillMaxSize())
       }
     }
+  }
+}
+
+/**
+ * 胶片条格子里的**默认占位图**：浅灰底 + 一个小图片图标。
+ *
+ * 为什么要它见 [PhotoFilmstrip] 里那段注释（一句话：缩略图的加载态是「什么都不画」，
+ * 而这一格的底色是纯黑 ⇒ 没图就是一排黑洞）。
+ *
+ * 视觉口径与全屏浏览器一致：**只用黑白灰，不用主题色** —— 胶片条永远压在纯黑底上，
+ * 主题色（尤其浅色主题下的深色 onSurfaceVariant）在这里会直接糊成看不见。
+ */
+@Composable
+private fun PhotoThumbPlaceholder() {
+  Box(
+    modifier = Modifier
+      .fillMaxSize()
+      .background(Color.White.copy(alpha = 0.14f)),
+    contentAlignment = Alignment.Center,
+  ) {
+    Icon(
+      imageVector = Icons.Outlined.Image,
+      contentDescription = null,
+      tint = Color.White.copy(alpha = 0.55f),
+      modifier = Modifier.size(16.dp),
+    )
   }
 }
 

@@ -421,6 +421,15 @@ class NetworkRepository(
     favoriteDao.isFavorite(connectionId, path)
 
   /**
+   * 某台连接下已收藏的目录路径集合（一条 SQL）。
+   *
+   * 长按菜单要知道「这个子文件夹收了没有」，逐个 `isFavorite` 是一屏几十条查询；
+   * 拿全集回来在内存里判存在，页面打开时刷一次就够（收藏改变了就地改这个集合）。
+   */
+  suspend fun getFavoritePaths(connectionId: Long): Set<String> =
+    favoriteDao.getPaths(connectionId).toSet()
+
+  /**
    * 收藏 / 取消收藏一个目录。已收藏时再调 = 取消。
    *
    * @return true = 本次是「加上去」，false = 「取下来」

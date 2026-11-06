@@ -293,30 +293,55 @@ fun CineNetworkScreen(modifier: Modifier = Modifier) {
             onEdit = { editing = connection },
             onDelete = { pendingDelete = connection },
             onFeedPlay = {
-              Toast.makeText(context, "正在抽取视频…", Toast.LENGTH_SHORT).show()
+              // 与经典网络页同一个口径（`NetworkStreamingScreen`）：扫描进度写进同一个
+              // Toast 实例，抽不满时明说「只找到 N 个（已扫 M 个文件夹）」
+              val progress = Toast.makeText(context, "正在抽取视频…", Toast.LENGTH_LONG)
+              progress.show()
               scope.launch {
-                val limit = browserPreferences.randomPlayCount.get().coerceIn(1, 500)
-                val videos = NetworkFeedLauncher.collectVideos(
-                  repository = repository,
-                  connection = connection,
-                  startPath = "/",
-                  want = limit,
-                  drillDown = true,
-                )
-                val started = NetworkFeedLauncher.launch(
-                  context = context,
-                  application = context.applicationContext as Application,
-                  repository = repository,
-                  connection = connection,
-                  videos = videos,
-                  want = limit,
-                )
-                if (!started) {
-                  Toast.makeText(
-                    context,
-                    "「${connection.name}」里没有找到视频",
-                    Toast.LENGTH_SHORT,
-                  ).show()
+                try {
+                  val limit = browserPreferences.randomPlayCount.get().coerceIn(1, 500)
+                  val feed =
+                    NetworkFeedLauncher.collectVideos(
+                      repository = repository,
+                      connection = connection,
+                      startPath = "/",
+                      want = limit,
+                      drillDown = true,
+                      onProgress = { scanned, found ->
+                        if (scanned % 25 == 0) {
+                          progress.setText("正在抽取：目录 $scanned 个，视频 $found 个")
+                          progress.show()
+                        }
+                      },
+                    )
+                  val started =
+                    NetworkFeedLauncher.launch(
+                      context = context,
+                      application = context.applicationContext as Application,
+                      repository = repository,
+                      connection = connection,
+                      videos = feed.videos,
+                      want = limit,
+                    )
+                  when {
+                    !started ->
+                      Toast.makeText(
+                        context,
+                        "「${connection.name}」里没有找到视频",
+                        Toast.LENGTH_SHORT,
+                      ).show()
+                    feed.videos.size < limit -> {
+                      val tail = if (feed.timedOut) "（已达时间上限）" else ""
+                      Toast.makeText(
+                        context,
+                        "抽取完成：视频 ${feed.videos.size}/$limit，" +
+                          "扫描目录 ${feed.scannedDirs} 个$tail",
+                        Toast.LENGTH_LONG,
+                      ).show()
+                    }
+                  }
+                } finally {
+                  progress.cancel()
                 }
               }
             },

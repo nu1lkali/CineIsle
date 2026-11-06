@@ -217,6 +217,20 @@ class NetworkBrowserViewModel(
   val isCurrentFavorite: StateFlow<Boolean> = _isCurrentFavorite.asStateFlow()
 
   /**
+   * 当前连接下**已收藏的目录路径集合**（长按子文件夹菜单的星形状态）。
+   *
+   * 与 [isCurrentFavorite] 是两件事、刻意分开：
+   * - [isCurrentFavorite] 只答「我现在站的这一层收了没有」，顶栏 ⋮ 菜单用；
+   * - 这个是「这一屏里哪些子文件夹已经收过」，长按菜单用。
+   *
+   * 刷新口径与列表同源（`loadFiles` 末尾一次查询），不走 Room Flow：
+   * 一个浏览页一个 VM，进页面收一次就够；收藏改变时由 [toggleFavoriteFolder]
+   * 就地增删，不必再查库。
+   */
+  private val _favoritePaths = MutableStateFlow<Set<String>>(emptySet())
+  val favoritePaths: StateFlow<Set<String>> = _favoritePaths.asStateFlow()
+
+  /**
    * 当前连接是否支持**写操作**（重命名 / 删除）。目前只有 AList 支持。
    *
    * UI 据此决定要不要响应长按 —— 不支持的协议弹了菜单也是点了就报错，
@@ -953,6 +967,8 @@ class NetworkBrowserViewModel(
           }
         // 收藏状态与列表同源刷新：取消收藏后返回 / 重新进入都能看到正确星形
         _isCurrentFavorite.value = repository.isFavorite(connectionId, currentPath)
+        // 子文件夹的收藏状态同理：一次 SQL 拿全集，长按菜单直接查 Set
+        _favoritePaths.value = repository.getFavoritePaths(connectionId)
       } catch (e: Exception) {
         _error.value = e.message ?: "未知错误"
       } finally {
@@ -979,6 +995,34 @@ class NetworkBrowserViewModel(
       val dirName = networkPathDisplayName(currentPath, connection.name)
       val added = repository.toggleFavorite(connection, currentPath, dirName)
       _isCurrentFavorite.value = added
+      // 两个状态集同步维护：这一层也可能出现在 [favoritePaths] 里（不冲突，只是对齐）
+      _favoritePaths.update { if (added) it + currentPath else it - currentPath }
+      onResult(added)
+    }
+  }
+
+  /**
+   * 收藏 / 取消收藏**列表里的某一个子文件夹**（长按菜单入口）。
+   *
+   * ## 为什么单开一条而不是复用 [toggleFavoriteCurrent]
+   * 那条写死了 `currentPath` + `networkPathDisplayName(...)`：前者是「我站的这一层」，
+   * 后者是为「单段路径」这个坑兜底。子文件夹的显示名就是 `file.name`（列目录已经给了
+   * 真实名字，不需要从路径反推），路径是 `file.path` —— 用同一条函数反而要造假参数。
+   *
+   * ## 只改内存，不重列
+   * 收藏是**本地行为**（`network_favorites` 表），跟服务器无关：改完就地增删
+   * [favoritePaths]，长按菜单的星形立刻转过去；主界面「收藏的目录」section 走的是
+   * Room Flow，自己会收到失效通知重新查，两边天然一致。
+   *
+   * @param onResult 切完回调（true = 加上去，false = 取下来），给调用方弹 toast 用
+   */
+  fun toggleFavoriteFolder(file: NetworkFile, onResult: (added: Boolean) -> Unit = {}) {
+    viewModelScope.launch {
+      // 收藏的语义只对目录成立；文件传进来直接忽略，不要写进快捷入口
+      if (!file.isDirectory) return@launch
+      val connection = repository.getConnectionById(connectionId) ?: return@launch
+      val added = repository.toggleFavorite(connection, file.path, file.name)
+      _favoritePaths.update { if (added) it + file.path else it - file.path }
       onResult(added)
     }
   }
@@ -1148,23 +1192,36 @@ class NetworkBrowserViewModel(
    *
    * @param drillDown true = 穿透子文件夹（勾了「穿透子文件夹」），从当前目录逐层下钻累积；
    *   false = 只播当前目录（默认，与旧行为一致）
+   * @param onPartial 抽不满时回调（实际条数, 目标条数, 已扫目录数, 是否被时间预算掐停）。
+   *   穿透模式有 6 秒墙钟预算（见 `NetworkFeedLauncher.SCAN_TIME_BUDGET_MS`），视频
+   *   散在几百个文件夹里时必然少给 —— 必须说出来，否则用户以为抽片坏了
    * @param onEmpty 一条都没抽到时回调 —— 调用方据此给 toast。递归模式下调用方
    *   事先不知道有多少视频，只能**等抽完**才知道，所以结果必须回传而不是让它静默返回。
    */
-  fun playRandomVideos(drillDown: Boolean = false, onEmpty: () -> Unit = {}) {
+  fun playRandomVideos(
+    drillDown: Boolean = false,
+    onPartial: (found: Int, want: Int, scannedDirs: Int, timedOut: Boolean) -> Unit =
+      { _, _, _, _ -> },
+    onEmpty: () -> Unit = {},
+  ) {
     viewModelScope.launch {
       val limit = browserPreferences.randomPlayCount.randomPlayLimit()
-      val pool = if (drillDown) {
+      val pool: List<NetworkFile>
+      if (drillDown) {
         val connection = repository.getConnectionById(connectionId) ?: return@launch
-        NetworkFeedLauncher.collectVideos(
+        val feed = NetworkFeedLauncher.collectVideos(
           repository = repository,
           connection = connection,
           startPath = currentPath,
           want = limit,
           drillDown = true,
         )
+        if (feed.videos.size < limit) {
+          onPartial(feed.videos.size, limit, feed.scannedDirs, feed.timedOut)
+        }
+        pool = feed.videos
       } else {
-        _rawFiles.value.filter { it.isVideoFile() }
+        pool = _rawFiles.value.filter { it.isVideoFile() }
       }
       if (pool.isEmpty()) {
         onEmpty()
@@ -1208,9 +1265,16 @@ class NetworkBrowserViewModel(
    * 交给 `VerticalFeedActivity` 自己管「滑到哪放哪」。取片范围、数量口径与
    * [playRandomVideos] 完全共用（同一个 `randomPlayCount` 设置项）。
    *
+   * @param onPartial 抽不满时回调（实际条数, 目标条数, 已扫目录数, 是否被时间预算掐停）
+   *   —— 口径同 [playRandomVideos]：静默少给会被当成 bug
    * @param onEmpty 抽不到视频时回调，调用方负责 toast
    */
-  fun startFeedPlayback(drillDown: Boolean = false, onEmpty: () -> Unit = {}) {
+  fun startFeedPlayback(
+    drillDown: Boolean = false,
+    onPartial: (found: Int, want: Int, scannedDirs: Int, timedOut: Boolean) -> Unit =
+      { _, _, _, _ -> },
+    onEmpty: () -> Unit = {},
+  ) {
     viewModelScope.launch {
       val limit = browserPreferences.randomPlayCount.randomPlayLimit()
       val connection = repository.getConnectionById(connectionId)
@@ -1218,19 +1282,22 @@ class NetworkBrowserViewModel(
         onEmpty()
         return@launch
       }
-      val videos = NetworkFeedLauncher.collectVideos(
+      val feed = NetworkFeedLauncher.collectVideos(
         repository = repository,
         connection = connection,
         startPath = currentPath,
         want = limit,
         drillDown = drillDown,
       )
+      if (feed.videos.isNotEmpty() && feed.videos.size < limit) {
+        onPartial(feed.videos.size, limit, feed.scannedDirs, feed.timedOut)
+      }
       val started = NetworkFeedLauncher.launch(
         context = application,
         application = application,
         repository = repository,
         connection = connection,
-        videos = videos,
+        videos = feed.videos,
         want = limit,
       )
       if (!started) onEmpty()

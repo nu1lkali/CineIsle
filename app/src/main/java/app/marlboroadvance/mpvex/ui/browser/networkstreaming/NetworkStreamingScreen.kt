@@ -367,35 +367,67 @@ object NetworkStreamingScreen : Screen {
                 },
                 // 视界流：从这台存储的根目录递归抽一批视频，进仿抖音竖屏连播页。
                 // 不需要先连接 —— 抽片链路自己会按需建客户端；数量读统一的 randomPlayCount。
+                //
+                // ⚠️ 别再退回「一个静态 toast」：视频散在很多文件夹里时，抽片要列几百个
+                //    目录（AList / WebDAV 并发 4 路也要十几秒），一句不动的提示会被当成卡死。
+                //    复用一个 Toast 实例随进度改文案，抽完 cancel。
                 onFeedPlay = { conn ->
-                  android.widget.Toast
-                    .makeText(context, "正在抽取视频…", android.widget.Toast.LENGTH_SHORT)
-                    .show()
+                  val progress =
+                    android.widget.Toast
+                      .makeText(context, "正在抽取视频…", android.widget.Toast.LENGTH_LONG)
+                  progress.show()
                   coroutineScope.launch {
-                    val limit = browserPreferences.randomPlayCount.get().coerceIn(1, 500)
-                    val videos = NetworkFeedLauncher.collectVideos(
-                      repository = repository,
-                      connection = conn,
-                      startPath = "/",
-                      want = limit,
-                      drillDown = true,
-                    )
-                    val started = NetworkFeedLauncher.launch(
-                      context = context,
-                      application = context.applicationContext as android.app.Application,
-                      repository = repository,
-                      connection = conn,
-                      videos = videos,
-                      want = limit,
-                    )
-                    if (!started) {
-                      android.widget.Toast
-                        .makeText(
-                          context,
-                          "「${conn.name}」里没有找到视频",
-                          android.widget.Toast.LENGTH_SHORT,
+                    try {
+                      val limit = browserPreferences.randomPlayCount.get().coerceIn(1, 500)
+                      val feed =
+                        NetworkFeedLauncher.collectVideos(
+                          repository = repository,
+                          connection = conn,
+                          startPath = "/",
+                          want = limit,
+                          drillDown = true,
+                          onProgress = { scanned, found ->
+                            // 每 25 个目录刷一次：刷太勤会把 Toast 队列顶掉，反而不显示
+                            if (scanned % 25 == 0) {
+                              progress.setText("正在抽取：目录 $scanned 个，视频 $found 个")
+                              progress.show()
+                            }
+                          },
                         )
-                        .show()
+                      val started =
+                        NetworkFeedLauncher.launch(
+                          context = context,
+                          application = context.applicationContext as android.app.Application,
+                          repository = repository,
+                          connection = conn,
+                          videos = feed.videos,
+                          want = limit,
+                        )
+                      when {
+                        !started ->
+                          android.widget.Toast
+                            .makeText(
+                              context,
+                              "「${conn.name}」里没有找到视频",
+                              android.widget.Toast.LENGTH_SHORT,
+                            )
+                            .show()
+                        // 抽不满要说清是「真没有」还是「时间预算用尽」——
+                        // 静默少给会被当成抽片坏了（用户反馈过「开 500 只给 30」）
+                        feed.videos.size < limit -> {
+                          val tail = if (feed.timedOut) "（已达时间上限）" else ""
+                          android.widget.Toast
+                            .makeText(
+                              context,
+                              "抽取完成：视频 ${feed.videos.size}/$limit，" +
+                                "扫描目录 ${feed.scannedDirs} 个$tail",
+                              android.widget.Toast.LENGTH_LONG,
+                            )
+                            .show()
+                        }
+                      }
+                    } finally {
+                      progress.cancel()
                     }
                   }
                 },
