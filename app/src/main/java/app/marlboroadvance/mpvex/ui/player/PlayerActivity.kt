@@ -332,6 +332,16 @@ open class PlayerActivity :
   private var playlistItemIds: List<String> = emptyList()
 
   /**
+   * 当前挂着的那一个 Emby 上报观察者。
+   *
+   * 留着引用只为一件事：本页 `singleTask`，[onNewIntent] 换片时要能**先摘掉旧的再挂新的**
+   * （见 [startEmbyReporting]）。为空 = 这次播放不是从 Emby 发起的。
+   */
+  private var embyReporterObserver:
+    app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EmbyPlaybackLifecycleObserver? =
+    null
+
+  /**
    * 与 [playlist] 同序的 Emby 剧集原始序号（`"2005"` = S02E05；空串 = 不是剧集）。
    *
    * ⚠️ 只给**弹幕匹配**用：弹幕库的集号是「第几集」，而 [playlistIndex] 是「队列里的第几个」。
@@ -603,31 +613,7 @@ open class PlayerActivity :
 
     // Emby：本次播放来自 Emby 时，把播放进度实时回传给服务器
     // （开始 / 进度 / 暂停 / 切下一集 / 退出）。非 Emby 播放不会注册，无任何副作用。
-    runCatching {
-      // ⭐ 上报器必须知道「现在播的是队列里的第几条」：开了「预解析直链（302）」之后
-      //    mpv 的 path 是网盘 CDN 的地址，里面没有 `/Videos/{id}/stream` 可反查，
-      //    只靠路径会把它一直认成起播那一条 —— 连播时既不报上一集 Stopped、也不报
-      //    新一集 Start，后面几集的进度全被写到第一条的 itemId 上。
-      //
-      // ⚠️⚠️ 但**不能**直接调 currentEmbyItemId()：它第一步是从 **IO 线程**读 mpv 的
-      //    `path` 属性，而轮询恰好会在「切下一集」那一瞬读它 —— 那一刻 mpv 正在
-      //    重建 core。native 层在这种时刻被跨线程读属性是可能 SIGSEGV 的，而 native
-      //    崩溃**不走** UncaughtExceptionHandler：没有崩溃页、没有 last_crash.txt、
-      //    手机侧 logcat 也抓不到，表现就是「偶发闪退、复现不了」。
-      //
-      // 所以先取**平行数组**（`playlistItemIds` 与 `playlist` 同序，且在换位 / 删除时
-      // 同步维护，所以按下标取是准的，与 302 / 本地代理无关），只有它拿不到时才退回
-      // 路径反查 —— 那条路只在非 Emby 播放时会被用到，而那时 `start()` 根本没接管上报，
-      // provider 不会被调用。
-      app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.idProvider = {
-        playlistItemIds.getOrNull(playlistIndex)?.takeIf { it.isNotBlank() }
-          ?: currentEmbyItemId()
-      }
-      lifecycle.addObserver(
-        app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
-          .EmbyPlaybackLifecycleObserver(intent),
-      )
-    }
+    startEmbyReporting(intent)
 
     playlistId = intent.getIntExtra("playlist_id", -1).takeIf { it != -1 }
     playlistIndex = intent.getIntExtra("playlist_index", 0)
@@ -883,6 +869,59 @@ open class PlayerActivity :
       }
 
     super.attachBaseContext(contextToUse)
+  }
+
+  /**
+   * 挂上 Emby 进度上报（可重复调用）。
+   *
+   * ## 为什么要抽成方法（v228）
+   *
+   * 本页是 `singleTask`：**播放器已经在跑**时，再从详情页 / 首页起播走的是
+   * [onNewIntent] 而不是 `onCreate`。原来只在 `onCreate` 里挂观察者，于是复用页面
+   * 换片时上报器还认着上一场的 `itemIds` / `playSessionId`：
+   * 轮询发现「当前条目」变了，会把它当成**切集**，给新条目发一条 `PositionTicks = 0`
+   * 的 Start —— 哪怕这次其实是续播到 30 分钟的那一条。紧接着退出，Stopped 就按 0 结账。
+   *
+   * ## 为什么先 stop 再 add
+   *
+   * `lifecycle.removeObserver` **不会**派发 `onDestroy`，所以上一场必须显式 [stop] 结算，
+   * 否则服务端会一直挂着一条「正在播放」。stop 之后再 add，{onCreate} 会带**新令牌**
+   * 重新 `start(source)`，旧令牌的收尾请求一律被拒。
+   */
+  private fun startEmbyReporting(source: Intent) {
+    runCatching {
+      embyReporterObserver?.let {
+        lifecycle.removeObserver(it)
+        app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.stop()
+      }
+      embyReporterObserver = null
+
+      // ⭐ 上报器必须知道「现在播的是队列里的第几条」：开了「预解析直链（302）」之后
+      //    mpv 的 path 是网盘 CDN 的地址，里面没有 `/Videos/{id}/stream` 可反查，
+      //    只靠路径会把它一直认成起播那一条 —— 连播时既不报上一集 Stopped、也不报
+      //    新一集 Start，后面几集的进度全被写到第一条的 itemId 上。
+      //
+      // ⚠️⚠️ 但**不能**直接调 currentEmbyItemId()：它第一步是从 **IO 线程**读 mpv 的
+      //    `path` 属性，而轮询恰好会在「切下一集」那一瞬读它 —— 那一刻 mpv 正在
+      //    重建 core。native 层在这种时刻被跨线程读属性是可能 SIGSEGV 的，而 native
+      //    崩溃**不走** UncaughtExceptionHandler：没有崩溃页、没有 last_crash.txt、
+      //    手机侧 logcat 也抓不到，表现就是「偶发闪退、复现不了」。
+      //
+      // 所以先取**平行数组**（`playlistItemIds` 与 `playlist` 同序，且在换位 / 删除时
+      // 同步维护，所以按下标取是准的，与 302 / 本地代理无关），只有它拿不到时才退回
+      // 路径反查 —— 那条路只在非 Emby 播放时会被用到，而那时 `start()` 根本没接管上报，
+      // provider 不会被调用。
+      app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.idProvider = {
+        playlistItemIds.getOrNull(playlistIndex)?.takeIf { it.isNotBlank() }
+          ?: currentEmbyItemId()
+      }
+
+      val observer =
+        app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
+          .EmbyPlaybackLifecycleObserver(source)
+      embyReporterObserver = observer
+      lifecycle.addObserver(observer)
+    }
   }
 
   private fun setupBackPressHandler() {
@@ -4478,6 +4517,11 @@ private fun cancelAutoplayCountdown() {
 
     // Set HTTP headers (including referer) BEFORE loading the new file
     setHttpHeadersFromExtras(intent.extras)
+
+    // Emby 上报按**新 intent** 重挂。本页 singleTask，「播放器已经在跑」时再起播走的是
+    // 这里而不是 onCreate —— 不重挂的话上报器还认着上一场的条目与会话，会把新条目当成
+    // 「切集」发一条 positionTicks=0 的 Start（哪怕这次是续播），退出时按 0 结算。
+    startEmbyReporting(intent)
 
     // Load the new file
     // ⚠️ 复位必须**同步**做在 loadfile 之前：下面那次 loadfile 跑在 Dispatchers.Default，

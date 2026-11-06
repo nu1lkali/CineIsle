@@ -2867,7 +2867,26 @@ android {
     //  · 另：Start / Stopped 各写一条 `PlayerDiagLog`（开「详细日志」才落盘），
     //    下次再报「不上报」可以直接看发出去的位置是多少。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 227
+    // ────────────────────────────────────────────────────────────────────────
+    // v228（1.6.14，修复轮不涨名）续播后立刻退出把续播点清成 0
+    //  · 现象：播到 30 分钟退出，续播点大致正确；但**续播后又立刻退出**，进度直接变 0。
+    //  · 根因：`start()` 里 `lastReportedTicks = 0L`。它是「读不到实时位置时的兜底值」，
+    //    而续播起播后的头十几秒 mpv 还没落到 seek 位置（`time-pos` 先给 0），此时退出
+    //    ⇒ Stopped 拿兜底值 0 结账 ⇒ 服务端续播点被清空。
+    //  · 修法一：`lastReportedTicks` / 新增的 `sessionStartTicks` 都初始化为**续播位置**，
+    //    切集时归 0（连播本来就从 0 起）。
+    //  · 修法二：新增 `guardAgainstReset()` —— 起播 20 秒（两个上报周期）内，读数比本场
+    //    起点还小就抬回起点（那不是用户拖回去的，是 seek 没落地）；过了窗口一律照发，
+    //    尊重用户回拖。Progress 与 Stopped 两处都过这道闸。
+    //  · 修法三：播放页是 `singleTask`，「播放器已经在跑」时再起播走 `onNewIntent` 而不是
+    //    `onCreate`。原来只在 `onCreate` 挂观察者 ⇒ 复用页面换片时上报器还认着上一场的
+    //    条目与会话，会把新条目当成「切集」发一条 `PositionTicks=0` 的 Start。现在抽成
+    //    `startEmbyReporting(intent)`，两处都调；先 `stop()` 结算上一场再带新令牌重挂。
+    //  · 对照物：Yamby v2.1.0.11（`/emby/Sessions/Playing{,/Progress,/Stopped}` 同一套
+    //    REST）上报体只有 `PositionTicks / IsPaused / PlayMethod` 三个字段，
+    //    `PlaySessionId` 取自 `POST /Items/{Id}/PlaybackInfo` 的响应（我们 v226 起自己生成）。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 228
     versionName = "1.6.14"
 
     vectorDrawables {

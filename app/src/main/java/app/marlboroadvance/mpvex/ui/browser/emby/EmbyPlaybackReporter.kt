@@ -57,6 +57,17 @@ object EmbyPlaybackReporter {
   @Volatile private var lastReportedTicks: Long = 0L
 
   /**
+   * 本场（或本条）的**起点**，单位 ticks：`start()` 取 intent 里的续播位置，切集时归 0。
+   *
+   * 只服务于 [guardAgainstReset]：续播起播后的头十几秒里，播放器经常还没落到续播位置
+   * （mpv 的 `time-pos` 先给 0），此刻读到的低值一旦上报，服务端已有的续播点就被冲掉了。
+   */
+  @Volatile private var sessionStartTicks = 0L
+
+  /** 本场（或本条）开始时刻（`SystemClock.elapsedRealtime()`），配合 [sessionStartTicks] 使用。 */
+  @Volatile private var sessionStartedAt = 0L
+
+  /**
    * 最近一次「Start 请求」的发出时刻（`SystemClock.elapsedRealtime()`）；0 = 没有在飞。
    *
    * 用途只有一个：别在 Start 还在路上时判定「没有 session」又补发一次 —— 那会变成
@@ -235,6 +246,13 @@ object EmbyPlaybackReporter {
     // 用启动时指定的续播位置作为起点
     val startPositionTicks =
       EmbyTicks.secondsToTicks((intent.getIntExtra("position", 0) / 1000).toLong())
+    // ⚠️⚠️ 起点必须跟着续播位置走，**不能**留 0。
+    //   `lastReportedTicks` 是「读不到实时位置时的兜底值」，它要是在续播场景里等于 0，
+    //   「续播 → 立刻退出」这条路就会把 0 当位置发 Stopped，服务端 30 分钟的续播点当场清零 ——
+    //   用户看到的正是「继续播放后马上返回，进度变成 0」。
+    lastReportedTicks = startPositionTicks
+    sessionStartTicks = startPositionTicks
+    sessionStartedAt = android.os.SystemClock.elapsedRealtime()
     val firstSourceId = mediaSourceIdOf(firstId)
     val sessionForStart = playSessionId
     startRequestedAt = android.os.SystemClock.elapsedRealtime()
@@ -324,8 +342,9 @@ object EmbyPlaybackReporter {
     EmbyPlayerActions.release()
 
     if (itemId == null) return
-    // 实时读数优先；读不到才用「最后一次成功上报的位置」（别让 Stopped 把续播点写成 0）
-    val ticks = liveTicks ?: lastReportedTicks
+    // 实时读数优先；读不到才用「最后一次成功上报的位置」（别让 Stopped 把续播点写成 0）。
+    // 再过一道 guardAgainstReset：续播起播初期播放器可能还在 0 秒，直接用会把续播点冲掉。
+    val ticks = guardAgainstReset(liveTicks ?: lastReportedTicks)
     val stopSourceId = mediaSourceIdOf(itemId)
     val sid = serverId
     // ⚠️ session 取**快照**：下面那段是异步发出去的，等它真跑起来时字段可能已经被
@@ -434,6 +453,36 @@ object EmbyPlaybackReporter {
    */
   private const val SESSION_START_GRACE_MS = 20_000L
 
+  /**
+   * 「起播后多久之内，位置读数不被采信为『用户往回拖了』」。
+   *
+   * 续播起播时播放器要先 seek 到续播点：mpv 在 seek 落地之前，`time-pos` 给的是 **0**（或
+   * 上一次内核残留的值），网络片源上这个窗口能到十几秒。这段时间里把读到的低值报出去，
+   * 服务端就把续播点改成了那个低值 —— 典型现象是「继续播放 → 立刻返回 → 进度变成 0」。
+   *
+   * 20 秒 = 两个上报周期。超过这个窗口还往回走，只可能是用户自己拖回去的，照发。
+   */
+  private const val START_SETTLE_MS = 20_000L
+
+  /**
+   * 把「起播初期的假位置」抬回本场起点。
+   *
+   * 判据只有一条：**起播 [START_SETTLE_MS] 之内、读数比本场起点还小** —— 那不是用户拖回去的，
+   * 是 seek 还没落地。过了这个窗口就一律照发（尊重用户回拖）。
+   */
+  private fun guardAgainstReset(ticks: Long): Long {
+    if (ticks >= sessionStartTicks) return ticks
+    val sinceStart = android.os.SystemClock.elapsedRealtime() - sessionStartedAt
+    if (sinceStart in 0 until START_SETTLE_MS) {
+      PlayerDiagLog.log(
+        "report",
+        "起播初期位置回落被抬回：raw=$ticks floor=$sessionStartTicks since=${sinceStart}ms",
+      )
+      return sessionStartTicks
+    }
+    return ticks
+  }
+
   private fun startPolling() {
     pollingJob?.cancel()
     pollingJob = scope.launch {
@@ -465,7 +514,7 @@ object EmbyPlaybackReporter {
     val server = repository.getServer(serverId) ?: return
 
     // 内核还没就绪 / 读不到位置 ⇒ 这一轮整轮跳过（不能当 0 发，见 readPositionTicks 注释）
-    val positionTicks = readPositionTicks() ?: return
+    val positionTicks = guardAgainstReset(readPositionTicks() ?: return)
     val isPaused = readIsPaused()
     val playingItemId = readCurrentItemId() ?: currentItemId ?: return
     val playingSourceId = mediaSourceIdOf(playingItemId)
@@ -522,6 +571,9 @@ object EmbyPlaybackReporter {
         startAcknowledged = true
       }
       lastReportedTicks = 0
+      // 新一集从 0 秒起播（连播不续播）⇒ 本场起点跟着归零，回落保护自然失效
+      sessionStartTicks = 0L
+      sessionStartedAt = android.os.SystemClock.elapsedRealtime()
       // 切到下一条了 ⇒ 立刻把「再下一条」预热掉。这就是 v142 修「随机播放切下一个
       // 还是卡住」的那一刀：卡的不是客户端，是服务端还没 probe 过那条 strm 的远端源。
       warmNextItem(playingItemId)
