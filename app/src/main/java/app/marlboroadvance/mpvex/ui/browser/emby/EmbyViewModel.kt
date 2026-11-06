@@ -1282,18 +1282,27 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     if (playlist.size > 1) {
-      // 「预解析直链」开关打开时，先逐条把 302 背后的真实地址取出来（见 resolveIfEnabled）。
-      // 解析失败/未发生跳转返回 null，播放列表里对应位置回退到原始地址。
-      // ⚠️ 连播列表里只取「拿到的地址」，被拒（Denied）的集不回退也不报错 ——
-      //    不能因为某一集死链就把整场播放拦下来，那一集播到时会由播放器自己报错。
-      // ⚠️ 版本选择只作用于「用户当前点播的这一集」：后面自动连播的集仍是各自的默认版本。
-      val directUrls = playlist
-        .mapNotNull { it.Id }
-        .mapNotNull { id ->
-          val sourceForThisItem = if (id == itemIdToPlay) mediaSourceId else null
-          resolveIfEnabled(server, id, sourceForThisItem)?.urlOrNull?.let { id to it }
-        }
-        .toMap()
+      // ⚠️⚠️ 只探**用户马上要播的那一条**，绝不遍历整条连播列表。
+      //
+      // 原来这里是 `playlist.mapNotNull { resolveIfEnabled(...) }` —— 逐条串行发请求，
+      // 而 `resolveDirectUrl` 单次上限 2 秒（`STREAM_PROBE_CALL_TIMEOUT_MS`），
+      // 一季 12 集就是最坏 **24 秒**才 `startActivity`。用户看到的是「点了播放，
+      // 等 20 秒才出画面」，而同一部片第二次点又很快（服务端已经把 strm 的远端源
+      // probe 完写库了）—— 正是「有时候慢、有时候又快」的形状，且**只发生在多集
+      // 连播**上（电影 / 单集走下面 else 分支，只解析一条）。
+      //
+      // 这也与本文件里 `launchRandomPlaybackAwait` 的口径一致：那边写着「剧集连播
+      // 那条路也一样只探首条」，只是这里一直没照着做。
+      //
+      // 后面自动连播的集数不需要预解析：mpv 请求原始地址时会自己跟 302，多一次往返
+      // 而已；真要省这一步，应由播放器在「播这条时预热下一条」里串行处理
+      // （见 `EmbyPlaybackReporter.warmNextItem`），而不是让用户对着加载层等着。
+      //
+      // 版本选择本来就只作用于「用户当前点播的这一集」，所以这里只传这一条。
+      val directUrls: Map<String, String> = resolveIfEnabled(server, itemIdToPlay, mediaSourceId)
+        ?.urlOrNull
+        ?.let { mapOf(itemIdToPlay to it) }
+        ?: emptyMap()
       launchPlaylist(
         server = server,
         items = playlist,
