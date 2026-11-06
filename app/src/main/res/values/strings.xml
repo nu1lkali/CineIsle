@@ -174,7 +174,11 @@
   <string name="pref_decoder">Decoder</string>
   <string name="pref_decoder_summary">Hardware decoding, pixel format, debanding</string>
   <string name="pref_decoder_profile_title">MPV Profile</string>
-  <string name="pref_decoder_try_hw_dec_title">Try hardware decoding</string>
+  <string name="pref_decoder_default_title">Default decoder</string>
+  <string name="pref_decoder_default_auto">Prefer hardware, fall back to software</string>
+  <string name="pref_decoder_default_hw">Hardware only (no fallback)</string>
+  <string name="pref_decoder_default_sw">Software only</string>
+  <string name="pref_decoder_default_overridden">Direct output is on, so this setting has no effect</string>
   <string name="pref_decoder_direct_output_title">Direct output</string>
   <string name="pref_decoder_direct_output_summary">Zero-copy hardware decoding: skips the whole-frame copy-back, so 4K and high-frame-rate videos play much smoother. Subtitles are not displayed in this mode, and video filters, shaders and screenshots are unavailable. Takes effect after reopening the player.</string>
   <string name="player_direct_output_failed">Direct output not active (copy this into your report)</string>

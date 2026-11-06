@@ -378,8 +378,8 @@ object SearchablePreferences {
                 screen = DecoderPreferencesScreen,
             ))
             add(SearchablePreference(
-                titleRes = R.string.pref_decoder_try_hw_dec_title,
-                keywords = listOf("hardware", "decoding", "hw", "acceleration", "gpu"),
+                titleRes = R.string.pref_decoder_default_title,
+                keywords = listOf("hardware", "software", "decoding", "hw", "sw", "acceleration", "gpu"),
                 category = "Decoder",
                 screen = DecoderPreferencesScreen,
             ))

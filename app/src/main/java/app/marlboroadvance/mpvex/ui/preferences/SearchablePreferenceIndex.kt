@@ -949,7 +949,7 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
         screen = DecoderPreferencesScreen,
     ))
     add(SearchablePreference(
-        titleRes = R.string.pref_decoder_try_hw_dec_title,
+        titleRes = R.string.pref_decoder_default_title,
         category = "pref_decoder",
         screen = DecoderPreferencesScreen,
     ))

@@ -53,6 +53,7 @@ import app.marlboroadvance.mpvex.preferences.DecoderPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.player.Debanding
+import app.marlboroadvance.mpvex.ui.player.DefaultDecoder
 import app.marlboroadvance.mpvex.ui.player.MPVProfile
 import app.marlboroadvance.mpvex.ui.player.PlaybackColorPolicy
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
@@ -141,8 +142,13 @@ object DecoderPreferencesScreen : Screen {
 
               PreferenceDivider()
 
-              val tryHWDecoding by preferences.tryHWDecoding.collectAsState()
-              SwitchPreference(
+              // 默认解码器（v218）：把「要不要硬解」从布尔开关升级成三选一。
+              // 旧开关只有「硬解（copyback）／软解」两档，「只用硬解、不回退」这种
+              // 排查与救急场景没有入口 —— 而它恰恰是判断「花屏是硬解的锅还是软解的锅」
+              // 最直接的手段。播放中面板里的那个「解码器」是实时读数，跟这里不是一件事。
+              val directOutput by preferences.directOutput.collectAsState()
+              val decoderMode by preferences.decoderMode.collectAsState()
+              ListPreference(
                 icon = {
                   Icon(
                     Icons.Outlined.Hd,
@@ -150,19 +156,32 @@ object DecoderPreferencesScreen : Screen {
                     tint = MaterialTheme.colorScheme.primary,
                   )
                 },
-                value = tryHWDecoding,
-                onValueChange = {
-                  preferences.tryHWDecoding.set(it)
+                value = decoderMode,
+                onValueChange = { preferences.decoderMode.set(it) },
+                values = DefaultDecoder.entries,
+                valueToText = { value -> AnnotatedString(stringResource(value.titleRes)) },
+                // 直出模式会强制 `mediacodec` 零拷贝，跟这三档不是一个维度 ⇒ 置灰说清楚，
+                // 别让人以为「选了软解却还在硬解」。
+                enabled = !directOutput,
+                modifier = Modifier.settingsAnchor(R.string.pref_decoder_default_title),
+                title = { Text(stringResource(R.string.pref_decoder_default_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    if (directOutput) {
+                      stringResource(R.string.pref_decoder_default_overridden)
+                    } else {
+                      stringResource(decoderMode.titleRes)
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
                 },
-                modifier = Modifier.settingsAnchor(R.string.pref_decoder_try_hw_dec_title),
-                title = { Text(stringResource(R.string.pref_decoder_try_hw_dec_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
 
               PreferenceDivider()
 
               // 直出模式：零拷贝硬解。4K 高帧率片源从「每帧回拷 12.4 MB」降到零拷贝，
               // 代价是 mpv 侧的字幕 / 着色器 / 截图全部失效，所以默认关、写在文案里。
-              val directOutput by preferences.directOutput.collectAsState()
+              // （`directOutput` 在上面那条列表项之前已 collect，这里直接复用。）
               SwitchPreference(
                 icon = {
                   Icon(

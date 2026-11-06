@@ -71,6 +71,40 @@ enum class Decoder(
   }
 }
 
+/**
+ * **默认解码方式**（设置 → 解码器 →「默认解码器」）。
+ *
+ * 跟播放中面板里那个 [Decoder]（`hwdec-current` 的实时读数 + 临时切换）是两件事：
+ * 那个是「现在这一条片子正在用什么」，这个是「以后每条片子默认用什么」。
+ * 这里刻意只留三档 —— 面板里的 `auto` / `auto-copy` / `mediacodec` 是给排查用的，
+ * 放进设置页只会让普通用户不知道该选哪个。
+ */
+enum class DefaultDecoder(
+  @StringRes val titleRes: Int,
+  /**
+   * 真正写进 mpv `hwdec` 的值。
+   *
+   * `,no` 是**回退链**：前面那档用不了（编码不被 MediaCodec 支持、设备解码器拒绝这个规格）
+   * 就退到下一档；所以「硬解优先」必须带 `no` 兜底，否则遇到不支持的片子直接播不了。
+   */
+  val hwdec: String,
+) {
+  /** 硬解优先，用不了自动退软解。默认值，与旧版行为完全一致 */
+  Auto(R.string.pref_decoder_default_auto, "mediacodec-copy,no"),
+
+  /**
+   * 只用硬解，**不回退**。
+   *
+   * 给两类人：一是排查「这条片子到底是硬解在花屏、还是软解太慢」；
+   * 二是某些机型上软解路径本身有问题（比如 10bit 软解发灰），宁可播不了也不想要软解。
+   * 代价要说清楚：编码不支持时是**直接不出画面**，不是变慢。
+   */
+  Hardware(R.string.pref_decoder_default_hw, "mediacodec-copy"),
+
+  /** 只用软解。兼容性最好（解码器不再是变量），代价是功耗、发热与 4K 高帧率可能跟不上 */
+  Software(R.string.pref_decoder_default_sw, "no"),
+}
+
 enum class Debanding(
   @StringRes val titleRes: Int,
 ) {

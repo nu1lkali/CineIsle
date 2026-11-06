@@ -175,7 +175,11 @@
   <string name="pref_decoder">解码器</string>
   <string name="pref_decoder_summary">硬解、像素格式、去色带</string>
   <string name="pref_decoder_profile_title">MPV 配置档</string>
-  <string name="pref_decoder_try_hw_dec_title">尝试硬件解码</string>
+  <string name="pref_decoder_default_title">默认解码器</string>
+  <string name="pref_decoder_default_auto">硬解优先，不支持时自动回退软解</string>
+  <string name="pref_decoder_default_hw">仅硬件解码（不回退）</string>
+  <string name="pref_decoder_default_sw">仅软件解码</string>
+  <string name="pref_decoder_default_overridden">直出模式生效中，此项暂不生效</string>
   <string name="pref_decoder_direct_output_title">直出模式</string>
   <string name="pref_decoder_direct_output_summary">零拷贝硬解，省掉每帧的整帧回拷，4K、高帧率片源会明显更流畅。此模式下不显示字幕，画质滤镜、着色器与截图均不可用；重新进入播放器后生效。</string>
   <string name="player_direct_output_failed">直出未生效（复制到反馈里即可）</string>

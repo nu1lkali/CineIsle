@@ -3,12 +3,30 @@ package app.marlboroadvance.mpvex.preferences
 import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
 import app.marlboroadvance.mpvex.preferences.preference.getEnum
 import app.marlboroadvance.mpvex.ui.player.Debanding
+import app.marlboroadvance.mpvex.ui.player.DefaultDecoder
 
 class DecoderPreferences(
   preferenceStore: PreferenceStore,
 ) {
   val profile = preferenceStore.getString("mpv_profile", "fast")
-  val tryHWDecoding = preferenceStore.getBoolean("try_hw_dec", true)
+
+  /**
+   * 默认解码方式（设置 → 解码器 →「默认解码器」，v218 起取代原来的开关）。
+   *
+   * 默认值带**老用户迁移**：旧版只有一个「尝试硬件解码」布尔开关（`try_hw_dec`），
+   * 关掉它的人诉求就是「别硬解」，所以键不存在时按它映射到 [DefaultDecoder.Software]；
+   * 新键一旦写入，旧键就再也不参与判断（老键也就不用清理，留着无害）。
+   */
+  val decoderMode = preferenceStore.getEnum(
+    "mpv_decoder_mode",
+    // ⚠️ `getBoolean` 返回的是 `Preference<Boolean>`，这里要的是**当下这一个值**，
+    // 必须 `.get()` 同步读出来；漏了就是「Condition type mismatch」。
+    if (preferenceStore.getBoolean("try_hw_dec", true).get()) {
+      DefaultDecoder.Auto
+    } else {
+      DefaultDecoder.Software
+    },
+  )
 
   /**
    * 渲染器：true = gpu-next（libplacebo），false = 旧版 gpu。
@@ -117,11 +135,14 @@ class DecoderPreferences(
   /**
    * `hwdec` 的基准值：初始化（`MPVView.initOptions`）与「P5 修正结束后恢复」
    * 必须共用这一份口径。谁在别处再手写一遍三态，将来改了一边就会串味。
+   *
+   * ⚠️ 直出模式**优先于**用户在列表里的选择：它要的是 `mediacodec` 零拷贝，
+   * 而零拷贝只在 `vo=mediacodec_embed` 下成立，跟「软解 / 硬解」不是一个维度。
+   * 设置页在这个状态下会把列表置灰（见 `DecoderPreferencesScreen`）。
    */
   fun defaultHwdec(): String =
     when {
       directOutput.get() -> "mediacodec,no"
-      tryHWDecoding.get() -> "mediacodec-copy,no"
-      else -> "no"
+      else -> decoderMode.get().hwdec
     }
 }
