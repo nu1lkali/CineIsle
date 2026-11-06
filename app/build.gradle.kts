@@ -2886,7 +2886,19 @@ android {
     //    REST）上报体只有 `PositionTicks / IsPaused / PlayMethod` 三个字段，
     //    `PlaySessionId` 取自 `POST /Items/{Id}/PlaybackInfo` 的响应（我们 v226 起自己生成）。
     // ────────────────────────────────────────────────────────────────────────
-    versionCode = 228
+    // ────────────────────────────────────────────────────────────────────────
+    // v229（1.6.14，修复轮不涨名）详情页播放的剧集不进「继续观看」
+    //  · 现象：从详情页点某一集播放，进度上报了、详情页也显示进度，但首页「继续观看」
+    //    里始终没有它（电影有、剧集没有 —— 「有些有有些没有」）。
+    //  · 根因：`getResumeItems` 默认传 `IncludeItemTypes=Movie,Series`。单集的类型是
+    //    `Episode`，被服务端直接从 Resume 结果里滤掉。当初写这个过滤的理由是「单集放在
+    //    继续观看里显得零散」，但代价是**从详情页起播的剧集永远不会出现**。
+    //  · 修法：按 Yamby v2.1.0.11 的口径 —— **不传 `IncludeItemTypes`**，只用
+    //    `MediaTypes=Video` + `Recursive=true`，把类型判断交回服务端（Emby 官方客户端
+    //    也是这个做法）。`IncludeItemTypes` 参数保留但默认 null，需要收窄时再显式传。
+    //  · 顺带：桌面「继续观看」小组件走同一个 `repository.getResumeItems`，一并修好。
+    // ────────────────────────────────────────────────────────────────────────
+    versionCode = 229
     versionName = "1.6.14"
 
     vectorDrawables {

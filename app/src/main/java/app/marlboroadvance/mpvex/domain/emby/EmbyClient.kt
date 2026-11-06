@@ -376,16 +376,26 @@ object EmbyClient {
   /**
    * 继续观看。
    *
-   * 只取电影与剧集（不含单集）——单集属于剧集内部层级，
-   * 放在"继续观看"里会显得零散，也不方便从海报直接定位。
-   * 音乐、图片同样排除。
+   * ## ⚠️ 不要再按类型过滤（v229）
+   *
+   * 原来默认传 `IncludeItemTypes=Movie,Series`，理由写着「单集属于剧集内部层级，放在
+   * 继续观看里会显得零散」。后果是从**详情页点某一集**播放之后，那一集的类型是
+   * `Episode` —— 服务端直接把它从 Resume 结果里滤掉：详情页明明有进度、首页那一行却
+   * 始终没有它，用户侧就是「有些上报了但继续观看里看不到」。
+   *
+   * 现在按 [Yamby v2.1.0.11] 的做法：**不传 `IncludeItemTypes`**，只用
+   * `MediaTypes=Video` + `Recursive=true` 圈定范围，让服务端按自己的 Resume 语义决定
+   * 返回哪一条（电影返回电影、剧集返回那一集）。Emby 官方客户端也是这个口径。
+   *
+   * 需要收窄时再显式传 [includeItemTypes]（目前没有调用方这么做）。
    */
   fun getResumeItems(
     server: EmbyServer,
     startIndex: Int = 0,
     limit: Int = 20,
-    includeItemTypes: List<String>? = listOf("Movie", "Series"),
+    includeItemTypes: List<String>? = null,
     mediaTypes: List<String>? = listOf(VIDEO_MEDIA_TYPE),
+    parentId: String? = null,
   ): EmbyItemsResult = getJson(
     server,
     "/Users/${server.userId}/Items/Resume",
@@ -394,6 +404,10 @@ object EmbyClient {
       "limit" to limit.toString(),
       "IncludeItemTypes" to includeItemTypes?.joinToString(","),
       "MediaTypes" to mediaTypes?.joinToString(","),
+      // ⚠️ `Recursive` 必须显式给：Resume 的默认递归行为在个别兼容服务端上不一致，
+      //    显式 `true` 与官方客户端一致（Yamby 也是写死 true）。
+      "Recursive" to "true",
+      "ParentId" to parentId,
       "Fields" to ITEM_FIELDS,
       "EnableImages" to "true",
       "EnableUserData" to "true",
