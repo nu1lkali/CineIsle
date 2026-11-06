@@ -1087,8 +1087,22 @@ class EmbyRepository(
     positionTicks: Long = 0,
     /** 多版本媒体：告诉服务器「正在播的是哪一个版本」，服务器控制台的「正在播放」才准 */
     mediaSourceId: String? = null,
+    /**
+     * 客户端自己生成的会话 id。
+     *
+     * ⚠️ 必须传：`/Sessions/Playing` 正常返回 204 / 空 JSON，里面**没有** `PlaySessionId`
+     * 可读。不传的话 Progress / Stopped 只能带空串去对账，服务端记不住这次播放 ——
+     * 用户侧表现为「退出后已观看 0%」。
+     */
+    playSessionId: String? = null,
   ): String = withContext(Dispatchers.IO) {
-    EmbyClient.reportPlaybackStart(server, itemId, positionTicks, mediaSourceId = mediaSourceId)
+    EmbyClient.reportPlaybackStart(
+      server,
+      itemId,
+      positionTicks,
+      mediaSourceId = mediaSourceId,
+      playSessionId = playSessionId,
+    )
   }
 
   suspend fun reportPlaybackProgress(

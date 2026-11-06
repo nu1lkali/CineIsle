@@ -71,6 +71,15 @@ object EmbyPlaybackReporter {
   @Volatile private var sessionRepairFor: String? = null
 
   /**
+   * [playSessionId] 对应的那次 Start 是否**被服务端成功接收过**（2xx / 204 都算）。
+   *
+   * ⚠️ 判据必须是「请求成败」，不能是「有没有拿到 PlaySessionId」—— Emby 的
+   * `/Sessions/Playing` 正常就返回 204 / 空 JSON，那个字段压根不存在。曾经拿空串当
+   * 失败判据，结果每场只补一次 Start、之后整场一条 Progress 都不发（0% 的元凶）。
+   */
+  @Volatile private var startAcknowledged = false
+
+  /**
    * 由播放页提供的「当前正在播的是哪一条」。
    *
    * ## 为什么需要这个口子（v223）
@@ -207,9 +216,12 @@ object EmbyPlaybackReporter {
     itemIds = ids
     currentItemId = ids.firstOrNull()
     lastReportedTicks = 0L
-    // ⚠️ 必须清空：上一场播放的 session 留在这两个字段里的话，本场第一条 Progress
-    //    会带着上一场的 PlaySessionId 出去 —— 服务端要么丢弃、要么记到上一场那条上。
-    playSessionId = ""
+    // ⚠️ 会话 id **由客户端自己生成**，不等服务端给。
+    //    Emby 的 `POST /Sessions/Playing` 正常返回 204（空 body）或 `{}`，里面根本没有
+    //    `PlaySessionId` 字段 —— 靠响应取等于永远空串，而 Progress / Stopped 拿着空串
+    //    去对账，服务端记不住这次播放（「退出后已观看 0%」就是这么来的）。
+    playSessionId = newPlaySessionId()
+    startAcknowledged = false
     sessionRepairFor = null
     mediaSourceIds =
       intent.getStringArrayListExtra(EXTRA_MEDIA_SOURCE_ID)?.toList() ?: emptyList()
@@ -222,6 +234,7 @@ object EmbyPlaybackReporter {
     val startPositionTicks =
       EmbyTicks.secondsToTicks((intent.getIntExtra("position", 0) / 1000).toLong())
     val firstSourceId = mediaSourceIdOf(firstId)
+    val sessionForStart = playSessionId
     startRequestedAt = android.os.SystemClock.elapsedRealtime()
     scope.launch {
       try {
@@ -232,7 +245,10 @@ object EmbyPlaybackReporter {
             itemId = firstId,
             positionTicks = startPositionTicks,
             mediaSourceId = firstSourceId,
+            playSessionId = sessionForStart,
           )
+          // 判据是「请求成功返回」（2xx / 204 都算），**不是**「有没有拿到 session id」
+          startAcknowledged = true
         }
       } finally {
         startRequestedAt = 0L
@@ -461,17 +477,20 @@ object EmbyPlaybackReporter {
           )
         }
       }
-      // ⚠️ 先清空再赋值：Start 失败会抛异常，`runCatching` 捕获后 `playSessionId` 保持
-      //    **上一集**的值 —— 拿它给新一集发 Progress，服务端就把新一集的进度记到
-      //    上一集上了。清空后即便 Start 没成功，也只会走 [ensureSession] 的补发。
-      playSessionId = ""
+      // ⚠️ 换一集就换一个会话 id：上一集的 Progress 绝不能记到新一集头上。
+      //    这里**先生成再发**（不等服务端回话），Start 抛异常也不会留着旧的。
+      val sessionForNext = newPlaySessionId()
+      playSessionId = sessionForNext
+      startAcknowledged = false
       runCatching {
         playSessionId = repository.reportPlaybackStart(
           server = server,
           itemId = playingItemId,
           positionTicks = 0,
           mediaSourceId = playingSourceId,
+          playSessionId = sessionForNext,
         )
+        startAcknowledged = true
       }
       lastReportedTicks = 0
       // 切到下一条了 ⇒ 立刻把「再下一条」预热掉。这就是 v142 修「随机播放切下一个
@@ -497,22 +516,31 @@ object EmbyPlaybackReporter {
   }
 
   /**
-   * 保证手上有一个可用的 [playSessionId]，没有就补一次 Start。
+   * 确保 Start 至少被服务端接收过一次；**无论补发成败都放行本轮 Progress**。
    *
    * ## 为什么需要它
    *
-   * `PlaySessionId` 是「这条进度往哪个会话里记账」的唯一凭据。[start] 里那次 Start 是
-   * **异步发**的，网络抖动、服务端 500、回包里没有 `PlaySessionId` 三种情况都会让它
-   * 留在空串 —— 之后每一条 Progress 都带着空串出去，服务端既匹配不上会话，也不会走
-   * 「按 ItemId 找当前会话」的兜底，于是整场播放一条进度都没写进去。
+   * [start] 里那次 Start 是**异步发**的，网络抖动 / 服务端 5xx 都可能让它没送到。
+   * 这种情况要补一次，否则服务端上这场播放「没开始过」，后续 Progress 无处归账。
    *
-   * ## 三条自我约束
+   * ## ⚠️ 曾经的重大错误（v223~v225，用户报「退出后已观看 0%」）
+   *
+   * 那时用「`playSessionId` 是否为空」判断 Start 成没成功 —— 可 Emby 的
+   * `/Sessions/Playing` 正常就返回 **204 / 空 JSON，里面没有这个字段**，于是每次都判成
+   * 失败：每场只补一次，之后**整场一条 Progress 都不发**，Stopped 又只能拿
+   * `lastReportedTicks`（从没更新过 = 0）结账 ⇒ 服务端记成「已观看 0%，剩余 = 总时长」。
+   *
+   * 现在会话 id 由客户端自己生成（[newPlaySessionId]），所以**不存在**「空串」这个失败
+   * 信号；成败只看请求是否成功返回（[startAcknowledged]）。
+   *
+   * ## 约束
    *
    * · **不在飞时补**：Start 还在路上（[startRequestedAt] 非 0）就等下一轮，
-   *   否则同一场播放会开出两个 session，服务端上就是两条并行的「正在播放」；
+   *   否则同一场播放会开出两个会话，服务端上就是两条并行的「正在播放」；
    * · **同一条目只补一次**（[sessionRepairFor]）：这是兜底不是重试，变成每 10 秒
-   *   一条 Start 比不修更糟；
-   * · **补不到就跳过本轮上报**：空串发出去只会污染服务端状态。
+   *   一条 Start 比不修更糟。补过之后不再拦 Progress。
+   *
+   * @return false 仅表示「Start 正在路上，这一轮先别发」
    */
   private suspend fun ensureSession(
     repository: EmbyRepository,
@@ -521,28 +549,40 @@ object EmbyPlaybackReporter {
     mediaSourceId: String?,
     positionTicks: Long,
   ): Boolean {
-    if (playSessionId.isNotBlank()) return true
+    if (startAcknowledged) return true
     val requestedAt = startRequestedAt
     if (requestedAt > 0L && android.os.SystemClock.elapsedRealtime() - requestedAt < SESSION_START_GRACE_MS) {
       return false
     }
-    if (sessionRepairFor == itemId) return false
+    if (sessionRepairFor == itemId) return true
     sessionRepairFor = itemId
-    val sid = runCatching {
-      repository.reportPlaybackStart(
+    val session = newPlaySessionId()
+    playSessionId = session
+    runCatching {
+      playSessionId = repository.reportPlaybackStart(
         server = server,
         itemId = itemId,
         positionTicks = positionTicks,
         mediaSourceId = mediaSourceId,
+        playSessionId = session,
       )
-    }.getOrNull()
-    if (sid.isNullOrBlank()) {
-      EmbyLog.warn("补发 Start 仍未拿到 PlaySessionId（item=$itemId），本次播放跳过进度上报")
-      return false
+      startAcknowledged = true
+    }.onFailure {
+      // 补不上也让本轮 Progress 照发：带会话 id 的 Progress 服务端能按 ItemId + 会话对账，
+      // 比整场不上报好得多。
+      EmbyLog.warn("补发 Start 失败（item=$itemId），本轮进度照发", it)
     }
-    playSessionId = sid
     return true
   }
+
+  /**
+   * 生成一个播放会话 id。
+   *
+   * 形态跟 Emby 官方客户端一致：32 位十六进制（去掉 UUID 的连字符）。客户端生成、
+   * 三处（Start / Progress / Stopped）共用同一个值，服务端据此把三次请求串成一条会话。
+   */
+  private fun newPlaySessionId(): String =
+    java.util.UUID.randomUUID().toString().replace("-", "").lowercase()
 
   // ─── mpv 属性读取 ───
 

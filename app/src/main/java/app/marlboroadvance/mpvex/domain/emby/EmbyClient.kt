@@ -2644,8 +2644,11 @@ object EmbyClient {
   // ════════════════════════════════════════════════════════════════════════
 
   /**
-   * 上报播放开始。调用时机：PlayerActivity 准备开始播放时。
-   * 返回 PlaySessionId，后续 Progress/Stopped 需带它。
+   * 上报播放开始。调用时机：播放页准备开始播放时。
+   *
+   * @param playSessionId **客户端自己生成的**会话 id（见下方说明）。传了就会写进 body，
+   *   返回值也会在服务端不回显时退回它。
+   * @return 本次播放的会话 id —— 服务端回显的就用它的，否则就是传进来的那个。
    */
   fun reportPlaybackStart(
     server: EmbyServer,
@@ -2656,9 +2659,19 @@ object EmbyClient {
     playMethod: String = "DirectStream",
     /** 多版本媒体：本次播放的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
     mediaSourceId: String? = null,
+    /**
+     * 会话 id（客户端生成，官方客户端也是自己生成 GUID 带上来的）。
+     *
+     * ⚠️ 为什么必须由客户端给：Emby 的 `POST /Sessions/Playing` 正常返回 **204**（空 body）
+     * 或 `{}`，**里面没有 `PlaySessionId` 字段**。只从响应里读的话永远是空串，而
+     * Progress / Stopped 拿着空 id 去对账，服务端既匹配不上会话、又不会按 ItemId 兜底，
+     * 整场播放一条进度都记不下来 —— 现象就是「退出后已观看 0%，剩余=总时长」。
+     */
+    playSessionId: String? = null,
   ): String {
     val obj = buildMap {
       put("ItemId", itemId)
+      if (!playSessionId.isNullOrBlank()) put("PlaySessionId", playSessionId)
       put("PositionTicks", positionTicks)
       put("PlayMethod", playMethod)
       mediaSourceId?.let { put("MediaSourceId", it) }
@@ -2673,10 +2686,14 @@ object EmbyClient {
       .post(body.toRequestBody(jsonMedia))
       .build()
     val resp = execString(req)
-    // Emby 返回 PlaySessionId 字段
+    // 服务端回显了就用它的（个别版本会）；没回显（204 / 空 JSON，最常见）就用我们自己的。
     return try {
-      json.parseToJsonElement(resp).jsonObject["PlaySessionId"]?.jsonPrimitive?.contentOrNull ?: ""
-    } catch (_: Exception) { "" }
+      json.parseToJsonElement(resp).jsonObject["PlaySessionId"]?.jsonPrimitive?.contentOrNull
+        ?.takeIf { it.isNotBlank() }
+        ?: playSessionId.orEmpty()
+    } catch (_: Exception) {
+      playSessionId.orEmpty()
+    }
   }
 
   /**

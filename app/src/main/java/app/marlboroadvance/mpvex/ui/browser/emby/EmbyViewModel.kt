@@ -1402,17 +1402,13 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       )
     }
 
-    // 上报播放开始，让服务器记录"正在播放"
-    viewModelScope.launch {
-      runCatching {
-        repository.reportPlaybackStart(
-          server = server,
-          itemId = itemIdToPlay,
-          positionTicks = EmbyTicks.secondsToTicks(resumeSeconds),
-          mediaSourceId = mediaSourceId,
-        )
-      }
-    }
+    // ⚠️ 这里**不再**单独上报 Start。
+    //
+    // 原来这里发一次 `/Sessions/Playing`，进播放页后 `EmbyPlaybackReporter.start()`
+    // 又发一次 —— 同一个条目两条播放会话，而且这一条没有会话 id、也永远不会有对应的
+    // Progress / Stopped（服务端上就是一条「一直停在 0% 的正在播放」）。
+    // 现在统一由上报器负责：它在 `PlayerActivity.onCreate` 挂上观察者，用的是同一个
+    // intent 里的 `position`（即续播秒数）与媒体源 Id，信息不比这里少。
   }
 
   /**
