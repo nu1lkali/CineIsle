@@ -2267,7 +2267,7 @@ open class PlayerActivity :
       val probe = steadyStateProbe()
       PlayerDiagLog.log("steady", probe)
 
-      if (!decoderPreferences.directOutput.get()) return@launch
+      if (!decoderPreferences.isDirectOutput()) return@launch
       val hwdec = runCatching { PlayerLib.getPropertyString("hwdec-current") }.getOrNull().orEmpty()
       val vo = runCatching { PlayerLib.getPropertyString("current-vo") }.getOrNull().orEmpty()
       val zeroCopy = hwdec.startsWith("mediacodec") && vo == "mediacodec_embed"

@@ -379,7 +379,9 @@ object SearchablePreferences {
             ))
             add(SearchablePreference(
                 titleRes = R.string.pref_decoder_default_title,
-                keywords = listOf("hardware", "software", "decoding", "hw", "sw", "acceleration", "gpu"),
+                // 零拷贝档（HW+）与沿用旧名的「直出模式」都归到这一条下 ——
+                // 它们现在是同一个设置项的不同档位，搜「直出」不该什么都搜不到。
+                keywords = listOf("hardware", "software", "decoding", "hw", "sw", "acceleration", "gpu", "zero-copy", "direct output"),
                 category = "Decoder",
                 screen = DecoderPreferencesScreen,
             ))

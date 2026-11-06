@@ -11,20 +11,26 @@ class DecoderPreferences(
   val profile = preferenceStore.getString("mpv_profile", "fast")
 
   /**
-   * 默认解码方式（设置 → 解码器 →「默认解码器」，v218 起取代原来的开关）。
+   * 默认解码方式（设置 → 解码器 →「默认解码器」）。
    *
-   * 默认值带**老用户迁移**：旧版只有一个「尝试硬件解码」布尔开关（`try_hw_dec`），
-   * 关掉它的人诉求就是「别硬解」，所以键不存在时按它映射到 [DefaultDecoder.Software]；
-   * 新键一旦写入，旧键就再也不参与判断（老键也就不用清理，留着无害）。
+   * ## 默认值带两代老键迁移
+   *
+   * 历史上有过两个开关，都必须映射过来，否则老用户升级后行为会变：
+   *  - `try_hw_dec`（最早只有它）：关掉的人诉求就是「别硬解」⇒ [DefaultDecoder.Software]。
+   *  - `direct_output`（后来单独的「直出模式」开关）：打开的人要的是零拷贝
+   *    ⇒ [DefaultDecoder.HardwarePlus]。它的优先级高于 `try_hw_dec` ——
+   *    直出打开时 [defaultHwdec] 本来就整体覆盖解码档位，迁移后保持同一结果。
+   *
+   * 新键一旦写入，两个老键就再也不参与判断（老键也不用清理，留着无害）。
    */
   val decoderMode = preferenceStore.getEnum(
     "mpv_decoder_mode",
-    // ⚠️ `getBoolean` 返回的是 `Preference<Boolean>`，这里要的是**当下这一个值**，
-    // 必须 `.get()` 同步读出来；漏了就是「Condition type mismatch」。
-    if (preferenceStore.getBoolean("try_hw_dec", true).get()) {
-      DefaultDecoder.Auto
-    } else {
-      DefaultDecoder.Software
+    when {
+      // ⚠️ `getBoolean` 返回的是 `Preference<Boolean>`，这里要的是**当下这一个值**，
+      // 必须 `.get()` 同步读出来；漏了就是「Condition type mismatch」。
+      preferenceStore.getBoolean("direct_output", false).get() -> DefaultDecoder.HardwarePlus
+      !preferenceStore.getBoolean("try_hw_dec", true).get() -> DefaultDecoder.Software
+      else -> DefaultDecoder.Auto
     },
   )
 
@@ -39,31 +45,6 @@ class DecoderPreferences(
   val gpuNext = preferenceStore.getBoolean("gpu_next", true)
   val useVulkan = preferenceStore.getBoolean("use_vulkan", false)
   val useYUV420P = preferenceStore.getBoolean("use_yuv420p", false)
-
-  /**
-   * 直出模式：`vo=mediacodec_embed` + `hwdec=mediacodec`（**零拷贝**硬解）。
-   *
-   * ## 解决什么
-   *
-   * 默认的 `vo=gpu / gpu-next` 拿不到 mpv 的零拷贝硬解 —— `hwdec=mediacodec` 要求
-   * `vo=mediacodec_embed`，所以实际生效的只有 `mediacodec-copy`：解码完把整帧
-   * **回拷到 CPU 内存**，再由 vo 重新上传成纹理。4K 一帧 12.4 MB，
-   * 2160×3840@60 就是每帧 12.4 MB 拷出 + 12.4 MB 上传 ≈ 1.5 GB/s，
-   * 中端 SoC 直接吃满 ⇒ 画面像幻灯片。
-   *
-   * 直出模式把解码器的输出 buffer 直接交给 Surface，**这两次搬运都不存在**，
-   * 与 MX Player / 系统播放器的路径一致。
-   *
-   * ## 代价（所以默认关）
-   *
-   * mpv 侧的所有叠加层全部失效：**外挂/内嵌字幕不显示**、OSD 不显示、
-   * GLSL 着色器（Anime4K / 锐化）无效、`grabThumbnail` 截图失败。
-   * 播放器界面本身是 Compose 独立图层，不受影响。
-   *
-   * ⚠️ 只在「解码器能直接吃下这个规格」时才有意义；若设备拒绝该流
-   * （`hwdec-current` 落到 `no`），直出模式也救不了 —— 那是设备能力问题。
-   */
-  val directOutput = preferenceStore.getBoolean("direct_output", false)
 
   /**
    * 杜比视界 Profile 5 颜色修正（硬解路径下自动生效）。
@@ -133,16 +114,17 @@ class DecoderPreferences(
   val anime4kQuality = preferenceStore.getString("anime4k_quality", "FAST")
 
   /**
+   * 当前是否为零拷贝直出档位（`vo=mediacodec_embed`）。
+   *
+   * 由 [decoderMode] 派生，**不再是一个独立开关**：vo 与 hwdec 必须同源。
+   * 分成两个偏好时会出现「档位说要零拷贝、vo 还是 gpu」这种组合 ——
+   * mpv 不会报错，只是静默退化成 copyback，用户以为开了零拷贝其实没开。
+   */
+  fun isDirectOutput(): Boolean = decoderMode.get() == DefaultDecoder.HardwarePlus
+
+  /**
    * `hwdec` 的基准值：初始化（`MPVView.initOptions`）与「P5 修正结束后恢复」
    * 必须共用这一份口径。谁在别处再手写一遍三态，将来改了一边就会串味。
-   *
-   * ⚠️ 直出模式**优先于**用户在列表里的选择：它要的是 `mediacodec` 零拷贝，
-   * 而零拷贝只在 `vo=mediacodec_embed` 下成立，跟「软解 / 硬解」不是一个维度。
-   * 设置页在这个状态下会把列表置灰（见 `DecoderPreferencesScreen`）。
    */
-  fun defaultHwdec(): String =
-    when {
-      directOutput.get() -> "mediacodec,no"
-      else -> decoderMode.get().hwdec
-    }
+  fun defaultHwdec(): String = decoderMode.get().hwdec
 }

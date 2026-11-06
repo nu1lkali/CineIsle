@@ -129,8 +129,8 @@ class MPVView(
     // 不经 CPU 内存、也不重新上传纹理。它是 mpv 里唯一能拿到 `hwdec=mediacodec`
     // （零拷贝档）的 vo —— 用 gpu / gpu-next 时 mpv 会跳过这一档、退到
     // `mediacodec-copy`（每帧 12.4 MB 回拷 + 12.4 MB 上传，4K60 ≈ 1.5 GB/s）。
-    // 代价见 [DecoderPreferences.directOutput]：字幕 / OSD / 着色器 / 截图全部失效。
-    val directOutput = decoderPreferences.directOutput.get()
+    // 代价见 [DefaultDecoder.HardwarePlus]：字幕 / OSD / 着色器 / 截图全部失效。
+    val directOutput = decoderPreferences.isDirectOutput()
     setVo(
       when {
         directOutput -> "mediacodec_embed"
@@ -334,7 +334,7 @@ class MPVView(
     // 直出模式下**不能**挂任何 `vf`：`mediacodec_embed` 直接把解码器的输出 buffer 交出去，
     // 没有滤镜链的位置，硬挂一个 deband 会让 mpv 报「这个 vo 不支持滤镜」并把整条
     // 播放链推翻（表现为黑屏或退回另一档 vo）。GPU 侧的 `deband` 同理 —— 那是 libplacebo 的活。
-    val directOutput = decoderPreferences.directOutput.get()
+    val directOutput = decoderPreferences.isDirectOutput()
     when (if (directOutput) Debanding.None else decoderPreferences.debanding.get()) {
       Debanding.None -> {}
       Debanding.CPU -> MPVLib.command("vf", "add", "@deband:gradfun=radius=12")
@@ -527,7 +527,7 @@ class MPVView(
   fun applyAnime4KShaders() {
     // 直出模式用的是 mediacodec_embed，没有 GL/libplacebo 渲染器：`glsl-shaders` 无处生效，
     // 顺手设的 `opengl-pbo` 之类 GL 选项也没有宿主 vo。直接跳过，别留一堆无效配置。
-    if (decoderPreferences.directOutput.get()) return
+    if (decoderPreferences.isDirectOutput()) return
     runCatching {
       val enabled = decoderPreferences.enableAnime4K.get()
       val gpuNextActive = decoderPreferences.gpuNext.get()

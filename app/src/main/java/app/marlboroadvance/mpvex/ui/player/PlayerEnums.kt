@@ -76,8 +76,9 @@ enum class Decoder(
  *
  * 跟播放中面板里那个 [Decoder]（`hwdec-current` 的实时读数 + 临时切换）是两件事：
  * 那个是「现在这一条片子正在用什么」，这个是「以后每条片子默认用什么」。
- * 这里刻意只留三档 —— 面板里的 `auto` / `auto-copy` / `mediacodec` 是给排查用的，
- * 放进设置页只会让普通用户不知道该选哪个。
+ * 这里只留四档 —— 面板里的 `auto` / `auto-copy` 是给排查用的，放进设置页只会让
+ * 普通用户不知道该选哪个；四档之间是**能力递进**（回退 → 不回退 → 零拷贝 → 软解），
+ * 每一档都有明确的适用场景。
  */
 enum class DefaultDecoder(
   @StringRes val titleRes: Int,
@@ -88,6 +89,16 @@ enum class DefaultDecoder(
    * 就退到下一档；所以「硬解优先」必须带 `no` 兜底，否则遇到不支持的片子直接播不了。
    */
   val hwdec: String,
+  /**
+   * 是否要求**零拷贝直出**（`vo=mediacodec_embed`）。
+   *
+   * ⚠️ 这个标志和一档 `hwdec=mediacodec` 是**绑死的一件事**，不能拆成两个开关：
+   * mpv 的零拷贝档只在 `vo=mediacodec_embed` 下成立，vo 是 gpu / gpu-next 时会
+   * 静默跳过它、退到 `mediacodec-copy`。换句话说「选了零拷贝但没切 vo」等于没选，
+   * 而且没有任何报错 —— 之前它是个单独的「直出模式」开关，与这里的解码档位
+   * 各说各话（开关一开就把档位整体覆盖），同一个决定有两个入口，注定对不上。
+   */
+  val directOutput: Boolean = false,
 ) {
   /** 硬解优先，用不了自动退软解。默认值，与旧版行为完全一致 */
   Auto(R.string.pref_decoder_default_auto, "mediacodec-copy,no"),
@@ -100,6 +111,20 @@ enum class DefaultDecoder(
    * 代价要说清楚：编码不支持时是**直接不出画面**，不是变慢。
    */
   Hardware(R.string.pref_decoder_default_hw, "mediacodec-copy"),
+
+  /**
+   * 零拷贝硬解（HW+）：`hwdec=mediacodec` + `vo=mediacodec_embed`。
+   *
+   * 与 [Hardware] 的差别只在**搬运**：copyback 档是解码器把整帧回拷到 CPU 内存、
+   * 再由 vo 重新上传成纹理（4K 一帧 12.4 MB，2160×3840@60 ≈ 1.5 GB/s），
+   * 这一档让解码器输出 buffer 直接挂到 Surface 上，两次搬运都不存在 ——
+   * 系统播放器 / MX Player 走的就是这条路径。4K 高帧率卡顿基本都出在这里。
+   *
+   * 代价：mpv 侧的叠加层与后处理全部失效 —— 字幕（外挂 / 内嵌都不显示）、OSD、
+   * GLSL 着色器（Anime4K / 锐化）、截图。播放器界面本身是 Compose 独立图层，不受影响。
+   * 所以它只能是一个**用户明确选择**的档位，不能做默认值。
+   */
+  HardwarePlus(R.string.pref_decoder_default_hwplus, "mediacodec,no", directOutput = true),
 
   /** 只用软解。兼容性最好（解码器不再是变量），代价是功耗、发热与 4K 高帧率可能跟不上 */
   Software(R.string.pref_decoder_default_sw, "no"),

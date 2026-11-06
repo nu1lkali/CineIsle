@@ -106,7 +106,7 @@ object PlaybackColorPolicy {
     val wantP5Fix =
       prefs.dolbyVisionColorFix.get() &&
         prefs.gpuNext.get() &&
-        !prefs.directOutput.get() &&
+        !prefs.isDirectOutput() &&
         profile == 5
     val wantHdr = prefs.hdrEnabled.get() && deviceSupportsHdr(activity) && hdrSource
 
