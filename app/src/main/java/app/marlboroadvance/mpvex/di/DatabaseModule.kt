@@ -753,7 +753,7 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
         )
         """.trimIndent()
       )
-      // TTL 清理（删 30 天前的旧行）按 updatedAt 扫全表，索引直接服务那条 DELETE
+      // TTL 清理（删 12 小时前的旧行）按 updatedAt 扫全表，索引直接服务那条 DELETE
       db.execSQL(
         "CREATE INDEX IF NOT EXISTS `index_folder_cover_cache_updatedAt` " +
           "ON `folder_cover_cache` (`updatedAt`)"

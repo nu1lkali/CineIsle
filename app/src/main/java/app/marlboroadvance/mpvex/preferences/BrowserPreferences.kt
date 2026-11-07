@@ -88,13 +88,40 @@ class BrowserPreferences(
   val videoGridColumnsLandscape = preferenceStore.getInt("video_grid_columns_landscape", 4)
 
   /**
-   * 网络浏览（SMB/WebDAV/FTP）文件夹卡片是否用「文件夹里第一张图片」当封面。
+   * 网络浏览的文件夹卡片是否显示封面。
    *
-   * 默认开：相册类共享目录一眼能认出内容。**懒加载**：只有文件夹卡片滚动到
-   * 可见时才为它列一次目录（取名称序第一张图片），结果进 VM 缓存，滑回去不重列；
-   * 关掉后不产生任何额外请求，文件夹回到默认图标。
+   * 封面口径（AList）：**有服务端海报（`thumb`）的视频优先**，其次目录内第一张图片；
+   * 本级都没有时，纯结构目录（只有子文件夹）会向下穿透取一层封面
+   * （见 `NetworkBrowserViewModel.scanFolderCover`）。其余协议没有服务端封面，
+   * 等价于「目录内第一张图片」。
+   *
+   * 默认开：相册类共享目录一眼能认出内容。**懒加载 + 预热**：卡片滚到可见时必然加载，
+   * 进入目录时还会提前为前若干个子文件夹预热（见 `preloadCovers`），结果进三级缓存，
+   * 滑回去不重列；关掉后不产生任何额外请求，文件夹回到默认图标。
    */
   val folderCoverEnabled = preferenceStore.getBoolean("folder_cover_enabled", true)
+
+  /**
+   * 已落盘的封面缓存是按**哪个算法口径**算出来的。
+   *
+   * 与 [app.marlboroadvance.mpvex.domain.network.FOLDER_COVER_CACHE_VERSION] 不一致时，
+   * App 启动会把 `folder_cover_cache` 整表清空一次并写回当前值 —— 理由是封面结果
+   * 有 30 天 TTL，改了选择规则却留着旧结果，用户会以为改动没生效。
+   */
+  val folderCoverCacheVersion = preferenceStore.getInt("folder_cover_cache_version", 0)
+
+  /**
+   * 「网络位置」页（连接列表）**上一次的搜索词**，空串 = 没有。
+   *
+   * 只记词、不记结果：结果本来就是连接列表的纯字符串过滤（见 `NetworkStreamingScreen`），
+   * 词一恢复结果自然一致；存一份结果快照反而会出现「列表里显示着已经删掉的连接」。
+   *
+   * 写入口径：输入即落盘（SharedPreferences 是内存写 + 异步刷盘，逐字符写无负担），
+   * **用户显式关掉搜索 / 清空输入时写空串** —— 那是「我不要这个词了」，下次进来
+   * 不该又自动进搜索态。
+   */
+  val networkConnectionSearchQuery =
+    preferenceStore.getString("network_connection_search_query", "")
 
   /**
    * 网络浏览**网格视图**卡片标题行数（一行 / 两行 / 全显）。

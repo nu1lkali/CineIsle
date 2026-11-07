@@ -123,8 +123,14 @@ object NetworkStreamingScreen : Screen {
     // 连接列表本来就是全量装在内存里的，按名称 / 地址 / 协议做纯字符串过滤即可。
     // 搜索只针对**已保存的连接**：直链段、收藏目录段都不是「连接」，有关键词时
     // 一并收起（否则搜索结果里混着两段无关内容，反而看不出命中了什么）。
-    var searchActive by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
+    var searchActive by remember {
+      mutableStateOf(browserPreferences.networkConnectionSearchQuery.get().isNotBlank())
+    }
+    // 恢复上次的搜索词：结果就是这份列表按词的过滤，所以「词回来了」=「结果回来了」，
+    // 不需要另存结果快照（存快照反而会显示已经删除的连接）
+    var searchQuery by remember {
+      mutableStateOf(browserPreferences.networkConnectionSearchQuery.get())
+    }
     val trimmedQuery = searchQuery.trim()
     val searchNarrows = trimmedQuery.isNotEmpty()
     val visibleConnections =
@@ -143,9 +149,11 @@ object NetworkStreamingScreen : Screen {
       }
 
     // 返回键：搜索态先收搜索（清词 + 收键盘），再退出页面 —— 与网络浏览页同一手势。
+    // 收搜索 = 明确放弃这个词 ⇒ 一并清掉存下来的搜索词（下次进来不自动进搜索态）。
     BackHandler(enabled = searchActive) {
       searchActive = false
       searchQuery = ""
+      browserPreferences.networkConnectionSearchQuery.set("")
     }
 
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
@@ -173,10 +181,15 @@ object NetworkStreamingScreen : Screen {
             if (searchActive) {
               NetworkSearchField(
                 query = searchQuery,
-                onQueryChange = { searchQuery = it },
+                // 输入即落盘：下次进这一页会把词（和由它过滤出的结果）原样恢复
+                onQueryChange = {
+                  searchQuery = it
+                  browserPreferences.networkConnectionSearchQuery.set(it)
+                },
                 onClose = {
                   searchActive = false
                   searchQuery = ""
+                  browserPreferences.networkConnectionSearchQuery.set("")
                 },
                 placeholder = "搜索连接…",
               )

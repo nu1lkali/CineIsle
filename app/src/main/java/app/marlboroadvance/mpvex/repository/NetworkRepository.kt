@@ -27,13 +27,14 @@ import kotlinx.coroutines.flow.map
  *
  * ## 文件夹封面的两级缓存（L1 进程内 LRU + L2 Room）
  *
- * 网络浏览的文件夹卡用「文件夹里第一张图片」当封面，这要列一次子目录才知道。
+ * 网络浏览的文件夹卡要显示封面，得先列一次子目录才知道用哪张（口径见
+ * `domain/network/FolderCoverSelector.kt`）。缓存的是**解析结果**，不是原始目录。
  * - **L1**（[coverL1]）：进程内 LRU，导航来回切页面零请求；
  * - **L2**（`folder_cover_cache` 表）：跨进程重启仍然有效，第二次进同一目录
  *   直接读库、不发请求。
- * 两层都缓存**负结果**（coverPath = null = 列过了但没有图片）—— 纯电影目录
- * 恰恰是最常见的场景，不为它每次重列。写缓存只发生在列目录**成功**之后；
- * 失败不写（下次重试）。下拉刷新按当前目录的子文件夹 path 批量失效。
+ * 两层都缓存**负结果**（coverPath = null = 解析过了、范围内没有可用封面）——
+ * 纯电影目录恰恰是最常见的场景，不为它每次重列。写缓存只发生在目录**列成功**之后；
+ * 失败 / 解析被预算截断都不写（下次重试）。下拉刷新按当前目录的子文件夹 path 批量失效。
  */
 class NetworkRepository(
   private val dao: NetworkConnectionDao,
@@ -359,21 +360,60 @@ class NetworkRepository(
   /**
    * 查一个文件夹的封面缓存（L1 → L2 读穿，L2 命中会回填 L1）。
    *
-   * @return null = **从没列过**（缓存未命中，调用方该去列目录）；
-   *   非 null = 列过了，[FolderCoverCacheEntity.coverPath] 可空
-   *   （null = 列过了但没有图片 —— 这也是有效缓存，别再列）。
+   * @param dirModified 该文件夹在**父目录列表**里的修改时间（`NetworkFile.lastModified`）；
+   *   0 / 未知时只按 TTL 判新鲜度。
+   * @return null = **没有可用缓存**（从没解析过，或已过期、或目录变过）——
+   *   调用方该去重新解析；非 null = 可用，[FolderCoverCacheEntity.coverPath] 可空
+   *   （null = 解析过了但没有可用封面，这也是有效缓存，别再列）。
+   *
+   * ## 新鲜度的两条判据
+   *
+   * 1. **TTL**：[FOLDER_COVER_TTL_MS]（12 小时）内才算缓存命中 —— 再久就重解析一次，
+   *    免得一直拿一份陈年结果；
+   * 2. **目录修改时间**：`缓存时间 < 目录 mtime` 说明这个文件夹在缓存之后被改过
+   *    （加删了文件 / 子目录），封面可能已经不是最合适的了 —— 重解析。
+   *
+   * ⚠️ 两条都用**绝对时间戳**比较，所以给 1 分钟的容差（[COVER_MTIME_SKEW_MS]）：
+   *    服务器与手机的时钟不可能完全一致，若服务器快几十秒，没容差就会永远判成
+   *    「刚改过」⇒ 每次进目录都重列一遍，比不缓存还糟。
+   *
+   * ⚠️ 只淘汰 L1 的条目、**不删 L2 行**：马上就会 upsert 覆盖它；这里多一次 DELETE
+   *    只是给每次读都加一次写。
    */
-  suspend fun getFolderCover(connectionId: Long, path: String): FolderCoverCacheEntity? {
+  suspend fun getFolderCover(
+    connectionId: Long,
+    path: String,
+    dirModified: Long = 0L,
+  ): FolderCoverCacheEntity? {
     val key = coverKey(connectionId, path)
-    synchronized(coverL1) { coverL1[key] }?.let { return it }
-    val entry = coverCacheDao.get(connectionId, path) ?: return null
-    synchronized(coverL1) { coverL1[key] = entry }
+    val entry =
+      synchronized(coverL1) { coverL1[key] }
+        ?: (coverCacheDao.get(connectionId, path)?.also { loaded ->
+          synchronized(coverL1) { coverL1[key] = loaded }
+        })
+        ?: return null
+    if (!entry.isFreshFor(dirModified)) {
+      synchronized(coverL1) { coverL1.remove(key) }
+      return null
+    }
     return entry
   }
 
   /**
+   * 这份缓存对「当前这个目录状态」还算不算数（见 [getFolderCover] 的两条判据）。
+   *
+   * 纯函数，便于单测；时间基准统一用 `System.currentTimeMillis()`（与 [putFolderCover] 同源）。
+   */
+  internal fun FolderCoverCacheEntity.isFreshFor(dirModified: Long): Boolean {
+    if (dirModified <= 0L) return System.currentTimeMillis() - updatedAt <= FOLDER_COVER_TTL_MS
+    // 缓存早于目录修改时间 ⇒ 缓存之后目录变过
+    if (dirModified > updatedAt + COVER_MTIME_SKEW_MS) return false
+    return System.currentTimeMillis() - updatedAt <= FOLDER_COVER_TTL_MS
+  }
+
+  /**
    * 写封面缓存（L1 + L2）。**只在列目录成功后调用** —— 失败是暂时的，
-   * 不能把「这次没列成」记成「没有图片」缓存 30 天。
+   * 不能把「这次没列成」记成「没有封面」缓存 12 小时。
    *
    * L2 写失败不致命：本次进程内 L1 仍然有效，下次启动重新列一次而已。
    */
@@ -400,6 +440,19 @@ class NetworkRepository(
     paths.chunked(400).forEach { chunk ->
       runCatching { coverCacheDao.deleteByPaths(connectionId, chunk) }
     }
+  }
+
+  /**
+   * 清空**全部**封面缓存（L1 + L2）。
+   *
+   * 只在「封面选择算法换了口径」时调用一次（见
+   * [app.marlboroadvance.mpvex.domain.network.FOLDER_COVER_CACHE_VERSION]）——
+   * 否则用户升级后看到的还是旧算法挑出来的封面，得等 30 天 TTL 才生效。
+   * 调用时机是 App 启动（此时 L1 本来就是空的，清一下只是为了语义完整）。
+   */
+  suspend fun clearAllFolderCovers() {
+    synchronized(coverL1) { coverL1.clear() }
+    runCatching { coverCacheDao.clearAll() }
   }
 
   /**
@@ -467,7 +520,26 @@ class NetworkRepository(
     /** L1 封面缓存封顶：一个浏览页通常几十个文件夹，500 条够跨多个连接用 */
     private const val COVER_L1_CAP = 500
 
-    /** 封面缓存 TTL：30 天。共享目录会变（往里加了照片），超期重列一次保证不永久停在旧图 */
-    const val FOLDER_COVER_TTL_MS = 30L * 24 * 60 * 60 * 1000
+    /**
+     * 封面缓存 TTL：**12 小时**。
+     *
+     * 共享目录会变（往里加了照片 / 视频有了新海报），超期重解析一次，保证封面不会
+     * 永久停在旧图上；上限也不能太长 —— 12 小时是「一天里最多重复列两次同一目录」的量级，
+     * 对服务器压力可以忽略（结果本身还分 L1 / L2 两级，同一页内零重复）。
+     *
+     * ⚠️ 这里同时被 App 启动时的 [clearStaleFolderCovers] 用作**清理阈值**：
+     *    超过 12 小时的行直接删掉，下次用到时重新解析。改小只会让清理更彻底，
+     *    不会让缓存失效得更慢。
+     */
+    const val FOLDER_COVER_TTL_MS = 12L * 60 * 60 * 1000
+
+    /**
+     * 「缓存时间 vs 目录修改时间」的时钟容差：1 分钟。
+     *
+     * 服务器与手机的时钟不可能完全一致。若服务器快几十秒，`缓存时间 < 目录 mtime`
+     * 会**永远成立** ⇒ 每次进目录都重列一遍，比不缓存还糟。1 分钟足够吸收常见的
+     * NTP 抖动，代价只是「刚缓存完 1 分钟内又改过的目录」不立刻刷新（12 小时 TTL 会兜住）。
+     */
+    private const val COVER_MTIME_SKEW_MS = 60L * 1000
   }
 }

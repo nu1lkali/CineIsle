@@ -6,6 +6,7 @@ import app.marlboroadvance.mpvex.database.repository.VideoMetadataCacheRepositor
 import app.marlboroadvance.mpvex.di.DatabaseModule
 import app.marlboroadvance.mpvex.di.FileManagerModule
 import app.marlboroadvance.mpvex.di.PreferencesModule
+import app.marlboroadvance.mpvex.domain.network.FOLDER_COVER_CACHE_VERSION
 import app.marlboroadvance.mpvex.presentation.crash.CrashActivity
 import app.marlboroadvance.mpvex.presentation.crash.GlobalExceptionHandler
 import app.marlboroadvance.mpvex.utils.media.MediaLibraryEvents
@@ -149,13 +150,27 @@ class App : Application() {
       }
     }
 
-    // 网络文件夹封面缓存的 TTL 清理：删掉 30 天没刷新过的 L2 行（启动时一次）。
+    // 网络文件夹封面缓存的 TTL 清理：删掉 12 小时没刷新过的 L2 行（启动时一次）。
     // 封面对的是「服务器上文件夹里当前有哪些图」，目录内容会变，
     // 一直不新鲜的缓存比没有缓存更糟（显示一个早就删掉的封面）。
     // L1 是进程内的不用管；失败吞掉 —— 少扫一次不过是多留几行旧数据。
     applicationScope.launch {
       runCatching { networkRepository.clearStaleFolderCovers() }
         .onFailure { trace("folder cover TTL cleanup failed: ${it.message}") }
+    }
+
+    // 封面**选择算法**换口径时，把落盘的旧结果整表作废一次（见
+    // FOLDER_COVER_CACHE_VERSION 的说明）。不这么做的话，用户升级后看到的还是旧算法
+    // 挑出来的封面，要等 12 小时 TTL 或手动下拉刷新 —— 表现就是「改了跟没改一样」。
+    applicationScope.launch {
+      runCatching {
+        val stored = browserPreferences.folderCoverCacheVersion
+        if (stored.get() < FOLDER_COVER_CACHE_VERSION) {
+          networkRepository.clearAllFolderCovers()
+          stored.set(FOLDER_COVER_CACHE_VERSION)
+          trace("folder cover cache purged: algo v${stored.get()}")
+        }
+      }.onFailure { trace("folder cover purge failed: ${it.message}") }
     }
 
     // 「不喜欢」标记的内存快照：启动时读一次库。

@@ -106,8 +106,9 @@ internal fun Modifier.tapAndLongPress(
  *   沿用旧视频卡的做法 —— surfaceContainerHigh 底 + 播放图标占位。
  * - **照片走 [NetworkPhotoThumbnail]**：拉全图 + Coil 采样解码，Crop 填满
  *   （没有服务端缩放，见 NetworkPhotoImageLoader 的 KDoc）。
- * - **文件夹封面**（可选）：[coverPath] 非空 = 文件夹里第一张图片的路径，
- *   用同一套缩略图组件渲染；为空 = 灰色文件夹图标。封面由调用方懒加载提供
+ * - **文件夹封面**（可选）：[coverRef] 非空 = 已解析出的封面 —— 「有服务端海报的视频」
+ *   优先，其次才是文件夹里的第一张图片（口径见 `domain/network/FolderCoverSelector.kt`）；
+ *   渲染分流在 [FolderCoverImage]，为空则落灰色文件夹图标。封面由调用方懒加载提供
  *   （见 [onCoverNeeded]），本卡只负责渲染。
  * - **统一 1:1 图区**（[aspectRatio]）：与 Emby 照片卡同一理由 ——
  *   高度随原图比例浮动的话网格参差不齐。
@@ -120,8 +121,8 @@ fun NetworkMediaCard(
   connectionId: Long,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
-  /** 文件夹封面（第一张图片的 path）；null = 还没有 / 没有图片 / 功能关闭 */
-  coverPath: String? = null,
+  /** 文件夹封面引用（视频海报 URL 或第一张图片的 path）；null = 还没有 / 没有可用封面 / 功能关闭 */
+  coverRef: String? = null,
   /** 网格标题行数（一行 / 两行 / 全显，走设置项） */
   titleMaxLines: Int = 1,
   /**
@@ -147,7 +148,7 @@ fun NetworkMediaCard(
 
   // 文件夹且还没拿到封面时请求一次。重复调是安全的（VM 侧有缓存/在途去重），
   // 滑走再滑回来会再触发，但命中缓存不再产生网络请求。
-  if (type == NetworkFileType.FOLDER && coverPath == null && onCoverNeeded != null) {
+  if (type == NetworkFileType.FOLDER && coverRef == null && onCoverNeeded != null) {
     LaunchedEffect(file.path) { onCoverNeeded(file.path) }
   }
 
@@ -166,30 +167,19 @@ fun NetworkMediaCard(
       ) {
         when (type) {
           NetworkFileType.FOLDER -> {
-            // 有封面（文件夹第一张图片）就渲染缩略图，否则回退文件夹图标。
-            // 封面加载中 / 没有图片 / 功能关闭时都是图标，不会留半张图。
-            if (coverPath != null) {
-              NetworkPhotoThumbnail(
+            // 有封面就渲染，否则回退文件夹图标。
+            // 封面可能是「视频的服务端海报（URL）」或「第一张图片（path）」，
+            // 分流交给 FolderCoverImage（与列表行共用同一份判据）。
+            if (coverRef != null) {
+              FolderCoverImage(
+                coverRef = coverRef,
                 connectionId = connectionId,
-                path = coverPath,
                 contentDescription = file.name,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
+                fallback = { FolderPlaceholderIcon(Modifier.fillMaxSize()) },
               )
             } else {
-              Box(
-                modifier = Modifier
-                  .fillMaxSize()
-                  .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                contentAlignment = Alignment.Center,
-              ) {
-                Icon(
-                  Icons.Filled.Folder,
-                  contentDescription = null,
-                  modifier = Modifier.size(44.dp),
-                  tint = MaterialTheme.colorScheme.secondary,
-                )
-              }
+              FolderPlaceholderIcon(Modifier.fillMaxSize())
             }
           }
 

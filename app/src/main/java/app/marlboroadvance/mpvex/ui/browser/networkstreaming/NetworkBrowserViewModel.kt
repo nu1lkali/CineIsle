@@ -8,12 +8,16 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import app.marlboroadvance.mpvex.domain.network.FolderCoverKind
+import app.marlboroadvance.mpvex.domain.network.FolderCoverPick
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.domain.network.NetworkFileType
 import app.marlboroadvance.mpvex.domain.network.NetworkProtocol
+import app.marlboroadvance.mpvex.domain.network.folderCoverChildDirs
 import app.marlboroadvance.mpvex.domain.network.isPhoto
 import app.marlboroadvance.mpvex.domain.network.isVideoFile
+import app.marlboroadvance.mpvex.domain.network.pickFolderCover
 import app.marlboroadvance.mpvex.domain.network.type
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.AlistClient
@@ -21,6 +25,7 @@ import app.marlboroadvance.mpvex.ui.browser.networkstreaming.download.NetworkDow
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkFileOps
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkOpResult
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkTransferMode
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.photos.NetworkPhotoImageLoader
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.DirSizeEntry
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.DirSizeUiState
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.properties.NetworkDirSizeStore
@@ -240,9 +245,14 @@ class NetworkBrowserViewModel(
   val supportsWrite: StateFlow<Boolean> = _supportsWrite.asStateFlow()
 
   /**
-   * 文件夹封面缓存：文件夹 path → 「第一张图片」的 path（**本页**可见的）。
+   * 文件夹封面缓存：文件夹 path → **封面引用**（**本页**可见的）。
    *
-   * - value = null：这个文件夹列过了，没有图片（或本次列失败）—— 别再列第二次；
+   * 「封面引用」是一个字符串，两种形态靠 scheme 区分（见
+   * [app.marlboroadvance.mpvex.domain.network.isRemoteCoverRef]）：
+   * - `http(s)://...` = 视频的服务端海报帧（AList `fs/list` 的 `thumb`，绝对 URL）；
+   * - 其余 = 图片在挂载点内的相对 path（客户端取字节解码）。
+   *
+   * - value = null：这个文件夹**解析过了**、范围内没有可用封面 —— 别再列第二次；
    * - 只进缓存不淘汰：一个浏览页面就对应这几个文件夹，滑回去直接命中。
    *
    * ⚠️ 这只是**本页**的可见缓存；跨页面 / 跨重启的持久化在 Repository 的两级
@@ -284,80 +294,102 @@ class NetworkBrowserViewModel(
   private var cachedConnection: NetworkConnection? = null
 
   /**
-   * 确保这个文件夹的封面已缓存（没有就列一次目录）。
+   * 当前页是否停在连接的**根目录**（`/`）。
    *
-   * 「第一张图片」按**名称自然序**取（`minWithOrNull(NaturalOrderComparator)`）——
-   * 与服务端返回顺序无关，同一文件夹每次进来封面稳定；且与列表排序同口径
-   * （否则 `img9/img10` 这种命名下封面会取到第 10 张、列表第一却是第 9 张）。
-   * 只认直接子级里的图片，**不递归**子文件夹（递归 = 一张卡片要 N 次列目录，
-   * 那就不是「尽可能减少请求」了）。
+   * 根目录在 AList 里是「存储挂载点列表」（阿里云盘 / 夸克 / 本地存储 …），不是媒体目录：
+   * 给它下面每一项算封面既没有语义（一张盘里的某张图代表整个网盘？），代价也最高
+   * （每个挂载点都要列一次目录，而挂载点底下往往几千条）。所以根目录**一律不给封面**，
+   * 卡片保持默认文件夹图标 —— 也不写负缓存，退出根目录后子目录照常解析。
+   *
+   * ⚠️ 只对 ALIST 生效：SMB / WebDAV / FTP 的「根」通常就是共享目录本身，
+   *    那里给封面是有意义的，维持原行为。
+   */
+  private val atConnectionRoot: Boolean = currentPath.trim('/').isEmpty()
+
+  /** 本页连接的协议（loadFiles 里同步；封面的根目录判断要用，见 [atConnectionRoot]） */
+  private var pageProtocol: NetworkProtocol? = null
+
+  /**
+   * 确保这个文件夹的封面已解析并缓存（没有就按下面的口径算一次）。
+   *
+   * ## 选择口径（素材全部由 AList 服务端提供，客户端不截帧、不合成）
+   *
+   * 1. 列本目录的**直接子级**，交给 [pickFolderCover] 挑一张：
+   *    有服务端海报（`thumb` 非空）的视频**优先**，否则回退名称自然序第一张图片的 path；
+   *    「仅含视频」走的也是这条 —— 图片候选为空时第 1 步直接命中视频海报。
+   * 2. 本级挑不出来、且本目录**只有子文件夹**时向下穿透（广度优先、命中即停），
+   *    深度与列目录次数各有上限，见 [COVER_SCAN_MAX_DEPTH] / [COVER_SCAN_MAX_LISTINGS]。
+   * 3. 结果作为**封面引用**落 L1/L2，形态见 [_folderCovers] 的说明。
+   *
+   * 名称自然序是关键：与服务端返回顺序无关，同一文件夹每次算出来都是同一张；
+   * 且与列表排序同口径（否则 `img9/img10` 这种命名下封面会取到第 10 张）。
    *
    * 三级查找：本页 Map → Repository L1（进程内 LRU）→ Repository L2（Room）。
    * 只有三级都没命中才真的列目录；列**成功**才回写持久缓存。
+   * 持久缓存有**新鲜度**要求（12 小时 TTL + 目录 mtime 判据），过期即视为未命中并重算 ——
+   * 见 [app.marlboroadvance.mpvex.repository.NetworkRepository.getFolderCover]。
    *
    * 安全地被重复调：已缓存 / 在途 / 连接没了都会静默返回。
    */
   fun ensureFolderCover(folderPath: String) {
     if (_folderCovers.value.containsKey(folderPath)) return
+    // AList 根目录（存储挂载点列表）不加载封面：语义上不成立，成本还最高。
+    // 直接返回、**不写负缓存** —— 这只是本页的策略，不是「这个目录没有封面」的结论。
+    if (atConnectionRoot && pageProtocol == NetworkProtocol.ALIST) return
     // 本页已经失败到次数上限：不再发请求，等下拉刷新（会把计数清零）或重进页面
     if ((coverFailures[folderPath] ?: 0) >= COVER_MAX_PAGE_ATTEMPTS) return
     if (!coverInFlight.add(folderPath)) return
     viewModelScope.launch {
       try {
-        // 1) 持久缓存命中（含负缓存：列过了、没图片）→ 直接渲染，零请求
-        val cached = repository.getFolderCover(connectionId, folderPath)
+        // 该文件夹在**当前列表**里的修改时间：封面缓存的新鲜度判据之一
+        //（缓存时间早于它 ⇒ 缓存之后这个目录被改过，封面要重算）。见 Repository.getFolderCover。
+        // 拿不到（不在本页列表里）就传 0，只按 TTL 判。
+        val dirModified = _rawFiles.value.firstOrNull { it.path == folderPath }?.lastModified ?: 0L
+        // 1) 持久缓存命中（含负缓存：解析过了、范围内没有可用封面）→ 直接渲染，零请求。
+        //    ⚠️ 过期（超过 12 小时）或目录 mtime 比缓存新 ⇒ Repository 返回 null，走下面的解析。
+        val cached = repository.getFolderCover(connectionId, folderPath, dirModified)
         if (cached != null) {
           _folderCovers.update { it + (folderPath to cached.coverPath) }
           coverFailures.remove(folderPath)
           return@launch
         }
-        // 2) 未命中：列一次目录（Semaphore(3) 限流，一屏可见的文件夹可能十几个）。
-        //    失败**自动重试一次** —— 刚进页面那一刻连接还在建、会话刚过期都很常见，
-        //    立刻重来一次多半就过了；再失败就不再空转，留给下拉刷新 / 点重载。
-        var attempt = 0
-        var cover: String? = null
-        var listedOk = false
-        while (true) {
-          attempt++
-          val connection = cachedConnection
+        // 2) 未命中：解析一次（Semaphore(3) 限流，一屏可见的文件夹可能十几个）。
+        //    根目录列失败会**自动重试一次** —— 刚进页面那一刻连接还在建、会话刚过期
+        //    都很常见，立刻重来一次多半就过了；再失败就不再空转，留给下拉刷新 / 点重载。
+        val connection =
+          cachedConnection
             ?: repository.getConnectionById(connectionId)?.also { cachedConnection = it }
             ?: return@launch
-          val outer = runCatching { coverGate.withPermit { repository.listFiles(connection, folderPath) } }
-          val page = outer.getOrNull()
-          if (page != null && page.isSuccess) {
-            cover =
-              page
-                .getOrNull()
-                ?.filter { it.isPhoto() }
-                // ⚠️ 走**自然序**取第一张，不能 `minByOrNull { it.name.lowercase() }`：
-                //    字典序会把 `img10.jpg` 判成比 `img9.jpg` 小 ⇒ 封面取的是第 10 张，
-                //    而网格里排在第一的是第 9 张，两者对不上。与列表排序同口径。
-                ?.minWithOrNull(compareBy(SortUtils.NaturalOrderComparator.DEFAULT) { it.name })
-                ?.path
-            listedOk = true
-            break
+        val scan = scanFolderCover(connection, folderPath)
+        val pick = scan.pick
+        when {
+          // 2a) 根目录都没列成：失败是暂时的，**不落盘**（见下方负缓存的说明）
+          !scan.rootListed -> coverFailures.merge(folderPath, 1) { a, b -> a + b }
+
+          // 2b) 命中：根目录与「真正产出封面的那一级」各记一行缓存。
+          //     ⚠️ 中途穿透过的父目录**不记** —— 它们的完整解析结果与根目录不一定相同
+          //     （同级里更靠前的兄弟目录，在它们的层级里可能先命中）。
+          pick != null -> {
+            repository.putFolderCover(connectionId, folderPath, pick.ref)
+            val hit = scan.hitFolder
+            if (hit != null && hit != folderPath) {
+              repository.putFolderCover(connectionId, hit, pick.ref)
+            }
+            _folderCovers.update { it + (folderPath to pick.ref) }
+            coverFailures.remove(folderPath)
+            Log.d(TAG, "封面命中(${pick.kind}): $folderPath → $hit")
           }
-          Log.w(
-            TAG,
-            "封面列目录失败($attempt): $folderPath | " +
-              (outer.exceptionOrNull() ?: page?.exceptionOrNull())?.message,
-          )
-          if (attempt >= COVER_LIST_ATTEMPTS) break
-          delay(COVER_RETRY_DELAY_MS)
-        }
-        if (listedOk) {
-          // 3) 列**成功**才写持久缓存（含「确实没图片」的负缓存）。
-          //    ⚠️ 失败绝不能写：原来这里用 `listFiles(...).getOrNull()`，失败被吞成 null，
-          //    等于把「这次没列成」记成「这个文件夹没有图片」并落盘 30 天 ——
-          //    网络抖一下，这个文件夹的封面在**整个 TTL 内**都不再加载（
-          //    「图片文件夹没封面、点进去却有图」就是这么来的）。
-          repository.putFolderCover(connectionId, folderPath, cover)
-          _folderCovers.update { it + (folderPath to cover) }
-          coverFailures.remove(folderPath)
-        } else {
-          // 两次都没列成：本页**不当负缓存**（滚回来还能再试，见 coverFailures 的说明），
-          // 只把计数 +1，到上限才放弃。
-          coverFailures.merge(folderPath, 1) { a, b -> a + b }
+
+          // 2c) 扫完确实没有：负缓存（下次进来零请求，也不会再为它发请求）
+          scan.complete -> {
+            repository.putFolderCover(connectionId, folderPath, null)
+            _folderCovers.update { it + (folderPath to null) }
+            coverFailures.remove(folderPath)
+          }
+
+          // 2d) 预算用完 / 某个子目录没列成 ⇒ 结论不完整，**不落盘**（否则会把
+          //     「没查完」冻成「没有封面」缓存 12 小时）；本页计次，到上限静默放弃。
+          else -> coverFailures.merge(folderPath, 1) { a, b -> a + b }
         }
       } catch (e: CancellationException) {
         throw e
@@ -368,6 +400,221 @@ class NetworkBrowserViewModel(
       } finally {
         coverInFlight.remove(folderPath)
       }
+    }
+  }
+
+  // ── 封面解析（纯函数见 domain/network/FolderCoverSelector.kt） ──
+
+  /** 穿透队列里的一项：待列的目录 + 它相对根目录的层级（根 = 0） */
+  private data class PendingCoverDir(val path: String, val depth: Int)
+
+  /**
+   * 一次封面解析的结果。
+   *
+   * @param pick 选中的封面；null = 范围内没有可用封面
+   * @param hitFolder 产出封面的那一级目录（null = 没命中）
+   * @param rootListed 根目录**列成功**了吗。false = 网络/会话问题，不能当结论
+   * @param complete 结论是否**完整**：false = 预算用完或有子目录没列成（不能当负缓存）
+   */
+  private data class CoverScan(
+    val pick: FolderCoverPick?,
+    val hitFolder: String?,
+    val rootListed: Boolean,
+    val complete: Boolean,
+  )
+
+  /**
+   * 解析一个文件夹的封面：本级优先；本级没有就**逐层下探**，同层内比优先级。
+   *
+   * ## 穿透的触发条件
+   *
+   * - 本级 [pickFolderCover] 挑不出封面（没有带海报的视频、也没有图片）；
+   * - 并且本级**没有媒体文件**（图片 / 视频一个都没有）。
+   *
+   * 第二条是成本闸门：一个装满「无海报视频」的电影目录如果也往下钻，一张卡片就要
+   * 多列 5 次目录，一屏十几个文件夹就是几十次请求，换来的大概率还是空 —— 所以
+   * 「有媒体文件但都没封面」一律就地停止，只有**纯结构目录**（类型 / 剧名 / 季）才穿透。
+   *
+   * ⚠️ 判据是「没有**媒体**文件」，不是「全是文件夹」：目录里躺一个 `.DS_Store`、
+   *    一个 `.nfo` 或字幕都不该阻断穿透（那些文件本来也当不了封面）。
+   *
+   * ## 同层的优先级：视频海报 > 图片
+   *
+   * 只在**单个目录内部**比类型是不够的。`A/{视频, 图片}` 这种结构下，「图片」在名称
+   * 自然序里排在「视频」前面（`图` U+56FE < `视` U+89C6），若按「谁先命中谁说了算」，
+   * A 会永远拿图片子目录当封面，正好与「视频优先」相反 —— 这是用户报的原始症状。
+   * 所以改成**一层一层地看**：同层里只要有一个子目录能给出视频海报就取它；整层只有
+   * 图片时，才取自然序第一张。
+   *
+   * 代价（必须明说）：同层里先命中图片时**不能**立刻返回，得把这一层剩下的兄弟目录
+   * 看完才知道有没有海报 —— 单次解析的列目录次数因此可能从 1 次涨到「本层子目录数」，
+   * 由 [COVER_SCAN_MAX_LISTINGS] 兜底。先命中海报的那条路径仍然只花 1 次。
+   *
+   * ## 终止条件（四条，任意一条成立就停）
+   *
+   * 1. **本层命中视频海报 ⇒ 立即返回**（同层最优，自然序已定胜负）；
+   * 2. **本层扫完只有图片 ⇒ 返回自然序第一张图片**，不再往更深处找（近的优先）；
+   * 3. **深度上限** [COVER_SCAN_MAX_DEPTH]：根 = 0，最多下钻到第 3 层
+   *    （库 → 类型 → 剧名 → 季，正好覆盖常见媒体树的四级结构）；
+   * 4. **列目录次数上限** [COVER_SCAN_MAX_LISTINGS]：一次解析最多列 6 次目录。
+   *
+   * ⚠️ 穿透**只对 AList 生效**：只有 AList 的 `fs/list` 会带 `thumb`（服务端封面），
+   *    SMB / WebDAV / FTP 的列目录是重量级往返（PROPFIND / 会话复用有限），
+   *    保持「只看直接子级」的老行为，不给它们叠加 N 次请求。
+   */
+  private suspend fun scanFolderCover(
+    connection: NetworkConnection,
+    rootPath: String,
+  ): CoverScan {
+    val rootItems =
+      listForCover(connection, rootPath, retry = true)
+        ?: return CoverScan(pick = null, hitFolder = null, rootListed = false, complete = false)
+
+    // 第 0 层：根目录自己（列表已在手上，不再多列一次）
+    pickFolderCover(rootItems)?.let { pick ->
+      return CoverScan(pick = pick, hitFolder = rootPath, rootListed = true, complete = true)
+    }
+
+    val penetrable =
+      connection.protocol == NetworkProtocol.ALIST &&
+        rootItems.none { it.isPhoto() || it.isVideoFile() }
+    if (!penetrable) {
+      // 没有可穿透的结构目录（或协议不支持）—— 扫描到此为止，且结论是完整的
+      return CoverScan(pick = null, hitFolder = null, rootListed = true, complete = true)
+    }
+
+    var listings = 1
+    var complete = true
+    // 本层待列的目录；depth 从 1 起（根 = 0）
+    var level: List<PendingCoverDir> = folderCoverChildDirs(rootItems).map { PendingCoverDir(it.path, 1) }
+    // 本层已找到的图片封面：先兜在手里，继续看同层有没有带海报的视频目录
+    var imageHit: CoverScan? = null
+
+    while (level.isNotEmpty()) {
+      val nextLevel = mutableListOf<PendingCoverDir>()
+      var truncated = false
+
+      for (dir in level) {
+        if (listings >= COVER_SCAN_MAX_LISTINGS) {
+          truncated = true
+          break
+        }
+        val items = listForCover(connection, dir.path, retry = false)
+        if (items == null) {
+          // 这一支查不了（目录被删 / 权限 / 抖动）⇒ 未知分支，不敢当负缓存
+          complete = false
+          continue
+        }
+        listings++
+
+        val pick = pickFolderCover(items)
+        if (pick != null) {
+          if (pick.kind == FolderCoverKind.VIDEO_THUMB) {
+            // 同层最优，立即收官
+            return CoverScan(pick = pick, hitFolder = dir.path, rootListed = true, complete = true)
+          }
+          if (imageHit == null) {
+            imageHit = CoverScan(pick = pick, hitFolder = dir.path, rootListed = true, complete = true)
+          }
+          // ⚠️ 不 return：同层后面可能还有能给海报的视频目录（`A/{图片, 视频}` 就是这种）
+          continue
+        }
+
+        // 本级没封面：只有**没有媒体文件**的纯结构目录才继续往下（见 KDoc 的成本闸门）
+        if (dir.depth >= COVER_SCAN_MAX_DEPTH) continue
+        if (items.any { it.isPhoto() || it.isVideoFile() }) continue
+        folderCoverChildDirs(items).forEach { child ->
+          nextLevel += PendingCoverDir(child.path, dir.depth + 1)
+        }
+      }
+
+      // 本层看完了：有图片就收（近的优先，不再下探）
+      val hit = imageHit
+      if (hit != null) return hit
+      if (truncated) {
+        // 本层没找完：既不能下探（兄弟目录里可能有更浅的封面），也不能当负缓存
+        complete = false
+        break
+      }
+      level = nextLevel
+    }
+
+    return CoverScan(pick = null, hitFolder = null, rootListed = true, complete = complete)
+  }
+
+  /**
+   * 列一次目录给封面用；[retry] 为 true 时按 [COVER_LIST_ATTEMPTS] 重试。
+   *
+   * 两条都必须走 [coverGate]（Semaphore(3)）：一屏可见的文件夹可能十几个，全并发
+   * 会把 SMB 会话 / AList 登录态挤爆。失败一律返回 null（不抛）—— 封面的失败
+   * 处理在调用方，这里只负责「拿到没拿到」。
+   */
+  private suspend fun listForCover(
+    connection: NetworkConnection,
+    path: String,
+    retry: Boolean,
+  ): List<NetworkFile>? {
+    var attempt = 0
+    while (true) {
+      attempt++
+      val outer = runCatching { coverGate.withPermit { repository.listFiles(connection, path) } }
+      val page = outer.getOrNull()
+      if (page != null && page.isSuccess) return page.getOrNull()
+      Log.w(
+        TAG,
+        "封面列目录失败($attempt): $path | " +
+          (outer.exceptionOrNull() ?: page?.exceptionOrNull())?.message,
+      )
+      if (!retry || attempt >= COVER_LIST_ATTEMPTS) return null
+      delay(COVER_RETRY_DELAY_MS)
+    }
+  }
+
+  /**
+   * 进入目录后的**预热**：把本次列表里能提前算的都算掉，让「滚到眼前」这一步不再等网络。
+   *
+   * 两件事，都在后台、都不阻塞加载：
+   * 1. **子文件夹封面**（前 [PRELOAD_FOLDER_LIMIT] 个，按列表基序）—— 一张文件夹卡要
+   *    显示封面必须列一次子目录。不预热的话，一屏十几张卡是「谁先组合出来谁先排队」，
+   *    表现就是封面一个接一个往外蹦；预热让它们在列表落地的同一刻全部入队，
+   *    卡片组合出来时结果大概率已经在缓存里（仍走同一份 Semaphore(3)，不会挤爆会话）。
+   * 2. **本级媒体缩略图字节**（前 [PRELOAD_THUMB_LIMIT] 个带 `thumb` 的条目）——
+   *    只预热服务端已经给了缩略图的（AList 的 `thumb`，通常几 KB～几十 KB）。
+   *    SMB / WebDAV / FTP 没有 `thumb`，预热等于把原图整份拉下来换几百毫秒，不做。
+   *
+   * ⚠️ 上限是必须的：这些都是**猜测性**流量。一个 300 个文件夹的库根目录若全预热，
+   *    就是 300 次列目录（最坏按每次 6 跳算可达 1800 次请求），而用户可能只看得见
+   *    前两屏。取 12 / 24 的依据：一屏约 9~12 格（3 列 × 4 行）+ Compose 的预取余量。
+   *
+   * ⚠️ 全程复用既有缓存，不会重复发请求：`ensureFolderCover` 命中 L1/L2 直接返回、
+   *    Coil 命中内存/磁盘缓存直接返回。
+   */
+  private fun preloadCovers(items: List<NetworkFile>) {
+    if (!browserPreferences.folderCoverEnabled.get()) return
+    // 根目录完全不预热：下面每一项都是存储挂载点，解析封面等于把每个网盘各列一次，
+    // 却没有可看的结果（卡片本来就保持图标，见 atConnectionRoot）
+    if (atConnectionRoot && pageProtocol == NetworkProtocol.ALIST) return
+
+    items
+      .asSequence()
+      .filter { it.isDirectory }
+      .map { it.path }
+      .take(PRELOAD_FOLDER_LIMIT)
+      .forEach { ensureFolderCover(it) }
+
+    val thumbs =
+      items
+        .asSequence()
+        .filter { !it.isDirectory }
+        .mapNotNull { file -> file.thumb?.takeIf { it.isNotBlank() } }
+        .take(PRELOAD_THUMB_LIMIT)
+        .toList()
+    if (thumbs.isEmpty()) return
+    val loader = NetworkPhotoImageLoader.get(application)
+    thumbs.forEach { url ->
+      // enqueue 是「发起即返回」，解码与落缓存都在 Coil 自己的调度器上。
+      // 单张失败不该影响其它张，更不能让异常冒进 viewModelScope（没人接 ⇒ 崩进程）
+      runCatching { loader.enqueue(NetworkPhotoImageLoader.thumbRequest(application, url)) }
     }
   }
 
@@ -925,6 +1172,8 @@ class NetworkBrowserViewModel(
 
         // 长按菜单只对支持写操作的协议开放（当前只有 AList）
         _supportsWrite.value = connection.protocol == NetworkProtocol.ALIST
+        // 封面的「根目录不加载」判据要用（见 atConnectionRoot）
+        pageProtocol = connection.protocol
         // 属性面板「存储」那一行要用（`我的 NAS · AList`）
         _protocolLabel.value = connection.protocol.displayName
 
@@ -954,6 +1203,10 @@ class NetworkBrowserViewModel(
                 seenFolders.forEach { ensureFolderCover(it) }
               }
             }
+            // 进入目录后**立刻**把这一屏可见范围内的封面 / 缩略图预热起来，
+            // 而不是等卡片组合出来才一张一张发请求（见 preloadCovers 的说明）。
+            // 传排好序的那份：预热取「前 N 个」时顺序要与屏幕上看到的一致。
+            preloadCovers(_rawFiles.value)
             // 随机排序 + 下拉刷新 = 整副牌重洗 ⇒ 与「切排序」一样必须回顶。
             // ⚠️ 信号只能在这里发（新列表已经落到 [_rawFiles] 之后）。
             //    在 `loadFiles()` 开头发的话，UI 收到 tick 时数据还是旧的：
@@ -1331,6 +1584,43 @@ class NetworkBrowserViewModel(
      * 就一直发请求；而「网络抖了一下」几乎都能在这两轮里自愈。
      */
     private const val COVER_MAX_PAGE_ATTEMPTS = 2
+
+    /**
+     * 封面穿透的最大**层级**（根目录 = 0）。
+     *
+     * 3 层的理由是常见媒体树是「库 → 类型 → 剧名 → 季」四级：库的卡片往下钻三层
+     * 正好能碰到「季」里的集（集自带服务端海报）。再深就属于异常结构，收益远小于
+     * 请求成本。
+     *
+     * ⚠️ 到限即停，且**允许写负缓存**：深度上限是确定性策略，同一目录每次解析
+     * 结果一致，不存在「这次没查到、下次能查到」。
+     */
+    private const val COVER_SCAN_MAX_DEPTH = 3
+
+    /**
+     * 一次封面解析最多列几次目录（根目录算 1 次）。
+     *
+     * 目录树可能很宽（一个类型下有上百个剧名），没有上限就是「一张卡片列上百次」。
+     * 6 次的容量：根 + 5 个分支。超了按「结论不完整」处理（不落盘、本页计次），
+     * 宁可留一个灰图标给下一次，也不把「没查完」冻成 12 小时的「没有封面」。
+     */
+    private const val COVER_SCAN_MAX_LISTINGS = 6
+
+    /**
+     * 进入目录后**预热**多少个子文件夹的封面。
+     *
+     * 12 ≈ 一屏（3 列 × 4 行）加上 Compose 预取的余量。再多就是拿请求换「可能滚不到
+     * 的地方」，一个宽目录（几百个子文件夹）全预热会把会话和流量都吃掉。
+     */
+    private const val PRELOAD_FOLDER_LIMIT = 12
+
+    /**
+     * 进入目录后预热多少张媒体缩略图（只算带服务端 `thumb` 的条目）。
+     *
+     * 24 = 两屏的量：第一屏立刻可见，第二屏大概率是下一步滑动的地方。缩略图本身很小
+     * （服务端已压过），但仍要封顶 —— 这是猜测性流量，不是用户明确要的。
+     */
+    private const val PRELOAD_THUMB_LIMIT = 24
 
     /**
      * 需要走本地代理才能**拖动进度**的协议 —— 已挪到

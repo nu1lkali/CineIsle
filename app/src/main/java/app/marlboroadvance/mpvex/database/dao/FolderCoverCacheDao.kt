@@ -28,6 +28,17 @@ interface FolderCoverCacheDao {
   @Query("DELETE FROM folder_cover_cache WHERE connectionId = :connectionId")
   suspend fun deleteByConnection(connectionId: Long)
 
+  /**
+   * 清空整表。
+   *
+   * 唯一用途：**封面选择算法换口径**时一次性作废旧结果（见
+   * [app.marlboroadvance.mpvex.domain.network.FOLDER_COVER_CACHE_VERSION]）。
+   * 不清的话，用户升级后看到的仍是旧算法挑出来的封面，要等 30 天 TTL 或手动下拉刷新，
+   * 表现就是「改了跟没改一样」。
+   */
+  @Query("DELETE FROM folder_cover_cache")
+  suspend fun clearAll()
+
   /** TTL 清理：删掉超过 ttlMillis 没刷新过的行 */
   @Query("DELETE FROM folder_cover_cache WHERE updatedAt < :cutoff")
   suspend fun deleteOlderThan(cutoff: Long)

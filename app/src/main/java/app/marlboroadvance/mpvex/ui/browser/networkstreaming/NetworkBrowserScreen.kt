@@ -76,6 +76,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -93,6 +94,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -179,8 +181,9 @@ import kotlin.math.roundToInt
  *   照片走 [NetworkPhotoRow]，其他文件走 [NetworkOtherFileRow]。
  * - **视图模式与本地文件夹浏览共用同一偏好**（[FolderViewMode]）：
  *   用户在「本地」里选的网格/列表，这里跟着变，不用学两套。
- * - **文件夹封面**：文件夹卡用目录内第一张图片作封面，懒加载 + 两级缓存
- *   （VM 本页 Map → Repository 内存 LRU → Room 持久表），可在设置里关闭。
+ * - **文件夹封面**：优先取目录内有服务端海报的视频，其次第一张图片；纯结构目录向下
+ *   穿透一层取封面（口径见 `domain/network/FolderCoverSelector.kt`）。懒加载 + 预热 + 三级
+ *   缓存（VM 本页 Map → Repository 内存 LRU → Room 持久表），可在设置里关闭。
  * - **排序**（内容区控制条）：名称 / 时间 / 大小 / 类型 / 随机多维度，
  *   一个 chip（图标 + 维度名 + ↑/↓）点开下拉菜单换维度，范式对齐 Emby 媒体库
  *   （[SortMenu]）：选中项标签 append 方向 + 主色高亮、不单列方向选项、
@@ -617,6 +620,12 @@ data class NetworkBrowserScreen(
     val coverTrigger: ((String) -> Unit)? =
       if (folderCoverEnabled) viewModel::ensureFolderCover else null
 
+    // 关掉「显示文件夹封面图」时**只把封面换成默认图标，不清空已解析的结果**：
+    // 传给卡片一个空 Map 即可 —— VM 里的 `folderCovers` 原样保留，
+    // 再次打开时同一批封面立刻回来，零请求（这正是「只做显示开关」的收益）。
+    // ⚠️ 别在这里调 ViewModel 的失效 / 清空接口，那会把「切换回来不重复请求」直接毁掉。
+    val shownCovers = if (folderCoverEnabled) folderCovers else emptyMap()
+
     // ── 多选：选中集 & 批量动作 ──
 
     /**
@@ -742,6 +751,29 @@ data class NetworkBrowserScreen(
                 onDismissRequest = { showOverflowMenu = false },
                 offset = pinMenuToRightEdge,
               ) {
+                // ── 显示文件夹封面图（开关）──
+                // 与「设置 → 网络浏览 → 文件夹封面」是**同一个偏好**：两处任意一边切，
+                // 另一边立刻同步，不会出现「设置里开着、菜单里关着」的自相矛盾。
+                // 关掉**只是不画**封面（卡片回退默认文件夹图标），VM 里已解析的结果
+                // 一律保留（见 shownCovers 的说明）⇒ 再打开时零请求就全回来了。
+                //
+                // 点完整行就切，开关本身 `onCheckedChange = null`（纯指示）——
+                // 否则点开关会触发两次（开关自己 + 整行），一开一关等于没变。
+                // 这个菜单**不关**：显示类开关用户多半想反复看效果。
+                DropdownMenuItem(
+                  text = { Text("显示文件夹封面图") },
+                  trailingIcon = {
+                    Switch(
+                      checked = folderCoverEnabled,
+                      onCheckedChange = null,
+                      modifier = Modifier.scale(0.8f),
+                    )
+                  },
+                  onClick = {
+                    browserPreferences.folderCoverEnabled.set(!folderCoverEnabled)
+                  },
+                )
+
                 // ── 回到首页（网络模块首页）──
                 // 从深层文件夹一键回首页，不必连按好几次「上一级」。
                 // 原先是个顶栏图标（占横向位置），收进「更多」里。
@@ -1166,7 +1198,7 @@ data class NetworkBrowserScreen(
             listState = networkListState,
             searchQuery = searchQuery,
             anyTypeHidden = !(showFolders && showPhotos && showVideos),
-            folderCovers = folderCovers,
+            folderCovers = shownCovers,
             coverTrigger = coverTrigger,
             titleMaxLines = titleMaxLines,
             groupMode = groupMode,
@@ -1995,7 +2027,7 @@ private fun NetworkBrowserContent(
   searchQuery: String,
   /** 是否有类型被筛掉（空态文案用） */
   anyTypeHidden: Boolean,
-  /** 文件夹封面缓存（path → 封面 path）；功能关闭时传空 Map */
+  /** 文件夹封面缓存（path → 封面引用：视频海报 URL 或图片 path）；功能关闭时传空 Map */
   folderCovers: Map<String, String?>,
   /** 封面懒加载触发点；功能关闭时传 null */
   coverTrigger: ((String) -> Unit)?,
@@ -2525,8 +2557,9 @@ private fun NetworkGridCell(
         }
       },
       // 文件夹封面：缓存里有就用（功能关闭时 Map 是空的 ⇒ 全是 null），
-      // 没有就让卡片触发懒加载（coverTrigger 为 null 时不触发）
-      coverPath = if (file.isDirectory) folderCovers[file.path] else null,
+      // 没有就让卡片触发懒加载（coverTrigger 为 null 时不触发）。
+      // 值是「封面引用」（视频海报 URL / 图片 path），渲染分流在 FolderCoverImage。
+      coverRef = if (file.isDirectory) folderCovers[file.path] else null,
       titleMaxLines = titleMaxLines,
       showYear = showYear,
       onCoverNeeded = coverTrigger,
@@ -2754,7 +2787,7 @@ private fun NetworkBrowserList(
                         onClick = {
                           if (clickOverride != null) clickOverride(file) else onFolderClick(file)
                         },
-                        coverPath = folderCovers[file.path],
+                        coverRef = folderCovers[file.path],
                         onCoverNeeded = coverTrigger,
                         onLongClick = longPress,
                       )

@@ -258,7 +258,7 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
     ))
     add(SearchablePreference(
         title = "文件夹封面",
-        summary = "文件夹卡片显示目录内第一张图片作为封面；只在滚动到可见时加载，",
+        summary = "文件夹卡片显示封面：优先取目录内有海报的视频，否则取第一张图片；",
         category = "网络浏览",
         screen = PreferencesScreen,
     ))
