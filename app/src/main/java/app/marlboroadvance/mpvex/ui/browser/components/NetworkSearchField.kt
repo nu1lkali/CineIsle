@@ -41,6 +41,9 @@ import androidx.compose.ui.unit.dp
  * @param autoFocus 出现即要焦点、弹键盘。**「点放大镜才出现」的场景要 true**（用户明确是要搜）；
  *   **常驻在页面里的场景必须 false** —— 否则一进页面键盘就弹起来，把下面的内容顶掉一半，
  *   用户想点的东西刚好被键盘盖住（相册面板踩过这个坑）。
+ * @param queryIsHint 框里那段字是**自动带出来的「上次搜索」、用户还没改过** ⇒ 用次要色（灰）显示，
+ *   一眼能分清「这是上次的词」还是「我刚打的字」；用户一敲键盘就转正常文字色（调用方置 false）。
+ *   它只是**观感**，过滤照常生效 —— 上次搜索本来就是「点开就已经在搜上一次的词」。
  */
 @Composable
 fun NetworkSearchField(
@@ -50,6 +53,7 @@ fun NetworkSearchField(
   modifier: Modifier = Modifier,
   placeholder: String = "搜索当前目录…",
   autoFocus: Boolean = true,
+  queryIsHint: Boolean = false,
 ) {
   val focusRequester = remember { FocusRequester() }
 
@@ -85,7 +89,11 @@ fun NetworkSearchField(
           .focusRequester(focusRequester),
         singleLine = true,
         textStyle = MaterialTheme.typography.bodyLarge.copy(
-          color = MaterialTheme.colorScheme.onSurface,
+          // 「上次搜索」自动带出的词用次要色（灰）：它还不是用户这次打的字。
+          // 一旦用户开始编辑，调用方立刻把 queryIsHint 置 false，字就转成正常色。
+          color =
+            if (queryIsHint) MaterialTheme.colorScheme.onSurfaceVariant
+            else MaterialTheme.colorScheme.onSurface,
         ),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         decorationBox = { innerTextField ->

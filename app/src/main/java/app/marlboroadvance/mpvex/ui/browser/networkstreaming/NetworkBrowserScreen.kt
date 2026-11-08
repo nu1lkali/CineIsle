@@ -193,6 +193,8 @@ import kotlin.math.roundToInt
  *   多选不关窗；有筛选生效时按钮主色高亮。字幕 / nfo 等其他文件只在列表视图出现，
  *   不受这三项管。
  * - **本地搜索**（顶栏放大镜）：对当前目录已拉到的内容按名称过滤，零请求。
+ *   **按「连接 + 目录」记住上一次的搜索词**，点放大镜直接带进输入框（灰字显示，可即时修改），
+ *   不同文件夹页面各记各的，互不共享。
  * - **顶栏标题 = 当前文件夹名**（根目录退化为连接名），过长自动截断；
  *   标题用**小两档字号（20sp，`compactTitle`）**—— 标题常年是长文件夹名、
  *   右侧又挂着几个图标，24sp 会把它们挤在一起。
@@ -434,6 +436,19 @@ data class NetworkBrowserScreen(
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
 
+    // 「上次在**这一层目录**搜过的词」。按 连接 id + 当前目录 各存一份
+    // （见 `BrowserPreferences.networkDirSearchQuery`）：不同文件夹页面互不共享，
+    // 在 `影片/2024` 搜的词不会跑到 `剧集` 的搜索框里。
+    // ⚠️ key 是从这两个值算出来的，用 remember 一起带上 —— 换目录就必须换一个 Preference 对象。
+    val searchPref =
+      remember(connectionId, currentPath) {
+        browserPreferences.networkDirSearchQuery(connectionId, currentPath)
+      }
+    // 框里这段话是不是「自动带出来的上次搜索」（用户还没改过）。
+    // 为 true 时输入框用次要色（灰）显示 —— 与「我现在打的字」在观感上分开；
+    // 过滤照常生效（点放大镜本来就是接着上次的词搜）。
+    var searchIsHint by remember { mutableStateOf(false) }
+
     // 类型筛选（显示文件夹 / 显示图片 / 显示媒体）。「显示全部」= 三项全开，
     // 不单独存状态 —— 由这三项推导（勾上全部 ⇒ 三项全勾；取消任一项 ⇒ 全部自动取消）。
     // 字幕 / nfo 等其他文件只出现在列表视图，不受这三项管。
@@ -587,6 +602,7 @@ data class NetworkBrowserScreen(
       } else if (searchActive) {
         searchActive = false
         searchQuery = ""
+        searchIsHint = false
       } else {
         backstack.removeLastOrNull()
       }
@@ -686,7 +702,20 @@ data class NetworkBrowserScreen(
           // 排序不走顶栏：它要常驻又能显示当前状态，放在内容区顶部（见 NetworkSortRow）。
           // 顶栏图标只有 更多 / 搜索 / 设置 三个（「回到首页」收进「更多」菜单里）。
           onSortClick = null,
-          onSearchClick = { searchActive = true },
+          // 点放大镜：把**这个目录**上次搜的词直接带进输入框（灰字显示、可直接改），
+          // 过滤器随之生效 —— 用户点放大镜本来多半就是想接着上次搜，
+          // 让他把同一个词重打一遍是最没意义的一步。
+          // 手上已经有词（还没关搜索）时不覆盖用户内容。
+          onSearchClick = {
+            if (searchQuery.isBlank()) {
+              val last = searchPref.get()
+              if (last.isNotBlank()) {
+                searchQuery = last
+                searchIsHint = true
+              }
+            }
+            searchActive = true
+          },
           onSettingsClick = {
             backstack.add(PreferencesScreen)
           },
@@ -1128,11 +1157,22 @@ data class NetworkBrowserScreen(
         if (searchActive) {
           NetworkSearchField(
             query = searchQuery,
-            onQueryChange = { searchQuery = it },
+            // 输入即落盘（按 连接 + 目录）：下次进这一层点放大镜就能带出来。
+            // 清空也写空串 —— 用户主动删掉就是「这个词我不要了」，
+            // 与「网络位置」列表页的搜索词同一口径。
+            // 用户一动键盘就不再是「上次搜索」，灰字转正常色。
+            onQueryChange = {
+              searchQuery = it
+              searchIsHint = false
+              searchPref.set(it)
+            },
             onClose = {
               searchActive = false
               searchQuery = ""
+              searchIsHint = false
             },
+            // 自动带出的上次搜索词用灰字（只是观感；过滤照常生效）
+            queryIsHint = searchIsHint,
           )
         }
 

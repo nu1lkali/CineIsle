@@ -124,6 +124,29 @@ class BrowserPreferences(
     preferenceStore.getString("network_connection_search_query", "")
 
   /**
+   * **某个网络位置里、某个目录**上一次的搜索词，空串 = 没有。
+   *
+   * 与 [networkConnectionSearchQuery] 是两件事：那个记的是「网络位置列表页」在搜哪个连接，
+   * 这个记的是「进到某一层目录后」搜目录里的什么文件。
+   *
+   * **key = 连接 id + 目录路径，两者都不省**：
+   *  · 不按连接合并 —— 用户在 `影片/2024` 搜「S01」、在 `剧集` 搜「4K」，
+   *    换个目录还挂着上一层目录的词，事后再搜就分不清这个词是在哪搜的；
+   *  · 不按路径全局存 —— 不同连接下的同一路径（`/video`）根本不是同一个地方。
+   *
+   * 路径先 `trim('/')` 归一化：`/a/b` 与 `/a/b/` 必须是同一个键，
+   * 否则同一个目录会因为尾斜杠不同分裂成两份记忆（`AlistClient` 没做这层归一化）。
+   *
+   * 只记词、不记结果：这个搜索本来就是「对已拉到的目录列表做名称过滤」，
+   * 词一恢复结果自然一致；存结果快照反而会出现「列表里显示着已经删掉的文件」。
+   */
+  fun networkDirSearchQuery(connectionId: Long, dirPath: String): Preference<String> =
+    preferenceStore.getString(
+      "network_dir_search_query_${connectionId}_${dirPath.trim('/')}",
+      "",
+    )
+
+  /**
    * 网络浏览**网格视图**卡片标题行数（一行 / 两行 / 全显）。
    *
    * 只管网络网格卡（[app.marlboroadvance.mpvex.ui.browser.cards.NetworkMediaCard]）：
