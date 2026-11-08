@@ -123,6 +123,7 @@ import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlas
 import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerStatusIndicators
 import app.marlboroadvance.mpvex.ui.player.controls.components.SeekPlayerUpdate
 import app.marlboroadvance.mpvex.ui.player.controls.components.SeekbarWithTimers
+import app.marlboroadvance.mpvex.ui.player.controls.components.SkipEpisodeIcon
 import app.marlboroadvance.mpvex.ui.player.controls.components.SlideToUnlock
 import app.marlboroadvance.mpvex.ui.player.controls.components.SpeedControlSlider
 import app.marlboroadvance.mpvex.ui.player.controls.components.TextPlayerUpdate
@@ -889,6 +890,17 @@ fun PlayerControls(
           val icon = AnimatedImageVector.animatedVectorResource(R.drawable.anim_play_to_pause)
           val interaction = remember { MutableInteractionSource() }
 
+          // ── 上下集按钮的「按下计数」──
+          // 每点一次 +1，`SkipEpisodeIcon` 据此重放一次「三角滑入 + 放大」。
+          // ⚠️ 用计数而不是布尔：布尔值第二次点击没有变化，LaunchedEffect 不会重跑，
+          //    表现就是「只有第一下有动画」。
+          var prevPress by remember { mutableStateOf(0) }
+          var nextPress by remember { mutableStateOf(0) }
+          // 这两个按钮原先只写了 clickable(enabled, onClick)，没有 indication
+          // ⇒ 按下**没有涟漪**（中央播放键是有的）。这里补齐，手感才一致。
+          val prevInteraction = remember { MutableInteractionSource() }
+          val nextInteraction = remember { MutableInteractionSource() }
+
           when {
             // ⚠️ `firstFrameRendered` 这一项是**去重**用的，别删。
             //    首帧还没上屏时，屏幕中央已经有 `PlayerFirstFrameLoading`
@@ -942,10 +954,16 @@ fun PlayerControls(
                         .size(56.dp)
                         .clip(CircleShape)
                         .clickable(
+                          interactionSource = prevInteraction,
+                          indication = ripple(),
                           enabled = viewModel.hasPrevious(),
                           onClick = {
                             resetControlsTimestamp = System.currentTimeMillis()
-                            if (viewModel.hasPrevious()) viewModel.playPrevious()
+                            if (viewModel.hasPrevious()) {
+                              // 先计数再切集：动画与切集并行，不让用户等动画
+                              prevPress++
+                              viewModel.playPrevious()
+                            }
                           },
                         )
                         .then(
@@ -972,19 +990,17 @@ fun PlayerControls(
                         null
                       },
                   ) {
-                    Icon(
-                      imageVector = Icons.Default.SkipPrevious,
-                      contentDescription = stringResource(R.string.player_control_previous),
+                    SkipEpisodeIcon(
+                      forward = false,
+                      pressTick = prevPress,
                       tint =
                         if (viewModel.hasPrevious()) {
                           controlColor
                         } else {
-                          if (hideBackground) {
-                            controlColor.copy(alpha = 0.38f)
-                          } else {
-                            controlColor.copy(alpha = 0.38f)
-                          }
+                          // 无上一集：置灰且不响应点击（与可自定义控制条同一口径）
+                          controlColor.copy(alpha = 0.38f)
                         },
+                      contentDescription = stringResource(R.string.player_control_previous),
                       modifier = Modifier
                         .fillMaxSize()
                         .padding(MaterialTheme.spacing.small),
@@ -1040,10 +1056,15 @@ fun PlayerControls(
                         .size(56.dp)
                         .clip(CircleShape)
                         .clickable(
+                          interactionSource = nextInteraction,
+                          indication = ripple(),
                           enabled = viewModel.hasNext(),
                           onClick = {
                             resetControlsTimestamp = System.currentTimeMillis()
-                            if (viewModel.hasNext()) viewModel.playNext()
+                            if (viewModel.hasNext()) {
+                              nextPress++
+                              viewModel.playNext()
+                            }
                           },
                         )
                         .then(
@@ -1070,19 +1091,16 @@ fun PlayerControls(
                         null
                       },
                   ) {
-                    Icon(
-                      imageVector = Icons.Default.SkipNext,
-                      contentDescription = stringResource(R.string.player_control_next),
+                    SkipEpisodeIcon(
+                      forward = true,
+                      pressTick = nextPress,
                       tint =
                         if (viewModel.hasNext()) {
                           controlColor
                         } else {
-                          if (hideBackground) {
-                            controlColor.copy(alpha = 0.38f)
-                          } else {
-                            controlColor.copy(alpha = 0.38f)
-                          }
+                          controlColor.copy(alpha = 0.38f)
                         },
+                      contentDescription = stringResource(R.string.player_control_next),
                       modifier = Modifier
                         .fillMaxSize()
                         .padding(MaterialTheme.spacing.small),

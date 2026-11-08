@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.padding
@@ -36,7 +37,7 @@ import org.koin.compose.koinInject
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ControlsButton(
-  icon: ImageVector,
+  icon: ImageVector? = null,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
   onLongClick: () -> Unit = {},
@@ -44,6 +45,16 @@ fun ControlsButton(
   color: Color? = null,
   /** 为 false 时按钮置灰且不响应点击（用于播放队列首尾 / 请求进行中） */
   enabled: Boolean = true,
+  /**
+   * 自定义图标内容（给了它就不用 [icon]）。
+   *
+   * 存在的原因：上一集 / 下一集要画**弧边三角 + 按下时的滑入动画**，那是自绘的
+   * Canvas，不是 ImageVector。尺寸/内边距与外层 Icon 那条分支保持一致，
+   * 否则同一排按钮的图标大小会不一致。
+   *
+   * 参数是该按钮当前的有效色（已含置灰的 0.38 alpha），自绘时直接用即可。
+   */
+  iconContent: (@Composable (Color) -> Unit)? = null,
 ) {
   val interactionSource = remember { MutableInteractionSource() }
   val appearancePreferences = koinInject<AppearancePreferences>()
@@ -81,15 +92,26 @@ fun ControlsButton(
         )
       },
   ) {
-    Icon(
-      imageVector = icon,
-      contentDescription = title,
-      tint = effectiveColor ?: controlColor,
-      modifier =
-        Modifier
-          .padding(MaterialTheme.spacing.small)
-          .size(20.dp),
-    )
+    if (iconContent != null) {
+      Box(
+        modifier =
+          Modifier
+            .padding(MaterialTheme.spacing.small)
+            .size(20.dp),
+      ) {
+        iconContent(effectiveColor ?: controlColor)
+      }
+    } else if (icon != null) {
+      Icon(
+        imageVector = icon,
+        contentDescription = title,
+        tint = effectiveColor ?: controlColor,
+        modifier =
+          Modifier
+            .padding(MaterialTheme.spacing.small)
+            .size(20.dp),
+      )
+    }
   }
 }
 

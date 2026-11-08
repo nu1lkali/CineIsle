@@ -126,6 +126,7 @@ import app.marlboroadvance.mpvex.ui.player.controls.components.ControlsButton
 import app.marlboroadvance.mpvex.ui.player.controls.components.CurrentChapter
 import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassBorder
 import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassFill
+import app.marlboroadvance.mpvex.ui.player.controls.components.SkipEpisodeIcon
 import app.marlboroadvance.mpvex.ui.theme.controlColor
 import app.marlboroadvance.mpvex.ui.theme.spacing
 import dev.vivvvek.seeker.Segment
@@ -912,12 +913,25 @@ fun RenderPlayerButton(
       // 只在真正有播放队列时出现；首尾自动置灰（循环模式下首尾可用）
       val enabled = activity.hasPrevious()
       if (enabled || activity.hasPlaylistItems()) {
+        // 弧边三角 + 按下滑入动画：计数递增一次就重放一次（见 SkipEpisodeIcon）
+        var press by remember { mutableStateOf(0) }
         ControlsButton(
-          icon = Icons.Default.SkipPrevious,
-          onClick = activity::playPrevious,
+          onClick = {
+            press++
+            activity.playPrevious()
+          },
           color = controlColor,
           modifier = Modifier.size(buttonSize),
           enabled = enabled,
+          iconContent = { tint ->
+            SkipEpisodeIcon(
+              forward = false,
+              pressTick = press,
+              tint = tint,
+              contentDescription = stringResource(R.string.player_control_previous),
+              modifier = Modifier.fillMaxSize(),
+            )
+          },
         )
       }
     }
@@ -925,12 +939,24 @@ fun RenderPlayerButton(
     PlayerButton.NEXT -> {
       val enabled = activity.hasNext()
       if (enabled || activity.hasPlaylistItems()) {
+        var press by remember { mutableStateOf(0) }
         ControlsButton(
-          icon = Icons.Default.SkipNext,
-          onClick = activity::playNext,
+          onClick = {
+            press++
+            activity.playNext()
+          },
           color = controlColor,
           modifier = Modifier.size(buttonSize),
           enabled = enabled,
+          iconContent = { tint ->
+            SkipEpisodeIcon(
+              forward = true,
+              pressTick = press,
+              tint = tint,
+              contentDescription = stringResource(R.string.player_control_next),
+              modifier = Modifier.fillMaxSize(),
+            )
+          },
         )
       }
     }
