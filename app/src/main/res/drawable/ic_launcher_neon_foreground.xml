@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面图标「霓虹」：近黑底 + 青色线描岛屿，播放三角是实心亮粉的峰。
+
+  融合骨架见「樱」那套的注释（三角三顶点落在岛轮廓上，是内接而非叠加）。
+
+  ## 这一套的差异
+  唯一的**线描**方案：岛只画轮廓（青），三角峰是整张图唯一的实心块（粉）。
+  于是「融合」体现在轮廓上（三角的两条边就是岛的崖壁与右坡），
+  而不是靠两块同色填充去糊成一片 —— 48dp 下轮廓仍然清楚。
+  ⚠️ 岛体描边必须闭合，否则起点处会露出断口。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+  <group
+      android:scaleX="0.62"
+      android:scaleY="0.62"
+      android:translateX="20.5"
+      android:translateY="20.5">
+    <!-- 岛体：只描边（含崖壁轮廓） -->
+    <path
+        android:pathData="M12,82 C20,78 27,72 35,72 L44,72 L44,32 L78,60 C84,68 89,76 96,82 Z"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF00E5FF"
+        android:strokeWidth="3.4"
+        android:strokeLineJoin="round"/>
+    <!-- 三角峰：实心，边缘与上面那条轮廓重合 -->
+    <path
+        android:pathData="M44,72 L44,32 L78,60 Z"
+        android:fillColor="#FFFF3FA4"/>
+    <!-- 水面波纹：紫 -->
+    <path
+        android:pathData="M16,87 C22,83 28,83 34,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF7A5CFF"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M40,87 C46,83 52,83 58,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF7A5CFF"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M64,87 C70,83 76,83 82,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF7A5CFF"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"/>
+  </group>
+</vector>

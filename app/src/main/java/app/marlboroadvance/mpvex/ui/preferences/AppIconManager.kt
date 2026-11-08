@@ -98,6 +98,42 @@ object AppIconManager {
       "ic_launcher_amber_foreground",
       ".MainActivityAliasAmber",
     ),
+
+    // ── v238 新增四套 ──
+    // 共同前提：都沿用「岛弧 + 地平线 + 播放三角」这套品牌骨架，
+    // 只换配色与表现手法（圆角 / 分层 / 线描 / 印章），
+    // 否则换出来就不像同一个 App 的图标，只是一堆不相干的图。
+    // 新增一套要同时补齐五处：颜色（app_icon_colors.xml）、前景矢量、
+    // adaptive icon（mipmap-anydpi-v26）、文案（values 与 values-zh-rCN）、
+    // 清单里的 activity-alias。少任何一处，表现都是「点了没反应」。
+    Sakura(
+      "sakura",
+      app.marlboroadvance.mpvex.R.string.app_icon_sakura,
+      "app_icon_sakura_background",
+      "ic_launcher_sakura_foreground",
+      ".MainActivityAliasSakura",
+    ),
+    Forest(
+      "forest",
+      app.marlboroadvance.mpvex.R.string.app_icon_forest,
+      "app_icon_forest_background",
+      "ic_launcher_forest_foreground",
+      ".MainActivityAliasForest",
+    ),
+    Neon(
+      "neon",
+      app.marlboroadvance.mpvex.R.string.app_icon_neon,
+      "app_icon_neon_background",
+      "ic_launcher_neon_foreground",
+      ".MainActivityAliasNeon",
+    ),
+    Paper(
+      "paper",
+      app.marlboroadvance.mpvex.R.string.app_icon_paper,
+      "app_icon_paper_background",
+      "ic_launcher_paper_foreground",
+      ".MainActivityAliasPaper",
+    ),
     ;
 
     val isAlias: Boolean get() = aliasRelative.isNotBlank()

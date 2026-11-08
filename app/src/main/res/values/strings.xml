@@ -1075,6 +1075,10 @@
   <string name="app_icon_midnight">Midnight</string>
   <string name="app_icon_minimal">Minimal</string>
   <string name="app_icon_amber">Amber</string>
+  <string name="app_icon_sakura">Sakura</string>
+  <string name="app_icon_forest">Forest</string>
+  <string name="app_icon_neon">Neon</string>
+  <string name="app_icon_paper">Paper</string>
   <string name="loading_anim_system">System spinner</string>
   <string name="loading_anim_system_short">Default</string>
   <string name="loading_anim_yamby1">Pac-Man</string>

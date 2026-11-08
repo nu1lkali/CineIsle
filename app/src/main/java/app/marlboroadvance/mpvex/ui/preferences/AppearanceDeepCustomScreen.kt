@@ -79,6 +79,16 @@ import org.koin.compose.koinInject
 private const val LOADING_ANIM_COLUMNS = 4
 
 /**
+ * 桌面图标网格的列数。
+ *
+ * 用 3 列而不是沿用加载动画的 4 列：图标共 9 套（默认 + 8 套配色），
+ * 4 列会排成 4+4+1 —— 最后一行孤零零一个，看起来像少了一格；
+ * 3 列正好 3×3 满格。每格 76dp + 12dp 间距 ⇒ 3×76+2×12 = 252dp，
+ * 窄屏也放得下，不必像加载动画那样卡在 4 列。
+ */
+private const val APP_ICON_COLUMNS = 3
+
+/**
  * 外观深度定制：桌面图标 + 加载动画。
  *
  * 分成两个独立页面而不是塞进 [AppearancePreferencesScreen]：这一页全都会
@@ -235,13 +245,14 @@ private fun IconRow(
   onPick: (AppIconManager.Style) -> Unit,
 ) {
   val context = LocalContext.current
-  // 同样是网格而不是一行：5 个图标一行拉完，一屏只露 4 个，
+  // 网格而不是一行：9 套图标一行拉完，一屏只露 4 个，
   // 用户横向滑才发现还有 ⇒ 会以为「只有 4 个图标可选」（和加载动画同一个坑）。
+  // 列数用 APP_ICON_COLUMNS = 3（9 套正好 3×3 满格，4 列会剩一个孤项）。
   FlowRow(
     modifier = Modifier.fillMaxWidth(),
     horizontalArrangement = Arrangement.spacedBy(12.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
-    maxItemsInEachRow = LOADING_ANIM_COLUMNS,
+    maxItemsInEachRow = APP_ICON_COLUMNS,
   ) {
     // 普通 for 循环：`items(...)` 是 LazyListScope 的扩展，FlowRow 里没有。
     for (style in AppIconManager.Style.entries) {

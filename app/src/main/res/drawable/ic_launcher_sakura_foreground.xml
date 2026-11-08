@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面图标「樱」：淡樱粉底 + 玫粉岛屿，播放三角就是岛的主峰。
+
+  ## 融合骨架（本组四套共用）
+  以前是「岛 + 浮在上面的三角」两个图形，读起来是两个不相干的符号贴在一起。
+  现在三角长在岛上：
+    左下 → 左坡升起 → 平台 → **垂直崖壁** → 崖顶斜下切出尖 → 右坡落回水面
+  崖壁、斜边、平台共同围出的区域就是播放三角 —— 它的三个顶点全部落在岛的轮廓上，
+  所以三角是岛的一部分（内接），不是叠上去的一层。
+
+  ## 这一套的差异
+  暖而柔：岛体中粉、三角峰用深玫（同色系深一档），靠明度而不是靠对比色区分。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+  <group
+      android:scaleX="0.62"
+      android:scaleY="0.62"
+      android:translateX="20.5"
+      android:translateY="20.5">
+    <!-- 岛体（含崖壁与右坡的完整剪影） -->
+    <path
+        android:pathData="M12,82 C20,78 27,72 35,72 L44,72 L44,32 L78,60 C84,68 89,76 96,82 Z"
+        android:fillColor="#FFE88FAE"/>
+    <!-- 三角峰：三个顶点都落在岛体轮廓上，所以视觉上就是岛的尖顶。
+         ⚠️ 改岛体 path 时必须同步改这里，否则会出现错位的色块。 -->
+    <path
+        android:pathData="M44,72 L44,32 L78,60 Z"
+        android:fillColor="#FFA8405F"/>
+    <!-- 水面波纹 -->
+    <path
+        android:pathData="M16,87 C22,83 28,83 34,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFC25C7E"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M40,87 C46,83 52,83 58,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFC25C7E"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M64,87 C70,83 76,83 82,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFC25C7E"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"/>
+  </group>
+</vector>

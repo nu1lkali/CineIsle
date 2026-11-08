@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面图标「素纸」：米白纸底 + 墨色岛屿，播放三角是朱红的峰。
+
+  融合骨架见「樱」那套的注释（三角三顶点落在岛轮廓上，是内接而非叠加）。
+
+  ## 这一套的差异
+  墨 + 纸 + 朱红，右下角一枚朱红小印，读起来像一方藏书印。
+  三角峰是朱红的 —— 于是「播放」这个符号落在整张图的最高点，
+  和右下角的印形成对角呼应，而不是孤零零浮在岛上方。
+  ⚠️ 印章受 adaptive icon 的**圆形**安全区约束（中心 54、半径 33），取点见下方注释。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+  <group
+      android:scaleX="0.62"
+      android:scaleY="0.62"
+      android:translateX="20.5"
+      android:translateY="20.5">
+    <!-- 岛体：墨 -->
+    <path
+        android:pathData="M12,82 C20,78 27,72 35,72 L44,72 L44,32 L78,60 C84,68 89,76 96,82 Z"
+        android:fillColor="#FF4A4A4A"/>
+    <!-- 三角峰：朱红 -->
+    <path
+        android:pathData="M44,72 L44,32 L78,60 Z"
+        android:fillColor="#FFB5443A"/>
+    <!-- 水面波纹：墨（比岛体稍深） -->
+    <path
+        android:pathData="M16,87 C22,83 28,83 34,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF2A2A2A"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M40,87 C46,83 52,83 58,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF2A2A2A"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M64,87 C70,83 76,83 82,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF2A2A2A"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"/>
+    <!-- 右下角小印：空心朱红方印。
+         ⚠️ 最远的角要满足 (x-54)²+(y-54)² ≤ 33²（圆形遮罩），
+         所以压到 72~82 / 88~96，缩放后最远点约 31.2dp，才不会被切掉。 -->
+    <path
+        android:pathData="M72,88 L82,88 L82,96 L72,96 Z M75,91 L75,93.5 L79,93.5 L79,91 Z"
+        android:fillColor="#FFB5443A"
+        android:fillType="evenOdd"/>
+  </group>
+</vector>

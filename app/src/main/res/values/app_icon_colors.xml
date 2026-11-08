@@ -12,4 +12,15 @@
   <color name="app_icon_midnight_background">#121212</color>
   <color name="app_icon_minimal_background">#FAFAFA</color>
   <color name="app_icon_amber_background">#FF9E4A</color>
+
+  <!-- v238 新增四套。选色原则：两两之间在「明度 / 色相 / 冷暖」至少差两项，
+       否则 64dp 的预览格子里分不出来（用户要的是能一眼换掉审美，不是微调色号）。 -->
+  <!-- 樱：淡樱粉底，柔和日系 -->
+  <color name="app_icon_sakura_background">#F7DCE4</color>
+  <!-- 森：深松绿底，护眼自然 -->
+  <color name="app_icon_forest_background">#0E2B22</color>
+  <!-- 霓虹：近黑底（比暗夜更偏蓝），留给描边发光用 -->
+  <color name="app_icon_neon_background">#07070F</color>
+  <!-- 素纸：米白纸底，东方纸感 -->
+  <color name="app_icon_paper_background">#F2E9DB</color>
 </resources>

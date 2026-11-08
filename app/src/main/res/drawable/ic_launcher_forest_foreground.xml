@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面图标「森」：深松绿底 + 中绿岛屿，播放三角是岛的峰。
+
+  融合骨架见「樱」那套的注释（三角三顶点落在岛轮廓上，是内接而非叠加）。
+
+  ## 这一套的差异
+  **三层**：远山（同形上移、压暗）→ 岛体 → 浅色三角峰。
+  深绿底 + 三层绿，摘下眼镜也分得清层次；夜里看片不刺眼。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+  <group
+      android:scaleX="0.62"
+      android:scaleY="0.62"
+      android:translateX="20.5"
+      android:translateY="20.5">
+    <!-- 远山：同形上移 6，压暗当背景层 -->
+    <path
+        android:pathData="M12,76 C20,72 27,66 35,66 L44,66 L44,26 L78,54 C84,62 89,70 96,76 Z"
+        android:fillColor="#FF1E5C46"/>
+    <!-- 岛体 -->
+    <path
+        android:pathData="M12,82 C20,78 27,72 35,72 L44,72 L44,32 L78,60 C84,68 89,76 96,82 Z"
+        android:fillColor="#FF4FA97C"/>
+    <!-- 三角峰 -->
+    <path
+        android:pathData="M44,72 L44,32 L78,60 Z"
+        android:fillColor="#FFC9F2DA"/>
+    <!-- 水面波纹 -->
+    <path
+        android:pathData="M16,87 C22,83 28,83 34,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF7FD9A4"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M40,87 C46,83 52,83 58,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF7FD9A4"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M64,87 C70,83 76,83 82,87"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF7FD9A4"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"/>
+  </group>
+</vector>

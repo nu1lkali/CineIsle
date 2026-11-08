@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 桌面图标切换：樱（淡粉柔和，与冷色系三套对比明显） -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/app_icon_sakura_background"/>
+    <foreground android:drawable="@drawable/ic_launcher_sakura_foreground"/>
+</adaptive-icon>
