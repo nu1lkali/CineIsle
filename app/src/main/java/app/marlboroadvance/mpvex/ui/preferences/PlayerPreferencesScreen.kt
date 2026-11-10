@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.preferences
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -1008,7 +1009,43 @@ object PlayerPreferencesScreen : Screen {
                 modifier = Modifier.settingsAnchor(R.string.pref_player_gestures_volume),
                 title = { Text(stringResource(R.string.pref_player_gestures_volume), maxLines = 1, overflow = TextOverflow.Ellipsis) },
               )
-              
+
+              PreferenceDivider()
+
+              // 手势引导（coach mark）看过一次就不再出现；想再看走这里。
+              // 只把标记复位，不立刻弹 —— 引导是播放器里的整屏遮罩，
+              // 在设置页没有可锚定的画面，硬弹反而不知道指的是哪。
+              Preference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.TouchApp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                title = {
+                  Text(
+                    stringResource(R.string.pref_player_gestures_replay_coach_mark),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                },
+                summary = {
+                  Text(stringResource(R.string.pref_player_gestures_replay_coach_mark_summary))
+                },
+                onClick = {
+                  preferences.hasSeenGestureCoachMark.set(false)
+                  // 跳过计数一并清零：否则「已跳过 N 次」的历史会让重看的引导
+                  // 在第一次点空白时又立刻被判定为「不想看」。
+                  preferences.gestureCoachMarkSkipCount.set(0)
+                  Toast.makeText(
+                    context,
+                    context.getString(R.string.pref_player_gestures_replay_coach_mark),
+                    Toast.LENGTH_SHORT,
+                  ).show()
+                },
+              )
+
               PreferenceDivider()
               
               val pinchToZoomGesture by preferences.pinchToZoomGesture.collectAsState()

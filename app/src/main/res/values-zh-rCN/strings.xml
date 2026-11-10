@@ -135,6 +135,8 @@
   <string name="pref_player_gestures">手势</string>
   <string name="pref_player_gestures_brightness">亮度手势</string>
   <string name="pref_player_gestures_volume">音量手势</string>
+  <string name="pref_player_gestures_replay_coach_mark">重看手势提示</string>
+  <string name="pref_player_gestures_replay_coach_mark_summary">下次进入播放器时重新显示一次手势引导</string>
   <string name="pref_player_gestures_pinch_to_zoom">双指缩放</string>
   <string name="pref_player_gestures_horizontal_swipe_to_seek">横向滑动快进</string>
   <string name="pref_player_gestures_horizontal_swipe_to_seek_summary">在屏幕上左右滑动以前进或后退</string>

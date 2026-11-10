@@ -186,6 +186,21 @@ object AppIconManager {
       }
   }
 
+  /**
+   * 只读版 [currentStyle]：**不触发任何组件切换**。
+   *
+   * [currentStyle] 带一个自愈副作用：上次切换中途被杀（`applying` 标记残留）时会重放
+   * 一次切换，而重放会杀进程。启动页每次组合都要读样式，不能带上这个副作用 ——
+   * 否则最坏的表现是「启动动画放到一半进程被杀」。
+   *
+   * ⚠️ 与 [currentStyle] 的分工要守住：启动页 / 预览这类**读**场景一律用本方法，
+   * 只有真正需要自愈的入口（设置页进入时）才用 [currentStyle]。
+   */
+  fun currentStyleReadOnly(context: Context): Style {
+    val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    return Style.fromKey(prefs.getString(KEY_STYLE, null))
+  }
+
   fun currentStyle(context: Context): Style {
     val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     // ⚠️ 上次切换中途被杀（切换本身会杀进程）⇒ applying 标记还留着。

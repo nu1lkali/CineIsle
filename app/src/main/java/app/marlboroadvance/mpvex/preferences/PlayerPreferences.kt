@@ -449,6 +449,28 @@ class PlayerPreferences(
 
   val keepScreenOnWhenPaused = preferenceStore.getBoolean("keep_screen_on_when_paused", false)
 
+  /**
+   * 播放器手势引导（coach mark）是否已经看过。
+   *
+   * 双击两侧快进、长按 2× 倍速、上下滑调音量亮度这三件事**没有任何视觉入口**，
+   * 只能靠一次性引导告知。默认 false ⇒ 首次进入播放器时播放一次，看过即置 true。
+   * 用户可在「播放器设置 → 手势」里重置（重置按钮直接写 false）。
+   */
+  val hasSeenGestureCoachMark = preferenceStore.getBoolean("has_seen_gesture_coach_mark", false)
+
+  /**
+   * 手势引导被「点空白跳过」的累计次数。
+   *
+   * 引导的两种关闭方式语义不同：
+   * - 点「知道了」⇒ 真的看过了，直接记账（[hasSeenGestureCoachMark] = true）；
+   * - 点画面空白 ⇒ 只是这一下不想看，**不记账**，下次进入播放器仍会出现。
+   *
+   * 后者是为了兜住「等加载时无意识连点」—— 旧实现把它当成已看过，
+   * 一次手滑就等于永久失去引导。但也得给完全不想看的用户一个出口：
+   * 跳过累计到 [GESTURE_COACH_MARK_SKIP_LIMIT] 次，同样不再出现。
+   */
+  val gestureCoachMarkSkipCount = preferenceStore.getInt("gesture_coach_mark_skip_count", 0)
+
   // Persist aspect ratio setting (default to Fit)
   val defaultVideoAspect = preferenceStore.getEnum("default_video_aspect", VideoAspect.Fit)
   val defaultCustomAspectRatio = preferenceStore.getObject(
@@ -464,5 +486,8 @@ class PlayerPreferences(
 
     /** 预取的数据量：够覆盖容器头 + 开头关键帧即可，取多了反而挤占当前视频的带宽。 */
     const val PRELOAD_BYTES = 2L * 1024 * 1024
+
+    /** 手势引导被「点空白跳过」多少次后，视为用户就是不想看，不再打扰。 */
+    const val GESTURE_COACH_MARK_SKIP_LIMIT = 3
   }
 }

@@ -30,6 +30,12 @@ private const val LOAD_MORE_THRESHOLD = 5
 /** 「能直接播」的条目类型，与媒体库页筛选可播放条目的口径保持一致 */
 private val PLAYABLE_TYPES = listOf("Movie", "Episode", "Video", "MusicVideo", "TvProgram")
 
+/** 超短视频的时长上限（毫秒，含本数）：时长不超过 3 秒的片子播完后延迟 3 秒再切下一条 */
+internal const val ULTRA_SHORT_MAX_MS = 3_000L
+
+/** 超短视频播完后停留的秒数（延迟切换的等待时长） */
+private const val ULTRA_SHORT_END_DELAY_SEC = 3
+
 /**
  * 视界流（仿抖音竖屏上下滑连播）的状态容器。
  *
@@ -177,6 +183,54 @@ class FeedViewModel(
     return true
   }
 
+  // ── 超短视频（≤3 秒）播完的延迟切换 ──
+  // 时长不超过 3 秒（含 1/2/3 秒）的片子播完后停留 3 秒再自动切下一条，
+  // 更长的片子维持原有「播完立即切」。等待期间 FeedScreen 悬浮胶囊显示倒计时；
+  // 点胶囊或手动上滑都可立即切走 —— 换页（moveTo）一律取消等待，不留残留定时器。
+
+  /** 延迟切换的倒计时剩余秒数，0 = 不在等待期 */
+  var ultraShortCountdownSec by mutableIntStateOf(0)
+    private set
+
+  /** 是否正在等待延迟切换（驱动悬浮倒计时卡片） */
+  val ultraShortWaiting: Boolean get() = ultraShortCountdownSec > 0
+
+  private var endDelayJob: Job? = null
+
+  /**
+   * 播放结束的统一分流入口（两内核的播完检测都汇聚到这里）：
+   * 超短视频先等 [ULTRA_SHORT_END_DELAY_SEC] 秒（可被用户随时打断），
+   * 其余片子立即 [goNext]。没有下一条时留在原地（由 [goNext] 自己处理）。
+   */
+  fun onPlaybackEnded(durationMs: Long) {
+    if (endDelayJob?.isActive == true) return
+    // 最后一条：留在原地（goNext 顺带尝试续拉下一页），不倒计时
+    if (!hasNext) {
+      goNext()
+      return
+    }
+    if (durationMs <= 0L || durationMs > ULTRA_SHORT_MAX_MS) {
+      goNext()
+      return
+    }
+    ultraShortCountdownSec = ULTRA_SHORT_END_DELAY_SEC
+    endDelayJob = viewModelScope.launch {
+      while (ultraShortCountdownSec > 0) {
+        delay(1000L)
+        ultraShortCountdownSec--
+      }
+      endDelayJob = null
+      goNext()
+    }
+  }
+
+  /** 取消延迟等待并复位倒计时（手动划走 / 点胶囊跳过 / 重载时调用） */
+  fun cancelUltraShortWait() {
+    endDelayJob?.cancel()
+    endDelayJob = null
+    ultraShortCountdownSec = 0
+  }
+
   /**
    * 挪到新下标。
    *
@@ -187,6 +241,8 @@ class FeedViewModel(
    */
   private fun moveTo(newIndex: Int) {
     if (newIndex == index || newIndex !in items.indices) return
+    // 任何换页都取消延迟等待：手动划走后绝不能再被残留的定时器拽去下一条
+    cancelUltraShortWait()
     index = newIndex
     positionSec = 0.0
     // 「不喜欢」状态与换页**同帧**完成：按钮不会先亮后暗。
@@ -260,6 +316,8 @@ class FeedViewModel(
   var buffered by mutableStateOf(false)
 
   fun requestReload() {
+    // 重载 = 重新看这一条，挂着的延迟切换必须先取消，否则看到一半被拽走
+    cancelUltraShortWait()
     val keep = positionSec
     reloadSeekSec = if (keep > 1.0) keep else 0.0
     errors.remove(index)

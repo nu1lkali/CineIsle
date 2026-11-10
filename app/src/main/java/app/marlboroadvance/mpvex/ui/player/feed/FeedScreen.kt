@@ -412,6 +412,35 @@ internal fun FeedScreen(
       }
     }
 
+    // ── 超短视频播完的延迟切换倒计时 ──
+    // 半透明小胶囊，只报「几秒后切走」这一件事。点它 = 立即切下一条；
+    // 手动上滑同样随时可用（Pager 翻页会经 moveTo 取消等待），卡片不拦手势。
+    AnimatedVisibility(
+      visible = vm.ultraShortWaiting,
+      enter = fadeIn(tween(180)),
+      exit = fadeOut(tween(180)),
+      modifier = Modifier
+        .align(Alignment.BottomCenter)
+        .navigationBarsPadding()
+        .padding(bottom = 112.dp),
+    ) {
+      Surface(
+        onClick = {
+          vm.cancelUltraShortWait()
+          vm.goNext()
+        },
+        shape = RoundedCornerShape(percent = 50),
+        color = Color.Black.copy(alpha = 0.55f),
+      ) {
+        Text(
+          text = "${vm.ultraShortCountdownSec} 秒后播放下一条",
+          color = Color.White.copy(alpha = 0.85f),
+          fontSize = 12.sp,
+          modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        )
+      }
+    }
+
     // ── 长按「不喜欢」弹出的备注框 ──
     // 复用 mpv 侧那份对话框：同一套文案、同一套「保存即标记」语义，
     // 用户在三个播放器之间换来换去不用重新适应。

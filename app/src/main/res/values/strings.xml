@@ -134,6 +134,8 @@
   <string name="pref_player_gestures">Gestures</string>
   <string name="pref_player_gestures_brightness">Brightness gestures</string>
   <string name="pref_player_gestures_volume">Volume gestures</string>
+  <string name="pref_player_gestures_replay_coach_mark">Show gesture tips again</string>
+  <string name="pref_player_gestures_replay_coach_mark_summary">Displays the one-time hint layer again the next time you open the player</string>
   <string name="pref_player_gestures_pinch_to_zoom">Pinch to zoom</string>
   <string name="pref_player_gestures_horizontal_swipe_to_seek">Horizontal swipe to seek</string>
   <string name="pref_player_gestures_horizontal_swipe_to_seek_summary">Swipe left or right on screen to seek forward or backward</string>

@@ -1059,6 +1059,50 @@ internal class ExoPlayerPool(
       applyVideoLayout(idx)
     }
     applyPlaybackState()
+    // ③ 回到「已经播完」的那一页：把它拨回开头重播。
+    //    位置必须在这一调里同步改掉（`seekTo` 会立刻更新 currentPosition），
+    //    因为紧接着的心跳就要读它 —— 详见 [restartIfEnded]。
+    restartIfEnded(center)
+  }
+
+  /**
+   * 「这一页上一次已经播到片尾」→ 拨回开头重播，返回是否真的重播了。
+   *
+   * ## 为什么必须有这一手
+   * 一条片子放完、自动切到下一条之后，**这一页的实例并没有被销毁**（它还在
+   * 「当前页 ±1」的窗口里，停在 `STATE_ENDED`，位置就在片尾）。用户往回滑，
+   * 落到的就是这个实例。不重置的话有两层坏处：
+   * · 进度条一进来就是满的；
+   * · 250ms 心跳读到 `STATE_ENDED`，再走一次「播完 → 切下一条」——
+   *   用户看到的就是**滑回去瞬间又被弹走**。
+   *
+   * ## 为什么判据要「位置优先」
+   * 只看 `playbackState == STATE_ENDED` 不够稳：`seekTo` 之后 `currentPosition`
+   * 是**同步**变成 0 的，而 `playbackState` 要走内部消息线程，异步才从
+   * `STATE_ENDED` 转成 `STATE_BUFFERING`。这一段缝隙里若心跳先跑，看到的就是
+   * 「ENDED + 位置 0」，按状态判会再切一次。所以位置已经回到开头的，
+   * 一律当作**正在重播**，不算播完。
+   *
+   * 只对**当前页**调用 —— 邻居页停在哪都无所谓，它们还没上屏。
+   */
+  fun restartIfEnded(index: Int): Boolean {
+    val player = players[index] ?: return false
+    val dur = player.duration.takeIf { it > 0L } ?: 0L
+    val pos = player.currentPosition.coerceAtLeast(0L)
+    // 已经拨回开头（或本来就从头）⇒ 不是「播完态」，什么都不做。
+    // 这一条同时保证本方法是幂等的：重复调用不会把刚播到一半的片子倒回去。
+    val atStart = pos < RESTART_HEAD_TOLERANCE_MS
+    val ended = if (dur > 0L) {
+      pos >= dur - END_TOLERANCE_MS
+    } else {
+      player.playbackState == Player.STATE_ENDED && !atStart
+    }
+    if (!ended) return false
+    player.seekTo(0L)
+    // 当前页要真的播起来：`STATE_ENDED` 下 `seekTo` 只是把位置挪回开头，
+    // 是否继续播仍取决于 playWhenReady（非活动实例一律 false，见 applyPlaybackState）。
+    if (index == activeIndex) player.playWhenReady = true
+    return true
   }
 
   /**
@@ -1224,6 +1268,24 @@ private const val NO_VIDEO_UNSUPPORTED_ADVANCE_MS = 1_200L
 
 /** 两次心跳之间不可能推进这么多 —— 超过就说明是 seek，不是播放（见 [ExoPlayerPool.detectNoVideoStall]） */
 private const val NO_VIDEO_MAX_TICK_ADVANCE_MS = 3_000L
+
+/**
+ * 距片尾多近算「已经播完」。
+ *
+ * 与心跳里那套提前量同源：视界流的自动切换本来就允许在片尾前 500ms 抢跑（超短视频
+ * 收紧到 50ms），所以用户滑回一页时，位置落在片尾前 500ms 内**同样**应按「已播完」
+ * 处理 —— 否则他会看到片子卡在最后一帧不动，而不是从头重播。
+ */
+private const val END_TOLERANCE_MS = 500L
+
+/**
+ * 位置小于这个值就算「已经在开头」。
+ *
+ * 用途只有一个：区分「ENDED 且位置还没被拨回去」与「刚拨回去、状态还没从 ENDED
+ * 转出来」这两种情况。后者的 `playbackState` 会滞后几十毫秒，按状态判就会把一次
+ * 正常的重播误判成播完、再切走一次（见 [ExoPlayerPool.restartIfEnded]）。
+ */
+private const val RESTART_HEAD_TOLERANCE_MS = 1_000L
 
 /**
  * 一次失败的**归属** —— 决定兜底链怎么走。

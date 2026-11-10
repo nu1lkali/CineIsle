@@ -88,9 +88,17 @@ crash-reports/
 /_*
 /.tmp_*
 /build_tmp_*/
+#  构建脚本（.run_gradle.py）把 gradle 输出直接写成根目录下**无扩展名**的文件，
+#  文件名是「版本号 + 阶段」：242-compile、243-minify、243b-assemble……
+#  上面那几条都按扩展名匹配，管不到它们，必须单列一条，否则每次构建完
+#  `git status` 都会多出几个未跟踪文件。
+/[0-9]*-*
 # 协作期临时写的小工具（git 直调 / 锁清理），只在本机用，不入库
 /.git-run.py
 /.clean_transforms_locks.py
+# 三段构建（compile → minify → assemble）的本机跑法：内容写死了这台机器的
+# 仓库路径与 JDK 路径（GRADLE_USER_HOME 也指到仓库内），换台机器跑不起来。
+/.run_gradle.py
 
 # ── tools/ 本地辅助脚本的产物 ─────────────────────────────────
 #  脚本本身（*.py）入库；它们的输出和下载的 sources jar 不入库

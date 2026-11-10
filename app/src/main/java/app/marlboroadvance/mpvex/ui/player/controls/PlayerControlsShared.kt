@@ -76,6 +76,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 // 偏好读值用项目自定义扩展（preference 的 receiver），与上面 Compose 那个并存：
@@ -113,6 +114,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.PlayerButton
+import app.marlboroadvance.mpvex.preferences.getPlayerButtonLabel
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlayerActions
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FavoriteHeartIcon
 import app.marlboroadvance.mpvex.ui.player.DislikeControlsButton
@@ -123,6 +125,7 @@ import app.marlboroadvance.mpvex.ui.player.PlayerViewModel
 import app.marlboroadvance.mpvex.ui.player.Sheets
 import app.marlboroadvance.mpvex.ui.player.VideoAspect
 import app.marlboroadvance.mpvex.ui.player.controls.components.ControlsButton
+import app.marlboroadvance.mpvex.ui.player.controls.components.LocalPlayerButtonLabel
 import app.marlboroadvance.mpvex.ui.player.controls.components.CurrentChapter
 import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassBorder
 import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassFill
@@ -185,8 +188,15 @@ fun RenderPlayerButton(
    * 传 null ⇒ 长按无反应（单击仍可用），不会崩。
    */
   onDislikeRemarkRequest: (() -> Unit)? = null,
+  /** 名称气泡朝下显示（顶栏那一排必须为 true，否则气泡被屏幕顶部裁掉）。 */
+  labelBelow: Boolean = false,
 ) {
   val clickEvent = LocalPlayerButtonsClickEvent.current
+  // 名称气泡的文案来源：PlayerButton 的多语言标签，经 CompositionLocal 下发给 ControlsButton。
+  // 包住整个 when ⇒ 20 多个分支不用各自传一遍 label，将来加按钮也不会漏。
+  CompositionLocalProvider(
+    LocalPlayerButtonLabel provides getPlayerButtonLabel(button),
+  ) {
   when (button) {
     PlayerButton.BACK_ARROW -> {
       ControlsButton(
@@ -1013,6 +1023,7 @@ fun RenderPlayerButton(
 
     PlayerButton.NONE -> { /* Do nothing */
     }
+  }
   }
 }
 

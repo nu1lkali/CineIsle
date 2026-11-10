@@ -83,6 +83,15 @@ private const val LOADING_GRACE_MS = 400L
 private const val SEEK_PREVIEW_INTERVAL_MS = 120L
 
 /**
+ * 位置小于这个值就算「已经在开头」—— 用于区分「真的播完了」与「刚被拨回开头重播」。
+ *
+ * 自动切走时那一条会停在 `STATE_ENDED`（ExoPlayer）/ `eof-reached`（mpv），用户滑回来
+ * 后实例被拨回 0 重新播。但两个内核的「结束」标志都是**异步**才复位的，复位前的那一拍
+ * 心跳会看到「已结束 + 位置在开头」。按状态判就会再切一次，按位置判才是对的。
+ */
+private const val FEED_RESTART_HEAD_TOLERANCE_MS = 1_000L
+
+/**
  * 「视界流」——仿抖音竖屏上下滑动连播的播放器（ExoPlayer 多实例版）。
  *
  * ── 为什么现在是「一页一个实例」而不是「一个画面换源」 ──
@@ -581,11 +590,23 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     if (active != null) {
       val durMs = active.duration.takeIf { it > 0 } ?: 0L
       val posMs = active.currentPosition.coerceAtLeast(0L)
-      if (active.playbackState == Player.STATE_ENDED || (durMs > 0L && posMs >= durMs - 500L)) {
+      // 提前量分流：超短视频等真正放完才起算延迟（否则倒计时会在片尾前 500ms
+      // 就冒出来、切换也跟着提前），其余片子维持原有的 500ms 抢跑。
+      val earlyFireMs = if (durMs in 1L..ULTRA_SHORT_MAX_MS) 50L else 500L
+      // 位置优先，状态只作时长未知时的退路。
+      // `seekTo(0)` 会**同步**把位置改回开头，而 `playbackState` 是异步才从
+      // STATE_ENDED 转出去的；这一段缝隙里若只看状态，用户滑回已播完的那一条
+      // 会被立刻再判一次「播完 → 切下一条」—— 就是「滑回去瞬间被弹走」。
+      val ended = if (durMs > 0L) {
+        posMs >= durMs - earlyFireMs
+      } else {
+        active.playbackState == Player.STATE_ENDED && posMs >= FEED_RESTART_HEAD_TOLERANCE_MS
+      }
+      if (ended) {
         if (!endHandled) {
           endHandled = true
           // 已经是最后一条时留在原地，让用户自己决定要不要退
-          viewModel.goNext()
+          viewModel.onPlaybackEnded(durMs)
         }
       }
     }
@@ -639,9 +660,13 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     viewModel.paused = mpvEngine.isPaused()
     viewModel.buffering = mpvEngine.isBuffering()
     if (mpvEngine.hasPicture()) viewModel.buffered = true
-    if (mpvEngine.reachedEnd() && !endHandled) {
+    // `eof-reached` 在 `seek 0` 生效之后还要过一拍才复位；这段时间里位置已经在开头、
+    // 却仍会读到「已到片尾」。所以位置能拿到时以位置为准 —— 否则滑回刚播完的那条，
+    // 心跳会再切一次（「滑回来瞬间弹走」）。
+    val mpvAtHead = dur > 0.0 && pos < 1.0
+    if (mpvEngine.reachedEnd() && !endHandled && !mpvAtHead) {
       endHandled = true
-      viewModel.goNext()
+      viewModel.onPlaybackEnded((dur * 1000.0).toLong())
     }
     // 看门狗：mpv 迟迟连时长都拿不到，说明源本身不通（不是解码问题，换内核也没用）
     if (loadStartedAt > 0L && dur <= 0.0 &&
@@ -863,7 +888,13 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
         if (isExiting || mpvIndex < 0) return@launch
         val dur = mpvEngine.durationSec()
         if (dur > 0.0) {
-          mpvEngine.seekTo(targetSec.coerceIn(0.0, (dur - 1.0).coerceAtLeast(0.0)))
+          // 上次是「放完」离开的：记下的位置就在片尾，照着跳回去会立刻再 reachedEnd
+          // → 又被切走（用户看到的「滑回来瞬间弹走」）。落在片尾 1 秒内一律当从头播。
+          if (targetSec >= dur - 1.0) {
+            mpvEngine.seekTo(0.0)
+          } else {
+            mpvEngine.seekTo(targetSec.coerceIn(0.0, (dur - 1.0).coerceAtLeast(0.0)))
+          }
           return@launch
         }
       }

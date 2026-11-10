@@ -173,6 +173,8 @@ fun TopRightPlayerControlsLandscape(
         chapters = chapters,
         currentChapter = currentChapter,
         isPortrait = isPortrait,
+        // 顶栏这一簇贴着屏幕顶边，名称气泡只能朝下
+        labelBelow = true,
         isSpeedNonOne = isSpeedNonOne,
         currentZoom = currentZoom,
         aspect = aspect,

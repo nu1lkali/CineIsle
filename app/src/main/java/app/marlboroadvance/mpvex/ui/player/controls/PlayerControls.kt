@@ -534,6 +534,8 @@ fun PlayerControls(
         val (topLeftControls, topRightControls) = createRefs()
         val (volumeSlider, brightnessSlider) = createRefs()
         val unlockControlsButton = createRef()
+        // 锁屏态下的只读进度条（解锁条上方那一行）
+        val lockedProgress = createRef()
         val (bottomRightControls, bottomLeftControls) = createRefs()
         val playerPauseButton = createRef()
         val seekbar = createRef()
@@ -870,6 +872,29 @@ fun PlayerControls(
           SlideToUnlock(
             onUnlock = { viewModel.unlockControls() },
             onDraggingChanged = { isDragging -> isUnlockSliderDragging = isDragging },
+          )
+        }
+
+        // 锁屏态的只读进度：单击画面唤起控件时出现，2 秒后随控件一起自动隐藏
+        // （锁屏态的自动隐藏时长在文件上方的 LaunchedEffect 里固定为 2000ms）。
+        // 不可交互 —— 详见 [LockedProgressStrip] 顶部注释。
+        AnimatedVisibility(
+          visible = controlsShown && areControlsLocked,
+          enter = fadeIn(),
+          exit = fadeOut(),
+          modifier =
+            Modifier
+              .constrainAs(lockedProgress) {
+                // 压在滑动解锁条上方：解锁条自己贴着屏幕底边（extraLarge），
+                // 两者不能同高，否则进度条会被滑块的轨道盖住。
+                bottom.linkTo(unlockControlsButton.top, spacing.medium)
+                start.linkTo(parent.start, spacing.extraLarge)
+                end.linkTo(parent.end, spacing.extraLarge)
+              },
+        ) {
+          LockedProgressStrip(
+            position = if (precisePosition > 0f) precisePosition else (position?.toFloat() ?: 0f),
+            duration = if (preciseDuration > 0f) preciseDuration else (duration?.toFloat() ?: 0f),
           )
         }
 
@@ -1694,6 +1719,45 @@ fun PlayerControls(
         }
 
       }
+      // ── 首次进入播放器的手势引导 ──
+      // 触发条件三条：第一帧已上屏、从没看过、用户没把对应手势关掉。
+      // 等首帧是为了不把遮罩盖在「正在加载」的黑屏上 —— 文案读完了画面还没出来，
+      // 引导就变成了纯粹的干扰。
+      val holdSpeedForHint by playerPreferences.holdForMultipleSpeed.collectAsState()
+      val brightnessHintOn by playerPreferences.brightnessGesture.collectAsState()
+      val volumeHintOn by playerPreferences.volumeGesture.collectAsState()
+      var coachMarkVisible by remember { mutableStateOf(false) }
+      LaunchedEffect(firstFrameRendered) {
+        if (!firstFrameRendered) return@LaunchedEffect
+        if (playerPreferences.hasSeenGestureCoachMark.get()) return@LaunchedEffect
+        delay(600)
+        coachMarkVisible = true
+      }
+
+      PlayerGestureCoachMarkHost(
+        visible = coachMarkVisible,
+        seekBackwardSeconds = seekBackwardSeconds,
+        seekForwardSeconds = seekForwardSeconds,
+        holdSpeed = holdSpeedForHint,
+        showVerticalSwipeHint = brightnessHintOn || volumeHintOn,
+        onDismiss = { acknowledged ->
+          coachMarkVisible = false
+          if (acknowledged) {
+            // 点「知道了」= 真的看过了，此后不再出现
+            playerPreferences.hasSeenGestureCoachMark.set(true)
+          } else {
+            // 点空白 = 只是跳过本次，**不记账**，下次进入播放器还会出现。
+            // 这是为了兜住「等加载时无意识连点」：旧实现把它当成已看过，
+            // 一次手滑就永久失去引导。
+            // 但也不能无限骚扰 —— 跳过累计到上限，同样视为「不想看」。
+            val skips = playerPreferences.gestureCoachMarkSkipCount.get() + 1
+            playerPreferences.gestureCoachMarkSkipCount.set(skips)
+            if (skips >= PlayerPreferences.GESTURE_COACH_MARK_SKIP_LIMIT) {
+              playerPreferences.hasSeenGestureCoachMark.set(true)
+            }
+          }
+        },
+      )
     }
 
     // 内核切换要交给承载页（mpv 播放页 PlayerActivity）来做。
