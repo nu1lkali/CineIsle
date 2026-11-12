@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbySearchMemory
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
 import app.marlboroadvance.mpvex.ui.cine.components.CinePosterCard
 import app.marlboroadvance.mpvex.ui.cine.components.CineStatePanel
@@ -84,6 +85,8 @@ private const val SEARCH_LIMIT = 60
  */
 @Composable
 fun CineSearchOverlay(
+  /** 与 [CineRoot] 共用的留存票据（见 [EmbySearchMemory]）；决定「返回」还是「重新进入」 */
+  ticket: String,
   onClose: () -> Unit,
   onOpenDetail: (EmbyItem) -> Unit,
   modifier: Modifier = Modifier,
@@ -97,19 +100,46 @@ fun CineSearchOverlay(
   val keyboard = LocalSoftwareKeyboardController.current
   val play = rememberCinePlay()
 
-  var query by remember { mutableStateOf("") }
+  // 从详情页返回：词与结果由留存表带回（见文件末尾 openDetailWithMemory）。
+  // `pendingRestore` 只用来吃掉搜索 effect 的第一次触发 —— 否则返回瞬间会重搜一遍，
+  // 画面闪一下、排序随机时整批顺序还会变。
+  val restored = remember {
+    // 服务器对不上就不复用：结果是那台服务端给的，换一台还回放等于显示不存在的条目
+    EmbySearchMemory.take("$ticket|content")?.takeIf { it.serverId == null || it.serverId == server?.id }
+  }
+  var pendingRestore by remember { mutableStateOf(restored != null) }
+  var query by remember { mutableStateOf(restored?.query ?: "") }
   var results by remember { mutableStateOf<List<CineMediaUi>>(emptyList()) }
   var searching by remember { mutableStateOf(false) }
   var errorText by remember { mutableStateOf<String?>(null) }
-  var lastTerm by remember { mutableStateOf("") }
+  var lastTerm by remember { mutableStateOf(restored?.query ?: "") }
 
   val focusRequester = remember { FocusRequester() }
-  LaunchedEffect(Unit) { focusRequester.requestFocus() }
+  // 返回搜索层时不再抢焦点：刚回来就弹键盘会把画面顶上去一半，
+  // 而用户此刻要的是「继续看刚才那批结果」，不是马上再打字。
+  LaunchedEffect(Unit) { if (restored == null) focusRequester.requestFocus() }
 
   // 系统返回键先退搜索（搜索是叠在首页之上的一层）
   BackHandler(onBack = onClose)
 
   LaunchedEffect(query, server?.id) {
+    // 返回路径：把留存的那批结果重新映射回 UI 模型，不发请求
+    if (pendingRestore) {
+      pendingRestore = false
+      val snap = restored
+      // 服务器快照可能还没发出来（cold 组合）：先不映射，等它到了下面的新一轮走正常搜索兜底。
+      // 这条分支实际很少走到 —— 能搜出结果就一定已经有服务器了。
+      val current = server ?: run {
+        searching = false
+        return@LaunchedEffect
+      }
+      if (snap != null) {
+        results = snap.items.map { viewModel.toCineMedia(current, it) }
+        lastTerm = snap.query
+      }
+      searching = false
+      return@LaunchedEffect
+    }
     val term = query.trim()
     errorText = null
     if (term.isEmpty()) {
@@ -134,6 +164,23 @@ fun CineSearchOverlay(
       }
       .onFailure { errorText = it.message }
     searching = false
+  }
+
+  // 进详情页之前把「词 + 结果」拍进留存表，返回时原样带回。
+  // ⚠️ 用「点的时候写」而不是 onDispose：CineRoot 的 searchOpen 与本层状态分属两个组合，
+  //    onDispose 分不清这次离开是「进详情」还是「关搜索」，写早了会把已关掉的搜索又留一条。
+  val openDetailWithMemory: (EmbyItem) -> Unit = { item ->
+    if (query.isNotBlank()) {
+      val snap = EmbySearchMemory.Snapshot(
+        query = query,
+        items = results.map { it.item },
+        serverId = server?.id,
+      )
+      EmbySearchMemory.attach("$ticket|content", snap)
+      // 另记一条「搜索层是开着的」：CineRoot 只凭它决定返回后要不要把这一层盖回来
+      EmbySearchMemory.attach("$ticket|open", snap)
+    }
+    onOpenDetail(item)
   }
 
   val wide = rememberCineWide()
@@ -225,7 +272,8 @@ fun CineSearchOverlay(
           },
           onLongClick = { media ->
             keyboard?.hide()
-            onOpenDetail(media.item)
+            // 走留存活页：进详情前把「词 + 结果」拍下来，返回时原样带回
+            openDetailWithMemory(media.item)
           },
           // 键盘弹起时网格要跟着缩，否则最后一行永远在键盘下面
           modifier = Modifier.imePadding(),

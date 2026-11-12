@@ -51,6 +51,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -320,23 +321,43 @@ fun EmbyHomeScreen(
 
   // ── 全库搜索 ──
   // 不带 ParentId，Emby 会跨所有媒体库检索，所以这里搜的是「全部媒体」而不是某个库。
-  var searchActive by remember { mutableStateOf(false) }
-  var searchQuery by remember { mutableStateOf("") }
-  var searchResults by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
+  //
+  // ⚠️ 搜索态跨「详情页压栈」留存（需求：搜索结果返回保持 v1）：
+  //    首页挂在 MainScreen 这个 entry 下，点进详情时整棵子树被销毁、remember 全部归零，
+  //    返回就落回浏览内容。ticket 用 rememberSaveable —— entry 只要还在返回栈上就一直
+  //    还原同一个值，从首页重新进（新 entry）必然是新的值 —— 配合 [EmbySearchMemory]
+  //    把「词 + 结果 + 筛选 + 页签 + 滚动位置」原样带回，且不重发搜索。
+  val searchTicket = rememberSaveable { java.util.UUID.randomUUID().toString() }
+  // 服务器对不上就不复用：结果是那台服务端给的，换一台还回放等于显示并不存在的条目
+  val restoredSearch = remember {
+    EmbySearchMemory.take(searchTicket)?.takeIf { it.serverId == null || it.serverId == server?.id }
+  }
+  // 本次组合是不是「从详情页返回」：只用来吃掉搜索 effect 的第一次触发，
+  // 让留存的结果直接落地（否则返回瞬间会重搜一次，画面闪骨架、顺序也可能变）。
+  var pendingSearchRestore by remember { mutableStateOf(restoredSearch != null) }
+  var searchActive by remember { mutableStateOf(restoredSearch != null) }
+  var searchQuery by remember { mutableStateOf(restoredSearch?.query ?: "") }
+  var searchResults by remember { mutableStateOf(restoredSearch?.items ?: emptyList()) }
   var isSearching by remember { mutableStateOf(false) }
   /**
    * 结果是否被 [EmbyViewModel.GLOBAL_SEARCH_LIMIT] 截断（清单 1.1）。
    * 全库搜索是「人物 + 媒体」两条流拼的，混合列表没法真分页，
    * 所以只能靠明确提示让用户知道还有更多、可以收窄条件。
    */
-  var searchTruncated by remember { mutableStateOf(false) }
+  var searchTruncated by remember { mutableStateOf(restoredSearch?.truncated ?: false) }
   // 类型筛选：空集合 = 「全部」= 不加类型限制
-  var searchFilters by remember { mutableStateOf(emptySet<EmbySearchFilter>()) }
+  var searchFilters by remember { mutableStateOf(restoredSearch?.filters ?: emptySet()) }
   // 结果分类页签（清单 4.1）。**纯客户端切片**，与上面的 searchFilters 不同：
   // 它决定「已拿到的结果里先看哪一堆」，切一下不发请求（详见 EmbySearchTab 的 KDoc）。
   // 用 rememberSaveable：旋转屏幕时结果集靠 ViewModel 保住，页签也得跟着保住，
   // 否则转个屏就退回「全部」，用户会以为搜索结果被重置了。
-  var searchTab by rememberSaveable { mutableStateOf(EmbySearchTab.ALL) }
+  var searchTab by rememberSaveable { mutableStateOf(restoredSearch?.tab ?: EmbySearchTab.ALL) }
+  // 搜索结果的滚动位置：以前没有显式持有（网格自己 remember 一个隐式的 state），
+  // 从详情页返回就得从头看起。显式建一个，初值取留存快照里的位置。
+  val searchGridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState(
+    initialFirstVisibleItemIndex = restoredSearch?.scrollIndex ?: 0,
+    initialFirstVisibleItemScrollOffset = restoredSearch?.scrollOffset ?: 0,
+  )
 
   // 搜索历史：与媒体库内搜索共用同一张表，在哪儿搜过的词换个地方也能点到
     val searchHistoryRepository = koinInject<SearchHistoryRepository>()
@@ -683,6 +704,12 @@ fun EmbyHomeScreen(
         isSearching = false
         return@LaunchedEffect
       }
+      // 从详情页返回：结果已经由留存快照落地，这一次触发只用来**消费标记**。
+      // 少了这条会重搜一遍 —— 返回瞬间闪一次骨架，且排序随机时整批顺序会变。
+      if (pendingSearchRestore) {
+        pendingSearchRestore = false
+        return@LaunchedEffect
+      }
       isSearching = true
       // 换词 / 改筛选 ⇒ 回到「全部」页签。这不是「顺手」而是必需的：
       // 新结果集里很可能没有此前选中的那个类型（比如上轮选「电影」、这轮只搜到剧集），
@@ -709,6 +736,30 @@ fun EmbyHomeScreen(
         searchHistoryRepository.record(current.id, finishedQuery)
       }
       isSearching = false
+    }
+
+    // 离开首页（压栈进详情 / 演员页）的那一刻把搜索态记进留存表，返回时由 ticket 取回。
+    // 只在 onDispose 写一次：跟着字段写会在滚动时每帧写一遍，纯属浪费。
+    // 这里的几个状态都是 remember 出来的**同一个实例**（没有 cacheKey 重置），
+    // 所以闭包直接抓引用就是最新值，不需要 rememberUpdatedState 转一手。
+    DisposableEffect(searchTicket) {
+      onDispose {
+        if (searchActive && searchQuery.isNotBlank()) {
+          EmbySearchMemory.attach(
+            searchTicket,
+            EmbySearchMemory.Snapshot(
+              query = searchQuery,
+              items = searchResults,
+              serverId = server?.id,
+              truncated = searchTruncated,
+              filters = searchFilters,
+              tab = searchTab,
+              scrollIndex = searchGridState.firstVisibleItemIndex,
+              scrollOffset = searchGridState.firstVisibleItemScrollOffset,
+            ),
+          )
+        }
+      }
     }
 
     // 页签切片结果。remember 包住是因为 grid 会把整个列表传进 items()，
@@ -796,6 +847,8 @@ fun EmbyHomeScreen(
               androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(minSize = 104.dp),
                 modifier = Modifier.fillMaxSize(),
+                // 显式持有滚动位置：从详情页返回时接回原来那一屏（见 searchGridState 的说明）
+                state = searchGridState,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),

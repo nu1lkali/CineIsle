@@ -25,6 +25,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.EmbyLibraryScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyLiveTvScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyOfflineScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyPersonScreen
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbySearchMemory
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyServerManageScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.collection.EmbyCollectionScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.EmbyDiscoverScreen
@@ -79,7 +80,15 @@ fun CineRoot(modifier: Modifier = Modifier) {
   // rememberSaveable：转屏、进程被回收后回来还停在原来那个 tab。
   var tabIndex by rememberSaveable { mutableStateOf(0) }
   var dockHidden by remember { mutableStateOf(false) }
-  var searchOpen by remember { mutableStateOf(false) }
+  // 搜索层跨「详情页压栈」留存（需求：搜索结果返回保持 v1）：
+  // searchOpen 与 CineSearchOverlay 里的词/结果都是页面内 remember，进详情就全没了，
+  // 返回时搜索层会整层消失。这里用一个 rememberSaveable 的票据把两处串起来：
+  // 该票据在 entry 存活期间保持不变、entry 出栈即换新值 —— 于是「返回」能取回
+  // 「重新进 App」必然取不到（详见 EmbySearchMemory 的 KDoc）。
+  val searchTicket = rememberSaveable { java.util.UUID.randomUUID().toString() }
+  var searchOpen by remember {
+    mutableStateOf(EmbySearchMemory.take("$searchTicket|open") != null)
+  }
   // 侧边抽屉（老 UI AppBar 功能的收纳处）。⚠️ CineDrawerOverlay 要求常驻组合播进出场动画，
   // 所以这个状态驱动的是 overlay 的 visible 参数，不是 if 包不包它。
   var drawerOpen by remember { mutableStateOf(false) }
@@ -203,10 +212,14 @@ fun CineRoot(modifier: Modifier = Modifier) {
       // 覆盖层最后画：确保盖住 Dock 与内容（包括 Rail 右侧的边界）
       if (searchOpen) {
         CineSearchOverlay(
+          ticket = searchTicket,
           // 关掉覆盖层时把 Dock 复位：搜索是「临时插一层」，回来时底部导航该在
           onClose = {
             searchOpen = false
             dockHidden = false
+            // 关闭 = 结束这次搜索会话，留存表里那两条一起丢掉
+            EmbySearchMemory.detach("$searchTicket|open")
+            EmbySearchMemory.detach("$searchTicket|content")
           },
           onOpenDetail = ::openDetail,
         )

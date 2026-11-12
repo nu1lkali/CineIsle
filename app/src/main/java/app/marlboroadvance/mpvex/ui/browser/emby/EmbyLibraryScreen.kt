@@ -79,6 +79,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -184,16 +185,41 @@ import kotlin.math.roundToInt
  * 单击行为：容器类继续下钻，其余打开详情页，播放由详情页发起。
  */
 /**
- * 退出搜索时的内容快照：词 + 整批结果 + 总数 + 滚动位置。
+ * 退出搜索时的内容快照：词 + 整批结果 + 总数 + 分页游标 + 滚动位置。
  * 再点放大镜进来时用它**原样回放** —— 不发请求、不看 cacheKey，
  * 切没切过分类、点得多快都不会闪出别的列表（见搜索 effect 的恢复分支）。
+ *
+ * 从详情页返回时的恢复走的是**同一条**回放路径（快照由 [EmbySearchMemory] 提供），
+ * 所以两条来源的口径必须一致 —— 少一个字段就少一份还原。
  */
 private data class EmbySearchSnapshot(
   val query: String,
   val items: List<EmbyItem>,
   val totalCount: Int,
+  /**
+   * 已向服务端消耗的条数（续页 StartIndex）。
+   *
+   * 回放时必须一起还原：只把 items 塞回去、游标留在 0 的话，
+   * 返回后继续下滑会把第一页再拉一遍（同一批条目重复出现、且永远翻不到下一页）。
+   */
+  val consumedCount: Int = 0,
   val scrollIndex: Int,
   val scrollOffset: Int,
+)
+
+/**
+ * 留存表里的快照 → 本页的快照。
+ *
+ * 两个类型刻意不合并：留存在 `ui.browser.emby` 这层要同时服务首页全库搜索
+ * （没有分页游标）与库内搜索（没有结果页签），字段是并集；本页只关心自己那几个。
+ */
+private fun EmbySearchMemory.Snapshot.toLocalSnapshot(): EmbySearchSnapshot = EmbySearchSnapshot(
+  query = query,
+  items = items,
+  totalCount = totalCount,
+  consumedCount = consumedCount,
+  scrollIndex = scrollIndex,
+  scrollOffset = scrollOffset,
 )
 
 @Serializable
@@ -247,17 +273,30 @@ data class EmbyLibraryScreen(
     val server by viewModel.currentServer.collectAsState()
     val scope = rememberCoroutineScope()
 
-    var searchQuery by remember { mutableStateOf("") }
-    var searchActive by remember { mutableStateOf(false) }
+    // ── 搜索态跨「详情页压栈」留存（需求：搜索结果返回保持 v1）──
+    // nav3 只组合栈顶 entry，点进详情页时本页组合被销毁，页面内的 remember 全部归零 ——
+    // 于是「搜索 → 点进详情 → 返回」落回浏览态（用户报障：返回直接回库首页）。
+    // ticket 用 rememberSaveable：entry 只要还留在栈上就一直还原同一个值，出栈即换新值，
+    // 于是「返回」取得回快照、「从首页重新进同一个库」必然取不到（不会误恢复上次搜索）。
+    val searchTicket = rememberSaveable { java.util.UUID.randomUUID().toString() }
+    // 服务器对不上就不复用：结果是那台服务端给的，换一台还回放等于显示并不存在的条目
+    val restoredSearch = remember {
+      EmbySearchMemory.take(searchTicket)?.takeIf { it.serverId == null || it.serverId == server?.id }
+    }
+    var searchQuery by remember { mutableStateOf(restoredSearch?.query ?: "") }
+    var searchActive by remember { mutableStateOf(restoredSearch != null) }
     // 上一次搜索词：退出搜索时留存，再点放大镜进来时原样恢复 ——
     // 配合本页缓存（cacheKey 一致即命中），结果直接可见、不用重新搜
-    var lastSearchQuery by remember { mutableStateOf("") }
+    var lastSearchQuery by remember { mutableStateOf(restoredSearch?.query ?: "") }
     // 退出搜索时拍下的内容快照 + 「刚进入搜索」的恢复标记：
-    // 恢复只在进入的那一次生效，之后改词 / 换排序照常走防抖与网络
-    var lastSearchSnapshot by remember { mutableStateOf<EmbySearchSnapshot?>(null) }
-    var pendingSearchRestore by remember { mutableStateOf(false) }
+    // 恢复只在进入的那一次生效，之后改词 / 换排序照常走防抖与网络。
+    // 从详情页返回时初值就是留存表里那份 —— 走的是同一条回放路径，不另开一套。
+    var lastSearchSnapshot by remember {
+      mutableStateOf(restoredSearch?.toLocalSnapshot())
+    }
+    var pendingSearchRestore by remember { mutableStateOf(restoredSearch != null) }
     // 类型筛选：空集合 = 「全部」= 不加类型限制
-    var searchFilters by remember { mutableStateOf(emptySet<EmbySearchFilter>()) }
+    var searchFilters by remember { mutableStateOf(restoredSearch?.filters ?: emptySet()) }
     /**
      * 搜索范围：「仅本目录」开关。
      *
@@ -271,8 +310,10 @@ data class EmbyLibraryScreen(
      * 为什么**不持久化**：这是个一次性的临时口径。若记进偏好，用户下次进来
      * 发现库根页搜不到东西（库根往下大多是子目录，recursive=false 基本为空），
      * 会当成搜索坏了。默认关 + 每次进来重置，行为永远可预期。
+     * ⚠️ 「每次进来」指**新的 entry**：从详情页返回是回到同一次搜索，
+     *    这一档必须跟着会话一起回来（否则返回后结果集会换一批，看着像搜索被重置了）。
      */
-    var searchLocalOnly by remember { mutableStateOf(false) }
+    var searchLocalOnly by remember { mutableStateOf(restoredSearch?.localOnly ?: false) }
     // 上一次「由输入触发」的搜索词。用来区分这次重查是打字引起的（要 400ms 防抖），
     // 还是切排序 / 换类型筛选引起的（离散操作，立即重查）。
     var lastTypedQuery by remember { mutableStateOf("") }
@@ -534,10 +575,23 @@ data class EmbyLibraryScreen(
       } else {
         emptyList()
       }
-    var items by remember(cacheKey) { mutableStateOf(cachedItems) }
+    // ⚠️ `pendingSearchRestore` 分支（也就是「从详情页返回」那一趟）必须放在最前面：
+    //    直接以留存的那批结果起值，首帧就是完整列表 —— 否则会先空一帧（空态一闪）/
+    //    或者先转一帧圈，用户看到的就是「返回后列表重新加载了一次」。
+    //    标记只在这一趟为真，之后改词 / 切筛选照常按 cacheKey 从缓存或空集起值。
+    val restoringSearch = pendingSearchRestore && searchQuery.isNotBlank()
+    var items by remember(cacheKey) {
+      mutableStateOf(
+        if (restoringSearch) restoredSearch?.items ?: emptyList() else cachedItems,
+      )
+    }
     var totalCount by remember(cacheKey) {
       mutableIntStateOf(
-        if (searchQuery.isBlank() || chineseSubsOnly) cachedEntry?.totalCount ?: 0 else 0
+        when {
+          restoringSearch -> restoredSearch?.totalCount ?: 0
+          searchQuery.isBlank() || chineseSubsOnly -> cachedEntry?.totalCount ?: 0
+          else -> 0
+        }
       )
     }
     // ── 分页游标（与 PagedList.consumed 同一口径）──
@@ -549,7 +603,11 @@ data class EmbyLibraryScreen(
     // 从缓存恢复列表时，续页游标也要跟着恢复，否则返回后续页会回到开头重拉。
     var consumedCount by remember(cacheKey) {
       mutableIntStateOf(
-        if (searchQuery.isBlank() || chineseSubsOnly) cachedEntry?.consumedCount ?: 0 else 0
+        when {
+          restoringSearch -> restoredSearch?.consumedCount ?: 0
+          searchQuery.isBlank() || chineseSubsOnly -> cachedEntry?.consumedCount ?: 0
+          else -> 0
+        }
       )
     }
     // 续页闸门：触底回调每个滚动帧都会评估，没有它会把同一页并发拉好几遍
@@ -564,11 +622,12 @@ data class EmbyLibraryScreen(
     var actorError by remember(cacheKey) { mutableStateOf<String?>(null) }
     var isLoading by remember(cacheKey) {
       mutableStateOf(
-        if (searchQuery.isBlank() || chineseSubsOnly) {
+        when {
+          // 返回那一趟：数据已经随 items 一起落位，不该再转圈
+          restoringSearch -> false
           // 中文字幕模式下仍在用扫完那份：有数据就不该再转圈
-          cachedEntry == null || cachedEntry.items.isEmpty()
-        } else {
-          true
+          searchQuery.isBlank() || chineseSubsOnly -> cachedEntry == null || cachedEntry.items.isEmpty()
+          else -> true
         },
       )
     }
@@ -635,6 +694,37 @@ data class EmbyLibraryScreen(
       initialFirstVisibleItemIndex = cachedEntry?.scrollIndex ?: 0,
       initialFirstVisibleItemScrollOffset = cachedEntry?.scrollOffset ?: 0,
     )
+
+    // 离开本页（压栈进详情 / 季 / 演员页）的那一刻，把当前搜索态记进留存表 ——
+    // 返回时由上面那个 ticket 取回来（见 [EmbySearchMemory] 的说明）。
+    // ⚠️ 必须在 onDispose 里拍，而不是在 LaunchedEffect 里跟着字段变：
+    //    后者会在滚动时每帧写一次（一次滚动几十上百次写），这里只在"离开"写一次。
+    // ⚠️ 用 rememberUpdatedState 转一手：cacheKey 一变（改词 / 切筛选），
+    //    `items` 这些 remember(cacheKey) 都是**新实例**，闭包要是抓着首次组合的旧引用，
+    //    写进去的就是过期快照（返回后看到的是上一个词的结果）。
+    val searchSnapshotProvider = rememberUpdatedState<() -> EmbySearchMemory.Snapshot?> {
+      if (!searchActive || searchQuery.isBlank()) {
+        null
+      } else {
+        EmbySearchMemory.Snapshot(
+          query = searchQuery,
+          items = items,
+          serverId = server?.id,
+          totalCount = totalCount,
+          consumedCount = consumedCount,
+          filters = searchFilters,
+          localOnly = searchLocalOnly,
+          scrollIndex = gridState.firstVisibleItemIndex,
+          scrollOffset = gridState.firstVisibleItemScrollOffset,
+        )
+      }
+    }
+    DisposableEffect(searchTicket) {
+      onDispose {
+        // 这里拿到的是**最后一次组合**更新过的取值函数，不是首次组合时的那份
+        searchSnapshotProvider.value.invoke()?.let { EmbySearchMemory.attach(searchTicket, it) }
+      }
+    }
 
     // 换排序方式 / 切升降序之后，列表内容整体换了一批，滚动位置必须回到第一条 ——
     // 否则用户停在「第 200 个」，切完排序还停在 200 号位，看到的是一批顺序完全不同的条目。
@@ -1959,11 +2049,15 @@ data class EmbyLibraryScreen(
           query = searchQuery,
           items = items,
           totalCount = totalCount,
+          consumedCount = consumedCount,
           scrollIndex = gridState.firstVisibleItemIndex,
           scrollOffset = gridState.firstVisibleItemScrollOffset,
         )
       searchActive = false
       searchQuery = ""
+      // 主动退出搜索 = 这次搜索会话结束：留存表里那份也一并丢掉，
+      // 免得之后从浏览态压栈进详情时还挂着一次早已结束的搜索。
+      EmbySearchMemory.detach(searchTicket)
       releaseInputFocus()
       // 回去时把离开前的滚动位置接回去（配合上面的 LaunchedEffect(cacheKey)）
       pendingBrowseRestore = true
@@ -2359,6 +2453,8 @@ data class EmbyLibraryScreen(
             if (snap != null && snap.query == searchQuery) {
               items = snap.items
               totalCount = snap.totalCount
+              // 续页游标一起还原：少了它，返回后继续下滑会把第一页再拉一遍
+              consumedCount = snap.consumedCount
               chineseHits = emptyMap()
               isLoading = false
               gridState.scrollToItem(snap.scrollIndex, snap.scrollOffset)
