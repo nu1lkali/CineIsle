@@ -789,7 +789,10 @@ fun EmbyHomeScreen(
                 searchHistoryRepository.clear(id)
               }
             },
-            modifier = Modifier.fillMaxSize(),
+            // 历史面板自己会滚：整块让出底栏高度，否则历史条数多时最后一行压在底栏下面
+            modifier = Modifier
+              .fillMaxSize()
+              .padding(bottom = LocalNavigationBarHeight.current),
             emptyHint = "输入关键词，搜索全部媒体库",
           )
         } else if (isSearching) {
@@ -849,7 +852,15 @@ fun EmbyHomeScreen(
                 modifier = Modifier.fillMaxSize(),
                 // 显式持有滚动位置：从详情页返回时接回原来那一屏（见 searchGridState 的说明）
                 state = searchGridState,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                // ⚠️ 底部必须躲开底部导航栏：它是 Scaffold 的 bottomBar，**浮在内容之上**、
+                //    不占内容的布局空间。这里只给 8dp 的话，滚到底时最后一排卡片会被
+                //    整条压住（与 browse 列表的 923 行同一口径）。
+                contentPadding = PaddingValues(
+                  start = 16.dp,
+                  end = 16.dp,
+                  top = 8.dp,
+                  bottom = LocalNavigationBarHeight.current + 16.dp,
+                ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
               ) {
