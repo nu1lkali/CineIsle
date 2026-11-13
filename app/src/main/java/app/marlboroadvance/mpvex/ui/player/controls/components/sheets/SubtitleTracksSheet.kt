@@ -1,15 +1,19 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
 
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -31,8 +35,17 @@ sealed class SubtitleItem {
   /** 筛选后一条都不剩时的提示行（跟着列表一起滚，不占固定高度） */
   data class EmptyHint(val query: String) : SubtitleItem()
 
-  /** 字幕目录里按番号 / 标题匹配到的本地文件，点一下即挂载 */
-  data class Suggestion(val candidate: LocalSubtitleCandidate) : SubtitleItem()
+  /**
+   * 字幕目录里按番号 / 标题匹配到的本地文件**整块**做成一个条目。
+   *
+   * 不拆成「Header + 若干行」：那样每一行各自是 LazyColumn 的一个 item，
+   * 没法共用一层底色 —— 而这个区块的全部意义就是「一眼看出这几条是系统替我找的」。
+   * 合成一个 item 之后，圆角卡片是连续的一整块。
+   */
+  data class SuggestionGroup(
+    val header: String,
+    val candidates: List<LocalSubtitleCandidate>,
+  ) : SubtitleItem()
 
   /** 「番号识别出来了，但字幕目录里没有对应的」——只陈述事实，不是错误 */
   data class SuggestionHint(val label: String) : SubtitleItem()
@@ -163,8 +176,7 @@ fun SubtitlesSheet(
 
     // ── 字幕目录匹配（放最前面：用户找字幕时先看「有没有现成的」） ──
     if (suggestions.isNotEmpty()) {
-      list.add(SubtitleItem.Header(suggestionHeader))
-      list.addAll(suggestions.map { SubtitleItem.Suggestion(it) })
+      list.add(SubtitleItem.SuggestionGroup(suggestionHeader, suggestions))
     } else if (
       localScan.attempted &&
       !localScan.scanning &&
@@ -268,11 +280,11 @@ fun SubtitlesSheet(
                 .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.large),
             )
         }
-        is SubtitleItem.Suggestion -> {
-          LocalSubtitleRow(
-            candidate = item.candidate,
-            reasonText = stringResource(item.candidate.reason.labelRes()),
-            onClick = { onPickLocalSubtitle?.invoke(item.candidate) },
+        is SubtitleItem.SuggestionGroup -> {
+          SuggestionCard(
+            header = item.header,
+            candidates = item.candidates,
+            onPick = { onPickLocalSubtitle?.invoke(it) },
           )
         }
         is SubtitleItem.SuggestionHint -> {
@@ -351,6 +363,80 @@ private fun LocalSubtitleMatch.Reason.labelRes(): Int = when (this) {
 }
 
 /**
+ * 「字幕目录里替你找到的」那一块：圆角卡片 + 角标 + 条数。
+ *
+ * 做成整块卡片而不是和普通轨道同款的列表行，是因为它和下面的轨道列表**不是一类东西**：
+ * 前者是「磁盘上还没挂上去的文件」，后者是「已经挂上去的轨」。
+ * 同款排版会让用户以为这些也已经在列表里了（尤其下面还紧跟着「内嵌字幕 / 外挂字幕」两个分区，
+ * 三个分区标题一个样式，等于没有分区）。
+ *
+ * 底色用 `primaryContainer` 而不是更高的饱和度：面板本身压在半透明视频画面上，
+ * 太跳的颜色会把下面真正要选的轨道压得看不见。
+ */
+@Composable
+private fun SuggestionCard(
+  header: String,
+  candidates: List<LocalSubtitleCandidate>,
+  onPick: (LocalSubtitleCandidate) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Column(
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.extraSmall)
+        .clip(RoundedCornerShape(16.dp))
+        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)),
+  ) {
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .padding(
+            start = MaterialTheme.spacing.medium,
+            end = MaterialTheme.spacing.medium,
+            top = MaterialTheme.spacing.small,
+            bottom = MaterialTheme.spacing.extraSmall,
+          ),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
+    ) {
+      Icon(
+        Icons.Default.Star,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(18.dp),
+      )
+      Text(
+        text = header,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f),
+      )
+      Text(
+        text = stringResource(R.string.player_sheets_local_subs_count, candidates.size),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+      )
+    }
+
+    candidates.forEach { candidate ->
+      LocalSubtitleRow(
+        candidate = candidate,
+        reasonText = stringResource(candidate.reason.labelRes()),
+        onClick = { onPick(candidate) },
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+      )
+    }
+
+    Spacer(Modifier.height(MaterialTheme.spacing.small))
+  }
+}
+
+/**
  * 字幕目录里匹配到的一条：整行可点，点了就挂载。
  *
  * 不给「添加」按钮：一行里已经有两段文字，再塞按钮会把文件名挤成省略号
@@ -361,6 +447,7 @@ private fun LocalSubtitleRow(
   candidate: LocalSubtitleCandidate,
   reasonText: String,
   onClick: () -> Unit,
+  contentColor: androidx.compose.ui.graphics.Color = Color.Unspecified,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -387,13 +474,18 @@ private fun LocalSubtitleRow(
         text = candidate.name,
         style = MaterialTheme.typography.bodyMedium,
         fontWeight = FontWeight.Medium,
+        color = contentColor,
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
       )
       Text(
         text = if (sizeText.isBlank()) reasonText else "$reasonText · $sizeText",
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = if (contentColor == Color.Unspecified) {
+          MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+          contentColor.copy(alpha = 0.75f)
+        },
       )
     }
     Icon(

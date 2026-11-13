@@ -3098,7 +3098,12 @@ android {
     //    系统 AlertDialog 的定长列表，十几条轨道只能一页页翻。
     //  · 轨道数 > 6 时改用自拼的「输入框 + ListView」对话框：空格分词、全词命中（与 mpv 同口径），
     //    筛选只换 Adapter 数据，输入框焦点与光标不动；≤6 条仍是原来的单选列表。
-    versionCode = 248
+    // 249（修复轮，versionName 仍为 1.6.15）：字幕目录匹配改成醒目的整块卡片。
+    //  · 原来「匹配到的字幕」和普通轨道行同一个排版、分区标题也同色，看着像已经挂上去的轨。
+    //  · 现在整块是一张 primaryContainer 圆角卡片：星标 + 标题 + 条数，行内文字改用容器前景色；
+    //    合成**一个** LazyColumn item，底色才能连续（拆成多行就没法共用背景）。
+    //  · 顺带：GSY 轨道对话框筛选后先 clearChoices，避免单选圆点留在别的行上。
+    versionCode = 249
     versionName = "1.6.15"
 
     vectorDrawables {

@@ -311,6 +311,7 @@
   <string name="player_sheets_local_subs_reason_episode">集号一致</string>
   <string name="player_sheets_local_subs_reason_title">标题相符</string>
   <string name="player_sheets_local_subs_empty">字幕目录中未找到与「%1$s」匹配的字幕</string>
+  <string name="player_sheets_local_subs_count">共 %1$d 条</string>
   <string name="player_sheets_add_ext_audio">添加外挂音轨</string>
   <string name="player_sheets_tracks_off">关闭</string>
   <string name="player_sheets_subtitles_settings_title">字幕设置</string>

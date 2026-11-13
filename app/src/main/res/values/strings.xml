@@ -315,6 +315,7 @@
   <string name="player_sheets_local_subs_reason_episode">Same episode</string>
   <string name="player_sheets_local_subs_reason_title">Title match</string>
   <string name="player_sheets_local_subs_empty">No subtitle in the subtitle folder matches “%1$s”</string>
+  <string name="player_sheets_local_subs_count">%1$d found</string>
   <string name="player_sheets_add_ext_audio">Add external audio tracks</string>
   <string name="player_sheets_tracks_off">Off</string>
   <string name="player_sheets_track_title_w_lang" translatable="false">#%d: %s (%s)</string>

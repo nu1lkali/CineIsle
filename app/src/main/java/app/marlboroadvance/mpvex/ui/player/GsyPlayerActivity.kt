@@ -1991,6 +1991,9 @@ class GsyPlayerActivity : ComponentActivity() {
       adapter.clear()
       adapter.addAll(filtered.map { it.label })
       adapter.notifyDataSetChanged()
+      // 先清掉上一轮的选中态：不清的话筛完「已选中的那条」不在结果里时，
+      // 单选圆点会留在**别的**行上，看着像「这条现在是选中的」
+      listView.clearChoices()
       val pos = filtered.indexOfFirst { it.trackIndex == checkedTrackIndex }
       if (pos >= 0) listView.setItemChecked(pos, true)
     }
