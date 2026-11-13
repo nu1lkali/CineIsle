@@ -312,6 +312,13 @@
   <string name="player_sheets_local_subs_reason_title">标题相符</string>
   <string name="player_sheets_local_subs_empty">字幕目录中未找到与「%1$s」匹配的字幕</string>
   <string name="player_sheets_local_subs_count">共 %1$d 条</string>
+  <string name="file_picker_filter_hint">按文件名或番号筛选</string>
+  <string name="file_picker_filter_clear">清除筛选</string>
+  <string name="file_picker_recommended_header">可能匹配：“%1$s”</string>
+  <string name="file_picker_recommended_header_plain">可能与本片匹配</string>
+  <string name="file_picker_recommended_count">%1$d 个文件</string>
+  <string name="file_picker_no_match">当前目录没有匹配“%1$s”的条目</string>
+  <string name="file_picker_empty">没有文件夹或受支持的文件</string>
   <string name="player_sheets_add_ext_audio">添加外挂音轨</string>
   <string name="player_sheets_tracks_off">关闭</string>
   <string name="player_sheets_subtitles_settings_title">字幕设置</string>
