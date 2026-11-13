@@ -682,6 +682,8 @@
   <string name="gsy_subtitle_track_title">Subtitle track</string>
   <string name="gsy_track_kind_audio">audio tracks</string>
   <string name="gsy_track_kind_subtitle">subtitle tracks</string>
+  <string name="gsy_track_filter_hint">Filter %1$s by name or language</string>
+  <string name="gsy_track_no_match">No matching %1$s</string>
 
   <!-- 字幕样式（清单 #19）。全部与 mpv 侧共用同一份设置，切换内核后依然生效。 -->
   <string name="gsy_subtitle_style">Subtitle style</string>

@@ -11,8 +11,11 @@ import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -1854,40 +1857,175 @@ class GsyPlayerActivity : ComponentActivity() {
     val selected = runCatching { ijk.getSelectedTrack(trackType) }.getOrDefault(-1)
     val kindLabel = getString(kindRes)
     val closable = trackType == ITrackInfo.MEDIA_TRACK_TYPE_SUBTITLE
-    // 字幕轨在列表最前面插一个「关闭」；两种列表的下标含义不同，用 trackIndexAt 收口
-    val labels =
+
+    // 每一项都自带「点下去要 select 哪个全局轨道下标」，-1 表示「关闭」。
+    // 旧写法是「数组下标 → 轨道下标」另算一次（因为「关闭」占了第 0 位），
+    // 加了筛选之后下标会变得，映射必须跟着项走，否则筛完点错轨。
+    val entries =
       buildList {
-          if (closable) add(getString(R.string.gsy_track_off))
-          tracks.forEachIndexed { n, (_, info) ->
-            val language = info.language?.takeIf { it.isNotBlank() && it != "und" }
-            val detail = language ?: info.infoInline.orEmpty().take(40)
-            add("$kindLabel ${n + 1} · $detail")
-          }
+        if (closable) add(TrackEntry(getString(R.string.gsy_track_off), -1))
+        tracks.forEachIndexed { n, (index, info) ->
+          val language = info.language?.takeIf { it.isNotBlank() && it != "und" }
+          val detail = language ?: info.infoInline.orEmpty().take(40)
+          add(TrackEntry("$kindLabel ${n + 1} · $detail", index))
         }
-        .toTypedArray()
-    val trackIndexAt: (Int) -> Int = { which -> if (closable && which == 0) -1 else tracks[which - 1].first }
-    val checkedAt =
-      when {
-        selected < 0 && closable -> 0
-        selected < 0 -> -1
-        else -> tracks.indexOfFirst { it.first == selected }.let { if (it < 0) -1 else it + 1 }
       }
 
-    android.app.AlertDialog
-      .Builder(this)
-      .setTitle(titleRes)
-      .setSingleChoiceItems(labels, checkedAt) { dialog, which ->
-        val idx = trackIndexAt(which)
-        if (idx < 0) {
-          // 「关闭」：先把当前选中的那条 deselect 掉，内嵌字幕即不再显示
-          if (selected >= 0) runCatching { ijk.deselectTrack(selected) }
-        } else {
-          runCatching { ijk.selectTrack(idx) }
+    val onPick: (Int) -> Unit = { trackIndex ->
+      if (trackIndex < 0) {
+        // 「关闭」：先把当前选中的那条 deselect 掉，内嵌字幕即不再显示
+        if (selected >= 0) runCatching { ijk.deselectTrack(selected) }
+      } else {
+        runCatching { ijk.selectTrack(trackIndex) }
+      }
+    }
+    val checkedIndex = if (selected < 0) -1 else selected
+
+    // 轨道少的时候不摆筛选框：两三条字幕还要先点一下输入框，纯粹是碍事
+    if (entries.size <= TRACK_FILTER_MIN_ENTRIES) {
+      val checkedPos = entries.indexOfFirst { it.trackIndex == checkedIndex }
+      android.app.AlertDialog
+        .Builder(this)
+        .setTitle(titleRes)
+        .setSingleChoiceItems(entries.map { it.label }.toTypedArray(), checkedPos) { dialog, which ->
+          onPick(entries[which].trackIndex)
+          dialog.dismiss()
         }
+        .show()
+      return
+    }
+
+    showFilterableTrackDialog(
+      titleRes = titleRes,
+      kindLabel = kindLabel,
+      entries = entries,
+      checkedTrackIndex = checkedIndex,
+      onPick = onPick,
+    )
+  }
+
+  /** 轨道列表里的一项。 */
+  private data class TrackEntry(val label: String, val trackIndex: Int)
+
+  /**
+   * 带筛选的轨道列表对话框。
+   *
+   * ## 为什么不用 `setSingleChoiceItems`
+   *
+   * 那个 API 只吃一个**定长数组** —— 筛完再换一份就得重建整个对话框，
+   * 输入框的焦点、光标位置、已滚到的位置全丢，打字打一半列表就跳回顶部。
+   * 所以这里自己拼一个 `EditText + ListView`：筛选只是给 Adapter 换数据，
+   * 输入框本身不动。
+   *
+   * 匹配口径与 mpv 侧字幕面板一致：不分大小写、空格分词、**每个词都要命中**，
+   * 比对的是整行文案（含「字幕轨 3 · chi」这种前缀），所以打「chi」「3」「简」都能过滤。
+   *
+   * 列表高度写死成屏幕的 50%：`AlertDialog` 的自定义 View 是 `WRAP_CONTENT`，
+   * 不去限高的话一百条轨道会把对话框撑到顶出屏幕，标题和输入框都看不见。
+   */
+  private fun showFilterableTrackDialog(
+    titleRes: Int,
+    kindLabel: String,
+    entries: List<TrackEntry>,
+    checkedTrackIndex: Int,
+    onPick: (Int) -> Unit,
+  ) {
+    val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+    val filter =
+      EditText(this).apply {
+        hint = getString(R.string.gsy_track_filter_hint, kindLabel)
+        setSingleLine(true)
+        inputType = android.text.InputType.TYPE_CLASS_TEXT
+        setPadding(dp(16), dp(8), dp(16), dp(8))
+        // 不主动抢焦点：进对话框就弹键盘会挡住列表，用户多半只是想切一条轨
+        isFocusableInTouchMode = true
+      }
+    root.addView(
+      filter,
+      LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT,
+      ),
+    )
+
+    val listView =
+      ListView(this).apply {
+        choiceMode = ListView.CHOICE_MODE_SINGLE
+        divider = null
+        layoutParams =
+          LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (resources.displayMetrics.heightPixels * 0.5f).toInt(),
+          )
+      }
+    root.addView(listView)
+
+    val emptyView =
+      TextView(this).apply {
+        text = getString(R.string.gsy_track_no_match, kindLabel)
+        gravity = android.view.Gravity.CENTER
+        setPadding(dp(16), dp(24), dp(16), dp(24))
+      }
+    // 必须与 ListView 同父：ListView 自己会在「有数据 / 没数据」之间切换两者的可见性
+    root.addView(emptyView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+    listView.emptyView = emptyView
+
+    val adapter =
+      ArrayAdapter<String>(this, android.R.layout.simple_list_item_single_choice, mutableListOf())
+    listView.adapter = adapter
+
+    var filtered: List<TrackEntry> = entries
+
+    fun applyFilter(raw: String) {
+      val tokens = raw.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+      filtered =
+        if (tokens.isEmpty()) {
+          entries
+        } else {
+          entries.filter { entry ->
+            val haystack = entry.label.lowercase()
+            tokens.all { it in haystack }
+          }
+        }
+      adapter.clear()
+      adapter.addAll(filtered.map { it.label })
+      adapter.notifyDataSetChanged()
+      val pos = filtered.indexOfFirst { it.trackIndex == checkedTrackIndex }
+      if (pos >= 0) listView.setItemChecked(pos, true)
+    }
+
+    filter.addTextChangedListener(
+      object : android.text.TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+
+        override fun afterTextChanged(s: android.text.Editable?) = applyFilter(s?.toString().orEmpty())
+      },
+    )
+
+    val dialog =
+      android.app.AlertDialog
+        .Builder(this)
+        .setTitle(titleRes)
+        .setView(root)
+        .setNegativeButton(android.R.string.cancel, null)
+        .create()
+
+    listView.setOnItemClickListener { _, _, position, _ ->
+      filtered.getOrNull(position)?.let { entry ->
+        onPick(entry.trackIndex)
         dialog.dismiss()
       }
-      .show()
+    }
+
+    applyFilter("")
+    dialog.show()
   }
+
+  private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
 
   // ────────────────────────────────────────────────────────────────────────
   // 画中画 / 投屏
@@ -2553,6 +2691,14 @@ class GsyPlayerActivity : ComponentActivity() {
 
     /** 字幕延迟一次调整的步长 */
     private const val SUBTITLE_STEP_MS = 500L
+
+    /**
+     * 轨道数超过这个值才在「选择字幕 / 音轨」对话框里摆筛选框。
+     *
+     * 三五个轨道一眼扫完，多一个输入框只是多一次点击；而多语种 mkv 经常十几二十条，
+     * 那才是「翻翻也费劲」的场景。
+     */
+    private const val TRACK_FILTER_MIN_ENTRIES = 6
 
     /**
      * 字幕字号档位（**mpv 侧原始刻度**，值域 0~200，默认 55）。
