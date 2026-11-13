@@ -525,6 +525,7 @@ private fun matchesTokens(name: String, tokens: List<String>): Boolean {
 
 /** 命中理由的文案。与字幕面板 `SubtitleTracksSheet` 共用同一套字符串资源。 */
 private fun LocalSubtitleMatch.Reason.labelRes(): Int = when (this) {
+  LocalSubtitleMatch.Reason.Stem -> R.string.player_sheets_local_subs_reason_stem
   LocalSubtitleMatch.Reason.Code -> R.string.player_sheets_local_subs_reason_code
   LocalSubtitleMatch.Reason.Crc -> R.string.player_sheets_local_subs_reason_crc
   LocalSubtitleMatch.Reason.Episode -> R.string.player_sheets_local_subs_reason_episode

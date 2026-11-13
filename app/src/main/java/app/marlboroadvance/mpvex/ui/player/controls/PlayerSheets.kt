@@ -194,6 +194,11 @@ fun PlayerSheets(
         localScan = localScan,
         localMatchLabel = localQuery.label,
         onPickLocalSubtitle = { candidate ->
+          // 记住这次的选择：下次打开面板时它排第一（用户自己验证过的那条，比任何猜测都准）
+          app.marlboroadvance.mpvex.ui.player.subtitle.SubtitlePickMemory.remember(
+            app.marlboroadvance.mpvex.ui.player.subtitle.SubtitlePickMemory.keyOf(localQuery),
+            candidate.uri,
+          )
           subtitleScope.launch {
             viewModel.loadSubtitle(Uri.parse(candidate.uri), select = true, silent = false)
           }

@@ -306,6 +306,7 @@
   <string name="player_sheets_subtitle_filter_clear">清除筛选</string>
   <string name="player_sheets_local_subs_header">字幕目录中匹配「%1$s」</string>
   <string name="player_sheets_local_subs_header_plain">字幕目录中匹配</string>
+  <string name="player_sheets_local_subs_reason_stem">文件名一致</string>
   <string name="player_sheets_local_subs_reason_code">编号一致</string>
   <string name="player_sheets_local_subs_reason_crc">CRC 一致</string>
   <string name="player_sheets_local_subs_reason_episode">集号一致</string>

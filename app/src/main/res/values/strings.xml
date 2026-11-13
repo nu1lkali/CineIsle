@@ -310,6 +310,7 @@
   <string name="player_sheets_subtitle_filter_clear">Clear filter</string>
   <string name="player_sheets_local_subs_header">Matched in subtitle folder: “%1$s”</string>
   <string name="player_sheets_local_subs_header_plain">Matched in subtitle folder</string>
+  <string name="player_sheets_local_subs_reason_stem">Same file name</string>
   <string name="player_sheets_local_subs_reason_code">Same release code</string>
   <string name="player_sheets_local_subs_reason_crc">Same CRC</string>
   <string name="player_sheets_local_subs_reason_episode">Same episode</string>

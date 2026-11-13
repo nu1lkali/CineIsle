@@ -356,6 +356,7 @@ private fun SubtitleFilterField(
  * 命中理由 → 文案资源。集中一处映射，免得三个地方各写一遍 `when` 之后开始漂。
  */
 private fun LocalSubtitleMatch.Reason.labelRes(): Int = when (this) {
+  LocalSubtitleMatch.Reason.Stem -> R.string.player_sheets_local_subs_reason_stem
   LocalSubtitleMatch.Reason.Code -> R.string.player_sheets_local_subs_reason_code
   LocalSubtitleMatch.Reason.Crc -> R.string.player_sheets_local_subs_reason_crc
   LocalSubtitleMatch.Reason.Episode -> R.string.player_sheets_local_subs_reason_episode

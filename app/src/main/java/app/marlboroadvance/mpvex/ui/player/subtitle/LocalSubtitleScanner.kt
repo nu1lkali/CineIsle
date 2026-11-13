@@ -131,11 +131,17 @@ object LocalSubtitleScanner {
           }
         }
 
-        // 同分时短路径优先：`番号/zh.srt` 比 `番号/备份/旧版/zh.srt` 更可能是用户要的那条
+        // 排序：上次用过的那条永远第一（用户自己的选择，比任何猜测都准），
+        // 其余按证据强度，同分时短路径优先（`番号/zh.srt` 比 `番号/备份/旧版/zh.srt` 更像是用户要的）
+        val preferred = SubtitlePickMemory.recall(SubtitlePickMemory.keyOf(query))
         val hits =
           found
             .distinctBy { it.uri }
-            .sortedWith(compareByDescending<LocalSubtitleCandidate> { it.score }.thenBy { it.relativePath.length })
+            .sortedWith(
+              compareByDescending<LocalSubtitleCandidate> { preferred != null && it.uri == preferred }
+                .thenByDescending { it.score }
+                .thenBy { it.relativePath.length }
+            )
             .take(MAX_RESULTS)
         LocalSubtitleScan(scanning = false, attempted = true, hits = hits)
       } catch (t: Throwable) {
