@@ -185,6 +185,79 @@ class LocalSubtitleMatchTest {
     }
   }
 
+  // ── 站点前缀 / 单字母番号（v253 的真实故障回归） ──────────────────────────────
+
+  @Test
+  fun `单字母番号_站点前缀之后照样提取`() {
+    // 真实样本：www.98T.la@n0907_iris2.mp4。n0907 是 TokyoHot 的「单字母 + 4 位数字」写法，
+    // 旧的正则要求字母段 ≥ 2 位，于是这条片子一个番号都没解析出来 —— 这正是误匹配的前提条件。
+    val query = LocalSubtitleMatch.buildQuery("www.98T.la@n0907_iris2.mp4")
+    assertEquals("N0907", query.displayCode)
+    assertTrue("应提取出 N907，实际 ${query.codeKeys}", "N907" in query.codeKeys)
+  }
+
+  @Test
+  fun `单字母番号_变体表`() {
+    listOf(
+      "n0907.mp4",
+      "N0907.mp4",
+      "n_0907.mp4",
+      "n-0907.mp4",
+      "n0907_iris2.mp4",
+      "TokyoHot_n0907.mp4",
+      "www.98t.la@n0907_iris2.mp4",
+      "[n0907] iris2.mp4",
+      "n0907中文字幕.mp4",
+    ).forEach { name ->
+      val keys = LocalSubtitleMatch.buildQuery(name).codeKeys
+      assertTrue("「$name」应该提取出 N907，实际 $keys", "N907" in keys)
+    }
+  }
+
+  @Test
+  fun `单字母番号_命中番号一致的字幕`() {
+    val query = LocalSubtitleMatch.buildQuery("www.98T.la@n0907_iris2.mp4")
+    val hit = LocalSubtitleMatch.match(query, "n0907_runa_kobayashi.srt")
+
+    assertNotNull("同番号的字幕必须命中", hit)
+    assertEquals(LocalSubtitleMatch.Reason.Code, hit!!.reason)
+  }
+
+  @Test
+  fun `单字母番号_不命中番号不同的字幕`() {
+    // 真实误判：视频 n0907 却推了 n0861。两条都带 www.98t.la@ 与 iris2，
+    // 剥掉站点前缀之前「标题重合度」是 100%，把错的那条顶到了第一。
+    val query = LocalSubtitleMatch.buildQuery("www.98T.la@n0907_iris2.mp4")
+    assertNull(
+      "n0861 是另一部片子，不能命中",
+      LocalSubtitleMatch.match(query, "www.98t.la@TokyoHot_n0861_iris2.srt"),
+    )
+  }
+
+  @Test
+  fun `站点前缀_不进入标题词`() {
+    // 域名片段一旦混进标题词，目录里每一条候选都能命中它，等于把判据废掉
+    val query = LocalSubtitleMatch.buildQuery("www.98T.la@The.Dark.Knight.2008.mkv")
+    assertTrue("标题词不应含 www，实际 ${query.titleTokens}", "www" !in query.titleTokens)
+    assertTrue("标题词不应含域名片段，实际 ${query.titleTokens}", "la" !in query.titleTokens)
+  }
+
+  @Test
+  fun `站点前缀_两侧不同也能靠番号命中`() {
+    val query = LocalSubtitleMatch.buildQuery("www.98T.la@n0907_iris2.mp4")
+    val hit = LocalSubtitleMatch.match(query, "b.net@N0907.chs.srt")
+
+    assertNotNull(hit)
+    assertEquals(LocalSubtitleMatch.Reason.Code, hit!!.reason)
+  }
+
+  @Test
+  fun `技术标签不是单字母番号`() {
+    // 单字母番号的数字段门槛（≥4 位）就是为了把这三个挡在外面
+    val keys = LocalSubtitleMatch.buildQuery("Show.x264.h265.1080p.mkv").codeKeys
+    assertTrue("x264 / h265 不能被当成番号，实际 $keys", keys.none { it.startsWith("X") || it.startsWith("H") })
+  }
+
   // ── CRC ─────────────────────────────────────────────────────────────────────
 
   @Test

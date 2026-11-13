@@ -58,6 +58,14 @@ class SubtitlesPreferences(
   val pickerPath = preferenceStore.getString("sub_picker_path")
   
   val subtitleSaveFolder = preferenceStore.getString("sub_save_folder", "")
+
+  /**
+   * 手动绑定的外挂字幕账本：一行一条 `媒体键<TAB>字幕Uri`，见
+   * [app.marlboroadvance.mpvex.ui.player.subtitle.SubtitleBindings]。
+   *
+   * 存成单个字符串而不是拆成多条偏好：条目数是动态的，SharedPreferences 没有「列」的概念。
+   */
+  val subtitleBindings = preferenceStore.getString("sub_bindings", "")
 }
 
 enum class SubtitleJustification(

@@ -83,15 +83,32 @@ fun PlayerSheets(
   when (sheetShown) {
     Sheets.None -> {}
     Sheets.SubtitleTracks -> {
+      val subtitlesPreferences = koinInject<app.marlboroadvance.mpvex.preferences.SubtitlesPreferences>()
+
+      // 用户手动挑中的外挂字幕 → 落一条持久绑定（片名 → 字幕 Uri）。
+      // 只有「用户点出来的」才记；目录扫描自动加进来的不记，否则一次误扫就会把错字幕钉死。
+      // 刻意读 viewModel 的当前值而不是闭包里的局部变量：选择器的回调是记住的，
+      // 捕捉到的是首次组合时的值，片名换了之后就会记错片子。
+      val bindManualSubtitle: (Uri) -> Unit = { uri ->
+        val title = viewModel.currentMediaTitle
+        if (title.isNotBlank()) {
+          app.marlboroadvance.mpvex.ui.player.subtitle.SubtitleBindings.bind(
+            subtitlesPreferences,
+            title,
+            uri.toString(),
+          )
+        }
+      }
+
       val subtitlesPicker =
         rememberLauncherForActivityResult(
           ActivityResultContracts.OpenDocument(),
         ) {
           if (it == null) return@rememberLauncherForActivityResult
+          bindManualSubtitle(it)
           onAddSubtitle(it)
         }
 
-      val subtitlesPreferences = koinInject<app.marlboroadvance.mpvex.preferences.SubtitlesPreferences>()
       val savedPickerPath = subtitlesPreferences.pickerPath.get()
 
       val currentMediaTitle = viewModel.currentMediaTitle
@@ -199,8 +216,11 @@ fun PlayerSheets(
             app.marlboroadvance.mpvex.ui.player.subtitle.SubtitlePickMemory.keyOf(localQuery),
             candidate.uri,
           )
+          // 同一条关系也落进持久账本：进程被杀重进时自动挂回去
+          val picked = Uri.parse(candidate.uri)
+          bindManualSubtitle(picked)
           subtitleScope.launch {
-            viewModel.loadSubtitle(Uri.parse(candidate.uri), select = true, silent = false)
+            viewModel.loadSubtitle(picked, select = true, silent = false)
           }
         },
       )

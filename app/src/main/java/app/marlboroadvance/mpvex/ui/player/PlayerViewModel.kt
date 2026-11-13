@@ -24,6 +24,7 @@ import app.marlboroadvance.mpvex.preferences.AudioPreferences
 import app.marlboroadvance.mpvex.preferences.GesturePreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
+import app.marlboroadvance.mpvex.ui.player.subtitle.SubtitleBindings
 import app.marlboroadvance.mpvex.utils.media.ChecksumUtils
 import app.marlboroadvance.mpvex.utils.media.MediaInfoParser
 import app.marlboroadvance.mpvex.utils.media.SubtitleFileTypes
@@ -817,6 +818,67 @@ class PlayerViewModel(
     }
   }
 
+  /**
+   * 恢复「这部片子上次手动绑定的外挂字幕」。
+   *
+   * 绑定关系由 [SubtitleBindings] 落在偏好存储里，进程被杀、设备重启都还在。
+   *
+   * ⚠️ 必须等 mpv 真的把媒体加载起来再 `sub-add`：`loadfile` 还没完成时发过去的字幕会被丢掉
+   * （轨道列表还是空的）。所以先轮询 `track-list/count`，最多等 8 秒；超时就放弃本次恢复 ——
+   * 静默失败即可，绝不能弹错误打断播放。
+   *
+   * ⚠️ 轮询必须在主线程（`viewModelScope` 默认就是）：从后台线程读 mpv native 属性会崩。
+   */
+  private fun restoreBoundSubtitle(mediaTitle: String) {
+    val bound = runCatching { SubtitleBindings.find(subtitlesPreferences, mediaTitle) }.getOrNull()
+    if (bound.isNullOrBlank()) return
+    viewModelScope.launch {
+      var waited = 0L
+      while (waited < 8_000L && (PlayerLib.getPropertyInt("track-list/count") ?: 0) <= 0) {
+        delay(120)
+        waited += 120
+      }
+      // 目录扫描可能已经把它以 `auto` 方式加进轨道（select = false）。那种情况下清单里
+      // 已经有这条字幕，只是没选中；此时再走 loadSubtitle 会被「已跟踪」直接挡回去，
+      // 表现成「字幕在列表里但画面上没有」。所以先查轨道，能查到就直接选中。
+      val existing = findSubtitleTrackIdOf(bound)
+      if (existing != null) {
+        ensureSubtitleSelected(existing)
+      } else {
+        runCatching { Uri.parse(bound) }.getOrNull()
+          ?.let { loadSubtitle(it, select = true, silent = true) }
+      }
+    }
+  }
+
+  /**
+   * 按「字幕 Uri」查外挂字幕的轨道 id；轨道还没建出来时返回 null。
+   *
+   * 用 [mpvPathToUriMap] 反查而不是把 Uri 再解析一次：[Uri.resolveUri] 对 `content://`
+   * 是**真的 open 一个 fd**，多解析一次就多漏一个 fd，而且两次拿到的 `fd://N` 编号
+   * 本来也不一样，拿它去比 `external-filename` 永远不会相等。
+   */
+  private fun findSubtitleTrackIdOf(uriString: String): Int? =
+    runCatching {
+      val count = PlayerLib.getPropertyInt("track-list/count") ?: return@runCatching null
+      for (i in 0 until count) {
+        if (PlayerLib.getPropertyString("track-list/$i/type") != "sub") continue
+        val path = PlayerLib.getPropertyString("track-list/$i/external-filename") ?: continue
+        if (mpvPathToUriMap[path] == uriString) {
+          return@runCatching PlayerLib.getPropertyInt("track-list/$i/id")
+        }
+      }
+      null
+    }.getOrNull()
+
+  /** 把一条已存在的字幕轨道顶成主字幕（bottom），必要时先腾出 secondary 槽位。 */
+  private fun ensureSubtitleSelected(id: Int) {
+    runCatching {
+      if (getSecondarySubtitleId() == id) PlayerLib.setPropertyString("secondary-sid", "no")
+      PlayerLib.setPropertyInt("sid", id)
+    }
+  }
+
   private fun scanLocalSubtitles(mediaTitle: String) {
     viewModelScope.launch(Dispatchers.IO) {
       val saveFolderUri = subtitlesPreferences.subtitleSaveFolder.get()
@@ -856,6 +918,8 @@ class PlayerViewModel(
       _externalSubtitles.clear()
       // Scan for previously downloaded/added subtitles
       scanLocalSubtitles(mediaTitle)
+      // 用户上次为这部片子手动挂过的字幕：自动挂回去（进程被杀也不丢）
+      restoreBoundSubtitle(mediaTitle)
 
       // 1. Reset Aspect Ratio to saved preference
       val savedAspect = playerPreferences.defaultVideoAspect.get()
@@ -928,10 +992,10 @@ class PlayerViewModel(
     PlayerLib.getPropertyString("secondary-sid")?.toIntOrNull() ?: 0
 
   fun removeSubtitle(id: Int) {
+    // ⚠️ mpv 属性只能在主线程读（从后台线程打 native 崩溃且不留日志）：先在主线程取快照。
+    val primarySid = getPrimarySubtitleId()
+    val secondarySid = getSecondarySubtitleId()
     viewModelScope.launch(Dispatchers.IO) {
-      val primarySid = getPrimarySubtitleId()
-      val secondarySid = getSecondarySubtitleId()
-
       // If removing the primary subtitle while a secondary subtitle is active,
       // promote secondary to primary so the remaining subtitle stays at the bottom.
       // Must clear secondary-sid FIRST so mpv does not reject assigning that track to sid.
@@ -959,6 +1023,18 @@ class PlayerViewModel(
         val originalUriString = mpvPathToUriMap[mpvPath] ?: mpvPath
         _externalSubtitles.remove(originalUriString)
         mpvPathToUriMap.remove(mpvPath)
+
+        // 用户主动删掉这条外挂字幕 ⇒ 绑定关系一起解除。
+        // 不解除的话下次开片会照旧自动挂回来，等于「删不掉」。
+        val title = currentMediaTitle
+        if (title.isNotBlank()) {
+          val bound = runCatching { SubtitleBindings.find(subtitlesPreferences, title) }.getOrNull()
+          if (bound != null) {
+            val boundPath =
+              runCatching { Uri.parse(bound).resolveUri(host.context) }.getOrNull() ?: bound
+            if (boundPath == mpvPath) SubtitleBindings.unbind(subtitlesPreferences, title)
+          }
+        }
       }
 
       PlayerLib.command("sub-remove", id.toString())

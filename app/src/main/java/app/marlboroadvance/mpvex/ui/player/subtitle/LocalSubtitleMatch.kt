@@ -187,11 +187,14 @@ object LocalSubtitleMatch {
     Regex("""(?i)(?<![A-Za-z0-9])HEYZO[-_. ]?\d{3,5}(?![A-Za-z0-9])"""),
     // 素人系：123456-789
     Regex("""(?<![A-Za-z0-9])\d{6}[-_.]\d{3}(?![A-Za-z0-9])"""),
-    // 通贩系：SSIS-123 / IPX-001 / ABP-123
-    Regex("""(?i)(?<![A-Za-z0-9])[A-Z]{2,5}[-_. ]\d{2,5}(?![A-Za-z0-9])"""),
+    // 通贩系：SSIS-123 / IPX-001 / ABP-123（数字段放到 6 位，覆盖 1pondo-123456 这类）
+    Regex("""(?i)(?<![A-Za-z0-9])[A-Z]{2,5}[-_. ]\d{2,6}(?![A-Za-z0-9])"""),
     // 无分隔符的连写形态：SSIS00123。要求数字段 ≥ 3 位，
     // 否则 `AAC2`、`AVC1` 这类编码标签会源源不断地被当成番号。
-    Regex("""(?i)(?<![A-Za-z0-9])[A-Z]{2,5}\d{3,5}(?![A-Za-z0-9])"""),
+    Regex("""(?i)(?<![A-Za-z0-9])[A-Z]{2,5}\d{3,6}(?![A-Za-z0-9])"""),
+    // 单字母 + 数字：TokyoHot 系 `n0907` / `k0583`。
+    // 要求数字 ≥ 4 位，这样 `x264`、`h265`、`H.264`（3 位）天然被挡在外面，不需要维护单字母黑名单。
+    Regex("""(?i)(?<![A-Za-z0-9])[A-Z][-_. ]?\d{4,6}(?![A-Za-z0-9])"""),
   )
 
   /** 独立出现的 8 位十六进制。目录名常常就是裸 CRC，没有方括号。 */
@@ -236,7 +239,7 @@ object LocalSubtitleMatch {
     var coreStem = ""
 
     names.forEachIndexed { index, raw ->
-      val stem = toHalfWidth(stripExtension(raw))
+      val stem = stripSitePrefix(toHalfWidth(stripExtension(raw)))
       for (regex in CODE_REGEXES) {
         for (match in regex.findAll(stem)) {
           val token = codeTokenOf(match.value) ?: continue
@@ -250,7 +253,9 @@ object LocalSubtitleMatch {
       if (index == 0) coreStem = normalize(coreStemOf(stem))
     }
 
-    val primary = MediaInfoParser.parse(names.first())
+    // 片名 / 集号同样在剥过站点前缀的名字上解析：`www.98t.la@n0907_iris2.mp4` 的片名里
+    // 不该出现域名片段，否则「www」「la」这类词会同时出现在每条候选里，把重合度抬到 100%。
+    val primary = MediaInfoParser.parse(stripSitePrefix(toHalfWidth(names.first())))
     val titleTokens = titleTokensOf(primary.title).take(MAX_TITLE_TOKENS)
 
     return Query(
@@ -344,7 +349,7 @@ object LocalSubtitleMatch {
     // 全角转半角：中文输入法 / 某些站点导出的文件名会带全角字母数字与全角连字符
     val path = toHalfWidth(rawPath)
     val segments = path.split('/', '\\').filter { it.isNotEmpty() }
-    val fileName = segments.lastOrNull().orEmpty()
+    val fileName = stripSitePrefix(segments.lastOrNull().orEmpty())
     val dirs = segments.dropLast(1)
 
     val codes = LinkedHashSet<CodeToken>()
@@ -462,7 +467,12 @@ object LocalSubtitleMatch {
     if (letters.isEmpty()) {
       return if (digits.length in 8..9) CodeToken("", digits.trimStart('0').ifEmpty { "0" }) else null
     }
-    if (letters.length < 2) return null
+    if (letters.length < 2) {
+      // 单字母番号（TokyoHot 的 `n0907` / `k0583`）：只在数字 ≥ 4 位时成立，
+      // 这样 `x264` / `h265` / `H.264` 这类技术标签不会变成番号。
+      if (letters.length != 1 || digits.length < 4) return null
+      return CodeToken(letters, digits.trimStart('0').ifEmpty { "0" })
+    }
     if (letters in CODE_PREFIX_BLACKLIST) return null
     // 去掉前导零再比：`SSIS-001` / `SSIS-1` / `SSIS00001` 是同一条
     return CodeToken(letters, digits.trimStart('0').ifEmpty { "0" })
@@ -483,6 +493,27 @@ object LocalSubtitleMatch {
 
   private fun versionFlagsOf(text: String): Set<String> =
     VERSION_FLAG_REGEX.findAll(text).map { it.value.lowercase() }.toSet()
+
+  /**
+   * 媒体站点的推广前缀：`www.98T.la@`、`hhd800.com@`、`https://xxx.tv@`。
+   *
+   * 这类前缀在下载来的片子和字幕上都会原样保留，**两边都有**，于是
+   * `www` 这种词会同时出现在两侧的标题词里，把「标题重合度」抬高到 100% ——
+   * 这是 `n0907` 案例里被误判到 `n0861` 的直接原因（真正的番号没提取出来时，
+   * 只剩下 `www` 与 `iris2` 两个共有词撑起了「高置信度」）。
+   *
+   * 剥掉之后既不影响番号提取，也让标题词回到片名本身。
+   */
+  private val SITE_PREFIX_REGEX =
+    Regex(
+      """(?i)^(?:https?://)?(?:[a-z0-9][a-z0-9-]*\.)+(?:com|net|org|la|tv|cc|xyz|top|club|vip|me|info|app|link|site|pw|in|to|ws|biz)@"""
+    )
+
+  private fun stripSitePrefix(text: String): String {
+    val match = SITE_PREFIX_REGEX.find(text) ?: return text
+    if (match.range.first != 0) return text
+    return text.substring(match.range.last + 1)
+  }
 
   /**
    * 全角转半角。
@@ -577,5 +608,7 @@ object LocalSubtitleMatch {
     "the", "and", "for", "with", "from", "that", "this", "you", "your",
     "movie", "film", "video", "sample", "trailer",
     "sub", "subs", "subtitle", "subtitles", "chi", "eng", "jpn",
+    // 站点前缀剥不干净时的残留（`www.xxx.com@`），出现在每一条候选里，毫无区分度
+    "www", "http", "https", "com", "net",
   )
 }
