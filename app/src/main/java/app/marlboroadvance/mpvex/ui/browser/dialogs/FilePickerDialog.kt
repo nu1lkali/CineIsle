@@ -3,6 +3,13 @@ package app.marlboroadvance.mpvex.ui.browser.dialogs
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Environment
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.MarqueeAnimationMode
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
@@ -51,6 +58,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -148,6 +157,11 @@ fun FilePickerDialog(
       filter.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
     }
 
+  // 搜索框默认收起，只留一个放大镜按钮。常驻输入框会让列表固定少看两行，
+  // 而这个选择器 90% 的使用是「翻两层目录点文件」，只有找番号时才需要打字。
+  var searchExpanded by remember(isOpen) { mutableStateOf(false) }
+  val searchFocus = remember { FocusRequester() }
+
   // 与当前影片关联的「钥匙」（番号 / CRC / 标题词）。解析不出来就整段推荐逻辑不启用。
   val matchQuery =
     remember(matchToName) {
@@ -205,6 +219,39 @@ fun FilePickerDialog(
   val configuration = LocalConfiguration.current
   val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
 
+  // 收起搜索 = 同时取消筛选：否则「框看不见、列表却仍是空的」会被当成这个目录里没文件。
+  val toggleSearch: (() -> Unit)? =
+    if (showStorageRoot) {
+      null // 存储根上没有任何可筛的东西，按钮直接不给
+    } else {
+      {
+        searchExpanded = !searchExpanded
+        if (!searchExpanded) filter = ""
+      }
+    }
+
+  // 回到存储根（那里没有搜索按钮）时把搜索态收干净：
+  // 否则会留下一个「框还在、却筛不动任何东西」的状态。
+  LaunchedEffect(showStorageRoot) {
+    if (showStorageRoot && searchExpanded) {
+      searchExpanded = false
+      filter = ""
+    }
+  }
+
+  // 展开时列表让出高度、收起时长回来，总高度始终不超出屏幕。
+  val listHeight by
+    animateDpAsState(
+      targetValue =
+        when {
+          isPortrait && searchExpanded -> 320.dp
+          isPortrait -> 400.dp
+          searchExpanded -> 260.dp
+          else -> 400.dp
+        },
+      animationSpec = tween(180),
+    )
+
   // 换目录 / 改筛选词后必须回到顶部：推荐区永远在第一行，
   // 否则用户「什么都没变但列表好像空了」—— 其实是停在上一层的滚动位置。
   val listState = rememberLazyListState()
@@ -220,9 +267,12 @@ fun FilePickerDialog(
           color = MaterialTheme.colorScheme.surface,
           tonalElevation = 6.dp,
       ) {
+          // 注意：这里**不能**用 verticalArrangement = spacedBy(16.dp)。
+          // 折叠的 AnimatedVisibility 高度虽然为 0，但仍是 Column 的一个子项，
+          // spacedBy 会给它前后各加一份间距 —— 收起的搜索框会白留 32dp 空白。
+          // 所以间距改成各段自己带 padding(top = 16.dp)，折叠时随高度一起归零。
           Column(
               modifier = Modifier.padding(24.dp),
-              verticalArrangement = Arrangement.spacedBy(16.dp)
           ) {
               // Title Section - orientation-aware layout
               if (isPortrait) {
@@ -253,6 +303,8 @@ fun FilePickerDialog(
                       onBack = { selectedPath = currentDir?.parent },
                       onHome = { selectedPath = Environment.getExternalStorageDirectory().absolutePath },
                       onSystemPicker = onSystemPickerRequest,
+                      onToggleSearch = toggleSearch,
+                      searchActive = searchExpanded,
                       buttonSize = 48.dp,
                       iconSize = 26.dp,
                     )
@@ -288,6 +340,8 @@ fun FilePickerDialog(
                           onBack = { selectedPath = currentDir?.parent },
                           onHome = { selectedPath = Environment.getExternalStorageDirectory().absolutePath },
                           onSystemPicker = onSystemPickerRequest,
+                          onToggleSearch = toggleSearch,
+                          searchActive = searchExpanded,
                           buttonSize = 40.dp,
                           iconSize = 24.dp,
                         )
@@ -297,12 +351,19 @@ fun FilePickerDialog(
               }
 
               // 筛选框：字幕目录动辄上百个文件，滚动翻找不如直接打两个字。
-              // 只在「进了具体目录」时出现 —— 存储根界面上没有可筛的东西。
-              if (!showStorageRoot) {
+              // 但只在需要时展开 —— 高度是从 0 长出来的（AnimatedVisibility），
+              // 收起时这一行完全不占位置。
+              AnimatedVisibility(
+                visible = searchExpanded,
+                enter = expandVertically(animationSpec = tween(180)) + fadeIn(tween(180)),
+                exit = shrinkVertically(animationSpec = tween(160)) + fadeOut(tween(120)),
+              ) {
+                // 展开即聚焦：点了放大镜就该能直接打字，不用再点一次输入框
+                LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
                 OutlinedTextField(
                   value = filter,
                   onValueChange = { filter = it },
-                  modifier = Modifier.fillMaxWidth(),
+                  modifier = Modifier.fillMaxWidth().padding(top = 16.dp).focusRequester(searchFocus),
                   placeholder = {
                     Text(
                       text = stringResource(R.string.file_picker_filter_hint),
@@ -335,7 +396,7 @@ fun FilePickerDialog(
 
               // Content Section
               Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
               ) {
                 // Folder/Volume/File list
@@ -343,8 +404,8 @@ fun FilePickerDialog(
                   modifier =
                     Modifier
                       .fillMaxWidth()
-                      // 比原来的 400dp 矮一截：上面多了一行筛选框，总高不能顶出屏幕
-                      .height(if (isPortrait) 320.dp else 260.dp),
+                      // 随搜索框伸缩：收起时回到 400dp，展开时让出一行的高度
+                      .height(listHeight),
                   state = listState,
                   verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
@@ -416,7 +477,7 @@ fun FilePickerDialog(
 
               // Footer Section (Analyze padding here)
               Row(
-                  modifier = Modifier.fillMaxWidth(),
+                  modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
                   horizontalArrangement = Arrangement.End
               ) {
                   TextButton(
@@ -713,6 +774,8 @@ private fun NavigationButtons(
   onBack: () -> Unit,
   onHome: () -> Unit,
   onSystemPicker: () -> Unit,
+  onToggleSearch: (() -> Unit)? = null,
+  searchActive: Boolean = false,
   buttonSize: Dp,
   iconSize: Dp,
 ) {
@@ -749,6 +812,36 @@ private fun NavigationButtons(
     )
   ) {
     Icon(Icons.Default.DriveFolderUpload, "System Picker", modifier = Modifier.size(iconSize))
+  }
+
+  // 搜索是个「开关」：展开时按钮换成关闭态并吃主色容器，
+  // 让「框现在打开着」这件事在框被键盘挡住时也看得出来。
+  if (onToggleSearch != null) {
+    FilledTonalIconButton(
+      onClick = onToggleSearch,
+      modifier = Modifier.size(buttonSize),
+      colors =
+        IconButtonDefaults.filledTonalIconButtonColors(
+          containerColor =
+            if (searchActive) {
+              MaterialTheme.colorScheme.primaryContainer
+            } else {
+              MaterialTheme.colorScheme.secondaryContainer
+            },
+          contentColor =
+            if (searchActive) {
+              MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+              MaterialTheme.colorScheme.onSecondaryContainer
+            },
+        ),
+    ) {
+      Icon(
+        imageVector = if (searchActive) Icons.Default.Close else Icons.Default.Search,
+        contentDescription = stringResource(R.string.file_picker_filter_hint),
+        modifier = Modifier.size(iconSize),
+      )
+    }
   }
 }
 

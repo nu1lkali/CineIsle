@@ -3111,7 +3111,13 @@ android {
     //  · 顶部加筛选框（Search/Clear），与字幕面板同口径：小写 + 空格分词 + 每词命中；
     //    目录名也一起过滤，否则筛完只剩文件、一眼看不出还能往哪层走。
     //  · 列表高度 400dp → 320/260dp（多了一行筛选框），换目录或改词后滚回顶部。
-    versionCode = 250
+    // 251（修复轮，versionName 仍为 1.6.15）：文件选择器的筛选框改成**伸缩式**，不再常驻。
+    //  · 常驻输入框等于每次都少看两行，而 90% 的用法是翻两层目录点文件；现在平时只有一个放大镜按钮，
+    //    点开才从 0 高度展开（expandVertically + fadeIn），展开即聚焦、按钮同时变成关闭态。
+    //  · 列表高度随展开态 400dp ⇄ 320/260dp 用 animateDpAsState 补间，总高始终不超屏。
+    //  · 坑：外层 Column 不能用 spacedBy —— 折叠的 AnimatedVisibility 高度为 0 但仍是子项，
+    //    spacedBy 会白留两份间距（实测 32dp）；改成各段自带 padding(top = 16.dp)。
+    versionCode = 251
     versionName = "1.6.15"
 
     vectorDrawables {
