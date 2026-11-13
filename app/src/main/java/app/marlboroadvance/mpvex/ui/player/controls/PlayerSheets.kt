@@ -36,7 +36,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleMatch
+import app.marlboroadvance.mpvex.ui.player.subtitle.AliasStore
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.SmartSubtitleMatcher
 import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleScan
 import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleScanner
 import kotlinx.coroutines.launch
@@ -123,16 +124,25 @@ fun PlayerSheets(
       // 当名字用会把「匹配钥匙」变成一串 32 位十六进制。
       val saveFolder by subtitlesPreferences.subtitleSaveFolder.collectAsState()
       val hostContext = LocalContext.current.applicationContext
-      val localQuery = remember(currentMediaTitle) { LocalSubtitleMatch.buildQuery(currentMediaTitle) }
+      // 用户确认过的番号别名（设置里撤销过、或刚在本面板确认过都会让 revision +1）
+      var aliasRevision by remember { mutableStateOf(0) }
+      val aliasManager = remember(aliasRevision) { AliasStore.load(subtitlesPreferences) }
+      val localQuery =
+        remember(currentMediaTitle, aliasManager) {
+          SmartSubtitleMatcher.prepare(currentMediaTitle, aliasManager)
+        }
+      // 片长（秒 → 毫秒）：只用于对前几条候选做时间轴佐证（见 LocalSubtitleScanner.verifyTiming）。
+      // 拿不到（0）时那一步自然跳过，判分仍只看名字。
+      val durationMs = (viewModel.duration ?: 0).toLong() * 1000L
       val localScan by
-        produceState(initialValue = LocalSubtitleScan(), localQuery, saveFolder) {
+        produceState(initialValue = LocalSubtitleScan(), localQuery, saveFolder, durationMs) {
           // 目录没配、或一个可用条件都没有 ⇒ 不扫。此时面板与旧版逐行一致。
           if (saveFolder.isBlank() || localQuery.isEmpty) {
             value = LocalSubtitleScan()
             return@produceState
           }
           value = LocalSubtitleScan(scanning = true)
-          value = LocalSubtitleScanner.scan(hostContext, saveFolder, localQuery)
+          value = LocalSubtitleScanner.scan(hostContext, saveFolder, localQuery, durationMs)
         }
 
       var showFilePicker by remember { mutableStateOf(false) }
@@ -210,6 +220,13 @@ fun PlayerSheets(
         // 字幕目录里的候选；点一下直接挂载（走与在线字幕同一条 loadSubtitle 路径）
         localScan = localScan,
         localMatchLabel = localQuery.label,
+        // 系统自己也不确定时（Top1 拿不到「可直接使用」），才给「确认编号别名」这一行：
+        // 这时用户的一句话比任何算法都准，而且只影响这一个编号对，不会扩散成全局规则
+        onConfirmAlias = { canonical, alias ->
+          if (AliasStore.add(subtitlesPreferences, canonical, alias)) {
+            aliasRevision++
+          }
+        },
         onPickLocalSubtitle = { candidate ->
           // 记住这次的选择：下次打开面板时它排第一（用户自己验证过的那条，比任何猜测都准）
           app.marlboroadvance.mpvex.ui.player.subtitle.SubtitlePickMemory.remember(

@@ -2,6 +2,7 @@ package app.marlboroadvance.mpvex.ui.player.subtitle
 
 import android.util.Log
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.SmartSubtitleMatcher
 
 /**
  * 「这部片子我手动挂的是哪条字幕」的**持久化**账本。
@@ -20,7 +21,8 @@ import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
  * 为一个键值对付出一次迁移风险不划算。这里存进现有的偏好存储（SharedPreferences 后端），
  * 一行一条记录，`key<TAB>uri`，读写都是 O(n) 且 n 有上限。
  *
- * 键用 [LocalSubtitleMatch] 归一化后的字干（去扩展名、去站点前缀、去语言标签、小写）：
+ * 键用 [app.marlboroadvance.mpvex.ui.player.subtitle.smart.FilenameNormalizer] 归一化后的字干
+ * （去扩展名、去站点前缀、去语言标签、小写）：
  * 换字幕、换目录都不会让绑定失效；改片名会（这是可接受的代价，改名的片子本来就很难自动关联）。
  */
 object SubtitleBindings {
@@ -35,7 +37,7 @@ object SubtitleBindings {
   /** 媒体名 → 稳定的键。跟 [SubtitlePickMemory] 用同一口径，两处才不会各记一套。 */
   fun keyOf(mediaTitle: String): String {
     val stem =
-      runCatching { LocalSubtitleMatch.buildQuery(mediaTitle).coreStem }.getOrNull().orEmpty()
+      runCatching { SmartSubtitleMatcher.prepare(mediaTitle).stem }.getOrNull().orEmpty()
     return stem.ifBlank { mediaTitle.lowercase().trim() }
   }
 

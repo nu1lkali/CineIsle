@@ -23,7 +23,9 @@ import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.ui.player.TrackNode
 import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleCandidate
-import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleMatch
+import app.marlboroadvance.mpvex.ui.player.subtitle.badgeRes
+import app.marlboroadvance.mpvex.ui.player.subtitle.labelRes
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.MatchReason
 import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleScan
 import app.marlboroadvance.mpvex.ui.theme.spacing
 import kotlinx.collections.immutable.ImmutableList
@@ -45,6 +47,8 @@ sealed class SubtitleItem {
   data class SuggestionGroup(
     val header: String,
     val candidates: List<LocalSubtitleCandidate>,
+    /** 片名编号 → 字幕编号。只在这条候选「系统不确定」时才有值 */
+    val aliasPair: Pair<String, String>? = null,
   ) : SubtitleItem()
 
   /** 「番号识别出来了，但字幕目录里没有对应的」——只陈述事实，不是错误 */
@@ -117,6 +121,11 @@ fun SubtitlesSheet(
   /** 用来匹配的那个「番号」或标题词，只用于文案（「未找到与「SSIS-123」匹配的字幕」） */
   localMatchLabel: String? = null,
   onPickLocalSubtitle: ((LocalSubtitleCandidate) -> Unit)? = null,
+  /**
+   * 用户确认「片名编号 ↔ 字幕编号」是同一部。只在系统自己也不确定时（Top1 拿不到
+   * 「可直接使用」）才展示入口 —— 系统很确定时再问一遍，只会让面板变吵。
+   */
+  onConfirmAlias: ((canonical: String, alias: String) -> Unit)? = null,
 ) {
   // ── 本地筛选 ──
   // 只在**眼前这份轨道列表**里按名字 / 语言 / 文件名过滤，一个请求都不发 ——
@@ -167,7 +176,8 @@ fun SubtitlesSheet(
       stringResource(R.string.player_sheets_local_subs_header_plain)
     }
 
-  val items = remember(tracks, tokens, suggestions, suggestionHeader, localScan, localMatchLabel) {
+  val items =
+    remember(tracks, tokens, suggestions, suggestionHeader, localScan, localMatchLabel) {
     val matched =
       if (tokens.isEmpty()) tracks
       else tracks.filter { track -> tokens.all { it in track.searchHaystack() } }
@@ -176,7 +186,18 @@ fun SubtitlesSheet(
 
     // ── 字幕目录匹配（放最前面：用户找字幕时先看「有没有现成的」） ──
     if (suggestions.isNotEmpty()) {
-      list.add(SubtitleItem.SuggestionGroup(suggestionHeader, suggestions))
+      // 只在 Top1「系统自己也不敢直接采用」且两边编号写得不一样时，才给出确认别名的入口。
+      // 编号完全相同或已被确信时不问：问了也只是噪音。
+      val top = suggestions.first()
+      val pair =
+        if (!top.canAutoMatch) {
+          val queryCode = localScan.queryCodeText
+          val subCode = top.codeText
+          if (queryCode != null && subCode != null && queryCode != subCode) queryCode to subCode else null
+        } else {
+          null
+        }
+      list.add(SubtitleItem.SuggestionGroup(suggestionHeader, suggestions, pair))
     } else if (
       localScan.attempted &&
       !localScan.scanning &&
@@ -285,6 +306,8 @@ fun SubtitlesSheet(
             header = item.header,
             candidates = item.candidates,
             onPick = { onPickLocalSubtitle?.invoke(it) },
+            aliasPair = item.aliasPair,
+            onConfirmAlias = onConfirmAlias,
           )
         }
         is SubtitleItem.SuggestionHint -> {
@@ -353,17 +376,6 @@ private fun SubtitleFilterField(
 }
 
 /**
- * 命中理由 → 文案资源。集中一处映射，免得三个地方各写一遍 `when` 之后开始漂。
- */
-private fun LocalSubtitleMatch.Reason.labelRes(): Int = when (this) {
-  LocalSubtitleMatch.Reason.Stem -> R.string.player_sheets_local_subs_reason_stem
-  LocalSubtitleMatch.Reason.Code -> R.string.player_sheets_local_subs_reason_code
-  LocalSubtitleMatch.Reason.Crc -> R.string.player_sheets_local_subs_reason_crc
-  LocalSubtitleMatch.Reason.Episode -> R.string.player_sheets_local_subs_reason_episode
-  LocalSubtitleMatch.Reason.Title -> R.string.player_sheets_local_subs_reason_title
-}
-
-/**
  * 「字幕目录里替你找到的」那一块：圆角卡片 + 角标 + 条数。
  *
  * 做成整块卡片而不是和普通轨道同款的列表行，是因为它和下面的轨道列表**不是一类东西**：
@@ -380,6 +392,8 @@ private fun SuggestionCard(
   candidates: List<LocalSubtitleCandidate>,
   onPick: (LocalSubtitleCandidate) -> Unit,
   modifier: Modifier = Modifier,
+  aliasPair: Pair<String, String>? = null,
+  onConfirmAlias: ((canonical: String, alias: String) -> Unit)? = null,
 ) {
   Column(
     modifier =
@@ -425,12 +439,33 @@ private fun SuggestionCard(
     }
 
     candidates.forEach { candidate ->
+      val parts =
+        listOfNotNull(
+          stringResource(candidate.reason.labelRes()).takeIf { it.isNotBlank() },
+          candidate.confidence.badgeRes()?.let { stringResource(it) },
+          stringResource(R.string.player_sheets_local_subs_verified).takeIf { candidate.verified },
+        )
       LocalSubtitleRow(
         candidate = candidate,
-        reasonText = stringResource(candidate.reason.labelRes()),
+        reasonText = parts.joinToString(" · "),
         onClick = { onPick(candidate) },
         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
       )
+    }
+
+    if (aliasPair != null && onConfirmAlias != null) {
+      TextButton(
+        onClick = { onConfirmAlias(aliasPair.first, aliasPair.second) },
+        modifier =
+          Modifier
+            .align(Alignment.End)
+            .padding(end = MaterialTheme.spacing.small),
+      ) {
+        Text(
+          text = stringResource(R.string.player_sheets_local_subs_alias_confirm, aliasPair.first, aliasPair.second),
+          style = MaterialTheme.typography.labelMedium,
+        )
+      }
     }
 
     Spacer(Modifier.height(MaterialTheme.spacing.small))

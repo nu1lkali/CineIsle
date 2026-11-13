@@ -69,7 +69,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import app.marlboroadvance.mpvex.R
-import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleMatch
+import app.marlboroadvance.mpvex.ui.player.subtitle.labelRes
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.MatchConfig
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.MatchReason
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.SmartSubtitleMatcher
 import app.marlboroadvance.mpvex.utils.sort.SortUtils
 import app.marlboroadvance.mpvex.utils.storage.StorageVolumeUtils
 import java.io.File
@@ -165,7 +168,7 @@ fun FilePickerDialog(
   // 与当前影片关联的「钥匙」（番号 / CRC / 标题词）。解析不出来就整段推荐逻辑不启用。
   val matchQuery =
     remember(matchToName) {
-      matchToName?.takeIf { it.isNotBlank() }?.let { LocalSubtitleMatch.buildQuery(it) }
+      matchToName?.takeIf { it.isNotBlank() }?.let { SmartSubtitleMatcher.prepare(it) }
     }
 
   // 文件夹：同样只在当前层过滤，命中筛选词的留在列表里。
@@ -201,10 +204,19 @@ fun FilePickerDialog(
           if (matchQuery == null) {
             emptyList()
           } else {
-            all
-              .mapNotNull { file ->
-                LocalSubtitleMatch.match(matchQuery, file.name)?.let {
-                  RecommendedFile(file, it.reason, it.score)
+            // 一次把整层目录交给匹配引擎，而不是逐个文件问一次：
+            // 预处理有缓存，但「分数上限」「Top1/Top2 分差」这类判定要看全局。
+            val byName = all.associateBy { it.name }
+            SmartSubtitleMatcher
+              .rank(matchQuery, all.map { it.name })
+              .filter { it.score >= RECOMMEND_SCORE }
+              .mapNotNull { scored ->
+                byName[scored.path]?.let { file ->
+                  RecommendedFile(
+                    file = file,
+                    reason = scored.reasons.firstOrNull() ?: MatchReason.TEXT_ONLY,
+                    score = scored.score,
+                  )
                 }
               }
               // 分数相同就短名优先：`011214-521.chs.srt` 比 `...whisperjav.chinese.srt` 更像正片字幕
@@ -496,13 +508,14 @@ fun FilePickerDialog(
 /**
  * 一条「疑似本片字幕」。存 `score` 只为排序，UI 只用到 [reason] 的那句话。
  *
- * 不直接用 `LocalSubtitleMatch.Hit` 是因为排序时 `compareByDescending` 需要同时拿到分数和文件，
+ * 不直接用 `ScoredCandidate` 是因为排序时 `compareByDescending` 需要同时拿到分数和文件，
  * 中间多一个 Pair 反而更难读。
  */
 private data class RecommendedFile(
   val file: File,
-  val reason: LocalSubtitleMatch.Reason,
-  val score: Int,
+  val reason: MatchReason,
+  /** 0..100 的综合分，只用于排序（新引擎是 Double，跨阈值比较更细） */
+  val score: Double,
 )
 
 /** 文件名的「自然序」（`2.srt` 在 `10.srt` 前面），与浏览器其它列表同一口径。 */
@@ -524,13 +537,7 @@ private fun matchesTokens(name: String, tokens: List<String>): Boolean {
 }
 
 /** 命中理由的文案。与字幕面板 `SubtitleTracksSheet` 共用同一套字符串资源。 */
-private fun LocalSubtitleMatch.Reason.labelRes(): Int = when (this) {
-  LocalSubtitleMatch.Reason.Stem -> R.string.player_sheets_local_subs_reason_stem
-  LocalSubtitleMatch.Reason.Code -> R.string.player_sheets_local_subs_reason_code
-  LocalSubtitleMatch.Reason.Crc -> R.string.player_sheets_local_subs_reason_crc
-  LocalSubtitleMatch.Reason.Episode -> R.string.player_sheets_local_subs_reason_episode
-  LocalSubtitleMatch.Reason.Title -> R.string.player_sheets_local_subs_reason_title
-}
+private val RECOMMEND_SCORE = MatchConfig().candidateScore
 
 /**
  * 推荐区的标题行：星标 + 「可能匹配：番号」+ 条数。
