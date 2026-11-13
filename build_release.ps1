@@ -1,4 +1,4 @@
-﻿# CineIsle release 出包 + 复制到 F:\apk_release
+﻿# CineIsle release 出包 + 复制到 G:\apk_release
 # 用法（PowerShell，管理员非必需）：
 #   .\build_release.ps1                 # 默认 arm64-v8a release
 #   .\build_release.ps1 -Abi x86_64     # 换 ABI
@@ -11,7 +11,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectDir = "D:\project\mpvEx-master"
-$OutDir = "F:\apk_release"
+# 归档盘已从 F: 换到 G:（F 盘不再保留放包目录）
+$OutDir = "G:\apk_release"
 
 # 版本号从 build.gradle.kts 里现读，不再手写 ——
 # 之前脚本里硬编码 1.0.1，而 gradle 已经改成 1.0.3，产物名和真实版本对不上。
@@ -80,14 +81,15 @@ if (-not $apk -or -not (Test-Path $apk)) {
   exit 1
 }
 
-# 4) 复制到 F:\apk_release，按项目命名约定带版本/ABI/时间戳，不覆盖旧包
+# 4) 复制到 G:\apk_release，按项目命名约定带版本/ABI/时间戳，不覆盖旧包
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
 $stamp = Get-Date -Format "yyyyMMdd-HHmm"
 $dest = Join-Path $OutDir "CineIsle-v${VersionName}_${versionCode}-$Abi-release-$stamp.apk"
 Copy-Item -LiteralPath $apk -Destination $dest -Force
 
 # 5) 校验签名
-$sdk = "D:\project\AlistClientN\.android-sdk\build-tools\36.0.0\apksigner.bat"
+#    用 34.0.0：项目约定的期望证书指纹是按这一版 apksigner 打印出来的口径记的。
+$sdk = "D:\project\AlistClientN\.android-sdk\build-tools\34.0.0\apksigner.bat"
 if (Test-Path $sdk) {
   Write-Host "[3/4] 校验签名 ..." -ForegroundColor Cyan
   $prevEap = $ErrorActionPreference

@@ -301,6 +301,9 @@
   <string name="pref_about_donate_paypal_summary">在 PayPal 上支持开发者</string>
   <string name="pref_about_donate_upi">UPI</string>
   <string name="player_sheets_add_ext_sub">添加外挂字幕</string>
+  <string name="player_sheets_subtitle_filter_hint">筛选字幕</string>
+  <string name="player_sheets_subtitle_filter_empty">没有匹配「%1$s」的字幕</string>
+  <string name="player_sheets_subtitle_filter_clear">清除筛选</string>
   <string name="player_sheets_add_ext_audio">添加外挂音轨</string>
   <string name="player_sheets_tracks_off">关闭</string>
   <string name="player_sheets_subtitles_settings_title">字幕设置</string>
