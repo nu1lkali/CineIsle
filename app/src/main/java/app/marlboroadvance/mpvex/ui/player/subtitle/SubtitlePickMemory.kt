@@ -1,5 +1,7 @@
 package app.marlboroadvance.mpvex.ui.player.subtitle
 
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.MediaQuery
+
 /**
  * 「这部片子我上次挂的是哪条字幕」的进程内记忆。
  *
@@ -7,7 +9,7 @@ package app.marlboroadvance.mpvex.ui.player.subtitle
  *
  * 番号能证明「同一部」，但证明不了「哪一条字幕能对上这个版本」——
  * 同一个番号下常有简中 / 繁中 / 机翻 / 不同剪辑的多条字幕，而**文件名里没有任何信息**
- * 能区分它们的时间轴是否对得上（详见 [LocalSubtitleMatch] 里「为什么不看视频时长」）。
+ * 能区分它们的时间轴是否对得上（时间轴本身也不作为否决依据，见 [LocalSubtitleScanner]）。
  *
  * 所以最后一条真正可靠的判据是用户自己的选择：他点开、看了两分钟、没换——
  * 这条字幕就是对的。下次打开面板时把它排在最前面，比任何猜测都准。
@@ -32,8 +34,8 @@ object SubtitlePickMemory {
    * 记忆的键：优先用媒体名剥出来的字干（同一部片子稳定），
    * 退化为番号 / 片名（媒体名解析不出来时的兜底）。
    */
-  fun keyOf(query: LocalSubtitleMatch.Query): String =
-    query.coreStem.ifBlank { query.displayCode ?: query.title.orEmpty() }
+  fun keyOf(query: MediaQuery): String =
+    query.stem.ifBlank { query.label.orEmpty() }
 
   fun remember(mediaKey: String, uri: String) {
     if (mediaKey.isBlank() || uri.isBlank()) return

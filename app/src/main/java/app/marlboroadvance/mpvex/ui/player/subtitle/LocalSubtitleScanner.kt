@@ -5,6 +5,13 @@ import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.ConfidenceLevel
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.MatchLogger
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.MatchReason
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.SubtitleMatchResult
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.MediaQuery
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.SmartSubtitleMatcher
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.SubtitleCache
 import app.marlboroadvance.mpvex.utils.media.SubtitleFileTypes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -13,16 +20,27 @@ import kotlinx.coroutines.withContext
  * 字幕保存目录里的一条候选字幕。
  *
  * @property name 文件名（展示用）
- * @property relativePath 相对字幕目录的路径，如 `SSIS-123/首华.zh.srt`（匹配与去重都用它）
+ * @property relativePath 相对字幕目录的路径（日志与去重用）
  * @property uri 可交给播放器的 `content://` Uri
+ * @property score 0..100 的综合分（已应用冲突上限）
+ * @property reason 主依据，UI 映射成一句人话
+ * @property confidence 置信度等级
+ * @property canAutoMatch 是否满足全部自动采用条件。UI 据此打「可直接使用」角标，
+ *   但**不会**自动注入轨道 —— 是否挂载始终由用户点选决定
+ * @property codeText 这条字幕解析出的主编号原文（`n0907`）。展示与「确认别名」用
+ * @property verified 时间轴与片长吻合（见 [SubtitleTimingProbe]）。只是更强的佐证，不是入选条件
  */
 data class LocalSubtitleCandidate(
   val name: String,
   val relativePath: String,
   val uri: String,
-  val score: Int,
-  val reason: LocalSubtitleMatch.Reason,
+  val score: Double,
+  val reason: MatchReason,
+  val confidence: ConfidenceLevel,
+  val canAutoMatch: Boolean,
   val sizeBytes: Long,
+  val codeText: String? = null,
+  val verified: Boolean = false,
 )
 
 /**
@@ -32,22 +50,29 @@ data class LocalSubtitleCandidate(
  * 「没条件、压根没扫」/「还在扫」（什么都不画）/「扫完没命中」（给一句提示）/「扫完有命中」（列出来）。
  * 只用 null 区分会分不清前两者，面板一打开就会闪一下「没有匹配」。
  *
+ * @property queryCodeText 片名解析出的主编号原文。与 [LocalSubtitleCandidate.codeText]
+ *   一起构成「确认别名」的那一对，UI 只在系统自己也不确定时才展示
  * @property attempted 是否真的扫过（目录没配、没有可用条件时都是 false）
  */
 data class LocalSubtitleScan(
   val scanning: Boolean = false,
   val attempted: Boolean = false,
   val hits: List<LocalSubtitleCandidate> = emptyList(),
+  val queryCodeText: String? = null,
 )
 
 /**
  * 在「字幕保存目录」（设置 → 字幕 → 字幕保存目录，SAF tree Uri）里找与当前片子相关的字幕。
  *
- * ## 为什么不全量解析字幕内容
+ * ## 为什么分两段
  *
- * 代价不成比例：目录里可能有上千个文件，逐个解码文本要几秒到几十秒。
- * 这里只用**名字**（含所在子目录名）判分，命中才列出来 ——
- * 用户点一下就把字幕挂上了，判错的成本只是那一下。
+ * 第一段只枚举文件名（[MAX_FILES] 内），第二段把整批名字一次交给
+ * [SmartSubtitleMatcher]。后者内部有预处理缓存（[app.marlboroadvance.mpvex.ui.player.subtitle.smart.SubtitleCache]），
+ * 重复打开面板时只有第一次要跑正则。
+ *
+ * 逐个文件调 `match` 是老写法：那样每个文件都要重新归一化查询，
+ * 而且拿不到「Top1 与 Top2 差多少」这个全局信息 —— 而这个差值恰恰是
+ * 「能不能自动采用」的必要条件之一。
  *
  * ## 预算
  *
@@ -68,10 +93,22 @@ object LocalSubtitleScanner {
   /** 最多列几条。多了会把真正的轨道列表挤下去，反而更难找。 */
   const val MAX_RESULTS = 5
 
+  /** 最多探测几条的时间轴。比 [MAX_RESULTS] 多一条，好让「略低分但时长吻合」的那条有机会上来。 */
+  private const val MAX_PROBE = 6
+
+  /**
+   * 时间轴吻合的判定窗口。
+   *
+   * 片尾曲通常没有字幕，末条比片长短一两分钟是**正常**的，所以窗口给到 2 分钟；
+   * 再宽就没有区分度了。
+   */
+  private const val TIMING_TOLERANCE_MS = 120_000L
+
   suspend fun scan(
     context: Context,
     treeUri: String,
-    query: LocalSubtitleMatch.Query,
+    query: MediaQuery,
+    durationMs: Long? = null,
   ): LocalSubtitleScan {
     if (treeUri.isBlank() || query.isEmpty) return LocalSubtitleScan()
     return withContext(Dispatchers.IO) {
@@ -82,7 +119,7 @@ object LocalSubtitleScanner {
           return@withContext LocalSubtitleScan()
         }
 
-        val found = mutableListOf<LocalSubtitleCandidate>()
+        val found = mutableListOf<Entry>()
         val queue = ArrayDeque<DirNode>()
         queue.addLast(DirNode(root, 0, ""))
         var dirs = 0
@@ -115,35 +152,45 @@ object LocalSubtitleScanner {
               continue
             }
 
-            files++
             if (!isSubtitleFile(name)) continue
-            val relative = node.prefix + name
-            val hit = LocalSubtitleMatch.match(query, relative) ?: continue
+            files++
             found +=
-              LocalSubtitleCandidate(
+              Entry(
                 name = name,
-                relativePath = relative,
+                relativePath = node.prefix + name,
                 uri = child.uri.toString(),
-                score = hit.score,
-                reason = hit.reason,
                 sizeBytes = child.length(),
               )
           }
         }
 
-        // 排序：上次用过的那条永远第一（用户自己的选择，比任何猜测都准），
-        // 其余按证据强度，同分时短路径优先（`番号/zh.srt` 比 `番号/备份/旧版/zh.srt` 更像是用户要的）
+        if (found.isEmpty()) return@withContext LocalSubtitleScan(attempted = true)
+
+        val results = SmartSubtitleMatcher.match(query, found.map { it.relativePath })
+        Log.d(TAG, MatchLogger.describe(query.label.orEmpty(), query.facts, results, MATCH_CONFIG))
+        if (results.isEmpty()) return@withContext LocalSubtitleScan(attempted = true)
+
+        val byPath = found.associateBy { it.relativePath }
         val preferred = SubtitlePickMemory.recall(SubtitlePickMemory.keyOf(query))
-        val hits =
-          found
-            .distinctBy { it.uri }
+
+        val candidates =
+          results
+            .mapNotNull { result ->
+              val entry = byPath[result.relativePath] ?: return@mapNotNull null
+              result.toCandidate(entry)
+            }
             .sortedWith(
               compareByDescending<LocalSubtitleCandidate> { preferred != null && it.uri == preferred }
                 .thenByDescending { it.score }
                 .thenBy { it.relativePath.length }
             )
-            .take(MAX_RESULTS)
-        LocalSubtitleScan(scanning = false, attempted = true, hits = hits)
+
+        LocalSubtitleScan(
+          scanning = false,
+          attempted = true,
+          hits = verifyTiming(context, candidates, durationMs),
+          queryCodeText = query.facts.identifiers.firstOrNull()?.raw,
+        )
       } catch (t: Throwable) {
         Log.w(TAG, "scan failed: ${t.message}")
         LocalSubtitleScan()
@@ -151,11 +198,66 @@ object LocalSubtitleScanner {
     }
   }
 
+  private val MATCH_CONFIG = app.marlboroadvance.mpvex.ui.player.subtitle.smart.MatchConfig()
+
+  private fun SubtitleMatchResult.toCandidate(entry: Entry): LocalSubtitleCandidate =
+    LocalSubtitleCandidate(
+      name = entry.name,
+      relativePath = entry.relativePath,
+      uri = entry.uri,
+      score = score,
+      reason = primaryReason,
+      confidence = confidenceLevel,
+      canAutoMatch = canAutoMatch,
+      sizeBytes = entry.sizeBytes,
+      // 缓存命中，成本可忽略；只取原文形态（`n0907`）给 UI 展示
+      codeText = SubtitleCache.factsOf(entry.relativePath).identifiers.firstOrNull()?.raw,
+    )
+
   /**
-   * 判扩展名。直接用 [SubtitleFileTypes] 的全局白名单，避免两处口径漂移
-   * （这里能列出来的，`loadSubtitle` 必须也接受，否则点一下报「字幕格式不支持」）。
+   * 名字判分之后的第二道：**打开前几条，看时间轴跟片长对不对得上**。
+   *
+   * 这一步对应「人会怎么做」：同名同番号有好几条时，人会点开看一眼时长。
+   * 只对前 [MAX_PROBE] 条做（每条最多读 1 MiB），全量读文件不可接受。
+   *
+   * 与 v252 的教训保持一致：时间轴**只做标记与同分排序**，绝不加减分数 ——
+   * 一旦让它动分数，就会跨过冲突上限，把「番号对不上」的候选推上去。
    */
+  private suspend fun verifyTiming(
+    context: Context,
+    ordered: List<LocalSubtitleCandidate>,
+    durationMs: Long?,
+  ): List<LocalSubtitleCandidate> {
+    if (durationMs == null || durationMs <= 0) return ordered.take(MAX_RESULTS)
+
+    val head = ordered.take(MAX_PROBE)
+    val rest = ordered.drop(MAX_PROBE)
+    val probed =
+      head.map { candidate ->
+        val timing = SubtitleTimingProbe.probe(context, candidate.uri) ?: return@map candidate
+        candidate.copy(verified = coincides(timing.lastCueMs, durationMs))
+      }
+    return (probed + rest)
+      .sortedWith(
+        compareByDescending<LocalSubtitleCandidate> { it.score }
+          .thenByDescending { it.verified }
+          .thenBy { it.relativePath.length }
+      )
+      .take(MAX_RESULTS)
+  }
+
+  /** 末条字幕的结束时间与片长是否落在同一个区间（见 [TIMING_TOLERANCE_MS]）。 */
+  internal fun coincides(lastCueMs: Long, durationMs: Long): Boolean =
+    lastCueMs > 0 && durationMs > 0 && kotlin.math.abs(lastCueMs - durationMs) <= TIMING_TOLERANCE_MS
+
   private fun isSubtitleFile(fileName: String): Boolean = SubtitleFileTypes.isSubtitle(fileName)
 
   private data class DirNode(val dir: DocumentFile, val depth: Int, val prefix: String)
+
+  private data class Entry(
+    val name: String,
+    val relativePath: String,
+    val uri: String,
+    val sizeBytes: Long,
+  )
 }

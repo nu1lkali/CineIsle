@@ -66,6 +66,17 @@ class SubtitlesPreferences(
    * 存成单个字符串而不是拆成多条偏好：条目数是动态的，SharedPreferences 没有「列」的概念。
    */
   val subtitleBindings = preferenceStore.getString("sub_bindings", "")
+
+  /**
+   * 用户确认过的番号别名账本：一行一条
+   * `canonical<TAB>alias<TAB>source<TAB>createdAt<TAB>confidence`，见
+   * [app.marlboroadvance.mpvex.ui.player.subtitle.smart.AliasRecord]。
+   *
+   * 与 [subtitleBindings] 分开存：绑定记的是「这部片子用哪个文件」，
+   * 别名记的是「这两个编号是同一部作品」。后者跨片子生效，混淆会让一次手动选择
+   * 悄悄扩散成全局规则 —— 那正是设计里明令禁止的事。
+   */
+  val subtitleCodeAliases = preferenceStore.getString("sub_code_aliases", "")
 }
 
 enum class SubtitleJustification(
