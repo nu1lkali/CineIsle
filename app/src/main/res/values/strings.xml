@@ -308,6 +308,13 @@
   <string name="player_sheets_subtitle_filter_hint">Filter subtitles</string>
   <string name="player_sheets_subtitle_filter_empty">No subtitle matches “%1$s”</string>
   <string name="player_sheets_subtitle_filter_clear">Clear filter</string>
+  <string name="player_sheets_local_subs_header">Matched in subtitle folder: “%1$s”</string>
+  <string name="player_sheets_local_subs_header_plain">Matched in subtitle folder</string>
+  <string name="player_sheets_local_subs_reason_code">Same release code</string>
+  <string name="player_sheets_local_subs_reason_crc">Same CRC</string>
+  <string name="player_sheets_local_subs_reason_episode">Same episode</string>
+  <string name="player_sheets_local_subs_reason_title">Title match</string>
+  <string name="player_sheets_local_subs_empty">No subtitle in the subtitle folder matches “%1$s”</string>
   <string name="player_sheets_add_ext_audio">Add external audio tracks</string>
   <string name="player_sheets_tracks_off">Off</string>
   <string name="player_sheets_track_title_w_lang" translatable="false">#%d: %s (%s)</string>

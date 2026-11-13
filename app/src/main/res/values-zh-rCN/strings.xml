@@ -304,6 +304,13 @@
   <string name="player_sheets_subtitle_filter_hint">筛选字幕</string>
   <string name="player_sheets_subtitle_filter_empty">没有匹配「%1$s」的字幕</string>
   <string name="player_sheets_subtitle_filter_clear">清除筛选</string>
+  <string name="player_sheets_local_subs_header">字幕目录中匹配「%1$s」</string>
+  <string name="player_sheets_local_subs_header_plain">字幕目录中匹配</string>
+  <string name="player_sheets_local_subs_reason_code">编号一致</string>
+  <string name="player_sheets_local_subs_reason_crc">CRC 一致</string>
+  <string name="player_sheets_local_subs_reason_episode">集号一致</string>
+  <string name="player_sheets_local_subs_reason_title">标题相符</string>
+  <string name="player_sheets_local_subs_empty">字幕目录中未找到与「%1$s」匹配的字幕</string>
   <string name="player_sheets_add_ext_audio">添加外挂音轨</string>
   <string name="player_sheets_tracks_off">关闭</string>
   <string name="player_sheets_subtitles_settings_title">字幕设置</string>

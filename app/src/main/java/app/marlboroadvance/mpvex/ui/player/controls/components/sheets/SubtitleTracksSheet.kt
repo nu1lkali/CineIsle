@@ -10,12 +10,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.ui.player.TrackNode
+import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleCandidate
+import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleMatch
+import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleScan
 import app.marlboroadvance.mpvex.ui.theme.spacing
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.toImmutableList
@@ -25,6 +30,12 @@ sealed class SubtitleItem {
   data class Header(val title: String) : SubtitleItem()
   /** 筛选后一条都不剩时的提示行（跟着列表一起滚，不占固定高度） */
   data class EmptyHint(val query: String) : SubtitleItem()
+
+  /** 字幕目录里按番号 / 标题匹配到的本地文件，点一下即挂载 */
+  data class Suggestion(val candidate: LocalSubtitleCandidate) : SubtitleItem()
+
+  /** 「番号识别出来了，但字幕目录里没有对应的」——只陈述事实，不是错误 */
+  data class SuggestionHint(val label: String) : SubtitleItem()
   object Divider : SubtitleItem()
 }
 
@@ -82,7 +93,17 @@ fun SubtitlesSheet(
   onOpenSubtitleDelay: () -> Unit,
   onRemoveSubtitle: (Int) -> Unit,
   onDismissRequest: () -> Unit,
-  modifier: Modifier = Modifier
+  modifier: Modifier = Modifier,
+  /**
+   * 字幕保存目录里的匹配结果（见 [LocalSubtitleScanner]）。
+   *
+   * 为空 / 还在扫时面板与旧版完全一致 —— 这个区块是「顺手给的建议」，不是必选项，
+   * 所以它的缺席不能改变原有布局的任何一行。
+   */
+  localScan: LocalSubtitleScan = LocalSubtitleScan(),
+  /** 用来匹配的那个「番号」或标题词，只用于文案（「未找到与「SSIS-123」匹配的字幕」） */
+  localMatchLabel: String? = null,
+  onPickLocalSubtitle: ((LocalSubtitleCandidate) -> Unit)? = null,
 ) {
   // ── 本地筛选 ──
   // 只在**眼前这份轨道列表**里按名字 / 语言 / 文件名过滤，一个请求都不发 ——
@@ -101,12 +122,58 @@ fun SubtitlesSheet(
     if (tokens.isNotEmpty()) listState.scrollToItem(0)
   }
 
-  val items = remember(tracks, tokens) {
+  // 已经挂上去的轨道不再出现在建议里 —— 同一个文件出两行，用户会以为重复添加了。
+  // 外挂轨的 `externalFilename` 才是磁盘上的文件名；某些来源（网络字幕）只给了 `title`，所以两个都看。
+  val loadedFileNames =
+    remember(tracks) {
+      tracks
+        .mapNotNull { node -> node.externalFilename ?: node.title }
+        .mapNotNull { raw ->
+          runCatching { Uri.decode(raw) }
+            .getOrDefault(raw)
+            .substringAfterLast('/')
+            .substringAfterLast('\\')
+            .takeIf { it.isNotBlank() }
+            ?.lowercase()
+        }.toSet()
+    }
+
+  // 建议行同样吃筛选框：用户已经在打字找「简」的时候，
+  // 上面还挂着一条不匹配的建议行会让整个面板看起来「筛选没生效」。
+  val suggestions =
+    remember(localScan.hits, loadedFileNames, tokens) {
+      localScan.hits
+        .filter { it.name.lowercase() !in loadedFileNames }
+        .filter { hit -> tokens.all { it in hit.relativePath.lowercase() } }
+    }
+
+  val suggestionHeader =
+    if (localMatchLabel != null) {
+      stringResource(R.string.player_sheets_local_subs_header, localMatchLabel)
+    } else {
+      stringResource(R.string.player_sheets_local_subs_header_plain)
+    }
+
+  val items = remember(tracks, tokens, suggestions, suggestionHeader, localScan, localMatchLabel) {
     val matched =
       if (tokens.isEmpty()) tracks
       else tracks.filter { track -> tokens.all { it in track.searchHaystack() } }
 
     val list = mutableListOf<SubtitleItem>()
+
+    // ── 字幕目录匹配（放最前面：用户找字幕时先看「有没有现成的」） ──
+    if (suggestions.isNotEmpty()) {
+      list.add(SubtitleItem.Header(suggestionHeader))
+      list.addAll(suggestions.map { SubtitleItem.Suggestion(it) })
+    } else if (
+      localScan.attempted &&
+      !localScan.scanning &&
+      localScan.hits.isEmpty() &&
+      localMatchLabel != null
+    ) {
+      // 只有「番号 / 标题确实认出来了」才说没找到：认不出来时说什么都是噪音
+      list.add(SubtitleItem.SuggestionHint(localMatchLabel))
+    }
 
     // Internal/Local tracks section
     val internal = matched.filter { it.external != true }
@@ -156,8 +223,9 @@ fun SubtitlesSheet(
         },
       )
       // 没有任何轨道时不出这一行：那时唯一要做的事是「添加字幕」，摆个搜索框纯属占地方。
+      // 但字幕目录里有匹配项时破例 —— 那时列表本身就有内容可筛。
       // 放在 header 里 ⇒ 它是**钉住**的，列表滚动时不会跟着走。
-      if (tracks.isNotEmpty()) {
+      if (tracks.isNotEmpty() || suggestions.isNotEmpty()) {
         SubtitleFilterField(query = filter, onQueryChange = { filter = it })
       }
     },
@@ -199,6 +267,23 @@ fun SubtitlesSheet(
                 .fillMaxWidth()
                 .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.large),
             )
+        }
+        is SubtitleItem.Suggestion -> {
+          LocalSubtitleRow(
+            candidate = item.candidate,
+            reasonText = stringResource(item.candidate.reason.labelRes()),
+            onClick = { onPickLocalSubtitle?.invoke(item.candidate) },
+          )
+        }
+        is SubtitleItem.SuggestionHint -> {
+          Text(
+            text = stringResource(R.string.player_sheets_local_subs_empty, item.label),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.small),
+          )
         }
         SubtitleItem.Divider -> {
             HorizontalDivider(
@@ -253,6 +338,70 @@ private fun SubtitleFilterField(
       }
     },
   )
+}
+
+/**
+ * 命中理由 → 文案资源。集中一处映射，免得三个地方各写一遍 `when` 之后开始漂。
+ */
+private fun LocalSubtitleMatch.Reason.labelRes(): Int = when (this) {
+  LocalSubtitleMatch.Reason.Code -> R.string.player_sheets_local_subs_reason_code
+  LocalSubtitleMatch.Reason.Crc -> R.string.player_sheets_local_subs_reason_crc
+  LocalSubtitleMatch.Reason.Episode -> R.string.player_sheets_local_subs_reason_episode
+  LocalSubtitleMatch.Reason.Title -> R.string.player_sheets_local_subs_reason_title
+}
+
+/**
+ * 字幕目录里匹配到的一条：整行可点，点了就挂载。
+ *
+ * 不给「添加」按钮：一行里已经有两段文字，再塞按钮会把文件名挤成省略号
+ * （中文按钮排不下的经典原因，见项目红线 9）。右侧的 + 只是「可以点」的暗示。
+ */
+@Composable
+private fun LocalSubtitleRow(
+  candidate: LocalSubtitleCandidate,
+  reasonText: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val context = LocalContext.current
+  val sizeText =
+    remember(candidate.sizeBytes) {
+      if (candidate.sizeBytes > 0) {
+        android.text.format.Formatter.formatShortFileSize(context, candidate.sizeBytes)
+      } else {
+        ""
+      }
+    }
+
+  Row(
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .clickable(onClick = onClick)
+        .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.extraSmall),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
+  ) {
+    Column(modifier = Modifier.weight(1f)) {
+      Text(
+        text = candidate.name,
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.Medium,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+      )
+      Text(
+        text = if (sizeText.isBlank()) reasonText else "$reasonText · $sizeText",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+    Icon(
+      Icons.Default.Add,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.primary,
+    )
+  }
 }
 
 @Composable

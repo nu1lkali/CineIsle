@@ -26,6 +26,7 @@ import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import app.marlboroadvance.mpvex.utils.media.ChecksumUtils
 import app.marlboroadvance.mpvex.utils.media.MediaInfoParser
+import app.marlboroadvance.mpvex.utils.media.SubtitleFileTypes
 import `is`.xyz.mpv.MPVLib
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
@@ -680,25 +681,6 @@ class PlayerViewModel(
 
     /** 网络加载速度的采样周期：1 秒一拍，与常见播放器（VLC / PotPlayer）的刷新节奏一致 */
     const val NET_SPEED_POLL_INTERVAL_MS = 1_000L
-    val VALID_SUBTITLE_EXTENSIONS =
-      setOf(
-        // Common & modern
-        "srt", "vtt", "ass", "ssa",
-        // DVD / Blu-ray
-        "sub", "idx", "sup",
-        // Streaming / XML / Professional
-        "xml", "ttml", "dfxp", "itt", "ebu", "imsc", "usf",
-        // Online platforms
-        "sbv", "srv1", "srv2", "srv3", "json",
-        // Legacy & niche
-        "sami", "smi", "mpl", "pjs", "stl", "rt", "psb", "cap",
-        // Broadcast captions
-        "scc", "vttx",
-        // Karaoke / lyrics
-        "lrc", "krc",
-        // Fallback / raw text
-        "txt", "pgs"
-      )
   }
 
   // ==================== Timer ====================
@@ -1062,7 +1044,7 @@ class PlayerViewModel(
     }
 
   private fun isValidSubtitleFile(fileName: String): Boolean =
-    fileName.substringAfterLast('.', "").lowercase() in VALID_SUBTITLE_EXTENSIONS
+    SubtitleFileTypes.isSubtitle(fileName)
 
   // ==================== Playback Control ====================
 

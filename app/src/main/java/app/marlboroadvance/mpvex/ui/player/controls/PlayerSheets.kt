@@ -31,9 +31,14 @@ import kotlinx.collections.immutable.toImmutableList
 import org.koin.compose.koinInject
 import androidx.compose.runtime.collectAsState as composeCollectAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleMatch
+import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleScan
+import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleScanner
 import kotlinx.coroutines.launch
 
 @Composable
@@ -94,6 +99,24 @@ fun PlayerSheets(
           // Remove extension if present to improve matching
           currentMediaTitle.substringBeforeLast(".")
       } else null
+
+      // ── 字幕目录里按番号 / 标题智能匹配（纯本地，不发任何请求）──
+      // 只取 media-title：PlayerActivity 开播时把它设成文件名（force-media-title），
+      // 番号就在那里面。Emby 的 `itemName` 实际存的是 itemId（见 EmbySubtitleContext），
+      // 当名字用会把「匹配钥匙」变成一串 32 位十六进制。
+      val saveFolder by subtitlesPreferences.subtitleSaveFolder.collectAsState()
+      val hostContext = LocalContext.current.applicationContext
+      val localQuery = remember(currentMediaTitle) { LocalSubtitleMatch.buildQuery(currentMediaTitle) }
+      val localScan by
+        produceState(initialValue = LocalSubtitleScan(), localQuery, saveFolder) {
+          // 目录没配、或一个可用条件都没有 ⇒ 不扫。此时面板与旧版逐行一致。
+          if (saveFolder.isBlank() || localQuery.isEmpty) {
+            value = LocalSubtitleScan()
+            return@produceState
+          }
+          value = LocalSubtitleScan(scanning = true)
+          value = LocalSubtitleScanner.scan(hostContext, saveFolder, localQuery)
+        }
 
       var showFilePicker by remember { mutableStateOf(false) }
 
@@ -166,7 +189,15 @@ fun PlayerSheets(
         onRemoveSubtitle = onRemoveSubtitle,
         onOpenSubtitleSettings = { onOpenPanel(Panels.SubtitleSettings) },
         onOpenSubtitleDelay = { onOpenPanel(Panels.SubtitleDelay) },
-        onDismissRequest = onDismissRequest
+        onDismissRequest = onDismissRequest,
+        // 字幕目录里的候选；点一下直接挂载（走与在线字幕同一条 loadSubtitle 路径）
+        localScan = localScan,
+        localMatchLabel = localQuery.label,
+        onPickLocalSubtitle = { candidate ->
+          subtitleScope.launch {
+            viewModel.loadSubtitle(Uri.parse(candidate.uri), select = true, silent = false)
+          }
+        },
       )
     }
 
