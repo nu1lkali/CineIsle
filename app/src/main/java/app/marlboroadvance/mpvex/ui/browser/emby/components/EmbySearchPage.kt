@@ -19,13 +19,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -57,6 +57,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,15 +67,16 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.CircularProgressIndicator
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
 import kotlinx.coroutines.launch
@@ -489,9 +491,6 @@ fun EmbyRecommendHeader(
 /**
  * 推荐卡：16:9 横版封面 + 底部渐隐，标题与元信息压在图上。
  *
- * 宽度由调用方给定（横向滚动条给固定宽、网格给 weight），卡片自己不撑满 ——
- * 这样同一个卡面既能在横条里排、也能在两列网格里排。
- *
  * 为什么不用 [EmbyPosterCard]（2:3 竖版）：推荐区是「顺手看几部」的轻内容，
  * 竖版海报两列会把首屏填满，用户一进来就以为已经搜出结果了；
  * 16:9 横图能容纳「剧名 + 年份 · 分类」两行而不挤，与设计稿一致；
@@ -511,7 +510,8 @@ fun EmbyRecommendCard(
 
   Box(
     modifier = modifier
-      // 宽度来自调用方（横条的固定宽 / 网格的 weight），这里只锁 16:9 的形状
+      .fillMaxWidth()
+      // aspectRatio(16f / 9f) = 宽 / 高，高度由宽度算出来，两列自适应不用手算宽度
       .aspectRatio(16f / 9f)
       .clip(shape)
       .background(MaterialTheme.colorScheme.surfaceContainerHigh)
@@ -583,66 +583,72 @@ fun EmbyRecommendCard(
 }
 
 /**
- * 推荐横条：一行 `LazyRow`，一屏见两张多一点。
+ * 推荐卡的一行（默认两列）。
  *
- * ## 为什么从「两列网格」改成横条（v259，用户报「搜索页太挤」）
+ * v260 定版：v259 按「减负」试过单行横滑条，实测竖屏下横条只占一行，
+ * 下面留出大片空白，观感比「挤」更难看 —— 回到两列网格，让内容自己把页面填满。
  *
- * 两列 16:9 卡在竖屏上一行只有 ~100dp 高，但网格一摆就是三行起步，把「历史 → 推荐」
- * 的空词态撑得全是图；横条只占一行，右边永远压着半张卡暗示「能滑」，浏览效率反而更高。
- * 上下布局也按设计稿定死：搜索框 → 工具栏 → 历史 → 推荐横条。
- *
- * 「更多」语义由两个入口分担：横条自己横向滑（[SearchRecommendViewModel] 封顶 40 条），
- * 标题右侧「换一批」整排换掉 —— 不再做触底自动续页：横条没有「页」的概念，
- * LazyRow 惰性渲染 40 张卡也没有任何压力。
+ * 之所以暴露「一行」而不是「一整个网格」：搜索页整页是一个 `LazyColumn`
+ * （历史 + 推荐标题 + 若干行），网格不能嵌进列表里（高度无限）。
  */
 @Composable
-fun EmbyRecommendStrip(
+fun EmbyRecommendRow(
   items: List<EmbyItem>,
   imageUrl: (EmbyItem) -> String?,
   onClick: (EmbyItem) -> Unit,
   modifier: Modifier = Modifier,
+  columns: Int = 2,
 ) {
-  val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-  // 一屏见两张多一点：右边压着半张，用户才知道这条能横着滑
-  val cardWidth = ((screenWidth - 32.dp) * 0.42f).coerceAtLeast(120.dp)
-  LazyRow(
-    modifier = modifier.fillMaxWidth(),
-    contentPadding = PaddingValues(horizontal = 16.dp),
-    horizontalArrangement = Arrangement.spacedBy(10.dp),
-  ) {
-    items(items, key = { it.Id ?: it.hashCode().toString() }) { item ->
-      EmbyRecommendCard(
-        item = item,
-        imageUrl = imageUrl(item),
-        onClick = { onClick(item) },
-        modifier = Modifier.width(cardWidth),
-      )
-    }
-  }
-}
-
-/** 推荐区加载态：一条与横条同形状的骨架（16:9 卡 + 同宽），落地时不跳版 */
-@Composable
-fun EmbyRecommendSkeleton(
-  modifier: Modifier = Modifier,
-) {
-  val shimmer = rememberShimmer()
-  val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-  val cardWidth = ((screenWidth - 32.dp) * 0.42f).coerceAtLeast(120.dp)
   Row(
     modifier = modifier
       .fillMaxWidth()
       .padding(horizontal = 16.dp),
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    repeat(3) {
-      Box(
-        modifier = Modifier
-          .width(cardWidth)
-          .aspectRatio(16f / 9f)
-          .clip(RoundedCornerShape(LocalEmbyAppearance.current.corner))
-          .shimmer(shimmer),
+    items.forEach { item ->
+      EmbyRecommendCard(
+        item = item,
+        imageUrl = imageUrl(item),
+        onClick = { onClick(item) },
+        modifier = Modifier.weight(1f),
       )
+    }
+    // 最后一行不满时补空位：少一个 weight，剩下那张卡会拉满整行，
+    // 与其它行等高的卡片突然变宽，观感像「加载错位」
+    repeat((columns - items.size).coerceAtLeast(0)) {
+      Spacer(modifier = Modifier.weight(1f))
+    }
+  }
+}
+
+/** 推荐区加载态：两列、三行的骨架，形状与真卡片一致（16:9），落地时不跳版 */
+@Composable
+fun EmbyRecommendSkeleton(
+  modifier: Modifier = Modifier,
+  rows: Int = 3,
+) {
+  val shimmer = rememberShimmer()
+  Column(
+    modifier = modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
+  ) {
+    repeat(rows) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        repeat(2) {
+          Box(
+            modifier = Modifier
+              .weight(1f)
+              .aspectRatio(16f / 9f)
+              .clip(RoundedCornerShape(LocalEmbyAppearance.current.corner))
+              .shimmer(shimmer),
+          )
+        }
+      }
     }
   }
 }
@@ -750,20 +756,21 @@ internal fun recommendImageUrl(
 }
 
 /**
- * 搜索页的「空词态」：搜索历史 + 推荐横条。
+ * 搜索页的「空词态」：搜索历史 + 推荐网格。
  *
- * ## 上下布局（v259，按设计稿定死）
- * 搜索框 → 工具栏 → **历史 → 推荐横条**。历史在前：点一个旧词直接搜是最高频的动作；
- * 推荐收在最后一行横卡里，不再是两列网格撑起的大块图墙。
+ * ## 上下布局
+ * 搜索框 → 工具栏 → **历史 → 推荐网格**。历史在前：点一个旧词直接搜是最高频的动作。
+ * v260 把 v259 的推荐横条改回两列网格：横条只占一行、下面大片留白，实测不如网格耐看；
+ * 标题右侧「换一批」保留（与下拉刷新同一个回调，四路游标轮转给出不同内容）。
  *
  * ## 为什么历史和推荐在**同一个滚动容器**里
  * 两个区块各自 `verticalScroll` 会撞车（父与子抢手势，实测就是「滑不动」）。
- * 这里整页一个 `LazyColumn`：历史是一行 FlowRow，推荐是一个横条 item
- * （横条的横向滚动与外层纵向滚动方向正交，不会抢手势）。
+ * 这里整页一个 `LazyColumn`：历史是一行 FlowRow，推荐是若干行两列卡片，
+ * 推荐多的时候一起往上滚，历史自然会滑出屏幕。
  *
- * ## 推荐不再触底续页
- * 横条一屏只见两三张，LazyRow 惰性渲染 40 条封顶的数据毫无压力；
- * 「看更多」由横条自己滑 + 标题右侧「换一批」承担，`loadMore` 不再被 UI 触发。
+ * ## 触底续页
+ * 没有「查看更多」入口，推荐靠滚动自己长出来；[SearchRecommendViewModel] 封顶后
+ * 留一行「已显示全部」。
  *
  * ## 键盘收起
  * 点空白处（列表的非交互区域）收键盘。挂在最外层 Box 的 `clickable` 上而不是
@@ -779,15 +786,19 @@ fun EmbySearchLanding(
   recommendItems: List<EmbyItem>,
   recommendLoading: Boolean,
   recommendError: String?,
+  recommendLoadingMore: Boolean,
+  recommendEndReached: Boolean,
   imageUrl: (EmbyItem) -> String?,
   onOpenRecommend: (EmbyItem) -> Unit,
   onRetryRecommend: () -> Unit,
+  onLoadMoreRecommend: () -> Unit,
   onRefresh: suspend () -> Unit,
   onDismissKeyboard: () -> Unit,
   bottomInset: Dp,
   modifier: Modifier = Modifier,
 ) {
   val isRefreshing = remember { mutableStateOf(false) }
+  val rows = remember(recommendItems) { recommendItems.chunked(2) }
   val listState = rememberLazyListState()
   val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
   // 「换一批」与下拉刷新同一个 suspend 回调；标题行入口是普通点击，这里转一层协程
@@ -796,6 +807,19 @@ fun EmbySearchLanding(
     { scope.launch { onRefresh() } }
   } else {
     null
+  }
+
+  // 触底续页：最后两行露头就补下一页。
+  // 用 snapshotFlow 而不是 derivedStateOf：后者会把首次组合的 rows 闭包住，
+  // 补完一页之后判断依据还停在旧值上（只触发一次）。
+  LaunchedEffect(listState, rows.size, recommendEndReached, recommendLoadingMore) {
+    if (rows.isEmpty()) return@LaunchedEffect
+    snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+      .collect { last ->
+        if (!recommendEndReached && !recommendLoadingMore && last >= rows.size - 2) {
+          onLoadMoreRecommend()
+        }
+      }
   }
 
   Box(
@@ -849,12 +873,46 @@ fun EmbySearchLanding(
             EmbyRecommendEmpty()
           }
 
-          else -> item(key = "recommend-strip") {
-            EmbyRecommendStrip(
-              items = recommendItems,
+          else -> items(rows, key = { row -> row.firstOrNull()?.Id ?: row.hashCode().toString() }) { row ->
+            EmbyRecommendRow(
+              items = row,
               imageUrl = imageUrl,
               onClick = onOpenRecommend,
-              modifier = Modifier.padding(top = 2.dp),
+              modifier = Modifier.padding(bottom = 10.dp),
+            )
+          }
+        }
+
+        // 续页脚：只在真有下一页、且正在取的时候占一行 ——
+        // 取完/到底都不留占位，免得历史区和推荐之间多一条莫名其妙的空白
+        if (recommendLoadingMore) {
+          item(key = "recommend-more") {
+            Box(
+              modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 44.dp),
+              contentAlignment = Alignment.Center,
+            ) {
+              CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp,
+              )
+            }
+          }
+        }
+
+        // 到底：推荐总量有上限（SearchRecommendViewModel.MAX_ITEMS），
+        // 触顶后不再续页。留一行字说明「没有更多了」，否则用户会以为还在加载。
+        if (recommendEndReached && recommendItems.isNotEmpty()) {
+          item(key = "recommend-end") {
+            Text(
+              text = "已显示全部 ${recommendItems.size} 条推荐",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              textAlign = TextAlign.Center,
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp, bottom = 8.dp),
             )
           }
         }

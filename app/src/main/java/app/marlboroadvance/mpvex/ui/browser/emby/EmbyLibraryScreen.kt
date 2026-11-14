@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
@@ -53,7 +54,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
@@ -87,14 +87,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -2243,6 +2252,16 @@ data class EmbyLibraryScreen(
       val pageFolderCount = items.count { isFolderLike(it) }
       val showPhotoRandom = pagePhotoCount > 0
       val showVideoActions = pagePlayableCount > 0 || pageFolderCount > 0 || items.isEmpty()
+      // v260：排序面板改从屏幕右缘滑出。工具行外套一层**全宽** Box 当 Popup 锚点：
+      // 面板顶边 = Box 底边（工具行下沿），右缘 = Box 右缘（屏幕右缘）。
+      // Box 高度用 onSizeChanged 量出来喂给 Popup 的 y offset，不写死（不同状态栏/字体下工具行高度会变）。
+      var sortMenuExpanded by remember { mutableStateOf(false) }
+      var toolbarBoxHeightPx by remember { mutableIntStateOf(0) }
+      Box(
+        modifier = Modifier
+          .fillMaxWidth()
+          .onSizeChanged { toolbarBoxHeightPx = it.height },
+      ) {
       Row(
         modifier = Modifier
           .fillMaxWidth()
@@ -2374,22 +2393,35 @@ data class EmbyLibraryScreen(
               Icon(Icons.Default.GridView, contentDescription = "视图样式", modifier = Modifier.size(20.dp))
             }
           }
-          SortMenu(
-            currentSort = sortBy,
-            currentOrder = sortOrder,
-            onSortChange = { newSort ->
-              browserPreferences.embyLibrarySortBy.set(newSort)
-              // 换排序项就丢掉手动方向，回到该排序项的自然方向
-              browserPreferences.embyLibrarySortOrder.set("")
-            },
-            onOrderChange = { newOrder ->
-              browserPreferences.embyLibrarySortOrder.set(newOrder)
-            },
-            // 展开菜单之前先收焦点：菜单一关，焦点若已经不在输入框上，
-            // 就没有「还给输入框」这回事，软键盘也就不会跟着弹出来
-            onRequestClearFocus = ::releaseInputFocus,
-          )
+          // 排序按钮：面板本体挂在上面那层全宽 Box 上（见下面 SortMenu）。
+          // 展开前先收焦点 —— 与旧 DropdownMenu 同一条纪律：焦点还挂在输入框上时，
+          // 面板一关键盘会自己弹回来。
+          IconButton(
+            onClick = { releaseInputFocus(); sortMenuExpanded = true },
+            modifier = Modifier.size(40.dp),
+          ) {
+            Icon(Icons.Default.Sort, contentDescription = "排序", modifier = Modifier.size(20.dp))
+          }
         }
+      }
+      SortMenu(
+        expanded = sortMenuExpanded,
+        onDismiss = {
+          sortMenuExpanded = false
+          releaseInputFocus()
+        },
+        topOffsetPx = toolbarBoxHeightPx,
+        currentSort = sortBy,
+        currentOrder = sortOrder,
+        onSortChange = { newSort ->
+          browserPreferences.embyLibrarySortBy.set(newSort)
+          // 换排序项就丢掉手动方向，回到该排序项的自然方向
+          browserPreferences.embyLibrarySortOrder.set("")
+        },
+        onOrderChange = { newOrder ->
+          browserPreferences.embyLibrarySortOrder.set(newOrder)
+        },
+      )
       }
 
       // 兜底：排序方式 / 升降序一变，就确保焦点不在输入框上。
@@ -2738,7 +2770,12 @@ data class EmbyLibraryScreen(
           // 推荐范围钉在当前库（start 时传了 libraryId），不会冒出别的库的片子。
           searchActive && searchQuery.isBlank() -> EmbySearchLanding(
             history = searchHistory,
-            onPickHistory = { keyword -> searchQuery = keyword },
+            onPickHistory = { keyword ->
+              // 点历史 = 「就用这个词搜」。只填词不摘焦点的话，键盘还挂在输入框上
+              // 会把结果列表顶掉一半（首页入口同样处理，两处口径一致）。
+              searchQuery = keyword
+              releaseInputFocus()
+            },
             onRemoveHistory = { keyword ->
               scope.launch {
                 val id = server?.id ?: return@launch
@@ -2754,6 +2791,8 @@ data class EmbyLibraryScreen(
             recommendItems = recommendState.items,
             recommendLoading = recommendState.loading,
             recommendError = recommendState.error,
+            recommendLoadingMore = recommendState.loadingMore,
+            recommendEndReached = recommendState.endReached,
             imageUrl = { item -> server?.let { s -> recommendImageUrl(viewModel, s, item) } },
             onOpenRecommend = { item ->
               val s = server
@@ -2770,6 +2809,7 @@ data class EmbyLibraryScreen(
               }
             },
             onRetryRecommend = { recommendViewModel.retry(server, parentId = libraryId) },
+            onLoadMoreRecommend = { recommendViewModel.loadMore(server, parentId = libraryId) },
             onRefresh = { recommendViewModel.refreshAndWait(server, parentId = libraryId) },
             onDismissKeyboard = { releaseInputFocus() },
             bottomInset = 0.dp,
@@ -4643,66 +4683,118 @@ private fun FilterDropdownRow(
 }
 
 
+/**
+ * 排序面板：从屏幕右缘滑出的侧挂面板（v260）。
+ *
+ * ## 为什么不再是 [DropdownMenu]
+ * DropdownMenu 锚在排序图标正下方，11 个排序项一展开就是一堵悬在网格中间的小墙，
+ * 左右都不贴边，和整个页面的版式脱节。改成右缘滑出面板后：
+ *  - **顶边 = 工具行下沿**：由调用方用 `onSizeChanged` 量锚点高度、经 [topOffsetPx] 传入，
+ *    不写死 —— 状态栏 / 字体缩放变化都不会让面板盖到工具行；
+ *  - **右缘贴屏幕右缘**：锚点是全宽 Box（不是被 padding 内缩的 Row），
+ *    `Alignment.TopEnd` 天然贴死；
+ *  - 入场从右滑入（`slideInHorizontally`），出场随 Popup 一起消失：
+ *    focusable Popup 会吃掉「点面板外」与「返回键」，都走 [onDismissRequest] → [onDismiss]。
+ *
+ * 排序语义与旧版一致：点已选中项 = 只反转方向（↑ / ↓ 显示在标签上），点其他项 = 换排序项。
+ */
 @Composable
 private fun SortMenu(
+  expanded: Boolean,
+  onDismiss: () -> Unit,
+  /** 面板顶边相对屏幕顶部的偏移（= 工具行锚点 Box 的高度，px） */
+  topOffsetPx: Int,
   currentSort: String,
   currentOrder: String,
   onSortChange: (String) -> Unit,
   onOrderChange: (String) -> Unit,
-  /**
-   * 展开前调用：把输入框的焦点收掉。
-   *
-   * 搜索态下焦点常常还在输入框上，`DropdownMenu` 关闭时会把焦点「还」给它，
-   * 于是每切一次排序就弹一次软键盘。焦点提前清掉后就没得可还。
-   * 注意得清**焦点**（`clearFocus`）而不是只 `hide()` 键盘 —— 焦点还在，下次照样弹。
-   */
-  onRequestClearFocus: () -> Unit,
 ) {
-  var expanded by remember { mutableStateOf(false) }
-  Box {
-    IconButton(
-      onClick = { onRequestClearFocus(); expanded = true },
-      modifier = Modifier.size(40.dp),
+  if (!expanded) return
+  Popup(
+    alignment = Alignment.TopEnd,
+    offset = IntOffset(0, topOffsetPx),
+    onDismissRequest = onDismiss,
+    properties = PopupProperties(focusable = true),
+  ) {
+    // 入场动画：面板从屏幕右缘外滑进来。出场不单独做 —— Popup 关闭是瞬时语义，
+    // 再叠一段退场动画反而让「选完排序」显得拖沓。
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    // 高度封顶 62% 屏高：11 项在小屏上放不完整列，露出底边暗示可滚
+    val panelMaxHeight = LocalConfiguration.current.screenHeightDp.dp * 0.62f
+
+    AnimatedVisibility(
+      visible = shown,
+      enter = slideInHorizontally(
+        initialOffsetX = { it },
+        animationSpec = tween(durationMillis = 240, easing = LinearOutSlowInEasing),
+      ) + fadeIn(tween(durationMillis = 160)),
     ) {
-      Icon(Icons.Default.Sort, contentDescription = "排序", modifier = Modifier.size(20.dp))
-    }
-    // 点菜单外面 / 按返回取消时同样清一次（这时已经没有焦点可收，但保持语义一致）
-    DropdownMenu(
-      expanded = expanded,
-      onDismissRequest = { expanded = false; onRequestClearFocus() },
-    ) {
-      // 上半区：排序项。勾中的那一项高亮，并直接显示它当前的方向（↑ 升 / ↓ 降）
-      SORT_OPTIONS.forEach { (value, label) ->
-        DropdownMenuItem(
-          text = {
-            Text(
-              text = buildString {
-                append(label)
-                if (value == currentSort) {
-                  append(if (currentOrder == "Ascending") " ↑" else " ↓")
-                }
+      Surface(
+        shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp),
+        shadowElevation = 8.dp,
+        tonalElevation = 2.dp,
+        modifier = Modifier
+          .width(240.dp)
+          .heightIn(max = panelMaxHeight),
+      ) {
+        Column(
+          modifier = Modifier.verticalScroll(rememberScrollState()),
+        ) {
+          Text(
+            text = "排序方式",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 6.dp),
+          )
+          HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+          )
+          SORT_OPTIONS.forEach { (value, label) ->
+            val selected = value == currentSort
+            DropdownMenuItem(
+              text = {
+                Text(
+                  text = buildString {
+                    append(label)
+                    if (selected) {
+                      append(if (currentOrder == "Ascending") " ↑" else " ↓")
+                    }
+                  },
+                  color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.onSurface
+                  },
+                )
               },
-              color = if (value == currentSort) {
-                MaterialTheme.colorScheme.primary
+              trailingIcon = if (selected) {
+                {
+                  Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                  )
+                }
               } else {
-                MaterialTheme.colorScheme.onSurface
+                null
+              },
+              onClick = {
+                if (selected) {
+                  // 再点一次已选中的排序项 = 只反转方向，不换排序项
+                  onOrderChange(if (currentOrder == "Ascending") "Descending" else "Ascending")
+                } else {
+                  // 换排序项：由调用方把方向重置为该排序项的自然方向
+                  onSortChange(value)
+                }
+                onDismiss()
               },
             )
-          },
-          onClick = {
-            if (value == currentSort) {
-              // 再点一次已选中的排序项 = 只反转方向，不换排序项
-              onOrderChange(if (currentOrder == "Ascending") "Descending" else "Ascending")
-            } else {
-              // 换排序项：由调用方把方向重置为该排序项的自然方向
-              onSortChange(value)
-            }
-            expanded = false
-          },
-        )
+          }
+          Spacer(modifier = Modifier.height(8.dp))
+        }
       }
-      // 方向不单列选项：上面每个排序项的标签会带 ↑ / ↓，
-      // 再点一次已选中的项就反转方向，两个入口合并成一个，菜单也短一半。
     }
   }
 }

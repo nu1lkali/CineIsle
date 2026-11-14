@@ -817,10 +817,13 @@ fun EmbyHomeScreen(
             recommendItems = recommendState.items,
             recommendLoading = recommendState.loading,
             recommendError = recommendState.error,
+            recommendLoadingMore = recommendState.loadingMore,
+            recommendEndReached = recommendState.endReached,
             // 推荐卡是 16:9 横图：优先剧照，没有剧照退回竖版主图
             imageUrl = { item -> server?.let { s -> recommendImageUrl(viewModel, s, item) } },
             onOpenRecommend = { onOpenDetail(it) },
             onRetryRecommend = { recommendViewModel.retry(server) },
+            onLoadMoreRecommend = { recommendViewModel.loadMore(server) },
             onRefresh = { recommendViewModel.refreshAndWait(server) },
             onDismissKeyboard = { dismissKeyboard() },
             bottomInset = LocalNavigationBarHeight.current,

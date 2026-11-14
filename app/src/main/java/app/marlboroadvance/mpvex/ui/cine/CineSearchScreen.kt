@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -28,7 +29,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -62,6 +62,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -75,6 +76,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -282,11 +284,14 @@ fun CineSearchOverlay(
           recommendItems = recommendState.items,
           recommendLoading = recommendState.loading,
           recommendError = recommendState.error,
+          recommendLoadingMore = recommendState.loadingMore,
+          recommendEndReached = recommendState.endReached,
           imageUrl = { item ->
             server?.let { s -> recommendImageUrl(viewModel, s, item) }
           },
           onOpenRecommend = { openDetailWithMemory(it) },
           onRetryRecommend = { recommendViewModel.retry(server) },
+          onLoadMoreRecommend = { recommendViewModel.loadMore(server) },
           onRefresh = { recommendViewModel.refreshAndWait(server) },
           onDismissKeyboard = { dismissKeyboard() },
         )
@@ -459,10 +464,13 @@ private fun CineSearchTopBar(
 }
 
 /**
- * 空词态：搜索历史 + 推荐。
+ * 空词态：搜索历史 + 推荐网格。
  *
  * 整页一个 `LazyColumn`：历史是一组 FlowRow 胶囊，推荐是若干行两列卡片。
  * 两个区块共用一个滚动容器，避免「内外两层各滚各的」那种滑不动的观感。
+ *
+ * v260 把 v259 的推荐横条改回两列网格：横条只占一行、下面大片留白，实测不如网格耐看；
+ * 触底自动续页随之恢复，标题右侧「换一批」保留。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -474,9 +482,12 @@ private fun CineSearchLanding(
   recommendItems: List<EmbyItem>,
   recommendLoading: Boolean,
   recommendError: String?,
+  recommendLoadingMore: Boolean,
+  recommendEndReached: Boolean,
   imageUrl: (EmbyItem) -> String?,
   onOpenRecommend: (EmbyItem) -> Unit,
   onRetryRecommend: () -> Unit,
+  onLoadMoreRecommend: () -> Unit,
   onRefresh: suspend () -> Unit,
   onDismissKeyboard: () -> Unit,
 ) {
@@ -486,8 +497,20 @@ private fun CineSearchLanding(
   val context = LocalContext.current
   val isRefreshing = remember { mutableStateOf(false) }
   val listState = rememberLazyListState()
+  val rows = remember(recommendItems) { recommendItems.chunked(2) }
   val scope = rememberCoroutineScope()
   var confirmClear by remember { mutableStateOf(false) }
+
+  // 触底续页：最后两行露头就补下一页（没有「查看更多」入口，推荐靠滚动自己长出来）
+  LaunchedEffect(listState, rows.size, recommendEndReached, recommendLoadingMore) {
+    if (rows.isEmpty()) return@LaunchedEffect
+    snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+      .collect { last ->
+        if (!recommendEndReached && !recommendLoadingMore && last >= rows.size - 2) {
+          onLoadMoreRecommend()
+        }
+      }
+  }
 
   if (confirmClear) {
     AlertDialog(
@@ -640,7 +663,6 @@ private fun CineSearchLanding(
               .padding(start = 8.dp),
           )
           // 换一批：与下拉刷新同一个回调（四路游标轮转 + 去重，天然给出不同内容）。
-          // 横条一屏只见两三张，一键换掉整排比滑很远更省事。
           if (recommendItems.isNotEmpty()) {
             Text(
               text = stringResource(R.string.cine_search_recommend_shuffle),
@@ -657,8 +679,12 @@ private fun CineSearchLanding(
       }
 
       when {
-        recommendLoading && recommendItems.isEmpty() -> item(key = "cine-recommend-skeleton") {
+        recommendLoading && recommendItems.isEmpty() -> items(
+          3,
+          key = { "cine-recommend-skeleton-$it" },
+        ) {
           CineRecommendSkeletonRow()
+          Spacer(Modifier.height(space.itemGap))
         }
 
         recommendItems.isEmpty() && recommendError != null ->
@@ -681,11 +707,46 @@ private fun CineSearchLanding(
           )
         }
 
-        else -> item(key = "cine-recommend-strip") {
-          CineRecommendStrip(
-            items = recommendItems,
+        else -> items(rows, key = { row -> row.firstOrNull()?.Id ?: row.hashCode().toString() }) { row ->
+          CineRecommendRow(
+            items = row,
             imageUrl = imageUrl,
             onClick = onOpenRecommend,
+            modifier = Modifier.padding(bottom = space.itemGap),
+          )
+        }
+      }
+
+      // 续页脚：只在真有下一页、且正在取的时候占一行
+      if (recommendLoadingMore) {
+        item(key = "cine-recommend-more") {
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .heightIn(min = 44.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            CircularProgressIndicator(
+              color = colors.progressFill,
+              strokeWidth = 2.dp,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        }
+      }
+
+      // 到底：推荐总量有上限（SearchRecommendViewModel.MAX_ITEMS），触顶后不再续页。
+      // 留一行说明，否则用户会以为还在加载而一直往下拉。
+      if (recommendEndReached && recommendItems.isNotEmpty()) {
+        item(key = "cine-recommend-end") {
+          Text(
+            text = stringResource(R.string.cine_search_recommend_end, recommendItems.size),
+            style = type.cardMeta,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(bottom = space.itemGap),
           )
         }
       }
@@ -774,7 +835,8 @@ private fun CineRecommendCard(
 
   Box(
     modifier = modifier
-      // 宽度由调用方给定（横条给固定宽），这里只锁 16:9 的形状
+      .fillMaxWidth()
+      // aspectRatio(16f / 9f) = 宽 / 高，高度由宽度算出来，两列自适应不用手算宽度
       .aspectRatio(16f / 9f)
       .clip(shape)
       .background(colors.skeleton)
@@ -839,56 +901,51 @@ private fun CineRecommendCard(
   }
 }
 
-/**
- * 推荐横条：一行 `LazyRow`，一屏见两张多一点（与 Classic 的 EmbyRecommendStrip 同口径）。
- *
- * v259 从「两列网格」改成横条：空词态不再被三行图墙撑满，「看更多」由横条自己滑 +
- * 标题右侧「换一批」承担，触底自动续页在横条上没有意义，不再触发。
- */
+/** 推荐卡的一行（两列）。最后一行不满时补空位，避免剩下的卡片被拉宽 */
 @Composable
-private fun CineRecommendStrip(
+private fun CineRecommendRow(
   items: List<EmbyItem>,
   imageUrl: (EmbyItem) -> String?,
   onClick: (EmbyItem) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val space = CineTheme.space
-  val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-  val cardWidth = ((screenWidth - space.screenH * 2) * 0.42f).coerceAtLeast(120.dp)
-  LazyRow(
-    modifier = modifier.fillMaxWidth(),
-    contentPadding = PaddingValues(horizontal = space.screenH),
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .padding(horizontal = space.screenH),
     horizontalArrangement = Arrangement.spacedBy(space.itemGap),
   ) {
-    items(items, key = { it.Id ?: it.hashCode().toString() }) { item ->
+    items.forEach { item ->
       CineRecommendCard(
         item = item,
         imageUrl = imageUrl(item),
         onClick = { onClick(item) },
-        modifier = Modifier.width(cardWidth),
+        modifier = Modifier.weight(1f),
       )
+    }
+    repeat((2 - items.size).coerceAtLeast(0)) {
+      Spacer(modifier = Modifier.weight(1f))
     }
   }
 }
 
-/** 推荐骨架：一条与横条同形状的骨架（16:9 卡 + 同宽），落地时不跳版 */
+/** 推荐骨架行：两列 16:9 空卡，形状与真卡片一致，落地时不跳版 */
 @Composable
 private fun CineRecommendSkeletonRow() {
   val colors = CineTheme.colors
   val space = CineTheme.space
   val corner = LocalCardCorner.current
-  val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-  val cardWidth = ((screenWidth - space.screenH * 2) * 0.42f).coerceAtLeast(120.dp)
   Row(
     modifier = Modifier
       .fillMaxWidth()
       .padding(horizontal = space.screenH),
     horizontalArrangement = Arrangement.spacedBy(space.itemGap),
   ) {
-    repeat(3) {
+    repeat(2) {
       Box(
         modifier = Modifier
-          .width(cardWidth)
+          .weight(1f)
           .aspectRatio(16f / 9f)
           .clip(RoundedCornerShape(corner))
           .background(colors.skeleton),
