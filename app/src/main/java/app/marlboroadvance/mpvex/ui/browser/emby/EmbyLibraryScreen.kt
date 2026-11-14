@@ -2272,7 +2272,9 @@ data class EmbyLibraryScreen(
             totalCount > 0 -> "$totalCount 项"
             else -> ""
           },
-          style = MaterialTheme.typography.bodyMedium,
+          // v259：数量是**辅助信息**，不与右侧功能图标争夺视觉焦点 —— 从 bodyMedium
+          // 降到 labelSmall，视觉重量与旁边 20dp 的图标持平。
+          style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           // ⚠️ 这行文案的长度会随筛选状态大幅变化（「1234 项」→「命中 328 项 · 已扫 1234 / 1234」）。
           // 不约束宽度的话它先按内容宽测量，把右边那排工具按钮整排顶出屏幕 ——
@@ -2336,7 +2338,10 @@ data class EmbyLibraryScreen(
               },
             )
             // 筛选：有生效条件时图标高亮，让人一眼看出列表不是全量
-            IconButton(onClick = { releaseInputFocus(); showFilterDialog = true }) {
+            IconButton(
+              onClick = { releaseInputFocus(); showFilterDialog = true },
+              modifier = Modifier.size(40.dp),
+            ) {
               Icon(
                 imageVector = Icons.Default.FilterAlt,
                 contentDescription = "筛选",
@@ -2345,21 +2350,28 @@ data class EmbyLibraryScreen(
                 } else {
                   MaterialTheme.colorScheme.onSurface
                 },
+                modifier = Modifier.size(20.dp),
               )
             }
           }
           // 有照片就给「随机播放图片」（递归取整个范围的照片，落全屏照片浏览器）。
           // 混合页两个入口并存是有意的：随机看照片和随便挑个视频看，是两件事。
           if (showPhotoRandom) {
-            IconButton(onClick = { releaseInputFocus(); startRandomPhotoPlayback() }) {
-              Icon(Icons.Default.Image, contentDescription = "随机播放图片")
+            IconButton(
+              onClick = { releaseInputFocus(); startRandomPhotoPlayback() },
+              modifier = Modifier.size(40.dp),
+            ) {
+              Icon(Icons.Default.Image, contentDescription = "随机播放图片", modifier = Modifier.size(20.dp))
             }
           }
           // 视图样式（海报 / 横版 / 紧凑）：照片卡是**统一等比**的，跟着切样式会把它
           // 压成海报比例或拉成一行一条 —— 这一页有照片时收掉，保住照片的版式。
           if (showVideoActions) {
-            IconButton(onClick = { releaseInputFocus(); showStyleDialog = true }) {
-              Icon(Icons.Default.GridView, contentDescription = "视图样式")
+            IconButton(
+              onClick = { releaseInputFocus(); showStyleDialog = true },
+              modifier = Modifier.size(40.dp),
+            ) {
+              Icon(Icons.Default.GridView, contentDescription = "视图样式", modifier = Modifier.size(20.dp))
             }
           }
           SortMenu(
@@ -2742,8 +2754,6 @@ data class EmbyLibraryScreen(
             recommendItems = recommendState.items,
             recommendLoading = recommendState.loading,
             recommendError = recommendState.error,
-            recommendLoadingMore = recommendState.loadingMore,
-            recommendEndReached = recommendState.endReached,
             imageUrl = { item -> server?.let { s -> recommendImageUrl(viewModel, s, item) } },
             onOpenRecommend = { item ->
               val s = server
@@ -2760,7 +2770,6 @@ data class EmbyLibraryScreen(
               }
             },
             onRetryRecommend = { recommendViewModel.retry(server, parentId = libraryId) },
-            onLoadMoreRecommend = { recommendViewModel.loadMore(server, parentId = libraryId) },
             onRefresh = { recommendViewModel.refreshAndWait(server, parentId = libraryId) },
             onDismissKeyboard = { releaseInputFocus() },
             bottomInset = 0.dp,
@@ -3679,8 +3688,12 @@ private fun EmbyLibraryMediaCell(
  *
  * 为什么不用 `IconButton`：它只有 `onClick`，接不了长按；而「单击 = 下钻随机 /
  * 长按 = 不下钻」这组语义必须落在同一个图标上（否则工具行要多排一个按钮、
- * 一排图标也更挤）。自铺 48dp 圆形触控区 + `combinedClickable`，
- * 尺寸与 M3 `IconButton` 一致，所以和旁边的筛选 / 视图图标不会高低不齐。
+ * 一排图标也更挤）。自铺 40dp 圆形触控区 + `combinedClickable`。
+ *
+ * v259 把整排工具从 48dp 收到 40dp：搜索态下顶栏下面要叠「工具行 + 联想 + 类型筛选」
+ * 三条，7 个 48dp 按钮把数量文字挤到省略号，行高也多吃 8dp。40dp + 4dp 间距
+ * 仍在可靠点击下限之上（相邻按钮间还有间隙可借），但一排放得下、数量文字不再被顶掉。
+ * 旁边的筛选 / 图片随机 / 视图 / 排序已同步收到同一规格，不会高低不齐。
  */
 @Composable
 private fun ToolbarIconAction(
@@ -3691,12 +3704,12 @@ private fun ToolbarIconAction(
 ) {
   Box(
     modifier = Modifier
-      .size(48.dp)
+      .size(40.dp)
       .clip(CircleShape)
       .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     contentAlignment = Alignment.Center,
   ) {
-    Icon(imageVector = icon, contentDescription = contentDescription)
+    Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(20.dp))
   }
 }
 
@@ -4647,8 +4660,11 @@ private fun SortMenu(
 ) {
   var expanded by remember { mutableStateOf(false) }
   Box {
-    IconButton(onClick = { onRequestClearFocus(); expanded = true }) {
-      Icon(Icons.Default.Sort, contentDescription = "排序")
+    IconButton(
+      onClick = { onRequestClearFocus(); expanded = true },
+      modifier = Modifier.size(40.dp),
+    ) {
+      Icon(Icons.Default.Sort, contentDescription = "排序", modifier = Modifier.size(20.dp))
     }
     // 点菜单外面 / 按返回取消时同样清一次（这时已经没有焦点可收，但保持语义一致）
     DropdownMenu(

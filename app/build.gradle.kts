@@ -3213,7 +3213,22 @@ android {
     //    一律「先 hide 再 clearFocus」；结果网格开始滚动也收键盘（注意力已经在列表上）。
     //  · 历史空态提示的图标由 History 换成 Search：「还没有搜索记录」配放大镜才贴切，
     //    与区块标题的小时钟上下叠着出现会像重复渲染了一遍标题。
-    versionCode = 258
+    // 259（修复轮，versionName 仍为 1.6.17）：搜索页减负 + 播放进度 0% 第四次修复。
+    //  · 搜索页按设计稿减负（用户报「太挤」）：上下布局定死为 搜索框 → 工具栏 → 历史 → 推荐横条。
+    //  · 工具行整排从 48dp 收到 40dp 触达（图标 20dp），数量文字降到 labelSmall 作辅助信息 ——
+    //    搜索态下顶栏要叠「工具行 + 联想 + 类型筛选」三条，7 个 48dp 按钮把数量挤到省略号。
+    //  · 推荐区从两列网格改成一行横条（LazyRow，一屏约两张半），标题右侧加「换一批」
+    //    （与下拉刷新同一回调）；触底自动续页与「已显示全部」文案随之移除（横条无「页」），
+    //    loadMore 不再被 UI 触发，SearchRecommendViewModel 的封顶与去重逻辑不动。
+    //  · Cine 版同口径：CineRecommendStrip + 换一批（cine_search_recommend_shuffle）。
+    //  · 播放进度「频繁拖动 → 返回 → 详情页 0%」的确定性根因（前三次都没打中）：
+    //    ① ticks/秒 单位错配 —— 上报器把 ticks 直接喂给按秒判定的 PlayerSeekTracker，
+    //      容差 12 秒在 ticks 面前 = 0 ⇒ 每次 seek 后恒判「未落地」⇒ 目标秒数被当 ticks
+    //      发出去（2400 秒 → 2400 ticks = 0.00024 秒）；换算收进纯函数 settleTicksPosition。
+    //    ② 时长读不到被 `?: 0` 夹成 0 ⇒ 跳转目标记成 0 ⇒ 两道零闸门全部失效；改「只夹下界」。
+    //    ③ 「距下发 8 秒」判据改成状态判定（读数没跑到目标附近就一直用目标，120s 兜底）。
+    //    判定收进 PlayerSeekSettle.kt（纯 JVM），回归网 .verify/run_settle_tests.py（16 例全绿）。
+    versionCode = 259
     versionName = "1.6.17"
 
     vectorDrawables {

@@ -1,7 +1,4 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
-import app.marlboroadvance.mpvex.ui.player.PlayerDiagLog
-import app.marlboroadvance.mpvex.ui.player.PlayerSeekTracker
-import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import android.app.Activity
 import android.content.Intent
@@ -12,6 +9,10 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyLog
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.ui.player.PlayerDiagLog
+import app.marlboroadvance.mpvex.ui.player.PlayerSeekTracker
+import app.marlboroadvance.mpvex.ui.player.TicksSettleOutcome
+import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -260,7 +261,7 @@ object EmbyPlaybackReporter {
    */
   fun snapshotExitPosition() {
     val itemId = currentItemId
-    val live = if (itemId != null) readSettledPositionTicks() else null
+    val live = if (itemId != null) readSettledPosition()?.ticks else null
     // 读不到就**主动作废**上一份快照：留着它，[stop] 会拿一次更早的暂停（转屏、
     // 短暂切后台）时的位置去结算，比退回 [lastReportedTicks] 更偏。
     if (itemId == null || live == null) {
@@ -424,7 +425,7 @@ object EmbyPlaybackReporter {
           exitSnapshotItemId == itemId &&
           android.os.SystemClock.elapsedRealtime() - exitSnapshotAt <= EXIT_SNAPSHOT_TTL_MS
       }
-      snapshot ?: readSettledPositionTicks()
+      snapshot ?: readSettledPosition()?.ticks
     } else {
       null
     }
@@ -651,7 +652,8 @@ object EmbyPlaybackReporter {
     val server = repository.getServer(serverId) ?: return
 
     // 内核还没就绪 / 读不到位置 ⇒ 这一轮整轮跳过（不能当 0 发，见 readPositionTicks 注释）
-    val positionTicks = guardAgainstReset(readSettledPositionTicks() ?: return)
+    val settled = readSettledPosition() ?: return
+    val positionTicks = guardAgainstReset(settled.ticks)
     val isPaused = readIsPaused()
     val playingItemId = readCurrentItemId() ?: currentItemId ?: return
     val playingSourceId = mediaSourceIdOf(playingItemId)
@@ -719,6 +721,16 @@ object EmbyPlaybackReporter {
 
     // 手上没有可用 session 就先补一次 Start；补不上本轮跳过（带空串发出去等于白打）
     if (!ensureSession(repository, server, playingItemId, playingSourceId, positionTicks)) return
+
+    // ⚠️ 「seek 未落地」闸门：这个位置是跳转目标顶上来的，不是这一拍真看到的画面位置。
+    //   实时 Progress 发出去等于替用户宣称「我已经在目标处了」，而播放器还在重连取流。
+    //   跳过本轮，下一拍落地后照常上报；退出结算走 [snapshotExitPosition]，那里**照用**
+    //   substituted（用户按返回时，我们关心的是他要去哪儿）。
+    //   放在换条目分支之后：切集检测是本函数另一项职责，不能因为一次 seek 就整轮漏掉。
+    if (settled.substituted) {
+      PlayerDiagLog.log("report", "seek 未落地，跳过本轮实时进度（target=${settled.ticks}）")
+      return
+    }
 
     // ⚠️ 「零闸门」必须放在**换条目分支之后**：连播切到下一集时新一集本来就从 0 起播，
     //   放在前面会被误判成「假 0」而 return，这一轮就检测不到切集（Stopped/Start 全不发）。
@@ -840,12 +852,23 @@ object EmbyPlaybackReporter {
   /**
    * 位置读数的**唯一入口**：读一次 + 过「刚下发过 seek」校正。
    *
-   * 校正的必要性见 [PlayerSeekTracker] 的类注释。这里只做转调，不做任何兜底 ——
+   * 校正的必要性见 `PlayerSeekTracker` 的类注释。这里只做转调，不做任何兜底 ——
    * 读不到仍然是 null，由调用方决定「跳过本轮」还是「退回上次位置」，
    * 绝不能在这里折成 0。
+   *
+   * ⚠️⚠️ **单位**：本类全程用 Emby ticks，而 seek 目标记的是秒。换算集中在
+   * [PlayerSeekTracker.settleDetailedTicks] / `settleTicksPosition` 里做（那是可单测的纯函数），
+   * 这里**只传换算系数**，绝不自己拿 ticks 去比秒 —— 早先正是这么比错的，详见
+   * `PlayerSeekSettle.kt` 里 `settleTicksPosition` 的注释。
+   *
+   * 返回的 [TicksSettleOutcome] 带 `substituted`：true 表示这个值是「跳转目标顶上来的」，
+   * 不是这一拍真看到的画面位置。实时上报必须据此跳过（见 [reportProgressOnce]），
+   * 退出结算则照用（用户按返回时，我们关心的是他要去哪儿）。
    */
-  private fun readSettledPositionTicks(): Long? =
-    readPositionTicks()?.let { PlayerSeekTracker.settle(it) }
+  private fun readSettledPosition(): TicksSettleOutcome? =
+    readPositionTicks()?.let {
+      PlayerSeekTracker.settleDetailedTicks(it, EmbyTicks.TICKS_PER_SECOND)
+    }
 
   private fun readIsPaused(): Boolean {
     pausedProvider?.let { provider ->

@@ -1,7 +1,6 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import android.os.SystemClock
-import kotlin.math.abs
 
 /**
  * 「最近一次绝对跳转的目标位置」的唯一记账处。
@@ -27,13 +26,24 @@ import kotlin.math.abs
  * 这不是阈值调不调的问题 —— 这类读数在这个窗口里**本身就没有意义**。
  *
  * 而「用户想跳到哪」这个信息我们**自己手里就有**（`PlayerViewModel.dispatchAbsoluteSeek`
- * 里的最终落点），所以结算时不该盲信一次瞬时读数，而应当用它校正：
+ * 里的最终落点），所以结算时不该盲信一次瞬时读数，而应当用它校正。
  *
- * · 距下发不到 [SETTLE_WINDOW_MS] 且读数与目标差得超过 [SETTLE_TOLERANCE_SECONDS]
- *   ⇒ 认为 seek 还没落地，**用目标位置**；
- * · 其余情况（早就落地了 / 差值在关键帧粒度内 / 从没跳转过）⇒ 原样返回。
+ * ## v259：为什么「修过一次还是没好」
  *
- * 这条校正是**双向**的：往前拖时防 `0`，往回拖时防「还停在拖动前的高位」。
+ * 两处都出在**判据本身**，不是阈值：
+ *
+ * 1. **校正靠时间窗口（8 秒）**。网络流上一次 seek 落地常常超过 8 秒（丢缓存 → Range
+ *    重连 → 定位关键帧 → 解出第一帧），窗口一过就重新采信读数 —— 那时读数正好还是 0。
+ *    现在改成**状态判定**：只要读数还没跑到目标附近就一直用目标，见
+ *    [SeekSettlePolicy.MAX_HOLD_MS] 的注释。
+ * 2. **目标本身可能是 0**。`PlayerViewModel.dispatchAbsoluteSeek` 里
+ *    `PlayerLib.getPropertyInt("duration") ?: 0` 会把「时长读不到」变成「时长 0 秒」，
+ *    于是 `position.coerceIn(0, 0)` ⇒ 目标被夹成 0 ⇒ 这里记下的就是「用户要跳到开头」。
+ *    此后 [seekTargetsZero] 恒真（两道「读到 0 就不许上报」的闸门全部失效），
+ *    而 [settle] 又会把任何一个读数都校正成 0 —— 一次拖动就把 Progress / Stopped /
+ *    本地续播三条写入全部打成 0。**上一版修的所有逻辑，反而成了把 0 送出去的高速公路。**
+ *    目标端的病根在 `PlayerViewModel` 那边堵死（时长未知时不再夹取），这里补一道
+ *    「0 意图必须限时」的兜底（见 [seekTargetsZero]）。
  *
  * ## 为什么不做成「一律取最大值」之类的启发式
  *
@@ -48,31 +58,20 @@ import kotlin.math.abs
  * · 写它的只有 `PlayerViewModel`（主线程 + IO 各一处），读它的可能是 IO 线程 ⇒ `@Volatile`。
  */
 internal object PlayerSeekTracker {
-  /**
-   * 「刚下发过 seek」的有效窗口。
-   *
-   * 网络流上一次 seek 的落地时间实测在 1~4 秒（丢缓存 → Range 重连 → 定位到关键帧 →
-   * 解出第一帧），取 8 秒留一倍余量。窗口**必须小于两倍上报周期（10s × 2）**：
-   * 否则「拖完接着看了十几秒」的那种正常读数也会被拖回目标位置。
-   */
-  const val SETTLE_WINDOW_MS = 8_000L
-
-  /**
-   * 允许「还没到位」的差值。
-   *
-   * mpv 的 `absolute+keyframes` 会落到目标**之前**的关键帧上，GOP 长一点能差近 10 秒；
-   * 12 秒 = 关键帧粒度 + 一点抖动余量。差值在这之内就当已经落地、照读数上报。
-   */
-  const val SETTLE_TOLERANCE_SECONDS = 12L
-
-  /** 「目标就是开头」的判定阈值：1 秒以内都算用户要求回到开头。 */
-  private const val ZERO_TARGET_SECONDS = 1L
-
   /** 最近一次跳转的目标（秒）；-1 = 本次播放里还没有过跳转。 */
   @Volatile private var targetSeconds: Long = -1L
 
   /** 最近一次跳转的下发时刻（`SystemClock.elapsedRealtime()`）。 */
   @Volatile private var dispatchedAt: Long = 0L
+
+  /**
+   * 这一次跳转是否已经**确认落地**（读数跑到目标附近过）。
+   *
+   * 落地之后就不能再拿目标去压读数：用户可能只是拖到 40 分钟看了一眼、接着又拖到
+   * 12 分钟，而 12 分钟那次如果没记进目标（异常路径），继续用旧目标会把位置拉回去。
+   * 只要确认过一次，就说明取流层已经完成定位，之后的读数一律照用。
+   */
+  @Volatile private var confirmed: Boolean = false
 
   /**
    * 记一笔「用户要求跳到这里」。
@@ -86,12 +85,19 @@ internal object PlayerSeekTracker {
     if (seconds < 0) return
     targetSeconds = seconds.toLong()
     dispatchedAt = SystemClock.elapsedRealtime()
+    confirmed = false
+    if (seconds <= SeekSettlePolicy.ZERO_TARGET_SECONDS) {
+      // 这是「0 是从哪儿来的」的取证线：正常拖动只会在用户把进度条拖到最左端时命中。
+      // 若日志里在用户没拖到开头的情况下出现它，说明上游把「时长未知」又当成了 0 —— 见类注释 v259 第 2 条。
+      PlayerDiagLog.log("seek", "记录跳转目标 = 0（视为用户要求回到开头）")
+    }
   }
 
   /** 换片 / 本场收尾后清空，见类注释「边界」。 */
   fun clear() {
     targetSeconds = -1L
     dispatchedAt = 0L
+    confirmed = false
   }
 
   /**
@@ -101,51 +107,77 @@ internal object PlayerSeekTracker {
    *   自己跳过本轮，不要把 null 折成 0 送进来（那个 0 会直接变成续播点）。
    * @return 校正后的位置（秒）。没有任何可校正的跳转时原样返回 [seconds]。
    */
-  fun settle(seconds: Long): Long {
+  fun settle(seconds: Long): Long = settleDetailed(seconds).seconds
+
+  /**
+   * 同 [settle]，但把「这个值是不是实测读数」一并给出。
+   *
+   * 实时上报要据此跳过本轮（见 [SeekSettleOutcome.substituted]），退出结算则照用。
+   */
+  fun settleDetailed(seconds: Long): SeekSettleOutcome {
     val target = targetSeconds
-    if (target < 0L) return seconds
+    if (target < 0L) return SeekSettleOutcome(seconds, false)
     val elapsed = SystemClock.elapsedRealtime() - dispatchedAt
-    val fixed = settleSeekPosition(seconds, target, elapsed)
-    if (fixed != seconds) {
-      PlayerDiagLog.log(
+    // 先判「落地」：落地这一拍之后的所有读数都是可信的
+    if (isAtSeekTarget(seconds, target)) {
+      confirmed = true
+      return SeekSettleOutcome(seconds, false)
+    }
+    val outcome = settleSeekPosition(seconds, target, elapsed, alreadyConfirmed = confirmed)
+    if (outcome.substituted) {
+      PlayerDiagLog.forceLog(
         "report",
         "seek 未落地，位置按目标校正：raw=${seconds}s target=${target}s since=${elapsed}ms",
       )
     }
-    return fixed
+    return outcome
+  }
+
+  /**
+   * 同 [settleDetailed]，但输入 / 输出都是 **ticks** —— Emby 上报器全程用 ticks，
+   * 由它自己换算容易再把量纲搞错（见 [settleTicksPosition] 的类注释），所以收在这里。
+   *
+   * @param ticksPerSecond 1 秒对应的 ticks（Emby 是 `EmbyTicks.TICKS_PER_SECOND`）。
+   */
+  fun settleDetailedTicks(rawTicks: Long, ticksPerSecond: Long): TicksSettleOutcome {
+    val target = targetSeconds
+    if (target < 0L) return TicksSettleOutcome(rawTicks, false)
+    val elapsed = SystemClock.elapsedRealtime() - dispatchedAt
+    // 「已落地」的判据是秒，读数先换算；这一拍之后 confirmed 置位，之后照用实测值。
+    if (isAtSeekTarget(rawTicks / ticksPerSecond, target)) {
+      confirmed = true
+      return TicksSettleOutcome(rawTicks, false)
+    }
+    val outcome =
+      settleTicksPosition(
+        rawTicks = rawTicks,
+        targetSeconds = target,
+        elapsedSinceDispatchMs = elapsed,
+        alreadyConfirmed = confirmed,
+        ticksPerSecond = ticksPerSecond,
+      )
+    if (outcome.substituted) {
+      PlayerDiagLog.forceLog(
+        "report",
+        "seek 未落地，位置按目标校正：raw=${rawTicks}ticks target=${target}s since=${elapsed}ms",
+      )
+    }
+    return outcome
   }
 
   /**
    * 这次的 `0` 是不是**用户自己要的**（拖回开头）。
    *
-   * 给最后的「别把续播点写零」闸门用：只有用户明确要求跳到开头时，`0` 才可信。
-   * 不做时间窗口判定 —— 目标一旦是 0，本场之内它都代表同样的意图。
+   * 给「别把续播点写零」的闸门用：只有用户明确要求跳到开头、且**就是刚才**，`0` 才可信。
+   *
+   * ⚠️ 必须限时，理由见 [SeekSettlePolicy.ZERO_INTENT_WINDOW_MS]。
    */
-  fun seekTargetsZero(): Boolean = targetSeconds in 0..ZERO_TARGET_SECONDS
+  fun seekTargetsZero(): Boolean {
+    val target = targetSeconds
+    if (target !in 0..SeekSettlePolicy.ZERO_TARGET_SECONDS) return false
+    return SystemClock.elapsedRealtime() - dispatchedAt <= SeekSettlePolicy.ZERO_INTENT_WINDOW_MS
+  }
 
   /** 当前跳转目标（秒）；没有则 -1。仅用于日志与调试。 */
   fun currentTargetSeconds(): Long = targetSeconds
-}
-
-/**
- * [PlayerSeekTracker.settle] 的**纯函数**部分（不碰状态、不读时钟，可直接单测）。
- *
- * @param rawSeconds 播放器报的位置
- * @param targetSeconds 最近一次跳转的目标
- * @param elapsedSinceDispatchMs 距那次跳转下发的毫秒数
- * @param windowMs 有效窗口，超过就认为早就落地了
- * @param toleranceSeconds 允许的差值，在这之内算「已经到位」
- */
-internal fun settleSeekPosition(
-  rawSeconds: Long,
-  targetSeconds: Long,
-  elapsedSinceDispatchMs: Long,
-  windowMs: Long = PlayerSeekTracker.SETTLE_WINDOW_MS,
-  toleranceSeconds: Long = PlayerSeekTracker.SETTLE_TOLERANCE_SECONDS,
-): Long {
-  if (targetSeconds < 0L) return rawSeconds
-  if (rawSeconds < 0L) return rawSeconds
-  // 时钟回绕 / 记录比现在还晚：不敢判，原样返回
-  if (elapsedSinceDispatchMs < 0L || elapsedSinceDispatchMs > windowMs) return rawSeconds
-  return if (abs(rawSeconds - targetSeconds) > toleranceSeconds) targetSeconds else rawSeconds
 }

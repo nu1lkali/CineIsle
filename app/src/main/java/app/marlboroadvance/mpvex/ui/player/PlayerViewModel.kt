@@ -1353,8 +1353,27 @@ class PlayerViewModel(
     scrubSeekJob?.cancel()
     scrubSeekJob =
       viewModelScope.launch(Dispatchers.IO) {
-        val maxDuration = PlayerLib.getPropertyInt("duration") ?: 0
-        var clampedPosition = position.coerceIn(0, maxDuration)
+        // ⚠️⚠️ 时长**读不到**时绝不能当成 0（v259，用户报「频繁拖动进度条然后返回，详情页变 0%」）。
+        //
+        // 老写法是 `PlayerLib.getPropertyInt("duration") ?: 0`，看起来只是个兜底，实际是一条
+        // 把续播点清零的流水线：
+        //   `getPropertyInt` 在内核未就绪、或 mpv 正为上一次 seek 重建解复用器时返回 null
+        //   ⇒ 时长变成 0 ⇒ `position.coerceIn(0, 0)` 把目标夹成 0
+        //   ⇒ 真的 seek 到开头，并且把 0 记成「用户要跳到这里」（PlayerSeekTracker）
+        //   ⇒ 此后「读到 0 就不许上报」的两道闸门全部失效，而位置校正又把任何读数都校正成 0
+        //   ⇒ Progress / Stopped / 本地续播三条写入同时变 0。
+        // 「频繁拖动」正是最容易撞上的场景：每 150ms 就下发一次，每次都现读一次时长，
+        // 而这段时间里 mpv 一半以上时间在重开 demuxer。
+        //
+        // 所以：时长拿不到就**只夹下界**，不猜上界；拿得到也优先用 [preciseDuration] ——
+        // 它已经做过「mpv 报 0 / 报小 / 报大」的三重甄别（见那里的注释），进度条画的也是它。
+        // 老写法读裸 mpv 值，于是 `.mts` 这类「mpv 时长报成 8 秒」的文件上，进度条最大 40 分钟、
+        // 拖到哪都被夹回 8 秒 —— 那本身也是「拖完进度条位置乱跳」的另一个来源。
+        val knownDuration =
+          preciseDuration.value.toInt().takeIf { it > 0 }
+            ?: PlayerLib.getPropertyInt("duration")?.takeIf { it > 0 }
+        var clampedPosition =
+          if (knownDuration != null) position.coerceIn(0, knownDuration) else position.coerceAtLeast(0)
 
         // Clamp within AB loop if active
         val loopA = _abLoopA.value
@@ -1365,14 +1384,15 @@ class PlayerViewModel(
           clampedPosition = clampedPosition.coerceIn(min, max)
         }
 
-        if (clampedPosition !in 0..maxDuration) return@launch
+        if (knownDuration != null && clampedPosition !in 0..knownDuration) return@launch
 
         // Cancel pending relative seek before absolute seek
         seekCoalesceJob?.cancel()
         pendingSeekOffset = 0
 
         // Use precise seeking for videos shorter than 2 minutes (120 seconds) or if preference is enabled
-        val shouldUsePreciseSeeking = playerPreferences.usePreciseSeeking.get() || maxDuration < 120
+        val shouldUsePreciseSeeking =
+          playerPreferences.usePreciseSeeking.get() || (knownDuration ?: 0) < 120
         val seekMode = if (shouldUsePreciseSeeking) "absolute+exact" else "absolute+keyframes"
         // ⚠️⚠️ 记账**必须紧贴命令之前**：这次跳转的目标是「seek 真的落地之前，位置读数
         //   不能代表用户在哪儿」的唯一凭据（详见 [PlayerSeekTracker]）。
@@ -1393,10 +1413,15 @@ class PlayerViewModel(
         pendingSeekOffset = 0
         
         if (toApply != 0) {
-          val duration = PlayerLib.getPropertyInt("duration") ?: 0
-          val currentPos = PlayerLib.getPropertyInt("time-pos") ?: 0
+          // 时长 / 位置**读不到就是读不到**：一律不折成 0（v259）。
+          // 折成 0 会让「双击快进 10 秒」被记成「用户要跳到第 10 秒」，比不记目标更糟。
+          val duration =
+            preciseDuration.value.toInt().takeIf { it > 0 }
+              ?: PlayerLib.getPropertyInt("duration")?.takeIf { it > 0 }
+              ?: 0
+          val currentPos = PlayerLib.getPropertyInt("time-pos") ?: pos?.toInt()
 
-          if (duration > 0 && currentPos + toApply >= duration) {
+          if (duration > 0 && currentPos != null && currentPos + toApply >= duration) {
               // If seeking past the end, force seek to 100% absolute to ensure EOF is triggered
               PlayerSeekTracker.noteAbsoluteSeek(duration)
               PlayerLib.command("seek", "100", "absolute-percent+exact")
@@ -1406,12 +1431,15 @@ class PlayerViewModel(
               val seekMode = if (shouldUsePreciseSeeking) "relative+exact" else "relative+keyframes"
               // 相对 seek 也要换算出**绝对落点**记账：双击快进/快退之后立刻退出，
               // 退出结算同样读不到可靠位置（理由见 [PlayerSeekTracker]）。
-              val target = if (duration > 0) {
-                (currentPos + toApply).coerceIn(0, duration)
-              } else {
-                (currentPos + toApply).coerceAtLeast(0)
+              // 只有读到当前位时才记 —— 读不到就没有落点，宁可不记也不要记个假的。
+              if (currentPos != null) {
+                val target = if (duration > 0) {
+                  (currentPos + toApply).coerceIn(0, duration)
+                } else {
+                  (currentPos + toApply).coerceAtLeast(0)
+                }
+                PlayerSeekTracker.noteAbsoluteSeek(target)
               }
-              PlayerSeekTracker.noteAbsoluteSeek(target)
               PlayerLib.command("seek", toApply.toString(), seekMode)
           }
         }

@@ -1177,6 +1177,7 @@
   <string name="cine_search_recommend_empty_title">暂无推荐内容</string>
   <string name="cine_search_recommend_empty_desc">推荐取自服务端的收藏、最近添加与评分数据。</string>
   <string name="cine_search_recommend_end">已显示全部 %1$d 条推荐</string>
+  <string name="cine_search_recommend_shuffle">换一批</string>
   <string name="cine_section_libraries">媒体库</string>
   <string name="cine_section_resume">继续观看</string>
   <string name="cine_section_latest">最新加入</string>
