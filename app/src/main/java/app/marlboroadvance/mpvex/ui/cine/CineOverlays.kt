@@ -1,6 +1,5 @@
 package app.marlboroadvance.mpvex.ui.cine
 
-import android.app.Application
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -23,335 +21,25 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.SearchOff
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
-import app.marlboroadvance.mpvex.ui.browser.emby.EmbySearchMemory
-import app.marlboroadvance.mpvex.ui.browser.emby.EmbyViewModel
 import app.marlboroadvance.mpvex.ui.cine.components.CinePosterCard
 import app.marlboroadvance.mpvex.ui.cine.components.CineStatePanel
-import kotlinx.coroutines.delay
 
-/** 搜索防抖：每敲一个字就发一次请求，对十万级库的服务端是灾难 */
-private const val SEARCH_DEBOUNCE_MS = 320L
-
-/** 单次搜索上限：与 Classic 的全库搜索一致（结果再多也只能往下翻，没有分页） */
-private const val SEARCH_LIMIT = 60
-
-/**
- * 全屏搜索页。
- *
- * ## 为什么是「全屏页」而不是首页顶部就地展开
- * 1. 首页的搜索胶囊压在 Hero 上，就地展开会把 Hero 的视觉重心抢走；
- * 2. 软键盘弹起（约 300dp）后 Hero 会被顶掉一半，滚动位置也跟着乱；
- * 3. 搜索结果需要网格空间 —— 在 Hero 下方挤几行卡片等于没有结果页。
- *
- * ## 数据
- * 复用 [EmbyViewModel.search]（同样的「演员 + 媒体」两路合并、同样的上限），
- * 所以 Cine 搜出来的和 Classic 搜出来的是同一批东西，只是排版不同。
- */
-@Composable
-fun CineSearchOverlay(
-  /** 与 [CineRoot] 共用的留存票据（见 [EmbySearchMemory]）；决定「返回」还是「重新进入」 */
-  ticket: String,
-  onClose: () -> Unit,
-  onOpenDetail: (EmbyItem) -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  val context = LocalContext.current
-  val app = context.applicationContext as Application
-  val viewModel: EmbyViewModel = viewModel(factory = EmbyViewModel.factory(app))
-  val server by viewModel.currentServer.collectAsState()
-  val space = CineTheme.space
-  val colors = CineTheme.colors
-  val keyboard = LocalSoftwareKeyboardController.current
-  val play = rememberCinePlay()
-
-  // 从详情页返回：词与结果由留存表带回（见文件末尾 openDetailWithMemory）。
-  // `pendingRestore` 只用来吃掉搜索 effect 的第一次触发 —— 否则返回瞬间会重搜一遍，
-  // 画面闪一下、排序随机时整批顺序还会变。
-  val restored = remember {
-    // 服务器对不上就不复用：结果是那台服务端给的，换一台还回放等于显示不存在的条目
-    EmbySearchMemory.take("$ticket|content")?.takeIf { it.serverId == null || it.serverId == server?.id }
-  }
-  var pendingRestore by remember { mutableStateOf(restored != null) }
-  var query by remember { mutableStateOf(restored?.query ?: "") }
-  var results by remember { mutableStateOf<List<CineMediaUi>>(emptyList()) }
-  var searching by remember { mutableStateOf(false) }
-  var errorText by remember { mutableStateOf<String?>(null) }
-  var lastTerm by remember { mutableStateOf(restored?.query ?: "") }
-
-  val focusRequester = remember { FocusRequester() }
-  // 返回搜索层时不再抢焦点：刚回来就弹键盘会把画面顶上去一半，
-  // 而用户此刻要的是「继续看刚才那批结果」，不是马上再打字。
-  LaunchedEffect(Unit) { if (restored == null) focusRequester.requestFocus() }
-
-  // 系统返回键先退搜索（搜索是叠在首页之上的一层）
-  BackHandler(onBack = onClose)
-
-  LaunchedEffect(query, server?.id) {
-    // 返回路径：把留存的那批结果重新映射回 UI 模型，不发请求
-    if (pendingRestore) {
-      pendingRestore = false
-      val snap = restored
-      // 服务器快照可能还没发出来（cold 组合）：先不映射，等它到了下面的新一轮走正常搜索兜底。
-      // 这条分支实际很少走到 —— 能搜出结果就一定已经有服务器了。
-      val current = server ?: run {
-        searching = false
-        return@LaunchedEffect
-      }
-      if (snap != null) {
-        results = snap.items.map { viewModel.toCineMedia(current, it) }
-        lastTerm = snap.query
-      }
-      searching = false
-      return@LaunchedEffect
-    }
-    val term = query.trim()
-    errorText = null
-    if (term.isEmpty()) {
-      results = emptyList()
-      searching = false
-      lastTerm = ""
-      return@LaunchedEffect
-    }
-    searching = true
-    delay(SEARCH_DEBOUNCE_MS)
-    val current = server
-    if (current == null) {
-      searching = false
-      errorText = context.getString(R.string.cine_search_no_server)
-      return@LaunchedEffect
-    }
-    val found = runCatching { viewModel.search(current, term, limit = SEARCH_LIMIT) }
-    found
-      .onSuccess { items ->
-        results = items.map { viewModel.toCineMedia(current, it) }
-        lastTerm = term
-      }
-      .onFailure { errorText = it.message }
-    searching = false
-  }
-
-  // 进详情页之前把「词 + 结果」拍进留存表，返回时原样带回。
-  // ⚠️ 用「点的时候写」而不是 onDispose：CineRoot 的 searchOpen 与本层状态分属两个组合，
-  //    onDispose 分不清这次离开是「进详情」还是「关搜索」，写早了会把已关掉的搜索又留一条。
-  val openDetailWithMemory: (EmbyItem) -> Unit = { item ->
-    if (query.isNotBlank()) {
-      val snap = EmbySearchMemory.Snapshot(
-        query = query,
-        items = results.map { it.item },
-        serverId = server?.id,
-      )
-      EmbySearchMemory.attach("$ticket|content", snap)
-      // 另记一条「搜索层是开着的」：CineRoot 只凭它决定返回后要不要把这一层盖回来
-      EmbySearchMemory.attach("$ticket|open", snap)
-    }
-    onOpenDetail(item)
-  }
-
-  val wide = rememberCineWide()
-  val columns = if (wide) 5 else 3
-  val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-  val cardWidth = (
-    (screenWidth - space.screenH * 2 - space.itemGap * (columns - 1)) / columns
-    ).coerceAtLeast(88.dp)
-
-  Column(
-    modifier = modifier
-      .fillMaxSize()
-      .background(colors.surface),
-  ) {
-    // ── 输入行 ──
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .statusBarsPadding()
-        .padding(start = 6.dp, end = space.screenH, top = 6.dp, bottom = 8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-      Box(
-        modifier = Modifier
-          .size(40.dp)
-          .clip(CircleShape)
-          .clickable(onClick = onClose),
-        contentAlignment = Alignment.Center,
-      ) {
-        Icon(
-          imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-          contentDescription = null,
-          tint = colors.onSurface,
-          modifier = Modifier.size(20.dp),
-        )
-      }
-
-      SearchField(
-        query = query,
-        onQueryChange = { query = it },
-        focusRequester = focusRequester,
-        onSearch = { keyboard?.hide() },
-        modifier = Modifier.weight(1f),
-      )
-    }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-      when {
-        query.isBlank() -> CineStatePanel(
-          icon = Icons.Outlined.Search,
-          title = stringResource(R.string.cine_search_prompt_title),
-          description = stringResource(R.string.cine_search_prompt_desc),
-        )
-
-        errorText != null -> CineStatePanel(
-          icon = Icons.Outlined.SearchOff,
-          title = stringResource(R.string.cine_state_error_title),
-          description = errorText,
-          isError = true,
-        )
-
-        searching && results.isEmpty() -> Box(
-          modifier = Modifier.fillMaxSize(),
-          contentAlignment = Alignment.TopCenter,
-        ) {
-          CircularProgressIndicator(
-            color = colors.progressFill,
-            strokeWidth = 2.5.dp,
-            modifier = Modifier
-              .padding(top = 48.dp)
-              .size(26.dp),
-          )
-        }
-
-        results.isEmpty() -> CineStatePanel(
-          icon = Icons.Outlined.SearchOff,
-          title = stringResource(R.string.cine_search_empty_title),
-          description = context.getString(R.string.cine_search_empty_desc, lastTerm.ifBlank { query }),
-        )
-
-        else -> CineMediaGrid(
-          items = results,
-          cardWidth = cardWidth,
-          columns = columns,
-          onClick = { media ->
-            keyboard?.hide()
-            play(media.item, media.resumeSeconds)
-          },
-          onLongClick = { media ->
-            keyboard?.hide()
-            // 走留存活页：进详情前把「词 + 结果」拍下来，返回时原样带回
-            openDetailWithMemory(media.item)
-          },
-          // 键盘弹起时网格要跟着缩，否则最后一行永远在键盘下面
-          modifier = Modifier.imePadding(),
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun SearchField(
-  query: String,
-  onQueryChange: (String) -> Unit,
-  focusRequester: FocusRequester,
-  onSearch: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  val colors = CineTheme.colors
-  val type = CineTheme.type
-  val shape = remember { RoundedCornerShape(50) }
-
-  Row(
-    modifier = modifier
-      .height(44.dp)
-      .clip(shape)
-      .background(colors.chipSurface)
-      .border(1.dp, colors.chipBorder, shape)
-      .padding(horizontal = 14.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(9.dp),
-  ) {
-    Icon(
-      imageVector = Icons.Outlined.Search,
-      contentDescription = null,
-      tint = colors.onSurfaceVariant,
-      modifier = Modifier.size(17.dp),
-    )
-    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-      if (query.isEmpty()) {
-        Text(
-          text = stringResource(R.string.cine_search_hint),
-          style = type.itemTitle,
-          color = colors.onSurfaceVariant,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-      BasicTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        modifier = Modifier
-          .fillMaxWidth()
-          .focusRequester(focusRequester),
-        textStyle = type.itemTitle.copy(color = colors.onSurface),
-        singleLine = true,
-        cursorBrush = SolidColor(colors.progressFill),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { onSearch() }),
-      )
-    }
-    if (query.isNotEmpty()) {
-      Box(
-        modifier = Modifier
-          .size(22.dp)
-          .clip(CircleShape)
-          .clickable { onQueryChange("") },
-        contentAlignment = Alignment.Center,
-      ) {
-        Icon(
-          imageVector = Icons.Outlined.Close,
-          contentDescription = null,
-          tint = colors.onSurfaceVariant,
-          modifier = Modifier.size(16.dp),
-        )
-      }
-    }
-  }
-}
 
 /**
  * 「全部」网格页。
@@ -440,7 +128,7 @@ fun CineGridOverlay(
  * 所以标题自适应、角标、进度条的表现完全一致，不会出现「网格里的卡片和首页不一样」。
  */
 @Composable
-private fun CineMediaGrid(
+internal fun CineMediaGrid(
   items: List<CineMediaUi>,
   cardWidth: Dp,
   columns: Int,

@@ -147,6 +147,9 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaActionsDial
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMediaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchLanding
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchTopBar
+import app.marlboroadvance.mpvex.ui.browser.emby.components.recommendImageUrl
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonList
 import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
@@ -329,6 +332,19 @@ data class EmbyLibraryScreen(
     val searchHistory by searchHistoryFlow.collectAsState(initial = emptyList())
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
+
+    // ── 搜索页「推荐」（库内）──
+    // 与首页搜索共用同一个 ViewModel / 同一套缓存，但**范围钉在这个库里**：
+    // start 传 libraryId，取数时带 ParentId。没有刮削（连海报都没有）的条目会被
+    // 过滤掉，宁可少推荐几条，也不在搜索页里摆一排空封面。
+    val recommendViewModel: app.marlboroadvance.mpvex.ui.browser.emby.discover.SearchRecommendViewModel =
+      viewModel(
+        factory = app.marlboroadvance.mpvex.ui.browser.emby.discover.SearchRecommendViewModel.factory(
+          context.applicationContext as android.app.Application,
+        ),
+      )
+    val recommendState by recommendViewModel.state.collectAsState()
+    val searchFocusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
 
     // 排序方式 / 方向 / 卡片样式走偏好存储：重新进入媒体库、甚至重启 App 都沿用上次的选择
     val browserPreferences = koinInject<BrowserPreferences>()
@@ -2076,8 +2092,39 @@ data class EmbyLibraryScreen(
     // enabled = searchActive ⇒ 非搜索态完全不拦截，交给系统正常出栈。
     BackHandler(enabled = searchActive) { exitSearch() }
 
+    // 进入搜索页 / 换库时拉「本库推荐」。命中缓存则零请求（见 SearchRecommendCache）。
+    // 只在没有关键词时拉：有词的时候整页是结果，取推荐纯属浪费一次请求。
+    LaunchedEffect(searchActive, server?.id, libraryId, searchQuery.isBlank()) {
+      if (searchActive && searchQuery.isBlank()) {
+        recommendViewModel.start(server, parentId = libraryId)
+      }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
-      // ── 1. 顶栏：返回 + 库名 + 搜索 ──
+      // ── 1. 顶栏 ──
+      // 搜索态换成一整行搜索栏（返回 + 圆角输入框 + 搜索按钮）：库名在没有结果可看的时候
+      // 没有信息量，占着位置不如把宽度让给输入框。返回这一步是「退出搜索」而不是「退出媒体库」，
+      // 与系统返回键同一套语义。
+      if (searchActive) {
+        EmbySearchTopBar(
+          query = searchQuery,
+          onQueryChange = { searchQuery = it },
+          onSubmit = {
+            keyboardController?.hide()
+            val term = searchQuery.trim()
+            if (term.isNotEmpty()) {
+              scope.launch {
+                server?.let { searchHistoryRepository.record(it.id, term) }
+              }
+            }
+          },
+          onBack = { exitSearch() },
+          focusRequester = searchFocusRequester,
+          hint = "搜索当前媒体库…",
+          // 从详情页返回时不抢焦点：用户要的是继续看那批结果，不是马上再打字
+          autoFocus = restoredSearch == null,
+        )
+      } else {
       TopAppBar(
         title = { Text(title, maxLines = 1) },
         navigationIcon = {
@@ -2132,27 +2179,24 @@ data class EmbyLibraryScreen(
           // 一个退搜索、一个退整个库，很容易点错。SearchOff 保留放大镜意象，
           // 一眼还能看出它跟搜索有关。
           IconButton(onClick = {
-            if (searchActive) {
-              exitSearch()
-            } else {
-              searchActive = true
-              val snap = lastSearchSnapshot
-              if (snap != null) {
-                // 有快照：恢复词本身，列表内容由搜索 effect 用快照回放
-                pendingSearchRestore = true
-                searchQuery = snap.query
-              } else if (lastSearchQuery.isNotBlank()) {
-                searchQuery = lastSearchQuery
-              }
+            searchActive = true
+            val snap = lastSearchSnapshot
+            if (snap != null) {
+              // 有快照：恢复词本身，列表内容由搜索 effect 用快照回放
+              pendingSearchRestore = true
+              searchQuery = snap.query
+            } else if (lastSearchQuery.isNotBlank()) {
+              searchQuery = lastSearchQuery
             }
           }) {
             Icon(
-              imageVector = if (searchActive) Icons.Default.SearchOff else Icons.Default.Search,
-              contentDescription = if (searchActive) "退出搜索" else "搜索",
+              imageVector = Icons.Default.Search,
+              contentDescription = "搜索",
             )
           }
         },
       )
+      }
 
       // ── 2. 分类行 ──
       // 搜索时藏起来：那一排「全部 / 继续播放 / 合集 / 收藏 / 文件夹」
@@ -2379,36 +2423,7 @@ data class EmbyLibraryScreen(
       }
 
       if (searchActive) {
-        OutlinedTextField(
-          value = searchQuery,
-          onValueChange = { searchQuery = it },
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-          placeholder = { Text("搜索媒体…") },
-          singleLine = true,
-          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-          keyboardActions = KeyboardActions(
-            // 键盘上按「搜索」= 用户明确表态要搜这个词，直接落一条历史
-            onSearch = {
-              keyboardController?.hide()
-              scope.launch {
-                val id = server?.id ?: return@launch
-                searchHistoryRepository.record(id, searchQuery)
-              }
-            },
-          ),
-          trailingIcon = {
-            if (searchQuery.isNotEmpty()) {
-              IconButton(onClick = {
-                searchQuery = ""
-                scope.launch { load(reset = true) }
-              }) {
-                Icon(Icons.Default.Clear, contentDescription = "清空")
-              }
-            }
-          },
-        )
+        // 输入框已经搬到顶栏（见上面 EmbySearchTopBar），这里只留联想 + 类型筛选。
         // 搜索联想：点一下就把候选词填进输入框，省掉手动敲完整个片名。
         // 高度由卡片自己控制（封顶 + 可收起 + 自动收起），不会把下面的结果挤没。
         val suggestionsCollapsed = suggestCollapsed || suggestAutoCollapsed
@@ -2705,26 +2720,51 @@ data class EmbyLibraryScreen(
             }
           }
 
-          // 刚点开搜索、还没输入：顶掉网格，用历史词占位
-          searchActive && searchQuery.isBlank() -> SearchHistoryPanel(
+          // 刚点开搜索、还没输入：顶掉网格，用「历史 + 本库推荐」占位。
+          // 推荐范围钉在当前库（start 时传了 libraryId），不会冒出别的库的片子。
+          searchActive && searchQuery.isBlank() -> EmbySearchLanding(
             history = searchHistory,
-            onPick = { keyword -> searchQuery = keyword },
-            onRemove = { keyword ->
+            onPickHistory = { keyword -> searchQuery = keyword },
+            onRemoveHistory = { keyword ->
               scope.launch {
                 val id = server?.id ?: return@launch
                 searchHistoryRepository.remove(id, keyword)
               }
             },
-            onClearAll = {
+            onClearHistory = {
               scope.launch {
                 val id = server?.id ?: return@launch
                 searchHistoryRepository.clear(id)
               }
             },
+            recommendItems = recommendState.items,
+            recommendLoading = recommendState.loading,
+            recommendError = recommendState.error,
+            recommendLoadingMore = recommendState.loadingMore,
+            recommendEndReached = recommendState.endReached,
+            imageUrl = { item -> server?.let { s -> recommendImageUrl(viewModel, s, item) } },
+            onOpenRecommend = { item ->
+              val s = server
+              if (s != null) {
+                openItem(
+                  item,
+                  backStack,
+                  s,
+                  context,
+                  photoParentId = libraryId,
+                  collectionType = collectionType,
+                  categoryName = category.name,
+                )
+              }
+            },
+            onRetryRecommend = { recommendViewModel.retry(server, parentId = libraryId) },
+            onLoadMoreRecommend = { recommendViewModel.loadMore(server, parentId = libraryId) },
+            onRefresh = { recommendViewModel.refreshAndWait(server, parentId = libraryId) },
+            onDismissKeyboard = { keyboardController?.hide() },
+            bottomInset = 0.dp,
             modifier = Modifier
               .align(Alignment.TopStart)
               .fillMaxWidth(),
-            emptyHint = "输入关键词，搜索当前媒体库",
           )
 
           isLoading && items.isEmpty() -> {

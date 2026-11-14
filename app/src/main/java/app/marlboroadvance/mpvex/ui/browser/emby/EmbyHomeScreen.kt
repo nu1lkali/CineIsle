@@ -87,7 +87,10 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyMaintainButton
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyPosterCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilter
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchFilterRow
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchLanding
+import app.marlboroadvance.mpvex.ui.browser.emby.components.recommendImageUrl
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchTabRow
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySearchTopBar
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySectionHeader
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonGrid
 import app.marlboroadvance.mpvex.ui.browser.emby.components.OopsErrorAnimation
@@ -96,6 +99,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyWideCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyItemActionsDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.SearchHistoryPanel
 import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
+import app.marlboroadvance.mpvex.ui.browser.emby.discover.SearchRecommendViewModel
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarRecommendationViewModel
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
 import kotlinx.coroutines.launch
@@ -360,21 +364,37 @@ fun EmbyHomeScreen(
   )
 
   // 搜索历史：与媒体库内搜索共用同一张表，在哪儿搜过的词换个地方也能点到
-    val searchHistoryRepository = koinInject<SearchHistoryRepository>()
-    // 搜索历史按「服务器 + 用户」隔离：remember key 带上当前服务器，
-    // 切换服务器后 Flow 重建，历史面板即时换成新服务器的（见 SearchHistoryRepository）
-    val searchHistoryServerId = server?.id
-    val searchHistoryFlow = remember(searchHistoryServerId) {
-      searchHistoryRepository.observe(searchHistoryServerId)
-    }
-    val searchHistory by searchHistoryFlow.collectAsState(initial = emptyList())
+  val searchHistoryRepository = koinInject<SearchHistoryRepository>()
+  // 搜索历史按「服务器 + 用户」隔离：remember key 带上当前服务器，
+  // 切换服务器后 Flow 重建，历史面板即时换成新服务器的（见 SearchHistoryRepository）
+  val searchHistoryServerId = server?.id
+  val searchHistoryFlow = remember(searchHistoryServerId) {
+    searchHistoryRepository.observe(searchHistoryServerId)
+  }
+  val searchHistory by searchHistoryFlow.collectAsState(initial = emptyList())
   val historyScope = rememberCoroutineScope()
   val keyboardController = LocalSoftwareKeyboardController.current
 
-  // 搜索态下系统返回（含边缘滑动）**先退搜索**，而不是直接退掉首页。
-  // 返回键对应「上一层」，而搜索是叠在首页之上的一层；直接出栈不符合预期。
-  // enabled = searchActive ⇒ 非搜索态完全不拦截，交给系统正常出栈。
-  BackHandler(enabled = searchActive) {
+  // ── 搜索页「推荐」区（v257）──
+  // 数据全部来自 Emby 服务端（收藏 / 最近添加 / 高评分 / 随机四路混合），
+  // 取数与缓存都在 [SearchRecommendViewModel] 里，这里只做展示与状态联动。
+  val recommendViewModel: SearchRecommendViewModel = viewModel(
+    factory = SearchRecommendViewModel.factory(
+      context.applicationContext as android.app.Application,
+    ),
+  )
+  val recommendState by recommendViewModel.state.collectAsState()
+  val searchFocusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+  val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+
+  /** 收起键盘 + 清焦点：点空白处、点「搜索」、退出搜索三处共用 */
+  fun dismissKeyboard() {
+    focusManager.clearFocus()
+    keyboardController?.hide()
+  }
+
+  /** 退出搜索：状态整体复位（返回键与顶栏返回箭头共用） */
+  fun exitSearch() {
     searchActive = false
     searchQuery = ""
     searchResults = emptyList()
@@ -383,7 +403,18 @@ fun EmbyHomeScreen(
     // 页签也要复位：下次进搜索时用户要的默认视图就是「全部」，
     // 留着上一次的「电影」页签会让第一条结果直接消失，看着像搜索坏了。
     searchTab = EmbySearchTab.ALL
-    keyboardController?.hide()
+    dismissKeyboard()
+  }
+
+  // 搜索态下系统返回（含边缘滑动）**先退搜索**，而不是直接退掉首页。
+  // 返回键对应「上一层」，而搜索是叠在首页之上的一层；直接出栈不符合预期。
+  // enabled = searchActive ⇒ 非搜索态完全不拦截，交给系统正常出栈。
+  BackHandler(enabled = searchActive) { exitSearch() }
+
+  // 进入搜索页 / 换服务器时拉推荐。命中进程内缓存则零请求（见 SearchRecommendCache）。
+  // ⚠️ 只在「没有关键词」时才拉：有词的时候整页是结果，取推荐纯属浪费一次请求。
+  LaunchedEffect(searchActive, server?.id) {
+    if (searchActive && searchQuery.isBlank()) recommendViewModel.start(server)
   }
 
   Column(modifier = Modifier.fillMaxSize()) {
@@ -520,7 +551,11 @@ fun EmbyHomeScreen(
         onDismissRequest = { orderDialogShown = false },
       )
     }
-    TopAppBar(
+    // 搜索态下不画功能顶栏（v257）：搜索页自己的顶栏只有「返回 + 输入框 + 搜索键」，
+    // 服务器名 / 下载 / 维护 / ⋮ / 设置在这里既帮不上忙，又会把输入框挤窄 ——
+    // 参考设计图的取舍就是「搜索时整屏只服务搜索」。
+    if (!searchActive) {
+      TopAppBar(
       title = {
         Column {
           Text(
@@ -543,21 +578,13 @@ fun EmbyHomeScreen(
         }
       },
       actions = {
-        // 全库搜索：跨所有媒体库检索，结果替换首页内容
-        // 图标跟着搜索态走（放大镜 ↔ 放大镜加斜杠），否则进了搜索界面就没有明确的退出入口。
-        // 用 SearchOff 而不是通用的 ✕：旁边就是别的工具栏动作，✕ 太容易被读成「关掉这一页」。
-        IconButton(onClick = {
-          searchActive = !searchActive
-          if (!searchActive) {
-            searchQuery = ""
-            searchResults = emptyList()
-            searchTruncated = false
-            isSearching = false
-          }
-        }) {
+        // 全库搜索：跨所有媒体库检索，进入独立的搜索页（v257）。
+        // 这里只剩「进入」一个方向 —— 退出由搜索页自己的返回箭头 / 返回键负责，
+        // 功能顶栏在搜索态下根本不画（见上方 if (!searchActive)）。
+        IconButton(onClick = { searchActive = true }) {
           Icon(
-            imageVector = if (searchActive) Icons.Default.SearchOff else Icons.Default.Search,
-            contentDescription = if (searchActive) "退出搜索" else "搜索全部媒体库",
+            imageVector = Icons.Default.Search,
+            contentDescription = "搜索全部媒体库",
           )
         }
         // ⚠️ **这里原来还有一个 `Icons.Default.Dns`「切换服务器」按钮，已删**。
@@ -658,41 +685,29 @@ fun EmbyHomeScreen(
           Icon(Icons.Default.Settings, contentDescription = "设置")
         }
       },
-    )
-
-    // 搜索框：只在点开搜索后出现
-    if (searchActive) {
-      OutlinedTextField(
-        value = searchQuery,
-        onValueChange = { searchQuery = it },
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 16.dp, vertical = 8.dp),
-        placeholder = { Text("搜索全部媒体库…") },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(
-          // 键盘上按「搜索」= 用户明确表态「我就搜这个词」，直接落一条历史并立刻出结果
-          onSearch = {
-            keyboardController?.hide()
+      )
+    } else {
+      // ── 搜索页顶栏 ──
+      // 没有关键词时是「历史 + 推荐」，有词时是筛选 + 结果；两种状态共用这一个输入行，
+      // 所以它不属于任何一个分支，而是搜索态的固定头部。
+      EmbySearchTopBar(
+        query = searchQuery,
+        onQueryChange = { searchQuery = it },
+        onSubmit = {
+          // 键盘搜索键与右侧「搜索」按钮走同一套：先收键盘，再落一条历史。
+          // 搜索本身由下面那个防抖 effect 负责（立即执行不需要额外触发信号）。
+          dismissKeyboard()
+          val term = searchQuery.trim()
+          if (term.isNotEmpty()) {
             historyScope.launch {
-              val id = server?.id ?: return@launch
-              searchHistoryRepository.record(id, searchQuery)
-            }
-          },
-        ),
-        trailingIcon = {
-          if (searchQuery.isNotEmpty()) {
-            IconButton(onClick = { searchQuery = "" }) {
-              Icon(Icons.Default.Clear, contentDescription = "清空")
+              server?.let { searchHistoryRepository.record(it.id, term) }
             }
           }
         },
-      )
-      // 类型筛选：默认「全部」不加限制；勾了电影/合集/演员这类就按类型查
-      EmbySearchFilterRow(
-        selected = searchFilters,
-        onSelectedChange = { searchFilters = it },
+        onBack = { exitSearch() },
+        focusRequester = searchFocusRequester,
+        // 从详情页返回时不抢焦点：用户要的是继续看那批结果，不是马上再打字
+        autoFocus = restoredSearch == null,
       )
     }
 
@@ -771,127 +786,154 @@ fun EmbyHomeScreen(
     val searchTabCounts = remember(searchResults) { EmbySearchTab.countByTab(searchResults) }
 
     when {
-      // 全库搜索：结果替换首页内容
+      // 全库搜索：没有关键词 = 历史 + 推荐；有词 = 筛选 + 结果
       searchActive -> {
         if (searchQuery.isBlank()) {
-          SearchHistoryPanel(
+          EmbySearchLanding(
             history = searchHistory,
-            onPick = { keyword -> searchQuery = keyword },
-            onRemove = { keyword ->
+            onPickHistory = { keyword ->
+              // 点历史 = 「就用这个词搜」：填进输入框，防抖 effect 会立刻查一次。
+              // 顺手把这条提到最前（仓库的 upsert 会刷新时间戳），
+              // 否则连点几个旧词，列表顺序还停在原来的位置。
+              searchQuery = keyword
+              dismissKeyboard()
               historyScope.launch {
-                val id = server?.id ?: return@launch
-                searchHistoryRepository.remove(id, keyword)
+                server?.let { searchHistoryRepository.record(it.id, keyword) }
               }
             },
-            onClearAll = {
+            onRemoveHistory = { keyword ->
               historyScope.launch {
-                val id = server?.id ?: return@launch
-                searchHistoryRepository.clear(id)
+                server?.let { searchHistoryRepository.remove(it.id, keyword) }
               }
             },
-            // 历史面板自己会滚：整块让出底栏高度，否则历史条数多时最后一行压在底栏下面
-            modifier = Modifier
-              .fillMaxSize()
-              .padding(bottom = LocalNavigationBarHeight.current),
-            emptyHint = "输入关键词，搜索全部媒体库",
+            onClearHistory = {
+              historyScope.launch {
+                server?.let { searchHistoryRepository.clear(it.id) }
+              }
+            },
+            recommendItems = recommendState.items,
+            recommendLoading = recommendState.loading,
+            recommendError = recommendState.error,
+            recommendLoadingMore = recommendState.loadingMore,
+            recommendEndReached = recommendState.endReached,
+            // 推荐卡是 16:9 横图：优先剧照，没有剧照退回竖版主图
+            imageUrl = { item -> server?.let { s -> recommendImageUrl(viewModel, s, item) } },
+            onOpenRecommend = { onOpenDetail(it) },
+            onRetryRecommend = { recommendViewModel.retry(server) },
+            onLoadMoreRecommend = { recommendViewModel.loadMore(server) },
+            onRefresh = { recommendViewModel.refreshAndWait(server) },
+            onDismissKeyboard = { dismissKeyboard() },
+            bottomInset = LocalNavigationBarHeight.current,
           )
-        } else if (isSearching) {
-          // 搜索期间用骨架屏而不是居中转圈：结果卡片的版式先摆出来，落地时不会整屏跳
-          EmbySkeletonGrid(columns = 3, ratio = 3f / 4f, itemCount = 9)
-        } else if (searchResults.isEmpty()) {
-          Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(
-              horizontalAlignment = Alignment.CenterHorizontally,
-              modifier = Modifier.padding(horizontal = 32.dp),
-            ) {
-              Icon(
-                imageVector = Icons.Filled.SearchOff,
-                contentDescription = null,
-                modifier = Modifier.size(56.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-              )
-              Spacer(modifier = Modifier.height(16.dp))
-              Text(
-                text = "没有找到「$searchQuery」相关媒体",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                textAlign = TextAlign.Center,
-              )
-              Spacer(modifier = Modifier.height(6.dp))
-              Text(
-                text = "换个关键词，或检查拼写试试",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-              )
-            }
-          }
         } else {
           Column(modifier = Modifier.fillMaxSize()) {
-            // 分类页签（清单 4.1）。放在结果网格**上面**而不是吸顶：搜索结果通常一屏到两屏就到底，
-            // 真滚很久的场合下面还有上一排筛选 chip 顶着，页签不会被顶出视野。
-            EmbySearchTabRow(
-              counts = searchTabCounts,
-              total = searchResults.size,
-              selected = searchTab,
-              onSelectedChange = { searchTab = it },
+            // 类型筛选：默认「全部」不加限制；勾了电影/合集/演员这类就按类型查。
+            // 它属于「结果」而不是「入口」—— 空词态下没有结果可筛，摆出来只会误导。
+            EmbySearchFilterRow(
+              selected = searchFilters,
+              onSelectedChange = { searchFilters = it },
             )
-            if (visibleSearchResults.isEmpty()) {
-              // 正常走不到这里（切页签时 0 条的页签不给选，换词时页签会复位到「全部」），
-              // 留着是防「结果集变了但选中态没跟上」时给用户一句人话，而不是一片空白。
-              Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                  text = "「${searchTab.label}」下没有匹配的结果",
-                  style = MaterialTheme.typography.bodyMedium,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            when {
+              isSearching -> {
+                // 搜索期间用骨架屏而不是居中转圈：结果卡片的版式先摆出来，落地时不会整屏跳
+                EmbySkeletonGrid(columns = 3, ratio = 3f / 4f, itemCount = 9)
               }
-            } else {
-              androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(minSize = 104.dp),
-                modifier = Modifier.fillMaxSize(),
-                // 显式持有滚动位置：从详情页返回时接回原来那一屏（见 searchGridState 的说明）
-                state = searchGridState,
-                // ⚠️ 底部必须躲开底部导航栏：它是 Scaffold 的 bottomBar，**浮在内容之上**、
-                //    不占内容的布局空间。这里只给 8dp 的话，滚到底时最后一排卡片会被
-                //    整条压住（与 browse 列表的 923 行同一口径）。
-                contentPadding = PaddingValues(
-                  start = 16.dp,
-                  end = 16.dp,
-                  top = 8.dp,
-                  bottom = LocalNavigationBarHeight.current + 16.dp,
-                ),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-              ) {
-                items(
-                  items = visibleSearchResults,
-                  key = { it.Id ?: it.Name ?: "" },
-                ) { item ->
-                  EmbyPosterCard(
-                    title = item.Name ?: "",
-                    subtitle = item.ProductionYear?.toString(),
-                    imageUrl = server?.let { s -> viewModel.imageUrl(s, item, "Primary", 300) },
-                    progress = null,
-                    isFavorite = item.UserData?.IsFavorite == true,
-                    onClick = { onOpenDetail(item) },
-                  )
-                }
-                // 结果被上限截断时明确告知（清单 1.1）：全库搜索是「人物 + 媒体」两条流
-                // 拼的，混合列表没法真正分页，所以这里靠提示让用户自己收窄条件。
-                // 只在「全部」页签下提示 —— 截断是**整体**现象，
-                // 停在「电影」页签时报「只显示前 N 条」会让人误以为电影只有 N 部。
-                if (searchTruncated && searchTab == EmbySearchTab.ALL) {
-                  item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                    Text(
-                      text = "只显示前 ${searchResults.size} 条，试试更精确的关键词或勾选类型筛选",
-                      style = MaterialTheme.typography.bodySmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                      modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 20.dp),
-                      textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+              searchResults.isEmpty() -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                  Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(horizontal = 32.dp),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Filled.SearchOff,
+                      contentDescription = null,
+                      modifier = Modifier.size(56.dp),
+                      tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                      text = "没有找到「$searchQuery」相关媒体",
+                      style = MaterialTheme.typography.titleMedium,
+                      color = MaterialTheme.colorScheme.onSurface,
+                      textAlign = TextAlign.Center,
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                      text = "换个关键词，或检查拼写试试",
+                      style = MaterialTheme.typography.bodyMedium,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      textAlign = TextAlign.Center,
+                    )
+                  }
+                }
+              }
+              else -> {
+                // 分类页签（清单 4.1）。放在结果网格**上面**而不是吸顶：搜索结果通常一屏到两屏就到底，
+                // 真滚很久的场合下面还有上一排筛选 chip 顶着，页签不会被顶出视野。
+                EmbySearchTabRow(
+                  counts = searchTabCounts,
+                  total = searchResults.size,
+                  selected = searchTab,
+                  onSelectedChange = { searchTab = it },
+                )
+                if (visibleSearchResults.isEmpty()) {
+                  // 正常走不到这里（切页签时 0 条的页签不给选，换词时页签会复位到「全部」），
+                  // 留着是防「结果集变了但选中态没跟上」时给用户一句人话，而不是一片空白。
+                  Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                      text = "「${searchTab.label}」下没有匹配的结果",
+                      style = MaterialTheme.typography.bodyMedium,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                } else {
+                  androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                    columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(minSize = 104.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    // 显式持有滚动位置：从详情页返回时接回原来那一屏（见 searchGridState 的说明）
+                    state = searchGridState,
+                    // ⚠️ 底部必须躲开底部导航栏：它是 Scaffold 的 bottomBar，**浮在内容之上**、
+                    //    不占内容的布局空间。这里只给 8dp 的话，滚到底时最后一排卡片会被
+                    //    整条压住（与 browse 列表的 923 行同一口径）。
+                    contentPadding = PaddingValues(
+                      start = 16.dp,
+                      end = 16.dp,
+                      top = 8.dp,
+                      bottom = LocalNavigationBarHeight.current + 16.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                  ) {
+                    items(
+                      items = visibleSearchResults,
+                      key = { it.Id ?: it.Name ?: "" },
+                    ) { item ->
+                      EmbyPosterCard(
+                        title = item.Name ?: "",
+                        subtitle = item.ProductionYear?.toString(),
+                        imageUrl = server?.let { s -> viewModel.imageUrl(s, item, "Primary", 300) },
+                        progress = null,
+                        isFavorite = item.UserData?.IsFavorite == true,
+                        onClick = { onOpenDetail(item) },
+                      )
+                    }
+                    // 结果被上限截断时明确告知（清单 1.1）：全库搜索是「人物 + 媒体」两条流
+                    // 拼的，混合列表没法真正分页，所以这里靠提示让用户自己收窄条件。
+                    // 只在「全部」页签下提示 —— 截断是**整体**现象，
+                    // 停在「电影」页签时报「只显示前 N 条」会让人误以为电影只有 N 部。
+                    if (searchTruncated && searchTab == EmbySearchTab.ALL) {
+                      item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                        Text(
+                          text = "只显示前 ${searchResults.size} 条，试试更精确的关键词或勾选类型筛选",
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 20.dp),
+                          textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                      }
+                    }
                   }
                 }
               }
