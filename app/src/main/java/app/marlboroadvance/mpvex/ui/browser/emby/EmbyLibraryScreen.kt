@@ -2044,7 +2044,8 @@ data class EmbyLibraryScreen(
      * 焦点还在就会有下一次，必须把焦点本身清掉。
      */
     fun releaseInputFocus() {
-      focusManager.clearFocus()
+      keyboardController?.hide()
+      focusManager.clearFocus(force = true)
     }
 
     /**
@@ -2110,7 +2111,7 @@ data class EmbyLibraryScreen(
           query = searchQuery,
           onQueryChange = { searchQuery = it },
           onSubmit = {
-            keyboardController?.hide()
+            // 收键盘 + 摘焦点已由顶栏统一处理，这里只落一条历史
             val term = searchQuery.trim()
             if (term.isNotEmpty()) {
               scope.launch {
@@ -2440,7 +2441,8 @@ data class EmbyLibraryScreen(
           },
           onPick = { keyword ->
             searchQuery = keyword
-            keyboardController?.hide()
+            // 点联想词 = 明确要搜这个词，焦点和键盘一起退场
+            releaseInputFocus()
             scope.launch {
               val id = server?.id ?: return@launch
               searchHistoryRepository.record(id, keyword)
@@ -2760,7 +2762,7 @@ data class EmbyLibraryScreen(
             onRetryRecommend = { recommendViewModel.retry(server, parentId = libraryId) },
             onLoadMoreRecommend = { recommendViewModel.loadMore(server, parentId = libraryId) },
             onRefresh = { recommendViewModel.refreshAndWait(server, parentId = libraryId) },
-            onDismissKeyboard = { keyboardController?.hide() },
+            onDismissKeyboard = { releaseInputFocus() },
             bottomInset = 0.dp,
             modifier = Modifier
               .align(Alignment.TopStart)

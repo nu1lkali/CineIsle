@@ -3202,7 +3202,18 @@ android {
     //  · Cine 侧新页面落在 ui/cine/CineSearchScreen.kt，旧的 CineSearchOverlay 从 CineOverlays.kt 删除
     //    （同名函数会直接编译冲突）；CineMediaGrid 由 private 改 internal 供两处共用。
     //  · 受限于屏幕宽度，手机端推荐是两列（设计稿也是两列），宽屏（≥600dp）卡片按 16:9 自然变宽。
-    versionCode = 257
+    // 258（同功能轮修复）：推荐总量封顶 + 搜索提交后交还焦点。
+    //  · 推荐不再无限增长：SearchRecommendViewModel.MAX_ITEMS = 40（首屏 8 + 12×2 + 收尾 8）。
+    //    额度用尽时 buildPage 直接把 endReached 置位，next 一次请求都不再发；
+    //    落地页底部留一行「已显示全部 N 条推荐」，否则用户会以为还在加载而一直下拉。
+    //  · 提交即交还焦点：EmbySearchTopBar / CineSearchTopBar 内部自己收键盘 + `clearFocus(force = true)`，
+    //    键盘搜索键与右侧搜索按钮共用同一个 submitAndDismiss。只 hide 不摘焦点时，焦点还挂在
+    //    BasicTextField 上，键盘会自己弹回来（用户可感为「搜完了关不掉输入法」）。
+    //  · 同一条口径推广到其余入口：点历史词、点联想词、点结果卡、退出搜索、点空白处，
+    //    一律「先 hide 再 clearFocus」；结果网格开始滚动也收键盘（注意力已经在列表上）。
+    //  · 历史空态提示的图标由 History 换成 Search：「还没有搜索记录」配放大镜才贴切，
+    //    与区块标题的小时钟上下叠着出现会像重复渲染了一遍标题。
+    versionCode = 258
     versionName = "1.6.17"
 
     vectorDrawables {

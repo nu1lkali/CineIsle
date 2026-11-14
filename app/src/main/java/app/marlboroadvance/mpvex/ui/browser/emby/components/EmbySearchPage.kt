@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -67,8 +68,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -125,6 +129,18 @@ fun EmbySearchTopBar(
     LaunchedEffect(Unit) {
       runCatching { focusRequester.requestFocus() }
     }
+  }
+
+  // 「搜索」= 用户的注意力从输入框转到结果上。所以两条提交路径
+  // （键盘搜索键 / 右侧搜索按钮）都先**摘掉输入框焦点**再收键盘：
+  // 只 hide 不 clearFocus 时焦点还挂在输入框上，键盘随时会自己弹回来，
+  // 用户会觉得「搜完了却关不掉输入法」。
+  val focusManager = LocalFocusManager.current
+  val keyboard = LocalSoftwareKeyboardController.current
+  val submitAndDismiss = {
+    keyboard?.hide()
+    focusManager.clearFocus(force = true)
+    onSubmit()
   }
 
   Row(
@@ -188,7 +204,7 @@ fun EmbySearchTopBar(
           singleLine = true,
           cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
           keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-          keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+          keyboardActions = KeyboardActions(onSearch = { submitAndDismiss() }),
         )
       }
       // 清除键：只在有内容时出现。用 Cancel（实心圆叉）而不是 Clear ——
@@ -212,7 +228,7 @@ fun EmbySearchTopBar(
     }
 
     TextButton(
-      onClick = onSubmit,
+      onClick = submitAndDismiss,
       contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
     ) {
       Text(
@@ -314,7 +330,9 @@ fun EmbySearchHistorySection(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Icon(
-          imageVector = Icons.Filled.History,
+          // 与区标题的 History（时钟）区分开：提示语说的是「输入关键词开始检索」，
+          // 配放大镜才对；两个时钟上下叠着出现会让人以为重复渲染了一遍标题。
+          imageVector = Icons.Outlined.Search,
           contentDescription = null,
           tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
           modifier = Modifier.size(15.dp),
@@ -844,6 +862,22 @@ fun EmbySearchLanding(
                 strokeWidth = 2.dp,
               )
             }
+          }
+        }
+
+        // 到底：推荐总量有上限（SearchRecommendViewModel.MAX_ITEMS），
+        // 触顶后不再续页。留一行字说明「没有更多了」，否则用户会以为还在加载。
+        if (recommendEndReached && recommendItems.isNotEmpty()) {
+          item(key = "recommend-end") {
+            Text(
+              text = "已显示全部 ${recommendItems.size} 条推荐",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              textAlign = TextAlign.Center,
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp, bottom = 8.dp),
+            )
           }
         }
       }

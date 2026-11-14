@@ -181,7 +181,7 @@ internal object SearchRecommendCache {
  *
  * ## 分页
  * [FIRST_PAGE] 8 条（两列 4 行，符合「首次限制 6~10 条」），
- * 「加载更多」每次 [MORE_PAGE] 条，取完为止（[UiState.endReached]）。
+ * 「加载更多」每次 [MORE_PAGE] 条，到 [MAX_ITEMS] 条为止（[UiState.endReached]）。
  * 因为混合页的 offset 空间分属四条流，这里的「下一页」是**先补池子再发**，
  * 池子空了才向后翻 `StartIndex` —— 这一点与全库搜索刻意不分页是同一类取舍。
  */
@@ -282,7 +282,10 @@ class SearchRecommendViewModel(
           entry.items = entry.items + page
           entry.fetchedAt = SystemClock.elapsedRealtime()
         }
-        entry.endReached = entry.cursor.endReached && page.isEmpty()
+        // 到底的两种情形在这里已经统一（四路取空 / 触到 [MAX_ITEMS] 上限），
+        // 直接把游标的结论搬过来即可；再要求 page 为空会让触顶那一页之后
+        // 还多发一次注定为空的请求。
+        entry.endReached = entry.cursor.endReached
       }
       // 已经有内容时「加载更多失败」不整屏报错：把手上这批留住，用户还能继续点
       _state.value = _state.value.copy(
@@ -374,12 +377,20 @@ class SearchRecommendViewModel(
     cursor: RecommendCursor,
     want: Int,
   ): List<EmbyItem> {
-    val out = ArrayList<EmbyItem>(want)
+    // 总量封顶：推荐区是「入口导流」，不是无限画廊。
+    // `seen` 只在真正发出去时增长 ⇒ 已发条数就是 seen.size，差额即剩余额度。
+    val remaining = (MAX_ITEMS - cursor.seen.size).coerceAtLeast(0)
+    if (remaining == 0) {
+      cursor.endReached = true
+      return emptyList()
+    }
+    val target = minOf(want, remaining)
+    val out = ArrayList<EmbyItem>(target)
     var failures = 0
     var rounds = 0
-    while (out.size < want && !cursor.endReached && rounds <= MAX_REFILL_ROUNDS) {
-      out += drain(cursor, want - out.size)
-      if (out.size >= want) break
+    while (out.size < target && !cursor.endReached && rounds <= MAX_REFILL_ROUNDS) {
+      out += drain(cursor, target - out.size)
+      if (out.size >= target) break
       if (cursor.endReached) break
       // 四路都取空了 ⇒ 后面再翻也是空，直接收尾
       if (RecommendSource.entries.all { cursor.isExhausted(it) }) {
@@ -409,6 +420,8 @@ class SearchRecommendViewModel(
       }
       rounds++
     }
+    // 额度刚好吃满：这一页发完就到顶，别让下一次「加载更多」空跑一趟
+    if (cursor.seen.size >= MAX_ITEMS) cursor.endReached = true
     return out
   }
 
@@ -492,6 +505,15 @@ class SearchRecommendViewModel(
 
     /** 加载更多每次条数 */
     const val MORE_PAGE = 12
+
+    /**
+     * 推荐总量上限（含首屏）。
+     *
+     * 8 + 12 + 12 + 8 = 40：够翻四屏，又不会让「搜索页空词态」变成无限滚动的画廊 ——
+     * 推荐的作用是把人引到内容上，不是替代浏览页。
+     * 触顶后 `endReached` 置位，UI 只留一行「已显示全部推荐」，不再发请求。
+     */
+    const val MAX_ITEMS = 40
 
     /**
      * 每一路每次向服务端要多少条（四路共 4 × 该值进池子）。

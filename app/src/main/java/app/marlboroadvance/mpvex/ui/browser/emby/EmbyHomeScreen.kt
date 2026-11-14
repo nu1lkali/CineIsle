@@ -389,8 +389,11 @@ fun EmbyHomeScreen(
 
   /** 收起键盘 + 清焦点：点空白处、点「搜索」、退出搜索三处共用 */
   fun dismissKeyboard() {
-    focusManager.clearFocus()
+    // 先 hide 再 clearFocus：顺序反过来时，个别输入法会在焦点摘除的同一帧
+    // 又把键盘顶起来（表现为「搜完了键盘还在」）。force = true 才摘得掉
+    // BasicTextField 内部的焦点目标。
     keyboardController?.hide()
+    focusManager.clearFocus(force = true)
   }
 
   /** 退出搜索：状态整体复位（返回键与顶栏返回箭头共用） */
@@ -868,6 +871,11 @@ fun EmbyHomeScreen(
                 }
               }
               else -> {
+                // 用户开始滚结果 ⇒ 注意力已经在列表上，输入法不该再占半屏。
+                // 用状态订阅而不是 pointerInput：不抢网格的滚动手势。
+                LaunchedEffect(searchGridState.isScrollInProgress) {
+                  if (searchGridState.isScrollInProgress) dismissKeyboard()
+                }
                 // 分类页签（清单 4.1）。放在结果网格**上面**而不是吸顶：搜索结果通常一屏到两屏就到底，
                 // 真滚很久的场合下面还有上一排筛选 chip 顶着，页签不会被顶出视野。
                 EmbySearchTabRow(

@@ -72,9 +72,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -139,7 +141,14 @@ fun CineSearchOverlay(
   val space = CineTheme.space
   val colors = CineTheme.colors
   val keyboard = LocalSoftwareKeyboardController.current
+  val focusManager = LocalFocusManager.current
   val play = rememberCinePlay()
+
+  /** 收键盘必须连着摘焦点：焦点留在输入框上，键盘会自己弹回来 */
+  fun dismissKeyboard() {
+    keyboard?.hide()
+    focusManager.clearFocus(force = true)
+  }
 
   // 搜索历史：与 Classic / 媒体库内搜索共用同一张表、同一份「服务器 + 用户」隔离
   val historyRepository = koinInject<SearchHistoryRepository>()
@@ -246,7 +255,7 @@ fun CineSearchOverlay(
       query = query,
       onQueryChange = { query = it },
       onSubmit = {
-        keyboard?.hide()
+        // 顶栏已经收过键盘并摘了焦点，这里只负责落历史
         val term = query.trim()
         if (term.isNotEmpty()) {
           scope.launch { server?.let { historyRepository.record(it.id, term) } }
@@ -263,7 +272,7 @@ fun CineSearchOverlay(
           history = history,
           onPickHistory = { keyword ->
             query = keyword
-            keyboard?.hide()
+            dismissKeyboard()
             scope.launch { server?.let { historyRepository.record(it.id, keyword) } }
           },
           onRemoveHistory = { keyword ->
@@ -284,7 +293,7 @@ fun CineSearchOverlay(
           onRetryRecommend = { recommendViewModel.retry(server) },
           onLoadMoreRecommend = { recommendViewModel.loadMore(server) },
           onRefresh = { recommendViewModel.refreshAndWait(server) },
-          onDismissKeyboard = { keyboard?.hide() },
+          onDismissKeyboard = { dismissKeyboard() },
         )
 
         errorText != null -> CineStatePanel(
@@ -318,11 +327,11 @@ fun CineSearchOverlay(
           cardWidth = cardWidth,
           columns = columns,
           onClick = { media ->
-            keyboard?.hide()
+            dismissKeyboard()
             play(media.item, media.resumeSeconds)
           },
           onLongClick = { media ->
-            keyboard?.hide()
+            dismissKeyboard()
             openDetailWithMemory(media.item)
           },
         )
@@ -348,6 +357,16 @@ private fun CineSearchTopBar(
   if (autoFocus) {
     // 放在组件内部：调用方那一层还没组合出输入框，requestFocus 会找不到节点
     LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+  }
+
+  // 「搜索」= 注意力从输入框转到结果上：两条提交路径都先摘焦点再收键盘。
+  // 只 hide 不 clearFocus 时焦点仍挂在输入框，键盘会自己弹回来（表现为「搜完了关不掉输入法」）。
+  val focusManager = LocalFocusManager.current
+  val keyboard = LocalSoftwareKeyboardController.current
+  val submitAndDismiss = {
+    keyboard?.hide()
+    focusManager.clearFocus(force = true)
+    onSubmit()
   }
 
   Row(
@@ -410,7 +429,7 @@ private fun CineSearchTopBar(
           singleLine = true,
           cursorBrush = SolidColor(colors.progressFill),
           keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-          keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+          keyboardActions = KeyboardActions(onSearch = { submitAndDismiss() }),
         )
       }
       if (query.isNotEmpty()) {
@@ -438,7 +457,7 @@ private fun CineSearchTopBar(
       maxLines = 1,
       modifier = Modifier
         .clip(RoundedCornerShape(50))
-        .clickable(onClick = onSubmit)
+        .clickable(onClick = submitAndDismiss)
         .padding(horizontal = 8.dp, vertical = 8.dp),
     )
   }
@@ -693,6 +712,22 @@ private fun CineSearchLanding(
               modifier = Modifier.size(20.dp),
             )
           }
+        }
+      }
+
+      // 到底：推荐总量有上限（SearchRecommendViewModel.MAX_ITEMS），触顶后不再续页。
+      // 留一行说明，否则用户会以为还在加载而一直往下拉。
+      if (recommendEndReached && recommendItems.isNotEmpty()) {
+        item(key = "cine-recommend-end") {
+          Text(
+            text = stringResource(R.string.cine_search_recommend_end, recommendItems.size),
+            style = type.cardMeta,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(bottom = space.itemGap),
+          )
         }
       }
     }

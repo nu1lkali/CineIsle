@@ -1176,7 +1176,7 @@
   <string name="cine_search_retry">Retry</string>
   <string name="cine_search_recommend_empty_title">Nothing to recommend yet</string>
   <string name="cine_search_recommend_empty_desc">Recommendations come from favourites, recent additions and ratings on your server.</string>
-  <string name="cine_search_recommend_end">That\'s everything</string>
+  <string name="cine_search_recommend_end">All %1$d recommendations shown</string>
   <string name="cine_section_libraries">Libraries</string>
   <string name="cine_section_resume">Continue Watching</string>
   <string name="cine_section_latest">Recently Added</string>
