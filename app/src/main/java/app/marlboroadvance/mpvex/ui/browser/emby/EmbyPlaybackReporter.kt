@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
 import app.marlboroadvance.mpvex.ui.player.PlayerDiagLog
+import app.marlboroadvance.mpvex.ui.player.PlayerSeekTracker
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import android.app.Activity
@@ -91,6 +92,37 @@ object EmbyPlaybackReporter {
    * 失败判据，结果每场只补一次 Start、之后整场一条 Progress 都不发（0% 的元凶）。
    */
   @Volatile private var startAcknowledged = false
+
+  /**
+   * 退出前抓下的位置快照（ticks）；-1 = 没有快照。
+   *
+   * ## 为什么不能在 [stop] 里现读（v256）
+   *
+   * 按下返回键时的生命周期顺序是 `onPause → onStop → onDestroy`，而
+   * `PlayerActivity.onPause` 里有这么一段：
+   *
+   * ```
+   * if (isFinishing && !isManualBackgroundPlayback) {
+   *   viewModel.pause()
+   *   PlayerLib.command("stop")   // ← 把文件从 mpv 卸掉
+   * }
+   * ```
+   *
+   * `mpv stop` 之后 `time-pos` **直接不可读**（JNI 层 `getPropertyInt` 返回 null），
+   * 而本类的 [stop] 是在 `onStop`（生命周期观察者）里跑的 —— 那时文件早卸了。
+   * 于是退出结算只能退回 [lastReportedTicks]（上一次 10 秒轮询的值）：
+   * 「拖完进度条立刻返回」时那个值还是拖动前的旧位置。
+   *
+   * 所以播放页在 `onPause` **最前面**先调 [snapshotExitPosition] 抓一次，
+   * 本类收尾时优先用它。
+   */
+  @Volatile private var exitSnapshotTicks: Long = -1L
+
+  /** [exitSnapshotTicks] 的抓取时刻（`SystemClock.elapsedRealtime()`）。 */
+  @Volatile private var exitSnapshotAt: Long = 0L
+
+  /** [exitSnapshotTicks] 属于哪一条；条目对不上就不用（切集 / 换片后旧快照必须失效）。 */
+  @Volatile private var exitSnapshotItemId: String? = null
 
   /**
    * 由播放页提供的「当前正在播的是哪一条」。
@@ -209,6 +241,39 @@ object EmbyPlaybackReporter {
   }
 
   /**
+   * 退出前位置快照的有效期。
+   *
+   * `onPause` 到 `onStop` 只有几十毫秒，15 秒是从「转屏 / 短暂切到后台又回来」这类
+   * 不会真的退出的场景留的余量：那种情况下不该拿一个十几秒前的旧快照去结算。
+   */
+  private const val EXIT_SNAPSHOT_TTL_MS = 15_000L
+
+  /**
+   * 由播放页在 `onPause` **最前面**调用：把「此刻到底看到哪儿」抓下来。
+   *
+   * 调用时机与理由见 [exitSnapshotTicks]。这里只做三件事：读位置 → 过 seek 校正 →
+   * 连同条目 id 一起存下。**不发任何请求**，也不改任何上报状态，因此在
+   * 「转屏 / 进小窗 / 按 Home」这些 `isFinishing == false` 的路径上多调一次没有副作用。
+   *
+   * ⚠️ 必须在主线程调（mpv 属性读取是内存读，但 `MMap` 拿不到时不许跨线程碰 native，
+   * 见本文件顶部那条「绝不从后台线程读 mpv native 属性」的约束）。
+   */
+  fun snapshotExitPosition() {
+    val itemId = currentItemId
+    val live = if (itemId != null) readSettledPositionTicks() else null
+    // 读不到就**主动作废**上一份快照：留着它，[stop] 会拿一次更早的暂停（转屏、
+    // 短暂切后台）时的位置去结算，比退回 [lastReportedTicks] 更偏。
+    if (itemId == null || live == null) {
+      exitSnapshotTicks = -1L
+      exitSnapshotItemId = null
+      return
+    }
+    exitSnapshotTicks = live
+    exitSnapshotAt = android.os.SystemClock.elapsedRealtime()
+    exitSnapshotItemId = itemId
+  }
+
+  /**
    * 播放页创建时调用：上报开始并启动轮询。
    *
    * @param token 本场播放的令牌；同一个观察者的 [EmbyPlaybackLifecycleObserver.onDestroy]
@@ -236,6 +301,11 @@ object EmbyPlaybackReporter {
     playSessionId = newPlaySessionId()
     startAcknowledged = false
     sessionRepairFor = null
+    // 新的一场：上一场残留的跳转目标与退出快照都属于**上一条片子**，留着会串味
+    // （典型后果：这一条刚起播，位置读数被上一集的拖动目标校正成别的值）
+    PlayerSeekTracker.clear()
+    exitSnapshotTicks = -1L
+    exitSnapshotItemId = null
     mediaSourceIds =
       intent.getStringArrayListExtra(EXTRA_MEDIA_SOURCE_ID)?.toList() ?: emptyList()
 
@@ -344,7 +414,22 @@ object EmbyPlaybackReporter {
     //    ⇒ 只能退回 `lastReportedTicks`（最多差 10 秒）；播放不满 10 秒就退出时它还是 0，
     //    于是 Stopped 把续播点写成 0 —— 用户看到的就是「退出后已观看 0%」。
     val itemId = currentItemId
-    val liveTicks = if (itemId != null) readPositionTicks() else null
+    // ① 优先用播放页在 `onPause` 里抓的快照 —— 那时文件还没被 `mpv stop` 卸掉，
+    //    位置是**这次退出真正的落点**（含刚拖动到的位置）；
+    // ② 没有快照（按 Home 后被系统回收、PiP 关闭等）才现读；读不到返回 null。
+    // ⚠️ 两条路都过 seek 校正：`time-pos` 在 seek 落地之前会给 0 或拖动前的旧值。
+    val liveTicks = if (itemId != null) {
+      val snapshot = exitSnapshotTicks.takeIf {
+        it >= 0L &&
+          exitSnapshotItemId == itemId &&
+          android.os.SystemClock.elapsedRealtime() - exitSnapshotAt <= EXIT_SNAPSHOT_TTL_MS
+      }
+      snapshot ?: readSettledPositionTicks()
+    } else {
+      null
+    }
+    exitSnapshotTicks = -1L
+    exitSnapshotItemId = null
 
     sessionToken = null
     pollingJob?.cancel()
@@ -362,7 +447,19 @@ object EmbyPlaybackReporter {
     if (itemId == null) return
     // 实时读数优先；读不到才用「最后一次成功上报的位置」（别让 Stopped 把续播点写成 0）。
     // 再过一道 guardAgainstReset：续播起播初期播放器可能还在 0 秒，直接用会把续播点冲掉。
-    val ticks = guardAgainstReset(liveTicks ?: lastReportedTicks)
+    var ticks = guardAgainstReset(liveTicks ?: lastReportedTicks)
+    // ⚠️ 最后一道闸：本场已经报过 > 0 的位置，收尾却读到 0，而用户**没有**要求跳回开头
+    //   ⇒ 这个 0 是「取流层被重启」的假读数，不能拿它结算。宁可停在上一处，也不清零 ——
+    //   清零之后「继续观看」里这条会退回开头，用户得自己回忆看到哪儿（v256 用户报的现象）。
+    if (ticks <= 0L && lastReportedTicks > 0L && !PlayerSeekTracker.seekTargetsZero()) {
+      PlayerDiagLog.log(
+        "report",
+        "退出读数为 0 且无回拖意图，改用上次上报位置：fallback=$lastReportedTicks",
+      )
+      ticks = lastReportedTicks
+    }
+    // 本场结束：跳转目标跟着作废，避免影响下一场（下一场 start() 也会清一次，这里是兜底）
+    PlayerSeekTracker.clear()
     val stopSourceId = mediaSourceIdOf(itemId)
     val sid = serverId
     // ⚠️ session 取**快照**：下面那段是异步发出去的，等它真跑起来时字段可能已经被
@@ -554,7 +651,7 @@ object EmbyPlaybackReporter {
     val server = repository.getServer(serverId) ?: return
 
     // 内核还没就绪 / 读不到位置 ⇒ 这一轮整轮跳过（不能当 0 发，见 readPositionTicks 注释）
-    val positionTicks = guardAgainstReset(readPositionTicks() ?: return)
+    val positionTicks = guardAgainstReset(readSettledPositionTicks() ?: return)
     val isPaused = readIsPaused()
     val playingItemId = readCurrentItemId() ?: currentItemId ?: return
     val playingSourceId = mediaSourceIdOf(playingItemId)
@@ -622,6 +719,16 @@ object EmbyPlaybackReporter {
 
     // 手上没有可用 session 就先补一次 Start；补不上本轮跳过（带空串发出去等于白打）
     if (!ensureSession(repository, server, playingItemId, playingSourceId, positionTicks)) return
+
+    // ⚠️ 「零闸门」必须放在**换条目分支之后**：连播切到下一集时新一集本来就从 0 起播，
+    //   放在前面会被误判成「假 0」而 return，这一轮就检测不到切集（Stopped/Start 全不发）。
+    // 语义：刚拖完进度条、seek 还没落地时读到 0（取流层被重启）**不能发** ——
+    //   一条 Progress(PositionTicks=0) 就把服务端续播点清零，而且 [lastReportedTicks]
+    //   会跟着变成 0，之后退出结算想兜底都没得兜。跳过这一轮，下一拍读准了再报。
+    if (positionTicks <= 0L && lastReportedTicks > 0L && !PlayerSeekTracker.seekTargetsZero()) {
+      PlayerDiagLog.log("report", "进度读数为 0 且无回拖意图，跳过本轮（保留 $lastReportedTicks）")
+      return
+    }
 
     lastReportedTicks = positionTicks
     runCatching {
@@ -729,6 +836,16 @@ object EmbyPlaybackReporter {
     val seconds = runCatching { PlayerLib.getPropertyInt("time-pos") }.getOrNull() ?: return null
     return EmbyTicks.secondsToTicks(seconds.toLong())
   }
+
+  /**
+   * 位置读数的**唯一入口**：读一次 + 过「刚下发过 seek」校正。
+   *
+   * 校正的必要性见 [PlayerSeekTracker] 的类注释。这里只做转调，不做任何兜底 ——
+   * 读不到仍然是 null，由调用方决定「跳过本轮」还是「退回上次位置」，
+   * 绝不能在这里折成 0。
+   */
+  private fun readSettledPositionTicks(): Long? =
+    readPositionTicks()?.let { PlayerSeekTracker.settle(it) }
 
   private fun readIsPaused(): Boolean {
     pausedProvider?.let { provider ->

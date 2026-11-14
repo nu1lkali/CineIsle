@@ -1382,6 +1382,13 @@ open class PlayerActivity :
   @RequiresApi(Build.VERSION_CODES.P)
   override fun onPause() {
     runCatching {
+      // ⚠️⚠️ 必须是本方法**第一件事**：下面 `isFinishing` 分支里的 `PlayerLib.command("stop")`
+      //    会把文件从 mpv 卸掉，之后 `time-pos` 直接不可读（JNI 返回 null）。
+      //    而 Emby 的退出结算挂在 `onStop`（生命周期观察者）—— 那时已经晚了，
+      //    只能退回「上一次 10 秒轮询」的位置。「拖完进度条马上返回」时那个值还是
+      //    拖动前的旧位置，用户看到的进度就会往回跳甚至变 0（v256）。
+      app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.snapshotExitPosition()
+
       val isInPip = isInPictureInPictureMode
       val shouldPause = (!audioPreferences.automaticBackgroundPlayback.get() && !isManualBackgroundPlayback) || 
                         (isUserFinishing && !isManualBackgroundPlayback)
@@ -3933,7 +3940,11 @@ private fun cancelAutoplayCountdown() {
     savePlaybackStateJob?.cancel()
 
     // Read values from MPV immediately while it is still loaded (before stop/destroy or coroutine delay)
-    val currentPos = (PlayerLib.getPropertyInt("time-pos") ?: viewModel.pos ?: 0).coerceAtLeast(0)
+    val rawPos = (PlayerLib.getPropertyInt("time-pos") ?: viewModel.pos ?: 0).coerceAtLeast(0)
+    // ⚠️ 刚拖过进度条就退出时，`time-pos` 可能还是**拖动前的旧值**（新位置还没解码出第一帧）
+    //   或索性给 0（取流层被推倒重来）。照它记，本地续播点（以及多版本的按版本进度）
+    //   就跟着错/清零 —— 详情页读的正是这份记录。用这次跳转的目标兜底，详见 PlayerSeekTracker。
+    val currentPos = PlayerSeekTracker.settle(rawPos.toLong()).toInt().coerceAtLeast(0)
     // ⚠️ 三档回落，别只读 mpv：`.mts` 这类容器在取流层不可随机读时 mpv 的 `duration`
     // 恒为 0（见 startDurationWatchdog），只读它会把「已看/剩余时间」整条链路打成 0。
     val currentDuration =
@@ -5160,6 +5171,9 @@ private fun cancelAutoplayCountdown() {
     if (fileName.isNotBlank()) {
       saveVideoPlaybackState(fileName)
     }
+    // 上一条已经结算完，它的跳转目标不能留给下一条（否则新一条刚起播，
+    // 位置读数会被上一集的拖动目标「校正」到别的值，见 PlayerSeekTracker）
+    PlayerSeekTracker.clear()
 
     val uri = playlist[index]
 

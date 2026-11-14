@@ -1374,6 +1374,11 @@ class PlayerViewModel(
         // Use precise seeking for videos shorter than 2 minutes (120 seconds) or if preference is enabled
         val shouldUsePreciseSeeking = playerPreferences.usePreciseSeeking.get() || maxDuration < 120
         val seekMode = if (shouldUsePreciseSeeking) "absolute+exact" else "absolute+keyframes"
+        // ⚠️⚠️ 记账**必须紧贴命令之前**：这次跳转的目标是「seek 真的落地之前，位置读数
+        //   不能代表用户在哪儿」的唯一凭据（详见 [PlayerSeekTracker]）。
+        //   漏了这一行，退出结算就会采信 mpv 在 seek 途中给出的 0 / 旧值 ——
+        //   用户看到的就是「拖完进度条马上返回，详情页进度变成 0%」。
+        PlayerSeekTracker.noteAbsoluteSeek(clampedPosition)
         PlayerLib.command("seek", clampedPosition.toString(), seekMode)
       }
   }
@@ -1390,14 +1395,23 @@ class PlayerViewModel(
         if (toApply != 0) {
           val duration = PlayerLib.getPropertyInt("duration") ?: 0
           val currentPos = PlayerLib.getPropertyInt("time-pos") ?: 0
-          
+
           if (duration > 0 && currentPos + toApply >= duration) {
               // If seeking past the end, force seek to 100% absolute to ensure EOF is triggered
+              PlayerSeekTracker.noteAbsoluteSeek(duration)
               PlayerLib.command("seek", "100", "absolute-percent+exact")
           } else {
               // Use precise seeking for videos shorter than 2 minutes (120 seconds) or if preference is enabled
               val shouldUsePreciseSeeking = playerPreferences.usePreciseSeeking.get() || duration < 120
               val seekMode = if (shouldUsePreciseSeeking) "relative+exact" else "relative+keyframes"
+              // 相对 seek 也要换算出**绝对落点**记账：双击快进/快退之后立刻退出，
+              // 退出结算同样读不到可靠位置（理由见 [PlayerSeekTracker]）。
+              val target = if (duration > 0) {
+                (currentPos + toApply).coerceIn(0, duration)
+              } else {
+                (currentPos + toApply).coerceAtLeast(0)
+              }
+              PlayerSeekTracker.noteAbsoluteSeek(target)
               PlayerLib.command("seek", toApply.toString(), seekMode)
           }
         }
