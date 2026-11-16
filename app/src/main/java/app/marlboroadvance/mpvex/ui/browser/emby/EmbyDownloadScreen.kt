@@ -1,7 +1,6 @@
 package app.marlboroadvance.mpvex.ui.browser.emby
 
 import android.app.Application
-import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -61,6 +60,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyDownloadStatus
 import app.marlboroadvance.mpvex.domain.emby.EmbyDownloadTask
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.utils.media.MediaUtils
 import java.util.Locale
 import kotlinx.serialization.Serializable
 
@@ -147,11 +147,9 @@ object EmbyDownloadScreen : Screen {
                 onOpen = {
                   val uri = task.targetUri?.let { Uri.parse(it) }
                   if (uri != null) {
-                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                      setDataAndType(uri, "video/*")
-                      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
-                    runCatching { context.startActivity(intent) }
+                    // Downloaded media should stay in the same playback experience as the
+                    // offline-content page (mpv/GSY choice, subtitles, queue and progress).
+                    runCatching { MediaUtils.playFile(uri, context, "emby_download") }
                   }
                 },
               )

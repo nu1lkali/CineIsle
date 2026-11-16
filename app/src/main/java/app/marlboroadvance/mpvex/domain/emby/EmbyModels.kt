@@ -632,6 +632,41 @@ data class EmbyMediaStream(
   val IsExternal: Boolean? = null,
   val IsDefault: Boolean? = null,
   val IsForced: Boolean? = null,
+  /**
+   * 服务端本地化后的语言名（「简体中文」/「English」）。
+   *
+   * ⚠️ 这是**判断简繁的唯一可靠来源之一**：`Language` 只给 ISO 639-2（`chi`），
+   * 简繁都长一样；`DisplayLanguage` 与 [DisplayTitle] 才可能带「简体 / 繁体」。
+   * 但两者都是**本地化文案**，取值随服务器语言设置而变，所以只能当「线索」用，
+   * 不能当判据（见 `EmbySubtitleLanguage`）。
+   */
+  val DisplayLanguage: String? = null,
+  /** 这一条是不是**文本字幕**。图像字幕（PGS / DVD）恒为 false。 */
+  val IsTextSubtitleStream: Boolean? = null,
+  /** 听障字幕（SDH）。与普通字幕分开标识，自动选择时降权。 */
+  val IsHearingImpaired: Boolean? = null,
+  /**
+   * 服务端的交付方式：`Drop`（随容器一起给）/ `External`（旁挂文件）/ `Embed` /
+   * `Encode`（烧进画面，取不出来）/ `Web`…
+   *
+   * ⚠️ 这决定「能不能拿到独立字节」：`Encode` 拿不到，只能由服务端烧录或换源。
+   */
+  val DeliveryMethod: String? = null,
+  /** 服务端拼好的字幕交付地址（相对或绝对都有）。有它就**别自己拼 URL**。 */
+  val DeliveryUrl: String? = null,
+  /** 交付格式（`srt` / `ass` / `vtt` / `sub` …），与 [Codec] 不一定相同（可能已被转换） */
+  val DeliveryFormat: String? = null,
+  /** [DeliveryUrl] 是否是一个需要客户端自己去取的完整外部地址 */
+  val IsExternalUrl: Boolean? = null,
+  /** 服务端以分块方式交付（长字幕 / 转换中） */
+  val IsChunkedResponse: Boolean? = null,
+  /**
+   * 服务端上的字幕文件路径。
+   *
+   * ⚠️ **只用于显示与诊断**。这是 Emby 容器内部的路径，客户端不能据此直接读文件
+   * （NAS / Docker 映射下根本不存在这个路径）。
+   */
+  val Path: String? = null,
 )
 
 @Serializable

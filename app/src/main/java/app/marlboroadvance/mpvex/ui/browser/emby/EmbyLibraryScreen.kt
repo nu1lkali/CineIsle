@@ -4720,8 +4720,24 @@ private fun SortMenu(
     // 再叠一段退场动画反而让「选完排序」显得拖沓。
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown = true }
-    // 高度封顶 62% 屏高：11 项在小屏上放不完整列，露出底边暗示可滚
-    val panelMaxHeight = LocalConfiguration.current.screenHeightDp.dp * 0.62f
+    // 高度：尽量占满「工具行下沿 → 屏幕底部」的整段可用空间。
+    //
+    // 早先封顶 62% 屏高，11 个排序项 + 标题实测要 ~530dp，多数手机上 62% 只有 490–500dp，
+    // 用户每次都得手动往下滚才能看到「大小 / 随机」——这是本轮要解决的问题。
+    // ⚠️ 不能简单把百分比调大：面板顶边在工具行下沿，百分比按**整屏**算，
+    //    横屏 / 大字号时工具行下沿已经很靠下，62% 直接顶出屏幕，最后两项反而被裁掉。
+    // ⇒ 按**实际可用高度**封顶：内容区高度 − 工具行下沿 − 底部留白。
+    //   `screenHeightDp` 取的是**不含系统栏**的内容区高度，与 Popup 的定位基准一致。
+    //   下限 240dp 只是为了别在极端尺寸下压成一条，正常手机不会触发。
+    val config = LocalConfiguration.current
+    val density = LocalDensity.current
+    val screenHeightPx = with(density) { config.screenHeightDp.dp.roundToPx() }
+    // 底部留白：给手势条 + 一点视觉呼吸，不让最后一项贴着屏幕最下沿
+    val bottomInsetPx = with(density) { 24.dp.roundToPx() }
+    val usableHeight = with(density) {
+      (screenHeightPx - topOffsetPx - bottomInsetPx).coerceAtLeast(0).toDp()
+    }
+    val panelMaxHeight = usableHeight.coerceAtLeast(240.dp)
 
     AnimatedVisibility(
       visible = shown,
@@ -4753,6 +4769,9 @@ private fun SortMenu(
           SORT_OPTIONS.forEach { (value, label) ->
             val selected = value == currentSort
             DropdownMenuItem(
+              // 44dp 而不是默认 48dp：11 项能省 44dp —— 省下的正好够多数机型
+              // 「标题 + 11 项」整列放下，用户不必再滚。
+              modifier = Modifier.height(44.dp),
               text = {
                 Text(
                   text = buildString {

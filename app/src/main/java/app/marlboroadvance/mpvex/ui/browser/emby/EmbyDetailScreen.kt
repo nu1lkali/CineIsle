@@ -2718,9 +2718,25 @@ private fun MediaInfoSection(
 ) {
   val entries =
     remember(item, selectedMediaSourceId) { buildEmbyMediaInfoEntries(item, selectedMediaSourceId) }
+  val rows = remember(entries) { entries.filterIsInstance<MediaInfoEntry.Row>() }
+  val summary = remember(rows) {
+    rows.take(3).joinToString(" · ") { "${it.label} ${it.value}" }
+  }
+  var expanded by rememberSaveable(item.Id, selectedMediaSourceId) { mutableStateOf(false) }
 
-  Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(horizontal = 16.dp, vertical = 8.dp),
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(12.dp))
+        .clickable { expanded = !expanded }
+        .padding(vertical = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       Icon(
         imageVector = Icons.Default.Info,
         contentDescription = null,
@@ -2728,56 +2744,70 @@ private fun MediaInfoSection(
         modifier = Modifier.size(20.dp),
       )
       Spacer(modifier = Modifier.width(6.dp))
-      Text("媒体信息", style = MaterialTheme.typography.titleMedium)
-    }
-    Spacer(modifier = Modifier.height(8.dp))
-
-    if (entries.isEmpty()) {
-      Text(
-        text = "服务器没有返回可用的媒体信息",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      Column(modifier = Modifier.weight(1f)) {
+        Text("媒体信息", style = MaterialTheme.typography.titleMedium)
+        Text(
+          text = summary.ifBlank { "服务器没有返回可用的媒体信息" },
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      if (rows.isNotEmpty()) {
+        Text(
+          text = "${rows.size} 项",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+      }
+      Icon(
+        imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+        contentDescription = if (expanded) "收起媒体信息" else "展开媒体信息",
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
       )
-      return@Column
     }
 
-    Surface(
-      shape = RoundedCornerShape(16.dp),
-      color = MaterialTheme.colorScheme.surfaceContainerLow,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Column(modifier = Modifier.padding(vertical = 6.dp)) {
-        entries.forEach { entry ->
-          when (entry) {
-            is MediaInfoEntry.Section -> {
-              Text(
-                text = entry.title,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 2.dp),
-              )
-            }
+    if (expanded && entries.isNotEmpty()) {
+      Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+          entries.forEach { entry ->
+            when (entry) {
+              is MediaInfoEntry.Section -> {
+                Text(
+                  text = entry.title,
+                  style = MaterialTheme.typography.labelLarge,
+                  color = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 2.dp),
+                )
+              }
 
-            is MediaInfoEntry.Row -> {
-              Row(
-                modifier =
-                  Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.Top,
-              ) {
-                Text(
-                  text = entry.label,
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.width(76.dp),
-                )
-                Text(
-                  text = entry.value,
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurface,
-                  modifier = Modifier.weight(1f),
-                )
+              is MediaInfoEntry.Row -> {
+                Row(
+                  modifier =
+                    Modifier
+                      .fillMaxWidth()
+                      .padding(horizontal = 12.dp, vertical = 5.dp),
+                  verticalAlignment = Alignment.Top,
+                ) {
+                  Text(
+                    text = entry.label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(76.dp),
+                  )
+                  Text(
+                    text = entry.value,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                  )
+                }
               }
             }
           }

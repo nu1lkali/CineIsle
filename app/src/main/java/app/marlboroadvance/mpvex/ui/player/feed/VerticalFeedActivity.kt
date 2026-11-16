@@ -294,7 +294,13 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
           // 照它起 mpv 会「先响一下别的片子」。漂移窗口只有两帧，不预判不影响结果 ——
           // 兜底链照样会把这一条送到 mpv，只是多花一轮。
           if (!orientationLock) preRouteToMpv(page)
-          pool.onPageChanged(page) { index -> viewModel.items.getOrNull(index)?.url }
+          pool.onPageChanged(
+            center = page,
+            urlOf = { index -> viewModel.items.getOrNull(index)?.url },
+            preferFfmpeg = { index ->
+              viewModel.items.getOrNull(index)?.let { startPlanOf(it) == FeedStartPlan.FFMPEG } == true
+            },
+          )
           if (!orientationLock) {
             // 相邻那条在用户滑过来之前就已经 prepare 完，它的真实时长、进度、首帧
             // 状态全都在手边 —— 一次抄回来，UI 不需要先退回「未知」再等心跳填。
@@ -761,6 +767,11 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
   private fun switchToMpv(index: Int) {
     val item = viewModel.items.getOrNull(index) ?: return
     if (index in mpvServed) return
+    android.util.Log.w(
+      "FeedDecoder",
+      "handoff-to-mpv index=$index container=${item.container ?: "unknown"} " +
+        "codec=${item.videoCodec ?: "unknown"}",
+    )
 
     // ① 画面层：第一次用到时建（初始化必须发生在 surface attach 之前，见 FeedMpvEngine）
     if (!ensureMpvHost()) {

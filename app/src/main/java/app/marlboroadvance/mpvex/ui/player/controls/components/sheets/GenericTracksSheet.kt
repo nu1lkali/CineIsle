@@ -106,6 +106,14 @@ fun getTrackTitle(
   if ((track.isSubtitle || track.isAudio) && track.external == true && track.externalFilename != null) {
     val decoded = Uri.decode(track.externalFilename)
     val fileName = decoded.substringAfterLast("/")
+    // ⚠️ 外挂轨不一定「没有标题」：Emby 字幕挂载时会显式带 `sub-add ... "<标题>" <语言>`
+    //    （缓存文件名是 `<sha1>.ass`，不带上就是面板里一串 md5）。用户自己加的文件则由
+    //    mpv 把文件名填进 title，与 fileName 相同 —— 那种情况仍按文件名显示，行为不变。
+    val title = track.title?.trim()
+    val readable = title?.takeIf { it.isNotEmpty() && it != fileName }
+    if (readable != null) {
+      return stringResource(R.string.player_sheets_track_title_wo_lang, track.id, readable)
+    }
     return stringResource(R.string.player_sheets_track_title_wo_lang, track.id, fileName)
   }
 

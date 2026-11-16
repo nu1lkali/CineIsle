@@ -53,7 +53,7 @@ if (-not $NoClean) {
 Write-Host "[2/4] 构建 StandardRelease / $Abi ..." -ForegroundColor Cyan
 $prevEap = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-& .\gradlew.bat :app:assembleStandardRelease "-Pabi=$Abi" --console=plain
+& .\gradlew.bat :app:assembleStandardRelease "-Pabi=$Abi" --console=plain --no-daemon
 $buildExit = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
 if ($buildExit -ne 0) {

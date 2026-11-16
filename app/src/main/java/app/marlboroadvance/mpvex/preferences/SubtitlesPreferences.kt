@@ -18,6 +18,40 @@ class SubtitlesPreferences(
   val preferredLanguages = preferenceStore.getString("sub_preferred_languages")
   val autoloadMatchingSubtitles = preferenceStore.getBoolean("sub_autoload_enabled", true)
 
+  // ── Emby 字幕（服务端已识别的字幕：内嵌轨 + 旁挂文件）──
+
+  /**
+   * 播放 Emby 媒体时，自动按语言偏好挂载服务端已识别的字幕。
+   *
+   * 与 [autoloadMatchingSubtitles] 是**两件不同的事**：那个是「本地/网络目录里找同名
+   * 字幕文件」（靠文件名），这个是「用 Emby 自己的媒体识别结果」（靠服务端元数据）。
+   * 分开两个开关，是因为前者在网盘直链 / 本地文件上也能用，后者只对 Emby 生效。
+   */
+  val embyAutoSubtitles = preferenceStore.getBoolean("sub_emby_auto", true)
+
+  /**
+   * 没有首选语言候选时，是否跟随 Emby 标为「默认」的字幕轨。
+   *
+   * 关掉后只认用户自己设的语言；一条都对不上就**保持关闭**（不随便塞一条）。
+   */
+  val embyFollowDefault = preferenceStore.getBoolean("sub_emby_follow_default", true)
+
+  /**
+   * 允许的替补语言（逗号分隔）。为空 = 不限。
+   *
+   * 与 [preferredLanguages] 的区别是**只在首选语言完全没候选时**才用；
+   * 典型场景：首选简体中文，但片子只有繁体 —— 用户愿意看繁体就把它填进来。
+   */
+  val embyAllowedLanguages = preferenceStore.getString("sub_emby_allowed_languages", "")
+
+  /**
+   * 「这部片子用 Emby 的哪条字幕」的账本：一行一条 `itemId<TAB>mediaSourceId#index`。
+   *
+   * 与 [subtitleBindings]（片名 → 本地字幕 Uri）分开存：那边记的是**文件**，
+   * 这边记的是**服务端流**。混在一起的话，本地缓存被清掉时会把服务端选择也一起丢掉。
+   */
+  val embySubtitleChoices = preferenceStore.getString("sub_emby_choices", "")
+
   val fontsFolder = preferenceStore.getString("sub_fonts_folder")
   val font = preferenceStore.getString("sub_font", "")
   val fontSize = preferenceStore.getInt("sub_font_size", 55)

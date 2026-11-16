@@ -90,20 +90,35 @@ fun selectPreferredMediaSourceId(
 
   if (ranked.size < 2) return null
 
-  // ⚠️ 必须显式给类型：`when` 里有一个分支是 `return null`（不是表达式），
-  // 编译器无法从分支推断出 comparator 的类型，`minWithOrNull` 就找不到重载。
+  // If every candidate lacks the primary field for this rule, returning the first
+  // server item would look like a successful automatic choice while being arbitrary.
+  val hasPrimaryValue =
+    when (preference) {
+      MediaSourcePreference.HIGHEST_RESOLUTION,
+      MediaSourcePreference.LOWEST_RESOLUTION,
+      MediaSourcePreference.BEST_QUALITY_PER_SIZE -> ranked.any { it.pixels != null }
+      MediaSourcePreference.HIGHEST_BITRATE,
+      MediaSourcePreference.LOWEST_BITRATE -> ranked.any { it.bitrate != null }
+      MediaSourcePreference.SMALLEST_SIZE -> ranked.any { it.size != null }
+      MediaSourcePreference.DEFAULT -> false
+    }
+  if (!hasPrimaryValue) return null
+
+  // 缺失值统一沉底；其余分支用「主键是否缺失 + 正确排序方向」表达偏好。
+  // ⚠️ minWithOrNull 要求比较器的最小项就是首选项，因此最高值必须降序。
   val comparator: Comparator<Candidate> =
     when (preference) {
       MediaSourcePreference.HIGHEST_RESOLUTION ->
-        compareBy<Candidate> { it.pixels ?: Long.MIN_VALUE }
-          .thenBy { it.bitrate ?: Long.MIN_VALUE }
+        compareBy<Candidate> { if (it.pixels == null) 1 else 0 }
+          .thenByDescending { it.pixels ?: Long.MIN_VALUE }
+          .thenByDescending { it.bitrate ?: Long.MIN_VALUE }
       MediaSourcePreference.LOWEST_RESOLUTION ->
-        // 有值的排在缺失的**前面**（缺失当"最小"→ 反向取反即"最前"要小心）
         compareBy<Candidate> { if (it.pixels == null) 1 else 0 }
           .thenBy { it.pixels ?: Long.MAX_VALUE }
       MediaSourcePreference.HIGHEST_BITRATE ->
-        compareBy<Candidate> { it.bitrate ?: Long.MIN_VALUE }
-          .thenBy { it.pixels ?: Long.MIN_VALUE }
+        compareBy<Candidate> { if (it.bitrate == null) 1 else 0 }
+          .thenByDescending { it.bitrate ?: Long.MIN_VALUE }
+          .thenByDescending { it.pixels ?: Long.MIN_VALUE }
       MediaSourcePreference.LOWEST_BITRATE ->
         compareBy<Candidate> { if (it.bitrate == null) 1 else 0 }
           .thenBy { it.bitrate ?: Long.MAX_VALUE }
@@ -114,7 +129,8 @@ fun selectPreferredMediaSourceId(
         // "画质够就行、挑更小的"：以分辨率为主键分组不现实（要跨条目比较体积），
         // 这里取一个务实的近似 —— 像素数相同则选小的；像素数不同仍取像素多的
         // （否则"4K 的 20G" 会输给 "1080P 的 300M"，那不是用户想要的意思）。
-        compareBy<Candidate> { -(it.pixels ?: Long.MIN_VALUE) }
+        compareBy<Candidate> { if (it.pixels == null) 1 else 0 }
+          .thenByDescending { it.pixels ?: Long.MIN_VALUE }
           .thenBy { it.size ?: Long.MAX_VALUE }
       MediaSourcePreference.DEFAULT -> return null
     }

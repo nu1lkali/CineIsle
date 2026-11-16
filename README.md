@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.6.10.svg" alt="Release: v1.6.10" /></a>
+  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.6.20.svg" alt="Release: v1.6.20" /></a>
   <img src=".github/badges/flavor-standard.svg" alt="Flavor: standard" />
   <img src=".github/badges/package-cineisle.svg" alt="Package: app.cineisle.player" />
   <img src=".github/badges/kernel-mpv-gsy.svg" alt="Kernel: mpv + GSYVideoPlayer" />
@@ -87,7 +87,7 @@
 | **持久化** | Room 2.8（KSP 生成、schema 导出、迁移测试）· `me.zhanghai.compose.preference` |
 | **图像** | Coil 3.6（图片与视频首帧，按显示尺寸分桶缓存、有界解码）· haze 1.7（Cine 界面的实时背景模糊） |
 | **网络** | OkHttp 5 + kotlinx.serialization（手写 Emby 客户端，以及 AList 原生 API 客户端）· SMBJ / Sardine / Commons Net（SMB / FTP / WebDAV）· NanoHTTPD（本地 Range 代理） |
-| **播放** | libmpv（`mpv-android`）为主内核 · GSYVideoPlayer 13.2（IJK / System / ExoPlayer）为备选 · AndroidX Media3 ExoPlayer 1.10 承担视界流多实例播放 |
+| **播放** | libmpv（`mpv-android`）为主内核 · GSYVideoPlayer 13.2（IJK / System / ExoPlayer）为备选 · AndroidX Media3 ExoPlayer 1.11.1 + NextLib 本地 FFmpeg 扩展承担视界流多实例播放 |
 | **投屏** | UPnPCast（源码内置） |
 | **加密** | Android Keystore AES-256-GCM |
 | **构建** | AGP 9.4 + Gradle · Kotlin 2.3.20 · Compose BOM 2026.03 · JDK 17 · release 走 R8 混淆 + 资源裁剪 |
@@ -127,6 +127,7 @@
 | `ui/browser/networkstreaming` | 网络存储：`clients` 下四套协议客户端（SMB / FTP / WebDAV / AList 原生 API）、目录浏览、混合媒体列表、照片查看器、`upload/` 上传引擎与相册选择器、`NetworkFeedLauncher`（随机播放 / 视界流的候选收集与地址解析） |
 | `ui/browser/filesystem` · `folderlist` · `playlist` · `videolist` · `recentlyplayed` | 本地文件浏览与各列表页 |
 | `ui/player` | 播放页：`controls` 控件簇布局引擎、`engine` 双内核抽象、`gsy` GSY 内核、`feed` 视界流（含 mpv 内嵌兜底 `FeedMpvEngine`） |
+| `nextlib-patched` | NextLib 1.11.1-0.17.0 的本地 GPL-3.0 源码补丁：扩展 Media3 FFmpeg 对 MPEG-4 Part 2 / VC-1 / WMV / RealVideo / VP6 的映射；保留上游 `libmedia3ext.so`，与 mpv FFmpeg 9 ABI 配套 |
 | `ui/preferences` | 设置页（含设置搜索） |
 | `ui/lock` | 应用锁门禁：PIN / 图案解锁页、失败冷却、`AppLockGate` 包住 MainActivity 全部内容 |
 | `database` | Room 实体 / DAO / 仓库，含迁移与 schema 导出 |
@@ -418,4 +419,3 @@
 <p align="center">
   <img src=".github/assets/wechat-reward.png" width="320" alt="微信赞赏码" />
 </p>
-

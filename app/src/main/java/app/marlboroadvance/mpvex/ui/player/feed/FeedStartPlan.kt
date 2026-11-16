@@ -19,6 +19,9 @@ internal enum class FeedStartPlan {
   /** 默认：ExoPlayer（平台硬解优先，NextLib 的 FFmpeg 兜底） */
   INNER,
 
+  /** ExoPlayer 能拆容器，但这个编码在 Android 硬解上不可靠，起播时优先 FFmpeg */
+  FFMPEG,
+
   /** 内置内核必解不了，直接交给 mpv */
   MPV,
 }
@@ -53,11 +56,9 @@ private val MPV_ONLY_CONTAINERS = setOf(
  *
  * - 平台侧：AOSP 与厂商 MediaCodec 只覆盖 H.264 / HEVC / MPEG-4 Part 2 / VP8 / VP9 /
  *   AV1 / MPEG-2 这一批，VC-1、WMV3、RealVideo、VP6 一个都没有；
- * - NextLib 侧：FFmpeg 渲染器认哪些编码由 `FfmpegLibrary.getCodecName` 那张表决定，
- *   **视频只有 avc / hevc / mpeg / mpeg2 / vp8 / vp9 / av01 七项**。
- *   ⚠️ 这跟 FFmpeg 的编译配置无关 —— 打进包里的 `libavcodec.so` 是 mpv 那份
- *   （Lavc63），`mpeg4`、`wmv3`、`vc1`、`rv40`、`vp6` 全都在里面，
- *   只是那张表没把 mime 映射进去，扩展渲染器根本不会去问它。
+ * - NextLib 侧：上游 FFmpeg renderer 原先只映射 avc / hevc / mpeg / mpeg2 / vp8 /
+ *   vp9 / av01。本项目的本地兼容层补上了 MPEG-4 Part 2、MSMPEG4、VC-1、WMV、
+ *   RealVideo 和 VP6，并在运行时用 `ffmpegHasDecoder()` 确认当前 native 库确有实现。
  *
  * `mpeg4`（Xvid / DivX）**故意不在这个名单里**：平台普遍带 MPEG-4 Part 2 解码器，
  * 有些机型能正常出画面，预判成 mpv 会白白丢掉硬解。它的坏情况交给运行期兜底链。
@@ -66,15 +67,32 @@ private val MPV_ONLY_CONTAINERS = setOf(
  * 已被容器名单覆盖的 `.wmv` / `.asf` 里，要么个别机型能用 MPEG-4 解码器兼容。
  * 名单越长，误判的机会越多；而误判的代价（能放的片子被丢给 mpv）远大于省下一轮失败。
  */
-private val MPV_ONLY_CODECS = setOf(
-  "wmv3",
-  "vc1",
-  "rv30",
-  "rv40",
-  "vp6",
-  "vp6f",
-  "msmpeg4v3",
-)
+private val MPV_ONLY_CODECS = setOf("theora", "indeo3", "indeo5", "cinepak", "svq3")
+
+/**
+ * 编码有 NextLib 映射、但 Android MediaCodec 普遍不支持或容易「有声无画面」。
+ *
+ * 在 ExoPlayer 首次 prepare 时就选 FFmpeg，避免先让硬解空转 3 秒再切软件。
+ * MPEG-4 Part 2 只对 AVI 预选：MP4 中同编码在不少设备上仍能稳定硬解。
+ */
+private val FFMPEG_PREFERRED_CODECS =
+  setOf(
+    "h263",
+    "msmpeg4v1",
+    "msmpeg4v2",
+    "msmpeg4v3",
+    "rv10",
+    "rv20",
+    "rv30",
+    "rv40",
+    "vc1",
+    "vp6",
+    "vp6a",
+    "vp6f",
+    "wmv1",
+    "wmv2",
+    "wmv3",
+  )
 
 /**
  * 这一条起播时该走哪个内核。容器优先于编码 —— 容器拆不开时，
@@ -83,7 +101,24 @@ private val MPV_ONLY_CODECS = setOf(
 internal fun startPlanOf(item: FeedItem): FeedStartPlan {
   val container = item.container?.lowercase()?.trim().orEmpty()
   if (container in MPV_ONLY_CONTAINERS) return FeedStartPlan.MPV
-  val codec = item.videoCodec?.lowercase()?.trim().orEmpty()
+  val codec = normalizeCodec(item.videoCodec)
   if (codec in MPV_ONLY_CODECS) return FeedStartPlan.MPV
+  if (codec in FFMPEG_PREFERRED_CODECS || (container == "avi" && codec == "mpeg4")) {
+    return FeedStartPlan.FFMPEG
+  }
   return FeedStartPlan.INNER
+}
+
+/**
+ * Emby servers expose codec labels from different probing libraries:
+ * `VC-1`/`WVC1` and `VC1`, for example, refer to the same codec.
+ */
+private fun normalizeCodec(value: String?): String {
+  val token = value.orEmpty().lowercase().filter(Char::isLetterOrDigit)
+  return when (token) {
+    "wvc1", "vc1image" -> "vc1"
+    "realvideo30" -> "rv30"
+    "realvideo40" -> "rv40"
+    else -> token
+  }
 }

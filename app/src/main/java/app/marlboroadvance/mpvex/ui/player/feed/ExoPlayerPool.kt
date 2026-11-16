@@ -5,6 +5,7 @@ import android.graphics.SurfaceTexture
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.Gravity
 import android.view.TextureView
 import android.view.View
@@ -12,6 +13,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -29,6 +31,8 @@ import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegLibrary
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+private const val FEED_DECODER_TAG = "FeedDecoder"
 
 /**
  * 视界流的 ExoPlayer 实例池 —— 「无感滑动」的全部秘密都在这个类里。
@@ -224,21 +228,25 @@ internal class ExoPlayerPool(
    */
   private val noVideoReported = HashSet<Int>()
 
-  /**
-   * index → 已经试过「只准软解」这一次重建。
-   *
-   * 只试一次是刻意的：软解也不行的时候必须收手，否则「硬解失败 → 软解也失败 →
-   * 再重试」会变成无限重建，用户看到的是画面一直闪。
-   */
-  private val softRetried = HashSet<Int>()
+  /** 每种软件解码路径每条最多尝试一次，防止黑屏时无限重建播放器。 */
+  private val ffmpegRetryUsed = HashSet<Int>()
+  private val platformSoftwareRetryUsed = HashSet<Int>()
 
   /**
    * index → 下次建实例时**只准用软件解码器**（硬解已经被证明出不了画面）。
    *
-   * 与 [softRetried] 分开：前者是「允许试一次」的闸门，后者是「已经试过、从此只用软解」
-   * 的状态。合并成一个的话，重试请求与重建之间就没有先后关系了。
+   * 与 [ffmpegRetryUsed] 分开：这里表示「下次建实例从 FFmpeg 起播」，
+   * 前者记录「这个 index 已经实际尝试过 FFmpeg」，用于失败后继续试平台软解。
    */
   private val forceSoftware = HashSet<Int>()
+
+  /**
+   * NextLib doesn't map this MIME, but Android exposes a software MediaCodec.
+   *
+   * This is separate from [forceSoftware]: DecoderMode.FFMPEG disables platform
+   * video renderers, so it would disable the only decoder available to this item.
+   */
+  private val forcePlatformSoftware = HashSet<Int>()
 
   /** 兜底定时器跑在主线程 —— 账本和回调本来就都约定在主线程上碰 */
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -275,7 +283,13 @@ internal class ExoPlayerPool(
   private fun acquire(index: Int, url: String): ExoPlayer? {
     if (index in skipped) return null
     players[index]?.let { return it }
-    val player = build(index, url, softOnly = index in forceSoftware)
+    val player =
+      build(
+        index,
+        url,
+        softOnly = index in forceSoftware,
+        platformSoftwareOnly = index in forcePlatformSoftware,
+      )
     val listener = listenerFor(index)
     player.addListener(listener)
     // 记下这一对，释放时成对摘掉（清单 #20 建议项）。
@@ -292,44 +306,55 @@ internal class ExoPlayerPool(
    *
    * @param softOnly 已经确定硬解出不了画面，这一条**从头就用 FFmpeg 软解**
    *   （见 [retryInSoftware] 的 REBUILD 分支；就地切换那条路不走这里）。
+   * @param platformSoftwareOnly NextLib 没有这个 MIME 映射，但 Android 确实暴露了
+   *   软件 MediaCodec；禁用 FFmpeg 扩展并只挑平台软件解码器。
    */
-  private fun build(index: Int, url: String, softOnly: Boolean = false): ExoPlayer {
+  private fun build(
+    index: Int,
+    url: String,
+    softOnly: Boolean = false,
+    platformSoftwareOnly: Boolean = false,
+  ): ExoPlayer {
     // ── 解码能力的三层 ──
     // 1) 正常路径：平台 MediaCodec 优先，NextLib 的 FFmpeg Renderer 只在平台
     //    不支持该格式时兜底（EXTENSION_RENDERER_MODE_ON）。这样 H.264/HEVC 仍然
     //    走硬解，不会因为引入软解就整体变慢。
-    // 2) 软解重试：把 FFmpeg 提到平台前面（PREFER），专治「硬解建得起来但不吐帧」
-    //    （10bit HEVC、部分 AVI/MPEG-2）。平台侧的 SoftwareOnlyCodecSelector 仍然
-    //    保留，FFmpeg 不支持的编码还能再试一次系统软解。
-    // 3) 两者都不行：Activity 切 mpv（RMVB/WMV/VP6/Xvid 这类 NextLib 也没编进去的）。
+    // 2) 软解重试：先把 NextLib FFmpeg 提到平台前面，专治「硬解建得起来但不吐帧」
+    //    （10bit HEVC、部分 AVI/MPEG-2）。若 NextLib 没有该 MIME 映射，但系统确实
+    //    暴露了软件 MediaCodec，则再以平台软解单独重建一次。
+    // 3) 两条软件路径都不存在：Activity 切 mpv（容器不支持或设备没有可用解码器）。
     val extensionMode =
-      if (softOnly) {
-        DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
-      } else {
-        DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+      when {
+        platformSoftwareOnly -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
+        softOnly -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+        else -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
       }
     // 解码模式控制器：正常路径给 AUTO。
     // ⚠️ AUTO **不是**「偏向某一方」，它的语义是「两个渲染器都启用、按能力值竞争」——
     //    也就是跟不加控制器时的 ON 行为完全一致（反编译 `enables()` 确认：
     //    `mode == AUTO || (mode == FFMPEG) == isFfmpeg`）。所以换成它不会让硬解退化。
-    val decoderManager = DecoderManager(
-      if (softOnly) DecoderMode.FFMPEG else DecoderMode.AUTO,
-      // 音频不动：软解救「有声无画面」从来不需要动音频，动它反而会多一次重缓冲。
-      DecoderMode.AUTO,
-    )
-    val renderersFactory =
-      NextRenderersFactory(context)
-        // 必须在 `build()` **之前**设进工厂：控制器要靠它接管渲染器集合。
-        // ⚠️ 这一句必须是链上的**第一**个：`setEnableDecoderFallback` /
-        // `setExtensionRendererMode` 都是父类方法、返回的是 `DefaultRenderersFactory`
-        // 的静态类型，放在它们后面就调不到 `setDecoderManager` 了。
-        .setDecoderManager(decoderManager)
-        // ⚠️ 这一项**默认是 false**（media3 的 `DefaultRenderersFactory` 里
-        // `enableDecoderFallback = false`）⇒ 首选解码器建不起来时直接抛
-        // `DECODER_INIT_FAILED`，不会试后面的候选。打开后才会逐个回退。
-        .setEnableDecoderFallback(true)
-        .setExtensionRendererMode(extensionMode)
-    if (softOnly) {
+    // DecoderManager requires both FFmpeg renderers to wrap. The platform-only retry
+    // deliberately turns the extension renderer OFF, so it must use a plain factory.
+    val decoderManager =
+      if (platformSoftwareOnly) {
+        null
+      } else {
+        DecoderManager(
+          if (softOnly) DecoderMode.FFMPEG else DecoderMode.AUTO,
+          // 音频不动：软解救「有声无画面」从来不需要动音频，动它反而会多一次重缓冲。
+          DecoderMode.AUTO,
+        )
+      }
+    val renderersFactory = NextRenderersFactory(context)
+    decoderManager?.let { manager ->
+      // 必须在 `build()` **之前**设进工厂：控制器要靠它接管渲染器集合。
+      renderersFactory.setDecoderManager(manager)
+    }
+    // ⚠️ 这一项默认关闭；打开后解码器初始化失败才会尝试后续候选。
+    renderersFactory
+      .setEnableDecoderFallback(true)
+      .setExtensionRendererMode(extensionMode)
+    if (softOnly || platformSoftwareOnly) {
       renderersFactory.setMediaCodecSelector(SoftwareOnlyCodecSelector)
     }
     val builder = ExoPlayer.Builder(context).setRenderersFactory(renderersFactory)
@@ -371,8 +396,10 @@ internal class ExoPlayerPool(
     // attach 必须在 `build()` 之后、且在 player 自己的 application 线程上
     // （本池全部方法都在主线程，见类注释）。它会做两件事：接管 trackSelector、
     // 把当前模式应用到渲染器能力上。失败就别登记 —— 假装能用比不能用更糟。
-    runCatching { decoderManager.attach(player) }
-      .onSuccess { decoders[index] = decoderManager }
+    decoderManager?.let { manager ->
+      runCatching { manager.attach(player) }
+        .onSuccess { decoders[index] = manager }
+    }
     return player
   }
 
@@ -582,13 +609,12 @@ internal class ExoPlayerPool(
   private fun forgetFrameLedgers(index: Int, keepRendererEvidence: Boolean = false) {
     if (!keepRendererEvidence) firstFrameRendered.remove(index)
     frameOnScreen.remove(index)
-    // 「已经撤过圈」这条也要一起作废：新实例/新解码模式下画面要重新出帧，
+     // 「已经撤过圈」这条也要一起作废：新实例/新解码模式下画面要重新出帧，
     // 留着它会让加载圈再也不出现（用户对着黑屏，界面上却像已经播起来了）。
     revealNotified.remove(index)
     // 「这条没有画面」的结论同样跟着实例走：换了实例（软解重试 / 重载）就要重新判，
     // 否则第一次的判决会一直压着，软解成功了却还挂着错误卡片。
-    // ⚠️ 刻意**不**清 softRetried：那个是「已经给过一次软解机会」的闸门，
-    //    清了就等于允许无限重试。
+     // 软件解码尝试账本刻意不在这里清：换 Surface 不应让同一 index 无限重试解码器。
     noVideoReported.remove(index)
     revealFallbacks.remove(index)?.let { mainHandler.removeCallbacks(it) }
     // 画面要重新出帧了 —— 那片空白期间可能伴随一次「满屏 → contain」的几何重算，
@@ -913,10 +939,10 @@ internal class ExoPlayerPool(
    * ── 一个必须先挡掉的坑 ──
    *
    * `DecoderMode.FFMPEG` 会把**平台渲染器整个关掉**。如果这个编码不在
-   * `FfmpegLibrary` 的 mime 表里（表很小，视频只有 avc/hevc/mpeg/mpeg2/vp8/vp9/av01），
-   * 切过去的结果是「一个视频渲染器都没有」⇒ 视频轨被丢掉、**有声无画面**。
-   * 那正是我们想修的症状，不能自己再造一个。所以切之前先问一次
-   * [FfmpegLibrary.supportsFormat]，不支持就直接判死交给 mpv —— 那一步不可救。
+   * `FfmpegLibrary` 的 MIME 表里，FFmpeg 模式不会产生视频渲染器。但这不代表
+   * 一定只能交给 mpv：部分 Android 版本还暴露有对应编码的软件 MediaCodec。
+   * 所以切换前先检查 NextLib 映射；映射缺失时再检查平台软件解码器，有则用平台软解
+   * 重建一次，两边都没有才转交 mpv。
    *
    * @return [FeedSwRetry.IN_PLACE] 已就地切到软解（**不要**重建）；
    *   [FeedSwRetry.REBUILD] 需要调用方重建一次实例；
@@ -926,39 +952,70 @@ internal class ExoPlayerPool(
     val idx = activeIndex
     if (idx < 0) return FeedSwRetry.NONE
     val player = players[idx] ?: return FeedSwRetry.NONE
-    // 同一个 index 只放行一次：否则「硬解失败 → 软解也失败」会变成无限重建，
-    // 用户看到的是画面一直闪。
-    if (!softRetried.add(idx)) return FeedSwRetry.NONE
 
-    val mime = videoMimeOf(player)
-    if (mime != null && !ffmpegHandles(mime)) {
-      noVideoReported.add(idx)
-      return FeedSwRetry.NONE
+    val format = videoFormatOf(player)
+    val mime = format?.sampleMimeType
+    // MPV 元数据有时尚未到达 track-list：保留一次乐观 FFmpeg 尝试，随后再收手。
+    val ffmpegSupports = format == null || ffmpegHandles(format)
+    val platformSoftwareAvailable =
+      !mime.isNullOrBlank() && hasSoftwareMediaCodec(mime)
+    val preferredFallback =
+      chooseFeedSoftwareFallback(
+        ffmpegSupportsMime = ffmpegSupports,
+        platformHasSoftwareDecoder = platformSoftwareAvailable,
+      )
+    Log.i(
+      FEED_DECODER_TAG,
+      "index=$idx mime=${mime ?: "unknown"} codecs=${format?.codecs ?: "unknown"} " +
+        "ffmpeg=$ffmpegSupports platformSoftware=$platformSoftwareAvailable " +
+        "preferred=$preferredFallback currentFfmpeg=${idx in forceSoftware} " +
+        "currentPlatformSoftware=${idx in forcePlatformSoftware}",
+    )
+
+    // 第一级：FFmpeg 可识别且本条还没尝试过时，就地切换（或因控制器未接上而重建）。
+    // 如果本条起播时已按 codec 预选了 FFmpeg，则不重复切同一模式，直接进入下一级。
+    if (preferredFallback == FeedSoftwareFallback.FFMPEG &&
+      idx !in forceSoftware &&
+      ffmpegRetryUsed.add(idx)
+    ) {
+      val manager = decoders[idx] ?: run {
+        forceSoftware.add(idx)
+        return FeedSwRetry.REBUILD
+      }
+      val switched =
+        runCatching { manager.selectVideoDecoder(DecoderMode.FFMPEG) }.isSuccess
+      if (!switched) {
+        forceSoftware.add(idx)
+        return FeedSwRetry.REBUILD
+      }
+      // 换了渲染器 ⇒ 要重新出帧：首帧账本作废、遮罩重新盖上，
+      // 否则旧的「已经出过画面」会压着加载态，而画面上什么都没有。
+      forgetFrameLedgers(idx)
+      return FeedSwRetry.IN_PLACE
     }
 
-    val manager = decoders[idx] ?: run {
-      forceSoftware.add(idx)
+    // 第二级：FFmpeg 没映射该 MIME 或 FFmpeg 软解也没出帧时，尝试平台软件解码器。
+    // 每条最多一次；已在平台软解模式下仍没帧，则交由调用方切 mpv。
+    val ffmpegWasAlreadyTried = idx in forceSoftware || idx in ffmpegRetryUsed
+    if (platformSoftwareAvailable &&
+      (preferredFallback == FeedSoftwareFallback.PLATFORM || ffmpegWasAlreadyTried) &&
+      idx !in forcePlatformSoftware &&
+      platformSoftwareRetryUsed.add(idx)
+    ) {
+      forcePlatformSoftware.add(idx)
       return FeedSwRetry.REBUILD
     }
-    val switched =
-      runCatching { manager.selectVideoDecoder(DecoderMode.FFMPEG) }.isSuccess
-    if (!switched) {
-      forceSoftware.add(idx)
-      return FeedSwRetry.REBUILD
-    }
-    // 换了渲染器 ⇒ 要重新出帧：首帧账本作废、遮罩重新盖上，
-    // 否则旧的「已经出过画面」会压着加载态，而画面上什么都没有。
-    forgetFrameLedgers(idx)
-    return FeedSwRetry.IN_PLACE
+
+    noVideoReported.add(idx)
+    return FeedSwRetry.NONE
   }
 
-  /** 当前选中的视频轨 mime；拿不到就 null（调用方据此选择「乐观地试一次」） */
-  private fun videoMimeOf(player: ExoPlayer): String? =
+  /** 当前选中的视频轨格式；拿不到就 null（调用方据此选择「乐观地试一次」） */
+  private fun videoFormatOf(player: ExoPlayer): Format? =
     runCatching {
       player.currentTracks.groups
         .firstOrNull { it.type == C.TRACK_TYPE_VIDEO && it.length > 0 }
         ?.getTrackFormat(0)
-        ?.sampleMimeType
     }.getOrNull()
 
   /**
@@ -968,9 +1025,17 @@ internal class ExoPlayerPool(
    * 直接返回「不支持」，跟 FFmpeg 到底编进了多少解码器无关（打进包里的 libavcodec 是
    * mpv 那份，解码器是全的 —— 缺的只是这张映射表）。
    */
-  private fun ffmpegHandles(mime: String): Boolean =
-    runCatching { FfmpegLibrary.isAvailable() && FfmpegLibrary.supportsFormat(mime) }
+  private fun ffmpegHandles(format: Format): Boolean =
+    runCatching { FfmpegLibrary.isAvailable() && FfmpegLibrary.supportsFormat(format) }
       .getOrDefault(false)
+
+  /** Android 是否真的提供该 MIME 的软件解码器；不把硬解器算作软解回退。 */
+  private fun hasSoftwareMediaCodec(mime: String): Boolean =
+    runCatching {
+      MediaCodecSelector.DEFAULT
+        .getDecoderInfos(mime, false, false)
+        .any { it.softwareOnly }
+    }.getOrDefault(false)
 
   /**
    * 抄一份 [index] 实例此刻的播放状态。
@@ -1045,7 +1110,11 @@ internal class ExoPlayerPool(
    * 这一调用的时机很关键 —— 必须在**新页面还没成为活动页之前**（或者同一帧内），
    * 相邻那条就被 make ready，才有「滑过去当天就有画面」的效果。
    */
-  fun onPageChanged(center: Int, urlOf: (Int) -> String?) {
+  fun onPageChanged(
+    center: Int,
+    urlOf: (Int) -> String?,
+    preferFfmpeg: (Int) -> Boolean = { false },
+  ) {
     activeIndex = center
     // ① 裁掉窗口外的实例。只动 players，**不动 surfaces** —— 那些页的 View 可能
     //    还在 Composition 里（Pager 会多预组合一页），它们仍然指着自己的 TextureView，
@@ -1055,6 +1124,11 @@ internal class ExoPlayerPool(
     //    这就是「滑了几下之后某页黑屏」的正解。
     (center - 1..center + 1).forEach { idx ->
       val url = urlOf(idx) ?: return@forEach
+      // 根据已知 Emby codec 元数据在 prepare 前选 FFmpeg，避免不适合硬解的冷门编码
+      // 先进入 READY、音频/进度开始走，画面却要等 stall 看守超时才切软解。
+      if (preferFfmpeg(idx) && forceSoftware.add(idx) && players.containsKey(idx)) {
+        releaseSlot(idx)
+      }
       acquire(idx, url)?.let { bind(idx, it) }
       applyVideoLayout(idx)
     }
@@ -1195,8 +1269,10 @@ internal class ExoPlayerPool(
     advanceSince.clear()
     revealFallbacks.clear()
     noVideoReported.clear()
-    softRetried.clear()
+    ffmpegRetryUsed.clear()
+    platformSoftwareRetryUsed.clear()
     forceSoftware.clear()
+    forcePlatformSoftware.clear()
     skipped.clear()
     mainHandler.removeCallbacksAndMessages(null)
     players.clear()
@@ -1333,11 +1409,11 @@ internal data class NoVideoStall(
 )
 
 /**
- * 只用**软件解码器**的选择器 —— 硬解已经被证明「建得起来但吐不出帧」时的第二次机会。
+   * 只用**平台软件解码器**的选择器 —— 不使用硬解，也不把 NextLib FFmpeg 渲染器算进来。
  *
- * 过滤后为空就退回完整列表（原样交给上层）：有的编码在部分机型上压根没有软解
- * （比如某些 AV1 / HEVC 10bit），这时宁可再试一次硬解，也不能直接判死 ——
- * 「没有解码器」这个错误比「可能还是黑屏」更糟，它连一帧都不给。
+   * 若平台没有软件解码器，调用方不会进入此路径，而是交给 mpv 接管。
+   * 这里保留「过滤后为空退回完整列表」的行为，仅作为平台 codec registry 的变动兜底；
+   * 正常情况下调用前已经确认过存在软件解码器。
  *
  * ⚠️ 为什么不是「禁用硬解」的开关：media3 没有这种开关，能改的只有「挑哪个
  * MediaCodec」这一步，所以只能靠选择器表达。

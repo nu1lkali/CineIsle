@@ -329,6 +329,17 @@
   <string name="player_sheets_local_subs_reason_title">Title match</string>
   <string name="player_sheets_local_subs_empty">No subtitle in the subtitle folder matches “%1$s”</string>
   <string name="player_sheets_local_subs_count">%1$d found</string>
+  <string name="player_sheets_emby_subs_header">Subtitles from Emby</string>
+  <string name="player_sheets_emby_subs_empty">Emby reported no usable subtitle</string>
+  <string name="player_sheets_emby_subs_auto">Auto select</string>
+  <string name="player_sheets_emby_subs_off">Turn off</string>
+  <string name="pref_subtitles_emby_auto_title">Auto-load Emby subtitles</string>
+  <string name="pref_subtitles_emby_auto_summary">Pick the subtitle Emby already knows about by your language preference. Files are kept in the app’s private storage.</string>
+  <string name="pref_subtitles_emby_default_title">Follow Emby default subtitle</string>
+  <string name="pref_subtitles_emby_default_summary">Use the track Emby flags as default when no preferred language matches, and load it directly when the source only has one subtitle language; when off, subtitles stay disabled.</string>
+  <string name="pref_subtitles_emby_allowed_title">Also allow these languages</string>
+  <string name="pref_subtitles_emby_allowed_summary">Backup list used only when no preferred-language subtitle exists (e.g. zh-TW). Leave empty for no restriction.</string>
+  <string name="pref_subtitles_emby_allowed_empty">No restriction</string>
   <string name="file_picker_filter_hint">Filter by name or release code</string>
   <string name="file_picker_filter_clear">Clear filter</string>
   <string name="file_picker_recommended_header">Likely matches: “%1$s”</string>

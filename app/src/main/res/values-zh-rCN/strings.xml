@@ -325,6 +325,17 @@
   <string name="player_sheets_local_subs_reason_title">标题相符</string>
   <string name="player_sheets_local_subs_empty">字幕目录中未找到与「%1$s」匹配的字幕</string>
   <string name="player_sheets_local_subs_count">共 %1$d 条</string>
+  <string name="player_sheets_emby_subs_header">Emby 服务端字幕</string>
+  <string name="player_sheets_emby_subs_empty">Emby 没有识别到可用字幕</string>
+  <string name="player_sheets_emby_subs_auto">自动选择</string>
+  <string name="player_sheets_emby_subs_off">关闭字幕</string>
+  <string name="pref_subtitles_emby_auto_title">自动挂载 Emby 字幕</string>
+  <string name="pref_subtitles_emby_auto_summary">播放 Emby 媒体时，用服务端已识别的字幕按语言偏好自动选择（字幕文件保存在应用私有目录）</string>
+  <string name="pref_subtitles_emby_default_title">跟随 Emby 默认字幕</string>
+  <string name="pref_subtitles_emby_default_summary">没有首选语言的候选时，采用 Emby 标为「默认」的字幕；片源只有一种字幕时也直接加载。关掉则保持关闭</string>
+  <string name="pref_subtitles_emby_allowed_title">还允许这些语言</string>
+  <string name="pref_subtitles_emby_allowed_summary">只在没有首选语言字幕时兜底（例如只有繁体就填 zh-TW）。留空 = 不限制</string>
+  <string name="pref_subtitles_emby_allowed_empty">未限制</string>
   <string name="file_picker_filter_hint">按文件名或番号筛选</string>
   <string name="file_picker_filter_clear">清除筛选</string>
   <string name="file_picker_recommended_header">可能匹配：“%1$s”</string>

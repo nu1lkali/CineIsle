@@ -29,11 +29,11 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,9 +60,6 @@ import org.koin.compose.koinInject
 
 @Serializable
 object MainScreen : Screen {
-  // Use a companion object to store state more persistently
-  private var persistentSelectedTab: Int = 0
-
   // Reactive shared state that can be updated by FileSystemBrowserScreen / selection handlers
   private val _isInSelectionMode = MutableStateFlow(false)
   val isInSelectionMode: StateFlow<Boolean> = _isInSelectionMode.asStateFlow()
@@ -122,9 +119,14 @@ object MainScreen : Screen {
       return
     }
 
-    var selectedTab by remember {
-      mutableIntStateOf(persistentSelectedTab)
-    }
+    // Tab selection belongs to this navigation entry, not a process-wide mutable singleton:
+    // rememberSaveable restores it after Activity recreation without leaking state across
+    // separate MainScreen instances.
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    // AnimatedContent disposes the previous tab after its transition. Keep each tab's
+    // rememberSaveable state (notably lazy-list scroll positions and search state) so
+    // switching away and back resumes browsing instead of resetting the page.
+    val tabStateHolder = rememberSaveableStateHolder()
 
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -135,11 +137,6 @@ object MainScreen : Screen {
     // 标签为 null 时 Material3 会把图标挪到正中，导航条高度不变。
     val appearancePreferences = koinInject<AppearancePreferences>()
     val hideNavLabels by appearancePreferences.hideNavigationBarLabels.collectAsState()
-
-    // Update persistent state whenever tab changes
-    LaunchedEffect(selectedTab) {
-      persistentSelectedTab = selectedTab
-    }
 
     // Scaffold with bottom navigation bar
     Scaffold(
@@ -267,15 +264,17 @@ object MainScreen : Screen {
           },
           label = "tab_animation"
         ) { targetTab ->
-          CompositionLocalProvider(
-            LocalNavigationBarHeight provides fabBottomPadding
-          ) {
-            when (targetTab) {
-              0 -> EmbyHomeRoute()
-              1 -> app.marlboroadvance.mpvex.ui.browser.emby.EmbyFavoritesScreen()
-              2 -> app.marlboroadvance.mpvex.ui.browser.emby.EmbyHistoryScreen()
-              3 -> FolderListScreen.Content()
-              4 -> NetworkStreamingScreen.Content()
+          tabStateHolder.SaveableStateProvider(key = targetTab) {
+            CompositionLocalProvider(
+              LocalNavigationBarHeight provides fabBottomPadding
+            ) {
+              when (targetTab) {
+                0 -> EmbyHomeRoute()
+                1 -> app.marlboroadvance.mpvex.ui.browser.emby.EmbyFavoritesScreen()
+                2 -> app.marlboroadvance.mpvex.ui.browser.emby.EmbyHistoryScreen()
+                3 -> FolderListScreen.Content()
+                4 -> NetworkStreamingScreen.Content()
+              }
             }
           }
         }

@@ -23,21 +23,6 @@ import org.koin.core.component.inject
 import kotlin.reflect.KProperty
 
 /**
- * 允许交给 Android MediaCodec 硬解的编码白名单（`--hwdec-codecs`）。
- *
- * **不要写成 `all`。** `all` 会让 mpv 拿硬件解码器去啃 AVI 里那批老编码
- * （Xvid / DivX / MPEG-4 ASP，fourCC 常见 XVID / DIVX / MP42）—— 而 AVI 容器
- * 不把 codec-specific data（VOL 头）放在容器头里，MediaCodec 于是"解码器建起来了、
- * 一帧也吐不出来"，表现就是**有声音、画面全黑**，而且换内核也未必好使：
- * 另一条路（ExoPlayer）同样依赖设备的 `video/mp4v-es` 解码器，绝大多数手机没有。
- *
- * 这类编码交给 ffmpeg 软解成本极低（480p / 720p 的 Xvid 轻松跑满），所以
- * mpeg4 / msmpeg4 / wmv / mpeg1 系列一律留在名单外。名单本身取 mpv 自带的
- * `hwdec-codecs` 默认值，只做加法不做减法，不会削弱 H.264 / HEVC 的硬解。
- */
-private const val MPV_HWDEC_CODECS = "h264,hevc,mpeg2video,vc1,vp8,vp9,av1"
-
-/**
  * 网络流（http/https）在 lavf 协议层的基准选项：中途断了接着拉，而不是直接判死。
  *
  * ⚠️ 这里只放**与取流无关的通用项**，不要往字符串里塞只对某类地址成立的开关 ——

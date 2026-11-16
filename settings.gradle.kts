@@ -33,4 +33,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "mpvEx"
-include(":app")
+include(":app", ":nextlib-patched")

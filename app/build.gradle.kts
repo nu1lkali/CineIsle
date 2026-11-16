@@ -12,6 +12,12 @@ plugins {
   alias(libs.plugins.aboutlibraries)
 }
 
+aboutLibraries {
+  collect {
+    configPath.set(rootProject.layout.projectDirectory.dir("gradle/aboutlibraries"))
+  }
+}
+
 // ── release lint 开关（清单 1.2）──
 // 定义在 android {} 之前，好让 lint { checkReleaseBuilds } 和下面的
 // tasks.matching { lintVital } 共用同一个值，避免两处各读一遍属性。
@@ -3237,8 +3243,45 @@ android {
     //    顶边压工具行下沿（onSizeChanged 量锚点高度喂 Popup offset，不写死）、
     //    右缘贴屏幕右缘、240dp 宽、62% 屏高封顶可滚；排序语义不变（点已选项 = 反向）。
     //    Cine 库页本来就是底部 CineSortSheet，不动。
-    versionCode = 260
-    versionName = "1.6.17"
+    // 261（修复轮，versionName 仍为 1.6.17）：外挂字幕「记忆」链路失效（用户报重进 app 丢字幕）。
+    //  · 主因是恢复期三条来源互相覆写，而「用户亲手绑定的字幕」排在**最先**被执行、
+    //    没有任何优先级保护：存档 sid 只要读成 -1（保存时线程不对 / 旧数据残留），
+    //    applyRestoredSubtitleSelection 的 else 分支就会把刚挂上的绑定字幕整个关掉。
+    //    加 PlayerViewModel.boundSubtitleApplied，绑定成功接管后存档与剧集指纹一律让位。
+    //  · 保存端漏记：内置 FilePickerDialog 与 Emby 在线下载都没写绑定（只有系统选择器写了），
+    //    而字幕面板的「添加字幕」走的正是内置浏览器。收口成 addManualSubtitle（先记账再挂载）。
+    //  · loadSubtitle 的「已跟踪就 return」会连同 select 一起丢掉 ⇒ 改为仍执行选中。
+    //  · setMediaTitle 只清 _externalSubtitles 不清 mpvPathToUriMap ⇒ 过期 fd://N 映射可能
+    //    让 findSubtitleTrackIdOf 反查到不相干的轨道；改走 resetExternalSubtitles（两张表一起清）。
+    //  · restoreBoundSubtitle 的 8 秒轮询没有归属检查 ⇒ 切集后仍用上一集的绑定去挂字幕；补 currentMediaTitle 校验。
+    //  · saveVideoPlaybackState 的 sid 读取加主线程判定 + 警告日志（非主线程记 -1），让「sid 为何为 -1」可诊断。
+    // 264 / 1.6.20: preselect FFmpeg for legacy feed codecs, then try platform software
+    // before mpv; log the chosen track/fallback. Also includes Classic tab restore,
+    // compact detail media info, offline in-app playback and expanded FFmpeg mappings.
+    // 265 / 1.6.21：Emby 字幕自动发现 / 选择 / 挂载。
+    //  · 发现只走 POST /Items/{Id}/PlaybackInfo（DeliveryMethod/DeliveryUrl/IsTextSubtitleStream
+    //    只有它才填），按当前 MediaSourceId 取该源的字幕；失败退 GET /Items/{Id}。
+    //  · 新增 domain/emby/subtitle/**（语言归一 + 简繁区分 + 统一 SubtitleInfo + 纯函数选择器）
+    //    与 EmbySubtitleDiscovery / EmbySubtitleFetcher / EmbySubtitleCache / EmbySubtitleController。
+    //  · 外挂字幕落 cacheDir/emby_subtitles（不进用户字幕目录，避免被扫成重复外挂轨），
+    //    键 = SHA-1(ItemId|MediaSourceId|StreamIndex|Format)，TTL 7 天 / 64MB / 500 条。
+    //  · 自动挂载排在 applyRestoredSubtitleSelection 之后；闸门是「存档有没有具体字幕选择」
+    //    而不是 hasState（否则只有第一次播才生效）。
+    //  · 面板新增 Emby 服务端字幕卡（语言/格式/内外挂/默认/强制/听障 + 自动选择理由），
+    //    设置新增「自动挂载 Emby 字幕 / 跟随 Emby 默认 / 还允许这些语言」。
+    // 266 / 1.6.22：Emby 字幕「拉下来了却不挂 / 面板显示 md5」修复。
+    //  · 面板显示 md5 的根因有二：①`sub-add` 的 title/lang 是位置参数，不给 title 时 mpv
+    //    拿缓存文件名当轨道名 → loadSubtitle 增加 title/lang 并以位置参数顺序下发；
+    //    ②getTrackTitle 对外挂轨无条件显示 externalFilename → 改为 title 可读时优先 title
+    //    （用户自加字幕的 title 等于文件名，行为不变）。
+    //  · 不自动加载：sub-add 之后轨道尚未建出来就去设 sid，mpv 当成不存在的轨道丢弃。
+    //    改为 sub-add → awaitNewSubtitleTrack（路径/文件名/新增 id 三级判据）→ 显式设 sid
+    //    并回读校验。修掉「三级兜底只等不返回」导致恒回 null 的老 bug。
+    //  · 选择规则补齐「只剩一种可能」兜底：SINGLE_ONLY（只有一条可用）/ ONLY_LANGUAGE
+    //    （多条但同属一种语言）；用户没配过任何语言偏好时按系统语言兜底（SYSTEM_LANGUAGE）。
+    //    三者都受「跟随 Emby 默认」开关约束，关掉时仍保持关闭。
+    versionCode = 266
+    versionName = "1.6.22"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -3533,10 +3576,10 @@ dependencies {
   implementation(libs.haze)
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.ui)
-  // 视界流的 FFmpeg 软解兜底（音频 DTS/TrueHD/AC3/EAC3 + 视频 H264/HEVC/MPEG-2/VP8/VP9）。
-  // 只在平台解码器不支持/不吐帧时由 ExoPlayer 的扩展渲染器接管；不会抢平台硬解。
-  // ⚠️ 该库为 GPL-3.0（见 libs.versions.toml 注释），发布前要确认分发义务。
-  implementation(libs.nextlib.media3ext)
+  // NextLib 本地兼容 fork：保留上游 FFmpeg 9 / Media3 1.11.1 实现与 native ABI，
+  // 扩展 MPEG-4 Part 2 / VC-1 / WMV / RealVideo / VP6 的 MIME → decoder 映射。
+  // 只在平台解码器不支持/不吐帧时接管；上游 NextLib 为 GPL-3.0，分发义务不变。
+  implementation(project(":nextlib-patched"))
   implementation(libs.mediasession)
   implementation(libs.androidx.documentfile)
   implementation(libs.saveable)

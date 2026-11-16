@@ -21,6 +21,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleLanguage
+import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleInfo
+import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSourceType
 import app.marlboroadvance.mpvex.ui.player.TrackNode
 import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleCandidate
 import app.marlboroadvance.mpvex.ui.player.subtitle.badgeRes
@@ -53,6 +56,29 @@ sealed class SubtitleItem {
 
   /** 「番号识别出来了，但字幕目录里没有对应的」——只陈述事实，不是错误 */
   data class SuggestionHint(val label: String) : SubtitleItem()
+
+  /**
+   * Emby 服务端**已识别**的字幕整块（内嵌轨 + 旁挂文件）。
+   *
+   * 与 [SuggestionGroup] 分开：那一块是「磁盘上还没挂上去的文件」，这一块是
+   * 「服务端认得、但本地还没有的文件」—— 点一下会先下载再挂载。
+   * 两块都做成整块卡片，一眼能看出「这几条是系统替我找的」。
+   */
+  data class EmbyGroup(
+    /** 自动选择的结果说明（「首选语言「简体中文」→ 简体中文 · ASS · 外挂」） */
+    val hint: String?,
+    /** 下载 / 格式方面的一句话提示（失败原因、降级说明） */
+    val notice: String?,
+    /** 还没挂上的那些（已挂上的在下面的轨道列表里，不重复出现） */
+    val subtitles: List<SubtitleInfo>,
+    /** 正在下载的那条 */
+    val downloadingKey: String?,
+    /** 发现阶段就失败时的原因 */
+    val error: String?,
+    /** 是否显示「自动选择 / 关闭字幕」两个动作（只有 Emby 播放才给） */
+    val showActions: Boolean,
+  ) : SubtitleItem()
+
   object Divider : SubtitleItem()
 }
 
@@ -95,6 +121,34 @@ private fun TrackNode.searchHaystack(): String {
   return "$title $langCode $alias $fileName #$id $kind".lowercase()
 }
 
+/**
+ * Emby 字幕一条的可搜索文本：显示名 / 语言码与中文名 / 格式 / 编码 / 内嵌外挂 / 标记。
+ *
+ * 与 [TrackNode.searchHaystack] 的字段口径保持一致，用户在同一行筛选框里
+ * 打「中文」「ass」「外挂」都能同时命中两侧的条目。
+ */
+private fun SubtitleInfo.searchHaystack(): String {
+  val kind = when (sourceType) {
+    SubtitleSourceType.EMBEDDED -> "内嵌 embedded"
+    SubtitleSourceType.IMAGE_BASED -> "图像 image"
+    else -> "外挂 external"
+  }
+  val marks = buildString {
+    if (isDefault) append(" 默认 default")
+    if (isForced) append(" 强制 forced")
+    if (isHearingImpaired) append(" 听障 sdh")
+  }
+  return buildString {
+    append(displayName)
+    append(' ').append(language.orEmpty())
+    append(' ').append(EmbySubtitleLanguage.label(languageKey))
+    append(' ').append(format.orEmpty())
+    append(' ').append(codec.orEmpty())
+    append(' ').append(kind)
+    append(marks)
+  }.lowercase()
+}
+
 @Composable
 fun SubtitlesSheet(
   tracks: ImmutableList<TrackNode>,
@@ -126,6 +180,22 @@ fun SubtitlesSheet(
    * 「可直接使用」）才展示入口 —— 系统很确定时再问一遍，只会让面板变吵。
    */
   onConfirmAlias: ((canonical: String, alias: String) -> Unit)? = null,
+  // ── Emby 服务端已识别的字幕（只在 Emby 播放时有内容） ──
+  /** 服务端返回的字幕清单；空 = 没有 / 还没发现完 */
+  embySubtitles: List<SubtitleInfo> = emptyList(),
+  /** 自动选择的一句话结论（面板顶部展示，方便核对「为什么是这条」） */
+  embySelectionHint: String? = null,
+  /** 下载 / 格式降级 / 失败提示 */
+  embyNotice: String? = null,
+  embyError: String? = null,
+  embyDownloadingKey: String? = null,
+  /** 已经挂到 mpv 上的那条（不在 Emby 卡片里重复出现） */
+  embyMountedKey: String? = null,
+  onPickEmbySubtitle: ((SubtitleInfo) -> Unit)? = null,
+  /** 「自动选择」：忘掉记住的那条，重跑语言偏好 */
+  onAutoSelectEmby: (() -> Unit)? = null,
+  /** 「关闭字幕」：关掉当前字幕，并压制本次自动挂载 */
+  onDisableSubtitles: (() -> Unit)? = null,
 ) {
   // ── 本地筛选 ──
   // 只在**眼前这份轨道列表**里按名字 / 语言 / 文件名过滤，一个请求都不发 ——
@@ -176,8 +246,18 @@ fun SubtitlesSheet(
       stringResource(R.string.player_sheets_local_subs_header_plain)
     }
 
+  // Emby 那块是否要出现：有字幕、有结论、有提示，或者能提供两个动作（= 正在播 Emby）
+  val showEmbyActions = onAutoSelectEmby != null || onDisableSubtitles != null
+  val embyVisible =
+    showEmbyActions || embySubtitles.isNotEmpty() || embySelectionHint != null ||
+      embyNotice != null || embyError != null
+
   val items =
-    remember(tracks, tokens, suggestions, suggestionHeader, localScan, localMatchLabel) {
+    remember(
+      tracks, tokens, suggestions, suggestionHeader, localScan, localMatchLabel,
+      embySubtitles, embySelectionHint, embyNotice, embyError, embyDownloadingKey,
+      embyMountedKey, embyVisible, showEmbyActions,
+    ) {
     val matched =
       if (tokens.isEmpty()) tracks
       else tracks.filter { track -> tokens.all { it in track.searchHaystack() } }
@@ -206,6 +286,23 @@ fun SubtitlesSheet(
     ) {
       // 只有「番号 / 标题确实认出来了」才说没找到：认不出来时说什么都是噪音
       list.add(SubtitleItem.SuggestionHint(localMatchLabel))
+    }
+
+    // ── Emby 服务端已识别的字幕（下载后挂载） ──
+    if (embyVisible) {
+      val embyItems = embySubtitles
+        .filter { it.key != embyMountedKey }
+        .filter { s -> tokens.isEmpty() || tokens.all { it in s.searchHaystack() } }
+      list.add(
+        SubtitleItem.EmbyGroup(
+          hint = embySelectionHint,
+          notice = embyNotice,
+          subtitles = embyItems,
+          downloadingKey = embyDownloadingKey,
+          error = embyError,
+          showActions = showEmbyActions,
+        ),
+      )
     }
 
     // Internal/Local tracks section
@@ -310,6 +407,14 @@ fun SubtitlesSheet(
             onConfirmAlias = onConfirmAlias,
           )
         }
+        is SubtitleItem.EmbyGroup -> {
+          EmbySubtitlesCard(
+            group = item,
+            onPick = { onPickEmbySubtitle?.invoke(it) },
+            onAutoSelect = onAutoSelectEmby,
+            onDisable = onDisableSubtitles,
+          )
+        }
         is SubtitleItem.SuggestionHint -> {
           Text(
             text = stringResource(R.string.player_sheets_local_subs_empty, item.label),
@@ -373,6 +478,240 @@ private fun SubtitleFilterField(
       }
     },
   )
+}
+
+/**
+ * 「Emby 服务端认得的字幕」那一块。
+ *
+ * 和下面真正挂上去的轨道列表是两回事：这里列的是**服务端有、本地还没有**的字幕，
+ * 点一下才去下载。所以：
+ * · 已经挂上的那条（[SubtitleItem.EmbyGroup] 里已按 `mountedKey` 过滤掉）不再出现；
+ * · 不支持的（图像字幕 / VobSub / 烧录）**照常列出**，但把原因写在行里、整行不可点 ——
+ *   「格式不支持」和「下载失败」是两件事，用户需要能分辨（需求 3.4）。
+ *
+ * 底色用 `secondaryContainer`（与本地推荐卡的 `primaryContainer` 区分开），
+ * 两张卡片同时出现时不会看着像同一类东西。
+ */
+@Composable
+private fun EmbySubtitlesCard(
+  group: SubtitleItem.EmbyGroup,
+  onPick: (SubtitleInfo) -> Unit,
+  onAutoSelect: (() -> Unit)?,
+  onDisable: (() -> Unit)?,
+  modifier: Modifier = Modifier,
+) {
+  Column(
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.extraSmall)
+        .clip(RoundedCornerShape(16.dp))
+        .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)),
+  ) {
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .padding(
+            start = MaterialTheme.spacing.medium,
+            end = MaterialTheme.spacing.medium,
+            top = MaterialTheme.spacing.small,
+            bottom = MaterialTheme.spacing.extraSmall,
+          ),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
+    ) {
+      Icon(
+        Icons.Default.Cloud,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(18.dp),
+      )
+      Text(
+        text = stringResource(R.string.player_sheets_emby_subs_header),
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.weight(1f),
+      )
+      if (group.subtitles.isNotEmpty()) {
+        Text(
+          text = stringResource(R.string.player_sheets_local_subs_count, group.subtitles.size),
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+        )
+      }
+    }
+
+    // 自动选择的结论：让「为什么是这条」可核对（需求四末尾「必须可追踪」）
+    group.hint?.let { hint ->
+      Text(
+        text = hint,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
+        modifier =
+          Modifier.padding(
+            start = MaterialTheme.spacing.medium,
+            end = MaterialTheme.spacing.medium,
+            bottom = MaterialTheme.spacing.extraSmall,
+          ),
+      )
+    }
+
+    group.notice?.let { notice ->
+      Text(
+        text = notice,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.error,
+        modifier =
+          Modifier.padding(
+            start = MaterialTheme.spacing.medium,
+            end = MaterialTheme.spacing.medium,
+            bottom = MaterialTheme.spacing.extraSmall,
+          ),
+      )
+    }
+
+    group.error?.let { error ->
+      Text(
+        text = error,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.error,
+        modifier =
+          Modifier.padding(
+            start = MaterialTheme.spacing.medium,
+            end = MaterialTheme.spacing.medium,
+            bottom = MaterialTheme.spacing.extraSmall,
+          ),
+      )
+    }
+
+    if (group.subtitles.isEmpty() && group.notice == null && group.error == null) {
+      Text(
+        text = stringResource(R.string.player_sheets_emby_subs_empty),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f),
+        modifier =
+          Modifier.padding(
+            start = MaterialTheme.spacing.medium,
+            end = MaterialTheme.spacing.medium,
+            bottom = MaterialTheme.spacing.small,
+          ),
+      )
+    }
+
+    group.subtitles.forEach { subtitle ->
+      EmbySubtitleRow(
+        subtitle = subtitle,
+        downloading = subtitle.key == group.downloadingKey,
+        onPick = { onPick(subtitle) },
+      )
+    }
+
+    if (group.showActions && (onAutoSelect != null || onDisable != null)) {
+      Row(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .padding(horizontal = MaterialTheme.spacing.small),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        if (onAutoSelect != null) {
+          TextButton(onClick = onAutoSelect) {
+            Text(
+              text = stringResource(R.string.player_sheets_emby_subs_auto),
+              style = MaterialTheme.typography.labelMedium,
+            )
+          }
+        }
+        if (onDisable != null) {
+          TextButton(onClick = onDisable) {
+            Text(
+              text = stringResource(R.string.player_sheets_emby_subs_off),
+              style = MaterialTheme.typography.labelMedium,
+            )
+          }
+        }
+      }
+    }
+
+    Spacer(Modifier.height(MaterialTheme.spacing.small))
+  }
+}
+
+/**
+ * Emby 字幕的一行：显示名 + 一行元信息（语言 · 格式 · 内嵌/外挂 · 默认/强制/听障）。
+ *
+ * 不支持的行**不可点**并把原因写在第二行 —— 点了只弹一个失败提示，比直接说明更差。
+ */
+@Composable
+private fun EmbySubtitleRow(
+  subtitle: SubtitleInfo,
+  downloading: Boolean,
+  onPick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val unsupported = subtitle.unsupportedReason
+  val meta = buildString {
+    append(EmbySubtitleLanguage.label(subtitle.languageKey))
+    subtitle.format?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it.uppercase()) }
+    append(
+      when (subtitle.sourceType) {
+        SubtitleSourceType.EMBEDDED -> " · 内嵌"
+        SubtitleSourceType.IMAGE_BASED -> " · 图像"
+        SubtitleSourceType.SERVER_DELIVERED -> " · 服务端交付"
+        else -> " · 外挂"
+      },
+    )
+    if (subtitle.isDefault) append(" · 默认")
+    if (subtitle.isForced) append(" · 强制")
+    if (subtitle.isHearingImpaired) append(" · 听障")
+  }
+
+  Row(
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .then(if (unsupported == null) Modifier.clickable(onClick = onPick) else Modifier)
+        .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.extraSmall),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
+  ) {
+    Column(modifier = Modifier.weight(1f)) {
+      Text(
+        text = subtitle.displayName,
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.Medium,
+        color =
+          if (unsupported == null) MaterialTheme.colorScheme.onSecondaryContainer
+          else MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.6f),
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+      )
+      Text(
+        text = meta,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f),
+      )
+      if (unsupported != null) {
+        Text(
+          text = unsupported,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.error,
+        )
+      }
+    }
+    when {
+      downloading -> CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+      unsupported == null -> Icon(
+        Icons.Default.CloudDownload,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+      )
+      else -> Unit
+    }
+  }
 }
 
 /**

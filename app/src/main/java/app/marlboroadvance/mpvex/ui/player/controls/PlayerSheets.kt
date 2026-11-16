@@ -101,13 +101,20 @@ fun PlayerSheets(
         }
       }
 
+      // 用户主动加字幕：先记账、再挂载。三条入口（系统选择器 / 内置文件浏览器 /
+      // Emby 在线下载）共用这一个口子 —— 早先只有系统选择器调了 bindManualSubtitle，
+      // 内置浏览器与在线下载漏了，用户从这两个入口加的字幕「重开 app 就没了」。
+      val addManualSubtitle: (Uri) -> Unit = { uri ->
+        bindManualSubtitle(uri)
+        onAddSubtitle(uri)
+      }
+
       val subtitlesPicker =
         rememberLauncherForActivityResult(
           ActivityResultContracts.OpenDocument(),
         ) {
           if (it == null) return@rememberLauncherForActivityResult
-          bindManualSubtitle(it)
-          onAddSubtitle(it)
+          addManualSubtitle(it)
         }
 
       val savedPickerPath = subtitlesPreferences.pickerPath.get()
@@ -151,9 +158,17 @@ fun PlayerSheets(
       // 这里自己从 intent 解析 Emby 上下文，而不是让 PlayerActivity 一路传下来：
       // PlayerSheets 已经能拿到宿主 Activity，加两个参数会让 PlayerControls
       // 的参数表再涨一截，而在线字幕只有 Emby 播放才有。
-      val embyContext = rememberEmbySubtitleContext()
+      //
+      // ⚠️ 必须把**当前播放下标**传进去：intent 里带的是整条队列，固定取第 0 个
+      // 会让第 5 集的在线字幕搜索 / Emby 字幕下载全都作用在第 1 集上。
+      val hostPlayer = LocalActivity.current as? app.marlboroadvance.mpvex.ui.player.PlayerActivity
+      val embyContext = rememberEmbySubtitleContext { hostPlayer?.playlistIndex ?: 0 }
       var showOnlineSubtitles by remember { mutableStateOf(false) }
       val subtitleScope = rememberCoroutineScope()
+
+      // Emby 服务端已识别的字幕（发现 / 选择 / 下载状态）
+      val embyState by viewModel.embySubtitleState.composeCollectAsState()
+      val embyHint = embyState.selection?.takeIf { it.chosen != null }?.detail
 
       if (showOnlineSubtitles && embyContext != null) {
         app.marlboroadvance.mpvex.ui.browser.emby.subtitle.SubtitleSearchSheet(
@@ -163,6 +178,8 @@ fun PlayerSheets(
           mediaTitle = currentMediaTitle.ifBlank { embyContext.itemName },
           // 下载完立刻挂载（走 loadSubtitle 会等轨道就绪，见 PlayerViewModel KDoc）
           onDownloaded = { uri ->
+            // 在线下载也是「用户亲手挑的」，同样落一条持久绑定，否则重进 app 就没了
+            bindManualSubtitle(uri)
             subtitleScope.launch {
               viewModel.loadSubtitle(uri, select = true, silent = false)
             }
@@ -185,7 +202,7 @@ fun PlayerSheets(
               },
               onFileSelected = { path ->
                   showFilePicker = false
-                   onAddSubtitle(Uri.parse("file://$path"))
+                  addManualSubtitle(Uri.parse("file://$path"))
               },
               onSystemPickerRequest = {
                   showFilePicker = false
@@ -233,13 +250,40 @@ fun PlayerSheets(
             app.marlboroadvance.mpvex.ui.player.subtitle.SubtitlePickMemory.keyOf(localQuery),
             candidate.uri,
           )
-          // 同一条关系也落进持久账本：进程被杀重进时自动挂回去
+          // 同一条关系也落进持久账本：进程被杀重进时自动挂回去。
+          // 这里直接调 bindManualSubtitle + loadSubtitle 而不是 addManualSubtitle ——
+          // 候选的 Uri 已经是 mpv 可直接用的形式，不需要走 onAddSubtitle 的即发即忘版本。
           val picked = Uri.parse(candidate.uri)
           bindManualSubtitle(picked)
           subtitleScope.launch {
             viewModel.loadSubtitle(picked, select = true, silent = false)
           }
         },
+        // ── Emby 服务端已识别的字幕 ──
+        embySubtitles = embyState.subtitles,
+        embySelectionHint = embyHint,
+        embyNotice = embyState.notice,
+        embyError = embyState.error,
+        embyDownloadingKey = embyState.downloadingKey,
+        embyMountedKey = embyState.mountedKey,
+        // 点一条 = 下载 + 挂载 + 记住这个选择（下次开播直接用它）
+        onPickEmbySubtitle = { info ->
+          embyContext?.let { ctx ->
+            subtitleScope.launch {
+              viewModel.pickEmbySubtitle(ctx.server, ctx.itemId, ctx.mediaSourceId, info)
+            }
+          }
+        },
+        // 「自动选择」：忘掉记住的那条，按语言偏好重跑一次
+        onAutoSelectEmby = embyContext?.let { ctx ->
+          {
+            subtitleScope.launch {
+              viewModel.reapplyAutoEmbySubtitle(ctx.server, ctx.itemId, ctx.mediaSourceId)
+            }
+          }
+        },
+        // 「关闭字幕」：关掉当前字幕并压制本次自动挂载（下载中的那条也不会再打开）
+        onDisableSubtitles = embyContext?.let { { viewModel.disableSubtitles() } },
       )
     }
 

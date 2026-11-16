@@ -455,6 +455,10 @@ open class PlayerActivity :
   private lateinit var pipHelper: MPVPipHelper
 
   private var isReady = false // Single flag: true when video loaded and ready
+  /** 每次 FILE_LOADED 递增；避免上一条媒体的延迟解码检查影响当前条目。 */
+  private var playbackFileGeneration = 0
+  /** 直出模式每条媒体最多降级一次，防止 vo / hwdec 重协商形成循环。 */
+  private var directOutputFallbackApplied = false
   private var isUserFinishing = false
   private var isManualBackgroundPlayback = false // Track manual background playback trigger
   private var mpvInitialized = false // Track MPV initialization state
@@ -2954,6 +2958,57 @@ private fun cancelAutoplayCountdown() {
   }
 
   /**
+   * Emby 字幕自动挂载：发现服务端已识别的字幕 → 按语言偏好选择 → 取字节 → 挂到 mpv。
+   *
+   * ## 只在这条路径上生效
+   *
+   * `launch` 出来的，与播放主流程并行；内部所有失败都只写日志，**绝不打断播放**
+   * （需求 9.6 / 十二.H）。真正的优先级判断在
+   * [PlayerViewModel.autoLoadEmbySubtitle] 里（手动绑定 > 存档 > Emby 自动）。
+   *
+   * ## 为什么这里要自己解析 itemId / mediaSourceId
+   *
+   * 队列连播时 `playlistIndex` 已经指向新的一集，而 intent 里的三串数组是同序的；
+   * [currentEmbyItemId] / [currentEmbyMediaSourceId] 已经处理了「换位 / 随机播放」
+   * 造成的下标错位，直接用它们比在这里再推一遍可靠。
+   */
+  private suspend fun applyEmbyAutoSubtitle() {
+    val serverId = currentEmbyServerId() ?: return
+    val itemId = currentEmbyItemId() ?: return
+    val server =
+      runCatching { embyRepository.getServer(serverId) }.getOrNull() ?: run {
+        Log.w(TAG, "emby subtitle: server $serverId not found")
+        return
+      }
+    val mediaSourceId = currentEmbyMediaSourceId()
+    runCatching { viewModel.autoLoadEmbySubtitle(server, itemId, mediaSourceId) }
+      .onFailure { Log.e(TAG, "emby subtitle auto load failed: item=$itemId", it) }
+  }
+
+  /**
+   * 只**发现** Emby 字幕、不挂载。
+   *
+   * 用在「存档里已有具体字幕选择」的情况下：那条选择由 `applyRestoredSubtitleSelection`
+   * 还原，自动策略不能推翻它；但字幕面板还是要能列出 Emby 认得哪些字幕 —— 否则用户在
+   * 重看老片时打开面板看到的是一片空白，会以为服务端根本没有字幕。
+   *
+   * 选择结果同样会写进 `EmbySubtitleController.state`（面板据此显示「自动会选哪条」），
+   * 只是不调用挂载。
+   */
+  private suspend fun applyEmbySubtitleDiscoveryOnly() {
+    val serverId = currentEmbyServerId() ?: return
+    val itemId = currentEmbyItemId() ?: return
+    val server =
+      runCatching { embyRepository.getServer(serverId) }.getOrNull() ?: run {
+        Log.w(TAG, "emby subtitle: server $serverId not found")
+        return
+      }
+    val mediaSourceId = currentEmbyMediaSourceId()
+    runCatching { viewModel.refreshEmbySubtitleList(server, itemId, mediaSourceId) }
+      .onFailure { Log.e(TAG, "emby subtitle discovery failed: item=$itemId", it) }
+  }
+
+  /**
    * 应用「本剧上次记住的播放速度 / 音轨」。
    *
    * 只在开关打开且有记忆键时生效；音轨按指纹匹配（见 [PlaybackMemory]），
@@ -2986,7 +3041,12 @@ private fun cancelAutoplayCountdown() {
         }
       }
     }
-    if (playerPreferences.rememberSubtitleTrackPerSeries.get()) {
+    if (playerPreferences.rememberSubtitleTrackPerSeries.get() &&
+      // 单片手动绑定是「精确选择」，剧集级指纹是「模糊偏好」—— 有绑定时让位。
+      // 不让位的话，外挂 srt 的指纹（lang|codec，多半是 `|subrip`）很容易命中的是
+      // 内嵌那条字幕，把用户亲手挑的那条顶掉。
+      !viewModel.hasBoundSubtitle(viewModel.currentMediaTitle)
+    ) {
       val fingerprint = PlaybackMemory.subtitleFingerprintFor(playerPreferences, key)
       if (!fingerprint.isNullOrBlank()) {
         val trackId = PlaybackMemory.findSubtitleTrackId(fingerprint)
@@ -3315,6 +3375,8 @@ private fun cancelAutoplayCountdown() {
   ) {
     when (eventId) {
       MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
+        playbackFileGeneration++
+        directOutputFallbackApplied = false
         handleFileLoaded()
         isReady = true
         // 文件刚起来、画面还什么都没有 ⇒ 重新显示加载层。
@@ -3326,6 +3388,7 @@ private fun cancelAutoplayCountdown() {
         // 同时把上一部 HDR 片的 Window 色彩模式复位（video-params 还没出来，
         // 这次判定必然是 SDR）。等首帧后再判一次就会把 HDR 片切回去。
         PlaybackColorPolicy.apply(this, decoderPreferences)
+        handleDirectOutputCodecCompatibility()
       }
 
       MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
@@ -3346,6 +3409,61 @@ private fun cancelAutoplayCountdown() {
 
       MPVLib.MpvEvent.MPV_EVENT_END_FILE -> handleEndFileWithError(data)
     }
+  }
+
+  /**
+   * `mediacodec_embed` 只能显示 MediaCodec 直接输出的硬解帧。
+   *
+   * 自动硬解+模式的 `hwdec=mediacodec,no` 会在编码不支持硬解时退到 FFmpeg 软解，
+   * 但如果仍留在 `mediacodec_embed`，软解帧没有可用的视频输出路径，冷门格式就会黑屏。
+   * 已知不在硬解白名单中的编码在首帧前直接改用 GPU 输出；另设一个短看守，处理设备
+   * 声称支持但实际未能启动 MediaCodec 的编码。
+   */
+  private fun handleDirectOutputCodecCompatibility() {
+    if (!decoderPreferences.isDirectOutput()) return
+
+    val generation = playbackFileGeneration
+    val codec = runCatching { PlayerLib.getPropertyString("video-codec") }.getOrNull()
+    if (requiresSoftwareVideoOutput(codec)) {
+      switchDirectOutputToGpu(codec, "codec-not-hwdec")
+      return
+    }
+
+    lifecycleScope.launch {
+      delay(DIRECT_OUTPUT_CODEC_WATCHDOG_MS)
+      if (isFinishing || isDestroyed || generation != playbackFileGeneration) return@launch
+      if (viewModel.firstFrameRendered.value) return@launch
+      if (!decoderPreferences.isDirectOutput()) return@launch
+
+      val currentVo = runCatching { PlayerLib.getPropertyString("current-vo") }.getOrNull()
+      val hwdec = runCatching { PlayerLib.getPropertyString("hwdec-current") }.getOrNull()
+      val currentCodec = runCatching { PlayerLib.getPropertyString("video-codec") }.getOrNull()
+      if (currentVo == "mediacodec_embed" &&
+        !hwdec.orEmpty().startsWith("mediacodec") &&
+        !currentCodec.isNullOrBlank()
+      ) {
+        switchDirectOutputToGpu(currentCodec, "hardware-decoder-unavailable")
+      }
+    }
+  }
+
+  private fun switchDirectOutputToGpu(codec: String?, reason: String) {
+    if (directOutputFallbackApplied) return
+    directOutputFallbackApplied = true
+
+    val hwdec = runCatching { PlayerLib.getPropertyString("hwdec-current") }.getOrNull()
+    val renderer = if (decoderPreferences.gpuNext.get()) "gpu-next" else "gpu"
+    // 先切到能接收软解帧的 renderer，再保留硬解优先并允许软解兜底。
+    PlayerLib.setPropertyString("vo", renderer)
+    PlayerLib.setPropertyString("hwdec", "mediacodec-copy,no")
+
+    val detail = "codec=${codec ?: "?"} reason=$reason oldHwdec=${hwdec ?: "?"} newVo=$renderer"
+    PlayerDiagLog.forceLog("direct-output-fallback", detail)
+    android.widget.Toast.makeText(
+      this,
+      "当前编码无法使用直出硬解，已切换兼容渲染路径",
+      android.widget.Toast.LENGTH_LONG,
+    ).show()
   }
 
   /**
@@ -3511,7 +3629,10 @@ private fun cancelAutoplayCountdown() {
 
       // 「每部剧记住速度 / 音轨」：必须在 TrackSelector 之后，
       // 否则会被默认语言逻辑覆盖掉用户上次手动选的音轨。
+      // （字幕那一项会自己查手动绑定，有绑定时跳过，见 applyRememberedPlaybackSettings）
       applyRememberedPlaybackSettings()
+
+      // （Emby 字幕的触发点在本块末尾、applyRestoredSubtitleSelection 之后 —— 见那里注释）
 
       // 起一个盯梢协程：片尾倒数阶段把「下一集」卡片推出来
       autoplayCancelled = false
@@ -3550,6 +3671,31 @@ private fun cancelAutoplayCountdown() {
       // 一条同名外挂字幕，也不能把「记住的字幕」拖着不显示。
       withTimeoutOrNull(1200) { autoloadJob.join() }
       applyRestoredSubtitleSelection()
+
+      // ── Emby 字幕：用服务端已识别的字幕做自动选择 ──
+      //
+      // ⚠️ 闸门**不能**用 `hasState`：它只表示「这部片子有播放记录」，而几乎每部重看的
+      //    片子都有（退出时就会写一条）。早先按它拦，结果是「只有第一次播才会自动挂 Emby
+      //    字幕」，第二次起面板里连 Emby 字幕列表都是空的 —— 看起来就是功能坏了。
+      //
+      // 真正的判据是「存档里有没有**具体的字幕选择**」：
+      //  · sid > 0 ⇒ 用户上次选了某一条，上面那句刚还原过，自动策略不许推翻（需求四.8）
+      //    —— 只拉清清单给面板用，不挂载；
+      //  · sid <= 0 / 压根没记录 ⇒ 上次并没有选定哪条（含「上次这版就没字幕」），
+      //    按语言偏好自动选一条才是用户期望的行为。
+      //
+      // 位置：**必须在 applyRestoredSubtitleSelection 之后**。反过来的话，那句
+      // `player.sid = -1`（存档是「上次没字幕」时走 else 分支）会把刚挂上的字幕又关掉，
+      // 并且两条协程谁先跑不确定 ⇒ 偶发「字幕闪一下就没了」。
+      // 仍然只是 launch，不阻塞首帧。
+      if (intent.hasExtra("subs.enable")) {
+        Log.d(TAG, "skip emby subtitle auto: 外部应用指定了字幕（subs.enable）")
+      } else if (restoredSubtitleSid > 0) {
+        Log.d(TAG, "skip emby subtitle auto: 存档已选定字幕 sid=$restoredSubtitleSid")
+        launch { applyEmbySubtitleDiscoveryOnly() }
+      } else {
+        launch { applyEmbyAutoSubtitle() }
+      }
     }
 
     // Save to recently played when video actually loads and plays
@@ -3955,8 +4101,19 @@ private fun cancelAutoplayCountdown() {
         ).coerceAtLeast(0)
     val speed = PlayerLib.getPropertyDouble("speed") ?: DEFAULT_PLAYBACK_SPEED
     val videoZoom = PlayerLib.getPropertyDouble("video-zoom")?.toFloat() ?: 0f
-    val currentSid = PlayerLib.getPropertyInt("sid") ?: -1
-    val currentSecondarySid = PlayerLib.getPropertyInt("secondary-sid") ?: -1
+    // ⚠️ mpv 属性只能在主线程读（Android 层是同步 JNI 调用，后台线程打进去没有意义）。
+    // 这里读不到时绝不能用 0 顶替 —— 0 会被 applyRestoredSubtitleSelection 当成
+    // 「上次没选字幕」然后主动把字幕关掉。读不到就记 -1（与 mpv 的「无」同义），
+    // 同时打一条警告，让「sid 为何是 -1」能在 logcat 里直接对上。
+    val onMainThread = android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+    val currentSid =
+      if (onMainThread) {
+        PlayerLib.getPropertyInt("sid") ?: -1
+      } else {
+        Log.w(TAG, "saveVideoPlaybackState: reading sid off main thread, saved as -1")
+        -1
+      }
+    val currentSecondarySid = if (onMainThread) PlayerLib.getPropertyInt("secondary-sid") ?: -1 else -1
     val (effectiveSid, effectiveSecondarySid) = if (currentSid <= 0 && currentSecondarySid > 0) {
       currentSecondarySid to -1
     } else {
@@ -4148,6 +4305,14 @@ private fun cancelAutoplayCountdown() {
     // 外部应用经 intent 显式指定要启用的字幕（subs.enable）优先级最高 —— 那是用户在
     // 文件管理器里点「用影屿播放 + 带上这条字幕」，不该被存档里的旧选择盖掉。
     if (intent.hasExtra("subs.enable")) return
+
+    // 手动绑定优先级最高：本次已经按「用户为这部片子亲手挑的字幕」挂好并选中了。
+    // 存档里的 sid 是保存那一刻从 mpv 读到的值，可能是旧值甚至 -1（读属性的线程不对时
+    // 读不到）—— 照它覆写一下，`else` 分支就会把字幕整个关掉，表现就是「记忆失效」。
+    if (viewModel.boundSubtitleApplied) {
+      Log.d(TAG, "skip restored selection: manual subtitle binding already applied")
+      return
+    }
 
     val sid = restoredSubtitleSid
     if (sid == NO_SAVED_SUBTITLE_SELECTION) return
@@ -5767,6 +5932,7 @@ private fun cancelAutoplayCountdown() {
   fun isCurrentPlaylistM3U(): Boolean = isM3uPlaylist
 
   companion object {
+    private const val DIRECT_OUTPUT_CODEC_WATCHDOG_MS = 3_500L
     /**
      * Intent action used to return playback result data to the calling activity.
      */

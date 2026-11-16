@@ -67,6 +67,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.outlined.AspectRatio
 import androidx.compose.material.icons.outlined.ClosedCaption
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Subtitles
 import android.net.Uri
@@ -230,6 +231,114 @@ object SubtitlesPreferencesScreen : Screen {
                     stringResource(R.string.pref_subtitles_autoload_summary),
                     color = MaterialTheme.colorScheme.outline,
                   )
+                },
+              )
+
+              PreferenceDivider()
+
+              // ── Emby 服务端字幕（内嵌轨 + 旁挂文件）──
+              // 与上面「同名外挂字幕自动加载」是两条独立的路：那个按文件名在目录里找，
+              // 这个用 Emby 自己的媒体识别结果。所以在设置里也分成两个开关。
+              val embyAuto by preferences.embyAutoSubtitles.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.CloudDownload,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = embyAuto,
+                onValueChange = { preferences.embyAutoSubtitles.set(it) },
+                modifier = Modifier.settingsAnchor(R.string.pref_subtitles_emby_auto_title),
+                title = {
+                  Text(
+                    stringResource(R.string.pref_subtitles_emby_auto_title),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                },
+                summary = {
+                  Text(
+                    stringResource(R.string.pref_subtitles_emby_auto_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              val embyFollowDefault by preferences.embyFollowDefault.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Subtitles,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = embyFollowDefault,
+                onValueChange = { preferences.embyFollowDefault.set(it) },
+                modifier = Modifier.settingsAnchor(R.string.pref_subtitles_emby_default_title),
+                title = {
+                  Text(
+                    stringResource(R.string.pref_subtitles_emby_default_title),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                },
+                summary = {
+                  Text(
+                    stringResource(R.string.pref_subtitles_emby_default_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              // 「允许的其它语言」—— 首选语言完全没候选时的兜底（典型：只想要中文，
+              // 简体优先、繁体也行）。填法与上面的首选语言一致，都是逗号分隔的语言码。
+              val embyAllowed by preferences.embyAllowedLanguages.collectAsState()
+              TextFieldPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Language,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = embyAllowed,
+                onValueChange = preferences.embyAllowedLanguages::set,
+                textToValue = { it },
+                modifier = Modifier.settingsAnchor(R.string.pref_subtitles_emby_allowed_title),
+                title = {
+                  Text(
+                    stringResource(R.string.pref_subtitles_emby_allowed_title),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                },
+                summary = {
+                  if (embyAllowed.isBlank()) {
+                    Text(
+                      stringResource(R.string.pref_subtitles_emby_allowed_empty),
+                      color = MaterialTheme.colorScheme.outline,
+                    )
+                  } else {
+                    Text(embyAllowed, color = MaterialTheme.colorScheme.outline)
+                  }
+                },
+                textField = { value, onValueChange, _ ->
+                  Column {
+                    Text(stringResource(R.string.pref_subtitles_emby_allowed_summary))
+                    TextField(
+                      value,
+                      onValueChange,
+                      modifier = Modifier.fillMaxWidth(),
+                      placeholder = { Text(stringResource(R.string.language_codes_placeholder)) },
+                    )
+                  }
                 },
               )
 
