@@ -31,6 +31,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.CallMerge
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -110,6 +111,10 @@ fun EmbyMediaActionsDialog(
   onChanged: (EmbyItem) -> Unit,
   onDeleted: (String) -> Unit,
   onImagesChanged: () -> Unit,
+  /** 当前列表里同番号条目数量；>=2 时才显示「合并同番号」入口。 */
+  mergeGroupCount: Int = 0,
+  /** 打开「合并同番号」确认抽屉；null = 当前条目不适用。 */
+  onMergeSameCode: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
   // 用 ViewModel 作用域而非 rememberCoroutineScope()：菜单/抽屉一点完就关闭，
@@ -146,6 +151,8 @@ fun EmbyMediaActionsDialog(
       onDismissRequest = onDismissRequest,
       onChanged = onChanged,
       onOpen = { page = it },
+      mergeGroupCount = mergeGroupCount,
+      onMergeSameCode = onMergeSameCode,
     )
 
     MediaPage.EDIT_METADATA -> if (isPhoto) {
@@ -246,6 +253,8 @@ private fun EmbyMediaActionMenu(
   onDismissRequest: () -> Unit,
   onChanged: (EmbyItem) -> Unit,
   onOpen: (MediaPage) -> Unit,
+  mergeGroupCount: Int,
+  onMergeSameCode: (() -> Unit)?,
 ) {
   val context = LocalContext.current
   // 用 ViewModel 作用域而非 rememberCoroutineScope()：菜单/抽屉一点完就关闭，
@@ -339,6 +348,18 @@ private fun EmbyMediaActionMenu(
             }
           },
         )
+        // 媒体库长按快速合并：只在当前列表里找到 >=2 个同番号条目时出现。
+        // 点开不是立刻合并，而是选择抽屉 + 二次确认。
+        if (onMergeSameCode != null && mergeGroupCount >= 2) {
+          DropdownMenuItem(
+            text = { Text("合并同番号（$mergeGroupCount 个）…") },
+            leadingIcon = { Icon(Icons.Default.CallMerge, contentDescription = null) },
+            onClick = {
+              onDismissRequest()
+              onMergeSameCode()
+            },
+          )
+        }
         // 「更多 TA 出演 / 执导的作品」：取演职员表里第一个演员与第一个导演，各自跳 TA 的作品清单页
         // （与详情页点头像同一条路由）。
         // ⚠️ 两个身份**各自独立判断**：只有演员、没有导演的片子就只出现「出演」那一行，

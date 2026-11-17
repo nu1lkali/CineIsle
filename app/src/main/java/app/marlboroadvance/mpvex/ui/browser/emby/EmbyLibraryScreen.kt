@@ -99,6 +99,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewModelScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -128,12 +129,20 @@ import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleFilter
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleHit
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleMarks
 import app.marlboroadvance.mpvex.domain.emby.EmbyApiException
+import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyFilterOptions
 import app.marlboroadvance.mpvex.domain.emby.EmbyLibraryFilterState
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
+import app.marlboroadvance.mpvex.domain.smartmerge.OP_DONE
+import app.marlboroadvance.mpvex.domain.smartmerge.SmartMergeCandidate
+import app.marlboroadvance.mpvex.domain.smartmerge.SmartMergeManager
+import app.marlboroadvance.mpvex.domain.smartmerge.SmartMergeMapper
+import app.marlboroadvance.mpvex.domain.smartmerge.SmartMergeMatcher
+import app.marlboroadvance.mpvex.domain.smartmerge.SmartMergeOperation
+import app.marlboroadvance.mpvex.ui.browser.emby.smartmerge.SmartMergeDirectMergeDialog
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -147,6 +156,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyGachaStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.GachaCard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyProgressBar
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyQuickMergeSheet
 import app.marlboroadvance.mpvex.ui.browser.emby.components.MEDIA_BADGE_BG
 import app.marlboroadvance.mpvex.ui.browser.emby.components.FOLDER_ICON_BLUE
 import app.marlboroadvance.mpvex.ui.browser.emby.components.LocalEmbyAppearance
@@ -284,6 +294,17 @@ data class EmbyLibraryScreen(
     )
     val server by viewModel.currentServer.collectAsState()
     val scope = rememberCoroutineScope()
+
+    // ── 媒体库长按快速合并 ──
+    // 与 Smart Merge 页共用同一个 Manager（快照 / 历史 / 安全检查完全一致）；
+    // 差别只在合并完成后把结果直接写回本页列表，不等用户刷新。
+    val smartMergeManager = koinInject<SmartMergeManager>()
+    val smartMergeState by smartMergeManager.state.collectAsState()
+    var quickMergeCandidates by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
+    var quickMergeOpen by remember { mutableStateOf(false) }
+    var quickMergeCandidate by remember { mutableStateOf<SmartMergeCandidate?>(null) }
+    var quickMergePrimaryId by remember { mutableStateOf<String?>(null) }
+    var quickMergeConfirmOpen by remember { mutableStateOf(false) }
 
     // ── 搜索态跨「详情页压栈」留存（需求：搜索结果返回保持 v1）──
     // nav3 只组合栈顶 entry，点进详情页时本页组合被销毁，页面内的 remember 全部归零 ——
@@ -1490,6 +1511,102 @@ data class EmbyLibraryScreen(
     // （全部 / 电影 / 剧集 / 单集 / 合集 / 演员），用户根本分不清哪个才算数，属于重复入口。
     // 已删掉本地那一层：类型筛选只保留一处，改它就重新查库，语义唯一。
     val displayItems = visibleItems
+
+    /**
+     * 当前列表里与 [target] 同番号的条目。
+     *
+     * 用 SmartMergeMapper 的归一化番号主体比较（NEOB-0017 / NEOB-017 会归一），
+     * 只取 Movie / Video，且排除已经是多版本的条目。只在长按时算一次。
+     */
+    fun sameCodeMergeGroup(target: EmbyItem): List<EmbyItem> {
+      if (target.Type != "Movie" && target.Type != "Video") return emptyList()
+      val targetProjected = SmartMergeMapper.from(target) ?: return emptyList()
+      if (targetProjected.alreadyMultiVersion) return emptyList()
+      if (targetProjected.codeConfidence < 0.55) return emptyList()
+      val body = targetProjected.codeBody?.takeIf { it.isNotBlank() } ?: return emptyList()
+      return displayItems.filter { candidate ->
+        if (candidate.Type != "Movie" && candidate.Type != "Video") return@filter false
+        val projected = SmartMergeMapper.from(candidate) ?: return@filter false
+        !projected.alreadyMultiVersion &&
+          projected.codeConfidence >= 0.55 &&
+          projected.codeBody == body
+      }
+    }
+
+    /**
+     * 合并完成后**不刷新整页**，直接把本地列表改成「只保留合并结果」。
+     *
+     * - 服务端通常保留原始条目之一：`resultItemId` 就在原列表里，原地替换成重新拉到的
+     *   条目（MediaSources 已变成多版本），其余原始条目的卡片从列表与分页缓存里移除；
+     * - 验证失败时拿不到 resultItemId：先保留用户选的推荐主项目，移除其它原始条目，
+     *   并明确提示「结果暂未确认」；
+     * - 服务端返回了新 ItemId（极少见）：把它插到第一张被合并卡片的位置。
+     */
+    suspend fun applyQuickMergeResult(
+      operation: SmartMergeOperation,
+      primaryId: String?,
+    ) {
+      val removedIds = operation.originalItemIds.toSet()
+      val keepId = operation.resultItemId ?: primaryId ?: removedIds.firstOrNull() ?: return
+      val currentServer = server
+      val refreshed = if (operation.status == OP_DONE && currentServer != null) {
+        withContext(Dispatchers.IO) {
+          runCatching { EmbyClient.getItem(currentServer, keepId) }.getOrNull()
+        }
+      } else {
+        null
+      }
+
+      val nextItems = buildList {
+        items.forEach { old ->
+          when {
+            old.Id == keepId -> add(refreshed ?: old)
+            old.Id in removedIds -> Unit
+            else -> add(old)
+          }
+        }
+      }
+      when {
+        refreshed != null && nextItems.none { it.Id == keepId } -> {
+          val insertAt = items
+            .indexOfFirst { it.Id in removedIds }
+            .coerceAtLeast(0)
+            .coerceAtMost(nextItems.size)
+          items = nextItems.toMutableList().apply { add(insertAt, refreshed) }
+        }
+        refreshed == null && nextItems.none { it.Id == keepId } -> {
+          // 验证失败 / 拉取结果失败：不要整组消失，退回保留所选主项目或第一项。
+          val fallbackId = primaryId ?: removedIds.firstOrNull()
+          items = if (fallbackId != null) {
+            items.filterNot { it.Id in removedIds && it.Id != fallbackId }
+          } else {
+            nextItems
+          }
+        }
+        else -> {
+          items = nextItems
+        }
+      }
+
+      refreshed?.let { EmbyLibraryCache.replaceItem(it) }
+      (removedIds - keepId).forEach { EmbyLibraryCache.removeItem(it) }
+
+      // 分页游标跟着服务端条目数的净变化调整：N 个合并成 1 个，总数少 N-1。
+      // 不调整的话，下次触底续页会跳过 N-1 个条目。
+      val netRemoved = (removedIds.size - 1).coerceAtLeast(0)
+      consumedCount = (consumedCount - netRemoved).coerceAtLeast(0)
+      totalCount = (totalCount - netRemoved).coerceAtLeast(items.size)
+      cacheItems()
+
+      Toast.makeText(
+        context,
+        when (operation.status) {
+          OP_DONE -> "已合并 ${removedIds.size} 个条目，列表已就地更新"
+          else -> "已提交合并；结果暂未确认，已先保留所选主项目，稍后可下拉刷新核对"
+        },
+        Toast.LENGTH_LONG,
+      ).show()
+    }
 
     /**
      * 卡片右上角心形「快捷收藏」。
@@ -2889,6 +3006,8 @@ data class EmbyLibraryScreen(
                     },
                     onLongClick = { offset ->
                       actionTarget = item
+                      quickMergeCandidates = sameCodeMergeGroup(item)
+                      quickMergePrimaryId = item.Id
                       menuAnchor = offset
                     },
                     onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
@@ -2964,6 +3083,8 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
           },
     onLongClick = { offset ->
   actionTarget = item
+               quickMergeCandidates = sameCodeMergeGroup(item)
+               quickMergePrimaryId = item.Id
                menuAnchor = offset
          },
           onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
@@ -3003,6 +3124,8 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                       },
                       onLongClick = { offset ->
                         actionTarget = item
+                        quickMergeCandidates = sameCodeMergeGroup(item)
+                        quickMergePrimaryId = item.Id
                         menuAnchor = offset
                       },
                       onToggleFavorite = if (quickFavoriteEnabled) ({ toggleFavoriteQuick(item, s) }) else null,
@@ -3173,10 +3296,100 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
             },
             // 图片 / 元数据换过之后，列表里这条的 ImageTags 已经旧了，重拉一次才看得到新封面
             onImagesChanged = { scope.launch { load(reset = true) } },
+            mergeGroupCount = quickMergeCandidates.size,
+            onMergeSameCode = if (quickMergeCandidates.size >= 2) {
+              { quickMergeOpen = true }
+            } else {
+              null
+            },
           )
         }
         } // 关闭锚定 Box（菜单跟着长按的那一点走）
       }
+
+    // ── 媒体库长按「合并同番号」 ──
+    // 选择抽屉只负责选条目 / 选推荐主项目；真正的合并仍走 SmartMergeDirectMergeDialog
+    // 的二次确认与 SmartMergeManager 的快照 / MergeVersions / 验证。
+    if (quickMergeOpen) {
+      val currentServer = server
+      if (currentServer != null) {
+        EmbyQuickMergeSheet(
+          items = quickMergeCandidates,
+          serverId = currentServer.id,
+          rules = smartMergeState.rules,
+          imageUrl = { item -> viewModel.imageUrl(currentServer, item, "Primary", 240) },
+          onDismiss = {
+            quickMergeOpen = false
+            quickMergeCandidates = emptyList()
+          },
+          initialPrimaryId = quickMergePrimaryId,
+          onConfirm = { selected, primaryId ->
+            quickMergeOpen = false
+            val projected = selected.mapNotNull(SmartMergeMapper::from)
+            val candidate = SmartMergeMatcher.candidateFromSelection(
+              serverId = currentServer.id,
+              items = projected,
+              rules = smartMergeState.rules,
+            )
+            if (candidate == null) {
+              Toast.makeText(
+                context,
+                "无法生成合并候选：这些条目缺少可识别的番号",
+                Toast.LENGTH_LONG,
+              ).show()
+            } else {
+              quickMergeCandidate = candidate
+              quickMergePrimaryId = primaryId
+              quickMergeConfirmOpen = true
+            }
+          },
+        )
+      }
+    }
+
+    quickMergeCandidate?.let { candidate ->
+      if (quickMergeConfirmOpen) {
+        SmartMergeDirectMergeDialog(
+          candidate = candidate,
+          primaryId = quickMergePrimaryId,
+          onDismiss = {
+            quickMergeConfirmOpen = false
+            quickMergeCandidate = null
+          },
+          onConfirm = {
+            quickMergeConfirmOpen = false
+            val currentServer = server
+            if (currentServer == null) {
+              Toast.makeText(context, "还没有连接 Emby 服务器", Toast.LENGTH_LONG).show()
+              quickMergeCandidate = null
+            } else {
+              // 合并任务挂在 ViewModel 作用域：用户立刻返回上一页也不会把请求取消。
+              viewModel.viewModelScope.launch {
+                withContext(Dispatchers.IO) {
+                  smartMergeManager.addManualCandidate(candidate)
+                }
+                val operation = smartMergeManager.mergeNow(
+                  server = currentServer,
+                  candidate = candidate,
+                  selectedPrimaryId = quickMergePrimaryId,
+                )
+                if (operation == null) {
+                  Toast.makeText(
+                    context,
+                    "合并失败，请在「智能媒体合并 → 历史」查看原因",
+                    Toast.LENGTH_LONG,
+                  ).show()
+                } else {
+                  applyQuickMergeResult(operation, quickMergePrimaryId)
+                }
+                quickMergeCandidate = null
+                quickMergeCandidates = emptyList()
+              }
+            }
+          },
+        )
+      }
+    }
 
     // ── 筛选面板（2026-10-09 改为「加号 + 复选对话框 + 圆角标签」版式）──
     // 版式：抽屉里每个「多选」类目一行 = 类目名 + 右侧 `+` 圆钮。
@@ -5295,6 +5508,22 @@ internal object EmbyLibraryCache {
       }
     }
     lastRemovedItemId = itemId
+  }
+
+  /**
+   * 就地替换某条媒体的缓存快照。
+   *
+   * 媒体库长按合并后，被保留的那条 ItemId 不变，但 MediaSources / UserData 可能已经
+   * 被 Emby 改过；不同步的话，从详情页返回或换筛选条件命中缓存时卡片还是旧数据。
+   */
+  @Synchronized
+  fun replaceItem(item: EmbyItem) {
+    val id = item.Id ?: return
+    entries.values.forEach { entry ->
+      if (entry.items.any { it.Id == id }) {
+        entry.items = entry.items.map { if (it.Id == id) item else it }
+      }
+    }
   }
 
   /**

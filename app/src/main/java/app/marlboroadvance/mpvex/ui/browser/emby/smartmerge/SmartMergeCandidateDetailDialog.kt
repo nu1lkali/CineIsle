@@ -298,6 +298,13 @@ internal fun SmartMergeDirectMergeDialog(
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.primary,
         )
+        if (candidate.conflicts.isNotEmpty()) {
+          Text(
+            "冲突：" + candidate.conflicts.joinToString("；"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+          )
+        }
         Text(
           "不会主动删除文件；但 Emby 可能只保留一个 ItemId，收藏/进度/元数据归属由服务端决定。",
           style = MaterialTheme.typography.bodySmall,

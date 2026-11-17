@@ -246,124 +246,148 @@ class SmartMergeManager(
     candidate: SmartMergeCandidate,
     selectedPrimaryId: String? = null,
   ) {
-    scope.launch {
-      _message.value = null
-      try {
-        if (candidate.status == STATUS_MERGED) {
-          _message.value = "这个候选已经合并过，不能重复合并"
-          return@launch
-        }
-        if (candidate.status == STATUS_IGNORED) {
-          _message.value = "这个候选已被忽略"
-          return@launch
-        }
-        if (!EmbyClient.fetchIsAdmin(server)) {
-          _message.value = "需要 Emby 管理员权限才能合并"
-          return@launch
-        }
-        val ids = candidate.itemIds.distinct()
-        if (ids.size < 2) {
-          _message.value = "至少需要两个条目"
-          return@launch
-        }
-        // 防止「已经合过、但本地状态没更新」：原始 Id 至少要有两个还在。
-        val existing = runCatching { repository.getItemsByIds(server, ids) }.getOrDefault(emptyList())
-        if (existing.mapNotNull { it.Id }.distinct().size < 2) {
-          _message.value = "条目已发生变化（可能已经合并或删除），请重新扫描"
-          return@launch
-        }
-        if (existing.any { it.MediaSources.orEmpty().size > 1 }) {
-          _message.value = "其中已有条目是多版本状态，可能已经合并过；请重新扫描"
-          return@launch
-        }
-        val operationId = "merge-${System.currentTimeMillis()}"
-        val snapshots = ids.mapNotNull { itemId ->
-          runCatching {
-            val item = EmbyClient.getItem(server, itemId)
-            journal.saveRawSnapshot(operationId, itemId, json.encodeToString(item))
-            SmartMergeItemSnapshot(
-              itemId = itemId,
-              name = item.Name.orEmpty(),
-              path = item.Path,
-              providerIds = item.ProviderIds,
-              mediaSourcePaths = item.MediaSources.orEmpty().mapNotNull { it.Path },
-              userDataJson = item.UserData?.let { json.encodeToString(it) },
-              rawFile = "$operationId/$itemId.json",
-            )
-          }.getOrNull()
-        }
-        val running = SmartMergeOperation(
-          id = operationId,
-          serverId = server.id,
-          candidateId = candidate.id,
-          candidateCode = candidate.code,
-          candidateTitle = candidate.title,
-          originalItemIds = ids,
-          snapshots = snapshots,
-          status = OP_RUNNING,
-          serverVersion = server.version,
-          createdAt = System.currentTimeMillis(),
-        )
-        saveOperation(running)
+    scope.launch { performMerge(server, candidate, selectedPrimaryId) }
+  }
 
-        EmbyClient.mergeVersions(server, ids)
+  /**
+   * 与 [merge] 相同，但**挂起等待结果**。
+   *
+   * 媒体库长按「合并同番号」需要在合并完成后立刻把被合并掉的卡片从本地列表里移除，
+   * 不能等用户手动下拉刷新。安全检查、快照、MergeVersions、重新查询验证全部复用
+   * [performMerge]，所以两条入口的行为与历史记录完全一致。
+   */
+  suspend fun mergeNow(
+    server: EmbyServer,
+    candidate: SmartMergeCandidate,
+    selectedPrimaryId: String? = null,
+  ): SmartMergeOperation? = withContext(Dispatchers.IO) {
+    performMerge(server, candidate, selectedPrimaryId)
+  }
 
-        // 官方返回空 body，必须重新查询验证：优先找「MediaSources 数量 >= 2」的条目。
-        val after = runCatching { repository.getItemsByIds(server, ids) }.getOrDefault(emptyList())
-        val snapshotPaths = snapshots.flatMap { it.mediaSourcePaths }.toSet()
-        val byId = after.firstOrNull { item ->
-          val paths = item.MediaSources.orEmpty().mapNotNull { it.Path }
-          paths.count { it in snapshotPaths } >= 2
-        } ?: after.firstOrNull()
-        // 原 ItemId 可能全部失效：再用番号/标题在库内找一次多源条目。
-        val bySearch = if (byId == null) {
-          val term = candidate.code.ifBlank { candidate.title }
-          runCatching {
-            repository.getItems(
-              server = server,
-              searchTerm = term,
-              includeItemTypes = listOf("Movie", "Video"),
-              recursive = true,
-              isFolder = false,
-              limit = 20,
-              fields = SMART_MERGE_FIELDS,
-            ).Items.firstOrNull { item ->
-              val paths = item.MediaSources.orEmpty().mapNotNull { it.Path }
-              paths.count { it in snapshotPaths } >= 2 ||
-                item.MediaSources.orEmpty().size >= 2
-            }
-          }.getOrNull()
-        } else {
-          null
-        }
-        val result = byId ?: bySearch
-        val resultVersionNames = result?.MediaSources.orEmpty().mapNotNull { source ->
-          source.Name?.takeIf { it.isNotBlank() }
-            ?: source.Path?.substringAfterLast('/')?.substringAfterLast('\\')
-        }
-        val done = running.copy(
-          resultItemId = result?.Id,
-          resultVersionNames = resultVersionNames,
-          status = if (result != null) OP_DONE else OP_VERIFY_FAILED,
-          completedAt = System.currentTimeMillis(),
-          error = if (result == null) "合并接口已返回，但未查询到组合后的条目；请在 Emby 中人工确认" else null,
-        )
-        saveOperation(done)
-        if (done.status == OP_DONE) {
-          val next = _state.value.copy(
-            candidates = _state.value.candidates.map {
-              if (it.id == candidate.id) it.copy(status = STATUS_MERGED) else it
-            },
-          )
-          _state.value = next
-          journal.save(next)
-          _message.value = "已提交合并：${candidate.title}"
-        } else {
-          _message.value = done.error
-        }
-      } catch (e: Throwable) {
-        _message.value = "合并失败：${e.message ?: e::class.simpleName}"
+  @Suppress("UNUSED_PARAMETER")
+  private suspend fun performMerge(
+    server: EmbyServer,
+    candidate: SmartMergeCandidate,
+    selectedPrimaryId: String?,
+  ): SmartMergeOperation? {
+    _message.value = null
+    return try {
+      if (candidate.status == STATUS_MERGED) {
+        _message.value = "这个候选已经合并过，不能重复合并"
+        return null
       }
+      if (candidate.status == STATUS_IGNORED) {
+        _message.value = "这个候选已被忽略"
+        return null
+      }
+      if (!EmbyClient.fetchIsAdmin(server)) {
+        _message.value = "需要 Emby 管理员权限才能合并"
+        return null
+      }
+      val ids = candidate.itemIds.distinct()
+      if (ids.size < 2) {
+        _message.value = "至少需要两个条目"
+        return null
+      }
+      // 防止「已经合过、但本地状态没更新」：原始 Id 至少要有两个还在。
+      val existing = runCatching { repository.getItemsByIds(server, ids) }.getOrDefault(emptyList())
+      if (existing.mapNotNull { it.Id }.distinct().size < 2) {
+        _message.value = "条目已发生变化（可能已经合并或删除），请重新扫描"
+        return null
+      }
+      if (existing.any { it.MediaSources.orEmpty().size > 1 }) {
+        _message.value = "其中已有条目是多版本状态，可能已经合并过；请重新扫描"
+        return null
+      }
+      val operationId = "merge-${System.currentTimeMillis()}"
+      val snapshots = ids.mapNotNull { itemId ->
+        runCatching {
+          val item = EmbyClient.getItem(server, itemId)
+          journal.saveRawSnapshot(operationId, itemId, json.encodeToString(item))
+          SmartMergeItemSnapshot(
+            itemId = itemId,
+            name = item.Name.orEmpty(),
+            path = item.Path,
+            providerIds = item.ProviderIds,
+            mediaSourcePaths = item.MediaSources.orEmpty().mapNotNull { it.Path },
+            userDataJson = item.UserData?.let { json.encodeToString(it) },
+            rawFile = "$operationId/$itemId.json",
+          )
+        }.getOrNull()
+      }
+      val running = SmartMergeOperation(
+        id = operationId,
+        serverId = server.id,
+        candidateId = candidate.id,
+        candidateCode = candidate.code,
+        candidateTitle = candidate.title,
+        originalItemIds = ids,
+        snapshots = snapshots,
+        status = OP_RUNNING,
+        serverVersion = server.version,
+        createdAt = System.currentTimeMillis(),
+      )
+      saveOperation(running)
+
+      EmbyClient.mergeVersions(server, ids)
+
+      // 官方返回空 body，必须重新查询验证：优先找「MediaSources 数量 >= 2」的条目。
+      val after = runCatching { repository.getItemsByIds(server, ids) }.getOrDefault(emptyList())
+      val snapshotPaths = snapshots.flatMap { it.mediaSourcePaths }.toSet()
+      val byId = after.firstOrNull { item ->
+        val paths = item.MediaSources.orEmpty().mapNotNull { it.Path }
+        paths.count { it in snapshotPaths } >= 2
+      } ?: after.firstOrNull()
+      // 原 ItemId 可能全部失效：再用番号/标题在库内找一次多源条目。
+      val bySearch = if (byId == null) {
+        val term = candidate.code.ifBlank { candidate.title }
+        runCatching {
+          repository.getItems(
+            server = server,
+            searchTerm = term,
+            includeItemTypes = listOf("Movie", "Video"),
+            recursive = true,
+            isFolder = false,
+            limit = 20,
+            fields = SMART_MERGE_FIELDS,
+          ).Items.firstOrNull { item ->
+            val paths = item.MediaSources.orEmpty().mapNotNull { it.Path }
+            paths.count { it in snapshotPaths } >= 2 ||
+              item.MediaSources.orEmpty().size >= 2
+          }
+        }.getOrNull()
+      } else {
+        null
+      }
+      val result = byId ?: bySearch
+      val resultVersionNames = result?.MediaSources.orEmpty().mapNotNull { source ->
+        source.Name?.takeIf { it.isNotBlank() }
+          ?: source.Path?.substringAfterLast('/')?.substringAfterLast('\\')
+      }
+      val done = running.copy(
+        resultItemId = result?.Id,
+        resultVersionNames = resultVersionNames,
+        status = if (result != null) OP_DONE else OP_VERIFY_FAILED,
+        completedAt = System.currentTimeMillis(),
+        error = if (result == null) "合并接口已返回，但未查询到组合后的条目；请在 Emby 中人工确认" else null,
+      )
+      saveOperation(done)
+      if (done.status == OP_DONE) {
+        val next = _state.value.copy(
+          candidates = _state.value.candidates.map {
+            if (it.id == candidate.id) it.copy(status = STATUS_MERGED) else it
+          },
+        )
+        _state.value = next
+        journal.save(next)
+        _message.value = "已提交合并：${candidate.title}"
+      } else {
+        _message.value = done.error
+      }
+      done
+    } catch (e: Throwable) {
+      _message.value = "合并失败：${e.message ?: e::class.simpleName}"
+      null
     }
   }
 
