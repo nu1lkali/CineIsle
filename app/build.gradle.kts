@@ -3400,8 +3400,14 @@ android {
     //  · 直出 vo=mediacodec_embed 下不依赖帧号，避免误判正常零拷贝播放。
     // 287 / 1.6.43：10-bit HEVC 卡死先尝试 mpv 零拷贝直出（与 GSY 同类的 Surface 输出），
     //  而不是直接降软解；video-pts 作为 estimated-frame-number 的兜底进度信号。
-    versionCode = 287
-    versionName = "1.6.43"
+    // 288 / 1.6.44：VLC 第三内核（独立播放页 / 独立设置）。
+    //  · libVLC 3.7.6（LGPL 2.1）独立 VlcPlayerActivity，不改 mpv/GSY 播放页；
+    //    播放/暂停/拖动/倍速/音轨/字幕轨/外挂字幕/画面比例/画中画/播放列表自动下一集。
+    //  · 详情页长按播放改为内核选择（MPV / GSY / VLC），不再只反选 GSY。
+    //  · 设置新增「播放内核设置」三列入口（MPV / GSY / VLC），VLC 有自己的偏好页。
+    // 289 / 1.6.45：VLC 播放页细节收口（PiP 不暂停、首帧后才上报、外挂字幕）。
+    versionCode = 289
+    versionName = "1.6.45"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -3594,6 +3600,9 @@ android {
     }
     jniLibs {
       useLegacyPackaging = true
+      // mpv / NextLib / GSY / VLC 都自带 libc++_shared.so；符号检查确认 app 侧这份
+      // 覆盖 VLC 需要的全部 C++ 符号，固定取 app 侧，避免 AGP 版本升级后选择不定。
+      pickFirsts += "**/libc++_shared.so"
     }
   }
 
@@ -3759,6 +3768,8 @@ dependencies {
     implementation(libs.fsaf)
     implementation(libs.mediainfo.lib)
     implementation(libs.mpv.android)
+    // VLC 独立内核：自己的 Activity / 控件 / 设置页，不与 mpv/GSY 共用播放页
+    implementation(libs.libvlc.all)
 
     // GSYVideoPlayer —— 双播放内核中的第二个内核（默认仍是 mpv）
     // java = 播放器 View + IJK Java 绑定；exo2 = GSY 的 ExoPlayer 内核；

@@ -418,6 +418,20 @@
             android:supportsPictureInPicture="true"
             android:theme="@style/Theme.mpvex" />
 
+        <!-- VLC 第三个内核：完全独立的 Activity，失败/能力差异不会影响 mpv / GSY。 -->
+        <activity
+            android:name=".ui.player.vlc.VlcPlayerActivity"
+            android:autoRemoveFromRecents="true"
+            android:noHistory="false"
+            android:excludeFromRecents="false"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:documentLaunchMode="never"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
+            android:theme="@style/Theme.mpvex" />
+
         <!--
           「视界流」：仿抖音竖屏上下滑连播的播放器。
 

@@ -111,3 +111,11 @@
 # AndroidVideoCache（GSY 的边下边播）
 -keep class com.danikula.videocache.** { *; }
 -dontwarn com.danikula.videocache.**
+# ── LibVLC ──
+# VLC 的 JNI 回调 / 播放器接口按类名反射访问，必须整包保留。
+-keep class org.videolan.libvlc.** { *; }
+-keep class org.videolan.libvlc.interfaces.** { *; }
+-dontwarn org.videolan.**
+-keepclassmembers class org.videolan.libvlc.** {
+    native <methods>;
+}

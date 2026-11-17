@@ -260,6 +260,13 @@ object PreferencesScreen : Screen {
               // 所以它的配置单开一页：这一页改什么都不影响 mpv，反之亦然。
               SettingsDestinationRow(SettingsRegistry.gsy) { backstack.add(it) }
 
+              PreferenceDivider()
+
+              // 三内核总入口：MPV / GSY / VLC 各自的设置页从同一处切换。
+              SettingsDestinationRow(SettingsRegistry.playerEngine) { backstack.add(it) }
+
+              PreferenceDivider()
+
               // 「标记为不喜欢」的三个开关 + 管理页入口。
               // 播放器按钮那个开关与 mpv 的布局编辑器是**双向同步**的
               // （关开关会清掉控件簇里的按钮、开开关会加回原簇），

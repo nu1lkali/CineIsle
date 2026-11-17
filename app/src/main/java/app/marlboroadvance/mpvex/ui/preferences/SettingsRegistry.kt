@@ -114,6 +114,17 @@ internal object SettingsRegistry {
       keywords = listOf("gsy", "exo", "ijk", "kernel"),
     )
 
+  val playerEngine =
+    SettingsDestination(
+      id = "player_engine",
+      section = "播放与控件",
+      titleText = "播放内核设置",
+      summaryText = "MPV / GSY / VLC 三套内核的独立配置",
+      icon = Icons.Outlined.Memory,
+      screen = PlayerEngineSettingsScreen,
+      keywords = listOf("mpv", "gsy", "vlc", "内核", "播放器", "engine", "kernel"),
+    )
+
   val dislike =
     SettingsDestination(
       id = "dislike",
@@ -231,6 +242,7 @@ internal object SettingsRegistry {
       layout,
       gesture,
       gsy,
+      playerEngine,
       dislike,
       folders,
       decoder,

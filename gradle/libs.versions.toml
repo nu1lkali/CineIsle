@@ -35,7 +35,10 @@ gsy = "13.2.1"
 # ⭐ 之所以必须离开 1.10.1：NextLib 只有 1.10.1-0.13.0 这一个配 1.10.1 的版本，
 #    而它内置的是 FFmpeg 6.0（Lavc60），与 mpv 的 Lavc63 不同 major ⇒ native 层必崩。
 #    能配 FFmpeg 9.x（Lavc63）的 NextLib 最早是 1.11.x 系列，media3 只能一起上台阶。
+# Media3 / ExoPlayer 的版本；
 media3 = "1.11.1"
+# LibVLC Android：第三个独立播放内核（LGPL 2.1，AAR 含各 ABI native so）。
+vlc = "3.7.6"
 # NextLib base version for the local `:nextlib-patched` source fork.
 # The fork keeps this release's Media3 1.11.1 / FFmpeg 9.0.1 native bridge and
 # extends its video MIME → decoder mapping. Keep the native bridge paired with
@@ -99,6 +102,8 @@ androidx-documentfile = { group = "androidx.documentfile", name = "documentfile"
 seeker = "com.github.abdallahmehiz:seeker:2.0.1"
 mediainfo-lib = { module = "io.github.marlboro-advance:mediainfo-android", version.ref = "mediainfo-android" }
 mpv-android = { module = "io.github.marlboro-advance:mpv-android", version.ref = "mpv-android" }
+# VLC 独立内核（Activity + 设置页独立，不与 mpv/GSY 共用播放页）
+libvlc-all = { module = "org.videolan.android:libvlc-all", version.ref = "vlc" }
 
 koin-bom = { module = "io.insert-koin:koin-bom", version.ref = "koin" }
 koin-core = { module = "io.insert-koin:koin-core" }

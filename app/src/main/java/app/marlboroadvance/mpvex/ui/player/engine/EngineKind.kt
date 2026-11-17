@@ -23,6 +23,14 @@ enum class EngineKind(
    * 那是 GSY 播放页自己的配置，入口在「设置 → GSY 播放器」，与 mpv 这边无关。
    */
   GSY("GSYVideoPlayer"),
+
+  /**
+   * VLC：第三个独立内核。
+   *
+   * 独立的 `VlcPlayerActivity` + 独立的 `VlcPreferences`，不修改 mpv/GSY 播放页；
+   * 适合 mpv 的 copyback / GSY 的解码路径都不合适的片源。
+   */
+  VLC("VLC"),
   ;
 
   companion object {
@@ -30,13 +38,19 @@ enum class EngineKind(
       when (value?.uppercase()) {
         // "EXO" / "MEDIA3" 是改造前存在偏好里的旧值，继续识别，避免升级后设置失效
         "GSY", "EXO", "EXOPLAYER", "MEDIA3", "GSY_IJK", "GSY_EXO" -> GSY
+        "VLC" -> VLC
         else -> MPV
       }
   }
 }
 
-/** 「与当前内核相反」的那个内核 —— 长按切换备用内核用的就是它 */
-fun EngineKind.reversed(): EngineKind = if (this == EngineKind.MPV) EngineKind.GSY else EngineKind.MPV
+/** 「下一个内核」：给旧入口保留的循环顺序；详情页现在走显式选择。 */
+fun EngineKind.reversed(): EngineKind =
+  when (this) {
+    EngineKind.MPV -> EngineKind.GSY
+    EngineKind.GSY -> EngineKind.VLC
+    EngineKind.VLC -> EngineKind.MPV
+  }
 
 /*
  * 注：GSY 框架底下的解码内核（IJK / System / ExoPlayer）已迁到
@@ -183,10 +197,18 @@ private val GSY_SUPPORTED =
     EngineFeature.GSY_KERNEL_SWITCH,
   )
 
+/** VLC 播放页当前真正接了的：画面比例、画中画。其余能力后续按 VLC API 补。 */
+private val VLC_SUPPORTED =
+  setOf(
+    EngineFeature.VIDEO_ASPECT,
+    EngineFeature.PICTURE_IN_PICTURE,
+  )
+
 fun EngineKind.supports(feature: EngineFeature): Boolean =
   when (this) {
     EngineKind.MPV -> true
     EngineKind.GSY -> feature in GSY_SUPPORTED
+    EngineKind.VLC -> feature in VLC_SUPPORTED
   }
 
 /**

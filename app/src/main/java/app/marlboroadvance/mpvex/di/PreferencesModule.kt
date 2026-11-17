@@ -15,6 +15,7 @@ import app.marlboroadvance.mpvex.preferences.GsyPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.SettingsManager
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
+import app.marlboroadvance.mpvex.preferences.VlcPreferences
 import app.marlboroadvance.mpvex.preferences.preference.AndroidPreferenceStore
 import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.toolbox.RenameRuleStore
@@ -33,6 +34,7 @@ val PreferencesModule =
     singleOf(::DecoderPreferences)
     singleOf(::SubtitlesPreferences)
     singleOf(::AudioPreferences)
+    singleOf(::VlcPreferences)
     singleOf(::AdvancedPreferences)
     single { BrowserPreferences(get(), androidContext()) }
     singleOf(::FoldersPreferences)

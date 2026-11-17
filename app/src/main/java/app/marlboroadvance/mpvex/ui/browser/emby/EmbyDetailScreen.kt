@@ -143,6 +143,7 @@ import app.marlboroadvance.mpvex.domain.playbackstate.repository.PlaybackStateRe
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
+import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyIdentifyDialog
@@ -594,9 +595,9 @@ data class EmbyDetailScreen(
               // 所以尺寸必须从源头（这个 URL）给定。
               backdropUrl = viewModel.imageUrl(currentServer, current, "Backdrop", 1080),
               posterUrl = viewModel.imageUrl(currentServer, current, "Primary", 600),
-              onPlay = { resume, reverse ->
-                // 长按切内核时给个明确反馈，否则用户不知道这一下到底换了什么
-                viewModel.resolveEngineOverride(reverse)?.let {
+              onPlay = { resume, engine ->
+                // 长按选内核时给个明确反馈，否则用户不知道这一下到底换了什么
+                engine?.let {
                   Toast.makeText(context, "使用 ${it.label} 内核播放", Toast.LENGTH_SHORT).show()
                 }
                 // 已经点过一次就别再放一次（连点会起两个播放页）
@@ -605,12 +606,12 @@ data class EmbyDetailScreen(
                   scope.launch {
                     try {
                       viewModel.play(
-                        currentServer,
-                        current,
-                        resume,
-                        reverse,
-                        playSourceId,
+                        server = currentServer,
+                        item = current,
+                        resumeSeconds = resume,
+                        mediaSourceId = playSourceId,
                         mediaSourceLabel = playSourceLabel,
+                        engineOverride = engine,
                       )
                     } finally {
                       // ⚠️ 只在**没成功拉起播放器**时复位（比如解析失败 / 抛异常），
@@ -1355,8 +1356,8 @@ private fun DetailBody(
   showRecommendations: Boolean,
   backdropUrl: String?,
   posterUrl: String?,
-  /** resumeSeconds = 续播秒数（0 = 从头）；reverseEngine = 用与默认相反的内核（长按） */
-  onPlay: (resumeSeconds: Long, reverseEngine: Boolean) -> Unit,
+  /** resumeSeconds = 续播秒数（0 = 从头）；engine = 长按选择的内核（null = 默认） */
+  onPlay: (resumeSeconds: Long, engine: EngineKind?) -> Unit,
   /**
    * 电视剧专用：从**第一集开头**播放（不受「上次看到哪」影响）。
    *
@@ -2172,8 +2173,8 @@ private fun metaChips(item: EmbyItem): List<String> {
 @Composable
 private fun PlaySection(
   item: EmbyItem,
-  /** resumeSeconds = 续播秒数（0 = 从头）；reverseEngine = 用与默认相反的内核（长按） */
-  onPlay: (resumeSeconds: Long, reverseEngine: Boolean) -> Unit,
+  /** resumeSeconds = 续播秒数（0 = 从头）；engine = 长按选择的内核（null = 默认） */
+  onPlay: (resumeSeconds: Long, engine: EngineKind?) -> Unit,
   onDownload: () -> Unit,
   onCast: () -> Unit,
   onPlayExternal: () -> Unit,
@@ -2218,6 +2219,7 @@ private fun PlaySection(
   // 多版本媒体：MediaSources 就是各版本；只有一个（或 Id 缺失）时不算多版本。
   val mediaSources = item.MediaSources.orEmpty().filter { !it.Id.isNullOrBlank() }
   val resumeSeconds = EmbyTicks.ticksToSeconds(positionTicks)
+  var enginePickerResume by remember { mutableStateOf<Long?>(null) }
   val remainingTicks = (runTimeTicks - positionTicks).coerceAtLeast(0L)
   val hasResume = resumeSeconds > 10 && runTimeTicks > 0 &&
     (positionTicks.toFloat() / runTimeTicks.toFloat()) < 0.95f
@@ -2259,8 +2261,8 @@ private fun PlaySection(
           hasResume -> "继续播放 · ${formatClock(resumeSeconds)}"
           else -> "播放"
         },
-        onClick = { onPlay(if (hasResume) resumeSeconds else 0, false) },
-        onLongClick = { onPlay(if (hasResume) resumeSeconds else 0, true) },
+        onClick = { onPlay(if (hasResume) resumeSeconds else 0, null) },
+        onLongClick = { enginePickerResume = if (hasResume) resumeSeconds else 0 },
         // 拉起播放器期间：转圈 + 禁点。
         // 单看"转圈"还不够 —— 不挡掉点击的话，用户等得不耐烦会再点，起两个播放页。
         loading = playLaunching,
@@ -2450,12 +2452,60 @@ private fun PlaySection(
     // 有续播进度时给一个「从头播放」（蓝色主键此时是续播，两者各司其职）。
     // 「继续上次」不单独出现 —— 蓝色主键就是续播，再放一个是冗余的。
     if (hasResume) {
-      FilledTonalButton(onClick = { onPlay(0, false) }) {
+      FilledTonalButton(onClick = { onPlay(0, null) }) {
         Text("从头播放")
       }
     }
   }
+  enginePickerResume?.let { resume ->
+    EnginePickerDialog(
+      onDismiss = { enginePickerResume = null },
+      onPick = { engine ->
+        enginePickerResume = null
+        onPlay(resume, engine)
+      },
+    )
+  }
 }
+@Composable
+private fun EnginePickerDialog(
+  onDismiss: () -> Unit,
+  onPick: (EngineKind) -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("选择播放内核") },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        EngineKind.entries.forEach { engine ->
+          val summary = when (engine) {
+            EngineKind.MPV -> "功能最全，默认内核"
+            EngineKind.GSY -> "兼容性备用内核，独立播放页"
+            EngineKind.VLC -> "第三个独立内核，适合 mpv/GSY 都不合适的片源"
+          }
+          TextButton(
+            onClick = { onPick(engine) },
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+              Text(engine.label, fontWeight = FontWeight.SemiBold)
+              Text(
+                summary,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {},
+    dismissButton = {
+      TextButton(onClick = onDismiss) { Text("取消") }
+    },
+  )
+}
+
 /**
  * 多版本条目「当前选中版本」的本地续播秒数；返回 null 表示不要覆盖服务端进度。
  *

@@ -51,6 +51,7 @@ import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.ui.browser.emby.displayprefs.EmbyDisplayPrefsSync
 import app.marlboroadvance.mpvex.ui.player.GsyPlayerActivity
 import app.marlboroadvance.mpvex.ui.player.PlayerActivity
+import app.marlboroadvance.mpvex.ui.player.vlc.VlcPlayerActivity
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
 import app.marlboroadvance.mpvex.ui.player.engine.reversed
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1318,9 +1319,14 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
      *   而「从头播放」的语义是「第一集开头」，哪怕第 1 集已经看完。
      */
     fromStart: Boolean = false,
+    /**
+     * 显式指定内核（详情页长按选择 GSY / VLC 时传入）。
+     * null = 按设置里的默认内核 + [reverseEngine] 规则。
+     */
+    engineOverride: EngineKind? = null,
   ) {
     val itemId = item.Id ?: return
-    val engine = resolveEngine(reverseEngine)
+    val engine = engineOverride ?: resolveEngine(reverseEngine)
 
     // ⚠️ 容器类条目**绝不能**直接交给播放器。
     // `Series` / `Season` / 文件夹自身没有媒体文件，`/Videos/{id}/stream` 会回一个
@@ -1693,6 +1699,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   private fun Intent.putEngine(engine: EngineKind?) {
     when (engine) {
       EngineKind.GSY -> setClass(getApplication(), GsyPlayerActivity::class.java)
+      EngineKind.VLC -> setClass(getApplication(), VlcPlayerActivity::class.java)
       EngineKind.MPV -> putExtra(PlayerActivity.EXTRA_ENGINE, engine.name)
       null -> Unit
     }

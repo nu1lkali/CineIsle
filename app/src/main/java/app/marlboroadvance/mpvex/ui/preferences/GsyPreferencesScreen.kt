@@ -160,17 +160,27 @@ object GsyPreferencesScreen : Screen {
                 onValueChange = { playerPrefs.playbackEngine.set(it) },
                 modifier = Modifier.settingsAnchor("默认播放内核"),
                 title = { Text("默认播放内核", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                values = listOf("MPV", "GSY"),
+                values = listOf("MPV", "GSY", "VLC"),
                 valueToText = { value ->
-                  AnnotatedString(if (value == "GSY") "GSYVideoPlayer" else "mpv")
+                  AnnotatedString(
+                    when (value) {
+                      "GSY" -> "GSYVideoPlayer"
+                      "VLC" -> "VLC"
+                      else -> "mpv"
+                    },
+                  )
                 },
                 summary = {
                   Text(
-                    text = if (playbackEngine == "GSY") {
-                      "默认用 GSY 播放页。GSY 是独立播放页，配置见本页；" +
-                        "mpv 播放页的滤镜 / 字幕排版 / 解码器切换 / 章节在 GSY 下不可用"
-                    } else {
-                      "默认用 mpv 播放页（功能最全）；想临时用 GSY 就打开下面的「长按切换」"
+                    text = when (playbackEngine) {
+                      "GSY" ->
+                        "默认用 GSY 播放页。GSY 是独立播放页，配置见本页；" +
+                          "mpv 播放页的滤镜 / 字幕排版 / 解码器切换 / 章节在 GSY 下不可用"
+                      "VLC" ->
+                        "默认用 VLC 播放页。VLC 是独立内核，配置见 VLC 设置；" +
+                          "外挂字幕文件选择 / 投屏 / 后台播放仍在补齐"
+                      else ->
+                        "默认用 mpv 播放页（功能最全）；详情页长按播放可临时选 GSY / VLC"
                     },
                     color = MaterialTheme.colorScheme.outline,
                   )

@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.player
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
+import app.marlboroadvance.mpvex.ui.player.vlc.VlcPlayerActivity
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import android.content.ComponentName
@@ -840,6 +841,20 @@ open class PlayerActivity :
       } else {
         EngineKind.from(playerPreferences.playbackEngine.get())
       }
+    if (effective == EngineKind.VLC) {
+      runCatching {
+        startActivity(
+          Intent(intent).apply {
+            setClass(this@PlayerActivity, VlcPlayerActivity::class.java)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          },
+        )
+      }.onFailure { e ->
+        Log.e(TAG, "Failed to hand off playback to VlcPlayerActivity", e)
+      }
+      finish()
+      return true
+    }
     if (effective != EngineKind.GSY) return false
 
     runCatching {
