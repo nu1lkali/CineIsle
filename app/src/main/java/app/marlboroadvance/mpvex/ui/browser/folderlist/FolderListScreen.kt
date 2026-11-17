@@ -44,7 +44,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SearchBar
 import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Text
@@ -257,11 +256,13 @@ object FolderListScreen : Screen {
       onPermissionGranted = { viewModel.refresh() },
     )
 
-    // Update MainScreen about permission state
+    // Classic 外壳状态：权限被拒时收起 FAB。离开本页恢复，避免影响其它 Tab。
+    val classicChrome = app.marlboroadvance.mpvex.ui.browser.LocalClassicChrome.current
     LaunchedEffect(permissionState.status) {
-      app.marlboroadvance.mpvex.ui.browser.MainScreen.updatePermissionState(
-        isDenied = permissionState.status is PermissionStatus.Denied
-      )
+      classicChrome?.permissionDenied = permissionState.status is PermissionStatus.Denied
+    }
+    DisposableEffect(Unit) {
+      onDispose { classicChrome?.permissionDenied = false }
     }
 
     // Lifecycle observer for refresh
@@ -319,7 +320,7 @@ object FolderListScreen : Screen {
       onExpandedChange = { isFabExpanded.value = it },
     )
 
-    Scaffold(
+    app.marlboroadvance.mpvex.ui.browser.components.ClassicPageScaffold(
       topBar = {
         if (isSearching) {
           SearchBar(
@@ -452,7 +453,7 @@ object FolderListScreen : Screen {
             ) {
               ToggleFloatingActionButton(
                 modifier = Modifier.animateFloatingActionButton(
-                  visible = !selectionManager.isInSelectionMode && isFabVisible.value && !app.marlboroadvance.mpvex.ui.browser.MainScreen.getPermissionDeniedState(),
+                  visible = !selectionManager.isInSelectionMode && isFabVisible.value && classicChrome?.permissionDenied != true,
                   alignment = Alignment.BottomEnd,
                 ),
                 checked = isFabExpanded.value,

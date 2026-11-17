@@ -2656,6 +2656,37 @@ object EmbyClient {
       EmbyLog.warn("fetchIsAdmin 失败：${it.message} —— 保守当作无权限（写作能力会被禁掉）", it)
     }.getOrDefault(false)
 
+  // ─── Smart Merge：Emby 原生多版本组合 / 拆分 ───
+
+  /**
+   * 管理员：把多个条目组合成 Emby 原生多版本。
+   *
+   * 官方 `POST /Videos/MergeVersions?Ids=...`，200 响应是**空 body**，没有结果对象；
+   * 官方不承诺主项目、ItemId 与元数据归属，调用方必须重新查询验证。
+   */
+  fun mergeVersions(server: EmbyServer, ids: List<String>) {
+    require(ids.size >= 2) { "至少需要两个 ItemId" }
+    val request =
+      authedRequest(
+        server,
+        "/Videos/MergeVersions",
+        mapOf("Ids" to ids.distinct().joinToString(",")),
+      ).post("".toRequestBody(null)).build()
+    execString(request)
+  }
+
+  /**
+   * 管理员：移除备用视频源（Emby Web 的 Split Versions Apart 很可能走这条）。
+   *
+   * ⚠️ 官方描述只有 "Removes alternate video sources."，没有承诺不删除文件、也不承诺
+   * 恢复原 ItemId。调用前必须已完成测试服验证；未验证时不要把它做成「一键回退」。
+   */
+  fun removeAlternateSources(server: EmbyServer, itemId: String) {
+    val request =
+      authedRequest(server, "/Videos/$itemId/AlternateSources").delete().build()
+    execString(request)
+  }
+
   /** 服务端定时任务清单（找「刷新人员」用） */
   fun getScheduledTasks(server: EmbyServer): List<EmbyScheduledTask> =
     runCatching { getJson<List<EmbyScheduledTask>>(server, "/ScheduledTasks") }

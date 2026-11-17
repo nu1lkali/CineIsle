@@ -28,6 +28,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleLanguage
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleInfo
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSourceType
+import app.marlboroadvance.mpvex.ui.player.subtitle.ExternalSubtitleArchive
 import app.marlboroadvance.mpvex.ui.player.subtitle.SubtitleBindings
 import app.marlboroadvance.mpvex.ui.player.subtitle.emby.EmbySubtitleController
 import app.marlboroadvance.mpvex.utils.media.ChecksumUtils
@@ -612,6 +613,12 @@ class PlayerViewModel(
   val isVerticalFlipped: StateFlow<Boolean> = _isVerticalFlipped.asStateFlow()
 
   init {
+    // 预热公共字幕归档的文件名缓存：重装后第一次播放就能按片名找回手动字幕，
+    // 同时让 hasBoundSubtitle() 不必在主线程查 MediaStore。
+    viewModelScope.launch(Dispatchers.IO) {
+      ExternalSubtitleArchive.preload(host.context.applicationContext)
+    }
+
     // Track selection is now handled by TrackSelector in PlayerActivity
     
     // Restore repeat mode and shuffle state from preferences
@@ -766,6 +773,26 @@ class PlayerViewModel(
   }
 
   /**
+   * 把用户手动选择的外挂字幕复制到公共归档（`Download/CineIsle/Subtitles`）。
+   *
+   * 只服务于「重装 app 后还能找回」：SharedPreferences 里的绑定和 `content://`
+   * 持久权限都会在卸载时失效，而公共目录里的文件不会。失败只记日志，不影响
+   * 本次已经挂上的字幕。
+   */
+  fun archiveExternalSubtitle(uri: Uri) {
+    val title = currentMediaTitle
+    if (title.isBlank()) return
+    viewModelScope.launch(Dispatchers.IO) {
+      val saved = ExternalSubtitleArchive.archive(host.context.applicationContext, title, uri)
+      if (saved == null) {
+        Log.w("PlayerViewModel", "手动字幕未归档（重装后需重新选择）：$title")
+      } else {
+        Log.i("PlayerViewModel", "手动字幕已归档，可跨重装恢复：$title")
+      }
+    }
+  }
+
+  /**
    * 把外挂字幕真正交给 mpv，**在调用方协程里顺序执行**。
    *
    * 与 [addSubtitle] 的唯一区别是「这里是挂起函数」：返回时 `sub-add` 命令已经下发。
@@ -863,9 +890,14 @@ class PlayerViewModel(
   }
 
   /**
-   * 恢复「这部片子上次手动绑定的外挂字幕」。
+   * 恢复「这部片子上次手动选择的外挂字幕」。
    *
-   * 绑定关系由 [SubtitleBindings] 落在偏好存储里，进程被杀、设备重启都还在。
+   * 两级来源，优先级从高到低：
+   * 1. [SubtitleBindings] 的偏好绑定（同一台设备、未重装时最精确，指向用户原来的文件）；
+   * 2. [ExternalSubtitleArchive] 的公共归档（`Download/CineIsle/Subtitles`）——
+   *    **重装应用后偏好被清空、原 `content://` 权限失效时**，仍能按片名找回。
+   *
+   * 从归档恢复成功后会补写一条绑定，后续切集 / 重进不再重复走查询。
    *
    * ⚠️ 必须等 mpv 真的把媒体加载起来再 `sub-add`：`loadfile` 还没完成时发过去的字幕会被丢掉
    * （轨道列表还是空的）。所以先轮询 `track-list/count`，最多等 8 秒；超时就放弃本次恢复 ——
@@ -876,15 +908,42 @@ class PlayerViewModel(
   private fun restoreBoundSubtitle(mediaTitle: String) {
     val bound = runCatching { SubtitleBindings.find(subtitlesPreferences, mediaTitle) }.getOrNull()
     boundSubtitleApplied = false
-    if (bound.isNullOrBlank()) return
     viewModelScope.launch {
+      // 偏好绑定为空（典型：重装后）⇒ 先查公共归档。归档查找是磁盘 IO，放 IO 线程。
+      val archived =
+        if (bound.isNullOrBlank()) {
+          withContext(Dispatchers.IO) {
+            ExternalSubtitleArchive.find(host.context.applicationContext, mediaTitle)?.toString()
+          }
+        } else {
+          null
+        }
+      val source = bound?.takeIf { it.isNotBlank() } ?: archived
+      if (source.isNullOrBlank()) return@launch
+      // 升级前就已经存在的绑定：顺手补一份公共归档，避免用户这次不重新选择、
+      // 下次重装又丢。已有归档则不重复复制（find 走一次轻量查询）。
+      if (!bound.isNullOrBlank() && !ExternalSubtitleArchive.hasKnown(mediaTitle)) {
+        withContext(Dispatchers.IO) {
+          if (ExternalSubtitleArchive.find(host.context.applicationContext, mediaTitle) == null) {
+            runCatching { Uri.parse(bound) }
+              .getOrNull()
+              ?.let { ExternalSubtitleArchive.archive(host.context.applicationContext, mediaTitle, it) }
+          }
+        }
+      }
+      if (bound.isNullOrBlank() && !archived.isNullOrBlank()) {
+        // 重装恢复：补回偏好绑定，后续逻辑（Emby 自动选择 / hasBoundSubtitle）立刻看得见。
+        runCatching { SubtitleBindings.bind(subtitlesPreferences, mediaTitle, archived) }
+        Log.i("PlayerViewModel", "manual subtitle restored from archive: $mediaTitle")
+      }
+
       var waited = 0L
       while (waited < 8_000L && (PlayerLib.getPropertyInt("track-list/count") ?: 0) <= 0) {
         delay(120)
         waited += 120
       }
       // ⚠️ 这 8 秒里用户可能已经切集 / 换片（setMediaTitle 又被调了一次）：
-      // 这时手上的 bound 属于上一集，继续挂就是把上一集的字幕挂到新一集上。
+      // 这时手上的 source 属于上一集，继续挂就是把上一集的字幕挂到新一集上。
       if (currentMediaTitle != mediaTitle) {
         Log.d("PlayerViewModel", "bound restore aborted: media changed to $currentMediaTitle")
         return@launch
@@ -892,17 +951,17 @@ class PlayerViewModel(
       // 目录扫描可能已经把它以 `auto` 方式加进轨道（select = false）。那种情况下清单里
       // 已经有这条字幕，只是没选中；此时再走 loadSubtitle 会被「已跟踪」直接挡回去，
       // 表现成「字幕在列表里但画面上没有」。所以先查轨道，能查到就直接选中。
-      val existing = findSubtitleTrackIdOf(bound)
+      val existing = findSubtitleTrackIdOf(source)
       if (existing != null) {
         ensureSubtitleSelected(existing)
         boundSubtitleApplied = true
       } else {
-        val parsed = runCatching { Uri.parse(bound) }.getOrNull()
+        val parsed = runCatching { Uri.parse(source) }.getOrNull()
         if (parsed != null) {
           loadSubtitle(parsed, select = true, silent = true)
           // 走到这里说明没有现成轨道可选中，字幕是本次新挂上去的 —— 用「轨道里能查到」
           // 判断是否真的挂成功，而不是无条件置 true（否则加载失败也会挡住存档恢复）。
-          if (findSubtitleTrackIdOf(bound) != null) boundSubtitleApplied = true
+          if (findSubtitleTrackIdOf(source) != null) boundSubtitleApplied = true
         }
       }
       if (boundSubtitleApplied) {
@@ -911,11 +970,13 @@ class PlayerViewModel(
     }
   }
 
-  /** 这部片子有没有「用户亲手挑过」的外挂字幕绑定（不看能否挂成功，只看有没有记）。 */
+  /** 这部片子有没有「用户亲手挑过」的外挂字幕（偏好绑定或公共归档任一存在即可）。 */
   fun hasBoundSubtitle(mediaTitle: String): Boolean {
     if (mediaTitle.isBlank()) return false
-    return runCatching { SubtitleBindings.find(subtitlesPreferences, mediaTitle) }.getOrNull()
-      .isNullOrBlank().not()
+    val bound =
+      runCatching { SubtitleBindings.find(subtitlesPreferences, mediaTitle) }.getOrNull()
+        ?.isNotBlank() == true
+    return bound || ExternalSubtitleArchive.hasKnown(mediaTitle)
   }
 
   /**
@@ -1047,6 +1108,11 @@ class PlayerViewModel(
       Log.i(EmbySubtitleController.TAG, "用户本次已手动操作过字幕，跳过自动挂载")
       return false
     }
+    if (boundSubtitleApplied) {
+      // 手动字幕（含重装后从归档恢复的那条）已经挂好，Emby 自动策略不得顶掉它。
+      Log.i(EmbySubtitleController.TAG, "手动字幕已恢复，跳过 Emby 自动挂载")
+      return false
+    }
     if (hasBoundSubtitle(currentMediaTitle)) {
       // 手动绑定是「精确选择」，比任何自动策略都准
       Log.i(EmbySubtitleController.TAG, "存在手动绑定字幕，跳过 Emby 自动挂载")
@@ -1166,7 +1232,13 @@ class PlayerViewModel(
     mediaTitleSnapshot: String,
   ): Boolean {
     // ── 内嵌轨：文件里本来就有，不需要下载，只要选中 ──
-    if (chosen.sourceType == SubtitleSourceType.EMBEDDED) {
+    // 内嵌图像字幕（PGS / DVD）同样属于「容器里已有」，优先让 mpv 原生渲染；
+    // 只有**外挂**图像字幕才需要问服务端要 .sup。误把内嵌 PGS 当外挂下载，
+    // 既多一次不必要的请求，也会丢掉原生渲染。
+    val isEmbeddedTrack =
+      chosen.sourceType == SubtitleSourceType.EMBEDDED ||
+        (chosen.sourceType == SubtitleSourceType.IMAGE_BASED && !chosen.isExternal)
+    if (isEmbeddedTrack) {
       val selected = selectEmbeddedTrack(chosen)
       Log.i(
         EmbySubtitleController.TAG,
@@ -1337,28 +1409,72 @@ class PlayerViewModel(
         }
     }
 
-  /** 按语言把内嵌字幕轨选中（Emby 的元数据比 mpv 的 `lang` 可靠，用它做判据） */
+  /**
+   * 把 Emby 选中的内嵌字幕轨挂到 mpv 上。
+   *
+   * 匹配顺序（从最精确到兜底）：
+   * 1. **`ff-index` 等于 Emby 的 `MediaStreams[].Index`** —— 这两种索引同源于 ffmpeg
+   *    流序号，直连播放时通常一一对应。同一语言有简繁两条、mpv 的 `lang` 又都只写
+   *    `chi` 时，只有这一层能选对；
+   * 2. 语言 + 标题归一化后能够匹配（`lang` / `title` 里带脚本线索）；
+   * 3. 只按语言匹配（老服务端 / 转码流不暴露 ff-index 时的兜底）。
+   *
+   * 只用 Emby 元数据「找轨道」，选中仍走 [ensureSubtitleSelected]，并且只挑
+   * **内嵌**轨 —— 外挂轨由 [applyEmbySubtitle] 的下载路径负责。
+   */
   private suspend fun selectEmbeddedTrack(chosen: SubtitleInfo): Boolean = withContext(Dispatchers.Main) {
-    var selected = false
-    runCatching {
+    val candidates = runCatching {
       val count = PlayerLib.getPropertyInt("track-list/count") ?: 0
-      for (i in 0 until count) {
-        if (PlayerLib.getPropertyString("track-list/$i/type") != "sub") continue
-        if (PlayerLib.getPropertyBoolean("track-list/$i/external") == true) continue
-        val key = EmbySubtitleLanguage.resolve(
-          PlayerLib.getPropertyString("track-list/$i/lang"),
-          PlayerLib.getPropertyString("track-list/$i/title"),
+      (0 until count).mapNotNull { i ->
+        if (PlayerLib.getPropertyString("track-list/$i/type") != "sub") return@mapNotNull null
+        if (PlayerLib.getPropertyBoolean("track-list/$i/external") == true) return@mapNotNull null
+        EmbeddedTrackCandidate(
+          id = PlayerLib.getPropertyInt("track-list/$i/id") ?: return@mapNotNull null,
+          ffIndex = PlayerLib.getPropertyInt("track-list/$i/ff-index"),
+          lang = PlayerLib.getPropertyString("track-list/$i/lang"),
+          title = PlayerLib.getPropertyString("track-list/$i/title"),
         )
-        if (key == EmbySubtitleLanguage.UNKNOWN) continue
-        if (key != chosen.languageKey && !EmbySubtitleLanguage.matches(chosen.languageKey, key)) continue
-        val id = PlayerLib.getPropertyInt("track-list/$i/id") ?: continue
-        ensureSubtitleSelected(id)
-        selected = true
-        break
       }
+    }.getOrDefault(emptyList())
+    if (candidates.isEmpty()) return@withContext false
+
+    // ① ff-index 精确对应（同语言多条时唯一定位）
+    candidates.firstOrNull { it.ffIndex != null && it.ffIndex == chosen.streamIndex }?.let { exact ->
+      ensureSubtitleSelected(exact.id)
+      Log.i(
+        EmbySubtitleController.TAG,
+        "内嵌字幕按 ff-index 精确选中：${chosen.describe()} ff-index=${exact.ffIndex}",
+      )
+      return@withContext true
     }
-    selected
+
+    // ② 语言 + 标题线索；③ 仅语言
+    val matches = candidates.filter { candidate ->
+      val key = EmbySubtitleLanguage.resolve(candidate.lang, candidate.title)
+      key != EmbySubtitleLanguage.UNKNOWN &&
+        (key == chosen.languageKey || EmbySubtitleLanguage.matches(chosen.languageKey, key))
+    }
+    val picked = matches.firstOrNull { candidate ->
+      val key = EmbySubtitleLanguage.resolve(candidate.lang, candidate.title)
+      key == chosen.languageKey
+    } ?: matches.firstOrNull()
+    picked?.let {
+      ensureSubtitleSelected(it.id)
+      Log.i(
+        EmbySubtitleController.TAG,
+        "内嵌字幕按语言选中：${chosen.describe()} trackId=${it.id} ff-index=${it.ffIndex}",
+      )
+      return@withContext true
+    }
+    false
   }
+
+  private data class EmbeddedTrackCandidate(
+    val id: Int,
+    val ffIndex: Int?,
+    val lang: String?,
+    val title: String?,
+  )
 
   private suspend fun trackCountOnMain(): Int =
     withContext(Dispatchers.Main) { PlayerLib.getPropertyInt("track-list/count") ?: 0 }

@@ -272,6 +272,10 @@ class FeedViewModel(
     positionSec = snapshot.positionMs / 1000.0
     paused = !snapshot.playing
     buffered = snapshot.frameVisible
+    // 画面已经真的上屏 ⇒ 之前那条「无法播放 / 容器不认识」必然已经过期。
+    // 典型来源：相邻页预加载失败、旧实例的迟到回调、或容器错误发生时其实仍有画面。
+    // 不在这里清掉的话，错误卡片会永久叠在一条正常播放的视频上。
+    if (snapshot.frameVisible) errors.remove(index)
   }
 
   /**

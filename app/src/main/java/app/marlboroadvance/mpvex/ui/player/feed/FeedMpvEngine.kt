@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.player.feed
 import android.content.Context
 import android.util.Log
 import android.view.LayoutInflater
+import android.view.SurfaceHolder
 import android.view.View
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
@@ -52,8 +53,21 @@ internal class FeedMpvEngine(
   /** 初始化走到了不可恢复的失败 —— 不再重试，避免反复碰 native */
   private var broken = false
 
-  /** 当前交给 mpv 的地址（同一地址重复 [play] 直接忽略，防止无谓的重新打开） */
+  /** 当前**期望**交给 mpv 的地址（同一地址重复 [play] 直接忽略，防止无谓的重新打开） */
   private var currentUrl: String? = null
+
+  /** 已经真正下发过 `loadfile` 的地址。与 [currentUrl] 分开，避免「点名了但没加载」被误判成已在播。 */
+  private var loadedUrl: String? = null
+
+  /**
+   * Surface 是否已经由 AAR 的 `surfaceCreated` attach 完成。
+   *
+   * ⚠️ 不能只看 `Surface.isValid`：从 GONE → VISIBLE 时，Surface 可能先变成 valid，
+   * 而 `MPVView.surfaceCreated` 还没来得及 `attachSurface` / 恢复 `vo`。这时如果提前
+   * `loadfile`，命令会落在一块尚未 attach 的输出面上 —— 画面停在旧帧，后续条目全部
+   * 「加载了但不出画面」。我们的回调注册在 AAR 之后，所以这里置 true 时 attach 必已完成。
+   */
+  private var surfaceAttached = false
 
   /**
    * 已经点名、但**还没送进 mpv** 的地址。
@@ -115,9 +129,62 @@ internal class FeedMpvEngine(
 
     mpvView = view
     host = root
+    // ⚠️ **必须覆盖 AAR 的 `idle=once`。**
+    // `BaseMPVView.initialize()` 在 `init()` / `postInitOptions()` 之后无条件执行
+    // `setOptionString("idle", "once")` —— 这是给 PlayerActivity「只放一个文件」的语义：
+    // 第一条结束 / stop 后 mpv 进入一次性 idle，播放循环随即收尾。视界流是同一个
+    // mpv 实例连续放多条，后续 `loadfile` 看似下发成功，实际不会再起播，画面就停在
+    // 第一条的最后一帧（用户看到的「卡在第一帧」）。
+    // AAR 用 setOptionString 在 init 后写，我们同样在 initialize 返回后写回去。
+    runCatching { MPVLib.setOptionString("idle", "yes") }
+    // 某些 AAR 版本会把 idle 暴露成运行期属性 / 只认 command；三条都尝试，
+    // 失败不影响主路径（至少不会比 AAR 的 once 更差）。
+    runCatching { MPVLib.setPropertyString("idle", "yes") }
+    runCatching { MPVLib.command("set", "idle", "yes") }
+    Log.i(
+      "FeedMpv",
+      "idle=" + runCatching { MPVLib.getPropertyString("idle") }.getOrNull(),
+    )
+
     // 记下 initOptions 选定的输出（见 [voName] 的说明）：surfaceDestroyed 会把它
     // 置成 null，而我们不会走 AAR 那条「无待加载文件才恢复」的分支。
     voName = runCatching { MPVLib.getPropertyString("vo") }.getOrNull()
+
+    // ⚠️ 这个回调必须加在 AAR 的 `initialize()` **之后**：AAR 在 initialize 里把自己
+    // 注册为 SurfaceHolder.Callback，surfaceCreated 时先 attachSurface、恢复 vo；
+    // 我们后注册，才能在这一刻安全地补一次 pump。只靠 250ms 心跳也能起播，但
+    // 隐藏/显示画面层会让 Surface 反复销毁重建，心跳那一刻可能还没 ready ——
+    // 后续条目切到 mpv 时就会一直等不到 `loadfile`。在 surfaceCreated 里立刻补载，
+    // 起播时机与 Surface 生命周期对齐，不依赖轮询相位。
+    runCatching {
+      view.holder.addCallback(
+        object : SurfaceHolder.Callback {
+          override fun surfaceCreated(holder: SurfaceHolder) {
+            // AAR 的 callback 先注册、先执行：走到这里 attachSurface 与 vo 恢复都已完成。
+            surfaceAttached = true
+            pump()
+          }
+
+          override fun surfaceChanged(
+            holder: SurfaceHolder,
+            format: Int,
+            width: Int,
+            height: Int,
+          ) {
+            surfaceAttached = true
+            pump()
+          }
+
+          override fun surfaceDestroyed(holder: SurfaceHolder) {
+            surfaceAttached = false
+          }
+        },
+      )
+    }.onFailure { Log.w("FeedMpv", "surface callback setup failed: ${it.message}") }
+
+    // 回调注册时 Surface 可能已经创建过（例如后台恢复）；AAR 的 callback 先注册，
+    // 此时 attach 已完成，可以直接认为可用。真正销毁时 surfaceDestroyed 会置回 false。
+    surfaceAttached = runCatching { view.holder.surface.isValid }.getOrDefault(false)
 
     // ④ `keep-open` 保持 MPVView.initOptions 里的 true（不要改成 false）：
     //    到片尾时 mpv 停在最后一帧、`eof-reached` 一直为真，[reachedEnd] 才有稳定的
@@ -147,14 +214,27 @@ internal class FeedMpvEngine(
   /** 开始播 [url]（同一地址重复调用无副作用） */
   fun play(url: String) {
     if (mpvView == null) return
-    if (url == currentUrl) {
-      // 已经在放这一条（从别的条目滑回来时会被再次调用）：只把暂停解掉
+    if (url == currentUrl && pendingUrl == null && loadedUrl == url) {
+      // 已经真正加载过这一条（从别的条目滑回来时会被再次调用）：只把暂停解掉
       runCatching { MPVLib.setPropertyBoolean("pause", false) }
       return
     }
     currentUrl = url
     pendingUrl = url
     // 立刻试一次：多数时候画面层早就 attach 好了（滑回来、重载都是在同一层上）
+    pump()
+  }
+
+  /**
+   * 重新下发当前地址。
+   *
+   * 用于「已经发过 loadfile，但迟迟没有 duration / 画面」的看门狗：清掉 loadedUrl
+   * 让 [play] 的幂等判断不再挡住重试，再由 [pump] 重新加载。
+   */
+  fun retryCurrent() {
+    val url = currentUrl ?: return
+    loadedUrl = null
+    pendingUrl = url
     pump()
   }
 
@@ -179,6 +259,9 @@ internal class FeedMpvEngine(
   fun pump() {
     val view = mpvView ?: return
     val url = pendingUrl ?: return
+    // ⚠️ 必须同时满足：Surface 已 attach（AAR 已完成）且当前 surface 有效。
+    // 只看 isValid 会在 GONE → VISIBLE 的瞬间把 loadfile 发给尚未 attach 的输出面。
+    if (!surfaceAttached) return
     val surfaceReady = runCatching { view.holder?.surface?.isValid == true }.getOrDefault(false)
     if (!surfaceReady) return
     // ① 先把 vo 恢复回来：surfaceDestroyed 会把 vo 与 force-window 一起关掉，
@@ -188,7 +271,12 @@ internal class FeedMpvEngine(
     // ② `replace` 而不是默认的追加：这里是「一屏一条」的语义，不留队列
     runCatching { MPVLib.command("loadfile", url, "replace") }
     runCatching { MPVLib.setPropertyBoolean("pause", false) }
-    Log.w("FeedMpv", "loadfile: $url")
+    loadedUrl = url
+    Log.w(
+      "FeedMpv",
+      "loadfile: $url (vo=${MPVLib.getPropertyString("vo")}, " +
+        "attached=$surfaceAttached, valid=$surfaceReady)",
+    )
   }
 
   /**
@@ -226,13 +314,34 @@ internal class FeedMpvEngine(
    * 被裁掉），表面就绪却拿不到时长才是**源**的问题。两者的错误文案不该一样。
    */
   fun surfaceReady(): Boolean =
-    runCatching { mpvView?.holder?.surface?.isValid == true }.getOrDefault(false)
+    surfaceAttached &&
+      runCatching { mpvView?.holder?.surface?.isValid == true }.getOrDefault(false)
+
+  /** 出问题时打一行可读状态：idle / 当前文件 / 时长 / vo / pause / eof。 */
+  fun debugState(): String =
+    if (mpvView == null) {
+      "engine=null"
+    } else {
+      runCatching {
+        buildString {
+          append("idle=").append(MPVLib.getPropertyString("idle"))
+          append(", path=").append(MPVLib.getPropertyString("path"))
+          append(", dur=").append(MPVLib.getPropertyDouble("duration"))
+          append(", vo=").append(MPVLib.getPropertyString("vo"))
+          append(", pause=").append(MPVLib.getPropertyBoolean("pause"))
+          append(", eof=").append(MPVLib.getPropertyBoolean("eof-reached"))
+          append(", attached=").append(surfaceAttached)
+          append(", valid=").append(surfaceReady())
+        }
+      }.getOrDefault("engine=error")
+    }
 
   /** 停止播放并把内核置回空闲（滑走时调用：声音必须立刻停） */
   fun stop() {
     if (mpvView == null) return
     currentUrl = null
     pendingUrl = null
+    loadedUrl = null
     runCatching { MPVLib.command("stop") }
   }
 

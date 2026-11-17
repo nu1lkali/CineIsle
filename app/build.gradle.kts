@@ -3280,8 +3280,109 @@ android {
     //  · 选择规则补齐「只剩一种可能」兜底：SINGLE_ONLY（只有一条可用）/ ONLY_LANGUAGE
     //    （多条但同属一种语言）；用户没配过任何语言偏好时按系统语言兜底（SYSTEM_LANGUAGE）。
     //    三者都受「跟随 Emby 默认」开关约束，关掉时仍保持关闭。
-    versionCode = 266
-    versionName = "1.6.22"
+    // 267 / 1.6.23：视界流错误卡与 Emby 字幕挂载收尾。
+    //  · 画面已上屏 / 已出过画面时清除陈旧错误卡：修复「视频正常播放、进度条可拖，
+    //    却叠着『无法播放：这个容器格式内置内核不认识』」；容器错误在有画面证据时只记日志。
+    //  · 内嵌字幕优先按 mpv `ff-index` == Emby `MediaStreams[].Index` 精确选中，
+    //    同语言简繁多条时不再按语言瞎猜；语言/标题匹配退为兜底。
+    //  · 同语言候选优先文本字幕而不是 PGS/DVD 图像字幕；内嵌图像字幕走原生轨道，
+    //    不再误当外挂 `.sup` 下载。
+    // 268 / 1.6.24：切集字幕串片修复（上一集外挂字幕被带到下一条）。
+    //  · loadPlaylistItemInternal / onNewIntent 换媒体时，在 loadfile **之前**
+    //    关闭 sid/secondary-sid、对 external 字幕轨下发 sub-remove，并清应用层
+    //    外挂字幕账本与 Emby 自动挂载状态；下一条自己的字幕随后正常恢复。
+    //  · 同时包含 1.6.23 的视界流错误卡清理、内嵌字幕 ff-index 精确匹配、
+    //    文本优先于图像、内嵌 PGS 走原生轨道。
+    // 269 / 1.6.25：详情页媒体信息卡改为固定展开的摘要卡。
+    //  · 去掉收起 / 展开交互；只保留分辨率、视频编码、音频、容器、大小、总码率、
+    //    文件路径与字幕概况，完整轨道信息仍在播放页「媒体信息」里。
+    //  · 摘要组装抽到 domain/emby/EmbyMediaInfo.kt（buildEmbyMediaInfoSummary），
+    //    UI 不再自己格式化；路径保留并可长按复制。
+    // 270 / 1.6.26：手动外挂字幕跨重装恢复。
+    //  · 根因：SubtitleBindings 存 SharedPreferences，卸载即清空；原 content:// 的
+    //    持久读权限也随卸载失效。
+    //  · 用户手动添加/选择字幕时，额外复制到公共 Download/CineIsle/Subtitles，
+    //    文件名 = 归一化片名 + 片名哈希（稳定、可重算）；重装后按同一片名找回并重挂，
+    //    找到后补写绑定，后续不再走磁盘查询。
+    //  · Emby 自动选择遇到已恢复的手动字幕会主动让位；VobSub 的 idx+sub 成对文件不归档。
+    // 271 / 1.6.27：补齐两项收尾。
+    //  · 升级前就已存在的字幕绑定：首次播放时顺手补一份公共归档，用户不必为了
+    //    「下次重装不丢」而重新选一遍字幕。
+    //  · 增加了「所有文件访问」时直接写公共 Downloads（重装后不依赖 MediaStore 归属
+    //    记录）；无该权限时仍回退 MediaStore。hasBoundSubtitle 同时认归档。
+    // 272 / 1.6.28：视界流 mpv 兜底「第一条能放、后续全卡住」。
+    //  · 根因 ①：mpv 画面层的 `mpvVisible` 只在 AndroidView.update（布局阶段）里读取，
+    //    组合期不读 ⇒ 后续条目再交给 mpv 时不会重组，画面层一直 GONE / Surface 未恢复，
+    //    pump() 永远等不到 surface.isValid。改为组合期读取并把可见性固化进 update。
+    //  · 根因 ②：Surface 重建后只靠 250ms 心跳补 loadfile；现在在 SurfaceHolder
+    //    surfaceCreated/Changed 里立刻 pump，起播时机与 Surface 生命周期对齐。
+    //  · 自动续播动画经过中间页时，若 mpv 正在服务目标页则不再误停；落定后 sync 仍会自愈。
+    // 273 / 1.6.29：Classic UI 重构 P0（纯内部结构，视觉不变）。
+    //  · ClassicChromeState / LocalClassicChrome 取代 MainScreen 单例上的选择态、
+    //    导航栏可见性与权限态；页面级读写，离开自动恢复，不再跨 Tab 泄漏。
+    //  · ClassicPageScaffold 统一外壳与 SnackbarHost；已迁移最近播放 / 文件夹 / 视频列表。
+    //  · EmbyDetailContentState / EmbyLibraryFilterUiState / EmbyLibraryContentState
+    //    把详情与媒体库的数据/筛选状态从巨型 Composable 里收口；媒体库缓存 key
+    //    与持久化 JSON 保持逐字节兼容，新增单测钉住。
+    // 274 / 1.6.30：视界流 mpv 兜底「后续条目卡在第一条首帧」的真正根因。
+    //  · BaseMPVView.initialize() 在 init 后硬编码 idle=once —— 单文件播放页语义。
+    //    第一条结束 / stop 后 mpv 进入一次性 idle，后续 loadfile 看似下发但不再起播，
+    //    画面停在第一条的帧上。FeedMpvEngine 在 initialize 后覆盖为 idle=yes。
+    //  · 新增 surfaceAttached 门禁：不再在 GONE→VISIBLE 的瞬间、AAR attachSurface
+    //    之前把 loadfile 发给未接好的输出面。
+    //  · 切换到另一条 mpv 条目时先显式 stop，再 loadfile；4 秒无时长/画面自动重载一次。
+    //  · 设置页导航入口收口到 SettingsRegistry（第一批，视觉不变）。
+    // 275 / 1.6.31：Classic UI P1 第一批。
+    //  · 首页三块数据（媒体库 / 继续观看 / 最新加入）各自保留错误，在原位置给重试，
+    //    不再因为其中一块失败就静默消失；整页空态不再掩盖分区错误。
+    //  · SettingsRegistry 合并进设置搜索索引：导航入口的页面、标题、摘要、关键词
+    //    与设置页实际渲染同源，避免「页面有、搜索没有」。
+    // 276 / 1.6.32：MediaBrowser 页面外壳统一（第一批）。
+    //  · 本地文件浏览 / 网络浏览 / 网络首页 / 播放列表 / 播放列表详情迁到
+    //    ClassicPageScaffold，统一 SnackbarHost 与页面外壳。
+    //  · 为后续 BrowserSource / 共享条目操作模型提供统一落点。
+    // 277 / 1.6.33：Smart Merge 实验性 MVP。
+    //  · 扫描媒体库 → 番号/版本特征 → 候选/置信度/冲突 → 手动匹配。
+    //  · 合并前快照 + POST /Videos/MergeVersions + 重新查询验证 + JSON 历史账本。
+    //  · 拆分接口在阶段 0 验证前强制禁用（SMART_MERGE_SPLIT_VERIFIED=false）。
+    // 278 / 1.6.34：Smart Merge UI v2 + 安全修复。
+    //  · 概览/待处理/历史三页；扫描设置改为底部抽屉，媒体库用 FlowRow（不横向滚动），
+    //    支持全选/反选/清空；智能规则可勾选 ProviderIds/标题/演员/时长/最低分。
+    //  · 候选/预览带封面；支持非全屏 ExoPlayer 小窗预览，可随时关闭返回。
+    //  · 已合并/已忽略候选从待处理列表移除，Manager 再校验原始 ItemId 与多版本状态，
+    //    防止确认过的组合被重复合并。
+    //  · 记录 Emby 实际返回的版本名；UI 显示完整番号 + 版本特征，并提示 Emby 会剥离
+    //    文件名公共前缀（DGCEMD-229-4K → 229-4K）是服务端命名行为。
+    // 279 / 1.6.35：Smart Merge 全屏详情与手动匹配。
+    //  · 手动匹配改为全屏页式对话框：完整显示封面/番号/版本/分辨率/编码/时长/
+    //    ProviderIds/路径/ItemId，底部固定创建候选。
+    //  · 候选详情改为全屏：每条一张完整卡片；底部「忽略 / 预览合并 / 直接合并」，
+    //    直接合并仍走独立确认弹窗。
+    //  · 扫描支持暂停/继续；候选可移除单个条目；历史支持按番号/标题/ItemId 搜索。
+    // 280 / 1.6.36：手动组合清单 + 版本名补全 + 长路径完整显示。
+    //  · 手动匹配改为「待处理清单」：可以分多次搜索 A / B / C 逐个加入，
+    //    清单跨搜索保留，最后一次性组合为候选；支持查看/移除/清空。
+    //  · 手动组合增加护栏：番号不同、混入已多版本条目会标冲突并封顶 69 分；
+    //    重复条目自动去重，已有完全相同的候选时不再重复生成。
+    //  · Emby 详情页版本下拉显示完整规格（分辨率/编码/HDR/音频/容器/体积/码率），
+    //    并支持铅笔手动补全版本名（只存本机，不写 Emby）。
+    //  · Smart Merge 小窗预览：背景高斯模糊（Android 12+ 跨窗口模糊），
+    //    顶部下拉框直接切换候选版本，不用关窗再点下一条。
+    //  · 详情页媒体信息里的文件路径不再 2 行截断，.strm 长路径完整换行显示。
+    // 281 / 1.6.37：修复小窗背景模糊不生效、手动组合点了没反应。
+    //  · 模糊窗口改为沿 View 树找 DialogWindowProvider，窗口铺满全屏、
+    //    attach 后再设 FLAG_BLUR_BEHIND + LayoutParams/setBackgroundBlurRadius；
+    //    低版本用更浓的遮罩兜底。
+    //  · 小窗版本切换从一排 chip 改成下拉框（与详情页一致，长名字也放得下）。
+    //  · 「组合为候选」失败原因直接显示在弹窗内（全屏 Dialog 会盖住 Snackbar）；
+    //    已有完全相同的候选时视为成功，清空清单并跳到待处理。
+    // 282 / 1.6.38：自绘模糊遮罩 + 版本选择底部抽屉。
+    //  · 系统跨窗口模糊在部分机型/系统版本不生效，改为打开小窗时截取当前画面，
+    //    缩小到 1/12 后做两遍盒式模糊再放大铺满；任何系统版本都能看到模糊遮罩。
+    //  · Emby 详情页与小窗的版本选择从下拉菜单改成底部抽屉：分辨率角标 +
+    //    编码/HDR/音频/容器/体积/码率标签 + 本机名称 + 文件名，数据完整且不拥挤。
+    versionCode = 282
+    versionName = "1.6.38"
 
     vectorDrawables {
       useSupportLibrary = true

@@ -74,7 +74,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -676,7 +675,7 @@ data class NetworkBrowserScreen(
     //    就永远顶不到屏幕顶端 —— 只能排到 Scaffold 之后（同一个 Box 里后画的在上）。
     //    （下面 Scaffold 那一大块没有重新缩进：重排等于整文件重写，风险远大于收益。）
     Box(modifier = Modifier.fillMaxSize()) {
-    Scaffold(
+    app.marlboroadvance.mpvex.ui.browser.components.ClassicPageScaffold(
       topBar = {
         BrowserTopBar(
           // 顶栏标题 = **当前文件夹名**（根目录退化为连接名）。

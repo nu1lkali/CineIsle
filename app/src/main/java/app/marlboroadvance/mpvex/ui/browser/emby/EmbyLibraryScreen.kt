@@ -486,23 +486,22 @@ data class EmbyLibraryScreen(
     // （下面那些 selected* 筛选项是**跨会话**语义，走 SharedPreferences 落盘，
     //  与这里的 saveable 是互补的两层，别混。）
     var showFilterDialog by rememberSaveable { mutableStateOf(false) }
-    var selectedGenres by remember(libraryId) { mutableStateOf(savedFilter.genres.toSet()) }
-    var selectedTags by remember(libraryId) { mutableStateOf(savedFilter.tags.toSet()) }
-    var selectedYears by remember(libraryId) { mutableStateOf(savedFilter.years.toSet()) }
-    var selectedRatings by remember(libraryId) {
-      mutableStateOf(savedFilter.officialRatings.toSet())
+    // 筛选条件收进一个状态容器；下面的 `by` 保持原来的字段名，页面其它引用零改动。
+    // 演员作品子页：initialPersonId 非空时直接把它当成已选中的人员筛选。
+    val filterState = remember(libraryId) {
+      EmbyLibraryFilterUiState(savedFilter, initialPersonId = personId)
     }
-    // 演员作品子页：personId 非空时直接把它当成已选中的人员筛选，
-    // 于是这一页进来就是「该演员在这一库里的作品」
-    var selectedPersonIds by remember(libraryId) {
-      mutableStateOf(personId?.let { setOf(it) } ?: savedFilter.personIds.toSet())
-    }
-    var selectedStudioIds by remember(libraryId) { mutableStateOf(savedFilter.studioIds.toSet()) }
-    var playedFilter by remember(libraryId) { mutableStateOf(savedFilter.isPlayed) }
-    var hdFilter by remember(libraryId) { mutableStateOf(savedFilter.isHD) }
-    var threeDFilter by remember(libraryId) { mutableStateOf(savedFilter.is3D) }
-    var subtitlesFilter by remember(libraryId) { mutableStateOf(savedFilter.hasSubtitles) }
-    var chineseSubsOnly by remember(libraryId) { mutableStateOf(savedFilter.chineseSubsOnly) }
+    var selectedGenres by filterState.genresState
+    var selectedTags by filterState.tagsState
+    var selectedYears by filterState.yearsState
+    var selectedRatings by filterState.officialRatingsState
+    var selectedPersonIds by filterState.personIdsState
+    var selectedStudioIds by filterState.studioIdsState
+    var playedFilter by filterState.isPlayedState
+    var hdFilter by filterState.isHDState
+    var threeDFilter by filterState.is3DState
+    var subtitlesFilter by filterState.hasSubtitlesState
+    var chineseSubsOnly by filterState.chineseSubsOnlyState
     // ── 「中文字幕」标记配置 ──
     // 标记列表存在偏好里（可编辑、可恢复默认），不写死在代码里。
     // 在 remember 里同步 configure（而不是 LaunchedEffect）：保证任何扫描开始之前
@@ -512,8 +511,8 @@ data class EmbyLibraryScreen(
       ChineseSubtitleMarks.fromJson(chineseMarksRaw).also { ChineseSubtitleFilter.configure(it) }
     }
     var showMarksEditor by remember { mutableStateOf(false) }
-    var minRating by remember(libraryId) { mutableStateOf(savedFilter.minRating) }
-    var favoriteOnly by remember(libraryId) { mutableStateOf(savedFilter.favoriteOnly) }
+    var minRating by filterState.minRatingState
+    var favoriteOnly by filterState.favoriteOnlyState
     // 该库实际出现过的可选项，进页面时拉一次
     var filterOptions by remember { mutableStateOf(EmbyFilterOptions()) }
 
@@ -531,30 +530,11 @@ data class EmbyLibraryScreen(
     var draftMinRating by remember(showFilterDialog) { mutableStateOf(minRating) }
     var draftFavorite by remember(showFilterDialog) { mutableStateOf(favoriteOnly) }
 
-    val hasActiveFilter =
-      selectedGenres.isNotEmpty() || selectedTags.isNotEmpty() ||
-        selectedYears.isNotEmpty() || selectedRatings.isNotEmpty() ||
-        selectedPersonIds.isNotEmpty() || selectedStudioIds.isNotEmpty() ||
-        playedFilter != null || hdFilter != null || threeDFilter != null ||
-        subtitlesFilter != null || chineseSubsOnly || minRating != null || favoriteOnly
+    val hasActiveFilter = !filterState.isEmpty
 
     /** 把当前筛选条件写回偏好，下次进这个库还带着 */
     fun persistFilter() {
-      val state = EmbyLibraryFilterState(
-        genres = selectedGenres.toList(),
-        tags = selectedTags.toList(),
-        years = selectedYears.toList(),
-        officialRatings = selectedRatings.toList(),
-        personIds = selectedPersonIds.toList(),
-        studioIds = selectedStudioIds.toList(),
-        isPlayed = playedFilter,
-        isHD = hdFilter,
-        is3D = threeDFilter,
-        hasSubtitles = subtitlesFilter,
-        chineseSubsOnly = chineseSubsOnly,
-        minRating = minRating,
-        favoriteOnly = favoriteOnly,
-      )
+      val state = filterState.snapshot()
       runCatching { browserPreferences.embyLibraryFilter(libraryId).set(Json.encodeToString(state)) }
     }
 
@@ -571,23 +551,13 @@ data class EmbyLibraryScreen(
       // 不进 key 会让两种页面互相复用同一桶缓存 —— 一边是这一层，一边是整个子树。
       "inh=${if (categoryInherited) 1 else 0}|" +
       "${if (chineseSubsOnly) "" else searchQuery}|" +
-      "g=${selectedGenres.sorted().joinToString(",")}|" +
-      "t=${selectedTags.sorted().joinToString(",")}|" +
-      "y=${selectedYears.sorted().joinToString(",")}|" +
-      "r=${selectedRatings.sorted().joinToString(",")}|" +
-      "p=${selectedPersonIds.sorted().joinToString(",")}|" +
-      "s=${selectedStudioIds.sorted().joinToString(",")}|" +
-      "played=$playedFilter|hd=$hdFilter|3d=$threeDFilter|sub=$subtitlesFilter|" +
-      "csub=$chineseSubsOnly|" +
-      // 标记配置也算条件：改了标记 / 匹配范围，命中结果就变了，必须重新扫
-      "cmarks=${chineseMarks.signature()}|" +
-      "m=$minRating|fav=$favoriteOnly|" +
-      // 搜索筛选也算条件：换类型的结果是另一批，不能复用同一桶缓存
-      "st=${searchFilters.map { it.name }.sorted().joinToString(",")}|" +
-      // 搜索范围也算条件：同一个词在「全库 / 仅本目录」下是两批结果，不能共用一个桶。
-      // 只在**搜索态**参与拼接 —— 浏览态的 key 必须与本轮改造前逐字节一致，
-      // 否则升级后旧缓存全部失效、每个库都要重拉一遍。
-      "scope=${if (searchQuery.isNotBlank() && searchLocalOnly) 1 else 0}"
+      // 筛选段的格式与旧实现逐字节一致（见 EmbyLibraryFilterUiState.cacheSignature）：
+      // 标记配置、搜索筛选、搜索范围都参与 key，浏览态不能因为这次重构而丢缓存。
+      filterState.cacheSignature(
+        chineseMarksSignature = chineseMarks.signature(),
+        searchFilterNames = searchFilters.map { it.name }.sorted().joinToString(","),
+        searchScope = if (searchQuery.isNotBlank() && searchLocalOnly) 1 else 0,
+      )
     val cachedEntry = remember(cacheKey) { EmbyLibraryCache.get(cacheKey) }
 
     // 搜索路径不从这里起值：搜索的「退出再进」由上面的快照（词+结果+滚动位置）回放，
@@ -605,20 +575,42 @@ data class EmbyLibraryScreen(
     //    或者先转一帧圈，用户看到的就是「返回后列表重新加载了一次」。
     //    标记只在这一趟为真，之后改词 / 切筛选照常按 cacheKey 从缓存或空集起值。
     val restoringSearch = pendingSearchRestore && searchQuery.isNotBlank()
-    var items by remember(cacheKey) {
-      mutableStateOf(
-        if (restoringSearch) restoredSearch?.items ?: emptyList() else cachedItems,
-      )
-    }
-    var totalCount by remember(cacheKey) {
-      mutableIntStateOf(
-        when {
+    // 列表数据收进一个状态容器：初始值仍由「搜索恢复 / 缓存 / 中文字幕」三种来源决定，
+    // 但只在这里算一次；下面用 by 委托保持原字段名。
+    val contentState = remember(cacheKey) {
+      EmbyLibraryContentState(
+        initialItems = if (restoringSearch) restoredSearch?.items ?: emptyList() else cachedItems,
+        initialTotalCount = when {
           restoringSearch -> restoredSearch?.totalCount ?: 0
           searchQuery.isBlank() || chineseSubsOnly -> cachedEntry?.totalCount ?: 0
           else -> 0
-        }
+        },
+        initialConsumedCount = when {
+          restoringSearch -> restoredSearch?.consumedCount ?: 0
+          searchQuery.isBlank() || chineseSubsOnly -> cachedEntry?.consumedCount ?: 0
+          else -> 0
+        },
+        initialIsLoading = when {
+          // 返回那一趟：数据已经随 items 一起落位，不该再转圈
+          restoringSearch -> false
+          // 中文字幕模式下仍在用扫完那份：有数据就不该再转圈
+          searchQuery.isBlank() || chineseSubsOnly ->
+            cachedEntry == null || cachedEntry.items.isEmpty()
+          else -> true
+        },
+        // 中文字幕模式下搜索也沿用扫完那份的命中记录：
+        // 否则卡片上「命中了哪个标记」的角标会在搜索时整片消失。
+        initialChineseHits =
+          if (searchQuery.isBlank() || chineseSubsOnly) {
+            cachedEntry?.hits ?: emptyMap()
+          } else {
+            emptyMap()
+          },
+        initialScanScanned = if (searchQuery.isBlank()) cachedEntry?.scannedCount ?: 0 else 0,
       )
     }
+    var items by contentState.itemsState
+    var totalCount by contentState.totalCountState
     // ── 分页游标（与 PagedList.consumed 同一口径）──
     // 服务端**实际返回过**多少条 —— 下一页的 StartIndex 只能用它，绝不能用 items.size：
     // 客户端过滤（幽灵条目 / distinctBy 去重 / 类型白名单）会让 items.size 小于真实消耗，
@@ -626,55 +618,26 @@ data class EmbyLibraryScreen(
     // items.size 冻结 ⇒ 同一个 StartIndex 被无限重拉 ⇒ 一直转圈还没响应
     // （十万级库里服务端混入重复 / 幽灵条目时必现）。缓存里一并存取：
     // 从缓存恢复列表时，续页游标也要跟着恢复，否则返回后续页会回到开头重拉。
-    var consumedCount by remember(cacheKey) {
-      mutableIntStateOf(
-        when {
-          restoringSearch -> restoredSearch?.consumedCount ?: 0
-          searchQuery.isBlank() || chineseSubsOnly -> cachedEntry?.consumedCount ?: 0
-          else -> 0
-        }
-      )
-    }
+    // 续页游标：服务端实际返回过多少条。绝不能用 items.size（客户端去重会让它偏小）。
+    var consumedCount by contentState.consumedCountState
     // 续页闸门：触底回调每个滚动帧都会评估，没有它会把同一页并发拉好几遍
     // （照片网格 loadingMore 同款教训）
-    var loadingMore by remember(cacheKey) { mutableStateOf(false) }
+    var loadingMore by contentState.loadingMoreState
     // ── 「演员」分类的独立数据 ──
     // 不走上面媒体那套分页 / 缓存 / 中文字幕扫描：/Persons 一次性把演员给全，
     // 既没有下一页要续拉，也没有字幕可扫。单独存一份，两条路径互不干扰。
-    var actorItems by remember(cacheKey) { mutableStateOf(emptyList<EmbyItem>()) }
-    var actorTotal by remember(cacheKey) { mutableIntStateOf(0) }
-    var actorLoading by remember(cacheKey) { mutableStateOf(false) }
-    var actorError by remember(cacheKey) { mutableStateOf<String?>(null) }
-    var isLoading by remember(cacheKey) {
-      mutableStateOf(
-        when {
-          // 返回那一趟：数据已经随 items 一起落位，不该再转圈
-          restoringSearch -> false
-          // 中文字幕模式下仍在用扫完那份：有数据就不该再转圈
-          searchQuery.isBlank() || chineseSubsOnly -> cachedEntry == null || cachedEntry.items.isEmpty()
-          else -> true
-        },
-      )
-    }
-    var error by remember(cacheKey) { mutableStateOf<String?>(null) }
+    var actorItems by contentState.actorItemsState
+    var actorTotal by contentState.actorTotalState
+    var actorLoading by contentState.actorLoadingState
+    var actorError by contentState.actorErrorState
+    var isLoading by contentState.isLoadingState
+    var error by contentState.errorState
     val isRefreshing = remember { mutableStateOf(false) }
     // itemId → 命中的「中文字幕」标记：列表卡片直接显示是哪条标记命中的
-    var chineseHits by remember(cacheKey) {
-      // 中文字幕模式下搜索也沿用扫完那份的命中记录：
-      // 否则卡片上「命中了哪个标记」的角标会在搜索时整片消失。
-      mutableStateOf(
-        if (searchQuery.isBlank() || chineseSubsOnly) {
-          cachedEntry?.hits ?: emptyMap()
-        } else {
-          emptyMap()
-        }
-      )
-    }
+    var chineseHits by contentState.chineseHitsState
     // 客户端筛选必须扫全库，这两个状态让 UI 能显示「已扫多少 / 命中多少」
-    var scanScanned by remember(cacheKey) {
-      mutableIntStateOf(if (searchQuery.isBlank()) cachedEntry?.scannedCount ?: 0 else 0)
-    }
-    var isScanning by remember(cacheKey) { mutableStateOf(false) }
+    var scanScanned by contentState.scanScannedState
+    var isScanning by contentState.isScanningState
     /**
      * 「这一层浏览列表」的最后一份快照，**刻意不随 cacheKey 重置**。
      *
@@ -3267,11 +3230,9 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               draftPlayed = null
               draftSubtitles = null
               draftChinese = false
-              // 无草稿的隐藏维度直接清正式值（它们不参与抽屉的编辑/取消语义）
-              selectedPersonIds = emptySet()
-              selectedStudioIds = emptySet()
-              hdFilter = null
-              threeDFilter = null
+              // 无草稿的隐藏维度直接清正式值（它们不参与抽屉的编辑/取消语义）；
+              // 可见维度只改草稿，点「取消」仍能整体撤销。
+              filterState.clearHidden()
             }) {
               Text("恢复默认")
             }
@@ -3441,19 +3402,17 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                 val chinese = draftChinese
                 val minR = draftMinRating
                 val fav = draftFavorite
-                val changed = genres != selectedGenres || tags != selectedTags ||
-                  years != selectedYears || ratings != selectedRatings ||
-                  played != playedFilter || subs != subtitlesFilter ||
-                  chinese != chineseSubsOnly || minR != minRating || fav != favoriteOnly
-                selectedGenres = genres
-                selectedTags = tags
-                selectedYears = years
-                selectedRatings = ratings
-                playedFilter = played
-                subtitlesFilter = subs
-                chineseSubsOnly = chinese
-                minRating = minR
-                favoriteOnly = fav
+                val changed = filterState.applyDraft(
+                  genres = genres,
+                  tags = tags,
+                  years = years,
+                  officialRatings = ratings,
+                  isPlayed = played,
+                  hasSubtitles = subs,
+                  chineseSubsOnly = chinese,
+                  minRating = minR,
+                  favoriteOnly = fav,
+                )
                 persistFilter()
                 showFilterDialog = false
                 // 条件真的变了才重新加载；否则只是关了抽屉，不白跑一次请求

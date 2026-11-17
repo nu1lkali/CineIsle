@@ -71,6 +71,14 @@ import kotlin.math.roundToInt
 private const val LOAD_TIMEOUT_MS = 15_000L
 
 /**
+ * mpv 已经下发 loadfile、却迟迟没有 duration / 画面时，第一次重载的等待时间。
+ *
+ * 这条只兜「命令丢了 / 输出面还没接好」这一类；重载仍失败就等 [LOAD_TIMEOUT_MS]
+ * 的正常看门狗报错，不再无限重试。
+ */
+private const val MPV_STALL_RETRY_MS = 4_000L
+
+/**
  * 翻页时「撤到一半又得重新加载」的宽限时长（毫秒）。
  *
  * 新页已经接手但首帧还没上屏的那几十毫秒里，先不要把加载圈打回来 —— 相邻页通常
@@ -163,6 +171,9 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
   /** 正在用 mpv 播放的条目下标；`-1` = 没有 */
   private var mpvIndex = -1
 
+  /** 本条已经触发过一次「加载停滞重试」的下标；换条时重置。 */
+  private var mpvRetriedIndex = -1
+
   /** 离开某条 mpv 条目时的播放位置（秒），滑回来时据此续播 */
   private val mpvResumeSec = HashMap<Int, Double>()
 
@@ -246,6 +257,9 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
       // 加载圈在这一刻才撤、进度条同时拿到真实时长。只把 buffered 置真是不够的 ——
       // 那样进度条还得再等 250ms 的心跳才有数字。
       onFrameVisible = { index ->
+        // 帧真的上屏 = 这条已经在正常播放：任何早先留下的错误提示都必须撤销。
+        // 相邻页预加载时报的容器错误、旧实例的迟到 onPlayerError 都可能残留到这里。
+        viewModel.errors.remove(index)
         if (index == viewModel.index) viewModel.applySnapshot(pool.snapshotOf(index))
       },
       // strm 能播的关键（见 ExoPlayerPool.defaultHttpHeaders 的说明）：
@@ -286,7 +300,11 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
           // 页码一变（哪怕还在滑动途中）就先把 mpv 那条停掉：相邻页这一刻要接手播放，
           // 两边同时出声就是双音轨。**必须先停 mpv 再让池子起播** —— 顺序反了会有
           // 一小段两条音轨叠在一起的时刻（ExoPlayer 起播只要几毫秒）。
-          leaveMpvFor(page)
+          // 但自动续播时 Pager 会动画经过中间页，目标页才是这一程真正要落的页：
+          // 如果 mpv 正在服务的就是目标页（例如连续两条 rmvb），中间页不能把它停掉，
+          // 否则落定后 `syncMpvWithIndex` 可能已经错过（settledPage 早已发出），
+          // 画面就停在上一帧。手动滑动时 targetPage 是用户要去的页，照常先停。
+          leaveMpvFor(page, pagerState.targetPage)
           // 起播前预判：内置内核必解不了的容器/编码在这里就交给 mpv，
           // 用户不必先看两轮失败（判据见 startPlanOf）。必须先于 onPageChanged：
           // 那一调会把这一页标记成 skipped，池子才不会白建一个必然失败的实例。
@@ -402,11 +420,19 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
           // 建好后**常驻**组合，只用 visibility 开关 —— 反复 detach/attach Surface
           // 会让 mpv 每切一次都重建一次视频输出，画面会闪。
           if (mpvHostReady) {
+            // ⚠️ 必须在**组合期**读一次 `mpvVisible`，不能只写在 `update` 里。
+            // `update` 是布局阶段回调，里面的 state 读取不会登记依赖：第一条交给 mpv 时
+            // `mpvHostReady` 由 false→true，组合会跑一次，画面层正常显示；但后续条目
+            // 再交给 mpv 时 `mpvHostReady` 没变，只有 `mpvVisible` 变了，若组合期不读它，
+            // 就不会重组、`update` 也不会跑 ⇒ 画面层一直 GONE，mpv 没有 Surface，
+            // `pump()` 永远等不到 `surface.isValid`。表现就是「第一条兜底能放，
+            // 后面所有需要兜底的视频都卡住」。
+            val layerVisible = mpvVisible
             AndroidView(
               modifier = Modifier.fillMaxSize(),
               factory = { ctx -> mpvEngine.hostView() ?: View(ctx) },
               update = { root ->
-                root.visibility = if (mpvVisible) View.VISIBLE else View.GONE
+                root.visibility = if (layerVisible) View.VISIBLE else View.GONE
               },
             )
           }
@@ -662,10 +688,30 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     if (dur > 0.0) {
       viewModel.durationSec = dur
       loadStartedAt = 0L
+    } else if (
+      loadStartedAt > 0L &&
+      mpvRetriedIndex != idx &&
+      SystemClock.elapsedRealtime() - loadStartedAt > MPV_STALL_RETRY_MS &&
+      !mpvEngine.hasPicture()
+    ) {
+      // 已经发过 loadfile，但既没有时长也没有画面：最常见的是命令落在尚未 attach 的
+      // 输出面上，或上一条的 stop 与新 loadfile 之间状态没收干净。重载一次；
+      // 仍失败就交给下面的 LOAD_TIMEOUT_MS 看门狗报错，不再反复重试。
+      mpvRetriedIndex = idx
+      android.util.Log.w(
+        "FeedMpv",
+        "index=$idx 加载停滞，重试一次 loadfile；${mpvEngine.debugState()}",
+      )
+      mpvEngine.retryCurrent()
+      loadStartedAt = SystemClock.elapsedRealtime()
     }
     viewModel.paused = mpvEngine.isPaused()
     viewModel.buffering = mpvEngine.isBuffering()
-    if (mpvEngine.hasPicture()) viewModel.buffered = true
+    if (mpvEngine.hasPicture()) {
+      viewModel.buffered = true
+      // mpv 已经出画面 ⇒ 之前为这一条记下的失败提示全部过期
+      viewModel.errors.remove(idx)
+    }
     // `eof-reached` 在 `seek 0` 生效之后还要过一拍才复位；这段时间里位置已经在开头、
     // 却仍会读到「已到片尾」。所以位置能拿到时以位置为准 —— 否则滑回刚播完的那条，
     // 心跳会再切一次（「滑回来瞬间弹走」）。
@@ -713,11 +759,14 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
     // ── 换内核前的否决 ──
     // 这一条**已经出过画面**说明解码链路是通的：此刻报「容器解析失败」更可能是
     // 偶发（seek 到损坏段、网络抖动把包读坏了），不是「本机放不了这个容器」。
-    // 换内核既不一定救得了，还会把一条本来能放的片子推给旁路 —— 用户看到的就是
-    // 「播得好好的，突然被判不能播、还换了内核」。所以只报错、不复用那句文案之外的
-    // 任何自动动作，让用户点「重试」自己决定。
+    // 换内核既不一定救得了，还会把一条本来能放的片子推给旁路，同时也**不能**
+    // 弹错误卡片 —— 用户面前正在正常播放，再叠一句「无法播放」就是自相矛盾。
+    // 只记日志，交给后续心跳/出帧自行恢复。
     if (kind == FeedFailureKind.CONTAINER && pool.hasPictureEvidence(index)) {
-      viewModel.errors[index] = reason
+      android.util.Log.w(
+        "FeedDecoder",
+        "ignore transient container error while playing index=$index: $reason",
+      )
       return
     }
 
@@ -838,7 +887,11 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
    *   一个满是 rmvb 的库会弹到用户手软，而这对用户来说就是正常播放。
    */
   private fun startMpvPlayback(index: Int, item: FeedItem, preemptive: Boolean) {
+    // 切到另一条 mpv 条目时先显式 stop：不要把「上一条的 keep-open 末帧 / 旧解码上下文」
+    // 交给下一条的 loadfile replace 去猜。stop 后再 loadfile，mpv 处于干净的空闲态。
+    if (mpvIndex != index) mpvEngine.stop()
     mpvIndex = index
+    mpvRetriedIndex = -1
     mpvVisible = true
     // 换内核那一刻重置加载计时：mpv 要重新 create/init、再走一遍取流，这套开销与
     // ExoPlayer 那一轮无关。沿用旧起点会让看门狗在内核还没起来时就判「源不可用」。
@@ -860,10 +913,20 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
    * 位置，回来直接跳回去 —— 否则用户滑过去瞄一眼再滑回来，片子已经回到开头了。
    */
   private fun syncMpvWithIndex(index: Int) {
-    if (mpvIndex == index) return
+    if (mpvIndex == index) {
+      // 索引对得上，但画面层可能因为上一轮翻页被收起（Surface 已销毁）。
+      // 这是幂等自愈：该条仍由 mpv 负责时重新亮出来，并立刻尝试 pump。
+      if (index in mpvServed && !mpvVisible) {
+        mpvVisible = true
+        mpvEngine.pump()
+      }
+      return
+    }
     val item = viewModel.items.getOrNull(index)
     if (item != null && index in mpvServed) {
+      if (mpvIndex != index) mpvEngine.stop()
       mpvIndex = index
+      mpvRetriedIndex = -1
       mpvVisible = true
       endHandled = false
       loadStartedAt = SystemClock.elapsedRealtime()
@@ -879,9 +942,13 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
    *
    * ⚠️ 调用点不止「落定」，还有**滑动途中**（页码一变就调）：相邻页的 ExoPlayer
    * 在那一刻就已经接手播放了，mpv 若还出声，就是两条音轨叠在一起。
+   *
+   * @param targetPage Pager 这一程要落定的页。自动续播的动画会经过中间页，
+   *   如果 mpv 正在服务的就是目标页（连续两条都交给过 mpv），中间页不能停它 ——
+   *   等落定后 `settledPage` 往往已经发过，不会再有人把它接回来。
    */
-  private fun leaveMpvFor(page: Int) {
-    if (mpvIndex < 0 || mpvIndex == page) return
+  private fun leaveMpvFor(page: Int, targetPage: Int = page) {
+    if (mpvIndex < 0 || mpvIndex == page || mpvIndex == targetPage) return
     mpvResumeSec[mpvIndex] = mpvEngine.positionSec()
     mpvEngine.stop()
     mpvVisible = false

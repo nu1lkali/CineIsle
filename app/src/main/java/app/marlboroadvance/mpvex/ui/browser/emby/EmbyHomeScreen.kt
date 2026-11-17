@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.outlined.CallMerge
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -156,6 +158,8 @@ fun EmbyHomeScreen(
    * 同样只传回调、不自己 push：导航栈在 [MainScreen] 手里。
    */
   onOpenLiveTv: () -> Unit = {},
+  /** 打开 Smart Merge（智能媒体版本合并） */
+  onOpenSmartMerge: () -> Unit = {},
   /**
    * 打开一个「聚合库」（多个同类型媒体库的本地合并视图）。
    *
@@ -185,6 +189,10 @@ fun EmbyHomeScreen(
   val latestItems by viewModel.latestItems.collectAsState()
   val isLoading by viewModel.isLoading.collectAsState()
   val error by viewModel.error.collectAsState()
+  // 三发请求各自的分区错误：某一块失败时留在原位置给「重试」，而不是整块静默消失。
+  val librariesError by viewModel.librariesError.collectAsState()
+  val resumeError by viewModel.resumeError.collectAsState()
+  val latestError by viewModel.latestError.collectAsState()
 
   // 从播放器 / 详情页回到首页时重拉「继续观看」。
   // 播放器是**另一个 Activity**，首页这层 Composable 在播放期间并不销毁 ⇒ `LaunchedEffect`
@@ -680,6 +688,14 @@ fun EmbyHomeScreen(
                 onOpenCollections()
               },
             )
+            DropdownMenuItem(
+              text = { Text("智能媒体合并") },
+              leadingIcon = { Icon(Icons.Outlined.CallMerge, contentDescription = null) },
+              onClick = {
+                moreMenuExpanded = false
+                onOpenSmartMerge()
+              },
+            )
             }
         }
         // 设置：放在最后且永不折叠 —— 用户要的就是「设置按钮别再被挤没」。
@@ -988,8 +1004,15 @@ fun EmbyHomeScreen(
             //   连「媒体库」这个区块标题一起收掉（全隐藏时整块消失是预期行为）。
             // ⚠️ 聚合库不参与「隐藏」：它是本 App 本地的定义，没有服务端扫描之类的
             //   副作用，也没有「隐藏一个库」的用户心智；要收起来去管理页删。
-            if (visibleLibraries.isNotEmpty() || aggregates.isNotEmpty()) {
+            if (visibleLibraries.isNotEmpty() || aggregates.isNotEmpty() || librariesError != null) {
               item {
+                if (librariesError != null) {
+                  EmbySectionError(
+                    message = librariesError ?: "加载媒体库失败",
+                    onRetry = { viewModel.refreshHome() },
+                    modifier = Modifier.padding(top = 10.dp),
+                  )
+                }
                 EmbySectionHeader(
                   title = stringResource(R.string.emby_section_libraries),
                   modifier = Modifier.padding(top = 10.dp),
@@ -1036,54 +1059,68 @@ fun EmbyHomeScreen(
               }
             }
 
-            if (resumeItems.isNotEmpty()) {
+            if (resumeItems.isNotEmpty() || resumeError != null) {
               item {
                 EmbySectionHeader(title = stringResource(R.string.emby_section_resume))
-                LazyRow(
-                  state = resumeRowState,
-                  contentPadding = PaddingValues(horizontal = 16.dp),
-                  horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                  items(resumeItems, key = { it.Id ?: it.Name ?: "" }) { item ->
-                    EmbyWideCard(
-                      title = viewModel.displayTitle(item),
-                      subtitle = item.SeriesName ?: item.ProductionYear?.toString(),
-                      imageUrl = viewModel.imageUrl(server!!, item, "Backdrop", 640),
-                      fallbackImageUrl = viewModel.imageUrl(server!!, item, "Primary", 640),
-                      progress = playbackProgress(item),
-                      remainingText = remainingLabel(item),
-                      // 单击是进详情页而非直接播放，去掉居中的播放三角，避免误导
-                      showPlayButton = false,
-                      isFavorite = item.UserData?.IsFavorite == true,
-                      // 单击进入详情页，播放由详情页发起
-                      onClick = { onOpenDetail(item) },
-                      // 长按 → 从「继续观看」移除（清服务器播放位置 + 本机列表摘掉）
-                      onLongClick = { resumeTarget = item },
-                    )
+                if (resumeItems.isEmpty() && resumeError != null) {
+                  EmbySectionError(
+                    message = resumeError ?: "加载继续观看失败",
+                    onRetry = { viewModel.refreshHome() },
+                  )
+                } else {
+                  LazyRow(
+                    state = resumeRowState,
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                  ) {
+                    items(resumeItems, key = { it.Id ?: it.Name ?: "" }) { item ->
+                      EmbyWideCard(
+                        title = viewModel.displayTitle(item),
+                        subtitle = item.SeriesName ?: item.ProductionYear?.toString(),
+                        imageUrl = viewModel.imageUrl(server!!, item, "Backdrop", 640),
+                        fallbackImageUrl = viewModel.imageUrl(server!!, item, "Primary", 640),
+                        progress = playbackProgress(item),
+                        remainingText = remainingLabel(item),
+                        // 单击是进详情页而非直接播放，去掉居中的播放三角，避免误导
+                        showPlayButton = false,
+                        isFavorite = item.UserData?.IsFavorite == true,
+                        // 单击进入详情页，播放由详情页发起
+                        onClick = { onOpenDetail(item) },
+                        // 长按 → 从「继续观看」移除（清服务器播放位置 + 本机列表摘掉）
+                        onLongClick = { resumeTarget = item },
+                      )
+                    }
                   }
                 }
               }
             }
 
-            if (latestItems.isNotEmpty()) {
+            if (latestItems.isNotEmpty() || latestError != null) {
               item {
                 EmbySectionHeader(title = stringResource(R.string.emby_section_latest))
-                LazyRow(
-                  contentPadding = PaddingValues(horizontal = 16.dp),
-                  horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                  items(latestItems, key = { it.Id ?: it.Name ?: "" }) { item ->
-                    EmbyPosterCard(
-                      title = viewModel.displayTitle(item),
-                      subtitle = item.ProductionYear?.toString(),
-                      imageUrl = viewModel.imageUrl(server!!, item, "Primary", 480),
-                      // 单集等条目可能没有 Primary（海报），回退到 Thumb（剧照/缩略图）
-                      fallbackImageUrl = viewModel.imageUrl(server!!, item, "Thumb", 480),
-                      progress = playbackProgress(item),
-                      isFavorite = item.UserData?.IsFavorite == true,
-                      // 单击进入详情页，播放由详情页发起
-                      onClick = { onOpenDetail(item) },
-                    )
+                if (latestItems.isEmpty() && latestError != null) {
+                  EmbySectionError(
+                    message = latestError ?: "加载最新加入失败",
+                    onRetry = { viewModel.refreshHome() },
+                  )
+                } else {
+                  LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                  ) {
+                    items(latestItems, key = { it.Id ?: it.Name ?: "" }) { item ->
+                      EmbyPosterCard(
+                        title = viewModel.displayTitle(item),
+                        subtitle = item.ProductionYear?.toString(),
+                        imageUrl = viewModel.imageUrl(server!!, item, "Primary", 480),
+                        // 单集等条目可能没有 Primary（海报），回退到 Thumb（剧照/缩略图）
+                        fallbackImageUrl = viewModel.imageUrl(server!!, item, "Thumb", 480),
+                        progress = playbackProgress(item),
+                        isFavorite = item.UserData?.IsFavorite == true,
+                        // 单击进入详情页，播放由详情页发起
+                        onClick = { onOpenDetail(item) },
+                      )
+                    }
                   }
                 }
               }
@@ -1136,7 +1173,8 @@ fun EmbyHomeScreen(
             // 聚合库也要算进「有内容」：本地建了聚合库、服务端真实库却为空时，
             // 摆一句「还没有可显示的媒体」在聚合卡片下面很违和
             if (libraries.isEmpty() && aggregates.isEmpty() &&
-              resumeItems.isEmpty() && latestItems.isEmpty() && !isLoading
+              resumeItems.isEmpty() && latestItems.isEmpty() && !isLoading &&
+              librariesError == null && resumeError == null && latestError == null
             ) {
               item {
                 EmbyEmptyState(
@@ -1207,6 +1245,45 @@ fun EmbyEmptyState(
     )
     Button(onClick = onAction) {
       Text(buttonText)
+    }
+  }
+}
+
+/**
+ * 首页单块分区的错误行。
+ *
+ * 与整页 [EmbyEmptyState] / [EmbyErrorBanner] 的区别：这里只占一块的高度，
+ * 不把其它已经加载好的分区挤走。用于「继续观看 / 最新加入」这种可独立失败的数据源。
+ */
+@Composable
+fun EmbySectionError(
+  message: String,
+  onRetry: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .padding(horizontal = 16.dp, vertical = 8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(10.dp),
+  ) {
+    Icon(
+      imageVector = Icons.Outlined.ErrorOutline,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.error,
+      modifier = Modifier.size(20.dp),
+    )
+    Text(
+      text = message,
+      modifier = Modifier.weight(1f),
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 2,
+      overflow = TextOverflow.Ellipsis,
+    )
+    TextButton(onClick = onRetry) {
+      Text("重试")
     }
   }
 }

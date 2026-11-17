@@ -98,6 +98,9 @@ fun PlayerSheets(
             title,
             uri.toString(),
           )
+          // 另存一份到公共 Download/CineIsle/Subtitles：SharedPreferences 与
+          // content:// 持久权限都会随卸载消失，这份归档是重装后找回字幕的唯一依据。
+          viewModel.archiveExternalSubtitle(uri)
         }
       }
 

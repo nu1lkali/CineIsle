@@ -40,7 +40,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.style.TextAlign
@@ -158,7 +157,7 @@ object NetworkStreamingScreen : Screen {
 
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
 
-    Scaffold(
+    app.marlboroadvance.mpvex.ui.browser.components.ClassicPageScaffold(
         topBar = {
           Column {
             BrowserTopBar(

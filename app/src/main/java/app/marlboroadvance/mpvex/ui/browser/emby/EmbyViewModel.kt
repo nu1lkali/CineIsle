@@ -209,6 +209,17 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   private val _latestItems = MutableStateFlow<List<EmbyItem>>(emptyList())
   val latestItems: StateFlow<List<EmbyItem>> = _latestItems.asStateFlow()
 
+  // 三发请求各自的失败原因：首页不再因为「继续观看 / 最新加入」失败就静默少一块。
+  // 媒体库失败仍会写整页 _error（没有库确实什么也点不了），另两块只影响自己。
+  private val _librariesError = MutableStateFlow<String?>(null)
+  val librariesError: StateFlow<String?> = _librariesError.asStateFlow()
+
+  private val _resumeError = MutableStateFlow<String?>(null)
+  val resumeError: StateFlow<String?> = _resumeError.asStateFlow()
+
+  private val _latestError = MutableStateFlow<String?>(null)
+  val latestError: StateFlow<String?> = _latestError.asStateFlow()
+
   private val _isLoading = MutableStateFlow(false)
   val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -374,6 +385,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       // ⚠️ 静默：失败不写 `_error`。首页已经有内容了，为「续播没刷新出来」把整页
       //    标成加载失败是本末倒置（同 loadHome 里那两发失败的处理）。
       _resumeItems.value = resume
+      _resumeError.value = null
       lastResumeSyncAt = android.os.SystemClock.elapsedRealtime()
     }
   }
@@ -413,6 +425,9 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   private suspend fun loadHome(gen: Int) {
     _isLoading.value = true
     _error.value = null
+    _librariesError.value = null
+    _resumeError.value = null
+    _latestError.value = null
     try {
       // 冷启动时服务器是异步恢复的，这里必须等它恢复完，否则会误判成「没有服务器」
       val server = repository.ensureLoggedIn(repository.awaitCurrentServer())
@@ -422,6 +437,9 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         _libraries.value = emptyList()
         _resumeItems.value = emptyList()
         _latestItems.value = emptyList()
+        _librariesError.value = null
+        _resumeError.value = null
+        _latestError.value = null
         return
       }
 
@@ -435,22 +453,29 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         // 写下去会把新代刚拉到的数据冲成「空 + 加载失败」。
         if (gen == homeGeneration) {
           _libraries.value = libs.getOrElse { e ->
+            _librariesError.value = e.message ?: "加载媒体库失败"
             _error.value = e.message ?: "加载失败"
             emptyList()
           }
         }
 
-        // 下面两发失败只留空列表，不碰 _error —— 首页已经有内容了，
+        // 下面两发失败只留空列表 + 各自的分区错误，不碰 _error —— 首页已经有内容了，
         // 为「继续观看没加载出来」把整页标成失败是本末倒置。
         val resume = resumeDeferred.await()
         if (gen == homeGeneration) {
-          _resumeItems.value = resume.getOrElse { emptyList() }
+          _resumeItems.value = resume.getOrElse { e ->
+            _resumeError.value = e.message ?: "加载继续观看失败"
+            emptyList()
+          }
           // 记一笔：首页刚整页拉过，紧接着那次 ON_RESUME 不必再问一遍服务器
           lastResumeSyncAt = android.os.SystemClock.elapsedRealtime()
         }
         val latest = latestDeferred.await()
         if (gen == homeGeneration) {
-          _latestItems.value = latest.getOrElse { emptyList() }
+          _latestItems.value = latest.getOrElse { e ->
+            _latestError.value = e.message ?: "加载最新加入失败"
+            emptyList()
+          }
         }
 
         // 显示偏好自动恢复（清单 #16）。放在数据加载**之后**：

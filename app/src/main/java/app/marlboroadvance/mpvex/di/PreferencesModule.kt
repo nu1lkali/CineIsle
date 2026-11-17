@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.di
 
 import app.marlboroadvance.mpvex.database.MpvExDatabase
+import app.marlboroadvance.mpvex.domain.emby.EmbyVersionLabels
 import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.AppLockPreferences
@@ -41,4 +42,6 @@ val PreferencesModule =
     singleOf(::SettingsManager)
     // 批量重命名的规则链记忆（单例，构造只依赖 PreferenceStore）
     singleOf(::RenameRuleStore)
+    // 多版本媒体的本机版本名（Emby API 不支持写版本名）
+    singleOf(::EmbyVersionLabels)
   }

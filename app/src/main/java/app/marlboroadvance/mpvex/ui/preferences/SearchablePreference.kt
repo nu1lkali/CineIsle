@@ -616,16 +616,40 @@ object SearchablePreferences {
     }
 
     /**
-     * 全量索引：手写清单 + 自动抽取清单。
+     * 设置页导航入口（[SettingsRegistry]）转成的搜索项。
+     *
+     * 这一份与设置页实际渲染共用同一份元数据：新增一个入口只改 Registry，
+     * 不会再出现「页面里有、搜索里没有」或反过来。
+     */
+    private val registryPreferences: List<SearchablePreference> by lazy {
+        SettingsRegistry.all.map { entry ->
+            SearchablePreference(
+                titleRes = entry.titleRes,
+                title = entry.titleText,
+                summaryRes = entry.summaryRes,
+                summary = entry.summaryText,
+                keywords = entry.keywords,
+                category = entry.section,
+                screen = entry.screen,
+            )
+        }
+    }
+
+    /**
+     * 全量索引：手写清单 + Registry + 自动抽取清单。
      *
      * 手写那份排前面 —— 它带英文关键词，且指向的是「专页」而不是设置首页。
-     * 自动抽取那份按 [dedupeKey] 去重后再并入，所以不会出现同一个配置项两条。
+     * Registry 次之（它是设置页真正渲染的入口）；自动抽取那份最后，
+     * 按 [dedupeKey] 去重后并入，所以不会出现同一个配置项两条。
      */
     val allPreferences: List<SearchablePreference> by lazy {
         val seen = HashSet<String>()
         curatedPreferences.forEach { seen.add(it.dedupeKey()) }
         buildList {
             addAll(curatedPreferences)
+            registryPreferences.forEach { pref ->
+                if (seen.add(pref.dedupeKey())) add(pref)
+            }
             generatedSearchablePreferences.forEach { pref ->
                 if (seen.add(pref.dedupeKey())) add(pref)
             }

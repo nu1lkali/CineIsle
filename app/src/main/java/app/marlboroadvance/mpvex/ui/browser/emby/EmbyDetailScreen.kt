@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -45,7 +46,6 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.AlertDialog
@@ -63,6 +64,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -126,12 +128,16 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyStudio
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.domain.emby.EmbyVersionProgress
+import app.marlboroadvance.mpvex.domain.emby.EmbyVersionLabels
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
-import app.marlboroadvance.mpvex.domain.emby.MediaInfoEntry
 import app.marlboroadvance.mpvex.domain.emby.MediaSourcePreference
-import app.marlboroadvance.mpvex.domain.emby.buildEmbyMediaInfoEntries
+import app.marlboroadvance.mpvex.domain.emby.buildEmbyMediaInfoSummary
 import app.marlboroadvance.mpvex.domain.emby.effectiveEmbyMediaSourceId
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceLabel
+import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceResolution
+import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceSpec
+import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceSpecParts
+import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceTitle
 import app.marlboroadvance.mpvex.domain.emby.formatEmbyDurationFull
 import app.marlboroadvance.mpvex.domain.playbackstate.repository.PlaybackStateRepository
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
@@ -143,6 +149,8 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyIdentifyDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyRefreshMetadataDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbySkeletonDetail
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyVersionOption
+import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyVersionPickerSheet
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EpisodeDownloadState
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EpisodeListSection
 import app.marlboroadvance.mpvex.ui.browser.emby.components.RelatedEpisodes
@@ -196,9 +204,12 @@ data class EmbyDetailScreen(
     )
     val downloadTasks by downloadViewModel.tasks.collectAsState()
 
-    var item by remember { mutableStateOf<EmbyItem?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
+    // 数据状态收进独立容器（随 itemId 重建）；下面的 `by` 维持原来的字段名，
+    // 所以页面其它几百处引用一行都不用改。纯 UI 开关仍留在本页。
+    val detailState = remember(itemId) { EmbyDetailContentState() }
+    var item by detailState.itemState
+    var isLoading by detailState.loadingState
+    var error by detailState.errorState
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     // 「更多」菜单里的刮削 / 刷新元数据：改为与媒体库长按菜单同一套的抽屉式实现
@@ -220,15 +231,15 @@ data class EmbyDetailScreen(
 
     // ── 多版本媒体：当前选中的版本 ──
     // null = 还没选，等价于「服务端默认版本」（= MediaSources 的第一条）。
-    // 按 itemId 记忆：同一条目在页面存活期间保留选择，换条目则重置。
-    var selectedMediaSourceId by remember(itemId) { mutableStateOf<String?>(null) }
+    // 按 itemId 记忆：同一条目在页面存活期间保留选择，换条目则重置（状态容器随 itemId 重建）。
+    var selectedMediaSourceId by detailState.selectedMediaSourceIdState
 
     // ── 多版本媒体：当前版本自己的续播进度（本地）──
     // Emby 服务端的 `UserData.PlaybackPositionTicks` 是**按条目**存的 —— 4K / 1080P /
     // 导演剪辑版共用一个续播点，服务端层面无解。所以多版本条目按版本各记各的本地进度
     // （播放页退出时按版本写入，键见 [EmbyVersionProgress]），这里读出来覆盖服务端进度。
     // null = 不覆盖（单版本条目 / 本地还没按版本记过进度 ⇒ 沿用服务端进度）。
-    var versionResumeSeconds by remember(itemId) { mutableStateOf<Long?>(null) }
+    var versionResumeSeconds by detailState.versionResumeSecondsState
     val playbackStateRepository = koinInject<PlaybackStateRepository>()
     // 「多版本优先选择」规则：用户在播放入口（含外部播放器、含按版本存续播进度）
     // 没手动选版本时据此自动挑。用 .get() 而不是 collectAsState 是**刻意的**：
@@ -240,6 +251,19 @@ data class EmbyDetailScreen(
       remember(browserPrefsForSource.embyMediaSourcePreference.get()) {
         MediaSourcePreference.fromKey(browserPrefsForSource.embyMediaSourcePreference.get())
       }
+
+    // ── 多版本媒体：本机版本名 ──
+    // Emby 的 MediaSources API 没有版本名写入参数，服务端还会剥掉公共前缀，
+    // 所以「手动补全」只能作为本机显示别名（见 EmbyVersionLabels）。
+    val versionLabelStore = koinInject<EmbyVersionLabels>()
+    val versionLabels by versionLabelStore.labels.collectAsState()
+    var editingVersionSource by remember { mutableStateOf<EmbyMediaSource?>(null) }
+    // 当前条目某版本的显示名：null = 用 Emby 原始名
+    fun customVersionLabelOf(sourceId: String): String? {
+      val currentItemId = item?.Id ?: itemId
+      val currentServerId = server?.id ?: return null
+      return versionLabels[EmbyVersionLabels.key(currentServerId, currentItemId, sourceId)]
+    }
     LaunchedEffect(itemId, selectedMediaSourceId, item, server?.id) {
       val current = item
       val currentServer = server
@@ -309,8 +333,8 @@ data class EmbyDetailScreen(
     // `item {}`，滚出视口会被销毁组合、滚回来重新组合 —— 请求写在区块内部的话，
     // 上下滑一趟就会把整部剧的分集重新拉好几轮（长剧一次几百 KB）。
     // 只有 `Series` 才发这个请求：`Episode` 自己的详情页不需要，电影更没有。
-    var seriesEpisodes by remember(itemId) { mutableStateOf<List<EmbyItem>>(emptyList()) }
-    var episodesLoading by remember(itemId) { mutableStateOf(false) }
+    var seriesEpisodes by detailState.seriesEpisodesState
+    var episodesLoading by detailState.episodesLoadingState
     LaunchedEffect(itemId, item?.Type, server?.id) {
       val current = item ?: return@LaunchedEffect
       val currentServer = server ?: return@LaunchedEffect
@@ -366,10 +390,10 @@ data class EmbyDetailScreen(
     //   · item.Id 变化        ⇒ 重新进（或切到另一部片的）详情页
     //   · recommendReloadKey  ⇒ 下拉刷新（见 PullRefreshBox 的 onRefresh）
     // 滚动不在键里，所以无论怎么滚都不会再触发。
-    var recommendItems by remember(itemId) { mutableStateOf<List<EmbyItem>>(emptyList()) }
-    var genreRecommendLabel by remember(itemId) { mutableStateOf<String?>(null) }
-    var genreRecommendItems by remember(itemId) { mutableStateOf<List<EmbyItem>>(emptyList()) }
-    var recommendReloadKey by remember(itemId) { mutableStateOf(0) }
+    var recommendItems by detailState.recommendItemsState
+    var genreRecommendLabel by detailState.genreRecommendLabelState
+    var genreRecommendItems by detailState.genreRecommendItemsState
+    var recommendReloadKey by detailState.recommendReloadKeyState
 
     // ── 单集详情页的「相关分集」──
     // 只有**当前条目是 Episode** 时才需要：这时 `seriesEpisodes` 是空的（只有 Series 才拉全剧），
@@ -378,7 +402,7 @@ data class EmbyDetailScreen(
     //  ① 同季 + 特别篇：`SiblingIds`（随详情一起回来，零额外往返）→ 一次 `Ids` 批量取内容；
     //  ② 演员相关：`/Items?PersonIds&IncludeItemTypes=Episode` 再按 SeriesId 过滤。
     //      这一步要多发请求，所以只取**第一个演员**（`People` 首位），不遍历全阵容。
-    var relatedEpisodes by remember(itemId) { mutableStateOf(RelatedEpisodes()) }
+    var relatedEpisodes by detailState.relatedEpisodesState
     LaunchedEffect(itemId, item?.Id, item?.Type, server?.id, recommendReloadKey) {
       val current = item ?: return@LaunchedEffect
       val currentServer = server ?: return@LaunchedEffect
@@ -529,7 +553,9 @@ data class EmbyDetailScreen(
           //   「下拉里写着 1080P、播放页顶栏写着别的」。
           val playSourceLabel = playSourceId
             ?.let { id -> current.MediaSources.orEmpty().firstOrNull { it.Id == id } }
-            ?.let { embyMediaSourceLabel(it) }
+            ?.let { source ->
+              embyMediaSourceTitle(source, source.Id?.let(::customVersionLabelOf))
+            }
           // 该条目当前的下载任务（没有就是 null）：按钮的文字、进度、图标都由它决定
           val currentDownload = current.Id?.let { id ->
             downloadTasks.firstOrNull { it.itemId == id }
@@ -620,6 +646,8 @@ data class EmbyDetailScreen(
               selectedMediaSourceId = selectedMediaSourceId,
               onSelectMediaSource = { selectedMediaSourceId = it },
               versionResumeSeconds = versionResumeSeconds,
+              customVersionLabelOf = ::customVersionLabelOf,
+              onEditVersionLabel = { editingVersionSource = it },
               onToggleFavorite = {
                 if (!favoriteBusy) {
                   val wasFavorite = current.UserData?.IsFavorite == true
@@ -1031,6 +1059,33 @@ data class EmbyDetailScreen(
       )
     }
 
+    // ── 版本名手动补全：只写本机偏好，不碰 Emby ──
+    val labelSource = editingVersionSource
+    val labelServer = server
+    if (labelSource != null && labelServer != null) {
+      val labelSourceId = labelSource.Id
+      if (labelSourceId != null) {
+        val labelItemId = item?.Id ?: itemId
+        VersionLabelDialog(
+          source = labelSource,
+          customLabel = versionLabels[
+            EmbyVersionLabels.key(labelServer.id, labelItemId, labelSourceId)
+          ],
+          onSave = { text ->
+            versionLabelStore.set(labelServer.id, labelItemId, labelSourceId, text)
+            editingVersionSource = null
+          },
+          onClear = {
+            versionLabelStore.clear(labelServer.id, labelItemId, labelSourceId)
+            editingVersionSource = null
+          },
+          onDismiss = { editingVersionSource = null },
+        )
+      } else {
+        editingVersionSource = null
+      }
+    }
+
     // ── 编辑元数据弹窗：名称 / 原名 / 排序名 / 简介 / 年份 / 首映日期 /
     //    类型 / 标签 / 制作地区 / 工作室 / 评分 / 分级 / 演员与导演，整体 PUT 回服务器 ──
     if (showEditMeta && item != null) {
@@ -1375,6 +1430,10 @@ private fun DetailBody(
    * 转给 [PlaySection] 决定「继续播放 · hh:mm:ss / 已观看 x%」显示的是哪个进度。
    */
   versionResumeSeconds: Long? = null,
+  /** 多版本媒体：取某版本的本机自定义名（null = 用 Emby 原名）。 */
+  customVersionLabelOf: (String) -> String? = { null },
+  /** 多版本媒体：请求编辑某版本的本机名。 */
+  onEditVersionLabel: (EmbyMediaSource) -> Unit = {},
   /** 点推荐卡片：打开对应媒体的详情页（itemId / 标题） */
   onRecommendClick: (String, String) -> Unit,
   /** 全剧分集（非 Series 恒为空）。数据由 [EmbyDetailScreen] 加载，这里只负责画。 */
@@ -1453,6 +1512,8 @@ private fun DetailBody(
           selectedMediaSourceId = selectedMediaSourceId,
           onSelectMediaSource = onSelectMediaSource,
           versionResumeSeconds = versionResumeSeconds,
+          customVersionLabelOf = customVersionLabelOf,
+          onEditVersionLabel = onEditVersionLabel,
           onPlayFromStart = onPlayFromStart,
           episodes = episodes,
         )
@@ -1719,7 +1780,11 @@ private fun DetailBody(
 
       // ── 媒体信息（含完整视频 / 音频编码信息）──
       item {
-        MediaInfoSection(item = item, selectedMediaSourceId = effectiveSourceId)
+        MediaInfoSection(
+          item = item,
+          selectedMediaSourceId = effectiveSourceId,
+          customVersionLabel = effectiveSourceId?.let(customVersionLabelOf),
+        )
       }
     }
 
@@ -2123,6 +2188,10 @@ private fun PlaySection(
   selectedMediaSourceId: String? = null,
   /** 多版本媒体：用户切换了版本。 */
   onSelectMediaSource: (String) -> Unit = {},
+  /** 多版本媒体：取某版本的本机自定义名（null = 用 Emby 原名）。 */
+  customVersionLabelOf: (String) -> String? = { null },
+  /** 多版本媒体：请求编辑某版本的本机名。 */
+  onEditVersionLabel: (EmbyMediaSource) -> Unit = {},
   /**
    * 多版本媒体：当前版本的本地续播秒数（null = 用服务端进度）。
    *
@@ -2359,6 +2428,8 @@ private fun PlaySection(
         sources = mediaSources,
         selectedId = selectedMediaSourceId,
         onSelect = onSelectMediaSource,
+        customLabelOf = customVersionLabelOf,
+        onEditLabel = onEditVersionLabel,
       )
     }
 
@@ -2500,46 +2571,55 @@ private fun MetaChipRow(
 private val META_LABEL_WIDTH = 76.dp
 
 /**
- * 多版本媒体的版本下拉框：当前版本胶囊 + 下拉菜单。
+ * 多版本媒体的版本入口：当前版本胶囊 + 底部选择抽屉。
  *
- * 与收藏页的类型切换器同一套写法（小 Surface + DropdownMenu）—— Compose 下 M3
- * 没有现成的 Spinner，ExposedDropdownMenuBox 的展开态在可滚动列表里点击判定容易出问题；
- * 这个小组合最稳，观感也与项目里其它下拉一致。
+ * 胶囊只显示「标题 + 一行规格」；点开后用 [EmbyVersionPickerSheet] 展示完整数据：
+ * 分辨率角标、编码 / HDR / 音频 / 容器 / 体积 / 码率标签、本机名称、文件名。
+ * 之前用 DropdownMenu 时每条都塞四五行事，菜单又窄，版本一多就很挤。
  */
 @Composable
 private fun MediaSourceSelector(
   sources: List<EmbyMediaSource>,
   selectedId: String?,
   onSelect: (String) -> Unit,
+  customLabelOf: (String) -> String? = { null },
+  onEditLabel: (EmbyMediaSource) -> Unit = {},
 ) {
-  var expanded by remember { mutableStateOf(false) }
+  var sheetOpen by remember { mutableStateOf(false) }
   val current = sources.firstOrNull { it.Id == selectedId } ?: sources.first()
+  val currentCustom = current.Id?.let(customLabelOf)
+  val currentSpec = embyMediaSourceSpec(current)
 
   Box {
     Surface(
-      onClick = { expanded = true },
+      onClick = { sheetOpen = true },
       shape = MaterialTheme.shapes.small,
       color = MaterialTheme.colorScheme.secondaryContainer,
       contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
     ) {
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        // 版本名不可控（有的压制组会把整串信息塞进 Name），不封顶的话一个超长名字
-        // 能把整行撑到换行、把下面一排按钮挤变形。
-        // weight(1f, fill = false) 让中间的标题吃掉剩余空间 ⇒ 箭头稳定停在最右边，
-        // 不再随版本名长短左右晃。
         modifier = Modifier
-          .widthIn(min = 140.dp, max = 240.dp)
+          .widthIn(min = 160.dp, max = 280.dp)
           .padding(start = 10.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
       ) {
-        Text(
-          text = "版本：${embyMediaSourceLabel(current)}",
-          style = MaterialTheme.typography.labelLarge,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-          // 吃掉整行剩余宽度（fill 默认 true）⇒ 箭头被顶到最右端，不随版本名长短左右晃。
-          modifier = Modifier.weight(1f),
-        )
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "版本：${embyMediaSourceTitle(current, currentCustom)}",
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          if (currentSpec.isNotBlank()) {
+            Text(
+              text = currentSpec,
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f),
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
         Spacer(modifier = Modifier.width(4.dp))
         Icon(
           imageVector = Icons.Default.ArrowDropDown,
@@ -2548,41 +2628,94 @@ private fun MediaSourceSelector(
         )
       }
     }
-    DropdownMenu(
-      expanded = expanded,
-      onDismissRequest = { expanded = false },
-      // 菜单默认跟着锚点（那个小 Surface）的宽度走 —— 版本名一长就整条被省略号截掉，
-      // 用户根本分不清两个版本哪个是哪个。这里单独给一个更宽的区间，
-      // 配合下面「最多 3 行」让长名字**换行显示完整**，而不是截成一条看不懂的半句。
-      modifier = Modifier.widthIn(min = 200.dp, max = 320.dp),
-    ) {
-      sources.forEach { source ->
-        val id = source.Id ?: return@forEach
-        DropdownMenuItem(
-          text = {
-            Text(
-              text = embyMediaSourceLabel(source),
-              // 不截断：宁可换行把名字显示全。3 行是上限，再多菜单会高得离谱。
-              maxLines = 3,
-              style = MaterialTheme.typography.bodyMedium,
-            )
-          },
-          leadingIcon = {
-            // 选中项打勾；未选中放一个同宽占位，两行文字左对齐
-            if (id == current.Id) {
-              Icon(Icons.Default.Check, contentDescription = null)
-            } else {
-              Spacer(modifier = Modifier.width(24.dp))
-            }
-          },
-          onClick = {
-            expanded = false
-            onSelect(id)
-          },
+  }
+
+  if (sheetOpen) {
+    EmbyVersionPickerSheet(
+      options = sources.mapNotNull { source ->
+        val id = source.Id ?: return@mapNotNull null
+        val custom = customLabelOf(id)
+        EmbyVersionOption(
+          id = id,
+          title = embyMediaSourceTitle(source, custom),
+          badge = embyMediaSourceResolution(source).orEmpty(),
+          spec = embyMediaSourceSpecParts(source),
+          customName = custom != null,
+        )
+      },
+      selectedId = current.Id,
+      onSelect = { id ->
+        sheetOpen = false
+        onSelect(id)
+      },
+      onDismiss = { sheetOpen = false },
+      onEditName = { id ->
+        sheetOpen = false
+        sources.firstOrNull { it.Id == id }?.let(onEditLabel)
+      },
+    )
+  }
+}
+
+/**
+ * 版本名补全对话框。
+ *
+ * 只改本机显示名：不调 Emby API、不改文件名、不同步到其它设备。
+ * 空白 / 「恢复原名」都会删除本机别名，立刻回到 Emby 自动生成的名字。
+ */
+@Composable
+private fun VersionLabelDialog(
+  source: EmbyMediaSource,
+  customLabel: String?,
+  onSave: (String) -> Unit,
+  onClear: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  var text by remember(source.Id, customLabel) { mutableStateOf(customLabel.orEmpty()) }
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("编辑版本名") },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+          "Emby 原名：${embyMediaSourceLabel(source)}",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val spec = embyMediaSourceSpec(source)
+        if (spec.isNotBlank()) {
+          Text(
+            "完整规格：$spec",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        OutlinedTextField(
+          value = text,
+          onValueChange = { text = it },
+          label = { Text("本机显示名") },
+          placeholder = { Text("例如：4K HDR 中字 / 导演剪辑版") },
+          singleLine = true,
+        )
+        Text(
+          "只保存在本机，用于详情页 / 播放页显示；不会写入 Emby，也不影响其它设备。",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.primary,
         )
       }
-    }
-  }
+    },
+    confirmButton = {
+      Button(onClick = { onSave(text) }, enabled = text.isNotBlank()) { Text("保存") }
+    },
+    dismissButton = {
+      Row {
+        if (!customLabel.isNullOrBlank()) {
+          TextButton(onClick = onClear) { Text("恢复原名") }
+        }
+        TextButton(onClick = onDismiss) { Text("取消") }
+      }
+    },
+  )
 }
 /**
  * 主播放按钮：单击 = 默认内核，长按 = 备用内核。
@@ -2713,107 +2846,210 @@ private fun isDownloadable(item: EmbyItem): Boolean {
 @Composable
 private fun MediaInfoSection(
   item: EmbyItem,
-  /** 当前选中的版本 Id；多版本媒体下「容器 / 文件大小 / 码率 / 音视频轨道」都跟着它走 */
+  /** 当前选中的版本 Id；多版本媒体下「容器 / 文件大小 / 码率 / 路径」都跟着它走 */
   selectedMediaSourceId: String? = null,
+  /** 本机手动补全的版本名；null = Emby 原始名 */
+  customVersionLabel: String? = null,
 ) {
-  val entries =
-    remember(item, selectedMediaSourceId) { buildEmbyMediaInfoEntries(item, selectedMediaSourceId) }
-  val rows = remember(entries) { entries.filterIsInstance<MediaInfoEntry.Row>() }
-  val summary = remember(rows) {
-    rows.take(3).joinToString(" · ") { "${it.label} ${it.value}" }
-  }
-  var expanded by rememberSaveable(item.Id, selectedMediaSourceId) { mutableStateOf(false) }
+  val summary =
+    remember(item, selectedMediaSourceId, customVersionLabel) {
+      buildEmbyMediaInfoSummary(item, selectedMediaSourceId, customVersionLabel)
+    }
+  val specs =
+    remember(summary) {
+      listOfNotNull(
+        summary.resolution?.let { "分辨率" to it },
+        summary.videoCodec?.let { "视频编码" to it },
+        summary.audio?.let { "音频" to it },
+        summary.container?.let { "容器" to it },
+        summary.size?.let { "文件大小" to it },
+        summary.bitrate?.let { "总码率" to it },
+      )
+    }
 
   Column(
     modifier = Modifier
       .fillMaxWidth()
       .padding(horizontal = 16.dp, vertical = 8.dp),
   ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .clip(RoundedCornerShape(12.dp))
-        .clickable { expanded = !expanded }
-        .padding(vertical = 8.dp),
-      verticalAlignment = Alignment.CenterVertically,
+    Surface(
+      shape = RoundedCornerShape(20.dp),
+      color = MaterialTheme.colorScheme.surfaceContainerLow,
+      border = BorderStroke(
+        1.dp,
+        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+      ),
+      modifier = Modifier.fillMaxWidth(),
     ) {
-      Icon(
-        imageVector = Icons.Default.Info,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.size(20.dp),
-      )
-      Spacer(modifier = Modifier.width(6.dp))
-      Column(modifier = Modifier.weight(1f)) {
-        Text("媒体信息", style = MaterialTheme.typography.titleMedium)
-        Text(
-          text = summary.ifBlank { "服务器没有返回可用的媒体信息" },
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-      if (rows.isNotEmpty()) {
-        Text(
-          text = "${rows.size} 项",
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-      }
-      Icon(
-        imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-        contentDescription = if (expanded) "收起媒体信息" else "展开媒体信息",
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
-
-    if (expanded && entries.isNotEmpty()) {
-      Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Column(modifier = Modifier.padding(vertical = 6.dp)) {
-          entries.forEach { entry ->
-            when (entry) {
-              is MediaInfoEntry.Section -> {
-                Text(
-                  text = entry.title,
-                  style = MaterialTheme.typography.labelLarge,
-                  color = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 2.dp),
-                )
-              }
-
-              is MediaInfoEntry.Row -> {
-                Row(
-                  modifier =
-                    Modifier
-                      .fillMaxWidth()
-                      .padding(horizontal = 12.dp, vertical = 5.dp),
-                  verticalAlignment = Alignment.Top,
-                ) {
-                  Text(
-                    text = entry.label,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(76.dp),
-                  )
-                  Text(
-                    text = entry.value,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                  )
-                }
-              }
+      Column(modifier = Modifier.padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Box(
+            modifier = Modifier
+              .size(38.dp)
+              .clip(RoundedCornerShape(12.dp))
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Info,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+          Spacer(modifier = Modifier.width(10.dp))
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = "媒体信息",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.SemiBold,
+            )
+            summary.version?.let { version ->
+              Text(
+                text = version,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
             }
+          }
+          summary.hdr?.let { MediaInfoBadge(it) }
+        }
+
+        if (summary.isEmpty) {
+          Spacer(modifier = Modifier.height(12.dp))
+          Text(
+            text = "服务器没有返回可用的媒体信息",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          return@Column
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        specs.chunked(2).forEachIndexed { rowIndex, pair ->
+          Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            pair.forEach { (label, value) ->
+              MediaSpec(label = label, value = value, modifier = Modifier.weight(1f))
+            }
+            // 奇数项：右侧留空，避免最后一格被拉成半宽、和上面列不对齐
+            if (pair.size == 1) Spacer(modifier = Modifier.weight(1f))
+          }
+          if (rowIndex < (specs.size - 1) / 2) Spacer(modifier = Modifier.height(14.dp))
+        }
+
+        summary.path?.let { path ->
+          Spacer(modifier = Modifier.height(14.dp))
+          HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+          )
+          Spacer(modifier = Modifier.height(12.dp))
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+              text = "文件路径",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.weight(1f),
+            )
+            Text(
+              text = "长按复制",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            )
+          }
+          Spacer(modifier = Modifier.height(3.dp))
+          Text(
+            text = path,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            // 不截断：.strm 常常是完整的网络 URL / 很长的挂载路径，两行省略号会把
+            // 真正有用的目录或查询参数丢掉。这里让文本自然换行，短路径也不会多占高度。
+            softWrap = true,
+            modifier = Modifier
+              .fillMaxWidth()
+              .longPressToCopy(path, "文件路径"),
+          )
+        }
+
+        if (summary.subtitleCount > 0) {
+          Spacer(modifier = Modifier.height(12.dp))
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+              imageVector = Icons.Default.Subtitles,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(16.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+              text = "字幕 ${summary.subtitleCount} 条",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (summary.externalSubtitleCount > 0) {
+              Text(
+                text = " · 外挂 ${summary.externalSubtitleCount}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+          if (summary.subtitleLanguages.isNotEmpty()) {
+            Text(
+              text = summary.subtitleLanguages.joinToString(" / "),
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.padding(start = 22.dp, top = 2.dp),
+            )
           }
         }
       }
     }
+  }
+}
+
+/** 媒体信息里的一格：小标签 + 单行值 */
+@Composable
+private fun MediaSpec(
+  label: String,
+  value: String,
+  modifier: Modifier = Modifier,
+) {
+  Column(modifier = modifier) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(modifier = Modifier.height(2.dp))
+    Text(
+      text = value,
+      style = MaterialTheme.typography.bodyMedium,
+      fontWeight = FontWeight.Medium,
+      color = MaterialTheme.colorScheme.onSurface,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
+  }
+}
+
+/** 角标（HDR10 / HLG …），只用于强调非默认能力 */
+@Composable
+private fun MediaInfoBadge(text: String) {
+  Surface(
+    shape = RoundedCornerShape(percent = 50),
+    color = MaterialTheme.colorScheme.tertiaryContainer,
+  ) {
+    Text(
+      text = text,
+      style = MaterialTheme.typography.labelSmall,
+      fontWeight = FontWeight.Medium,
+      color = MaterialTheme.colorScheme.onTertiaryContainer,
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+    )
   }
 }
 

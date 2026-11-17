@@ -267,6 +267,18 @@ class EmbySubtitleSelectionTest {
   }
 
   @Test
+  fun `同语言优先文本字幕而不是图像字幕`() {
+    // 顺序故意把 PGS 放前、并标成 default：文本轨仍应胜出。
+    // 图像字幕不可检索、不可改样式，外部图像还要额外下载一次 .sup。
+    val list = listOf(
+      sub(1, "chi", codec = "hdmv_pgs_subtitle", external = false, text = false, isDefault = true),
+      sub(2, "chi", codec = "ass", external = false, text = true),
+    )
+    val result = EmbySubtitleSelector.select(list, preferredLanguages = listOf("zh-CN"))
+    assertEquals(2, result.chosen?.streamIndex)
+  }
+
+  @Test
   fun `记住的选择精确命中`() {
     val list = listOf(
       sub(1, "chi", codec = "ass", path = "/m/a.chs.ass"),

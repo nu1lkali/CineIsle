@@ -268,6 +268,9 @@ object EmbySubtitleSelector {
   private fun best(group: List<SubtitleInfo>): SubtitleInfo =
     group.minWith(
       compareBy<SubtitleInfo> { it.isHearingImpaired }
+        // 同语言优先文本字幕：PGS / DVD 图像字幕虽然能挂，但不可检索、不可改样式，
+        // 而且外部图像还需要额外下载。有文本轨时不该先选图像。
+        .thenBy { it.sourceType == SubtitleSourceType.IMAGE_BASED }
         .thenByDescending { it.isDefault }
         .thenByDescending { it.canMountExternally }
         .thenBy { it.streamIndex },

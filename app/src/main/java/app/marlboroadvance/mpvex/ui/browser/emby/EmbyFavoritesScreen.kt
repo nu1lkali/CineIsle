@@ -266,12 +266,13 @@ fun EmbyFavoritesScreen() {
 
   // 进多选就收起外层底部导航栏：本页批量条画在屏幕最底部，而宿主内容全屏铺、
   // 导航栏浮在其上，不收起来按钮会被整条盖住。
+  val classicChrome = app.marlboroadvance.mpvex.ui.browser.LocalClassicChrome.current
   DisposableEffect(selectionMode) {
-    app.marlboroadvance.mpvex.ui.browser.MainScreen.updateBottomBarVisibility(!selectionMode)
+    classicChrome?.bottomBarVisible = !selectionMode
     onDispose {
       // key 变化时 onDispose 先跑、之后才执行上面那行，两次写入语义一致；
       // 离开页面时则由这里恢复。
-      app.marlboroadvance.mpvex.ui.browser.MainScreen.updateBottomBarVisibility(true)
+      classicChrome?.bottomBarVisible = true
     }
   }
 

@@ -4685,11 +4685,17 @@ private fun cancelAutoplayCountdown() {
     }
 
     // Extract the new fileName before loading the file
+    val previousMediaIdentifier = mediaIdentifier
     fileName = getFileName(intent)
     if (fileName.isBlank()) {
       fileName = intent.data?.lastPathSegment ?: "Unknown Video"
     }
     mediaIdentifier = getMediaIdentifier(intent, fileName)
+    // 确实是另一条媒体（不是通知 / PiP 回来的同一个 intent）⇒ 先卸掉上一条的外挂字幕。
+    // 与 loadPlaylistItemInternal 同一套理由：否则「A 加的字幕」会短暂带到 B 上。
+    if (previousMediaIdentifier.isNotBlank() && previousMediaIdentifier != mediaIdentifier) {
+      clearSubtitlesBeforePlaylistSwitch()
+    }
 
     // Set HTTP headers (including referer) BEFORE loading the new file
     setHttpHeadersFromExtras(intent.extras)
@@ -5340,6 +5346,13 @@ private fun cancelAutoplayCountdown() {
     // 位置读数会被上一集的拖动目标「校正」到别的值，见 PlayerSeekTracker）
     PlayerSeekTracker.clear()
 
+    // ── 切集前**显式**把上一集的字幕状态清干净 ──
+    // 只在 FILE_LOADED 里 reset 不够：那时新文件已经打开，而 mpv 的外挂字幕轨 / sid
+    // 有可能在这一瞬间仍然挂着（用户反馈：给 A 加了外挂字幕，按「下一条」后 B 还在显示
+    // 同一条字幕）。这里在 loadfile 之前先卸轨、关字幕、清应用层账本；B 自己的字幕
+    // 仍会由 FILE_LOADED 之后的存档恢复 / TrackSelector / Emby 自动选择重新建立。
+    clearSubtitlesBeforePlaylistSwitch()
+
     val uri = playlist[index]
 
     // Skip playlist items whose local file was deleted (e.g. externally) so we
@@ -5436,6 +5449,43 @@ private fun cancelAutoplayCountdown() {
       // Refresh playlist items to update the currently playing indicator
       viewModel.refreshPlaylistItems()
     }
+  }
+
+  /**
+   * 切集前清掉**上一条**的字幕。
+   *
+   * ## 为什么不能只等 FILE_LOADED 里的 reset
+   *
+   * `viewModel.resetExternalSubtitles()` 只清应用层的跟踪表，不会主动从 mpv 的
+   * `track-list` 里卸轨；而外挂字幕（`sub-add`）是挂在当前文件上的。某些情况下
+   * `loadfile` 前后会有一段时间仍能读到上一集的 sid / 外挂轨，表现为
+   * 「A 加的外挂字幕被带到了 B」。
+   *
+   * 所以这里在 `loadfile` **之前**做三件事：
+   * 1. 把 `sid` / `secondary-sid` 关掉（B 的内嵌字幕之后由 TrackSelector 重新选）；
+   * 2. 对当前所有 `external == true` 的字幕轨下发 `sub-remove`；
+   * 3. 清应用层账本与 Emby 自动挂载的抑制标记。
+   *
+   * 不能放在 `loadfile` 之后：那时轨道属于新文件，`sub-remove` 会误删 B 自己的外挂字幕；
+   * 也不能删磁盘文件 —— 用户可能还想在 B 里重新选同一条字幕。
+   */
+  private fun clearSubtitlesBeforePlaylistSwitch() {
+    var removed = 0
+    runCatching {
+      PlayerLib.setPropertyString("secondary-sid", "no")
+      PlayerLib.setPropertyString("sid", "no")
+      val count = PlayerLib.getPropertyInt("track-list/count") ?: 0
+      for (i in 0 until count) {
+        if (PlayerLib.getPropertyString("track-list/$i/type") != "sub") continue
+        if (PlayerLib.getPropertyBoolean("track-list/$i/external") != true) continue
+        val id = PlayerLib.getPropertyInt("track-list/$i/id") ?: continue
+        PlayerLib.command("sub-remove", id.toString())
+        removed++
+      }
+    }.onFailure { Log.w(TAG, "clear subtitles before playlist switch failed", it) }
+    viewModel.resetExternalSubtitles()
+    viewModel.resetEmbySubtitleState()
+    Log.i(TAG, "playlist switch: cleared $removed external subtitle track(s) from previous media")
   }
 
   /**

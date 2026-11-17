@@ -43,9 +43,11 @@ class DislikeStore {
     synchronized(lock) {
       marks = sorted
       index = sorted.associateBy { it.key }
+      // ⚠️ 发布也必须在锁内：和 [mutate] 同一个原因 —— 锁外发布会与并发变更
+      // 形成「后算的先进、先算的后进」，_all 最终可能停在旧快照上。
+      _all.value = sorted
+      _revision.value = _revision.value + 1
     }
-    _all.value = sorted
-    _revision.value = _revision.value + 1
   }
 
   /**
@@ -76,9 +78,10 @@ class DislikeStore {
       merged = (picked + localOnly).sortedByDescending { it.markedAt }
       marks = merged
       index = merged.associateBy { it.key }
+      // 同上：发布与状态替换在同一锁内，避免并发变更把 _all 覆盖回旧快照。
+      _all.value = merged
+      _revision.value = _revision.value + 1
     }
-    _all.value = merged
-    _revision.value = _revision.value + 1
   }
 
   /** 该条目当前是否处于已标记状态 —— UI 判断选中态只应看这个。 */
@@ -269,11 +272,14 @@ class DislikeStore {
       val nextIndex = next.associateBy { it.key }
       marks = next
       index = nextIndex
+      // ⚠️ `_all` 必须与 marks/index 在同一锁内发布。放到锁外会出现：
+      // A 先算完、B 后算完并发布，A 随后又把 `_all` 覆盖成旧快照 ——
+      // 内部状态是新的，UI / 测试读到的却是旧的（50 条只取消了一部分的偶发根因）。
+      _all.value = next
+      _revision.value = _revision.value + 1
       next
     }
     if (snapshot == null) return false
-    _all.value = snapshot
-    _revision.value = _revision.value + 1
     // 锁外回调：允许它做 IO / 访问数据库
     onMutate?.invoke(snapshot)
     return true

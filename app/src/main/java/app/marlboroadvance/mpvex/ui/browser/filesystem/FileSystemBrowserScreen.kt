@@ -47,7 +47,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SearchBar
 import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Text
@@ -273,46 +272,31 @@ fun FileSystemBrowserScreen(path: String? = null) {
     onPermissionGranted = { viewModel.refresh() },
   )
 
-  // Combined MainScreen updates for better performance and responsiveness
+  // Classic 外壳状态：只有根页（底部导航还在时）才需要改外层导航栏。
+  // 文件页同时被 Cine 复用，那里没有 ClassicChrome，读到 null 就全部 no-op。
+  val classicChrome = app.marlboroadvance.mpvex.ui.browser.LocalClassicChrome.current
   LaunchedEffect(
-    showBottomNavigation, 
-    isInSelectionMode, 
-    isMixedSelection, 
+    showBottomNavigation,
+    isInSelectionMode,
+    isMixedSelection,
     videoSelectionManager.isInSelectionMode,
-    permissionState.status
+    permissionState.status,
   ) {
     if (isAtRoot) {
-      try {
-        val mainScreenObj = app.marlboroadvance.mpvex.ui.browser.MainScreen
-        val onlyVideosSelected = videoSelectionManager.isInSelectionMode && !folderSelectionManager.isInSelectionMode
-
-        // Update all MainScreen states in one call to reduce overhead
-        mainScreenObj.updateBottomBarVisibility(showBottomNavigation)
-        mainScreenObj.updateSelectionState(
-          isInSelectionMode = isInSelectionMode,
-          isOnlyVideosSelected = onlyVideosSelected,
-          selectionManager = if (onlyVideosSelected) videoSelectionManager else null
-        )
-        mainScreenObj.updatePermissionState(
-          isDenied = permissionState.status is PermissionStatus.Denied
-        )
-      } catch (e: Exception) {
-        Log.e("FileSystemBrowserScreen", "Failed to update MainScreen state", e)
-      }
+      val onlyVideosSelected =
+        videoSelectionManager.isInSelectionMode && !folderSelectionManager.isInSelectionMode
+      // 原逻辑最终以「只选中视频」为准隐藏底部导航；文件夹 / 混合选择仍保留导航栏。
+      classicChrome?.bottomBarVisible = !onlyVideosSelected
+      classicChrome?.permissionDenied = permissionState.status is PermissionStatus.Denied
     }
   }
 
-  // Cleanup: Restore bottom navigation bar when leaving the screen
+  // 离开根页时恢复外壳状态，避免把「隐藏导航 / 权限拒绝」泄漏到其它 Tab。
   DisposableEffect(Unit) {
     onDispose {
       if (isAtRoot) {
-        try {
-          val mainScreenObj = app.marlboroadvance.mpvex.ui.browser.MainScreen
-          // Restore bottom navigation when leaving the screen
-          mainScreenObj.updateBottomBarVisibility(true)
-        } catch (e: Exception) {
-          Log.e("FileSystemBrowserScreen", "Failed to restore MainScreen bottom bar visibility", e)
-        }
+        classicChrome?.bottomBarVisible = true
+        classicChrome?.permissionDenied = false
       }
     }
   }
@@ -429,7 +413,7 @@ fun FileSystemBrowserScreen(path: String? = null) {
 
   // Main content
   Box(modifier = Modifier.fillMaxSize()) {
-    Scaffold(
+    app.marlboroadvance.mpvex.ui.browser.components.ClassicPageScaffold(
       topBar = {
         if (isSearching) {
           // Search mode - show search bar instead of top bar
@@ -657,7 +641,7 @@ fun FileSystemBrowserScreen(path: String? = null) {
                 ToggleFloatingActionButton(
                   modifier = Modifier
                     .animateFloatingActionButton(
-                      visible = !isInSelectionMode && isFabVisible.value && !app.marlboroadvance.mpvex.ui.browser.MainScreen.getPermissionDeniedState(),
+                      visible = !isInSelectionMode && isFabVisible.value && classicChrome?.permissionDenied != true,
                       alignment = Alignment.BottomEnd,
                     ),
                   checked = isFabExpanded.value,

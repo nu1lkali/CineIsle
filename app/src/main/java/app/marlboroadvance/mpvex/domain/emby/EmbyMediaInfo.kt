@@ -36,6 +36,8 @@ sealed interface MediaInfoEntry {
 fun buildEmbyMediaInfoEntries(
   item: EmbyItem,
   selectedMediaSourceId: String? = null,
+  /** 本机手动补全的版本名；null = 用 Emby 原始名 */
+  customVersionLabel: String? = null,
 ): List<MediaInfoEntry> {
   val out = mutableListOf<MediaInfoEntry>()
 
@@ -58,7 +60,7 @@ fun buildEmbyMediaInfoEntries(
       ?: allSources.firstOrNull()
 
   if (allSources.count { !it.Id.isNullOrBlank() } > 1 && source != null) {
-    add("版本", embyMediaSourceLabel(source))
+    add("版本", embyMediaSourceTitle(source, customVersionLabel))
   }
   // ⚠️ 这里只能给**条目级**的首次入库时间：Emby 的 `MediaSourceInfo` 里根本没有日期字段
   // （官方文档的属性清单、本项目 `embyclient-reference` 生成的 MediaSourceInfo 都没有
@@ -145,6 +147,112 @@ fun buildEmbyMediaInfoEntries(
 }
 
 /**
+ * 详情页媒体信息卡的**摘要模型**。
+ *
+ * 详情页只需要「一眼能判断这是什么片源」的少量字段；完整轨道、路径、编码标识等
+ * 诊断信息仍由 [buildEmbyMediaInfoEntries] 提供给播放页的「媒体信息」弹窗。
+ * 这里单独做一层，避免详情页 UI 自己再写一遍格式化逻辑。
+ */
+data class EmbyMediaInfoSummary(
+  /** 多版本媒体的版本名；单版本为 null */
+  val version: String? = null,
+  val resolution: String? = null,
+  val videoCodec: String? = null,
+  val audio: String? = null,
+  val container: String? = null,
+  val size: String? = null,
+  val bitrate: String? = null,
+  /** 当前版本的实际文件路径（只用于显示 / 复制，不能当客户端路径直接访问） */
+  val path: String? = null,
+  /** 非 SDR 的动态范围，例如 HDR10 / HLG / DOLBYVISION */
+  val hdr: String? = null,
+  val subtitleCount: Int = 0,
+  val externalSubtitleCount: Int = 0,
+  /** 字幕语言名（已去重，最多 4 个） */
+  val subtitleLanguages: List<String> = emptyList(),
+) {
+  val isEmpty: Boolean
+    get() = resolution == null && videoCodec == null && audio == null &&
+      container == null && size == null && bitrate == null && path == null &&
+      subtitleCount == 0
+}
+
+/**
+ * 为详情页生成媒体信息摘要。任何字段缺失都只返回 null，不会抛异常。
+ */
+fun buildEmbyMediaInfoSummary(
+  item: EmbyItem,
+  selectedMediaSourceId: String? = null,
+  /** 本机手动补全的版本名；null = 用 Emby 原始名 */
+  customVersionLabel: String? = null,
+): EmbyMediaInfoSummary {
+  val sources = item.MediaSources.orEmpty()
+  val source =
+    effectiveEmbyMediaSourceId(item, selectedMediaSourceId)
+      ?.let { id -> sources.firstOrNull { it.Id == id } }
+      ?: sources.firstOrNull()
+  val streams = source?.MediaStreams.orEmpty()
+  val videos = streams.filter { it.Type == "Video" }
+  val audios = streams.filter { it.Type == "Audio" }
+  val subtitles = streams.filter { it.Type == "Subtitle" }
+
+  val video = videos.firstOrNull()
+  val audio =
+    audios.firstOrNull { it.IsDefault == true } ?: audios.firstOrNull()
+
+  val resolution = if (video?.Width != null && video.Height != null) {
+    "${video.Width}×${video.Height}"
+  } else {
+    null
+  }
+  val videoCodec = video?.let { v ->
+    listOfNotNull(
+      v.Codec?.takeIf { it.isNotBlank() }?.uppercase(),
+      v.Profile?.takeIf { it.isNotBlank() }?.let { "· $it" },
+    ).joinToString(" ").takeIf { it.isNotBlank() }
+  }
+  val audioText = audio?.let { a ->
+    listOfNotNull(
+      a.Codec?.takeIf { it.isNotBlank() }?.uppercase(),
+      a.ChannelLayout?.takeIf { it.isNotBlank() }
+        ?: a.Channels?.takeIf { it > 0 }?.let { "$it 声道" },
+    ).joinToString(" · ").takeIf { it.isNotBlank() }
+  }
+  val hdr = (video?.VideoRangeType ?: video?.VideoRange)
+    ?.trim()
+    ?.uppercase()
+    ?.takeIf { it.isNotBlank() && it != "SDR" && it != "UNKNOWN" }
+
+  val subtitleLanguages = subtitles
+    .mapNotNull { s ->
+      s.DisplayLanguage?.takeIf { it.isNotBlank() }
+        ?: languageLabel(s.Language)?.substringBefore(" (")
+    }
+    .distinct()
+    .take(4)
+
+  return EmbyMediaInfoSummary(
+    version = if (sources.count { !it.Id.isNullOrBlank() } > 1 && source != null) {
+      embyMediaSourceTitle(source, customVersionLabel)
+    } else {
+      null
+    },
+    resolution = resolution,
+    videoCodec = videoCodec,
+    audio = audioText,
+    container = source?.Container?.takeIf { it.isNotBlank() }?.uppercase(),
+    size = source?.Size?.takeIf { it > 0 }?.let { formatFileSize(it) },
+    bitrate = (source?.Bitrate?.takeIf { it > 0 } ?: video?.BitRate?.takeIf { it > 0 })
+      ?.let { formatBitrate(it) },
+    path = source?.Path?.takeIf { it.isNotBlank() } ?: item.Path?.takeIf { it.isNotBlank() },
+    hdr = hdr,
+    subtitleCount = subtitles.size,
+    externalSubtitleCount = subtitles.count { it.IsExternal == true },
+    subtitleLanguages = subtitleLanguages,
+  )
+}
+
+/**
  * 多版本媒体：算出「这次实际要用的版本 Id」。
  *
  * 只有确实存在多个版本时才返回非空 —— 单版本媒体返回 null，播放 URL 里就不会带
@@ -196,6 +304,92 @@ fun embyMediaSourceLabel(source: EmbyMediaSource): String {
   source.Size?.takeIf { it > 0 }?.let { parts += formatFileSize(it) }
   if (parts.isEmpty()) source.Container?.uppercase()?.let { parts += it }
   return parts.joinToString(" · ").ifBlank { "版本" }
+}
+
+/**
+ * 版本标题：**本机手动补全的名字** > Emby `Name` > 自动拼出的短名。
+ *
+ * 手动名只在本地生效（见 [EmbyVersionLabels]），不会写回 Emby；清空后自动回退。
+ */
+fun embyMediaSourceTitle(
+  source: EmbyMediaSource,
+  customLabel: String? = null,
+): String = customLabel?.takeIf { it.isNotBlank() } ?: embyMediaSourceLabel(source)
+
+/**
+ * 版本的完整技术规格，与标题分开显示。
+ *
+ * 例：`2160P · HEVC Main 10 · HDR10 · AAC 5.1 · MKV · 12.3 GB · 45.2 Mbps`
+ *
+ * 标题可能只是一个看不出差别的 `229-4K`，规格行才是用户判断「这到底是哪个版本」的依据。
+ */
+fun embyMediaSourceSpec(source: EmbyMediaSource): String =
+  embyMediaSourceSpecParts(source, includeResolution = true).joinToString(" · ")
+
+/**
+ * 规格拆成条目（供版本选择卡片的标签使用）。
+ *
+ * @param includeResolution true 时第一项是 `2160P`；选择卡片通常把分辨率放在角标里，
+ *        此时传 false，避免角标和标签重复。
+ */
+fun embyMediaSourceSpecParts(
+  source: EmbyMediaSource,
+  includeResolution: Boolean = false,
+): List<String> {
+  val streams = source.MediaStreams.orEmpty()
+  val video = streams.firstOrNull { it.Type == "Video" }
+  val audio = streams.firstOrNull { it.Type == "Audio" && it.IsDefault == true }
+    ?: streams.firstOrNull { it.Type == "Audio" }
+
+  val parts = mutableListOf<String>()
+  if (includeResolution) {
+    embyMediaSourceResolution(source)?.let { parts += it }
+  }
+  video?.let { v ->
+    val codec = buildString {
+      v.Codec?.takeIf { it.isNotBlank() }?.let { append(it.uppercase()) }
+      v.Profile?.takeIf { it.isNotBlank() }?.let {
+        if (isNotEmpty()) append(' ')
+        append(it)
+      }
+    }
+    if (codec.isNotBlank()) parts += codec
+  }
+  (video?.VideoRangeType ?: video?.VideoRange)
+    ?.trim()
+    ?.uppercase()
+    ?.takeIf { it.isNotBlank() && it != "SDR" && it != "UNKNOWN" }
+    ?.let { parts += it }
+  audio?.let { a ->
+    val audioParts = listOfNotNull(
+      a.Codec?.takeIf { it.isNotBlank() }?.uppercase(),
+      a.ChannelLayout?.takeIf { it.isNotBlank() }
+        ?: a.Channels?.takeIf { it > 0 }?.let { "${it}声道" },
+    )
+    if (audioParts.isNotEmpty()) parts += audioParts.joinToString(" ")
+  }
+  source.Container?.takeIf { it.isNotBlank() }?.let { parts += it.uppercase() }
+  source.Size?.takeIf { it > 0 }?.let { parts += formatFileSize(it) }
+  (source.Bitrate ?: video?.BitRate)?.takeIf { it > 0 }?.let { parts += formatBitrate(it) }
+  return parts
+}
+
+/** 版本卡片左上角的分辨率角标：`2160P` / `1080P` / `720P`；没有高度返回空串。 */
+fun embyMediaSourceResolution(source: EmbyMediaSource): String? =
+  source.MediaStreams
+    ?.firstOrNull { it.Type == "Video" }
+    ?.Height
+    ?.takeIf { it > 0 }
+    ?.let { "${it}P" }
+
+/** 单行完整名：`标题 · 规格`（用于播放页顶栏、媒体信息等只有一行的地方）。 */
+fun embyMediaSourceDetailedLabel(
+  source: EmbyMediaSource,
+  customLabel: String? = null,
+): String {
+  val title = embyMediaSourceTitle(source, customLabel)
+  val spec = embyMediaSourceSpec(source)
+  return if (spec.isBlank()) title else "$title · $spec"
 }
 
 /** `HEVC (Main 10 · L4.1)` 这样的编码器描述；没有档次/级别时只给编码名 */

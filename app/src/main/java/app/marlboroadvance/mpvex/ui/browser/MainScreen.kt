@@ -32,6 +32,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -52,60 +53,11 @@ import app.marlboroadvance.mpvex.ui.cine.CineTheme
 import app.marlboroadvance.mpvex.ui.cine.LocalUiStyle
 import app.marlboroadvance.mpvex.ui.cine.UiStyle
 import androidx.compose.runtime.collectAsState
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import org.koin.compose.koinInject
 
 @Serializable
 object MainScreen : Screen {
-  // Reactive shared state that can be updated by FileSystemBrowserScreen / selection handlers
-  private val _isInSelectionMode = MutableStateFlow(false)
-  val isInSelectionMode: StateFlow<Boolean> = _isInSelectionMode.asStateFlow()
-
-  private val _shouldHideNavigationBar = MutableStateFlow(false)
-  val shouldHideNavigationBar: StateFlow<Boolean> = _shouldHideNavigationBar.asStateFlow()
-
-  private val _sharedVideoSelectionManager = MutableStateFlow<Any?>(null)
-  val sharedVideoSelectionManager: StateFlow<Any?> = _sharedVideoSelectionManager.asStateFlow()
-
-  private val _isPermissionDenied = MutableStateFlow(false)
-
-  /**
-   * Update selection state and navigation bar visibility
-   * This method should be called whenever selection changes
-   */
-  fun updateSelectionState(
-    isInSelectionMode: Boolean,
-    isOnlyVideosSelected: Boolean,
-    selectionManager: Any?
-  ) {
-    _isInSelectionMode.value = isInSelectionMode
-    _sharedVideoSelectionManager.value = selectionManager
-    // Only hide navigation bar when videos are selected AND in selection mode
-    _shouldHideNavigationBar.value = isInSelectionMode && isOnlyVideosSelected
-  }
-
-  /**
-   * Update permission state to control FAB visibility
-   */
-  fun updatePermissionState(isDenied: Boolean) {
-    _isPermissionDenied.value = isDenied
-  }
-
-  /**
-   * Get current permission denied state
-   */
-  fun getPermissionDeniedState(): Boolean = _isPermissionDenied.value
-
-  /**
-   * Update bottom navigation bar visibility based on floating bottom bar state
-   */
-  fun updateBottomBarVisibility(shouldShow: Boolean) {
-    _shouldHideNavigationBar.value = !shouldShow
-  }
-
   @Composable
   @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
   override fun Content() {
@@ -131,7 +83,8 @@ object MainScreen : Screen {
     val context = LocalContext.current
     val density = LocalDensity.current
 
-    val hideNavigationBar by _shouldHideNavigationBar.collectAsState()
+    // Classic 外壳状态：底部导航可见性 / 权限态。页面级持有，不再挂在 MainScreen 单例上。
+    val classicChrome = remember { ClassicChromeState() }
 
     // 设置 → 外观 →「隐藏导航栏标题」：只留图标。
     // 标签为 null 时 Material3 会把图标挪到正中，导航条高度不变。
@@ -144,7 +97,7 @@ object MainScreen : Screen {
       bottomBar = {
         // Animated bottom navigation bar with slide animations
         AnimatedVisibility(
-          visible = !hideNavigationBar,
+          visible = classicChrome.bottomBarVisible,
           enter = slideInVertically(
             animationSpec = tween(durationMillis = 300),
             initialOffsetY = { fullHeight -> fullHeight }
@@ -266,7 +219,8 @@ object MainScreen : Screen {
         ) { targetTab ->
           tabStateHolder.SaveableStateProvider(key = targetTab) {
             CompositionLocalProvider(
-              LocalNavigationBarHeight provides fabBottomPadding
+              LocalClassicChrome provides classicChrome,
+              LocalNavigationBarHeight provides fabBottomPadding,
             ) {
               when (targetTab) {
                 0 -> EmbyHomeRoute()
@@ -351,6 +305,9 @@ private fun EmbyHomeRoute() {
     // 「直播电视」频道列表（/LiveTv/Channels；只有列表 + 播放，无 EPG/录制）
     onOpenLiveTv = {
       backStack.add(app.marlboroadvance.mpvex.ui.browser.emby.EmbyLiveTvScreen)
+    },
+    onOpenSmartMerge = {
+      backStack.add(app.marlboroadvance.mpvex.ui.browser.emby.smartmerge.SmartMergeScreen)
     },
     // 「聚合库」卡片：进多库合并视图（数据源与归属都在 entity.serverId 上）
     onOpenAggregate = { entity ->

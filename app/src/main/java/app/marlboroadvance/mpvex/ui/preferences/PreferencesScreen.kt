@@ -102,8 +102,6 @@ import app.marlboroadvance.mpvex.preferences.PhotoSlideshowInterval
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
-import app.marlboroadvance.mpvex.ui.browser.emby.PersonMergeScreen
-import app.marlboroadvance.mpvex.ui.browser.emby.aggregate.EmbyAggregateLibraryManageScreen
 import app.marlboroadvance.mpvex.ui.browser.emby.discover.SimilarAlgorithm
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyGachaStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
@@ -207,25 +205,7 @@ object PreferencesScreen : Screen {
           
           item {
             PreferenceCard {
-              Preference(
-                modifier = Modifier.settingsAnchor(R.string.pref_appearance_title),
-                title = { Text(text = stringResource(id = R.string.pref_appearance_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = { 
-                  Text(
-                    text = stringResource(id = R.string.pref_appearance_summary),
-                    color = MaterialTheme.colorScheme.outline
-                  ) 
-                },
-                icon = { 
-                  Icon(
-                    Icons.Outlined.Palette, 
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  ) 
-                },
-                onClick = { backstack.add(AppearancePreferencesScreen) },
-              )
-
+              SettingsDestinationRow(SettingsRegistry.appearance) { backstack.add(it) }
             }
           }
           
@@ -236,68 +216,15 @@ object PreferencesScreen : Screen {
           
           item {
             PreferenceCard {
-              Preference(
-
-                modifier = Modifier.settingsAnchor(R.string.pref_player),
-                title = { Text(text = stringResource(id = R.string.pref_player), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = { 
-                  Text(
-                    text = stringResource(id = R.string.pref_player_summary),
-                    color = MaterialTheme.colorScheme.outline
-                  ) 
-                },
-                icon = { 
-                  Icon(
-                    Icons.Outlined.PlayCircle, 
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  ) 
-                },
-                onClick = { backstack.add(PlayerPreferencesScreen) },
-              )
+              SettingsDestinationRow(SettingsRegistry.player) { backstack.add(it) }
 
               PreferenceDivider()
 
-              Preference(
-                modifier = Modifier.settingsAnchor(R.string.pref_layout_title),
-                title = { Text(text = stringResource(id = R.string.pref_layout_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = { 
-                  Text(
-                    text = stringResource(id = R.string.pref_layout_summary),
-                    color = MaterialTheme.colorScheme.outline
-                  ) 
-                },
-                icon = { 
-                  Icon(
-                    Icons.AutoMirrored.Outlined.ViewQuilt, 
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  ) 
-                },
-                onClick = { backstack.add(PlayerControlsPreferencesScreen) },
-              )
-              
-              PreferenceDivider()
-              
-              Preference(
+              SettingsDestinationRow(SettingsRegistry.layout) { backstack.add(it) }
 
-                modifier = Modifier.settingsAnchor(R.string.pref_gesture),
-                title = { Text(text = stringResource(id = R.string.pref_gesture), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = { 
-                  Text(
-                    text = stringResource(id = R.string.pref_gesture_summary),
-                    color = MaterialTheme.colorScheme.outline
-                  ) 
-                },
-                icon = { 
-                  Icon(
-                    Icons.Outlined.Gesture, 
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  ) 
-                },
-                onClick = { backstack.add(GesturePreferencesScreen) },
-              )
+              PreferenceDivider()
+
+              SettingsDestinationRow(SettingsRegistry.gesture) { backstack.add(it) }
 
               PreferenceDivider()
 
@@ -331,47 +258,13 @@ object PreferencesScreen : Screen {
 
               // GSY 播放器是**独立的一套播放页**（内核 / 渲染 / 手势都跟 mpv 不共用），
               // 所以它的配置单开一页：这一页改什么都不影响 mpv，反之亦然。
-              Preference(
-                modifier = Modifier.settingsAnchor(R.string.pref_gsy_player),
-                title = { Text(text = stringResource(id = R.string.pref_gsy_player), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = {
-                  Text(
-                    text = stringResource(id = R.string.pref_gsy_player_summary),
-                    color = MaterialTheme.colorScheme.outline,
-                  )
-                },
-                icon = {
-                  Icon(
-                    Icons.Outlined.PlayCircle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                  )
-                },
-                onClick = { backstack.add(GsyPreferencesScreen) },
-              )
+              SettingsDestinationRow(SettingsRegistry.gsy) { backstack.add(it) }
 
               // 「标记为不喜欢」的三个开关 + 管理页入口。
               // 播放器按钮那个开关与 mpv 的布局编辑器是**双向同步**的
               // （关开关会清掉控件簇里的按钮、开开关会加回原簇），
               // 细节见 DislikeLayoutSync。
-              Preference(
-                modifier = Modifier.settingsAnchor(R.string.pref_dislike_title),
-                title = { Text(text = stringResource(id = R.string.pref_dislike_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = {
-                  Text(
-                    text = stringResource(id = R.string.pref_dislike_summary),
-                    color = MaterialTheme.colorScheme.outline,
-                  )
-                },
-                icon = {
-                  Icon(
-                    Icons.Outlined.ThumbDown,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                  )
-                },
-                onClick = { backstack.add(DislikePreferencesScreen) },
-              )
+              SettingsDestinationRow(SettingsRegistry.dislike) { backstack.add(it) }
             }
           }
           
@@ -382,25 +275,7 @@ object PreferencesScreen : Screen {
           
           item {
             PreferenceCard {
-              Preference(
-
-                modifier = Modifier.settingsAnchor(R.string.pref_folders_title),
-                title = { Text(text = stringResource(id = R.string.pref_folders_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = { 
-                  Text(
-                    text = stringResource(id = R.string.pref_folders_summary),
-                    color = MaterialTheme.colorScheme.outline
-                  ) 
-                },
-                icon = { 
-                  Icon(
-                    Icons.Outlined.Folder, 
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  ) 
-                },
-                onClick = { backstack.add(FoldersPreferencesScreen) },
-              )
+              SettingsDestinationRow(SettingsRegistry.folders) { backstack.add(it) }
             }
           }
           
@@ -411,69 +286,15 @@ object PreferencesScreen : Screen {
           
           item {
             PreferenceCard {
-              Preference(
+              SettingsDestinationRow(SettingsRegistry.decoder) { backstack.add(it) }
 
-                modifier = Modifier.settingsAnchor(R.string.pref_decoder),
-                title = { Text(text = stringResource(id = R.string.pref_decoder), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = { 
-                  Text(
-                    text = stringResource(id = R.string.pref_decoder_summary),
-                    color = MaterialTheme.colorScheme.outline
-                  ) 
-                },
-                icon = { 
-                  Icon(
-                    Icons.Outlined.Memory, 
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  ) 
-                },
-                onClick = { backstack.add(DecoderPreferencesScreen) },
-              )
-              
               PreferenceDivider()
-              
-              Preference(
 
-                modifier = Modifier.settingsAnchor(R.string.pref_subtitles),
-                title = { Text(text = stringResource(id = R.string.pref_subtitles), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = { 
-                  Text(
-                    text = stringResource(id = R.string.pref_subtitles_summary),
-                    color = MaterialTheme.colorScheme.outline
-                  ) 
-                },
-                icon = { 
-                  Icon(
-                    Icons.Outlined.Subtitles, 
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  ) 
-                },
-                onClick = { backstack.add(SubtitlesPreferencesScreen) },
-              )
-              
+              SettingsDestinationRow(SettingsRegistry.subtitles) { backstack.add(it) }
+
               PreferenceDivider()
-              
-              Preference(
 
-                modifier = Modifier.settingsAnchor(R.string.pref_audio),
-                title = { Text(text = stringResource(id = R.string.pref_audio), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = { 
-                  Text(
-                    text = stringResource(id = R.string.pref_audio_summary),
-                    color = MaterialTheme.colorScheme.outline
-                  ) 
-                },
-                icon = { 
-                  Icon(
-                    Icons.Outlined.Audiotrack, 
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  ) 
-                },
-                onClick = { backstack.add(AudioPreferencesScreen) },
-              )
+              SettingsDestinationRow(SettingsRegistry.audio) { backstack.add(it) }
             }
           }
           
@@ -514,47 +335,17 @@ object PreferencesScreen : Screen {
               // 把多个同类型媒体库合并成一个本地视图。新建 / 编辑 / 删除都在独立页，
               // 这里只做入口 —— 与播放列表、合集同一套分工：设置里给门，内容在专门页面管。
               // 多服务器 / 多用户：管理页按「当前服务器」分桶，标题下会显示在管哪台。
-              Preference(
-                modifier = Modifier.settingsAnchor("聚合库"),
-                title = { Text(text = "聚合库", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = {
-                  Text(
-                    text = "把多个同类型媒体库合并成一个视图；只在本 App 内生效，不修改服务器",
-                    color = MaterialTheme.colorScheme.outline,
-                  )
-                },
-                icon = {
-                  Icon(
-                    Icons.Outlined.Layers,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                  )
-                },
-                onClick = { backstack.add(EmbyAggregateLibraryManageScreen()) },
-              )
+              SettingsDestinationRow(SettingsRegistry.aggregate) { backstack.add(it) }
 
               PreferenceDivider()
 
               // 演职员合并：同一个演员因为名字写法不同会裂成多条 Person（作品页缺片、演职员表重复）。
               // 这是唯一会写服务器元数据的工具，单独一个页面承载，这里只放入口。
-              Preference(
-                modifier = Modifier.settingsAnchor("演职员合并"),
-                title = { Text(text = "演职员合并", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = {
-                  Text(
-                    text = "把重复的演员条目归并成一条（写入服务器，所有客户端生效，可撤销）· 需要管理员",
-                    color = MaterialTheme.colorScheme.outline,
-                  )
-                },
-                icon = {
-                  Icon(
-                    Icons.Outlined.People,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                  )
-                },
-                onClick = { backstack.add(PersonMergeScreen()) },
-              )
+              SettingsDestinationRow(SettingsRegistry.personMerge) { backstack.add(it) }
+
+              PreferenceDivider()
+
+              SettingsDestinationRow(SettingsRegistry.smartMerge) { backstack.add(it) }
             }
           }
 
@@ -1751,47 +1542,11 @@ object PreferencesScreen : Screen {
 
           item {
             PreferenceCard {
-              Preference(
+              SettingsDestinationRow(SettingsRegistry.advanced) { backstack.add(it) }
 
-                modifier = Modifier.settingsAnchor(R.string.pref_advanced),
-                title = { Text(text = stringResource(R.string.pref_advanced), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = { 
-                  Text(
-                    text = stringResource(id = R.string.pref_advanced_summary),
-                    color = MaterialTheme.colorScheme.outline
-                  ) 
-                },
-                icon = { 
-                  Icon(
-                    Icons.Outlined.Code, 
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  ) 
-                },
-                onClick = { backstack.add(AdvancedPreferencesScreen) },
-              )
-              
               PreferenceDivider()
-              
-              Preference(
 
-                modifier = Modifier.settingsAnchor(R.string.pref_about_title),
-                title = { Text(text = stringResource(id = R.string.pref_about_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                summary = { 
-                  Text(
-                    text = stringResource(id = R.string.pref_about_summary),
-                    color = MaterialTheme.colorScheme.outline
-                  ) 
-                },
-                icon = { 
-                  Icon(
-                    Icons.Outlined.Info, 
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                  ) 
-                },
-                onClick = { backstack.add(AboutScreen) },
-              )
+              SettingsDestinationRow(SettingsRegistry.about) { backstack.add(it) }
             }
           }
         }
