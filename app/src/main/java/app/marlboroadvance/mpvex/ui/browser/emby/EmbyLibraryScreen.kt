@@ -143,6 +143,7 @@ import app.marlboroadvance.mpvex.domain.smartmerge.SmartMergeMapper
 import app.marlboroadvance.mpvex.domain.smartmerge.SmartMergeMatcher
 import app.marlboroadvance.mpvex.domain.smartmerge.SmartMergeOperation
 import app.marlboroadvance.mpvex.ui.browser.emby.smartmerge.SmartMergeDirectMergeDialog
+import app.marlboroadvance.mpvex.ui.browser.emby.smartmerge.SmartMergeScreen
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
@@ -305,6 +306,8 @@ data class EmbyLibraryScreen(
     var quickMergeCandidate by remember { mutableStateOf<SmartMergeCandidate?>(null) }
     var quickMergePrimaryId by remember { mutableStateOf<String?>(null) }
     var quickMergeConfirmOpen by remember { mutableStateOf(false) }
+    // 本页至少完成过一次快速合并：顶栏出现「智能合并历史」入口
+    var quickMergedOnce by remember { mutableStateOf(false) }
 
     // ── 搜索态跨「详情页压栈」留存（需求：搜索结果返回保持 v1）──
     // nav3 只组合栈顶 entry，点进详情页时本页组合被销毁，页面内的 remember 全部归零 ——
@@ -1597,6 +1600,7 @@ data class EmbyLibraryScreen(
       consumedCount = (consumedCount - netRemoved).coerceAtLeast(0)
       totalCount = (totalCount - netRemoved).coerceAtLeast(items.size)
       cacheItems()
+      quickMergedOnce = true
 
       Toast.makeText(
         context,
@@ -2268,6 +2272,11 @@ data class EmbyLibraryScreen(
           // 再摆一个 ✕ 会让同一个工具栏上出现两个「离开」性质的图标，
           // 一个退搜索、一个退整个库，很容易点错。SearchOff 保留放大镜意象，
           // 一眼还能看出它跟搜索有关。
+          if (quickMergedOnce) {
+            IconButton(onClick = { backStack.add(SmartMergeScreen) }) {
+              Icon(Icons.Default.History, contentDescription = "查看智能合并历史")
+            }
+          }
           IconButton(onClick = {
             searchActive = true
             val snap = lastSearchSnapshot
@@ -3325,7 +3334,9 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
           initialPrimaryId = quickMergePrimaryId,
           onConfirm = { selected, primaryId ->
             quickMergeOpen = false
-            val projected = selected.mapNotNull(SmartMergeMapper::from)
+            val projected = selected.mapNotNull {
+              SmartMergeMapper.from(it)?.copy(libraryId = libraryId)
+            }
             val candidate = SmartMergeMatcher.candidateFromSelection(
               serverId = currentServer.id,
               items = projected,

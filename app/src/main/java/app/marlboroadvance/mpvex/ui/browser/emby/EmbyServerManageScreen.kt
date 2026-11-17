@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -64,8 +65,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.emby.EmbyEndpoint
+import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyFailoverController
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.domain.emby.EmbySpeedTestResult
 import app.marlboroadvance.mpvex.domain.emby.primaryEndpoint
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
@@ -73,7 +76,9 @@ import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyBrandGreen
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyLogo
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 
 /**
@@ -101,6 +106,7 @@ object EmbyServerManageScreen : Screen {
     val viewModel: EmbyViewModel = viewModel(
       factory = EmbyViewModel.factory(context.applicationContext as Application),
     )
+    val scope = rememberCoroutineScope()
     val servers by viewModel.servers.collectAsState()
     val currentServer by viewModel.currentServer.collectAsState()
     val failoverEnabled by viewModel.failoverEnabled.collectAsState()
@@ -120,6 +126,9 @@ object EmbyServerManageScreen : Screen {
     var backupPicker by remember { mutableStateOf<EmbyServer?>(null) }
     // 「给这台配第二地址（内网 / 公网）」的编辑器
     var altPicker by remember { mutableStateOf<EmbyServer?>(null) }
+    // 测速：同一时刻只测一台；结果按 serverId 保留在本页，切页/重进后重新测
+    var speedTesting by remember { mutableStateOf<Long?>(null) }
+    var speedResults by remember { mutableStateOf<Map<Long, EmbySpeedTestResult>>(emptyMap()) }
 
     Scaffold(
       topBar = {
@@ -201,6 +210,20 @@ object EmbyServerManageScreen : Screen {
               onAddUser = { addUserOn = server },
               onSetBackup = { backupPicker = server },
               onSetAlt = { altPicker = server },
+              speedResult = speedResults[server.id],
+              speedTesting = speedTesting == server.id,
+              onSpeedTest = {
+                if (speedTesting == null) {
+                  speedTesting = server.id
+                  scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                      EmbyClient.measureLatency(server)
+                    }
+                    speedResults = speedResults + (server.id to result)
+                    speedTesting = null
+                  }
+                }
+              },
             )
           }
         }
@@ -488,6 +511,9 @@ private fun ServerCard(
   onAddUser: () -> Unit,
   onSetBackup: () -> Unit,
   onSetAlt: () -> Unit,
+  speedResult: EmbySpeedTestResult?,
+  speedTesting: Boolean,
+  onSpeedTest: () -> Unit,
 ) {
   Card(
     onClick = onSelect,
@@ -600,6 +626,23 @@ private fun ServerCard(
               overflow = TextOverflow.Ellipsis,
             )
           }
+          speedResult?.let { result ->
+            Text(
+              text = if (result.success) {
+                "测速：平均 ${result.averageMs} ms · 最低 ${result.minMs} ms（${result.samples} 次）"
+              } else {
+                "测速失败：${result.error ?: "未知错误"}"
+              },
+              style = MaterialTheme.typography.bodySmall,
+              color = if (result.success) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.error
+              },
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
           // 主备关系：配了就把名字写出来（不然只能点进对话框才知道配没配）。
           // 只有一台服务器时整行不出现 —— 「未设置备用服务器」对单机用户是无意义噪音。
           if (canSetBackup) {
@@ -654,6 +697,18 @@ private fun ServerCard(
         // a7：在这台服务器上再登一个用户（地址已填过，不用重打）
         IconButton(onClick = onAddUser) {
           Icon(Icons.Default.PersonAdd, contentDescription = "在这台服务器上添加另一个用户")
+        }
+        if (server.isLoggedIn) {
+          IconButton(onClick = onSpeedTest, enabled = !speedTesting) {
+            if (speedTesting) {
+              CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp,
+              )
+            } else {
+              Icon(Icons.Default.Speed, contentDescription = "测速")
+            }
+          }
         }
         IconButton(onClick = onEdit) {
           Icon(Icons.Default.Edit, contentDescription = "编辑")

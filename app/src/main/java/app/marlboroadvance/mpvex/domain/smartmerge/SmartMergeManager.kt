@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Smart Merge 的进程级协调器（Koin single）。
@@ -54,6 +55,8 @@ class SmartMergeManager(
 
   private var activeServerId: Long = 0L
   private var scanJob: Job? = null
+  /** 扫描与合并互斥：合并期间不启动扫描，扫描期间拒绝合并。 */
+  private val mergeRunning = AtomicBoolean(false)
 
   fun activate(serverId: Long) {
     if (serverId == activeServerId) return
@@ -64,6 +67,10 @@ class SmartMergeManager(
 
   fun scan(server: EmbyServer, libraryIds: List<String>) {
     if (_scanning.value) return
+    if (mergeRunning.get()) {
+      _message.value = "合并进行中，请等合并完成后再扫描"
+      return
+    }
     activate(server.id)
     scanJob = scope.launch {
       _scanning.value = true
@@ -89,7 +96,7 @@ class SmartMergeManager(
             if (start == 0) total += page.TotalRecordCount
             page.Items.forEach { raw ->
               SmartMergeMapper.from(raw)?.let { item ->
-                all[item.id] = item
+                all[item.id] = item.copy(libraryId = libraryId.takeIf { it.isNotBlank() })
               }
             }
             scanned += page.Items.size
@@ -270,6 +277,18 @@ class SmartMergeManager(
     candidate: SmartMergeCandidate,
     selectedPrimaryId: String?,
   ): SmartMergeOperation? {
+    if (candidate.serverId != server.id) {
+      _message.value = "候选属于其它服务器，已阻止合并"
+      return null
+    }
+    if (_scanning.value) {
+      _message.value = "正在扫描媒体库，请等扫描结束再合并"
+      return null
+    }
+    if (!mergeRunning.compareAndSet(false, true)) {
+      _message.value = "另一个合并正在进行，请稍后再试"
+      return null
+    }
     _message.value = null
     return try {
       if (candidate.status == STATUS_MERGED) {
@@ -278,6 +297,12 @@ class SmartMergeManager(
       }
       if (candidate.status == STATUS_IGNORED) {
         _message.value = "这个候选已被忽略"
+        return null
+      }
+      // 跨媒体库组合的服务端语义未验证：宁可拒绝，也不要把两个库的条目强行合并。
+      val libraries = candidate.items.mapNotNull { it.libraryId }.distinct()
+      if (libraries.size > 1) {
+        _message.value = "候选包含多个媒体库的条目（${libraries.size} 个），已阻止合并"
         return null
       }
       if (!EmbyClient.fetchIsAdmin(server)) {
@@ -388,6 +413,8 @@ class SmartMergeManager(
     } catch (e: Throwable) {
       _message.value = "合并失败：${e.message ?: e::class.simpleName}"
       null
+    } finally {
+      mergeRunning.set(false)
     }
   }
 

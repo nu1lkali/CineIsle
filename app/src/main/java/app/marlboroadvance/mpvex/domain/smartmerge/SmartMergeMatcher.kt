@@ -254,6 +254,18 @@ object SmartMergeMatcher {
       }
     }
 
+    // 后缀变体：ABC-123 / ABC-123B 主体相同但可能不是同一剪辑；不能静默同组。
+    val suffixes = items.map { it.codeSuffix.trim().uppercase() }.distinct()
+    if (suffixes.size > 1) {
+      val labels = items.mapNotNull { it.code?.takeIf { code -> code.isNotBlank() } }
+        .distinct()
+        .ifEmpty { listOf(suffixes.joinToString(" / ")) }
+      conflicts += "番号后缀不同：${labels.joinToString(" / ")}"
+    }
+    // 跨媒体库组合：Emby 的多版本关系是否有跨库语义未验证，先标冲突并封顶。
+    val libraries = items.mapNotNull { it.libraryId }.distinct()
+    if (libraries.size > 1) conflicts += "跨媒体库组合"
+
     if (hasCode && codeConfidence < 0.6) conflicts += "番号识别置信度低"
 
     return score.coerceIn(0, 100) to conflicts.distinct()

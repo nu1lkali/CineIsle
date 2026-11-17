@@ -13,6 +13,8 @@ class SmartMergeMatcherTest {
     name: String,
     code: String? = "ABC-123",
     body: String? = "ABC123",
+    suffix: String = "",
+    libraryId: String? = "lib1",
     source: String = SOURCE_METATUBE,
     year: Int = 2024,
     people: List<String> = listOf("演员A"),
@@ -22,6 +24,8 @@ class SmartMergeMatcherTest {
     name = name,
     code = code,
     codeBody = body,
+    codeSuffix = suffix,
+    libraryId = libraryId,
     codeConfidence = 0.9,
     source = source,
     productionYear = year,
@@ -178,5 +182,32 @@ class SmartMergeMatcherTest {
       items = listOf(same, same.copy(name = "ABC-123 另一个名字")),
     )
     assertEquals(null, candidate)
+  }
+
+  @Test
+  fun `同主体不同后缀会标冲突`() {
+    val candidates = SmartMergeMatcher.buildCandidates(
+      serverId = 1L,
+      items = listOf(
+        item("1", "ABC-123"),
+        item("2", "ABC-123B", code = "ABC-123B", suffix = "B"),
+      ),
+    )
+    assertEquals(1, candidates.size)
+    assertTrue(candidates.first().conflicts.any { it.contains("后缀") })
+    assertEquals(STATUS_CONFLICT, candidates.first().status)
+  }
+
+  @Test
+  fun `跨媒体库组合会标冲突`() {
+    val candidates = SmartMergeMatcher.buildCandidates(
+      serverId = 1L,
+      items = listOf(
+        item("1", "ABC-123", libraryId = "lib1"),
+        item("2", "ABC-123", libraryId = "lib2"),
+      ),
+    )
+    assertEquals(1, candidates.size)
+    assertTrue(candidates.first().conflicts.any { it.contains("跨媒体库") })
   }
 }

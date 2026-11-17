@@ -122,6 +122,7 @@ object SmartMergeMapper {
     return base.copy(
       code = code?.display,
       codeBody = code?.body,
+      codeSuffix = code?.suffix.orEmpty(),
       codeConfidence = code?.confidence ?: 0.0,
       version = version,
     )

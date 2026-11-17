@@ -35,6 +35,16 @@ import java.util.concurrent.TimeUnit
  *
  * 所有方法都会在 IO 线程阻塞（OkHttp 同步），调用方需自行 withContext(Dispatchers.IO)。
  */
+data class EmbySpeedTestResult(
+  val averageMs: Long,
+  val minMs: Long,
+  val maxMs: Long,
+  val samples: Int,
+  val error: String? = null,
+) {
+  val success: Boolean get() = error == null && samples > 0
+}
+
 object EmbyClient {
   private val json = Json {
     ignoreUnknownKeys = true
@@ -2655,6 +2665,48 @@ object EmbyClient {
     }.onFailure {
       EmbyLog.warn("fetchIsAdmin 失败：${it.message} —— 保守当作无权限（写作能力会被禁掉）", it)
     }.getOrDefault(false)
+
+  /**
+   * 服务器连接测速：先做一次不计时的预热（DNS / TLS / 连接池），再连续请求
+   * `/Users/{id}` 取平均 / 最低 / 最高延迟。
+   *
+   * 用当前登录用户的资料接口而不是 `/System/Info`：后者在部分服务端要求管理员，
+   * 普通账号会得到 403，测速结果会被误判成「服务器不可用」。
+   */
+  fun measureLatency(server: EmbyServer, samples: Int = 3): EmbySpeedTestResult {
+    val count = samples.coerceIn(1, 5)
+    val warmup = runCatching { getJson<EmbyUserDetailDto>(server, "/Users/${server.userId}") }
+    warmup.exceptionOrNull()?.let { error ->
+      return EmbySpeedTestResult(
+        averageMs = 0,
+        minMs = 0,
+        maxMs = 0,
+        samples = 0,
+        error = "连接失败：${error.message ?: error::class.simpleName}",
+      )
+    }
+    val measured = mutableListOf<Long>()
+    repeat(count) {
+      val started = System.nanoTime()
+      val outcome = runCatching { getJson<EmbyUserDetailDto>(server, "/Users/${server.userId}") }
+      outcome.exceptionOrNull()?.let { error ->
+        return EmbySpeedTestResult(
+          averageMs = 0,
+          minMs = 0,
+          maxMs = 0,
+          samples = measured.size,
+          error = "第 ${measured.size + 1} 次请求失败：${error.message ?: error::class.simpleName}",
+        )
+      }
+      measured += (System.nanoTime() - started) / 1_000_000L
+    }
+    return EmbySpeedTestResult(
+      averageMs = measured.average().toLong(),
+      minMs = measured.minOrNull() ?: 0,
+      maxMs = measured.maxOrNull() ?: 0,
+      samples = measured.size,
+    )
+  }
 
   // ─── Smart Merge：Emby 原生多版本组合 / 拆分 ───
 

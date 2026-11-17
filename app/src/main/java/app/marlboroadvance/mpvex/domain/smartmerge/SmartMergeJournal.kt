@@ -25,12 +25,14 @@ class SmartMergeJournal(private val dir: File) {
 
   private fun snapshotDir(operationId: String) = File(dir, "snapshots/$operationId")
 
+  @Synchronized
   fun load(serverId: Long): SmartMergeState = runCatching {
     val file = stateFile(serverId)
     if (!file.exists()) SmartMergeState(serverId = serverId)
     else json.decodeFromString<SmartMergeState>(file.readText())
   }.getOrElse { SmartMergeState(serverId = serverId) }
 
+  @Synchronized
   fun save(state: SmartMergeState) {
     runCatching {
       if (!dir.exists()) dir.mkdirs()
@@ -45,6 +47,7 @@ class SmartMergeJournal(private val dir: File) {
   }
 
   /** 保存完整条目原文（用于事后核对 / 人工恢复参考，不作为自动重建依据）。 */
+  @Synchronized
   fun saveRawSnapshot(operationId: String, itemId: String, rawJson: String) {
     runCatching {
       val operationDir = snapshotDir(operationId)
@@ -59,12 +62,14 @@ class SmartMergeJournal(private val dir: File) {
     }
   }
 
+  @Synchronized
   fun readRawSnapshot(operationId: String, itemId: String): String? = runCatching {
     val file = File(snapshotDir(operationId), "${safeName(itemId)}.json")
     if (file.exists()) file.readText() else null
   }.getOrNull()
 
   /** 只保留最近 [keep] 条操作；快照目录跟着操作一起裁。 */
+  @Synchronized
   fun prune(state: SmartMergeState, keep: Int = 50): SmartMergeState {
     if (state.operations.size <= keep) return state
     val kept = state.operations.take(keep)

@@ -22,6 +22,10 @@ data class SmartMergeItem(
   val code: String? = null,
   /** 去掉后缀的可比较主体（ABC123），候选分组用 */
   val codeBody: String? = null,
+  /** 番号后缀（如 ABC-123B 的 B）；扫描/手动组合用它标「后缀变体」冲突 */
+  val codeSuffix: String = "",
+  /** 所属媒体库 Id；null = 未知（如手动搜索投影）。跨库组合会被拒绝 */
+  val libraryId: String? = null,
   val codeConfidence: Double = 0.0,
   val version: SmartMergeVersionProfile = SmartMergeVersionProfile(),
   val productionYear: Int? = null,
