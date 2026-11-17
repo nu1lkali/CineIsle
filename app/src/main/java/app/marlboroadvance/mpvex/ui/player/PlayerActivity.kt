@@ -459,6 +459,9 @@ open class PlayerActivity :
   private var playbackFileGeneration = 0
   /** 直出模式每条媒体最多降级一次，防止 vo / hwdec 重协商形成循环。 */
   private var directOutputFallbackApplied = false
+  /** 卡死看门狗：解码器「出一两秒后停住」时自动切软解 / 关闭 dr。 */
+  private var stallWatchJob: Job? = null
+  private var stallRecoveryAttempts = 0
   private var isUserFinishing = false
   private var isManualBackgroundPlayback = false // Track manual background playback trigger
   private var mpvInitialized = false // Track MPV initialization state
@@ -2378,6 +2381,126 @@ open class PlayerActivity :
   }
 
   /**
+   * 解码卡死看门狗。
+   *
+   * 现象：某些设备的 MediaCodec HEVC Main10 解码器能出 1～2 秒画面，之后不再吐帧，
+   * 但 mpv 不报错、`time-pos` 可能还在走（音频继续），界面看起来就是「画面冻住」。
+   * 现有 `directOutput` 兜底只在首帧没出来时触发，救不了这种「先出画、后停住」。
+   *
+   * 这里同时看 `time-pos` 与 `estimated-frame-number`：只有两者都在前进才算
+   * 正常播放。4 秒没有进展就降级：
+   *  - 还在 MediaCodec → 切 GPU 渲染 + `hwdec=no` + 关闭 `vd-lavc-dr`；
+   *  - 已经是软解 → 先关 `vd-lavc-dr`，仍卡则弹播放错误，提示手动切软解。
+   */
+  private fun startStallWatchdog() {
+    stallWatchJob?.cancel()
+    if (engineKind != EngineKind.MPV) return
+    val generation = playbackFileGeneration
+    stallWatchJob = lifecycleScope.launch {
+      var lastPos = Double.NaN
+      var lastFrame = Double.NaN
+      var lastProgressAt = SystemClock.elapsedRealtime()
+      while (isActive && !isFinishing && !isDestroyed && generation == playbackFileGeneration) {
+        delay(1_500)
+        if (engineKind != EngineKind.MPV || isFinishing || isDestroyed) return@launch
+        if (PlayerLib.getPropertyBoolean("pause") == true ||
+          PlayerLib.getPropertyBoolean("paused-for-cache") == true ||
+          PlayerLib.getPropertyBoolean("seeking") == true ||
+          PlayerLib.getPropertyBoolean("core-idle") == true ||
+          PlayerLib.getPropertyBoolean("eof-reached") == true ||
+          PlayerLib.getPropertyBoolean("idle-active") == true
+        ) {
+          lastProgressAt = SystemClock.elapsedRealtime()
+          lastPos = Double.NaN
+          lastFrame = Double.NaN
+          continue
+        }
+        val pos = PlayerLib.getPropertyDouble("time-pos")
+        if (pos == null || pos < 0) {
+          lastProgressAt = SystemClock.elapsedRealtime()
+          continue
+        }
+        val codec = PlayerLib.getPropertyString("video-codec")
+        val hasVideo = !codec.isNullOrBlank() && codec != "no"
+        // mediacodec_embed 直出不一定维护 estimated-frame-number；直出时只看 time-pos，
+        // 避免把正常零拷贝播放误判成「视频帧不动」。
+        val vo = PlayerLib.getPropertyString("current-vo").orEmpty()
+        val frame = if (hasVideo && vo != "mediacodec_embed") {
+          PlayerLib.getPropertyDouble("estimated-frame-number")?.takeIf { it > 0.0 }
+        } else {
+          null
+        }
+        val posAdvanced = lastPos.isNaN() || pos > lastPos + 0.15
+        // 没有视频 / 读不到帧号时退回只看 time-pos；能读到帧号就要求帧号也前进。
+        val frameAdvanced = !hasVideo || frame == null || lastFrame.isNaN() || frame > lastFrame + 0.5
+        val now = SystemClock.elapsedRealtime()
+        if (posAdvanced && frameAdvanced) {
+          lastProgressAt = now
+          lastPos = pos
+          if (frame != null) lastFrame = frame
+        } else {
+          if (!posAdvanced) lastPos = pos
+          if (frame != null && frameAdvanced) lastFrame = frame
+          if (now - lastProgressAt >= 4_000) {
+            if (!recoverFromStall(generation, pos, frame, codec)) return@launch
+            lastProgressAt = now
+            lastPos = Double.NaN
+            lastFrame = Double.NaN
+          }
+        }
+      }
+    }
+  }
+
+  private fun recoverFromStall(
+    generation: Int,
+    pos: Double,
+    frame: Double?,
+    codec: String?,
+  ): Boolean {
+    if (generation != playbackFileGeneration || isFinishing || isDestroyed) return false
+    val hwdec = runCatching { PlayerLib.getPropertyString("hwdec-current") }.getOrNull().orEmpty()
+    val vo = runCatching { PlayerLib.getPropertyString("current-vo") }.getOrNull().orEmpty()
+    val pixel = runCatching { PlayerLib.getPropertyString("video-params/pixelformat") }.getOrNull().orEmpty()
+    val detail = "codec=${codec ?: "?"} pixel=$pixel hwdec=$hwdec vo=$vo " +
+      "pos=%.1f frame=%s attempt=${stallRecoveryAttempts + 1}"
+        .format(pos, frame?.toLong()?.toString() ?: "?")
+    runCatching { PlayerDiagLog.forceLog("stall-watchdog", detail) }
+
+    if (stallRecoveryAttempts >= 2) {
+      viewModel.showPlaybackError(
+        "播放持续卡住。可打开播放器面板，把解码器切到「软件解码」后重试。\n$detail",
+      )
+      return false
+    }
+    stallRecoveryAttempts++
+
+    if (hwdec.startsWith("mediacodec")) {
+      PlayerLib.setPropertyString("vo", if (decoderPreferences.gpuNext.get()) "gpu-next" else "gpu")
+      PlayerLib.setPropertyString("hwdec", "no")
+      PlayerLib.setPropertyString("vd-lavc-dr", "no")
+      android.widget.Toast.makeText(
+        this,
+        "硬件解码卡住，已自动切换软件解码",
+        android.widget.Toast.LENGTH_LONG,
+      ).show()
+    } else if (stallRecoveryAttempts == 1) {
+      PlayerLib.setPropertyString("vd-lavc-dr", "no")
+      android.widget.Toast.makeText(
+        this,
+        "播放卡住，已关闭解码器直写；如仍卡请切软件解码",
+        android.widget.Toast.LENGTH_LONG,
+      ).show()
+    } else {
+      viewModel.showPlaybackError(
+        "播放持续卡住。可打开播放器面板，把解码器切到「软件解码」后重试。\n$detail",
+      )
+      return false
+    }
+    return true
+  }
+
+  /**
    * Handles configuration changes by updating video aspect ratio.
    */
   private fun handleConfigurationChange() {
@@ -3377,6 +3500,9 @@ private fun cancelAutoplayCountdown() {
       MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
         playbackFileGeneration++
         directOutputFallbackApplied = false
+        stallWatchJob?.cancel()
+        stallWatchJob = null
+        stallRecoveryAttempts = 0
         handleFileLoaded()
         isReady = true
         // 文件刚起来、画面还什么都没有 ⇒ 重新显示加载层。
@@ -3401,6 +3527,7 @@ private fun cancelAutoplayCountdown() {
         viewModel.onFirstFrameRendered()
         updateRecentlyPlayedDurationIfAvailable()
         watchSteadyState()
+        startStallWatchdog()
 
         // 首帧出来后 video-params（gamma / sig-peak）才可读 ⇒ 这里才是
         // 「要不要让系统切进 HDR 显示模式」的正式判定时机。

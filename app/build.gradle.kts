@@ -3394,8 +3394,13 @@ android {
     //  · 扫描与合并互斥；合并并发互斥；JSON 账本读写加锁。
     //  · Emby 服务器管理每台服务器新增测速按钮：预热后取平均/最低延迟。
     //  · 媒体库完成快速合并后，顶栏出现「智能合并历史」入口。
-    versionCode = 284
-    versionName = "1.6.40"
+    // 285 / 1.6.41：解码卡死看门狗（HEVC Main10 等）。
+    //  · 同时观察 time-pos 与 estimated-frame-number；4 秒无进展时自动降级：
+    //    MediaCodec → 软件解码 + 关闭 vd-lavc-dr；仍卡则提示手动切软解。
+    //  · 直出 vo=mediacodec_embed 下不依赖帧号，避免误判正常零拷贝播放。
+    // 286 / 1.6.42：看门狗 EOF / idle 保护（避免片尾误判为卡死）。
+    versionCode = 286
+    versionName = "1.6.42"
 
     vectorDrawables {
       useSupportLibrary = true
