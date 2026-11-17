@@ -63,6 +63,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -200,6 +203,7 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
 
   override fun onStop() {
     super.onStop()
+    if (prefs.backgroundPlayback.get()) return
     if (!isInPictureInPictureMode && !enteringPip) {
       runCatching { mediaPlayer?.pause() }
     }
@@ -265,15 +269,21 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
       add("--network-caching=${prefs.networkCachingMs.get().coerceIn(0, 30_000)}")
       add("--file-caching=${prefs.fileCachingMs.get().coerceIn(0, 30_000)}")
       if (prefs.deinterlace.get()) add("--deinterlace=1")
-      if (prefs.dropLateFrames.get()) {
-        add("--drop-late-frames")
-        add("--skip-frames")
-      } else {
-        add("--no-drop-late-frames")
-        add("--no-skip-frames")
-      }
+      if (prefs.dropLateFrames.get()) add("--drop-late-frames") else add("--no-drop-late-frames")
+      if (prefs.skipFrames.get()) add("--skip-frames") else add("--no-skip-frames")
+      prefs.extraOptions.get()
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .forEach { option -> add(if (option.startsWith("-")) option else "--$option") }
     }
-    val lib = LibVLC(this, options)
+    // 选项列表里任何一项在个别 VLC 版本上不被认识时，宁可退回默认实例，
+    // 也不要让整个内核初始化直接失败（用户看到的就是「VLC 内核初始化失败」）。
+    val lib = runCatching { LibVLC(this, options) }
+      .getOrElse { error ->
+        android.util.Log.w("VlcPlayer", "LibVLC(options) 初始化失败，回退默认:", error)
+        LibVLC(this)
+      }
     val player = MediaPlayer(lib)
     player.setEventListener(object : MediaPlayer.EventListener {
       override fun onEvent(event: MediaPlayer.Event) {
@@ -313,6 +323,8 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
       if (subLang.isNotEmpty()) addOption(":sub-language=$subLang")
       val subtitleScale = prefs.subtitleScalePercent.get().coerceIn(50, 200) / 100f
       if (subtitleScale != 1f) addOption(":sub-text-scale=$subtitleScale")
+      val subtitleMargin = prefs.subtitleMargin.get().coerceIn(0, 160)
+      if (subtitleMargin > 0) addOption(":sub-margin=$subtitleMargin")
       intent?.getStringArrayExtra("headers")?.let { headers ->
         if (headers.size >= 2 && headers[0].equals("User-Agent", ignoreCase = true)) {
           addOption(":http-user-agent=${headers[1]}")
@@ -336,6 +348,8 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
           pendingStartMs = 0L
         }
         refreshTracks()
+        applyAspectPreference()
+        applyDelays()
       }
 
       MediaPlayer.Event.Paused,
@@ -448,6 +462,23 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     uiState.value = uiState.value.copy(aspect = next.name.removePrefix("SURFACE_"))
   }
 
+  private fun applyAspectPreference() {
+    val scale = when (prefs.defaultAspect.get().lowercase()) {
+      "16:9" -> MediaPlayer.ScaleType.SURFACE_16_9
+      "4:3" -> MediaPlayer.ScaleType.SURFACE_4_3
+      "fill" -> MediaPlayer.ScaleType.SURFACE_FILL
+      else -> MediaPlayer.ScaleType.SURFACE_BEST_FIT
+    }
+    runCatching { mediaPlayer?.videoScale = scale }
+    uiState.value = uiState.value.copy(aspect = scale.name.removePrefix("SURFACE_"))
+  }
+
+  private fun applyDelays() {
+    val player = mediaPlayer ?: return
+    runCatching { player.setAudioDelay(prefs.audioDelayMs.get().coerceIn(-5000, 5000) * 1000L) }
+    runCatching { player.setSpuDelay(prefs.subtitleDelayMs.get().coerceIn(-5000, 5000) * 1000L) }
+  }
+
   private fun enterPip() {
     if (Build.VERSION.SDK_INT < 26) return
     val params = PictureInPictureParams.Builder()
@@ -543,6 +574,8 @@ private fun VlcPlayerScreen(
   var showSubtitle by remember { mutableStateOf(false) }
   var sliderPosition by remember { mutableLongStateOf(ui.positionMs) }
   var dragging by remember { mutableStateOf(false) }
+  val context = LocalContext.current
+  val clipboard = LocalClipboardManager.current
 
   LaunchedEffect(ui.positionMs, dragging) {
     if (!dragging) sliderPosition = ui.positionMs
@@ -653,6 +686,12 @@ private fun VlcPlayerScreen(
               Text(error, color = Color.White, style = MaterialTheme.typography.bodySmall)
               Row {
                 TextButton(onClick = onRetry) { Text("重试") }
+                TextButton(
+                  onClick = {
+                    clipboard.setText(AnnotatedString(error))
+                    android.widget.Toast.makeText(context, "错误信息已复制", android.widget.Toast.LENGTH_SHORT).show()
+                  },
+                ) { Text("复制错误") }
                 TextButton(onClick = onBack) { Text("返回") }
               }
             }

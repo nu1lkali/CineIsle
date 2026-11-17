@@ -3406,8 +3406,11 @@ android {
     //  · 详情页长按播放改为内核选择（MPV / GSY / VLC），不再只反选 GSY。
     //  · 设置新增「播放内核设置」三列入口（MPV / GSY / VLC），VLC 有自己的偏好页。
     // 289 / 1.6.45：VLC 播放页细节收口（PiP 不暂停、首帧后才上报、外挂字幕）。
-    versionCode = 289
-    versionName = "1.6.45"
+    // 290 / 1.6.46：VLC 初始化失败回退 + 设置扩展。
+    //  · LibVLC(options) 失败时回退默认 LibVLC()，避免个别选项导致整个内核初始化失败。
+    //  · VLC 设置增加跳帧、后台播放、默认比例、字幕边距、额外命令行参数。
+    versionCode = 290
+    versionName = "1.6.46"
 
     vectorDrawables {
       useSupportLibrary = true

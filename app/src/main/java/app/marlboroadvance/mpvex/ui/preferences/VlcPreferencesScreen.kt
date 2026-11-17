@@ -2,6 +2,8 @@ package app.marlboroadvance.mpvex.ui.preferences
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,9 +57,16 @@ object VlcPreferencesScreen : Screen {
     val fileCaching by prefs.fileCachingMs.collectAsState()
     val deinterlace by prefs.deinterlace.collectAsState()
     val dropLateFrames by prefs.dropLateFrames.collectAsState()
+    val skipFrames by prefs.skipFrames.collectAsState()
+    val backgroundPlayback by prefs.backgroundPlayback.collectAsState()
+    val defaultAspect by prefs.defaultAspect.collectAsState()
     val subtitleScale by prefs.subtitleScalePercent.collectAsState()
+    val subtitleMargin by prefs.subtitleMargin.collectAsState()
+    val audioDelay by prefs.audioDelayMs.collectAsState()
+    val subtitleDelay by prefs.subtitleDelayMs.collectAsState()
     val audioLanguage by prefs.audioLanguage.collectAsState()
     val subtitleLanguage by prefs.subtitleLanguage.collectAsState()
+    val extraOptions by prefs.extraOptions.collectAsState()
 
     Scaffold(
       topBar = {
@@ -109,6 +119,18 @@ object VlcPreferencesScreen : Screen {
               checked = dropLateFrames,
               onCheckedChange = prefs.dropLateFrames::set,
             )
+            VlcSwitchRow(
+              title = "允许跳帧",
+              summary = "VLC 的 skip-frames；与丢晚帧分开控制，直播/低性能设备可单独关。",
+              checked = skipFrames,
+              onCheckedChange = prefs.skipFrames::set,
+            )
+            VlcSwitchRow(
+              title = "后台播放",
+              summary = "切到后台时不自动暂停；当前没有前台服务，系统仍可能在内存紧张时杀进程。",
+              checked = backgroundPlayback,
+              onCheckedChange = prefs.backgroundPlayback::set,
+            )
           }
         }
 
@@ -143,6 +165,10 @@ object VlcPreferencesScreen : Screen {
               checked = deinterlace,
               onCheckedChange = prefs.deinterlace::set,
             )
+            VlcAspectRow(
+              value = defaultAspect,
+              onValueChange = prefs.defaultAspect::set,
+            )
             VlcSliderRow(
               title = "字幕字号",
               valueText = "$subtitleScale%",
@@ -150,6 +176,14 @@ object VlcPreferencesScreen : Screen {
               range = 50f..200f,
               steps = 14,
               onValueChange = { prefs.subtitleScalePercent.set(it.toInt()) },
+            )
+            VlcSliderRow(
+              title = "字幕底部边距",
+              valueText = "$subtitleMargin px",
+              value = subtitleMargin.toFloat(),
+              range = 0f..160f,
+              steps = 15,
+              onValueChange = { prefs.subtitleMargin.set(it.toInt()) },
             )
           }
         }
@@ -181,9 +215,67 @@ object VlcPreferencesScreen : Screen {
               label = { Text("首选字幕语言") },
               placeholder = { Text("如 chi / eng；留空自动") },
             )
+            VlcSliderRow(
+              title = "音频延迟",
+              valueText = "%+d ms".format(audioDelay),
+              value = audioDelay.toFloat(),
+              range = -5000f..5000f,
+              steps = 19,
+              onValueChange = { prefs.audioDelayMs.set(it.toInt()) },
+            )
+            VlcSliderRow(
+              title = "字幕延迟",
+              valueText = "%+d ms".format(subtitleDelay),
+              value = subtitleDelay.toFloat(),
+              range = -5000f..5000f,
+              steps = 19,
+              onValueChange = { prefs.subtitleDelayMs.set(it.toInt()) },
+            )
+          }
+        }
+
+        item { VlcSectionTitle("高级") }
+        item {
+          VlcSettingsCard {
+            var extraText by remember(extraOptions) { mutableStateOf(extraOptions) }
+            OutlinedTextField(
+              value = extraText,
+              onValueChange = {
+                extraText = it
+                prefs.extraOptions.set(it)
+              },
+              modifier = Modifier.fillMaxWidth(),
+              minLines = 3,
+              label = { Text("额外 VLC 参数（每行一个）") },
+              placeholder = { Text("如 --no-audio-time-stretch\n或 --sub-text-color=#FFFFFF") },
+              supportingText = {
+                Text("仅作用于 VLC 播放页；写错时回到默认参数即可。")
+              },
+            )
           }
         }
       }
+    }
+  }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun VlcAspectRow(
+  value: String,
+  onValueChange: (String) -> Unit,
+) {
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Text("默认画面比例", style = MaterialTheme.typography.bodyLarge)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      listOf("auto" to "自动", "16:9" to "16:9", "4:3" to "4:3", "fill" to "填充")
+        .forEach { (key, label) ->
+          FilterChip(
+            selected = value == key,
+            onClick = { onValueChange(key) },
+            label = { Text(label) },
+          )
+        }
     }
   }
 }
