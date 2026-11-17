@@ -2399,6 +2399,7 @@ open class PlayerActivity :
     stallWatchJob = lifecycleScope.launch {
       var lastPos = Double.NaN
       var lastFrame = Double.NaN
+      var lastVideoPts = Double.NaN
       var lastProgressAt = SystemClock.elapsedRealtime()
       while (isActive && !isFinishing && !isDestroyed && generation == playbackFileGeneration) {
         delay(1_500)
@@ -2413,6 +2414,7 @@ open class PlayerActivity :
           lastProgressAt = SystemClock.elapsedRealtime()
           lastPos = Double.NaN
           lastFrame = Double.NaN
+          lastVideoPts = Double.NaN
           continue
         }
         val pos = PlayerLib.getPropertyDouble("time-pos")
@@ -2430,22 +2432,36 @@ open class PlayerActivity :
         } else {
           null
         }
+        // estimated-frame-number 在部分构建/容器里不可用；video-pts 是更底层的兜底。
+        val videoPts = if (hasVideo && vo != "mediacodec_embed") {
+          PlayerLib.getPropertyDouble("video-pts")
+        } else {
+          null
+        }
         val posAdvanced = lastPos.isNaN() || pos > lastPos + 0.15
-        // 没有视频 / 读不到帧号时退回只看 time-pos；能读到帧号就要求帧号也前进。
-        val frameAdvanced = !hasVideo || frame == null || lastFrame.isNaN() || frame > lastFrame + 0.5
+        // 视频进度优先看帧号，其次看 video-pts；两者都没有才退回只看 time-pos。
+        val videoAdvanced = when {
+          !hasVideo -> true
+          frame != null && !lastFrame.isNaN() -> frame > lastFrame + 0.5
+          videoPts != null && !lastVideoPts.isNaN() -> videoPts > lastVideoPts + 0.05
+          else -> true
+        }
         val now = SystemClock.elapsedRealtime()
-        if (posAdvanced && frameAdvanced) {
+        if (posAdvanced && videoAdvanced) {
           lastProgressAt = now
           lastPos = pos
           if (frame != null) lastFrame = frame
+          if (videoPts != null) lastVideoPts = videoPts
         } else {
           if (!posAdvanced) lastPos = pos
-          if (frame != null && frameAdvanced) lastFrame = frame
+          if (frame != null && videoAdvanced) lastFrame = frame
+          if (videoPts != null && videoAdvanced) lastVideoPts = videoPts
           if (now - lastProgressAt >= 4_000) {
             if (!recoverFromStall(generation, pos, frame, codec)) return@launch
             lastProgressAt = now
             lastPos = Double.NaN
             lastFrame = Double.NaN
+            lastVideoPts = Double.NaN
           }
         }
       }
@@ -2475,6 +2491,26 @@ open class PlayerActivity :
     }
     stallRecoveryAttempts++
 
+    val zeroCopy = hwdec == "mediacodec" && vo == "mediacodec_embed"
+    val copyback = hwdec.startsWith("mediacodec") && !zeroCopy
+    val tenBitHevc = isTenBitHevc(codec, pixel)
+
+    // 0) 10-bit HEVC 的 copyback 路径最容易在部分 MediaCodec 上「出几帧后停住」。
+    //    先尝试 mpv 自己的零拷贝直出 —— 它与 GSY / 系统播放器一样走 Surface 输出，
+    //    比直接降软解更接近「为什么 GSY 能播、mpv 不能播」的根因。
+    if (copyback && tenBitHevc) {
+      PlayerLib.setPropertyString("vo", "mediacodec_embed")
+      PlayerLib.setPropertyString("hwdec", "mediacodec")
+      PlayerLib.setPropertyString("vd-lavc-dr", "no")
+      android.widget.Toast.makeText(
+        this,
+        "硬件回拷解码卡住，已切换零拷贝直出（字幕/OSD 可能不可用）",
+        android.widget.Toast.LENGTH_LONG,
+      ).show()
+      return true
+    }
+
+    // 1) 其它硬解路径 → 软解
     if (hwdec.startsWith("mediacodec")) {
       PlayerLib.setPropertyString("vo", if (decoderPreferences.gpuNext.get()) "gpu-next" else "gpu")
       PlayerLib.setPropertyString("hwdec", "no")
@@ -2484,20 +2520,32 @@ open class PlayerActivity :
         "硬件解码卡住，已自动切换软件解码",
         android.widget.Toast.LENGTH_LONG,
       ).show()
-    } else if (stallRecoveryAttempts == 1) {
+      return true
+    }
+
+    // 2) 已经是软解：先关 vd-lavc-dr
+    if (stallRecoveryAttempts == 1) {
       PlayerLib.setPropertyString("vd-lavc-dr", "no")
       android.widget.Toast.makeText(
         this,
         "播放卡住，已关闭解码器直写；如仍卡请切软件解码",
         android.widget.Toast.LENGTH_LONG,
       ).show()
-    } else {
-      viewModel.showPlaybackError(
-        "播放持续卡住。可打开播放器面板，把解码器切到「软件解码」后重试。\n$detail",
-      )
-      return false
+      return true
     }
-    return true
+
+    viewModel.showPlaybackError(
+      "播放持续卡住。可打开播放器面板，把解码器切到「软件解码」后重试。\n$detail",
+    )
+    return false
+  }
+
+  /** 10-bit HEVC（Main10）识别：编码名 + 像素格式双条件，避免误伤 8-bit HEVC。 */
+  private fun isTenBitHevc(codec: String?, pixel: String?): Boolean {
+    val c = codec.orEmpty().lowercase()
+    val p = pixel.orEmpty().lowercase()
+    return c.contains("hevc") &&
+      (p.contains("10") || p.contains("p010") || p.contains("p016"))
   }
 
   /**

@@ -3398,9 +3398,10 @@ android {
     //  · 同时观察 time-pos 与 estimated-frame-number；4 秒无进展时自动降级：
     //    MediaCodec → 软件解码 + 关闭 vd-lavc-dr；仍卡则提示手动切软解。
     //  · 直出 vo=mediacodec_embed 下不依赖帧号，避免误判正常零拷贝播放。
-    // 286 / 1.6.42：看门狗 EOF / idle 保护（避免片尾误判为卡死）。
-    versionCode = 286
-    versionName = "1.6.42"
+    // 287 / 1.6.43：10-bit HEVC 卡死先尝试 mpv 零拷贝直出（与 GSY 同类的 Surface 输出），
+    //  而不是直接降软解；video-pts 作为 estimated-frame-number 的兜底进度信号。
+    versionCode = 287
+    versionName = "1.6.43"
 
     vectorDrawables {
       useSupportLibrary = true
