@@ -6,8 +6,10 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.util.Rational
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -74,14 +76,17 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import app.marlboroadvance.mpvex.BuildConfig
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.preferences.VlcPreferences
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import org.videolan.libvlc.LibVLC
@@ -89,6 +94,7 @@ import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.util.VLCVideoLayout
+import java.io.File
 
 /**
  * VLC 独立播放内核。
@@ -99,27 +105,20 @@ import org.videolan.libvlc.util.VLCVideoLayout
  *  - 自己的偏好（[VlcPreferences]）；
  *  - 只通过 Intent / [EmbyPlaybackReporter] 与外部交互。
  *
- * 当前覆盖：播放 / 暂停 / 拖动 / 倍速 / 音轨 / 字幕轨 / 画面比例 / 画中画 /
- * 播放列表自动下一集 / Emby 进度回传。VLC 的原生字幕渲染可直接显示内嵌 ASS/PGS；
- * 外挂字幕文件选择、弹幕、投屏、后台播放等后续按 VLC 自身能力补齐。
+ * 当前覆盖：播放 / 暂停 / 拖动 / 倍速 / 音轨 / 字幕轨 / 外挂字幕 / 画面比例 /
+ * 画中画 / 后台播放 / 播放列表自动下一集 / Emby 进度回传。VLC 的原生字幕渲染
+ * 可直接显示内嵌 ASS/PGS；投屏与完整手势后续按 VLC 自身能力补齐。
  */
 class VlcPlayerActivity : ComponentActivity(), KoinComponent {
   private val prefs: VlcPreferences by inject()
 
   private val pickSubtitle = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-    if (uri != null) {
-      runCatching {
-        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-      }
-      runCatching {
-        mediaPlayer?.addSlave(IMedia.Slave.Type.Subtitle, uri, true)
-      }
-      refreshTracks()
-    }
+    if (uri != null) attachExternalSubtitle(uri)
   }
 
   private var libVlc: LibVLC? = null
   private var mediaPlayer: MediaPlayer? = null
+  private var videoLayoutRef: VLCVideoLayout? = null
   private var surfaceReady = false
   private var hasStarted = false
   private var enteringPip = false
@@ -129,6 +128,8 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
   private var currentIndex = 0
   private var embyItemIds: List<String> = emptyList()
   private var pendingStartMs = 0L
+  /** 上一次选的外挂字幕：切集 / 换源后自动重新挂上。 */
+  private var externalSubtitleFile: File? = null
   private var reporterObserver: EmbyPlaybackReporter.EmbyPlaybackLifecycleObserver? = null
 
   private val uiState = mutableStateOf(VlcUiState())
@@ -146,7 +147,7 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     readIntent(intent)
     runCatching { createPlayer() }.onFailure { error ->
       uiState.value = uiState.value.copy(
-        error = "VLC 内核初始化失败：${error.message ?: error::class.simpleName}",
+        error = "VLC 内核初始化失败：${describeThrowable(error)}",
         buffering = false,
       )
     }
@@ -167,7 +168,7 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
           onPickSubtitle = { pickSubtitle.launch(arrayOf("*/*")) },
           onAspect = { cycleAspect() },
           onPip = { enterPip() },
-          onRetry = { loadCurrent() },
+          onRetry = { retryPlayback() },
           onSurfaceReady = ::onSurfaceReady,
         )
 
@@ -223,7 +224,8 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     controlsVisible.value = !isInPictureInPictureMode
   }
 
-  private fun onSurfaceReady() {
+  private fun onSurfaceReady(layout: VLCVideoLayout) {
+    videoLayoutRef = layout
     if (surfaceReady) return
     surfaceReady = true
     // AndroidView factory 运行在组合/布局阶段，不能在这里直接写 Compose state；
@@ -237,6 +239,74 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
         }
       }
     }
+  }
+
+  /**
+   * 初始化异常往往套了 2～3 层（`ExceptionInInitializerError → UnsatisfiedLinkError`），
+   * 只显示最外层 message 常常是 null；这里把整条 cause 链拼出来，
+   * 用户点「复制错误」就能直接发回完整现场。
+   */
+  private fun describeThrowable(error: Throwable): String = buildString {
+    var current: Throwable? = error
+    var depth = 0
+    while (current != null && depth < 4) {
+      if (isNotEmpty()) append(" ← ")
+      append(current.javaClass.name.substringAfterLast('.'))
+      current.message?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
+      current = current.cause
+      depth++
+    }
+  }
+
+  /**
+   * 外挂字幕：先把 SAF 的 `content://` 复制进 cache，再交给 libVLC。
+   *
+   * VLC 的 `addSlave` 最终走 native 文件访问，对 `content://` 支持不稳定；
+   * 复制成本地文件后兼容性明显更好，代价只是几百 KB 缓存。
+   */
+  private fun attachExternalSubtitle(uri: Uri) {
+    lifecycleScope.launch {
+      val file = withContext(Dispatchers.IO) {
+        runCatching { copySubtitleToCache(uri) }.getOrNull()
+      }
+      if (file == null) {
+        Toast.makeText(this@VlcPlayerActivity, "读取字幕文件失败", Toast.LENGTH_SHORT).show()
+        return@launch
+      }
+      val added = runCatching {
+        mediaPlayer?.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(file), true) == true
+      }.getOrDefault(false)
+      if (added) externalSubtitleFile = file
+      Toast.makeText(
+        this@VlcPlayerActivity,
+        if (added) "已加载字幕：${file.name}" else "VLC 不接受这个字幕文件",
+        Toast.LENGTH_SHORT,
+      ).show()
+      refreshTracks()
+    }
+  }
+
+  private fun copySubtitleToCache(uri: Uri): File? {
+    val displayName = runCatching {
+      contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+    }.getOrNull()
+    val ext = displayName
+      ?.substringAfterLast('.', "")
+      ?.lowercase()
+      ?.takeIf { it in SUBTITLE_EXTENSIONS }
+      ?: "srt"
+    val dir = File(cacheDir, "vlc_subtitles").apply { mkdirs() }
+    // 顺手清掉半天前的临时字幕，避免 cache 只增不减。
+    runCatching {
+      val cutoff = System.currentTimeMillis() - 6 * 60 * 60 * 1000L
+      dir.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.delete() }
+    }
+    val target = File(dir, "external_${System.currentTimeMillis()}.$ext")
+    contentResolver.openInputStream(uri)?.use { input ->
+      target.outputStream().use { output -> input.copyTo(output) }
+    } ?: return null
+    return target.takeIf { it.length() > 0 }
   }
 
   private fun readIntent(intent: Intent) {
@@ -262,6 +332,13 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
   }
 
   private fun createPlayer() {
+    // LibVLC.loadLibraries() 在 native 加载失败时会直接 System.exit(1)，用户只看到 App 闪退。
+    // 先按同样的顺序手动加载：失败就抛给上层显示错误卡片；成功时后续 loadLibrary 是幂等的。
+    // 这一步同时能把 dlopen 的真实原因（缺符号 / ABI 不匹配）带进错误信息。
+    System.loadLibrary("c++_shared")
+    System.loadLibrary("vlc")
+    System.loadLibrary("vlcjni")
+
     val options = buildList {
       add("--no-video-title-show")
       add("--audio-time-stretch")
@@ -284,7 +361,12 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
         android.util.Log.w("VlcPlayer", "LibVLC(options) 初始化失败，回退默认:", error)
         LibVLC(this)
       }
-    val player = MediaPlayer(lib)
+    val player = try {
+      MediaPlayer(lib)
+    } catch (error: Throwable) {
+      runCatching { lib.release() }
+      throw error
+    }
     player.setEventListener(object : MediaPlayer.EventListener {
       override fun onEvent(event: MediaPlayer.Event) {
         runOnUiThread { handleEvent(event) }
@@ -292,6 +374,28 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     })
     libVlc = lib
     mediaPlayer = player
+    // retry 时 AndroidView 已经建好，新 player 必须重新挂到同一个视频层上。
+    videoLayoutRef?.let { layout ->
+      runCatching { player.attachViews(layout, null, false, false) }
+    }
+  }
+
+  /** 初始化失败后「重试」：重建内核，而不是对空 player 再调一次 loadCurrent。 */
+  private fun retryPlayback() {
+    if (mediaPlayer != null) {
+      loadCurrent()
+      return
+    }
+    runCatching { createPlayer() }.onFailure { error ->
+      uiState.value = uiState.value.copy(
+        error = "VLC 内核初始化失败：${describeThrowable(error)}",
+        buffering = false,
+      )
+      return
+    }
+    if (!surfaceReady) return
+    startEmbyReporting(intent)
+    loadCurrent()
   }
 
   private fun loadCurrent() {
@@ -337,6 +441,10 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     player.setMedia(media)
     media.release()
     player.play()
+    // 外挂字幕是「这一场播放」的选择：切集后自动重新挂上同一个文件。
+    externalSubtitleFile?.let { file ->
+      runCatching { player.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(file), true) }
+    }
   }
 
   private fun handleEvent(event: MediaPlayer.Event) {
@@ -523,6 +631,7 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     mediaPlayer = null
     runCatching { libVlc?.release() }
     libVlc = null
+    videoLayoutRef = null
     surfaceReady = false
     hasStarted = false
     enteringPip = false
@@ -567,7 +676,7 @@ private fun VlcPlayerScreen(
   onAspect: () -> Unit,
   onPip: () -> Unit,
   onRetry: () -> Unit,
-  onSurfaceReady: () -> Unit,
+  onSurfaceReady: (VLCVideoLayout) -> Unit,
 ) {
   var showSpeed by remember { mutableStateOf(false) }
   var showAudio by remember { mutableStateOf(false) }
@@ -596,7 +705,7 @@ private fun VlcPlayerScreen(
         VLCVideoLayout(ctx).also { layout ->
           runCatching { player?.attachViews(layout, null, false, false) }
           layout.keepScreenOn = true
-          onSurfaceReady()
+          onSurfaceReady(layout)
         }
       },
       onRelease = {
@@ -688,7 +797,7 @@ private fun VlcPlayerScreen(
                 TextButton(onClick = onRetry) { Text("重试") }
                 TextButton(
                   onClick = {
-                    clipboard.setText(AnnotatedString(error))
+                    clipboard.setText(AnnotatedString(vlcErrorReport(error)))
                     android.widget.Toast.makeText(context, "错误信息已复制", android.widget.Toast.LENGTH_SHORT).show()
                   },
                 ) { Text("复制错误") }
@@ -778,10 +887,11 @@ private fun VlcPlayerScreen(
   }
 
   if (showSubtitle) {
+    val subtitleOptions = listOf(VlcTrack(SUBTITLE_TRACK_OFF, "关闭字幕")) + ui.subtitleTracks
     VlcChoiceDialog(
       title = "字幕",
-      options = ui.subtitleTracks,
-      selected = ui.subtitleTracks.firstOrNull { it.id == ui.subtitleTrackId },
+      options = subtitleOptions,
+      selected = subtitleOptions.firstOrNull { it.id == ui.subtitleTrackId },
       label = { it.name },
       onPick = {
         showSubtitle = false
@@ -839,6 +949,21 @@ private fun <T> VlcChoiceDialog(
     },
   )
 }
+
+private const val SUBTITLE_TRACK_OFF = -1
+
+/** 复制给开发者的错误报告：带上版本 / 设备 / ABI，光有异常文本没法定位。 */
+private fun vlcErrorReport(error: String): String = buildString {
+  appendLine("CineIsle ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+  appendLine(
+    "device: ${Build.MANUFACTURER} ${Build.MODEL}, API ${Build.VERSION.SDK_INT}, " +
+      Build.SUPPORTED_ABIS.joinToString("/"),
+  )
+  append(error)
+}
+
+/** 允许复制到 cache 再交给 VLC 的字幕扩展名；未知扩展按 srt 处理。 */
+private val SUBTITLE_EXTENSIONS = setOf("srt", "ass", "ssa", "vtt", "sub", "idx", "txt")
 
 private fun formatVlcTime(ms: Long): String {
   val total = (ms.coerceAtLeast(0)) / 1000

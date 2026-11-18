@@ -3409,8 +3409,10 @@ android {
     // 290 / 1.6.46：VLC 初始化失败回退 + 设置扩展。
     //  · LibVLC(options) 失败时回退默认 LibVLC()，避免个别选项导致整个内核初始化失败。
     //  · VLC 设置增加跳帧、后台播放、默认比例、字幕边距、额外命令行参数。
-    versionCode = 290
-    versionName = "1.6.46"
+    // 291 / 1.6.47：VLC 外挂字幕改为先复制到 cache 再挂载（content:// 兼容），
+    //  初始化错误显示完整 cause 链。
+    versionCode = 291
+    versionName = "1.6.47"
 
     vectorDrawables {
       useSupportLibrary = true

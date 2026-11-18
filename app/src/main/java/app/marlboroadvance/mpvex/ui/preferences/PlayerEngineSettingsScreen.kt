@@ -137,8 +137,8 @@ object PlayerEngineSettingsScreen : Screen {
               Text(
                 "MPV：字幕排版、滤镜、章节、第二字幕最完整。\n" +
                   "GSY：硬解 / 兼容性好，走独立 GSY 播放页。\n" +
-                  "VLC：第三套独立播放页，当前覆盖播放/暂停/拖动/倍速/音轨/字幕轨/" +
-                  "画面比例/画中画；外挂字幕文件选择、投屏、后台播放后续补。",
+                  "VLC：第三套独立播放页，覆盖播放/暂停/拖动/倍速/音轨/字幕轨/" +
+                  "外挂字幕/画面比例/画中画/后台播放；投屏与完整手势后续补。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
