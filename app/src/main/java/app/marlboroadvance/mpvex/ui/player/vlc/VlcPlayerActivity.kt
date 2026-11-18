@@ -4,10 +4,12 @@ import android.app.PictureInPictureParams
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.util.Rational
 import android.view.WindowManager
 import android.widget.Toast
@@ -20,8 +22,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -49,14 +55,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -72,14 +81,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -144,6 +159,7 @@ import kotlin.math.roundToInt
  */
 class VlcPlayerActivity : ComponentActivity(), KoinComponent {
   private val prefs: VlcPreferences by inject()
+  private val audioManager by lazy { getSystemService(AudioManager::class.java) }
 
   private val pickSubtitle = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
     pickerOpen = false
@@ -192,6 +208,9 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     readIntent(intent)
     uiState.value = uiState.value.copy(
       subtitleDelayMs = prefs.subtitleDelayMs.get().coerceIn(-5000, 5000),
+      audioDelayMs = prefs.audioDelayMs.get().coerceIn(-5000, 5000),
+      brightness = currentBrightnessFraction(),
+      volumeFraction = currentVolumeFraction(),
     )
     runCatching { createPlayer() }.onFailure { error ->
       uiState.value = uiState.value.copy(
@@ -224,6 +243,10 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
           },
           onAspectSelect = { selectAspect(it) },
           onSubtitleDelay = { setSubtitleDelay(it) },
+          onAudioDelay = { setAudioDelay(it) },
+          onBrightness = { setBrightnessFraction(it) },
+          onVolume = { setVolumeFraction(it) },
+          onSelectPlaylist = { playIndex(it) },
           onPip = { enterPip() },
           onRotate = { toggleOrientation() },
           onRetry = { retryPlayback() },
@@ -415,6 +438,9 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
         ?: intent.getStringExtra("filename")
         ?: "VLC",
       engine = EngineKind.VLC,
+      playlistIndex = currentIndex,
+      playlistCount = playlist.size,
+      playlistTitles = playlistTitles,
     )
   }
 
@@ -504,6 +530,9 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
       positionMs = 0,
       durationMs = 0,
       title = playlistTitles.getOrNull(currentIndex) ?: uiState.value.title,
+      playlistIndex = currentIndex,
+      playlistCount = playlist.size,
+      playlistTitles = playlistTitles,
     )
 
     val media = Media(lib, uri).apply {
@@ -653,6 +682,62 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     uiState.value = uiState.value.copy(subtitleDelayMs = value)
   }
 
+  private fun setAudioDelay(ms: Int) {
+    val value = ms.coerceIn(-5000, 5000)
+    prefs.audioDelayMs.set(value)
+    mediaPlayer?.let { runCatching { it.setAudioDelay(value * 1000L) } }
+    uiState.value = uiState.value.copy(audioDelayMs = value)
+  }
+
+  private fun currentVolumeFraction(): Float {
+    val max = runCatching { audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }
+      .getOrDefault(15)
+      .coerceAtLeast(1)
+    val current = runCatching { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) }
+      .getOrDefault(0)
+    return (current.toFloat() / max).coerceIn(0f, 1f)
+  }
+
+  private fun setVolumeFraction(fraction: Float) {
+    val max = runCatching { audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }
+      .getOrDefault(15)
+      .coerceAtLeast(1)
+    val value = fraction.coerceIn(0f, 1f)
+    runCatching {
+      audioManager.setStreamVolume(
+        AudioManager.STREAM_MUSIC,
+        (value * max).roundToInt().coerceIn(0, max),
+        0,
+      )
+    }
+    uiState.value = uiState.value.copy(volumeFraction = value)
+  }
+
+  private fun currentBrightnessFraction(): Float {
+    val windowValue = window.attributes.screenBrightness
+    if (windowValue in 0f..1f) return windowValue
+    // 窗口还没设过亮度时读系统亮度作起点（读这个设置不需要权限）。
+    return runCatching {
+      Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
+    }.getOrDefault(0.5f).coerceIn(0.01f, 1f)
+  }
+
+  private fun setBrightnessFraction(fraction: Float) {
+    val value = fraction.coerceIn(0.01f, 1f)
+    runCatching {
+      val attrs = window.attributes
+      attrs.screenBrightness = value
+      window.attributes = attrs
+    }
+    uiState.value = uiState.value.copy(brightness = value)
+  }
+
+  private fun playIndex(index: Int) {
+    if (index !in playlist.indices) return
+    currentIndex = index
+    loadCurrent()
+  }
+
   /** 横竖屏切换：与 mpv 播放页的旋转键同义，解决系统自动旋转关掉时无法横屏。 */
   private fun toggleOrientation() {
     val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -698,8 +783,11 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
 
   private fun applyDelays() {
     val player = mediaPlayer ?: return
-    runCatching { player.setAudioDelay(prefs.audioDelayMs.get().coerceIn(-5000, 5000) * 1000L) }
-    runCatching { player.setSpuDelay(prefs.subtitleDelayMs.get().coerceIn(-5000, 5000) * 1000L) }
+    val audio = prefs.audioDelayMs.get().coerceIn(-5000, 5000)
+    val subtitle = prefs.subtitleDelayMs.get().coerceIn(-5000, 5000)
+    runCatching { player.setAudioDelay(audio * 1000L) }
+    runCatching { player.setSpuDelay(subtitle * 1000L) }
+    uiState.value = uiState.value.copy(audioDelayMs = audio, subtitleDelayMs = subtitle)
   }
 
   private fun enterPip() {
@@ -774,10 +862,19 @@ private data class VlcUiState(
   val subtitleTrackId: Int = -1,
   val aspect: String? = null,
   val subtitleDelayMs: Int = 0,
+  val audioDelayMs: Int = 0,
+  /** 手势调整亮度 / 音量的起点值（0..1），由 Activity 与系统状态同步。 */
+  val brightness: Float = 0.5f,
+  val volumeFraction: Float = 0.5f,
+  /** 播放列表（单条播放时 count = 1）。 */
+  val playlistIndex: Int = 0,
+  val playlistCount: Int = 0,
+  val playlistTitles: List<String> = emptyList(),
 )
 
-private enum class VlcSheet { None, Speed, Audio, Subtitle, Aspect, SubtitleDelay }
+private enum class VlcSheet { None, Speed, Audio, Subtitle, Aspect, SubtitleDelay, AudioDelay, Playlist }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VlcPlayerScreen(
   player: MediaPlayer?,
@@ -795,6 +892,10 @@ private fun VlcPlayerScreen(
   onPickAudio: () -> Unit,
   onAspectSelect: (String) -> Unit,
   onSubtitleDelay: (Int) -> Unit,
+  onAudioDelay: (Int) -> Unit,
+  onBrightness: (Float) -> Unit,
+  onVolume: (Float) -> Unit,
+  onSelectPlaylist: (Int) -> Unit,
   onPip: () -> Unit,
   onRotate: () -> Unit,
   onRetry: () -> Unit,
@@ -813,6 +914,15 @@ private fun VlcPlayerScreen(
   val seekForwardSeconds by playerPrefs.seekForwardSeconds.collectAsState()
   val backStep = seekBackSeconds.coerceIn(1, 600)
   val forwardStep = seekForwardSeconds.coerceIn(1, 600)
+  val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+  val haptics = LocalHapticFeedback.current
+  val horizontalSwipeToSeek by playerPrefs.horizontalSwipeToSeek.collectAsState()
+  val brightnessGesture by playerPrefs.brightnessGesture.collectAsState()
+  val volumeGesture by playerPrefs.volumeGesture.collectAsState()
+  val swapVolumeBrightness by playerPrefs.swapVolumeAndBrightness.collectAsState()
+  val swipeSensitivity by playerPrefs.horizontalSwipeSensitivity.collectAsState()
+  val latestUi by rememberUpdatedState(ui)
+  var gestureHint by remember { mutableStateOf<VlcGestureHint?>(null) }
 
   LaunchedEffect(ui.positionMs, dragging) {
     if (!dragging) sliderPosition = ui.positionMs
@@ -845,14 +955,99 @@ private fun VlcPlayerScreen(
       },
     )
 
-    // 点击空白区域显示 / 隐藏控件
+    // 手势层：横滑进度、左侧亮度 / 右侧音量、单击显示隐藏控件。
+    // 它铺在视频上、控件层下面 —— 点按钮时事件先被按钮吃掉，不会误触手势。
     Box(
       modifier = Modifier
         .fillMaxSize()
-        .clickable(
-          interactionSource = remember { MutableInteractionSource() },
-          indication = null,
-        ) { onToggleControls() },
+        .pointerInput(
+          horizontalSwipeToSeek,
+          brightnessGesture,
+          volumeGesture,
+          swapVolumeBrightness,
+          swipeSensitivity,
+        ) {
+          val slop = 24.dp.toPx()
+          awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val startX = down.position.x
+            val startY = down.position.y
+            val startUi = latestUi
+            val startVolume = runCatching {
+              val am = context.getSystemService(AudioManager::class.java)
+              val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+              am.getStreamVolume(AudioManager.STREAM_MUSIC) / max.toFloat()
+            }.getOrDefault(startUi.volumeFraction).coerceIn(0f, 1f)
+            val startBrightness = (context as? android.app.Activity)
+              ?.window?.attributes?.screenBrightness
+              ?.takeIf { it in 0f..1f }
+              ?: startUi.brightness
+            var mode = 0
+            var seekTargetMs = startUi.positionMs
+            var hint: VlcGestureHint? = null
+
+            while (true) {
+              val event = awaitPointerEvent()
+              val change = event.changes.firstOrNull { it.id == down.id } ?: break
+              if (change.isConsumed) break
+
+              val dx = change.position.x - startX
+              val dy = change.position.y - startY
+              if (mode == 0 && (abs(dx) > slop || abs(dy) > slop)) {
+                mode = if (abs(dx) >= abs(dy)) 1 else 2
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              }
+
+              if (mode == 1 && horizontalSwipeToSeek) {
+                val duration = latestUi.durationMs
+                val deltaMs = (dx * swipeSensitivity * 1000f).toLong()
+                val upper = if (duration > 0) duration else Long.MAX_VALUE
+                seekTargetMs = (startUi.positionMs + deltaMs).coerceIn(0L, upper)
+                hint = VlcGestureHint(
+                  icon = if (deltaMs >= 0) Icons.Filled.FastForward else Icons.Filled.FastRewind,
+                  text = formatGestureTime(seekTargetMs),
+                  secondary = signedGestureTime(seekTargetMs - startUi.positionMs),
+                )
+                change.consume()
+              } else if (mode == 2) {
+                val useVolume = if (swapVolumeBrightness) {
+                  startX < size.width / 2f
+                } else {
+                  startX >= size.width / 2f
+                }
+                val delta = -dy / size.height.toFloat()
+                if (useVolume && volumeGesture) {
+                  val value = (startVolume + delta).coerceIn(0f, 1f)
+                  onVolume(value)
+                  hint = VlcGestureHint(
+                    icon = Icons.Filled.VolumeUp,
+                    text = "${(value * 100).roundToInt()}%",
+                  )
+                  change.consume()
+                } else if (!useVolume && brightnessGesture) {
+                  val value = (startBrightness + delta).coerceIn(0.01f, 1f)
+                  onBrightness(value)
+                  hint = VlcGestureHint(
+                    icon = Icons.Filled.BrightnessHigh,
+                    text = "${(value * 100).roundToInt()}%",
+                  )
+                  change.consume()
+                }
+              }
+
+              gestureHint = hint
+              if (!change.pressed) {
+                if (mode == 0) {
+                  onToggleControls()
+                } else if (mode == 1 && horizontalSwipeToSeek) {
+                  onSeek(seekTargetMs)
+                }
+                gestureHint = null
+                break
+              }
+            }
+          }
+        },
     )
 
     if (ui.buffering && !ui.ended && ui.error == null) {
@@ -882,35 +1077,37 @@ private fun VlcPlayerScreen(
             color = controlColor,
             modifier = Modifier.size(45.dp),
           )
-          Spacer(modifier = Modifier.width(8.dp))
-          Surface(
-            shape = RoundedCornerShape(50),
-            color = PlayerControlGlassFill,
-            contentColor = controlColor,
-            tonalElevation = 0.dp,
-            shadowElevation = 0.dp,
-            border = BorderStroke(1.dp, PlayerControlGlassBorder),
-            modifier = Modifier.weight(1f, fill = false),
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
+          if (!isPortrait) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = PlayerControlGlassFill,
+              contentColor = controlColor,
+              tonalElevation = 0.dp,
+              shadowElevation = 0.dp,
+              border = BorderStroke(1.dp, PlayerControlGlassBorder),
+              modifier = Modifier.weight(1f, fill = false),
             ) {
-              Text(
-                "VLC",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-              )
-              Text(
-                ui.title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
-                color = controlColor,
-              )
+              Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Text(
+                  "VLC",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                  ui.title,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontFamily = FontFamily.Monospace,
+                  color = controlColor,
+                )
+              }
             }
           }
           Spacer(modifier = Modifier.weight(1f))
@@ -983,6 +1180,28 @@ private fun VlcPlayerScreen(
             .windowInsetsPadding(WindowInsets.navigationBars)
             .padding(horizontal = 10.dp, vertical = 4.dp),
         ) {
+          if (isPortrait) {
+            val indexLabel = if (ui.playlistCount > 1) {
+              "${ui.playlistIndex + 1}/${ui.playlistCount} · "
+            } else {
+              ""
+            }
+            Text(
+              text = indexLabel + ui.title,
+              modifier = Modifier
+                .fillMaxWidth()
+                .basicMarquee()
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              textAlign = TextAlign.Center,
+              style = MaterialTheme.typography.bodyMedium.copy(
+                shadow = Shadow(Color.Black.copy(alpha = 0.7f), blurRadius = 8f),
+              ),
+              fontFamily = FontFamily.Monospace,
+              color = controlColor,
+            )
+          }
           SeekbarWithTimers(
             position = sliderPosition / 1000f,
             duration = ui.durationMs / 1000f,
@@ -1037,6 +1256,53 @@ private fun VlcPlayerScreen(
               color = controlColor,
               modifier = Modifier.size(40.dp),
             )
+            if (ui.playlistCount > 1) {
+              ControlsButton(
+                icon = Icons.Filled.PlaylistPlay,
+                onClick = { sheet = VlcSheet.Playlist },
+                title = "播放列表",
+                color = controlColor,
+                modifier = Modifier.size(40.dp),
+              )
+            }
+          }
+        }
+      }
+    }
+
+    // 手势 HUD：横滑进度 / 亮度 / 音量
+    gestureHint?.let { hint ->
+      Surface(
+        color = Color.Black.copy(alpha = 0.75f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, PlayerControlGlassBorder),
+        modifier = Modifier.align(Alignment.Center).padding(24.dp),
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Icon(
+            hint.icon,
+            contentDescription = null,
+            tint = controlColor,
+            modifier = Modifier.size(30.dp),
+          )
+          Column {
+            Text(
+              hint.text,
+              color = controlColor,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.SemiBold,
+            )
+            hint.secondary?.let {
+              Text(
+                it,
+                color = controlColor.copy(alpha = 0.75f),
+                style = MaterialTheme.typography.bodySmall,
+              )
+            }
           }
         }
       }
@@ -1083,7 +1349,9 @@ private fun VlcPlayerScreen(
     VlcSheet.Audio -> VlcAudioSheet(
       tracks = ui.audioTracks,
       selectedId = ui.audioTrackId,
+      audioDelayMs = ui.audioDelayMs,
       onSelect = onAudioTrack,
+      onOpenAudioDelay = { sheet = VlcSheet.AudioDelay },
       onPickAudio = {
         sheet = VlcSheet.None
         onPickAudio()
@@ -1126,13 +1394,79 @@ private fun VlcPlayerScreen(
       onDismiss = { sheet = VlcSheet.None },
     )
 
-    VlcSheet.SubtitleDelay -> VlcSubtitleDelaySheet(
+    VlcSheet.SubtitleDelay -> VlcDelaySheet(
+      title = "字幕延迟",
+      hint = "正数延后字幕，负数提前字幕。字号 / 边距在「设置 → 播放内核设置 → VLC」里调。",
       initialDelayMs = ui.subtitleDelayMs,
       onApply = onSubtitleDelay,
       onDismiss = { sheet = VlcSheet.None },
     )
+
+    VlcSheet.AudioDelay -> VlcDelaySheet(
+      title = "音频延迟",
+      hint = "正数延后声音，负数提前声音；只影响本次 VLC 播放的音频同步。",
+      initialDelayMs = ui.audioDelayMs,
+      onApply = onAudioDelay,
+      onDismiss = { sheet = VlcSheet.None },
+    )
+
+    VlcSheet.Playlist -> VlcPlaylistSheet(
+      titles = ui.playlistTitles,
+      count = ui.playlistCount,
+      currentIndex = ui.playlistIndex,
+      onSelect = {
+        onSelectPlaylist(it)
+        sheet = VlcSheet.None
+      },
+      onDismiss = { sheet = VlcSheet.None },
+    )
   }
 }
+
+@Composable
+private fun VlcPlaylistSheet(
+  titles: List<String>,
+  count: Int,
+  currentIndex: Int,
+  onSelect: (Int) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  PlayerSheet(onDismissRequest = onDismiss) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+      Text(
+        "播放列表",
+        style = MaterialTheme.typography.headlineSmall,
+        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+      )
+      LazyColumn {
+        items(count) { index ->
+          AudioTrackRow(
+            title = "${index + 1}. ${titles.getOrNull(index) ?: "第 ${index + 1} 项"}",
+            isSelected = index == currentIndex,
+            onClick = { onSelect(index) },
+          )
+        }
+      }
+    }
+  }
+}
+
+private data class VlcGestureHint(
+  val icon: androidx.compose.ui.graphics.vector.ImageVector,
+  val text: String,
+  val secondary: String? = null,
+)
+
+private fun formatGestureTime(ms: Long): String {
+  val total = (ms.coerceAtLeast(0)) / 1000
+  val h = total / 3600
+  val m = (total % 3600) / 60
+  val s = total % 60
+  return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+}
+
+private fun signedGestureTime(ms: Long): String =
+  (if (ms >= 0) "+" else "-") + formatGestureTime(abs(ms))
 
 @Composable
 private fun VlcCenterButton(
@@ -1217,13 +1551,20 @@ private fun VlcSpeedSheet(
 private fun VlcAudioSheet(
   tracks: List<VlcTrack>,
   selectedId: Int,
+  audioDelayMs: Int,
   onSelect: (Int) -> Unit,
+  onOpenAudioDelay: () -> Unit,
   onPickAudio: () -> Unit,
   onDismiss: () -> Unit,
 ) {
   PlayerSheet(onDismissRequest = onDismiss) {
     Column(modifier = Modifier.fillMaxWidth()) {
       AddTrackRow(title = "添加外部音轨", onClick = onPickAudio)
+      AudioTrackRow(
+        title = "音频延迟：%+d ms".format(audioDelayMs),
+        isSelected = false,
+        onClick = onOpenAudioDelay,
+      )
       LazyColumn {
         items(tracks, key = { it.id }) { track ->
           AudioTrackRow(
@@ -1289,7 +1630,9 @@ private fun VlcAspectSheet(
 }
 
 @Composable
-private fun VlcSubtitleDelaySheet(
+private fun VlcDelaySheet(
+  title: String,
+  hint: String,
   initialDelayMs: Int,
   onApply: (Int) -> Unit,
   onDismiss: () -> Unit,
@@ -1300,7 +1643,7 @@ private fun VlcSubtitleDelaySheet(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Text("字幕延迟", style = MaterialTheme.typography.headlineSmall)
+      Text(title, style = MaterialTheme.typography.headlineSmall)
       Text(
         "%+d ms".format(delayMs),
         style = MaterialTheme.typography.headlineMedium,
@@ -1316,7 +1659,7 @@ private fun VlcSubtitleDelaySheet(
         steps = 19,
       )
       Text(
-        "正数延后字幕，负数提前字幕。字号 / 边距在「设置 → 播放内核设置 → VLC」里调。",
+        hint,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )

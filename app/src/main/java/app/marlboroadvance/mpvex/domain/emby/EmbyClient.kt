@@ -2268,9 +2268,42 @@ object EmbyClient {
         }
         val url = StrmDirectLink.directUrl(source.Path) ?: return@use null
         StrmDirectPlayInfo(url = url, requiredHeaders = source.RequiredHttpHeaders.orEmpty())
+          .takeIf { probeStrmDirect(it) }
       }
     }.getOrNull()
   }
+
+  /**
+   * STRM 直链的可达性预检。
+   *
+   * 内网 / 失效 / 需要额外鉴权的直链，交给播放器只会得到一片黑屏或错误卡片；
+   * 起播前用 `Range: bytes=0-0` 轻探一次（带服务器声明的请求头），
+   * 探不通就返回 null，让调用方回退正常的 Emby 流地址。
+   *
+   * 判定口径偏保守：只有 401/403/404/410 判死；其余 4xx/5xx 视为「主机可达、
+   * 只是不接受这次 Range」，仍交给播放器尝试。
+   */
+  private fun probeStrmDirect(info: StrmDirectPlayInfo): Boolean = runCatching {
+    val builder = Request.Builder()
+      .url(info.url)
+      .header("Range", "bytes=0-0")
+    var hasUserAgent = false
+    info.requiredHeaders.forEach { (key, value) ->
+      if (value.isBlank()) return@forEach
+      if (key.equals("User-Agent", ignoreCase = true)) hasUserAgent = true
+      builder.header(key, value)
+    }
+    if (!hasUserAgent) builder.header("User-Agent", STREAM_USER_AGENT)
+
+    val call = strmDirectClient.newCall(builder.get().build())
+    call.timeout().timeout(STRM_DIRECT_PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+    call.execute().use { response ->
+      when (response.code) {
+        401, 403, 404, 410 -> false
+        else -> true
+      }
+    }
+  }.getOrDefault(false)
 
   /**
    * 预热专用 client：**不跟 302**。
@@ -2382,6 +2415,9 @@ object EmbyClient {
    * 与 302 预解析同一个口径：它也在起播关键路径上，超时就回退正常流地址。
    */
   private const val STRM_DIRECT_INFO_TIMEOUT_MS = 2_500L
+
+  /** STRM 直链可达性预检的单次上限（毫秒）。 */
+  private const val STRM_DIRECT_PROBE_TIMEOUT_MS = 1_500L
 
   /** 把「判死」的状态码翻成可直接给用户看的中文原因。 */
   private fun streamDeniedMessage(code: Int): String = when {

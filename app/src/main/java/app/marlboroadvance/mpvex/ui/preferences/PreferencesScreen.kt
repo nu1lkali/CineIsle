@@ -555,6 +555,7 @@ object PreferencesScreen : Screen {
 
           item {
             val browserPreferences = koinInject<BrowserPreferences>()
+            val settingsContext = LocalContext.current
             val resolveDirectLink by browserPreferences.embyResolveDirectLink.collectAsState()
             val strmDirectPlay by browserPreferences.embyStrmDirectPlay.collectAsState()
             val clearProgressOnDownload by browserPreferences.embyClearProgressOnDownload.collectAsState()
@@ -610,6 +611,37 @@ object PreferencesScreen : Screen {
                       "仅在明确需要时开启；拿不到直链会自动回退。",
                     color = MaterialTheme.colorScheme.outline,
                   )
+                },
+              )
+
+              PreferenceDivider()
+
+              // 播放异常时的「一键恢复」：有些用户会同时开 302 预解析与 STRM 直链，
+              // 内网 / 失效的直链会让两个开关看起来都“关不掉”。这一项直接把两者写回 false。
+              Preference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Restore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                title = { Text(text = "关闭所有直链优化", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = "一键关闭「STRM 直链播放」和「预解析直链（302）」，恢复服务器默认播放。" +
+                      "直链导致无法播放时用这一项。",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                onClick = {
+                  browserPreferences.embyStrmDirectPlay.set(false)
+                  browserPreferences.embyResolveDirectLink.set(false)
+                  Toast.makeText(
+                    settingsContext,
+                    "已关闭所有直链优化",
+                    Toast.LENGTH_SHORT,
+                  ).show()
                 },
               )
 

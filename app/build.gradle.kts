@@ -3416,8 +3416,9 @@ android {
     //  · VLC 控件改为 mpv 同款布局（玻璃按钮 / 标题胶囊 / 中央快退播放快进 / 底部快捷条）；
     //  · 控件显隐只做淡入淡出，不再往左上角收缩；字幕改为 mpv 同款选择面板；
     //  · 新增横竖屏切换、外挂音轨、字幕延迟面板。
-    versionCode = 292
-    versionName = "1.6.48"
+    // 293 / 1.6.49：VLC 手势 + 标题 + 更多控件；STRM 直链可达性预检 + 一键关闭。
+    versionCode = 293
+    versionName = "1.6.49"
 
     vectorDrawables {
       useSupportLibrary = true
