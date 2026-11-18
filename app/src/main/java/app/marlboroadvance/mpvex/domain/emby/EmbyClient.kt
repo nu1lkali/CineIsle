@@ -2216,6 +2216,63 @@ object EmbyClient {
   private val DENIED_STREAM_CODES = setOf(401, 403, 404, 410)
 
   /**
+   * 「STRM 直链播放」：从 `PlaybackInfo` 里取 `.strm` 文件中的远端地址。
+   *
+   * ## 为什么是 `PlaybackInfo.MediaSources[].Path`
+   *
+   * Emby 官方对 `.strm` 的处理是把文件里那一行地址当作**媒体路径**：
+   * `Path = "http://..."`、`Protocol = "Http"`、`IsRemote = true`。
+   * 这正是「strm 的直链」；拿到后直接交给播放器，就不需要再让
+   * `/Videos/{id}/stream` 中转（部分服务器 / 兼容层在这一步不兼容）。
+   *
+   * ## 取舍
+   *
+   * - 只发一次 `PlaybackInfo`，**不跟跳转、不下载媒体**；
+   * - 超时 / 不是 http(s) / 服务端没给 Path ⇒ 返回 null，调用方回退正常流地址；
+   * - 只在用户显式打开「STRM 直链播放」时调用（见 `BrowserPreferences.embyStrmDirectPlay`）。
+   */
+  fun strmDirectPlayInfo(
+    server: EmbyServer,
+    itemId: String,
+    /** 多版本媒体：只取这个版本；null = 服务端默认版本 */
+    mediaSourceId: String? = null,
+  ): StrmDirectPlayInfo? {
+    val payload =
+      jsonObjectOf(
+        mapOf(
+          "UserId" to server.userId.takeIf { it.isNotEmpty() },
+          "EnableDirectPlay" to true,
+          "EnableDirectStream" to true,
+          "EnableTranscoding" to false,
+          "AutoOpenLiveStream" to false,
+          "IsPlayback" to false,
+          "MediaSourceId" to mediaSourceId,
+        ),
+      ).toString()
+
+    val request = authedRequest(server, "/Items/$itemId/PlaybackInfo")
+      .post(payload.toRequestBody(jsonMedia))
+      .build()
+
+    return runCatching {
+      strmDirectClient.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) return@use null
+        val body = response.body?.string()?.takeIf { it.isNotBlank() } ?: return@use null
+        val info = json.decodeFromString<PlaybackInfoResult>(body)
+        // 指定版本时必须是同一个 Id：服务端退回默认版本的话，宁可回退普通流地址，
+        // 也不能把「用户选的 4K」播成「默认的 1080P」。
+        val source = if (mediaSourceId != null) {
+          info.MediaSources?.firstOrNull { it.Id == mediaSourceId } ?: return@use null
+        } else {
+          info.MediaSources?.firstOrNull() ?: return@use null
+        }
+        val url = StrmDirectLink.directUrl(source.Path) ?: return@use null
+        StrmDirectPlayInfo(url = url, requiredHeaders = source.RequiredHttpHeaders.orEmpty())
+      }
+    }.getOrNull()
+  }
+
+  /**
    * 预热专用 client：**不跟 302**。
    *
    * 这一点是本类最关键的取舍，见 [warmStream]。
@@ -2224,6 +2281,18 @@ object EmbyClient {
     httpClient.newBuilder()
       .followRedirects(false)
       .followSslRedirects(false)
+      .build()
+  }
+
+  /**
+   * STRM 直链探测专用 client：**短超时**。
+   *
+   * `PlaybackInfo` 在服务端还没 probe 过 strm 源时可能挂很久，而它挂在起播关键路径上。
+   * 这里给单次调用 2.5 秒硬上限；超时就当拿不到直链，回退正常流地址，绝不让用户干等。
+   */
+  private val strmDirectClient: OkHttpClient by lazy {
+    httpClient.newBuilder()
+      .callTimeout(STRM_DIRECT_INFO_TIMEOUT_MS, TimeUnit.MILLISECONDS)
       .build()
   }
 
@@ -2306,6 +2375,13 @@ object EmbyClient {
    * 超时按 [StreamProbe.Unknown] 放行，地址照样交给播放器，它自己会跟 302。
    */
   private const val STREAM_PROBE_CALL_TIMEOUT_MS = 2_000L
+
+  /**
+   * 「STRM 直链播放」的 PlaybackInfo 单次上限（毫秒）。
+   *
+   * 与 302 预解析同一个口径：它也在起播关键路径上，超时就回退正常流地址。
+   */
+  private const val STRM_DIRECT_INFO_TIMEOUT_MS = 2_500L
 
   /** 把「判死」的状态码翻成可直接给用户看的中文原因。 */
   private fun streamDeniedMessage(code: Int): String = when {
@@ -3713,6 +3789,13 @@ private data class PlaybackMediaSource(
   /** 服务器拼好的转码地址（通常是 HLS 的 master.m3u8），优先用它 */
   val TranscodingUrl: String? = null,
   val DirectStreamUrl: String? = null,
+  /**
+   * 媒体路径。对 `.strm` 条目，Emby 在这里返回的是 **strm 文件里的远端地址**
+   * （同时 `Protocol=Http` / `IsRemote=true`），这是「STRM 直链播放」的来源。
+   */
+  val Path: String? = null,
+  /** 这条媒体源要求客户端拉流时携带的请求头（可能为空）。 */
+  val RequiredHttpHeaders: Map<String, String>? = null,
 )
 
 /**

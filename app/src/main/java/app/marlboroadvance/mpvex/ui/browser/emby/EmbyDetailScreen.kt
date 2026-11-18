@@ -903,7 +903,7 @@ data class EmbyDetailScreen(
                     }
                     val from = base.indexOfFirst { it.Id == episode.Id }.takeIf { it >= 0 } ?: 0
                     val queue = base.drop(from).ifEmpty { listOf(episode) }
-                    viewModel.launchPlaylist(
+                    viewModel.launchPlaylistResolvingStrm(
                       server = currentServer,
                       items = queue,
                       resumeSeconds = resume,

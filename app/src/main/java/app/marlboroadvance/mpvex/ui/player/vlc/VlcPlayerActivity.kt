@@ -2,6 +2,7 @@ package app.marlboroadvance.mpvex.ui.player.vlc
 
 import android.app.PictureInPictureParams
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
@@ -15,42 +16,52 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
-import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -64,11 +75,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -78,15 +93,31 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import app.marlboroadvance.mpvex.BuildConfig
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.preferences.AppearancePreferences
+import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.VlcPreferences
+import app.marlboroadvance.mpvex.preferences.preference.collectAsState
+import app.marlboroadvance.mpvex.presentation.components.PlayerSheet
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
+import app.marlboroadvance.mpvex.ui.player.TrackNode
+import app.marlboroadvance.mpvex.ui.player.controls.components.ControlsButton
+import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassBorder
+import app.marlboroadvance.mpvex.ui.player.controls.components.PlayerControlGlassFill
+import app.marlboroadvance.mpvex.ui.player.controls.components.SeekbarWithTimers
+import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.AddTrackRow
+import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.AudioTrackRow
+import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.SubtitlesSheet
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
+import app.marlboroadvance.mpvex.ui.theme.controlColor
+import kotlinx.collections.immutable.persistentListOf
+import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.koin.compose.koinInject
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import org.videolan.libvlc.LibVLC
@@ -95,6 +126,8 @@ import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.util.VLCVideoLayout
 import java.io.File
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * VLC 独立播放内核。
@@ -113,7 +146,15 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
   private val prefs: VlcPreferences by inject()
 
   private val pickSubtitle = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    pickerOpen = false
+    controlsVisible.value = true
     if (uri != null) attachExternalSubtitle(uri)
+  }
+
+  private val pickAudio = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    pickerOpen = false
+    controlsVisible.value = true
+    if (uri != null) attachExternalAudio(uri)
   }
 
   private var libVlc: LibVLC? = null
@@ -122,6 +163,8 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
   private var surfaceReady = false
   private var hasStarted = false
   private var enteringPip = false
+  /** 系统文件选择器打开期间不要因为 onStop 把播放暂停（回来后用户会以为卡住了）。 */
+  private var pickerOpen = false
 
   private var playlist: List<Uri> = emptyList()
   private var playlistTitles: List<String> = emptyList()
@@ -130,6 +173,8 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
   private var pendingStartMs = 0L
   /** 上一次选的外挂字幕：切集 / 换源后自动重新挂上。 */
   private var externalSubtitleFile: File? = null
+  /** 上一次选的外挂音轨：切集 / 换源后自动重新挂上。 */
+  private var externalAudioFile: File? = null
   private var reporterObserver: EmbyPlaybackReporter.EmbyPlaybackLifecycleObserver? = null
 
   private val uiState = mutableStateOf(VlcUiState())
@@ -145,6 +190,9 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     }
 
     readIntent(intent)
+    uiState.value = uiState.value.copy(
+      subtitleDelayMs = prefs.subtitleDelayMs.get().coerceIn(-5000, 5000),
+    )
     runCatching { createPlayer() }.onFailure { error ->
       uiState.value = uiState.value.copy(
         error = "VLC 内核初始化失败：${describeThrowable(error)}",
@@ -162,12 +210,22 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
           onBack = { finish() },
           onTogglePlay = { togglePlay() },
           onSeek = { seekTo(it) },
+          onSeekBy = { seekBy(it) },
           onSpeed = { setSpeed(it) },
           onAudioTrack = { selectAudioTrack(it) },
           onSubtitleTrack = { selectSubtitleTrack(it) },
-          onPickSubtitle = { pickSubtitle.launch(arrayOf("*/*")) },
-          onAspect = { cycleAspect() },
+          onPickSubtitle = {
+            pickerOpen = true
+            pickSubtitle.launch(arrayOf("*/*"))
+          },
+          onPickAudio = {
+            pickerOpen = true
+            pickAudio.launch(arrayOf("audio/*"))
+          },
+          onAspectSelect = { selectAspect(it) },
+          onSubtitleDelay = { setSubtitleDelay(it) },
           onPip = { enterPip() },
+          onRotate = { toggleOrientation() },
           onRetry = { retryPlayback() },
           onSurfaceReady = ::onSurfaceReady,
         )
@@ -204,6 +262,7 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
 
   override fun onStop() {
     super.onStop()
+    if (pickerOpen) return
     if (prefs.backgroundPlayback.get()) return
     if (!isInPictureInPictureMode && !enteringPip) {
       runCatching { mediaPlayer?.pause() }
@@ -234,6 +293,7 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
       if (!hasStarted && !isFinishing && !isDestroyed) {
         hasStarted = true
         if (mediaPlayer != null) {
+          applyAspectPreference()
           startEmbyReporting(intent)
           loadCurrent()
         }
@@ -259,34 +319,61 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
   }
 
   /**
-   * 外挂字幕：先把 SAF 的 `content://` 复制进 cache，再交给 libVLC。
+   * 外挂字幕 / 音轨：先把 SAF 的 `content://` 复制进 cache，再交给 libVLC。
    *
    * VLC 的 `addSlave` 最终走 native 文件访问，对 `content://` 支持不稳定；
    * 复制成本地文件后兼容性明显更好，代价只是几百 KB 缓存。
    */
   private fun attachExternalSubtitle(uri: Uri) {
+    attachExternalSlave(
+      uri = uri,
+      type = IMedia.Slave.Type.Subtitle,
+      label = "字幕",
+      fallbackExt = "srt",
+      allowedExts = SUBTITLE_EXTENSIONS,
+    ) { file -> externalSubtitleFile = file }
+  }
+
+  private fun attachExternalAudio(uri: Uri) {
+    attachExternalSlave(
+      uri = uri,
+      type = IMedia.Slave.Type.Audio,
+      label = "音轨",
+      fallbackExt = "mka",
+      allowedExts = AUDIO_EXTENSIONS,
+    ) { file -> externalAudioFile = file }
+  }
+
+  private fun attachExternalSlave(
+    uri: Uri,
+    type: Int,
+    label: String,
+    fallbackExt: String,
+    allowedExts: Set<String>,
+    remember: (File) -> Unit,
+  ) {
     lifecycleScope.launch {
       val file = withContext(Dispatchers.IO) {
-        runCatching { copySubtitleToCache(uri) }.getOrNull()
+        runCatching { copySlaveToCache(uri, fallbackExt, allowedExts) }.getOrNull()
       }
       if (file == null) {
-        Toast.makeText(this@VlcPlayerActivity, "读取字幕文件失败", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this@VlcPlayerActivity, "读取${label}文件失败", Toast.LENGTH_SHORT).show()
         return@launch
       }
       val added = runCatching {
-        mediaPlayer?.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(file), true) == true
+        mediaPlayer?.addSlave(type, Uri.fromFile(file), true) == true
       }.getOrDefault(false)
-      if (added) externalSubtitleFile = file
+      if (added) remember(file)
       Toast.makeText(
         this@VlcPlayerActivity,
-        if (added) "已加载字幕：${file.name}" else "VLC 不接受这个字幕文件",
+        if (added) "已加载${label}：${file.name}" else "VLC 不接受这个${label}文件",
         Toast.LENGTH_SHORT,
       ).show()
       refreshTracks()
     }
   }
 
-  private fun copySubtitleToCache(uri: Uri): File? {
+  private fun copySlaveToCache(uri: Uri, fallbackExt: String, allowedExts: Set<String>): File? {
     val displayName = runCatching {
       contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
         ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
@@ -294,10 +381,10 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     val ext = displayName
       ?.substringAfterLast('.', "")
       ?.lowercase()
-      ?.takeIf { it in SUBTITLE_EXTENSIONS }
-      ?: "srt"
-    val dir = File(cacheDir, "vlc_subtitles").apply { mkdirs() }
-    // 顺手清掉半天前的临时字幕，避免 cache 只增不减。
+      ?.takeIf { it in allowedExts }
+      ?: fallbackExt
+    val dir = File(cacheDir, "vlc_slaves").apply { mkdirs() }
+    // 顺手清掉半天前的临时文件，避免 cache 只增不减。
     runCatching {
       val cutoff = System.currentTimeMillis() - 6 * 60 * 60 * 1000L
       dir.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.delete() }
@@ -441,9 +528,12 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     player.setMedia(media)
     media.release()
     player.play()
-    // 外挂字幕是「这一场播放」的选择：切集后自动重新挂上同一个文件。
+    // 外挂字幕 / 音轨是「这一场播放」的选择：切集后自动重新挂上同一个文件。
     externalSubtitleFile?.let { file ->
       runCatching { player.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(file), true) }
+    }
+    externalAudioFile?.let { file ->
+      runCatching { player.addSlave(IMedia.Slave.Type.Audio, Uri.fromFile(file), true) }
     }
   }
 
@@ -456,7 +546,6 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
           pendingStartMs = 0L
         }
         refreshTracks()
-        applyAspectPreference()
         applyDelays()
       }
 
@@ -517,10 +606,14 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
   private fun refreshTracks() {
     val player = mediaPlayer ?: return
     val audio = runCatching {
-      player.audioTracks.orEmpty().map { VlcTrack(it.id, it.name ?: "音轨 ${it.id}") }
+      player.audioTracks.orEmpty()
+        .filter { it.id >= 0 }
+        .map { VlcTrack(it.id, it.name ?: "音轨 ${it.id}") }
     }.getOrDefault(emptyList())
     val subs = runCatching {
-      player.spuTracks.orEmpty().map { VlcTrack(it.id, it.name ?: "字幕 ${it.id}") }
+      player.spuTracks.orEmpty()
+        .filter { it.id >= 0 }
+        .map { VlcTrack(it.id, it.name ?: "字幕 ${it.id}") }
     }.getOrDefault(emptyList())
     uiState.value = uiState.value.copy(
       audioTracks = audio,
@@ -532,6 +625,11 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
 
   private fun togglePlay() {
     val player = mediaPlayer ?: return
+    if (uiState.value.ended) {
+      uiState.value = uiState.value.copy(ended = false)
+      loadCurrent()
+      return
+    }
     if (player.isPlaying) player.pause() else player.play()
   }
 
@@ -540,34 +638,51 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
     uiState.value = uiState.value.copy(positionMs = ms.coerceAtLeast(0))
   }
 
+  /** 快进 / 快退：以**当前播放位置**为基准，越界自动夹到 0。 */
+  private fun seekBy(seconds: Int) {
+    val player = mediaPlayer ?: return
+    val target = (runCatching { player.time }.getOrDefault(0L) + seconds * 1000L)
+      .coerceAtLeast(0L)
+    seekTo(target)
+  }
+
+  private fun setSubtitleDelay(ms: Int) {
+    val value = ms.coerceIn(-5000, 5000)
+    prefs.subtitleDelayMs.set(value)
+    mediaPlayer?.let { runCatching { it.setSpuDelay(value * 1000L) } }
+    uiState.value = uiState.value.copy(subtitleDelayMs = value)
+  }
+
+  /** 横竖屏切换：与 mpv 播放页的旋转键同义，解决系统自动旋转关掉时无法横屏。 */
+  private fun toggleOrientation() {
+    val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    requestedOrientation = if (isLandscape) {
+      ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    } else {
+      ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    }
+  }
+
   private fun setSpeed(speed: Float) {
-    mediaPlayer?.rate = speed
+    runCatching { mediaPlayer?.rate = speed }
     uiState.value = uiState.value.copy(speed = speed)
   }
 
   private fun selectAudioTrack(id: Int) {
-    mediaPlayer?.setAudioTrack(id)
+    runCatching { mediaPlayer?.setAudioTrack(id) }
     uiState.value = uiState.value.copy(audioTrackId = id)
   }
 
   private fun selectSubtitleTrack(id: Int) {
-    mediaPlayer?.setSpuTrack(id)
+    runCatching { mediaPlayer?.setSpuTrack(id) }
     uiState.value = uiState.value.copy(subtitleTrackId = id)
   }
 
-  private fun cycleAspect() {
-    val player = mediaPlayer ?: return
-    val order = listOf(
-      MediaPlayer.ScaleType.SURFACE_BEST_FIT,
-      MediaPlayer.ScaleType.SURFACE_16_9,
-      MediaPlayer.ScaleType.SURFACE_4_3,
-      MediaPlayer.ScaleType.SURFACE_FILL,
-    )
-    val current = runCatching { player.videoScale }.getOrNull()
-    val index = order.indexOf(current)
-    val next = order[(if (index >= 0) index + 1 else 0) % order.size]
-    runCatching { player.videoScale = next }
-    uiState.value = uiState.value.copy(aspect = next.name.removePrefix("SURFACE_"))
+  /** 用户在比例面板里选了一项（name = `MediaPlayer.ScaleType` 的枚举名）。 */
+  private fun selectAspect(name: String) {
+    val scale = runCatching { MediaPlayer.ScaleType.valueOf(name) }.getOrNull() ?: return
+    runCatching { mediaPlayer?.videoScale = scale }
+    uiState.value = uiState.value.copy(aspect = scale.name.removePrefix("SURFACE_"))
   }
 
   private fun applyAspectPreference() {
@@ -658,7 +773,10 @@ private data class VlcUiState(
   val audioTrackId: Int = -1,
   val subtitleTrackId: Int = -1,
   val aspect: String? = null,
+  val subtitleDelayMs: Int = 0,
 )
+
+private enum class VlcSheet { None, Speed, Audio, Subtitle, Aspect, SubtitleDelay }
 
 @Composable
 private fun VlcPlayerScreen(
@@ -669,33 +787,47 @@ private fun VlcPlayerScreen(
   onBack: () -> Unit,
   onTogglePlay: () -> Unit,
   onSeek: (Long) -> Unit,
+  onSeekBy: (Int) -> Unit,
   onSpeed: (Float) -> Unit,
   onAudioTrack: (Int) -> Unit,
   onSubtitleTrack: (Int) -> Unit,
   onPickSubtitle: () -> Unit,
-  onAspect: () -> Unit,
+  onPickAudio: () -> Unit,
+  onAspectSelect: (String) -> Unit,
+  onSubtitleDelay: (Int) -> Unit,
   onPip: () -> Unit,
+  onRotate: () -> Unit,
   onRetry: () -> Unit,
   onSurfaceReady: (VLCVideoLayout) -> Unit,
 ) {
-  var showSpeed by remember { mutableStateOf(false) }
-  var showAudio by remember { mutableStateOf(false) }
-  var showSubtitle by remember { mutableStateOf(false) }
+  var sheet by remember { mutableStateOf(VlcSheet.None) }
   var sliderPosition by remember { mutableLongStateOf(ui.positionMs) }
   var dragging by remember { mutableStateOf(false) }
   val context = LocalContext.current
   val clipboard = LocalClipboardManager.current
+  val playerPrefs = koinInject<PlayerPreferences>()
+  val appearancePrefs = koinInject<AppearancePreferences>()
+  val seekbarStyle by appearancePrefs.seekbarStyle.collectAsState()
+  val invertDuration by playerPrefs.invertDuration.collectAsState()
+  val seekBackSeconds by playerPrefs.seekBackwardSeconds.collectAsState()
+  val seekForwardSeconds by playerPrefs.seekForwardSeconds.collectAsState()
+  val backStep = seekBackSeconds.coerceIn(1, 600)
+  val forwardStep = seekForwardSeconds.coerceIn(1, 600)
 
   LaunchedEffect(ui.positionMs, dragging) {
     if (!dragging) sliderPosition = ui.positionMs
   }
-  LaunchedEffect(controlsVisible, ui.playing, dragging) {
-    if (controlsVisible && ui.playing && !dragging) {
+  // 自动隐藏只在「真的在播、没有面板、没有错误」时进行；
+  // 淡出而不是默认的 expand/shrink —— 默认动画会让整块控件往左上角收缩。
+  LaunchedEffect(controlsVisible, ui.playing, dragging, sheet, ui.error) {
+    if (controlsVisible && ui.playing && !dragging && sheet == VlcSheet.None && ui.error == null) {
       delay(3_500)
       onToggleControls()
     }
   }
-  BackHandler(onBack = onBack)
+  BackHandler {
+    if (sheet != VlcSheet.None) sheet = VlcSheet.None else onBack()
+  }
 
   Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
     // VLC 只负责画视频；控件全部由 Compose 画在上面。
@@ -730,224 +862,466 @@ private fun VlcPlayerScreen(
       )
     }
 
-    AnimatedVisibility(visible = controlsVisible) {
-      Column(
-        modifier = Modifier
-          .fillMaxSize()
-          .windowInsetsPadding(WindowInsets.systemBars)
-          .padding(horizontal = 12.dp),
-      ) {
+    AnimatedVisibility(
+      visible = controlsVisible,
+      enter = fadeIn(tween(120)),
+      exit = fadeOut(tween(220)),
+    ) {
+      Box(modifier = Modifier.fillMaxSize()) {
+        // ── 顶栏：返回 + 标题胶囊 + 旋转 / 画中画（与 mpv 播放页同一套玻璃控件） ──
         Row(
-          modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+          modifier = Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          IconButton(onClick = onBack) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
-          }
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              ui.title,
-              color = Color.White,
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.SemiBold,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-              "VLC 内核",
-              color = Color.White.copy(alpha = 0.7f),
-              style = MaterialTheme.typography.labelSmall,
-            )
-          }
-          IconButton(onClick = onPip) {
-            Icon(Icons.Filled.PictureInPictureAlt, contentDescription = "画中画", tint = Color.White)
-          }
-        }
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        IconButton(
-          onClick = onTogglePlay,
-          modifier = Modifier.align(Alignment.CenterHorizontally).size(72.dp),
-        ) {
+          ControlsButton(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            onClick = onBack,
+            color = controlColor,
+            modifier = Modifier.size(45.dp),
+          )
+          Spacer(modifier = Modifier.width(8.dp))
           Surface(
-            shape = RoundedCornerShape(36.dp),
-            color = Color.Black.copy(alpha = 0.45f),
+            shape = RoundedCornerShape(50),
+            color = PlayerControlGlassFill,
+            contentColor = controlColor,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            border = BorderStroke(1.dp, PlayerControlGlassBorder),
+            modifier = Modifier.weight(1f, fill = false),
           ) {
-            Icon(
-              imageVector = if (ui.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-              contentDescription = if (ui.playing) "暂停" else "播放",
-              tint = Color.White,
-              modifier = Modifier.padding(18.dp).size(36.dp),
-            )
-          }
-        }
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        ui.error?.let { error ->
-          Surface(
-            color = Color.Black.copy(alpha = 0.7f),
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-          ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-              Text(error, color = Color.White, style = MaterialTheme.typography.bodySmall)
-              Row {
-                TextButton(onClick = onRetry) { Text("重试") }
-                TextButton(
-                  onClick = {
-                    clipboard.setText(AnnotatedString(vlcErrorReport(error)))
-                    android.widget.Toast.makeText(context, "错误信息已复制", android.widget.Toast.LENGTH_SHORT).show()
-                  },
-                ) { Text("复制错误") }
-                TextButton(onClick = onBack) { Text("返回") }
-              }
+            Row(
+              modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Text(
+                "VLC",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+              )
+              Text(
+                ui.title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+                color = controlColor,
+              )
             }
           }
-        }
-
-        Slider(
-          value = if (ui.durationMs > 0) {
-            (sliderPosition.toFloat() / ui.durationMs.toFloat()).coerceIn(0f, 1f)
-          } else {
-            0f
-          },
-          onValueChange = {
-            dragging = true
-            sliderPosition = (it * ui.durationMs).toLong()
-          },
-          onValueChangeFinished = {
-            dragging = false
-            onSeek(sliderPosition)
-          },
-          colors = SliderDefaults.colors(
-            thumbColor = MaterialTheme.colorScheme.primary,
-            activeTrackColor = MaterialTheme.colorScheme.primary,
-            inactiveTrackColor = Color.White.copy(alpha = 0.3f),
-          ),
-        )
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-          Text(
-            "${formatVlcTime(sliderPosition)} / ${formatVlcTime(ui.durationMs)}",
-            color = Color.White,
-            style = MaterialTheme.typography.labelMedium,
+          Spacer(modifier = Modifier.weight(1f))
+          ControlsButton(
+            icon = Icons.Filled.ScreenRotation,
+            onClick = onRotate,
+            title = "横竖屏",
+            color = controlColor,
+            modifier = Modifier.size(45.dp),
           )
-          Text(
-            "${(ui.speed * 100).toInt()}%",
-            color = Color.White.copy(alpha = 0.75f),
-            style = MaterialTheme.typography.labelMedium,
+          Spacer(modifier = Modifier.width(6.dp))
+          ControlsButton(
+            icon = Icons.Filled.PictureInPictureAlt,
+            onClick = onPip,
+            title = "画中画",
+            color = controlColor,
+            modifier = Modifier.size(45.dp),
           )
         }
 
+        // ── 正中：快退 / 播放 / 快进（与 mpv 播放页一致） ──
         Row(
-          modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-          horizontalArrangement = Arrangement.SpaceEvenly,
+          modifier = Modifier.align(Alignment.Center),
+          horizontalArrangement = Arrangement.spacedBy(22.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          VlcControlButton(Icons.Filled.Speed, "倍速") { showSpeed = true }
-          VlcControlButton(Icons.Filled.Audiotrack, "音轨") { showAudio = true }
-          VlcControlButton(Icons.Filled.Subtitles, "字幕") { showSubtitle = true }
-          VlcControlButton(Icons.Filled.FolderOpen, "外挂字幕") { onPickSubtitle() }
-          VlcControlButton(Icons.Filled.AspectRatio, "比例") { onAspect() }
+          VlcCenterButton(
+            icon = Icons.Filled.FastRewind,
+            label = "-${backStep}s",
+            onClick = { onSeekBy(-backStep) },
+          )
+          Surface(
+            modifier = Modifier
+              .size(68.dp)
+              .clip(CircleShape)
+              .clickable(onClick = onTogglePlay),
+            shape = CircleShape,
+            color = PlayerControlGlassFill,
+            contentColor = controlColor,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            border = BorderStroke(1.dp, PlayerControlGlassBorder),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = if (ui.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                contentDescription = if (ui.playing) "暂停" else "播放",
+                tint = controlColor,
+                modifier = Modifier.size(34.dp),
+              )
+            }
+          }
+          VlcCenterButton(
+            icon = Icons.Filled.FastForward,
+            label = "+${forwardStep}s",
+            onClick = { onSeekBy(forwardStep) },
+          )
+        }
+
+        // ── 底栏：进度条 + 快捷按钮 ──
+        Column(
+          modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .background(
+              Brush.verticalGradient(
+                listOf(Color.Transparent, Color.Black.copy(alpha = 0.65f)),
+              ),
+            )
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        ) {
+          SeekbarWithTimers(
+            position = sliderPosition / 1000f,
+            duration = ui.durationMs / 1000f,
+            onValueChange = {
+              dragging = true
+              sliderPosition = (it * 1000L).toLong()
+            },
+            onValueChangeFinished = {
+              dragging = false
+              onSeek(sliderPosition)
+            },
+            timersInverted = Pair(false, invertDuration),
+            positionTimerOnClick = {},
+            durationTimerOnCLick = {
+              playerPrefs.invertDuration.set(!invertDuration)
+            },
+            chapters = persistentListOf(),
+            paused = !ui.playing,
+            seekbarStyle = seekbarStyle,
+            modifier = Modifier.fillMaxWidth(),
+          )
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            ControlsButton(
+              icon = Icons.Filled.Speed,
+              onClick = { sheet = VlcSheet.Speed },
+              title = "倍速",
+              color = controlColor,
+              modifier = Modifier.size(40.dp),
+            )
+            ControlsButton(
+              icon = Icons.Filled.Audiotrack,
+              onClick = { sheet = VlcSheet.Audio },
+              title = "音轨",
+              color = controlColor,
+              modifier = Modifier.size(40.dp),
+            )
+            ControlsButton(
+              icon = Icons.Filled.Subtitles,
+              onClick = { sheet = VlcSheet.Subtitle },
+              title = "字幕",
+              color = controlColor,
+              modifier = Modifier.size(40.dp),
+            )
+            ControlsButton(
+              icon = Icons.Filled.AspectRatio,
+              onClick = { sheet = VlcSheet.Aspect },
+              title = "画面比例",
+              color = controlColor,
+              modifier = Modifier.size(40.dp),
+            )
+          }
+        }
+      }
+    }
+
+    // 错误卡片不跟控件一起淡出：初始化失败时用户必须一直看得到原因。
+    ui.error?.let { error ->
+      Surface(
+        color = Color.Black.copy(alpha = 0.82f),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, PlayerControlGlassBorder),
+        modifier = Modifier
+          .align(Alignment.BottomCenter)
+          .windowInsetsPadding(WindowInsets.navigationBars)
+          .padding(horizontal = 16.dp, vertical = 96.dp)
+          .fillMaxWidth(),
+      ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+          Text(error, color = controlColor, style = MaterialTheme.typography.bodySmall)
+          Row {
+            TextButton(onClick = onRetry) { Text("重试") }
+            TextButton(
+              onClick = {
+                clipboard.setText(AnnotatedString(vlcErrorReport(error)))
+                Toast.makeText(context, "错误信息已复制", Toast.LENGTH_SHORT).show()
+              },
+            ) { Text("复制错误") }
+            TextButton(onClick = onBack) { Text("返回") }
+          }
         }
       }
     }
   }
 
-  if (showSpeed) {
-    VlcChoiceDialog(
-      title = "播放速度",
-      options = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f),
-      selected = ui.speed,
-      label = { "${(it * 100).toInt()}%" },
-      onPick = {
-        showSpeed = false
-        onSpeed(it)
-      },
-      onDismiss = { showSpeed = false },
-    )
-  }
+  when (sheet) {
+    VlcSheet.None -> Unit
 
-  if (showAudio) {
-    VlcChoiceDialog(
-      title = "音轨",
-      options = ui.audioTracks,
-      selected = ui.audioTracks.firstOrNull { it.id == ui.audioTrackId },
-      label = { it.name },
-      onPick = {
-        showAudio = false
-        onAudioTrack(it.id)
-      },
-      onDismiss = { showAudio = false },
+    VlcSheet.Speed -> VlcSpeedSheet(
+      speed = ui.speed,
+      onSpeed = onSpeed,
+      onDismiss = { sheet = VlcSheet.None },
     )
-  }
 
-  if (showSubtitle) {
-    val subtitleOptions = listOf(VlcTrack(SUBTITLE_TRACK_OFF, "关闭字幕")) + ui.subtitleTracks
-    VlcChoiceDialog(
-      title = "字幕",
-      options = subtitleOptions,
-      selected = subtitleOptions.firstOrNull { it.id == ui.subtitleTrackId },
-      label = { it.name },
-      onPick = {
-        showSubtitle = false
-        onSubtitleTrack(it.id)
+    VlcSheet.Audio -> VlcAudioSheet(
+      tracks = ui.audioTracks,
+      selectedId = ui.audioTrackId,
+      onSelect = onAudioTrack,
+      onPickAudio = {
+        sheet = VlcSheet.None
+        onPickAudio()
       },
-      onDismiss = { showSubtitle = false },
+      onDismiss = { sheet = VlcSheet.None },
+    )
+
+    VlcSheet.Subtitle -> {
+      val subtitleNodes = remember(ui.subtitleTracks, ui.subtitleTrackId) {
+        ui.subtitleTracks.map {
+          TrackNode(
+            id = it.id,
+            type = "sub",
+            title = it.name,
+            selected = it.id == ui.subtitleTrackId,
+          )
+        }.toImmutableList()
+      }
+      SubtitlesSheet(
+        tracks = subtitleNodes,
+        onToggleSubtitle = { id ->
+          onSubtitleTrack(if (id == ui.subtitleTrackId) SUBTITLE_TRACK_OFF else id)
+        },
+        isSubtitleSelected = { it == ui.subtitleTrackId },
+        onAddSubtitle = {
+          sheet = VlcSheet.None
+          onPickSubtitle()
+        },
+        onOpenSubtitleSettings = { sheet = VlcSheet.SubtitleDelay },
+        onOpenSubtitleDelay = { sheet = VlcSheet.SubtitleDelay },
+        onRemoveSubtitle = {},
+        onDismissRequest = { sheet = VlcSheet.None },
+        onDisableSubtitles = { onSubtitleTrack(SUBTITLE_TRACK_OFF) },
+      )
+    }
+
+    VlcSheet.Aspect -> VlcAspectSheet(
+      current = ui.aspect,
+      onSelect = onAspectSelect,
+      onDismiss = { sheet = VlcSheet.None },
+    )
+
+    VlcSheet.SubtitleDelay -> VlcSubtitleDelaySheet(
+      initialDelayMs = ui.subtitleDelayMs,
+      onApply = onSubtitleDelay,
+      onDismiss = { sheet = VlcSheet.None },
     )
   }
 }
 
 @Composable
-private fun VlcControlButton(
+private fun VlcCenterButton(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   label: String,
   onClick: () -> Unit,
 ) {
-  Column(horizontalAlignment = Alignment.CenterHorizontally) {
-    IconButton(onClick = onClick) {
-      Icon(icon, contentDescription = label, tint = Color.White)
+  Surface(
+    modifier = Modifier
+      .size(52.dp)
+      .clip(CircleShape)
+      .clickable(onClick = onClick),
+    shape = CircleShape,
+    color = PlayerControlGlassFill,
+    contentColor = controlColor,
+    tonalElevation = 0.dp,
+    shadowElevation = 0.dp,
+    border = BorderStroke(1.dp, PlayerControlGlassBorder),
+  ) {
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
+      Icon(icon, contentDescription = label, tint = controlColor, modifier = Modifier.size(22.dp))
+      Text(
+        label,
+        style = MaterialTheme.typography.labelSmall,
+        color = controlColor.copy(alpha = 0.75f),
+      )
     }
-    Text(label, color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall)
   }
 }
 
 @Composable
-private fun <T> VlcChoiceDialog(
-  title: String,
-  options: List<T>,
-  selected: T?,
-  label: (T) -> String,
-  onPick: (T) -> Unit,
+private fun VlcSpeedSheet(
+  speed: Float,
+  onSpeed: (Float) -> Unit,
   onDismiss: () -> Unit,
 ) {
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(title) },
-    text = {
-      LazyColumn {
-        items(options) { option ->
-          TextButton(
-            onClick = { onPick(option) },
-            modifier = Modifier.fillMaxWidth(),
-          ) {
-            Text(
-              label(option) + if (option == selected) "  ✓" else "",
-              modifier = Modifier.fillMaxWidth(),
-            )
-          }
+  PlayerSheet(onDismissRequest = onDismiss) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text("播放速度", style = MaterialTheme.typography.headlineSmall)
+      Text(
+        "%.2fx".format(speed),
+        style = MaterialTheme.typography.headlineMedium,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.fillMaxWidth(),
+        textAlign = TextAlign.Center,
+      )
+      Slider(
+        value = speed.coerceIn(0.25f, 3f),
+        onValueChange = { onSpeed((it * 20).roundToInt() / 20f) },
+        valueRange = 0.25f..3f,
+      )
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 2.5f, 3f).forEach { preset ->
+          FilterChip(
+            selected = abs(speed - preset) < 0.01f,
+            onClick = { onSpeed(preset) },
+            label = {
+              Text(if (preset == preset.toInt().toFloat()) "${preset.toInt()}x" else "${preset}x")
+            },
+          )
         }
       }
-    },
-    confirmButton = {},
-    dismissButton = {
-      TextButton(onClick = onDismiss) { Text("关闭") }
-    },
+      Text(
+        "0.25x – 3.00x；步进 0.05x。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+  }
+}
+
+@Composable
+private fun VlcAudioSheet(
+  tracks: List<VlcTrack>,
+  selectedId: Int,
+  onSelect: (Int) -> Unit,
+  onPickAudio: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  PlayerSheet(onDismissRequest = onDismiss) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+      AddTrackRow(title = "添加外部音轨", onClick = onPickAudio)
+      LazyColumn {
+        items(tracks, key = { it.id }) { track ->
+          AudioTrackRow(
+            title = track.name,
+            isSelected = track.id == selectedId,
+            onClick = {
+              onSelect(track.id)
+              onDismiss()
+            },
+          )
+        }
+      }
+    }
+  }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun VlcAspectSheet(
+  current: String?,
+  onSelect: (String) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val options = listOf(
+    "SURFACE_BEST_FIT" to "自动",
+    "SURFACE_FIT_SCREEN" to "适应屏幕",
+    "SURFACE_FILL" to "填充",
+    "SURFACE_16_9" to "16:9",
+    "SURFACE_4_3" to "4:3",
+    "SURFACE_16_10" to "16:10",
+    "SURFACE_235_1" to "2.35:1",
+    "SURFACE_239_1" to "2.39:1",
+    "SURFACE_ORIGINAL" to "原始",
   )
+  PlayerSheet(onDismissRequest = onDismiss) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text("画面比例", style = MaterialTheme.typography.headlineSmall)
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        options.forEach { (name, label) ->
+          FilterChip(
+            selected = current == name.removePrefix("SURFACE_"),
+            onClick = {
+              onSelect(name)
+              onDismiss()
+            },
+            label = { Text(label) },
+          )
+        }
+      }
+      Text(
+        "「自动」= 按视频原始比例；「适应屏幕」会裁掉黑边。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+  }
+}
+
+@Composable
+private fun VlcSubtitleDelaySheet(
+  initialDelayMs: Int,
+  onApply: (Int) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  var delayMs by remember(initialDelayMs) { mutableStateOf(initialDelayMs) }
+  PlayerSheet(onDismissRequest = onDismiss) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text("字幕延迟", style = MaterialTheme.typography.headlineSmall)
+      Text(
+        "%+d ms".format(delayMs),
+        style = MaterialTheme.typography.headlineMedium,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.fillMaxWidth(),
+        textAlign = TextAlign.Center,
+      )
+      Slider(
+        value = delayMs.toFloat(),
+        onValueChange = { delayMs = it.toInt() },
+        onValueChangeFinished = { onApply(delayMs) },
+        valueRange = -5000f..5000f,
+        steps = 19,
+      )
+      Text(
+        "正数延后字幕，负数提前字幕。字号 / 边距在「设置 → 播放内核设置 → VLC」里调。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+  }
 }
 
 private const val SUBTITLE_TRACK_OFF = -1
@@ -965,10 +1339,5 @@ private fun vlcErrorReport(error: String): String = buildString {
 /** 允许复制到 cache 再交给 VLC 的字幕扩展名；未知扩展按 srt 处理。 */
 private val SUBTITLE_EXTENSIONS = setOf("srt", "ass", "ssa", "vtt", "sub", "idx", "txt")
 
-private fun formatVlcTime(ms: Long): String {
-  val total = (ms.coerceAtLeast(0)) / 1000
-  val h = total / 3600
-  val m = (total % 3600) / 60
-  val s = total % 60
-  return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
-}
+/** 允许复制到 cache 再交给 VLC 的外挂音轨扩展名；未知扩展按 mka 处理。 */
+private val AUDIO_EXTENSIONS = setOf("mka", "mkv", "aac", "m4a", "mp3", "flac", "ogg", "opus", "ac3", "eac3", "dts", "wav")

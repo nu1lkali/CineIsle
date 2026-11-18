@@ -144,6 +144,13 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
         screen = PreferencesScreen,
     ))
     add(SearchablePreference(
+        title = "STRM 直链播放",
+        summary = "仅对 .strm 条目生效：优先播放 strm 文件里的远端直链，不再经服务器中转。",
+        category = "Emby 播放与数据同步",
+        keywords = listOf("strm", "直链", "direct", "url"),
+        screen = PreferencesScreen,
+    ))
+    add(SearchablePreference(
         title = "下载后清除播放进度",
         summary = "下载完一条就把服务器上这条的续播位置清零，「继续观看」不再挂着它。",
         category = "Emby 播放与数据同步",

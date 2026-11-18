@@ -3411,8 +3411,13 @@ android {
     //  · VLC 设置增加跳帧、后台播放、默认比例、字幕边距、额外命令行参数。
     // 291 / 1.6.47：VLC 外挂字幕改为先复制到 cache 再挂载（content:// 兼容），
     //  初始化错误显示完整 cause 链。
-    versionCode = 291
-    versionName = "1.6.47"
+    // 292 / 1.6.48：Emby STRM 直链播放（opt-in，三内核共用）+ VLC 播放页对齐 mpv：
+    //  · .strm 条目可从 PlaybackInfo 的 MediaSources[].Path 取远端直链，直接交给播放器；
+    //  · VLC 控件改为 mpv 同款布局（玻璃按钮 / 标题胶囊 / 中央快退播放快进 / 底部快捷条）；
+    //  · 控件显隐只做淡入淡出，不再往左上角收缩；字幕改为 mpv 同款选择面板；
+    //  · 新增横竖屏切换、外挂音轨、字幕延迟面板。
+    versionCode = 292
+    versionName = "1.6.48"
 
     vectorDrawables {
       useSupportLibrary = true

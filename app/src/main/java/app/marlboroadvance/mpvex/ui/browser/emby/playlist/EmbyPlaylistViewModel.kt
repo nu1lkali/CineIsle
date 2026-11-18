@@ -341,8 +341,10 @@ class EmbyPlaylistViewModel(application: Application) : AndroidViewModel(applica
             val mediaId = item.MediaItemId
             if (mediaId == null || mediaId == item.Id) item else item.copy(Id = mediaId)
           }
-          embyVm.launchPlaylist(server, playable)
-          onReady(embyVm)
+          viewModelScope.launch {
+            embyVm.launchPlaylistResolvingStrm(server, playable)
+            onReady(embyVm)
+          }
         }
       }.onFailure {
         _error.value = it.message ?: "读取播放列表失败"

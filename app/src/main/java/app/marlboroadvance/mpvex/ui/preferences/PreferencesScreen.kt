@@ -556,6 +556,7 @@ object PreferencesScreen : Screen {
           item {
             val browserPreferences = koinInject<BrowserPreferences>()
             val resolveDirectLink by browserPreferences.embyResolveDirectLink.collectAsState()
+            val strmDirectPlay by browserPreferences.embyStrmDirectPlay.collectAsState()
             val clearProgressOnDownload by browserPreferences.embyClearProgressOnDownload.collectAsState()
             PreferenceCard {
               // ── 以下两项原在「Emby 服务器维护」页，现移到这里 ──────────
@@ -580,6 +581,33 @@ object PreferencesScreen : Screen {
                   Text(
                     text = "播放前先取出跳转后的真实地址。用于网盘 / STRM 这类带 302 跳转、" +
                       "直链有有效期的源；解析失败会自动回退，不影响正常播放。",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              // 「STRM 直链播放」：只对 .strm 条目生效，拿到 strm 文件里的远端地址就直接播，
+              // 不再经 /Videos/{id}/stream 中转。默认关 —— 部分服务器 / 兼容层不按这个口径
+              // 返回地址，直连会失败；解析不到会自动回退，所以开着也不会比原来更差。
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Link,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = strmDirectPlay,
+                onValueChange = { browserPreferences.embyStrmDirectPlay.set(it) },
+                modifier = Modifier.settingsAnchor("STRM 直链播放"),
+                title = { Text(text = "STRM 直链播放", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = "仅对 .strm 条目生效：优先播放 strm 文件里的远端直链，" +
+                      "不再经服务器中转。部分服务器不兼容可能导致无法播放，" +
+                      "仅在明确需要时开启；拿不到直链会自动回退。",
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },

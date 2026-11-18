@@ -30,6 +30,8 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
 import app.marlboroadvance.mpvex.domain.emby.FavoriteClock
 import app.marlboroadvance.mpvex.domain.emby.StreamProbe
+import app.marlboroadvance.mpvex.domain.emby.StrmDirectLink
+import app.marlboroadvance.mpvex.domain.emby.StrmDirectPlayInfo
 import app.marlboroadvance.mpvex.domain.emby.DuplicateGroup
 import app.marlboroadvance.mpvex.domain.emby.MergeItemRef
 import app.marlboroadvance.mpvex.domain.emby.MergeOutcome
@@ -1285,6 +1287,37 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   /** 是否开启「预解析直链」（设置项）。播放路径据此决定要不要多走一次解析。 */
   fun shouldResolveDirectLink(): Boolean = browserPreferences.embyResolveDirectLink.get()
 
+  /** 是否开启「STRM 直链播放」（设置项）。 */
+  fun shouldPlayStrmDirect(): Boolean = browserPreferences.embyStrmDirectPlay.get()
+
+  /**
+   * 「STRM 直链播放」：条目是 `.strm` 且开关打开时，取 strm 文件里的远端地址。
+   *
+   * 判据用**条目自身的 Path**（永远是 `.strm`）：Emby 第一次播放后会把
+   * `MediaSources[].Container` 从 `strm` 改成真实容器，只看容器会漏掉
+   * 「已经播过一次」的条目。Path 为空时（列表查询没带字段）仍问一次 PlaybackInfo，
+   * 不能因为字段缺失就漏掉 strm。
+   *
+   * 失败 / 超时 / 服务端没给 http(s) 直链都返回 null —— 调用方回退正常流地址，
+   * 这个开关绝不能成为「打不开视频」的原因。
+   */
+  private suspend fun resolveStrmDirectIfEnabled(
+    server: EmbyServer,
+    item: EmbyItem,
+    mediaSourceId: String? = null,
+  ): StrmDirectPlayInfo? {
+    if (!shouldPlayStrmDirect()) return null
+    val itemId = item.Id ?: return null
+    // 有明确证据说明「这不是 .strm」（Path 是 .mkv / 远端 URL 之外的普通路径）就直接跳过，
+    // 避免为普通片源白发一次 PlaybackInfo。
+    // Path 为空（列表查询没带这个字段）时仍然去问一次 —— 不能因为字段缺失就漏掉 strm。
+    val itemPath = item.Path
+    if (!itemPath.isNullOrBlank() && !StrmDirectLink.isStrmPath(itemPath)) return null
+    return withContext(Dispatchers.IO) {
+      runCatching { repository.strmDirectPlayInfo(server, itemId, mediaSourceId) }.getOrNull()
+    }
+  }
+
   // ==================== 播放 ====================
 
   /**
@@ -1386,16 +1419,26 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       // （见 `EmbyPlaybackReporter.warmNextItem`），而不是让用户对着加载层等着。
       //
       // 版本选择本来就只作用于「用户当前点播的这一集」，所以这里只传这一条。
-      val directUrls: Map<String, String> = resolveIfEnabled(server, itemIdToPlay, mediaSourceId)
-        ?.urlOrNull
-        ?.let { mapOf(itemIdToPlay to it) }
-        ?: emptyMap()
+      // STRM 直链（显式开关）优先：拿到远端地址就不必再走 302 预解析。
+      val strmDirect = resolveStrmDirectIfEnabled(server, playItem, mediaSourceId)
+      val directUrls: Map<String, String> = if (strmDirect != null) {
+        mapOf(itemIdToPlay to strmDirect.url)
+      } else {
+        resolveIfEnabled(server, itemIdToPlay, mediaSourceId)
+          ?.urlOrNull
+          ?.let { mapOf(itemIdToPlay to it) }
+          ?: emptyMap()
+      }
+      val directHeaders = strmDirect?.let {
+        StrmDirectLink.headerArray(it.requiredHeaders, EmbyClient.STREAM_USER_AGENT)
+      }
       launchPlaylist(
         server = server,
         items = playlist,
         resumeSeconds = effectiveResume,
         engine = engine,
         directUrls = directUrls,
+        directHeaders = directHeaders,
         firstMediaSourceId = mediaSourceId,
         firstMediaSourceName = mediaSourceLabel,
       )
@@ -1405,13 +1448,16 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       // 「预解析直链」是个无关的优化开关（默认关，见 BrowserPreferences），
       // 挂在它底下等于「用户没开这个开关就永远用不到 ISO 播放」。
       // 而 ISO 探测自己是会判断的：花 2KB 读一下 PVD，不是 ISO 就立刻返回。
+      // ①-a STRM 直链（显式开关）：优先级最高。
+      //     拿到远端地址时不必再要「指定版本的 stream 地址」，少一次 PlaybackInfo 往返。
+      val strmDirect = resolveStrmDirectIfEnabled(server, playItem, mediaSourceId)
       // ── 多版本：先向服务器要「这个版本」的播放地址 ──
       // ⚠️ 不能只自己拼 `/Videos/{id}/stream?MediaSourceId=…`：官方文档把
       //   `PlaySessionId` 与 `MediaSourceId` 一起列为该端点的**必需参数**，
       //   少了前者服务器会无视我们选的版本、直接吐默认版本 —— 现象就是
       //   「选了不带字幕的 B、播出来还是带字幕的 A」，关掉 302 预解析也一样。
       //   单版本媒体（mediaSourceId == null）完全不走这条路，行为与改动前一致。
-      val versionUrl = if (mediaSourceId != null) {
+      val versionUrl = if (strmDirect == null && mediaSourceId != null) {
         withContext(Dispatchers.IO) {
           runCatching { repository.directStreamUrl(server, itemIdToPlay, mediaSourceId) }.getOrNull()
         }
@@ -1420,7 +1466,9 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       }
       // ① 预解析（仅在「预解析直链」开关打开时才发请求）。
       //    返回值现在一并带出「能不能播」的结论 —— 用的是**本来就会发的那一次请求**。
-      val directProbe = versionUrl?.let { StreamProbe.Ok(it) }
+      //    STRM 直链（显式开关）优先级最高：拿到远端地址就不再做 302 预解析。
+      val directProbe = strmDirect?.let { StreamProbe.Ok(it.url) }
+        ?: versionUrl?.let { StreamProbe.Ok(it) }
         ?: resolveIfEnabled(server, itemIdToPlay, mediaSourceId)
 
       // 明确被拒（401 / 403 / 404 / 410）⇒ 起播前就拦下，改成播放页里的错误卡片。
@@ -1478,12 +1526,19 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
           },
         )
       }
+      // STRM 直链的请求头只在这一条确实用了直链、且没有被本地 ISO 代理接管时下发。
+      // 服务端没声明 RequiredHttpHeaders 时 headerArray 仍会带一个默认 UA
+      // （网盘签名常把 UA 算进去，不能交给播放器自己的默认值）。
+      val strmHeaders = strmDirect
+        ?.takeIf { isoUrl == null && it.url == directUrl }
+        ?.let { StrmDirectLink.headerArray(it.requiredHeaders, EmbyClient.STREAM_USER_AGENT) }
       launchSingle(
         server = server,
         item = playItem,
         resumeSeconds = effectiveResume,
         engine = engine,
         overrideUrl = isoUrl ?: directUrl,
+        overrideHeaders = strmHeaders,
         mediaSourceId = mediaSourceId,
         mediaSourceLabel = mediaSourceLabel,
       )
@@ -1800,6 +1855,11 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
      * · **本地 ISO Range 代理地址**（远程 ISO 原盘，见 [prepareRemoteIso]）。
      */
     overrideUrl: String? = null,
+    /**
+     * 与 [overrideUrl] 配套的请求头（格式见 [PlayerActivity] 的 `headers` extra）。
+     * STRM 直链用它下发服务器声明的 UA / Referer；null = 走原来的默认流请求头。
+     */
+    overrideHeaders: Array<String>? = null,
     /** 多版本媒体：本次播放的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
     mediaSourceId: String? = null,
     /** 多版本媒体：本次播放的版本显示名（播放页顶栏会追加在片名后面） */
@@ -1847,7 +1907,14 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       // —— 现象正是「解析成功、播放必失败」。播放器侧的 headers 约定：
       // 第 0/1 位是 User-Agent，其后两两成对（见 PlayerActivity.setHttpHeadersFromExtras）。
       // Referer 统一给**服务器**的来源，而不是直链自己（自引用常被网盘判为非法）。
-      if (overrideUrl != null && !isLocalIsoProxyUrl(overrideUrl)) putStreamHeaders(server)
+      // STRM 直链自带服务器声明的 RequiredHttpHeaders 时优先用它。
+      if (overrideUrl != null && !isLocalIsoProxyUrl(overrideUrl)) {
+        if (overrideHeaders != null) {
+          putExtra("headers", overrideHeaders)
+        } else {
+          putStreamHeaders(server)
+        }
+      }
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     getApplication<Application>().startActivity(intent)
@@ -1952,7 +2019,10 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     // 只发**一次**、只针对**首条**、2 秒硬预算（超时按原地址起播）。后面的条目一律
     // 不在这里探测 —— 由播放器按「播这条时预热下一条」串行处理
     // （见 EmbyPlaybackReporter.warmNextItem）。
-    if (firstId != null) {
+    // STRM 直链开启且首条确实是 .strm 时，先取直链；拿到就无需再让服务端 probe。
+    val firstItem = items.firstOrNull()
+    val strmDirect = firstItem?.let { resolveStrmDirectIfEnabled(server, it, mediaSourceId = null) }
+    if (strmDirect == null && firstId != null) {
       withTimeoutOrNull(RANDOM_PREWARM_BUDGET_MS) {
         withContext(Dispatchers.IO) {
           // 阻塞调用，所以把上限交给 OkHttp 自己（2 秒），别指望协程超时能打断它
@@ -1970,6 +2040,48 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       // 随机列表常混着看过的剧，切到下一条时恢复续播会直接跳到片尾就结束
       playFromStartAll = true,
       engine = engine,
+      directUrls = if (strmDirect != null && firstId != null) {
+        mapOf(firstId to strmDirect.url)
+      } else {
+        emptyMap()
+      },
+      directHeaders = strmDirect?.let {
+        StrmDirectLink.headerArray(it.requiredHeaders, EmbyClient.STREAM_USER_AGENT)
+      },
+    )
+  }
+
+  /**
+   * [launchPlaylist] 的**可等待版本**：起播前解析首条的 STRM 直链。
+   *
+   * 分集列表 / Emby 播放列表这类入口没有经过 [play]，但用户预期与详情页大按钮一致：
+   * 开了「STRM 直链播放」就应当走直链。同样只解析**首条**，后面的自动连播不逐条发请求。
+   */
+  suspend fun launchPlaylistResolvingStrm(
+    server: EmbyServer,
+    items: List<EmbyItem>,
+    resumeSeconds: Long = 0,
+    playFromStartAll: Boolean = false,
+    engine: EngineKind? = resolveEngine(false),
+  ) {
+    if (items.isEmpty()) return
+    val first = items.firstOrNull()
+    val firstId = first?.Id
+    val strmDirect = first?.let { resolveStrmDirectIfEnabled(server, it, mediaSourceId = null) }
+    launchPlaylist(
+      server = server,
+      items = items,
+      resumeSeconds = resumeSeconds,
+      playFromStartAll = playFromStartAll,
+      engine = engine,
+      directUrls = if (strmDirect != null && firstId != null) {
+        mapOf(firstId to strmDirect.url)
+      } else {
+        emptyMap()
+      },
+      directHeaders = strmDirect?.let {
+        StrmDirectLink.headerArray(it.requiredHeaders, EmbyClient.STREAM_USER_AGENT)
+      },
     )
   }
 
@@ -1992,6 +2104,11 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
      * 只有开启「预解析直链」且该条确实发生 302 跳转时才会有内容。
      */
     directUrls: Map<String, String> = emptyMap(),
+    /**
+     * 与 [directUrls] 配套的请求头（STRM 直链服务器声明的 UA / Referer）。
+     * null = 沿用原来的 `putStreamHeaders`（UA + 服务器 Referer）。
+     */
+    directHeaders: Array<String>? = null,
     /**
      * 多版本媒体：**首条**（即用户在详情页点播的那一条）要用的版本 Id。
      * 只作用于首条，后面自动连播的条目各自用默认版本 —— 用户只为当前这条选了版本。
@@ -2079,8 +2196,14 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       // 播放列表的 ID 顺序与 uris 一致，切集时据此把"正在播放"同步给服务器
       putEmbyPlaybackExtras(server, ids, mediaSourceIds, mediaSourceNames, episodeNumbers)
       putEngine(engine)
-      // 列表里只要有用预解析直链换掉的条目，就得同步请求头（理由见 [putStreamHeaders]）
-      if (directUrls.isNotEmpty()) putStreamHeaders(server)
+      // 列表里只要有用预解析直链换掉的条目，就得同步请求头（理由见 [putStreamHeaders]）。
+      // STRM 直链的服务器声明头优先；它不再套默认的「服务器 Referer」——
+      // 直链在 CDN 上，自引用 / 服务器来源的 Referer 反而常被判非法。
+      if (directHeaders != null) {
+        putExtra("headers", directHeaders)
+      } else if (directUrls.isNotEmpty()) {
+        putStreamHeaders(server)
+      }
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     getApplication<Application>().startActivity(intent)

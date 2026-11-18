@@ -471,6 +471,19 @@ class BrowserPreferences(
   val embyResolveDirectLink = preferenceStore.getBoolean("emby_resolve_direct_link", false)
 
   /**
+   * 「STRM 直链播放」开关。
+   *
+   * 打开后，`.strm` 条目在起播前会先问一次 `PlaybackInfo`：
+   * 服务器对 `.strm` 给出的 `MediaSources[].Path` 就是 strm 文件里的远端地址，
+   * 直接把它交给播放器，**不再经过** `/Videos/{id}/stream` 中转。
+   *
+   * 为什么默认关闭：部分服务器 / 兼容层不按这个口径返回 `Path`，或者远端地址
+   * 需要服务器侧签名 / 转码才能播 —— 直接播放会失败。只在明确知道自己的源
+   * 支持直连时才开；拿不到直链会自动回退原来的流地址。
+   */
+  val embyStrmDirectPlay = preferenceStore.getBoolean("emby_strm_direct_play", false)
+
+  /**
    * 多版本媒体的**优先选择规则**（存 [MediaSourcePreference.key]，不是枚举名）。
    *
    * 存 key 而不是枚举名：枚举重命名 / 增删会让 `valueOf` 抛异常或误匹配，
