@@ -673,6 +673,20 @@ class EmbyRepository(
     withContext(Dispatchers.IO) { EmbyClient.getItem(server, itemId) }
 
   /**
+   * 条目的祖先链（库视图 → … → 直接父目录，不含自己，根在前）。
+   *
+   * 库页顶栏「跳转到」下拉导航的数据来源。**失败一律兜成空列表**：
+   * 这个端点只影响导航的便利程度，拿不到就退化成「只有当前层」，
+   * 绝不能让一个 404 把整个库页顶栏搞挂。
+   *
+   * @return 空列表 = 拿不到（老服务端没实现 / 条目就在根上），两种情况对 UI 等价
+   */
+  suspend fun getItemAncestors(server: EmbyServer, itemId: String): List<EmbyItem> =
+    withContext(Dispatchers.IO) {
+      runCatching { EmbyClient.getItemAncestors(server, itemId) }.getOrDefault(emptyList())
+    }
+
+  /**
    * 收藏夹列表。
    *
    * [sortBy] / [sortOrder] 会**下推到服务端**：收藏页是分页的，分页切分跟着 SortBy 走，

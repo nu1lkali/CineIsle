@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Remove
@@ -117,6 +118,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -479,6 +481,27 @@ data class EmbyLibraryScreen(
       if (!canScopeSearch) searchLocalOnly = false
     }
 
+    // ── 顶栏「跳转到」下拉导航（文件夹类别专用）──
+    // 与网络位置那边同一套范式（`NetworkBrowserScreen.PathNavigatorSheet`）：点标题弹
+    // 底部抽屉，列出「库根 → 当前目录」逐级，点哪层跳哪层。
+    //
+    // 为什么 Emby 这边要单独拉数据而不是像网络位置那样从路径拆：Emby 是 **Id 树**，
+    // 页面手里只有一个 `libraryId`，既不知道自己是第几层、也不知道上面还剩哪几级。
+    // `/Items/{Id}/Ancestors` 一次给全（根在前，不含自己），比在 backStack 里反查可靠
+    // ——从详情页跳进文件夹时栈里夹着详情页，直接进库时栈里根本没有父级。
+    var showPathNavigator by remember(libraryId) { mutableStateOf(false) }
+    // 祖先链：null = 还没取 / 取失败。只在第一次打开抽屉时拉，不是每次进页面都发请求。
+    var ancestors by remember(libraryId) { mutableStateOf<List<EmbyItem>?>(null) }
+    var ancestorsLoading by remember(libraryId) { mutableStateOf(false) }
+    LaunchedEffect(showPathNavigator, libraryId, server?.id) {
+      val currentServer = server ?: return@LaunchedEffect
+      if (!showPathNavigator) return@LaunchedEffect
+      if (ancestors != null) return@LaunchedEffect
+      ancestorsLoading = true
+      ancestors = viewModel.loadItemAncestors(currentServer, libraryId)
+      ancestorsLoading = false
+    }
+
     // ── 「照片视频混合库」的处置：内容原样铺开，不再让用户手选档位 ──
     // 家庭视频 / 照片这类库（collectionType = homevideos / mixed / 未知）里，同一个
     // 目录可能既有视频又有照片，也可能只有其中一种。以前的做法是在顶部摆一排
@@ -501,6 +524,15 @@ data class EmbyLibraryScreen(
     // 「演员」分类 = 展示本库演员（头像网格 + 作品数角标）。
     // 进到某位演员的作品子页时 personId 非空，那时列表是媒体，不算演员模式
     val isActorListMode = category == EmbyCategory.ACTOR && personId == null
+    /**
+     * 本页是否给「跳转到」目录导航入口。
+     *
+     * 口径与 [canScopeSearch] 一致：只有「点进真实文件夹的下钻页」和「文件夹档」才有
+     * 明确的目录层级可言 —— 其余档位（全部 / 合集 / 收藏）铺的是跨目录的聚合结果，
+     * 列出「祖先链」对它没有意义（那些条目的父目录和本页压根不是一回事）。
+     * 演员作品页再单独排除：它不是目录。
+     */
+    val pathNavEnabled = canScopeSearch && !isActorListMode && personId == null
 
     // ── 筛选条件 ──
     // 各项可叠加；空集合、null、false 都代表「不限」。
@@ -2270,7 +2302,35 @@ data class EmbyLibraryScreen(
         )
       } else {
       TopAppBar(
-        title = { Text(title, maxLines = 1) },
+        title = {
+          // 文件夹类别下，标题变成「跳转到」下拉导航的抓手（参考网络位置那套）。
+          // 做法是给标题右侧挂一个朝下的小箭头，整块可点 —— 只做箭头点击的话
+          // 命中区太小，深目录里恰恰是最需要快速切层的时候。
+          if (pathNavEnabled) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { showPathNavigator = true }
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            ) {
+              Text(
+                text = title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+              )
+              Icon(
+                imageVector = Icons.Default.KeyboardArrowDown,
+                contentDescription = "跳转到其他目录",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+              )
+            }
+          } else {
+            Text(title, maxLines = 1)
+          }
+        },
         navigationIcon = {
           IconButton(onClick = { backStack.removeLastOrNull() }) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -3275,6 +3335,52 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
         }
       }
     }
+
+      // ── 「跳转到」目录导航（文件夹类别专用）──
+      // 范式与网络位置那边一致（`NetworkBrowserScreen.PathNavigatorSheet`）。
+      // 层级 = 祖先链（根在前）+ 当前层；当前层用勾号标出，点它只关窗。
+      if (showPathNavigator && pathNavEnabled && server != null) {
+        EmbyPathNavigatorSheet(
+          currentTitle = title,
+          // 祖先链里可能有服务器根（CollectionFolder / UserView），也可能混着库视图 ——
+          // 全都照原样列出来，用户点哪层都跳得过去。
+          ancestors = ancestors.orEmpty(),
+          loading = ancestorsLoading,
+          onDismiss = { showPathNavigator = false },
+          onSelect = { target ->
+            showPathNavigator = false
+            val targetId = target.Id
+            // 目标就是当前目录 ⇒ 什么都不做（已经在那一层了）
+            if (targetId != null && targetId != libraryId) {
+              // 栈里还在那一层 ⇒ **截栈**回去，而不是再压一层。
+              // 压栈会让「深目录 → 点根 → 连按两次返回」变成「退好几屏」，
+              // 也与网络位置点面包屑的语义（丢弃前进历史）不一致；
+              // 截栈还能保住那一层原有的搜索态与滚动位置。
+              val idx = backStack.indexOfLast { screen ->
+                screen is EmbyLibraryScreen && screen.libraryId == targetId
+              }
+              if (idx >= 0 && idx < backStack.lastIndex) {
+                // ⚠️ 一次性截断，**不能** `while (...) removeLastOrNull()`：
+                // `NavBackStack` 是 `MutableList<T>` 的类型别名，每个元素都是被导航器
+                // 观察的 entry，逐条移除等于在同一个组合帧里改多次栈 —— 中间态会各触发
+                // 一次重组（navigate back 多条的正确姿势是让底层一次性看到最终结构）。
+                backStack.subList(idx + 1, backStack.size).clear()
+              } else if (idx < 0) {
+                backStack.add(
+                  EmbyLibraryScreen(
+                    libraryId = targetId,
+                    title = target.Name ?: "",
+                    // 从祖先链跳过去 = 依然是文件夹视图，口径要跟着继承
+                    collectionType = target.CollectionType ?: collectionType,
+                    isFolderDive = true,
+                    inheritCategory = category.name,
+                  ),
+                )
+              }
+            }
+          },
+        )
+      }
 
       // ── 随机抽卡：全屏揭晓层（v194，v197 起支持多抽）──
       // 用 Dialog（而不是在本页里叠一层 Box）是为了天然盖住顶栏 / 工具行 / 网格，
@@ -4532,6 +4638,201 @@ private fun isGhostItem(item: EmbyItem): Boolean {
   if (JSON_FRAGMENT.containsMatchIn(name)) return true
   if (item.Id?.let { JSON_FRAGMENT.containsMatchIn(it) } == true) return true
   return name.startsWith("{") || name.startsWith("[")
+}
+
+/**
+ * 「跳转到」目录导航抽屉（文件夹类别下的顶栏标题点击后弹出）。
+ *
+ * 列表内容 = **祖先链（根在前）+ 当前层**，逐级列出，点任意一层直接跳过去。
+ * 深目录里不用再一层层按返回，也不止「回库根」一个出口。
+ *
+ * ## 与网络位置那版的差异（都是有意的）
+ *
+ * 1. **数据来源**：那边从 `currentPath` 拆斜杠；Emby 是 **Id 树**，路径字符串只在
+ *    服务器磁盘上有意义、且 `.strm` 条目压根没有本地路径 ⇒ 改用 `/Items/{Id}/Ancestors`。
+ * 2. **列表顺序**：祖先链本身就是「根在前」，直接铺即可（那边还专门修过反序问题）。
+ * 3. **当前层**：祖先链**不含自己**，所以要把当前层补在末尾并用勾号标出；
+ *    点它只关窗（已经在那一层，跳过去是空动作）。
+ * 4. **加载失败**：祖先链为空时不要显示空抽屉 —— 那时只剩「当前层」一行，
+ *    用户点了也没处去。这种情况直接给一句说明，避免让人以为界面坏了。
+ *
+ * @param currentTitle 当前目录名（补在列表末尾那一行）
+ * @param ancestors 祖先链，根在前、不含自己；空 = 拿不到（老服务端 / 就在根上）
+ * @param loading 祖先链是否正在加载（给一个明确的「正在取层级」状态）
+ * @param onSelect 选中某一层（传该层条目；Id 为空的层级调用方需自行忽略）
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EmbyPathNavigatorSheet(
+  currentTitle: String,
+  ancestors: List<EmbyItem>,
+  loading: Boolean,
+  onDismiss: () -> Unit,
+  onSelect: (EmbyItem) -> Unit,
+) {
+  val sheetState = rememberModalBottomSheetState()
+
+  ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+      Column(modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp)) {
+        Text(
+          text = "跳转到",
+          style = MaterialTheme.typography.headlineSmall,
+          fontWeight = FontWeight.Medium,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+          text = currentTitle,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.padding(top = 2.dp),
+        )
+      }
+
+      HorizontalDivider()
+
+      if (loading && ancestors.isEmpty()) {
+        // 取层级是一次网络请求：深目录下马上给反馈，别让人对着空列表发愣
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          CircularProgressIndicator(
+            strokeWidth = 2.dp,
+            modifier = Modifier.size(18.dp),
+            color = MaterialTheme.colorScheme.primary,
+          )
+          Spacer(modifier = Modifier.width(12.dp))
+          Text(
+            text = "正在读取目录层级…",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      } else if (ancestors.isEmpty()) {
+        Text(
+          text = "服务器没有返回上级目录信息，无法在层级间跳转",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+        )
+      } else {
+        // 层级一般不多（几层到十几层），普通 Column + 纵向滚动即可；
+        // 给个最大高度上限，免得深目录把整屏铺满。
+        Column(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .heightIn(max = 420.dp)
+              .verticalScroll(rememberScrollState())
+              .padding(vertical = 4.dp),
+        ) {
+          ancestors.forEach { level ->
+            val levelName = level.Name?.takeIf { it.isNotBlank() } ?: "未命名目录"
+            // 最外层如果是服务器根/库视图，给个首页图标更好认
+            val isOutermost = level === ancestors.first()
+            Row(
+              modifier =
+                Modifier
+                  .fillMaxWidth()
+                  .clickable { onSelect(level) }
+                  .padding(horizontal = 24.dp, vertical = 12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Icon(
+                imageVector = if (isOutermost) Icons.Default.Home else Icons.Default.Folder,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+              )
+              Spacer(modifier = Modifier.width(16.dp))
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = levelName,
+                  style = MaterialTheme.typography.bodyLarge,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                // 副标题给类型，一眼能分清「库视图」与「普通文件夹」。
+                // 认不出的类型返回 null ⇒ 干脆不画副标题（编不出来的类型名比没有更困惑）
+                level.Type?.let(::embyContainerTypeLabel)?.let { typeLabel ->
+                  Text(
+                    text = typeLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+              }
+            }
+          }
+
+          // 当前层：祖先链不含自己，这里补在末尾并用勾号标出。
+          // 点它只关窗 —— 已经在那一层了，跳过去是空动作。
+          Row(
+            modifier =
+              Modifier
+                .fillMaxWidth()
+                .clickable { onDismiss() }
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Folder,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(22.dp),
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = currentTitle.ifBlank { "当前目录" },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Text(
+                text = "当前位置",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+              )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+              imageVector = Icons.Default.Check,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 容器类型的中文名（导航抽屉里那行副标题）。
+ *
+ * 只覆盖会在「目录层级」里出现的几种；其余返回 null，让调用方干脆不画副标题
+ * —— 编不出来的类型名比没有更让人困惑。
+ */
+private fun embyContainerTypeLabel(type: String): String? = when (type) {
+  "CollectionFolder" -> "媒体库"
+  "UserView" -> "库视图"
+  "Folder" -> "文件夹"
+  "Season" -> "季"
+  "Series" -> "剧集"
+  "BoxSet" -> "合集"
+  "PhotoAlbum" -> "相册"
+  else -> null
 }
 
 /**

@@ -1398,6 +1398,34 @@ object EmbyClient {
   }
 
   /**
+   * 条目的**祖先链**（库视图 → … → 直接父目录，不含条目本身、不含服务器根）。
+   *
+   * 对应 SDK：`ItemsServiceApi.getItemsByIdAncestors` → `GET /Items/{Id}/Ancestors`。
+   *
+   * ## 谁在用
+   *
+   * 库页顶栏的「跳转到」下拉导航（`EmbyLibraryScreen` → [EmbyPathNavigatorSheet]）。
+   * Emby 是 **Id 树**、不是路径树：页面手里只有一个 `libraryId`，光靠它无法知道自己
+   * 站在第几层、上面还剩哪几级。这个端点一次就把整条链给全，比在 backStack 里
+   * 反查可靠得多 —— 从详情页跳进文件夹时栈里夹着 `EmbyDetailScreen`，
+   * 直接进某个库时栈里更是根本没有父级记录。
+   *
+   * ## 三件事必须说清
+   *
+   * 1. **顺序是「根在前」**：数组第一个是最外层的库视图（`CollectionFolder`），
+   *    最后一个是直接父目录。取「上一级」用 `lastOrNull()`。
+   * 2. **不含条目自己**：所以「当前层」要单独用 `itemId` 查一次（本类 [getItem]），
+   *    或用调用方手上已有的名字 —— 库页本来就知道自己叫什么。
+   * 3. **可能返回空数组**：条目直接挂在服务器根 / 库根时没有祖先。这不是错误，
+   *    调用方按「只有一层」处理即可，不要当成失败弹提示。
+   *
+   * ⚠️ 老服务端 / 第三方兼容实现可能没实现这个端点（404）。调用方一律
+   * `runCatching` 兜成空列表，退化成「只有当前层」的导航 —— 功能降级，但页面不能挂。
+   */
+  fun getItemAncestors(server: EmbyServer, itemId: String): List<EmbyItem> =
+    getJson(server, "/Items/$itemId/Ancestors")
+
+  /**
    * 详情页要的字段清单（基础版）。
    *
    * 抽成常量而不是写在 [getItem] 里：它有两个使用者 —— 正常路径和
@@ -1441,7 +1469,13 @@ object EmbyClient {
     // SiblingIds：单集详情页要拿「同季其它集」。它是标准 BaseItemDto 字段，
     // 但同样不一定被老服务端认 —— 所以放在这个「失败就降级」的清单里，
     // 而不是塞进 [ITEM_FIELDS_CORE]（那会把降级路径一起弄坏）。
-    "$ITEM_FIELDS_CORE,ExternalUrls,SiblingIds"
+    //
+    // ParentId：详情页的「打开所在文件夹」（`EmbyDetailScreen` → `MediaInfoSection`）
+    // 要拿这一条**直接父目录**的 Id 才能压栈库页下钻。`BaseItemDto.ParentId` 是标准字段，
+    // 但同样属于「不索取就不返回」的那一类 —— 不写进 Fields 时 `EmbyItem.ParentId` 恒为 null。
+    // 归到这条降级清单而不是 `ITEM_FIELDS_CORE`：代价一样，收益是拿不到时按钮不出现、
+    // 整页照样能开。
+    "$ITEM_FIELDS_CORE,ExternalUrls,SiblingIds,ParentId"
 
   /**
    * 拉取条目的章节表。

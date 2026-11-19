@@ -2721,6 +2721,15 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       runCatching { repository.getItem(server, itemId) }.getOrNull()
     }
 
+  /**
+   * 条目的祖先链，供库页顶栏的「跳转到」下拉导航使用。
+   *
+   * 与 [loadItem] 同风格：**拿不到就是空列表**，不抛、不提示 ——
+   * 这个数据只决定导航里能列几层，缺了照样能正常浏览（见 `EmbyRepository.getItemAncestors`）。
+   */
+  suspend fun loadItemAncestors(server: EmbyServer, itemId: String): List<EmbyItem> =
+    withContext(Dispatchers.IO) { repository.getItemAncestors(server, itemId) }
+
   /** 条目当前挂着的图片清单（含尺寸与来源，即「图片源数据」） */
   suspend fun loadItemImages(server: EmbyServer, itemId: String): List<EmbyImageInfo> =
     withContext(Dispatchers.IO) {

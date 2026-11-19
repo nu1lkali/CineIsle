@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
@@ -170,6 +171,7 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.rememberDominantColo
 import app.marlboroadvance.mpvex.ui.browser.emby.components.runEmbyLibraryAction
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import app.marlboroadvance.mpvex.ui.utils.longPressToCopy
+import app.marlboroadvance.mpvex.ui.browser.emby.EmbyLibraryScreen
 import android.net.Uri
 import androidx.compose.material.icons.outlined.Cast
 import org.koin.compose.koinInject
@@ -596,6 +598,30 @@ data class EmbyDetailScreen(
               listState = listState,
               collapse = collapse,
               showRecommendations = showRecommendations,
+              // 「打开所在文件夹」：父目录 Id 由 detail 请求里的 ParentId 给（见 EmbyClient 的
+              // ITEM_FIELDS_WITH_EXTERNAL_URLS），拿不到就不给入口。
+              //
+              // title 必须**现拉一次父目录**拿真名：不能从文件路径截 —— `.strm` 条目的
+              // Path 是指向外部的网络地址（`https://cdn.xxx/movie.mkv`），截出来是 CDN
+              // 路径末段而不是文件夹名；挂载盘 / UNC 路径同理不可靠。拉失败退到「文件夹」：
+              // 标题难看可以接受，跳不过去不行。
+              //
+              // 参数口径与 `EmbyLibraryScreen.openItem` 的 "Folder" 分支一致：
+              // isFolderDive = true 走「内容原样」（否则文件夹内视频会被类型过滤整层滤空）；
+              // collectionType 必须继承本条的（Emby 只在库根写 CollectionType）。
+              onOpenFolder = { parentId, collectionType ->
+                scope.launch {
+                  val folderName = viewModel.loadItem(currentServer, parentId)?.Name
+                  pushChild(
+                    EmbyLibraryScreen(
+                      libraryId = parentId,
+                      title = folderName?.takeIf { it.isNotBlank() } ?: "文件夹",
+                      collectionType = collectionType,
+                      isFolderDive = true,
+                    ),
+                  )
+                }
+              },
               // 剧照当封面区的整张背景图用，所以要按屏幕级别的宽度取（1080 足够铺满常见机型）：
               // 之前取 128px 是为了「放大即虚化」的糊底效果，用户不喜欢 —— 现在直接看清晰大图。
               // EmbyImageLoader 的 maxWidth 只做客户端降采样、不会改写 URL，
@@ -1464,6 +1490,14 @@ private fun DetailBody(
    * 数据由 [EmbyDetailScreen] 加载好后传进来（同 [recommendItems] 的理由：不能在区块内部发请求）。
    */
   relatedEpisodes: RelatedEpisodes = RelatedEpisodes(),
+  /**
+   * 「打开所在文件夹」：从父目录 Id 压栈一层库页下钻。
+   *
+   * 逻辑不写在这里 —— [DetailBody] 拿不到 `backStack` / `scope` / `viewModel`，
+   * 而这些都在 [EmbyDetailScreen.Content] 里。所以由那边构造好传下来。
+   * null = 不显示这个入口（调用方按 `item.ParentId` 是否为空决定）。
+   */
+  onOpenFolder: ((parentId: String, collectionType: String?) -> Unit)? = null,
 ) {
   val isFavorite = item.UserData?.IsFavorite == true
   val isPlayed = item.UserData?.Played == true
@@ -1790,10 +1824,23 @@ private fun DetailBody(
 
       // ── 媒体信息（含完整视频 / 音频编码信息）──
       item {
+        // 「所在文件夹」：只有拿到直接父目录 Id 才给入口。
+        // 拿不到（老服务端不认 ParentId 字段 / 条目本身就在库根）时按钮整块不出现，
+        // 而不是画一颗点了没反应的灰键。
+        val parentId = item.ParentId?.takeIf { it.isNotBlank() }
+        val openFolderAction = onOpenFolder
+        val folderCollectionType = item.CollectionType
+        val openFolder: (() -> Unit)? =
+          if (parentId == null || openFolderAction == null) {
+            null
+          } else {
+            { openFolderAction(parentId, folderCollectionType) }
+          }
         MediaInfoSection(
           item = item,
           selectedMediaSourceId = effectiveSourceId,
           customVersionLabel = effectiveSourceId?.let(customVersionLabelOf),
+          onOpenFolder = openFolder,
         )
       }
     }
@@ -3088,6 +3135,17 @@ private fun MediaInfoSection(
   selectedMediaSourceId: String? = null,
   /** 本机手动补全的版本名；null = Emby 原始名 */
   customVersionLabel: String? = null,
+  /**
+   * 点「所在文件夹」时回调；null = 不显示这个入口。
+   *
+   * 判据由调用方给（`item.ParentId` 非空），这里不做二次判断，
+   * 免得两处口径漂移后出现「按钮在但点了没反应」。
+   *
+   * ⚠️ 回调不带参数：曾试过在这里从 `summary.path` 里截父目录名传给调用方，
+   * 但 `.strm` 的 Path 是网络地址，截出来的是 CDN 路径末段而不是文件夹名 ——
+   * 目录名只能向服务端要，见调用点。
+   */
+  onOpenFolder: (() -> Unit)? = null,
 ) {
   val summary =
     remember(item, selectedMediaSourceId, customVersionLabel) {
@@ -3190,11 +3248,11 @@ private fun MediaInfoSection(
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               modifier = Modifier.weight(1f),
             )
-            Text(
-              text = "长按复制",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            )
+            // 「长按复制」原来是这里的提示文字；现在把位置让给「所在文件夹」入口，
+            // 提示下沉到路径文本下方，两者都不丢。
+            onOpenFolder?.let { open ->
+              OpenFolderChip(onClick = open)
+            }
           }
           Spacer(modifier = Modifier.height(3.dp))
           Text(
@@ -3207,6 +3265,12 @@ private fun MediaInfoSection(
             modifier = Modifier
               .fillMaxWidth()
               .longPressToCopy(path, "文件路径"),
+          )
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            text = "长按路径可复制",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
           )
         }
 
@@ -3287,6 +3351,46 @@ private fun MediaInfoBadge(text: String) {
       fontWeight = FontWeight.Medium,
       color = MaterialTheme.colorScheme.onTertiaryContainer,
       modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+    )
+  }
+}
+
+/**
+ * 「所在文件夹」入口：胶囊小键，点和长按都触发跳转。
+ *
+ * 规格刻意比播放区那排 48dp 图标键小一号（这里 [28dp][] 高、无外框投影）：
+ * 那排是**播放动作**，这个是**导航动作**，混进同一档视觉会让人误以为它也会起播放器。
+ * 形态上沿用 [MediaInfoBadge] 的胶囊语言，只把底色换成更安静的
+ * `surfaceContainerHighest`，避免和 HDR 角标抢注意力。
+ *
+ * 点击区域用 [minimumInteractiveComponentSize][androidx.compose.material3.minimumInteractiveComponentSize]
+ * 之外的写法（`sizeIn(minHeight = 28.dp)` + 外层 `padding` 不参与命中）——
+ * 28dp 视觉高度已经低于无障碍建议的 48dp，所以额外靠 [Modifier.height] 不变、
+ * 由 `clickable` 撑满整颗胶囊来保证至少 28dp 的可点面积；文字足够短，误触代价只有一次返回。
+ */
+@Composable
+private fun OpenFolderChip(onClick: () -> Unit) {
+  Row(
+    verticalAlignment = Alignment.CenterVertically,
+    modifier = Modifier
+      .clip(RoundedCornerShape(percent = 50))
+      .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+      .clickable(onClick = onClick)
+      .padding(start = 8.dp, end = 10.dp, top = 5.dp, bottom = 5.dp),
+  ) {
+    Icon(
+      imageVector = Icons.Default.FolderOpen,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.size(14.dp),
+    )
+    Spacer(modifier = Modifier.width(4.dp))
+    Text(
+      text = "所在文件夹",
+      style = MaterialTheme.typography.labelSmall,
+      fontWeight = FontWeight.Medium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 1,
     )
   }
 }
