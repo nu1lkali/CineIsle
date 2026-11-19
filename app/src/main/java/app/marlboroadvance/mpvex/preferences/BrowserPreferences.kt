@@ -459,6 +459,22 @@ class BrowserPreferences(
   val embyPersonSortAsc = preferenceStore.getBoolean("emby_person_sort_asc", true)
 
   /**
+   * 媒体库「演员」分类的排序方式（存稳定键，空串 = 默认「名称」）。
+   *
+   * 与 [embyPersonSort] 是**两件事**：那边排的是「某位演员的作品」，这里排的是
+   * 「整个库的演员列表」。演员列表一次性拉全、作品数由客户端统计，所以只能本地排；
+   * 落盘的原因也一样 —— 点进演员作品页再返回，这一屏会重建，只放 `remember` 会丢。
+   */
+  val embyActorSort = preferenceStore.getString("emby_actor_sort", "")
+
+  /**
+   * 媒体库「演员」分类排序的**方向**（true = 升序）。
+   *
+   * 与 [embyActorSort] 成对落盘：只存排序项的话，返回后「作品数量 ↓」会变回默认方向。
+   */
+  val embyActorSortAsc = preferenceStore.getBoolean("emby_actor_sort_asc", true)
+
+  /**
    * 「预解析直链（302）」开关。
    *
    * 打开后，播放前先把 `/Videos/{id}/stream` 背后跳转到的真实直链取出来再交给播放器。
@@ -493,6 +509,43 @@ class BrowserPreferences(
    * 老用户升级后不会看到任何变化。
    */
   val embyMediaSourcePreference = preferenceStore.getString("emby_media_source_preference", "default")
+
+  /**
+   * 「多版本自动连播」开关（默认开）。
+   *
+   * 打开后，从详情页播放**单部影片**时，会把同一部影片的其它版本（`MediaSources`）
+   * 一起放进播放队列，播完当前版本可以接着切下一个版本。
+   *
+   * 只作用于「单个条目」的播放：剧集播放的队列是「本季后续集」，
+   * 不会被同一集的多个版本打断（否则 S01E01-4K 后面接 S01E01-1080P 再接 S01E02，
+   * 看起来就像集号乱序）。
+   *
+   * 关闭后行为与加这个功能之前完全一致：只播用户选中的那一个版本。
+   */
+  val embyVersionQueueEnabled = preferenceStore.getBoolean("emby_version_queue_enabled", true)
+
+  /**
+   * 多版本队列的**排序规则**（存 `VersionQueueOrder.key`，不是枚举名）。
+   *
+   * 默认自然顺序：`第2版` 排在 `第10版` 前面，`CD2` 排在 `CD10` 前面。
+   * 存 key 的理由同 [embyMediaSourcePreference]：枚举重命名不能让老设置失效。
+   */
+  val embyVersionQueueOrder =
+    preferenceStore.getString("emby_version_queue_order", "natural")
+
+  /**
+   * 每个条目**自定义的版本顺序**（`mediaSourceId` 逗号分隔）。
+   *
+   * 只有排序规则选「自定义」时才被读取。按服务器 + 条目分开存：
+   * 版本 Id 是服务端生成的，跨服务器没有意义。
+   *
+   * 键形状与 `EmbyVersionLabels` 一致（`前缀:serverId:itemId`），
+   * 用动态 key 而不是新表，避免为一串 Id 改数据库 schema。
+   */
+  fun embyVersionQueueCustomOrder(
+    serverId: Long,
+    itemId: String,
+  ): Preference<String> = preferenceStore.getString("emby_version_queue_custom:$serverId:$itemId", "")
 
   /**
    * 媒体库内的**视图模式**（[EmbyLibraryViewMode] 的枚举名，空串 = 网格）。

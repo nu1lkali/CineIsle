@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.player.engine
 
+import app.marlboroadvance.mpvex.preferences.GsyKernelKind
 import app.marlboroadvance.mpvex.preferences.PlayerButton
 
 /**
@@ -31,13 +32,22 @@ enum class EngineKind(
    * 适合 mpv 的 copyback / GSY 的解码路径都不合适的片源。
    */
   VLC("VLC"),
+
+  /**
+   * Media3 / ExoPlayer：通过 GSY 独立播放页承载，但强制使用 ExoPlayer 内核。
+   *
+   * 这不是「跟随 GSY 设置」：从详情页显式选择本项时，当前这一场播放固定走
+   * [GsyKernelKind.EXO]，不会改写用户保存的 GSY 默认内核，也不会影响下一次普通 GSY 播放。
+   */
+  MEDIA3("Media3 / ExoPlayer"),
   ;
 
   companion object {
     fun from(value: String?): EngineKind =
       when (value?.uppercase()) {
         // "EXO" / "MEDIA3" 是改造前存在偏好里的旧值，继续识别，避免升级后设置失效
-        "GSY", "EXO", "EXOPLAYER", "MEDIA3", "GSY_IJK", "GSY_EXO" -> GSY
+        "GSY", "GSY_IJK" -> GSY
+        "EXO", "EXOPLAYER", "MEDIA3", "GSY_EXO" -> MEDIA3
         "VLC" -> VLC
         else -> MPV
       }
@@ -49,7 +59,8 @@ fun EngineKind.reversed(): EngineKind =
   when (this) {
     EngineKind.MPV -> EngineKind.GSY
     EngineKind.GSY -> EngineKind.VLC
-    EngineKind.VLC -> EngineKind.MPV
+    EngineKind.VLC -> EngineKind.MEDIA3
+    EngineKind.MEDIA3 -> EngineKind.MPV
   }
 
 /*
@@ -209,6 +220,7 @@ fun EngineKind.supports(feature: EngineFeature): Boolean =
     EngineKind.MPV -> true
     EngineKind.GSY -> feature in GSY_SUPPORTED
     EngineKind.VLC -> feature in VLC_SUPPORTED
+    EngineKind.MEDIA3 -> feature in GSY_SUPPORTED
   }
 
 /**

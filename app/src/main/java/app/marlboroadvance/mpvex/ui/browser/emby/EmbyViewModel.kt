@@ -20,14 +20,22 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyImageProviderInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyItemLookupInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyItemsResult
+import app.marlboroadvance.mpvex.domain.emby.EmbyMediaSource
 import app.marlboroadvance.mpvex.domain.emby.EmbyRemoteImageInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyRemoteSearchResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyRecentPlays
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanChunk
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
+import app.marlboroadvance.mpvex.domain.emby.EmbyPlaylistEntry
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.domain.emby.EmbyVersionLabels
+import app.marlboroadvance.mpvex.domain.emby.VersionQueueOrder
+import app.marlboroadvance.mpvex.domain.emby.buildMediaSourceQueue
+import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceTitle
+import app.marlboroadvance.mpvex.domain.emby.parseCustomVersionOrder
+import app.marlboroadvance.mpvex.domain.emby.sortEpisodesForQueue
 import app.marlboroadvance.mpvex.domain.emby.FavoriteClock
 import app.marlboroadvance.mpvex.domain.emby.StreamProbe
 import app.marlboroadvance.mpvex.domain.emby.StrmDirectLink
@@ -162,6 +170,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   private val playerPreferences by inject<PlayerPreferences>(PlayerPreferences::class.java)
   private val browserPreferences by inject<BrowserPreferences>(BrowserPreferences::class.java)
   private val displayPrefsSync by inject<EmbyDisplayPrefsSync>(EmbyDisplayPrefsSync::class.java)
+  /** 多版本媒体的本机别名：启动侧拼队列标题时要用（详情页显示的就是这个名字） */
+  private val versionLabels by inject<EmbyVersionLabels>(EmbyVersionLabels::class.java)
   /** 收藏时间账本：Emby 不记收藏时间，点红心时自己记一笔（见 FavoriteClock 的 KDoc） */
   private val favoriteClock by inject<FavoriteClock>(FavoriteClock::class.java)
   // 「聚合库」：删服务器时要级联清掉这台服务器上的聚合库（成员库 Id 全都失效了）
@@ -1368,9 +1378,10 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     // 电视剧的正确行为是「点封面 = 从上一集没看完的地方接着看」：
     // 先取分集列表，优先挑有进度的第一集，其次挑第一集未看的，最后退回首集。
     val playTarget: EmbyItem = if (isContainerOnly(item) && item.Type == "Series") {
+      // 同样要先稳定排序再挑：否则「第一集未看的」可能挑到第 8 集（服务端返回乱序）。
       val episodes = runCatching {
         withContext(Dispatchers.IO) { repository.getEpisodes(server, itemId, null, 0, null).Items }
-      }.getOrDefault(emptyList())
+      }.getOrDefault(emptyList()).let { sortEpisodesForQueue(it) }
       if (fromStart) {
         // 「从头播放」= 第一集开头，哪怕第 1 集早看完了。
         episodes.firstOrNull() ?: return
@@ -1401,7 +1412,46 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       emptyList()
     }
 
-    if (playlist.size > 1) {
+    // 多版本影片：把同一部影片的**其它版本**也排进队列（设置里可关，见
+    // BrowserPreferences.embyVersionQueueEnabled）。返回空表 = 不启用，行为与改动前一致。
+    //
+    // ⚠️ 只对非剧集生效。剧集的队列是「本季后续集」，把同一集的两个版本插进去会变成
+    //   S01E01-4K → S01E01-1080P → S01E02 —— 看起来就是用户抱怨的「集号乱序」。
+    val versionQueue = if (playItem.Type == "Episode") {
+      emptyList()
+    } else {
+      buildVersionPlaylist(server, playItem, mediaSourceId, mediaSourceLabel)
+    }
+
+    if (versionQueue.size > 1) {
+      // 多版本连播：探测口径与下面剧集分支完全一致 —— **只探用户马上要播的那一条**。
+      // 逐条预解析会让起播时间线性叠加（见下面那段说明），而且同一部影片的多个版本
+      // 走的是同一个 mediaSource，逐个探也没多拿到任何信息。
+      val first = versionQueue.first()
+      val firstId = first.item.Id.orEmpty()
+      val strmDirect = resolveStrmDirectIfEnabled(server, first.item, first.mediaSourceId)
+      val directUrls: Map<String, String> = if (strmDirect != null) {
+        // ⚠️ 键必须用 playbackKey（itemId#sourceId），不能用 itemId：
+        //    多版本队列里所有条目的 itemId 相同，按 itemId 命中会让**每个版本都拿到首条的直链**。
+        mapOf(first.playbackKey to strmDirect.url)
+      } else {
+        resolveIfEnabled(server, firstId, first.mediaSourceId)
+          ?.urlOrNull
+          ?.let { mapOf(first.playbackKey to it) }
+          ?: emptyMap()
+      }
+      val directHeaders = strmDirect?.let {
+        StrmDirectLink.headerArray(it.requiredHeaders, EmbyClient.STREAM_USER_AGENT)
+      }
+      launchPlaylistEntries(
+        server = server,
+        entries = versionQueue,
+        resumeSeconds = effectiveResume,
+        engine = engine,
+        directUrls = directUrls,
+        directHeaders = directHeaders,
+      )
+    } else if (playlist.size > 1) {
       // ⚠️⚠️ 只探**用户马上要播的那一条**，绝不遍历整条连播列表。
       //
       // 原来这里是 `playlist.mapNotNull { resolveIfEnabled(...) }` —— 逐条串行发请求，
@@ -1702,19 +1752,110 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
 
   /**
    * 取同季剧集中「当前集及其之后」的列表；失败时只返回当前集。
+   *
+   * ⚠️ 必须先 [sortEpisodesForQueue] 再切：`/Shows/{Id}/Episodes` **不保证顺序**
+   * （无排序参数时按入库时间 / 名字字符串 / 内部 Id 给结果，其中按名字排就是
+   * `第10集 < 第2集`）。以前这里直接 `subList(index, size)`，队列顺序原封不动继承了
+   * 这些乱序，播完第 1 集就跳到第 8 集 —— 那正是「连播顺序错乱」的根因。
    */
   private suspend fun buildEpisodePlaylist(
     server: EmbyServer,
     item: EmbyItem,
   ): List<EmbyItem> {
     val seriesId = item.SeriesId ?: return listOf(item)
-    val episodes = runCatching { repository.getEpisodes(server, seriesId, item.SeasonId).Items }
+    val fetched = runCatching { repository.getEpisodes(server, seriesId, item.SeasonId).Items }
       .getOrNull()
       ?: return listOf(item)
-    if (episodes.isEmpty()) return listOf(item)
+    if (fetched.isEmpty()) return listOf(item)
 
+    val episodes = sortEpisodesForQueue(fetched)
     val index = episodes.indexOfFirst { it.Id == item.Id }
     return if (index >= 0) episodes.subList(index, episodes.size) else listOf(item)
+  }
+
+  /**
+   * 多版本影片的播放队列（当前版本在前，其余版本按设置里的规则衔接）。
+   *
+   * 返回**空列表**的四种情况，都表示「不启用多版本排队，按原来的单条路径播」：
+   *  1. 设置里关掉了「多版本自动连播」；
+   *  2. 该条目只有一个版本（`MediaSources` 不足两条）；
+   *  3. 服务端没给版本信息（列表查询没带 `MediaSources` 字段）；
+   *  4. 当前要播的版本 Id 对不上（刷新后源被换掉）—— 这时猜一个版本只会让
+   *     「用户点的」与「实际播的」变成两回事，宁可退回单条播放。
+   *
+   * ## 排序规则与「当前项在前」
+   *
+   * 见 [buildMediaSourceQueue]：先按 [VersionQueueOrder] 排成一条有序链，
+   * 再把环从当前版本处切开。例如自然顺序 `A B C D` + 当前 `C` ⇒ `C D A B`，
+   * 保证「当前项之后的每一条」都严格按规则衔接，不会出现 1 → 8 → 2 这种跳跃。
+   *
+   * ## 版本名取哪一份
+   *
+   * 用 [EmbyVersionLabels] 里的**本机别名**（与详情页下拉框同一份数据）——
+   * 用户在详情页写「4K 中字」，播放队列里也必须写「4K 中字」，
+   * 否则用户会以为排进队列的是别的片子。
+   */
+  private fun buildVersionPlaylist(
+    server: EmbyServer,
+    item: EmbyItem,
+    currentSourceId: String?,
+    currentSourceLabel: String?,
+  ): List<EmbyPlaylistEntry> {
+    if (!browserPreferences.embyVersionQueueEnabled.get()) return emptyList()
+    val itemId = item.Id ?: return emptyList()
+    val sources = item.MediaSources.orEmpty().filter { !it.Id.isNullOrBlank() }
+    if (sources.size < 2) return emptyList()
+    if (currentSourceId == null || sources.none { it.Id == currentSourceId }) return emptyList()
+
+    val order = VersionQueueOrder.fromKey(browserPreferences.embyVersionQueueOrder.get())
+    val customOrder = if (order == VersionQueueOrder.CUSTOM) {
+      parseCustomVersionOrder(
+        browserPreferences.embyVersionQueueCustomOrder(server.id, itemId).get(),
+      )
+    } else {
+      emptyList()
+    }
+
+    // 标签快照取一次：下面每条都要用，逐个读 StateFlow 没必要
+    val labels = versionLabels.labels.value
+    fun labelOf(source: EmbyMediaSource): String =
+      embyMediaSourceTitle(
+        source,
+        labels[EmbyVersionLabels.key(server.id, itemId, source.Id.orEmpty())],
+      )
+
+    val queue = buildMediaSourceQueue(
+      sources = sources,
+      currentId = currentSourceId,
+      order = order,
+      labelOf = { source -> labelOf(source) },
+      customOrder = customOrder,
+    )
+    if (queue.size < 2) return emptyList()
+
+    // 首条是原盘 ISO ⇒ 退回单条播放：单条那条路会起本地 Range 代理，把 ISO 里的主影片
+    // 伪装成普通文件交给 mpv（见 prepareRemoteIso），队列路径没有这一步，
+    // 让 ISO 首条进队列的结果是「点播放黑屏」。宁可少一个连播，也不能打不开。
+    if (queue.first().Container.equals("iso", ignoreCase = true)) return emptyList()
+
+    val baseTitle = displayTitle(item)
+    return queue.map { source ->
+      val id = source.Id.orEmpty()
+      val label = labelOf(source)
+      EmbyPlaylistEntry(
+        item = item,
+        mediaSourceId = id,
+        // 首条沿用调用方传进来的标签：详情页下拉写什么，播放页就显示什么
+        mediaSourceLabel = if (id == currentSourceId) {
+          currentSourceLabel?.takeIf { it.isNotBlank() } ?: label
+        } else {
+          label
+        },
+        // 队列里必须能区分版本，否则同片 3 条一模一样的标题（只影响队列列表，
+        // 播放页顶栏读的是 filename，不会被这里带长）
+        titleOverride = if (baseTitle.isBlank()) label else "$baseTitle · $label",
+      )
+    }
   }
 
   /**
@@ -1753,7 +1894,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    */
   private fun Intent.putEngine(engine: EngineKind?) {
     when (engine) {
-      EngineKind.GSY -> setClass(getApplication(), GsyPlayerActivity::class.java)
+      EngineKind.GSY, EngineKind.MEDIA3 -> setClass(getApplication(), GsyPlayerActivity::class.java)
       EngineKind.VLC -> setClass(getApplication(), VlcPlayerActivity::class.java)
       EngineKind.MPV -> putExtra(PlayerActivity.EXTRA_ENGINE, engine.name)
       null -> Unit
@@ -2085,6 +2226,12 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     )
   }
 
+  /**
+   * 播放一组媒体（剧集连播 / 随机播放 / 多版本连播）。
+   *
+   * 这一版按 `ItemId` 建队列（一项 = 一个条目），多版本队列请走
+   * [launchPlaylistEntries] —— 那里的每一项还能单独指定 `mediaSourceId`。
+   */
   fun launchPlaylist(
     server: EmbyServer,
     items: List<EmbyItem>,
@@ -2117,6 +2264,52 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     /** [firstMediaSourceId] 对应的显示名；播放页顶栏据此显示「正在播的是哪个版本」。 */
     firstMediaSourceName: String? = null,
   ) {
+    launchPlaylistEntries(
+      server = server,
+      entries = items.map { EmbyPlaylistEntry(item = it) },
+      resumeSeconds = resumeSeconds,
+      playFromStartAll = playFromStartAll,
+      engine = engine,
+      directUrls = directUrls,
+      directHeaders = directHeaders,
+      firstMediaSourceId = firstMediaSourceId,
+      firstMediaSourceName = firstMediaSourceName,
+    )
+  }
+
+  /**
+   * [launchPlaylist] 的**逐项版本**版本：每一项自带 `mediaSourceId`。
+   *
+   * 为什么要多这一层：多版本连播的队列里，**多个项共用一个 `ItemId`**。
+   * 原来「一项 = 一个 ItemId」的实现有三处会因此撞车：
+   *  · `id == firstNameId` 判断版本 —— 同片两条都命中，第二条被套上首条的版本；
+   *  · `directUrls` 按 `itemId` 取 —— 同片所有版本都拿到首条的直链；
+   *  · `mediaSourceNames` 只填首条 —— 切到第二个版本后顶栏 / 媒体信息还是旧的。
+   * 所以队列的唯一标识改成 [EmbyPlaylistEntry.playbackKey]（`itemId#sourceId`）。
+   *
+   * 非多版本调用方（剧集连播 / 随机播放）走上面的重载时每项 `mediaSourceId` 为 null，
+   * 行为与改动前逐字节一致。
+   */
+  fun launchPlaylistEntries(
+    server: EmbyServer,
+    entries: List<EmbyPlaylistEntry>,
+    resumeSeconds: Long = 0,
+    /** 整场从头播放（随机播放 / 随机播放收藏专用），含义见上面的重载 */
+    playFromStartAll: Boolean = false,
+    /** 指定内核；默认取设置里的「默认播放内核」 */
+    engine: EngineKind? = resolveEngine(false),
+    /**
+     * `playbackKey`（`itemId#sourceId`）或 `itemId` → 预解析出来的直链。
+     * 空 map = 全部走原始流地址（默认行为）。
+     */
+    directUrls: Map<String, String> = emptyMap(),
+    /** 与 [directUrls] 配套的请求头（STRM 直链服务器声明的 UA / Referer） */
+    directHeaders: Array<String>? = null,
+    /** 兼容旧调用方：首条没显式给版本时用它 */
+    firstMediaSourceId: String? = null,
+    /** 兼容旧调用方：首条没显式给版本名时用它 */
+    firstMediaSourceName: String? = null,
+  ) {
     val uris = ArrayList<android.net.Uri>()
     val ids = ArrayList<String>()
     // 与 uris 下标一一对应的显示标题。播放器侧切集时用它，避免从
@@ -2129,7 +2322,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     // 取不到就填空串占位 —— 播放页会跳过空串（那时在线搜索按钮自动禁用）。
     val mediaSourceIds = ArrayList<String>()
     // 与上面同序的版本显示名，供播放页顶栏显示「正在播的是哪个版本」。
-    // 只有「用户点播的那一条」才会有值（用户只为这一条选了版本），其余一律空串占位。
+    // 多版本队列里每一项都有值；剧集连播只有用户点播的那一条有值，其余空串占位。
     val mediaSourceNames = ArrayList<String>()
     // 与上面同序的「S*E*」原始序号，供弹幕按真实集号匹配（队列下标 ≠ 集号）。
     val episodeNumbers = ArrayList<String>()
@@ -2137,23 +2330,25 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     // 拿分集名（item.Name，如「都市传说」）去搜番是搜不到的。电影没有 SeriesName ⇒ 空串，
     // 播放器侧会退回用显示名。
     val seriesNames = ArrayList<String>()
-    val firstNameId = items.firstOrNull()?.Id
-    items.forEach { item ->
-      val id = item.Id ?: return@forEach
-      // 首条若选了版本就用它；其余条目一律用各自的默认源（第一条源）
-      val sourceId = if (id == firstNameId && firstMediaSourceId != null) {
-        firstMediaSourceId
-      } else {
-        item.MediaSources?.firstOrNull()?.Id
-      }
+    entries.forEachIndexed { index, entry ->
+      val item = entry.item
+      val id = item.Id ?: return@forEachIndexed
+      // ⚠️ 用**下标**判断首条，不能用 `id == firstNameId`：多版本队列里同片每项 Id 相同。
+      val isFirst = index == 0
+      val sourceId = entry.mediaSourceId
+        ?: (if (isFirst) firstMediaSourceId else null)
+        ?: item.MediaSources?.firstOrNull()?.Id
+      // 直链表先按 playbackKey 精确命中（多版本），旧调用方按 itemId 给键时只在首条生效
+      val directUrl = directUrls[entry.playbackKey]
+        ?: directUrls[id].takeIf { isFirst }
       uris.add(
         android.net.Uri.parse(
-          directUrls[id]
+          directUrl
             ?: repository.videoStreamUrl(server, id, static = true, mediaSourceId = sourceId),
         ),
       )
       ids.add(id)
-      titles.add(displayTitle(item))
+      titles.add(entry.titleOverride?.takeIf { it.isNotBlank() } ?: displayTitle(item))
       seriesKeys.add(item.SeriesId ?: id)
       // ⚠️ 剧名：弹幕自动匹配要搜的是「某科学的超电磁炮」，
       //    不是某一集的 Name（如「都市传说」）。电影没有 SeriesName，该项留空
@@ -2161,18 +2356,19 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       seriesNames.add(item.SeriesName.orEmpty())
       mediaSourceIds.add(sourceId ?: "")
       mediaSourceNames.add(
-        if (id == firstNameId) firstMediaSourceName.orEmpty() else "",
+        (entry.mediaSourceLabel ?: firstMediaSourceName.takeIf { isFirst }).orEmpty(),
       )
       episodeNumbers.add(encodeEpisodeNumber(item))
     }
     if (uris.isEmpty()) return
 
-    val first = items.first()
+    val first = entries.first().item
+    val firstTitle = titles.firstOrNull()?.takeIf { it.isNotBlank() } ?: displayTitle(first)
     val intent = Intent(Intent.ACTION_VIEW, uris.first()).apply {
       setClass(getApplication(), PlayerActivity::class.java)
       putExtra("internal_launch", true)
       putExtra("launch_source", "emby")
-      putExtra("title", displayTitle(first))
+      putExtra("title", firstTitle)
       putExtra("filename", first.Name ?: displayTitle(first))
       if (resumeSeconds > 0) {
         putExtra("position", (resumeSeconds * 1000).toInt())
@@ -2191,7 +2387,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       putStringArrayListExtra("playlist_series_keys", seriesKeys)
       putStringArrayListExtra("playlist_series_names", seriesNames)
       // 单文件/单条播放时也有剧名可用于匹配（电影为空串 ⇒ 退回显示名）
-      putExtra("emby_series_name", items.firstOrNull()?.SeriesName.orEmpty())
+      putExtra("emby_series_name", first.SeriesName.orEmpty())
       putExtra("playlist_index", 0)
       // 播放列表的 ID 顺序与 uris 一致，切集时据此把"正在播放"同步给服务器
       putEmbyPlaybackExtras(server, ids, mediaSourceIds, mediaSourceNames, episodeNumbers)
@@ -2387,15 +2583,11 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     withContext(Dispatchers.IO) { EmbyClient.getPersonWorkCounts(server, parentId) }
 
   /**
-   * 演员角标用的作品数：**自适应 + 带缓存**（列表页专用，见 1.4 优化）。
+   * 演员角标用的作品数：**按需查询 + 增量缓存**（列表页专用，见 1.4 优化）。
    *
-   * 原来的实现每次进「演员」分类都要把整库逐页拉一遍（500/页、上限 1 万条 ⇒ 最多
-   * 20 次串行请求），而角标只是次要信息。现在：
-   *
-   * 1. 交给 [EmbyClient.getPersonWorkCountsAdaptive] 按库规模挑路 ——
-   *    小库整库扫一次算齐，大库只逐个问前 60 个；
-   * 2. 结果按 (服务器, 库) 缓存 [PERSON_WORK_COUNTS_TTL_MS] —— 切分类、进出页面、
-   *    切tab 都不再重算。
+   * 调用方只把当前批次的演员传进来；这里逐个 PersonId 向服务端取
+   * `TotalRecordCount`（每人一次 `Limit=1` 的小响应），并把结果合并进当前库的缓存。
+   * 因此首屏只查首屏，向后滚动时再查下一批，不会为了角标扫描整个媒体库。
    *
    * 缓存失效：刷新媒体库 / 扫描媒体库后调 [invalidatePersonWorkCountsCache]（角标会变）。
    */
@@ -2405,32 +2597,40 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     personIds: List<String>,
   ): Map<String, Int> {
     val key = "${server.id}|$parentId"
+    val targets = personIds.filter { it.isNotBlank() }.distinct()
+    if (targets.isEmpty()) return emptyMap()
+
+    val now = SystemClock.elapsedRealtime()
     val hit = personWorkCountsCache
-    if (hit != null && hit.first == key &&
-      SystemClock.elapsedRealtime() - hit.second < PERSON_WORK_COUNTS_TTL_MS
-    ) {
-      // 缓存是整张表，直接切片给这一轮要的演员
-      val ids = personIds.filter { it.isNotBlank() }.toSet()
-      return if (ids.isEmpty()) emptyMap() else hit.third.filterKeys { it in ids }
+      ?.takeIf { it.key == key && now - it.cachedAt < PERSON_WORK_COUNTS_TTL_MS }
+    val cached = hit?.counts.orEmpty()
+    val missing = targets.filterNot(cached::containsKey)
+    if (missing.isEmpty()) return targets.associateWith { cached.getValue(it) }
+
+    val fetched = withContext(Dispatchers.IO) {
+      missing.associateWith { personId -> EmbyClient.getPersonWorkCount(server, personId) }
     }
-    val counts = withContext(Dispatchers.IO) {
-      runCatching {
-        EmbyClient.getPersonWorkCountsAdaptive(server, parentId, personIds)
-      }.getOrDefault(emptyMap())
+    val merged = HashMap<String, Int>(cached.size + fetched.size).apply {
+      putAll(cached)
+      putAll(fetched)
     }
-    if (counts.isNotEmpty()) {
-      personWorkCountsCache = Triple(key, SystemClock.elapsedRealtime(), counts)
-    }
-    return counts
+    personWorkCountsCache = PersonWorkCountsCache(key, now, merged)
+    return targets.associateWith { merged.getValue(it) }
   }
 
   /**
-   * 演员作品数角标的进程内缓存：`(serverId|parentId)` → (缓存时间, PersonId → 条数)。
+   * 演员作品数角标的进程内缓存：同一个 `(serverId|parentId)` 下逐批累加。
    *
    * 单独一份而不是并进 [actorsCache]：那份是「全量演员名单」（跨库、无 parentId），
    * 这份是「某个库里的作品数」，键不一样，失效时机也不一样。
    */
-  private var personWorkCountsCache: Triple<String, Long, Map<String, Int>>? = null
+  private data class PersonWorkCountsCache(
+    val key: String,
+    val cachedAt: Long,
+    val counts: Map<String, Int>,
+  )
+
+  private var personWorkCountsCache: PersonWorkCountsCache? = null
 
   /** 媒体库内容变了（刷新 / 扫描 / 合并演职员）时调用：角标数字会变，缓存作废 */
   fun invalidatePersonWorkCountsCache() {

@@ -4,6 +4,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyItemsResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -67,6 +68,25 @@ class PlaylistPagingCursorTest {
     c.accept(page(listOf("1", "2", "3"), total = 3))
     assertFalse(c.hasMore)
     assertFalse(c.stalled)
+  }
+
+  @Test
+  fun `最后一页全是重复项时属于正常到底`() {
+    val c = PlaylistPagingCursor(pageSize = 2)
+    c.accept(page(listOf("1", "2"), total = 4))
+    c.accept(page(listOf("1", "2"), total = 4))
+
+    assertEquals(4, c.consumed)
+    assertEquals(listOf("1", "2"), c.items.map { it.Id })
+    assertFalse(c.hasMore)
+    assertFalse(c.stalled)
+  }
+
+  @Test
+  fun `非正数页大小会被拒绝`() {
+    assertThrows(IllegalArgumentException::class.java) {
+      PlaylistPagingCursor(pageSize = 0)
+    }
   }
 
   @Test

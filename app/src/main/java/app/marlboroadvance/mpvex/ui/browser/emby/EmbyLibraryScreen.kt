@@ -194,6 +194,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.koin.compose.koinInject
 import kotlin.math.roundToInt
+import kotlin.random.Random
 
 /**
  * Emby 媒体库浏览页（二级页面）。
@@ -383,6 +384,15 @@ data class EmbyLibraryScreen(
     val browserPreferences = koinInject<BrowserPreferences>()
     val sortBy by browserPreferences.embyLibrarySortBy.collectAsState()
     val sortOrderOverride by browserPreferences.embyLibrarySortOrder.collectAsState()
+    // ── 演员列表（分类 = 演员）自己的排序 ──
+    // 与媒体排序**分开存**：两套列表的合理默认方向不同（媒体「名称」升序、演员「作品数量」降序），
+    // 共用一份偏好会互相顶掉；而且演员是本地排序，值域只有 名称 / 作品数量 / 随机 三项。
+    val actorSortKey by browserPreferences.embyActorSort.collectAsState()
+    val actorSortAsc by browserPreferences.embyActorSortAsc.collectAsState()
+    val actorSort = remember(actorSortKey) { ActorSort.fromKey(actorSortKey) }
+    // 随机种子：只在用户点「换一批」时变。直接 shuffled() 会在每次重组洗出新顺序，
+    // 表现就是「手指还没动，头像自己换位了」。
+    var actorRandomSeed by remember { mutableIntStateOf(Random.nextInt()) }
     val cardStyleName by browserPreferences.embyLibraryCardStyle.collectAsState()
     val cardStyle = remember(cardStyleName) { embyCardStyleFromName(cardStyleName) }
 
@@ -652,8 +662,16 @@ data class EmbyLibraryScreen(
     // 既没有下一页要续拉，也没有字幕可扫。单独存一份，两条路径互不干扰。
     var actorItems by contentState.actorItemsState
     var actorTotal by contentState.actorTotalState
+    var actorCountLoaded by contentState.actorCountLoadedState
+    var actorCountLoading by contentState.actorCountLoadingState
     var actorLoading by contentState.actorLoadingState
     var actorError by contentState.actorErrorState
+    // 演员网格的**显示顺序**按当前排序派生，不原地改 actorItems：
+    // 作品数是按 actorItems 下标分批统计的（见 loadNextActorCounts），
+    // 把源列表重排会让「下一批从第几条开始」错位、甚至漏人。
+    val displayedActors = remember(actorItems, actorSort, actorSortAsc, actorRandomSeed) {
+      sortActors(actorItems, actorSort, actorSortAsc, actorRandomSeed)
+    }
     var isLoading by contentState.isLoadingState
     var error by contentState.errorState
     val isRefreshing = remember { mutableStateOf(false) }
@@ -1254,6 +1272,7 @@ data class EmbyLibraryScreen(
       val current = viewModel.currentServerOrAwait() ?: return
       actorLoading = true
       actorError = null
+      actorCountLoaded = 0
       val loaded = runCatching {
         viewModel.getActors(current, libraryId)
       }
@@ -1262,27 +1281,38 @@ data class EmbyLibraryScreen(
         // 重复 key 会把 LazyVerticalGrid 撞崩（与媒体库搜索同款问题）
         actorItems = list.distinctBy { it.Id ?: it.Name ?: "" }
         actorTotal = actorItems.size
+        actorCountLoaded = actorItems.indexOfFirst { it.ChildCount == null }
+          .let { if (it < 0) actorItems.size else it }
       }.onFailure {
         actorError = it.message ?: "加载演员失败"
       }
       actorLoading = false
+    }
 
-      // 作品数角标：/Persons 的 Fields 不支持 ChildCount，服务端从不返回该字段
-      // （见 EmbyClient.getPersonWorkCounts 的说明），所以自己数一遍补上。
-      // 放在 loading 结束之后 —— 头像网格先出来，数字随后补，不让首屏等这次统计。
-      // 服务端哪天真的返回了 ChildCount，就跳过统计、直接用它。
-      // 走 getPersonWorkCountsCached 而不是原始的 getPersonWorkCounts：自适应库规模
-      // + 带 10 分钟缓存，避免每次进「演员」分类都把整库逐页拉一遍。
-      val list = loaded.getOrNull().orEmpty()
-      if (list.isEmpty() || list.any { it.ChildCount != null }) return
-      val ids = list.mapNotNull { it.Id }
-      if (ids.isEmpty()) return
-      val counts = viewModel.getPersonWorkCountsCached(current, libraryId, ids)
-      if (counts.isEmpty()) return
-      actorItems = actorItems.map { person ->
-        val n = person.Id?.let { counts[it] } ?: 0
-        if (n > 0) person.copy(ChildCount = n) else person
+    /**
+     * 只补一批演员的作品数：优先保证首屏角标尽快出现，随后再逐批补齐。
+     *
+     * 之前会在头像列表落位后立刻把全库逐页扫完；大库在演员页常驻时，这段统计既耗流量
+     * 又持续占用 CPU。现在按演员顺序每批最多 60 人，进入页面先补首批，滚动到后面再补
+     * 下一批；底层缓存仍按库复用，回到演员页不会重复扫已经统计过的数据。
+     */
+    suspend fun loadNextActorCounts(batchSize: Int = 60) {
+      if (actorCountLoaded >= actorItems.size) return
+      val current = viewModel.currentServerOrAwait() ?: return
+      val end = minOf(actorCountLoaded + batchSize, actorItems.size)
+      val batch = actorItems.subList(actorCountLoaded, end)
+      val ids = batch.mapNotNull { if (it.ChildCount == null) it.Id else null }
+      if (ids.isNotEmpty()) {
+        val counts = viewModel.getPersonWorkCountsCached(current, libraryId, ids)
+        if (counts.isNotEmpty()) {
+          val countIds = ids.toHashSet()
+          actorItems = actorItems.map { person ->
+            if (person.Id !in countIds) person
+            else person.copy(ChildCount = counts[person.Id] ?: 0)
+          }
+        }
       }
+      actorCountLoaded = end
     }
 
     // 首次进入 / 筛选条件变化：只有没有可用缓存时才请求。
@@ -1376,6 +1406,26 @@ data class EmbyLibraryScreen(
             !loadingMore && consumedCount < totalCount && lastVisible != null
           if (canLoadMore && lastVisible >= items.size - prefetchDistance) {
             load(reset = false)
+          }
+        }
+    }
+
+    // 演员作品数角标按可见位置渐进补齐：首屏出来后先统计第一批，继续向后滚
+    // 再补下一批，避免一进「演员」就把大库从头扫到尾。actorCountLoading 是闸门，
+    // 同一次滚动产生的多次 layout 回调不会重复启动同一批请求。
+    LaunchedEffect(isActorListMode, searchActive, gridState, actorItems.size, actorCountLoaded) {
+      if (!isActorListMode || searchActive || actorItems.isEmpty()) return@LaunchedEffect
+      snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
+        .collect { lastVisible ->
+          val shouldLoad = !actorCountLoading && actorCountLoaded < actorItems.size &&
+            (lastVisible == null || lastVisible >= actorCountLoaded - 12)
+          if (shouldLoad) {
+            actorCountLoading = true
+            try {
+              loadNextActorCounts()
+            } finally {
+              actorCountLoading = false
+            }
           }
         }
     }
@@ -2325,9 +2375,11 @@ data class EmbyLibraryScreen(
       }
 
       // ── 3. 工具行：数量 + 随机播放 + 视图 + 排序 ──
-      // 演员列表与「某演员作品」子页都不可随机播放，也没有样式 / 排序 / 再筛选可言，
-      // 这些按钮留着只会让人点了没反应 —— 收掉，只保留左边的数量
-      val hideToolbarButtons = isActorListMode || personId != null
+      // 「某演员作品」子页不可随机播放，也没有样式 / 排序 / 再筛选可言（排序在作品页自己那行），
+      // 这些按钮留着只会让人点了没反应 —— 收掉，只保留左边的数量。
+      // 演员列表不一样：它现在**能排序**（名称 / 作品数量 / 随机），所以只收掉媒体那一排、
+      // 单独留一个排序按钮（见下面的 isActorListMode 分支）。
+      val hideToolbarButtons = personId != null
       // 工具行给哪几个按钮，由**这一页实际装了什么**决定（不再由用户手选档位决定）：
       //  · 有照片 ⇒ 给「随机播放图片」
       //  · 有非容器的可播放条目、**或者有子文件夹** ⇒ 给视频那套（随机播放 / 收藏随机 /
@@ -2396,7 +2448,17 @@ data class EmbyLibraryScreen(
           overflow = TextOverflow.Ellipsis,
         )
 
-        if (!hideToolbarButtons) {
+        if (isActorListMode) {
+          // 演员列表只留「排序」：随机播放 / 视界流 / 筛选 / 视图对人物列表都没有语义
+          // （人物不是媒体条目）。面板与其他列表是同一个右滑出 SortMenu，只是换了一套选项 ——
+          // 用户明确要求「排序 UI 参考其他界面要统一」，所以不复用作品页那个下拉。
+          IconButton(
+            onClick = { releaseInputFocus(); sortMenuExpanded = true },
+            modifier = Modifier.size(40.dp),
+          ) {
+            Icon(Icons.Default.Sort, contentDescription = "演员排序", modifier = Modifier.size(20.dp))
+          }
+        } else if (!hideToolbarButtons) {
           // 随机播放 / 收藏随机 / 视界流 / 筛选都是**视频语义**：这一页没有任何可播放
           // 条目（纯照片页 / 纯目录页）时它们点了只会把人带进视频播放器或空结果，收掉。
           if (showVideoActions) {
@@ -2493,6 +2555,9 @@ data class EmbyLibraryScreen(
           }
         }
       }
+      // 同一套右滑出面板，按当前模式换选项与回调：
+      //  · 媒体：11 项服务端 / 本地排序，后端全量排序（口径不变）；
+      //  · 演员：只有 名称 / 作品数量 / 随机 三档（本地排），「随机」没有方向，再点一次换一批。
       SortMenu(
         expanded = sortMenuExpanded,
         onDismiss = {
@@ -2500,15 +2565,43 @@ data class EmbyLibraryScreen(
           releaseInputFocus()
         },
         topOffsetPx = toolbarBoxHeightPx,
-        currentSort = sortBy,
-        currentOrder = sortOrder,
+        title = if (isActorListMode) "演员排序" else "排序方式",
+        options = if (isActorListMode) ACTOR_SORT_OPTIONS else SORT_OPTIONS,
+        directional = !isActorListMode || actorSort.hasDirection,
+        currentSort = if (isActorListMode) actorSort.key else sortBy,
+        currentOrder = if (isActorListMode) {
+          if (actorSortAsc) "Ascending" else "Descending"
+        } else {
+          sortOrder
+        },
         onSortChange = { newSort ->
-          browserPreferences.embyLibrarySortBy.set(newSort)
-          // 换排序项就丢掉手动方向，回到该排序项的自然方向
-          browserPreferences.embyLibrarySortOrder.set("")
+          if (isActorListMode) {
+            val picked = ActorSort.fromKey(newSort)
+            browserPreferences.embyActorSort.set(picked.key)
+            // 换排序项 = 回到该项的自然方向（名称升序、作品数量降序）。
+            // 沿用上一项的方向会得到一个没人想要的组合，比如「作品数量 ↑」。
+            browserPreferences.embyActorSortAsc.set(picked.naturalAsc)
+            if (picked == ActorSort.RANDOM) actorRandomSeed = Random.nextInt()
+            // 顺序整批变了，还停在原来的滚动位置会让人以为「排序没生效」
+            gridState.scrollToTop()
+          } else {
+            browserPreferences.embyLibrarySortBy.set(newSort)
+            // 换排序项就丢掉手动方向，回到该排序项的自然方向
+            browserPreferences.embyLibrarySortOrder.set("")
+          }
         },
         onOrderChange = { newOrder ->
-          browserPreferences.embyLibrarySortOrder.set(newOrder)
+          if (isActorListMode) {
+            browserPreferences.embyActorSortAsc.set(newOrder == "Ascending")
+            gridState.scrollToTop()
+          } else {
+            browserPreferences.embyLibrarySortOrder.set(newOrder)
+          }
+        },
+        onReshuffle = {
+          // 「随机」再点一次同一项 = 换一批（与演员作品页同一套手势语义）
+          actorRandomSeed = Random.nextInt()
+          gridState.scrollToTop()
         },
       )
       }
@@ -2812,7 +2905,8 @@ data class EmbyLibraryScreen(
               horizontalArrangement = Arrangement.spacedBy(8.dp),
               verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-              items(actorItems, key = { it.Id ?: it.Name ?: "" }) { person ->
+              // 用派生出来的 displayedActors（名称 / 作品数量 / 随机），不是原始拉取顺序
+              items(displayedActors, key = { it.Id ?: it.Name ?: "" }) { person ->
                 val s = server ?: return@items
                 EmbyMediaCard(
                   title = person.Name.orEmpty(),
@@ -4880,6 +4974,8 @@ private fun FilterDropdownRow(
  *    focusable Popup 会吃掉「点面板外」与「返回键」，都走 [onDismissRequest] → [onDismiss]。
  *
  * 排序语义与旧版一致：点已选中项 = 只反转方向（↑ / ↓ 显示在标签上），点其他项 = 换排序项。
+ * 唯一例外是「随机」这类 [directional] = false 的排序：标签不带箭头，
+ * 再点一次同一项走 [onReshuffle]（换一批），而不是假装有个方向。
  */
 @Composable
 private fun SortMenu(
@@ -4889,6 +4985,14 @@ private fun SortMenu(
   topOffsetPx: Int,
   currentSort: String,
   currentOrder: String,
+  /** 面板标题：媒体库与演员列表共用一套面板，标题要说明排的是谁 */
+  title: String = "排序方式",
+  /** 排序项（值 → 文案）。媒体 11 项，演员 3 项 */
+  options: List<Pair<String, String>> = SORT_OPTIONS,
+  /** 是否带升降序。false = 「随机」这类没有方向的选择项 */
+  directional: Boolean = true,
+  /** [directional] = false 时，再点一次已选中项触发的动作（换一批） */
+  onReshuffle: () -> Unit = {},
   onSortChange: (String) -> Unit,
   onOrderChange: (String) -> Unit,
 ) {
@@ -4941,7 +5045,7 @@ private fun SortMenu(
           modifier = Modifier.verticalScroll(rememberScrollState()),
         ) {
           Text(
-            text = "排序方式",
+            text = title,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 6.dp),
@@ -4949,7 +5053,7 @@ private fun SortMenu(
           HorizontalDivider(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
           )
-          SORT_OPTIONS.forEach { (value, label) ->
+          options.forEach { (value, label) ->
             val selected = value == currentSort
             DropdownMenuItem(
               // 44dp 而不是默认 48dp：11 项能省 44dp —— 省下的正好够多数机型
@@ -4959,7 +5063,8 @@ private fun SortMenu(
                 Text(
                   text = buildString {
                     append(label)
-                    if (selected) {
+                    // 没有方向的排序（随机）不画箭头：画了就等于承诺一个不存在的语义
+                    if (selected && directional) {
                       append(if (currentOrder == "Ascending") " ↑" else " ↓")
                     }
                   },
@@ -4983,12 +5088,13 @@ private fun SortMenu(
                 null
               },
               onClick = {
-                if (selected) {
+                when {
+                  // 没有方向的排序：再点一次 = 换一批
+                  selected && !directional -> onReshuffle()
                   // 再点一次已选中的排序项 = 只反转方向，不换排序项
-                  onOrderChange(if (currentOrder == "Ascending") "Descending" else "Ascending")
-                } else {
+                  selected -> onOrderChange(if (currentOrder == "Ascending") "Descending" else "Ascending")
                   // 换排序项：由调用方把方向重置为该排序项的自然方向
-                  onSortChange(value)
+                  else -> onSortChange(value)
                 }
                 onDismiss()
               },
@@ -5017,6 +5123,17 @@ private val SORT_OPTIONS = listOf(
   "Size" to "大小",
   "Random" to "随机",
 )
+
+/**
+ * 演员列表的排序项（与 [SORT_OPTIONS] 同一套面板、同一个「点已选中项翻方向」手势）。
+ *
+ * 只给三档是有原因的：`/Persons` 端点只认 `SortBy=SortName`，作品数是客户端统计的，
+ * 其余媒体字段（年份 / 评分 / 时长）在 Person 上要么没有、要么服务端不返回 ——
+ * 摆上去就是「点了没反应」的假选项。
+ * 值取自 [ActorSort.key]，与落盘的偏好键同源。
+ */
+private val ACTOR_SORT_OPTIONS: List<Pair<String, String>> =
+  ActorSort.entries.map { it.key to it.label }
 
 /** 最低评分档位：显示文案 → 传给 Emby 的 MinCommunityRating（null 表示不限） */
 private val RATING_OPTIONS: List<Pair<String, Float?>> = listOf(

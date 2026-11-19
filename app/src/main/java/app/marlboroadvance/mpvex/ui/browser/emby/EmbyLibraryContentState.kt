@@ -38,6 +38,10 @@ internal class EmbyLibraryContentState(
   /** 「演员」分类独立数据：/Persons 一次性给全，不走媒体分页。 */
   val actorItemsState = mutableStateOf(emptyList<EmbyItem>())
   val actorTotalState = mutableIntStateOf(0)
+  /** 作品数角标当前已补到哪一批；刷新演员名单后归零并重新渐进加载。 */
+  val actorCountLoadedState = mutableIntStateOf(0)
+  /** 防止滚动触底回调在同一批统计尚未结束时重复发起请求。 */
+  val actorCountLoadingState = mutableStateOf(false)
   val actorLoadingState = mutableStateOf(false)
   val actorErrorState = mutableStateOf<String?>(null)
 

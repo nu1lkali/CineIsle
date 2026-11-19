@@ -12,6 +12,8 @@
 
 # ── Gradle / Android 构建产物 ──────────────────────────────────
 .gradle/
+.gradle-local/
+.gradle-user-home/
 .kotlin/
 build/
 /captures

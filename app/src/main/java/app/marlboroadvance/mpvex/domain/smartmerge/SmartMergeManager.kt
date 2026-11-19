@@ -76,6 +76,9 @@ class SmartMergeManager(
       _scanning.value = true
       _scanProgress.value = SmartMergeScanProgress()
       _message.value = null
+      SmartMergeLog.info(
+        "扫描开始 serverId=${server.id} 库=${libraryIds.size} 库Id=${libraryIds.joinToString(",")}",
+      )
       try {
         val all = LinkedHashMap<String, SmartMergeItem>()
         var total = 0
@@ -132,10 +135,15 @@ class SmartMergeManager(
         journal.save(next)
         _scanProgress.value = _scanProgress.value.copy(candidateCount = candidates.size)
         _message.value = "扫描完成：${all.size} 个条目，${candidates.size} 个候选组"
+        SmartMergeLog.info(
+          "扫描完成 serverId=${server.id} 条目=${all.size} 候选=${candidates.size}",
+        )
       } catch (e: CancellationException) {
+        SmartMergeLog.warn("扫描已取消 serverId=${server.id} 已扫=${_scanProgress.value.scanned}")
         _message.value = "扫描已取消"
         throw e
       } catch (e: Throwable) {
+        SmartMergeLog.error("扫描失败 serverId=${server.id}", e)
         _message.value = "扫描失败：${e.message ?: e::class.simpleName}"
       } finally {
         _scanning.value = false
@@ -290,6 +298,14 @@ class SmartMergeManager(
       return null
     }
     _message.value = null
+    /**
+     * 已经落盘、还停在 RUNNING 的操作。
+     *
+     * 合并失败的兜底要靠它：异常可能发生在 `MergeVersions` 之后、也可能发生在
+     * 重查验证的路上，那时候记录已经写进账本了。以前 catch 里只弹一句提示，
+     * 历史里就永远留着一条 RUNNING —— 用户既看不到原因，也不敢重试。
+     */
+    var pendingOperation: SmartMergeOperation? = null
     return try {
       if (candidate.status == STATUS_MERGED) {
         _message.value = "这个候选已经合并过，不能重复合并"
@@ -315,7 +331,11 @@ class SmartMergeManager(
         return null
       }
       // 防止「已经合过、但本地状态没更新」：原始 Id 至少要有两个还在。
-      val existing = runCatching { repository.getItemsByIds(server, ids) }.getOrDefault(emptyList())
+      val existing = runCatching { repository.getItemsByIds(server, ids) }
+        .onFailure { error ->
+          SmartMergeLog.error("合并前查询原条目失败 serverId=${server.id} ids=$ids", error)
+        }
+        .getOrDefault(emptyList())
       if (existing.mapNotNull { it.Id }.distinct().size < 2) {
         _message.value = "条目已发生变化（可能已经合并或删除），请重新扫描"
         return null
@@ -325,10 +345,11 @@ class SmartMergeManager(
         return null
       }
       val operationId = "merge-${System.currentTimeMillis()}"
-      val snapshots = ids.mapNotNull { itemId ->
-        runCatching {
-          val item = EmbyClient.getItem(server, itemId)
-          journal.saveRawSnapshot(operationId, itemId, json.encodeToString(item))
+      val snapshots = try {
+        ids.map { itemId ->
+          val rawJson = EmbyClient.getItemRawJson(server, itemId)
+          val item = json.decodeFromString<EmbyItem>(rawJson)
+          journal.saveRawSnapshot(operationId, itemId, rawJson)
           SmartMergeItemSnapshot(
             itemId = itemId,
             name = item.Name.orEmpty(),
@@ -336,9 +357,17 @@ class SmartMergeManager(
             providerIds = item.ProviderIds,
             mediaSourcePaths = item.MediaSources.orEmpty().mapNotNull { it.Path },
             userDataJson = item.UserData?.let { json.encodeToString(it) },
-            rawFile = "$operationId/$itemId.json",
+            rawFile = "$operationId/${snapshotFileName(itemId)}.json",
           )
-        }.getOrNull()
+        }
+      } catch (error: Throwable) {
+        SmartMergeLog.error(
+          "合并前快照不完整，已阻止执行 serverId=${server.id} operationId=$operationId ids=$ids",
+          error,
+        )
+        journal.deleteSnapshots(operationId)
+        _message.value = "无法完整保存合并前快照，已阻止合并：${error.message ?: error::class.simpleName}"
+        return null
       }
       val running = SmartMergeOperation(
         id = operationId,
@@ -353,11 +382,21 @@ class SmartMergeManager(
         createdAt = System.currentTimeMillis(),
       )
       saveOperation(running)
+      pendingOperation = running
+      SmartMergeLog.info(
+        "合并开始 serverId=${server.id} operationId=$operationId 候选=${candidate.id} " +
+          "番号=${candidate.code} 条目=${ids.size} 快照=${snapshots.size}",
+      )
 
       EmbyClient.mergeVersions(server, ids)
+      SmartMergeLog.info("MergeVersions 已返回 operationId=$operationId")
 
       // 官方返回空 body，必须重新查询验证：优先找「MediaSources 数量 >= 2」的条目。
-      val after = runCatching { repository.getItemsByIds(server, ids) }.getOrDefault(emptyList())
+      val after = runCatching { repository.getItemsByIds(server, ids) }
+        .onFailure { error ->
+          SmartMergeLog.error("合并后重查原条目失败 operationId=$operationId ids=$ids", error)
+        }
+        .getOrDefault(emptyList())
       val snapshotPaths = snapshots.flatMap { it.mediaSourcePaths }.toSet()
       val byId = after.firstOrNull { item ->
         val paths = item.MediaSources.orEmpty().mapNotNull { it.Path }
@@ -397,6 +436,12 @@ class SmartMergeManager(
         error = if (result == null) "合并接口已返回，但未查询到组合后的条目；请在 Emby 中人工确认" else null,
       )
       saveOperation(done)
+      // 终态已经落账，catch 里不必再补一条 —— 否则会把 DONE 改写成 FAILED
+      pendingOperation = null
+      SmartMergeLog.info(
+        "合并结果 operationId=$operationId status=${done.status} " +
+          "resultItemId=${done.resultItemId ?: "-"} 版本=${resultVersionNames.joinToString("/")}",
+      )
       if (done.status == OP_DONE) {
         val next = _state.value.copy(
           candidates = _state.value.candidates.map {
@@ -411,7 +456,22 @@ class SmartMergeManager(
       }
       done
     } catch (e: Throwable) {
-      _message.value = "合并失败：${e.message ?: e::class.simpleName}"
+      val reason = e.message ?: e::class.simpleName ?: "未知错误"
+      SmartMergeLog.error(
+        "合并失败 operationId=${pendingOperation?.id ?: "-"} candidate=${candidate.id}",
+        e,
+      )
+      // 把失败写进账本：历史里要能看见「哪一步、为什么」，而不是留一条永远 RUNNING
+      pendingOperation?.let { running ->
+        saveOperation(
+          running.copy(
+            status = OP_FAILED,
+            completedAt = System.currentTimeMillis(),
+            error = "合并失败：$reason",
+          ),
+        )
+      }
+      _message.value = "合并失败：$reason"
       null
     } finally {
       mergeRunning.set(false)
@@ -441,8 +501,10 @@ class SmartMergeManager(
           error = null,
         )
         saveOperation(next)
+        SmartMergeLog.info("拆分已提交 operationId=${operation.id} resultItemId=$itemId")
         _message.value = "已调用拆分接口；请到 Emby 中核对文件与条目"
       } catch (e: Throwable) {
+        SmartMergeLog.error("拆分失败 operationId=${operation.id} itemId=$itemId", e)
         saveOperation(
           operation.copy(
             status = OP_SPLIT_FAILED,
@@ -467,6 +529,9 @@ class SmartMergeManager(
     _state.value = next
     journal.save(next)
   }
+
+  private fun snapshotFileName(itemId: String): String =
+    itemId.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
 
   companion object {
     private const val SCAN_PAGE_SIZE = 200

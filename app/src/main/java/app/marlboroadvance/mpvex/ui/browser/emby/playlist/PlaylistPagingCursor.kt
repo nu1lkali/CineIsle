@@ -28,6 +28,10 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyItem
  */
 class PlaylistPagingCursor(private val pageSize: Int) {
 
+  init {
+    require(pageSize > 0) { "pageSize must be positive" }
+  }
+
   /**
    * 已经**向服务端要过**的条数 —— 也就是下一页该用的 `StartIndex`。
    *
@@ -84,14 +88,22 @@ class PlaylistPagingCursor(private val pageSize: Int) {
     consumed += result.Items.size
 
     val noNewItems = items.size == before && consumed > 0
-    stalled = noNewItems && result.Items.isNotEmpty()
+    val reachedKnownEnd =
+      result.TotalRecordCount > 0 && consumed >= result.TotalRecordCount
+    // 到达服务端声明的末尾时，即使最后一页恰好全是重复项，也属于正常到底。
+    // 只有仍未消费完已知总数、却完全没有前进，才算服务端游标卡住。
+    stalled =
+      noNewItems &&
+        result.Items.isNotEmpty() &&
+        !reachedKnownEnd
 
     hasMore = when {
       result.Items.isEmpty() -> false
+      // 服务端给了总数：先按它判，避免把最后一页的重复项误报成 stalled
+      reachedKnownEnd -> false
       // 整页没带来任何新条目 ⇒ 服务端在原地打转，别无限翻了
       noNewItems -> false
-      // 服务端给了总数：按它判
-      result.TotalRecordCount > 0 -> consumed < result.TotalRecordCount
+      result.TotalRecordCount > 0 -> true
       // 没给总数：靠「本页是否不满」兜底
       else -> result.Items.size >= pageSize
     }

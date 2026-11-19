@@ -70,6 +70,7 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Slideshow
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.Title
+import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.ViewComfy
 import androidx.compose.material.icons.outlined.Widgets
@@ -92,6 +93,7 @@ import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.MediaSourcePreference
+import app.marlboroadvance.mpvex.domain.emby.VersionQueueOrder
 import app.marlboroadvance.mpvex.preferences.AppLockMethod
 import app.marlboroadvance.mpvex.preferences.AppLockPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
@@ -699,6 +701,66 @@ object PreferencesScreen : Screen {
                   )
                 },
               )
+
+              PreferenceDivider()
+
+              // ── 多版本自动连播 ────────────────────────────────────────
+              // 打开后，从详情页播放单部影片会把同片的其它版本也排进播放队列。
+              // 只作用于单个条目：剧集连播的队列是「本季后续集」，插进同集的多个版本
+              // 会变成 S01E01-4K → S01E01-1080P → S01E02，看起来就是集号乱序。
+              val versionQueueEnabled by browserPreferences.embyVersionQueueEnabled.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.AutoMirrored.Outlined.PlaylistPlay,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = versionQueueEnabled,
+                onValueChange = { browserPreferences.embyVersionQueueEnabled.set(it) },
+                modifier = Modifier.settingsAnchor("多版本自动连播"),
+                title = { Text(text = "多版本自动连播", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                summary = {
+                  Text(
+                    text = "播放单部影片时，把同一部影片的其它版本也排进播放队列，" +
+                      "播完当前版本可以接着切下一个版本；剧集连播与单版本条目不受影响。",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              if (versionQueueEnabled) {
+                PreferenceDivider()
+
+                // ── 多版本连播顺序 ──────────────────────────────────────
+                // 只决定「当前版本之后」的衔接顺序，不改变先播哪一个版本
+                // （那由上面的「多版本优先选择」+ 详情页下拉决定）。
+                val queueOrderKey by browserPreferences.embyVersionQueueOrder.collectAsState()
+                val queueOrder = VersionQueueOrder.fromKey(queueOrderKey)
+                ListPreference(
+                  icon = {
+                    Icon(
+                      Icons.Outlined.Tune,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                    )
+                  },
+                  value = queueOrder,
+                  onValueChange = { browserPreferences.embyVersionQueueOrder.set(it.key) },
+                  values = VersionQueueOrder.entries,
+                  valueToText = { AnnotatedString(versionQueueOrderLabel(it)) },
+                  modifier = Modifier.settingsAnchor("多版本连播顺序"),
+                  title = { Text(text = "多版本连播顺序", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                  summary = {
+                    Text(
+                      text = versionQueueOrderLabel(queueOrder) +
+                        "；当前播放的版本固定在第一位，其余按这个顺序衔接",
+                      color = MaterialTheme.colorScheme.outline,
+                    )
+                  },
+                )
+              }
             }
           }
 
@@ -1761,4 +1823,19 @@ private fun mediaSourcePreferenceLabel(preference: MediaSourcePreference): Strin
       stringResource(R.string.media_source_pref_smallest_size)
     MediaSourcePreference.BEST_QUALITY_PER_SIZE ->
       stringResource(R.string.media_source_pref_best_quality_per_size)
+  }
+
+/**
+ * 「多版本连播顺序」的文案。
+ *
+ * 与 [mediaSourcePreferenceLabel] 同一套做法：同一段文案出现在下拉当前值 + 展开后的
+ * 每一条，抽出来避免两处漂移；`when` 保持穷尽，新增规则时编译期就会提醒。
+ */
+@Composable
+private fun versionQueueOrderLabel(order: VersionQueueOrder): String =
+  when (order) {
+    VersionQueueOrder.NATURAL -> "自然顺序（数字按大小：第2版 → 第10版）"
+    VersionQueueOrder.ALPHABETICAL -> "字母顺序（A → B → C）"
+    VersionQueueOrder.FILE_NAME -> "文件名字母 / 数字升序"
+    VersionQueueOrder.CUSTOM -> "自定义顺序（按本机为该影片编排的次序）"
   }

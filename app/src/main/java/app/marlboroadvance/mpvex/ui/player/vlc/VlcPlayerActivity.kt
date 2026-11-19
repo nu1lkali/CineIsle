@@ -809,6 +809,8 @@ class VlcPlayerActivity : ComponentActivity(), KoinComponent {
       }
       reporterObserver = null
       reporter.idProvider = { embyItemIds.getOrNull(currentIndex) }
+      // 队列下标：多版本连播时同片的多个版本共用一个 ItemId，上报器靠它区分版本
+      reporter.queueIndexProvider = { currentIndex }
       reporter.positionProvider = {
         val p = mediaPlayer
         if (p == null || p.isReleased) null else EmbyTicks.msToTicks(p.time)

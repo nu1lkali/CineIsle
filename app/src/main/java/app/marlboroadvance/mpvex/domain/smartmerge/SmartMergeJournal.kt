@@ -30,35 +30,47 @@ class SmartMergeJournal(private val dir: File) {
     val file = stateFile(serverId)
     if (!file.exists()) SmartMergeState(serverId = serverId)
     else json.decodeFromString<SmartMergeState>(file.readText())
-  }.getOrElse { SmartMergeState(serverId = serverId) }
+  }.getOrElse { error ->
+    SmartMergeLog.error("读取状态失败 serverId=$serverId，将使用空状态", error)
+    SmartMergeState(serverId = serverId)
+  }
 
   @Synchronized
-  fun save(state: SmartMergeState) {
-    runCatching {
-      if (!dir.exists()) dir.mkdirs()
-      val target = stateFile(state.serverId)
-      val tmp = File(dir, "state_${state.serverId}.tmp")
-      tmp.writeText(json.encodeToString(state))
-      if (!tmp.renameTo(target)) {
-        target.writeText(tmp.readText())
-        tmp.delete()
+  fun save(state: SmartMergeState): Boolean = try {
+    ensureDirectory(dir)
+    val target = stateFile(state.serverId)
+    val tmp = File(dir, "state_${state.serverId}.tmp")
+    tmp.writeText(json.encodeToString(state))
+    if (!tmp.renameTo(target)) {
+      target.writeText(tmp.readText())
+      if (!tmp.delete()) {
+        SmartMergeLog.warn("状态临时文件删除失败 path=${tmp.absolutePath}")
       }
     }
+    true
+  } catch (error: Throwable) {
+    SmartMergeLog.error("保存状态失败 serverId=${state.serverId}", error)
+    false
   }
 
   /** 保存完整条目原文（用于事后核对 / 人工恢复参考，不作为自动重建依据）。 */
   @Synchronized
   fun saveRawSnapshot(operationId: String, itemId: String, rawJson: String) {
-    runCatching {
+    try {
       val operationDir = snapshotDir(operationId)
-      if (!operationDir.exists()) operationDir.mkdirs()
+      ensureDirectory(operationDir)
       val target = File(operationDir, "${safeName(itemId)}.json")
       val tmp = File(operationDir, "${safeName(itemId)}.tmp")
       tmp.writeText(rawJson)
       if (!tmp.renameTo(target)) {
         target.writeText(tmp.readText())
-        tmp.delete()
+        if (!tmp.delete()) {
+          SmartMergeLog.warn("快照临时文件删除失败 path=${tmp.absolutePath}")
+        }
       }
+    } catch (error: Throwable) {
+      SmartMergeLog.error("保存原始快照失败 operationId=$operationId itemId=$itemId", error)
+      throw error
     }
   }
 
@@ -66,7 +78,24 @@ class SmartMergeJournal(private val dir: File) {
   fun readRawSnapshot(operationId: String, itemId: String): String? = runCatching {
     val file = File(snapshotDir(operationId), "${safeName(itemId)}.json")
     if (file.exists()) file.readText() else null
-  }.getOrNull()
+  }.getOrElse { error ->
+    SmartMergeLog.error("读取原始快照失败 operationId=$operationId itemId=$itemId", error)
+    null
+  }
+
+  /** 清理尚未进入账本的失败操作快照，避免遗留不可追踪的半成品。 */
+  @Synchronized
+  fun deleteSnapshots(operationId: String) {
+    val directory = snapshotDir(operationId)
+    if (!directory.exists()) return
+    runCatching {
+      if (!directory.deleteRecursively() && directory.exists()) {
+        error("删除后目录仍存在：${directory.absolutePath}")
+      }
+    }.onFailure { error ->
+      SmartMergeLog.warn("清理失败操作快照失败 operationId=$operationId", error)
+    }
+  }
 
   /** 只保留最近 [keep] 条操作；快照目录跟着操作一起裁。 */
   @Synchronized
@@ -76,8 +105,17 @@ class SmartMergeJournal(private val dir: File) {
     val removed = state.operations.drop(keep)
     removed.forEach { op ->
       runCatching { snapshotDir(op.id).deleteRecursively() }
+        .onFailure { error ->
+          SmartMergeLog.warn("裁剪快照目录失败 operationId=${op.id}", error)
+        }
     }
     return state.copy(operations = kept)
+  }
+
+  private fun ensureDirectory(directory: File) {
+    if (!directory.exists() && !directory.mkdirs() && !directory.isDirectory) {
+      error("无法创建目录：${directory.absolutePath}")
+    }
   }
 
   private fun safeName(value: String): String =

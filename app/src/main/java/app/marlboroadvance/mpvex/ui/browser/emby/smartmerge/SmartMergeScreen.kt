@@ -56,6 +56,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.domain.smartmerge.OP_DONE
+import app.marlboroadvance.mpvex.domain.smartmerge.OP_FAILED
+import app.marlboroadvance.mpvex.domain.smartmerge.OP_RUNNING
+import app.marlboroadvance.mpvex.domain.smartmerge.OP_SPLIT
+import app.marlboroadvance.mpvex.domain.smartmerge.OP_SPLIT_FAILED
+import app.marlboroadvance.mpvex.domain.smartmerge.OP_VERIFY_FAILED
 import app.marlboroadvance.mpvex.domain.smartmerge.SMART_MERGE_SPLIT_VERIFIED
 import app.marlboroadvance.mpvex.domain.smartmerge.STATUS_CONFLICT
 import app.marlboroadvance.mpvex.domain.smartmerge.STATUS_HIGH
@@ -931,6 +936,22 @@ private fun ItemSummary(
   }
 }
 
+/**
+ * 账本里存的是协议常量（RUNNING / DONE …），历史页要显示给人看。
+ *
+ * 不在账本里直接存中文：状态是**判定结果**，中文只是展示层措辞，
+ * 以后改文案不该影响已经落盘的历史记录。
+ */
+private fun operationStatusLabel(status: String): String = when (status) {
+  OP_RUNNING -> "进行中"
+  OP_DONE -> "已完成"
+  OP_VERIFY_FAILED -> "结果待确认"
+  OP_FAILED -> "失败"
+  OP_SPLIT -> "已拆分"
+  OP_SPLIT_FAILED -> "拆分失败"
+  else -> status
+}
+
 @Composable
 private fun OperationCard(
   operation: SmartMergeOperation,
@@ -947,10 +968,16 @@ private fun OperationCard(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Text(
-          operation.status,
+          operationStatusLabel(operation.status),
           modifier = Modifier.weight(1f),
           style = MaterialTheme.typography.titleSmall,
           fontWeight = FontWeight.Bold,
+          // 失败类状态直接标红：历史里一眼能挑出「要人管」的那几条
+          color = if (operation.status == OP_FAILED || operation.status == OP_SPLIT_FAILED) {
+            MaterialTheme.colorScheme.error
+          } else {
+            MaterialTheme.colorScheme.onSurface
+          },
         )
         if (allowRollback && operation.status == OP_DONE && operation.resultItemId != null) {
           TextButton(onClick = onRollback) { Text("拆分（待验证）") }

@@ -425,6 +425,9 @@ class GsyPlayerActivity : ComponentActivity() {
 
       // 条目：与 `playlist` 同序的平行数组 + 当前下标（`playIndex` 里同步维护）
       reporter.idProvider = { embyItemIds.getOrNull(currentIndex) }
+      // 队列下标：多版本连播时同片的多个版本共用一个 ItemId，上报器要靠下标取
+      // 「这一项自己的版本 Id」，否则切到第二个版本后仍会上报第一个版本的进度
+      reporter.queueIndexProvider = { currentIndex }
       // 位置：直接问 GSY 的 manager。
       // ⚠️ 不能用 currentPositionMs() —— 它把「manager 为 null」变成 0，
       //    而上报器把 0 当成「真的在 0 秒」，会把服务端的续播点覆盖掉。
@@ -2337,7 +2340,14 @@ class GsyPlayerActivity : ComponentActivity() {
 
   @Composable
   private fun FavoriteButtonContent() {
-    MpvexTheme { EmbyFavoritePlayerButton(hideBackground = true, buttonSize = 32.dp) }
+    // ⚠️ hideBackground 必须为 false：GSY 的布局里 `gsy_btn_favorite` 是个**裸 ComposeView**，
+    // 相邻的音频轨 / 切换内核都是 `android:background="@drawable/gsy_ctrl_circle"` 的 ImageView。
+    // 之前传 true（当时以为外层有圆底）⇒ 收藏红心孤零零浮在画面上，没有圆圈包裹，
+    // 与两边按钮完全不是一套观感（用户反馈）。
+    // 圆底交给 Compose 自己画（PlayerControlGlassFill = #52000000 + 1dp #24FFFFFF，
+    // 与 gsy_ctrl_circle 同一组色值）；顺带解决「非 Emby 播放时只留一个空圆」的问题 ——
+    // 组件在非 Emby 场景整个不渲染，圆底也就跟着不出现。
+    MpvexTheme { EmbyFavoritePlayerButton(hideBackground = false, buttonSize = 40.dp) }
   }
 
   // ────────────────────────────────────────────────────────────────────────

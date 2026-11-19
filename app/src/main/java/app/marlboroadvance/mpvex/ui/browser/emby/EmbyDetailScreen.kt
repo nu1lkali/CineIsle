@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -131,8 +132,14 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyVersionProgress
 import app.marlboroadvance.mpvex.domain.emby.EmbyVersionLabels
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.MediaSourcePreference
+import app.marlboroadvance.mpvex.domain.emby.VersionQueueOrder
 import app.marlboroadvance.mpvex.domain.emby.buildEmbyMediaInfoSummary
+import app.marlboroadvance.mpvex.domain.emby.defaultCustomOrder
 import app.marlboroadvance.mpvex.domain.emby.effectiveEmbyMediaSourceId
+import app.marlboroadvance.mpvex.domain.emby.encodeCustomVersionOrder
+import app.marlboroadvance.mpvex.domain.emby.parseCustomVersionOrder
+import app.marlboroadvance.mpvex.domain.emby.sortVersionEntries
+import app.marlboroadvance.mpvex.domain.emby.versionQueueEntry
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceLabel
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceResolution
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceSpec
@@ -1501,6 +1508,8 @@ private fun DetailBody(
       item {
         PlaySection(
           item = item,
+          // 多版本连播顺序的自定义值按 `服务器 + 条目` 存，缺了服务器 Id 就只能读默认
+          serverId = server?.id ?: -1L,
           onPlay = onPlay,
           onDownload = onDownload,
           onCast = onCast,
@@ -2173,6 +2182,8 @@ private fun metaChips(item: EmbyItem): List<String> {
 @Composable
 private fun PlaySection(
   item: EmbyItem,
+  /** 当前服务器 Id：多版本连播顺序的自定义值按 `服务器 + 条目` 分开存 */
+  serverId: Long = -1L,
   /** resumeSeconds = 续播秒数（0 = 从头）；engine = 长按选择的内核（null = 默认） */
   onPlay: (resumeSeconds: Long, engine: EngineKind?) -> Unit,
   onDownload: () -> Unit,
@@ -2218,6 +2229,18 @@ private fun PlaySection(
   val runTimeTicks = item.RunTimeTicks ?: 0L
   // 多版本媒体：MediaSources 就是各版本；只有一个（或 Id 缺失）时不算多版本。
   val mediaSources = item.MediaSources.orEmpty().filter { !it.Id.isNullOrBlank() }
+  // ── 多版本连播顺序（本机配置）──
+  // 与播放侧读的是同一组偏好：这里只负责编排，真正排序在 EmbyViewModel.buildVersionPlaylist。
+  val browserPrefsForVersionQueue = koinInject<BrowserPreferences>()
+  val versionQueueEnabled = remember { browserPrefsForVersionQueue.embyVersionQueueEnabled.get() }
+  var orderEditorOpen by remember { mutableStateOf(false) }
+  fun versionLabelOf(source: EmbyMediaSource): String =
+    embyMediaSourceTitle(source, source.Id?.let(customVersionLabelOf))
+  val openOrderEditor: (() -> Unit)? = if (versionQueueEnabled) {
+    { orderEditorOpen = true }
+  } else {
+    null
+  }
   val resumeSeconds = EmbyTicks.ticksToSeconds(positionTicks)
   var enginePickerResume by remember { mutableStateOf<Long?>(null) }
   val remainingTicks = (runTimeTicks - positionTicks).coerceAtLeast(0L)
@@ -2432,6 +2455,7 @@ private fun PlaySection(
         onSelect = onSelectMediaSource,
         customLabelOf = customVersionLabelOf,
         onEditLabel = onEditVersionLabel,
+        onEditOrder = openOrderEditor,
       )
     }
 
@@ -2457,6 +2481,49 @@ private fun PlaySection(
       }
     }
   }
+  // 多版本连播顺序编辑器（从版本抽屉底部的「调整连播顺序」进入）
+  if (orderEditorOpen) {
+    val itemId = item.Id.orEmpty()
+    // 不用 remember：打开对话框那一刻要的是「最新」顺序（刚保存的自定义值必须立刻反映），
+    // 而版本数最多几条，每次重组重算一次排序的代价可以忽略。
+    // 编辑器永远展示这个条目自己的自定义序列；全局当前选中的排序规则不应覆盖它。
+    val seed = run {
+      val saved = parseCustomVersionOrder(
+        browserPrefsForVersionQueue.embyVersionQueueCustomOrder(serverId, itemId).get(),
+      )
+      val entries = mediaSources.mapNotNull { source ->
+        versionQueueEntry(
+          source,
+          embyMediaSourceTitle(source, source.Id?.let(customVersionLabelOf)),
+        )
+      }
+      if (saved.isEmpty()) {
+        sortVersionEntries(entries, VersionQueueOrder.NATURAL).map { it.id }
+      } else {
+        sortVersionEntries(
+          entries = entries,
+          order = VersionQueueOrder.CUSTOM,
+          customOrder = saved,
+        ).map { it.id }
+      }
+    }
+    VersionOrderEditorDialog(
+      sources = mediaSources,
+      initialOrder = seed,
+      labelOf = { versionLabelOf(it) },
+      onDismiss = { orderEditorOpen = false },
+      onSave = { ids ->
+        if (itemId.isNotBlank() && serverId > 0) {
+          browserPrefsForVersionQueue.embyVersionQueueCustomOrder(serverId, itemId)
+            .set(encodeCustomVersionOrder(ids))
+          // 存了自定义顺序却仍按别的规则播，等于白调 —— 一并把规则切过去
+          browserPrefsForVersionQueue.embyVersionQueueOrder.set(VersionQueueOrder.CUSTOM.key)
+        }
+        orderEditorOpen = false
+      },
+    )
+  }
+
   enginePickerResume?.let { resume ->
     EnginePickerDialog(
       onDismiss = { enginePickerResume = null },
@@ -2467,6 +2534,118 @@ private fun PlaySection(
     )
   }
 }
+/**
+ * 多版本连播顺序编辑器：↑ / ↓ 调整，从上到下就是「当前版本之后」的衔接次序。
+ *
+ * 为什么是对话框而不是抽屉里的拖动列表：
+ * 版本数量很少（通常 2~4 个），上下移比拖动更准；而且这段 UI 只在用户主动
+ * 点「调整连播顺序」时才需要，不该常驻在版本抽屉里抢注意力。
+ */
+@Composable
+private fun VersionOrderEditorDialog(
+  sources: List<EmbyMediaSource>,
+  initialOrder: List<String>,
+  labelOf: (EmbyMediaSource) -> String,
+  onDismiss: () -> Unit,
+  onSave: (List<String>) -> Unit,
+) {
+  var order by remember(initialOrder) { mutableStateOf(initialOrder) }
+  val byId = remember(sources) {
+    sources.filter { !it.Id.isNullOrBlank() }.associateBy { it.Id.orEmpty() }
+  }
+
+  fun move(from: Int, delta: Int) {
+    val to = from + delta
+    if (from !in order.indices || to !in order.indices) return
+    order = order.toMutableList().also { it.add(to, it.removeAt(from)) }
+  }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("调整连播顺序") },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+          "从上到下就是播完一个版本之后的衔接次序。当前正在播的版本始终排第一位，" +
+            "其余按这里的顺序接着播。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 380.dp)
+            .verticalScroll(rememberScrollState()),
+          verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          order.forEachIndexed { index, id ->
+            val source = byId[id] ?: return@forEachIndexed
+            Surface(
+              shape = MaterialTheme.shapes.small,
+              color = MaterialTheme.colorScheme.surfaceContainerLow,
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              Row(
+                modifier = Modifier.padding(start = 12.dp, top = 2.dp, bottom = 2.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Text(
+                  "${index + 1}",
+                  style = MaterialTheme.typography.labelLarge,
+                  color = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.width(22.dp),
+                )
+                Text(
+                  labelOf(source),
+                  style = MaterialTheme.typography.bodyMedium,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                  onClick = { move(index, -1) },
+                  enabled = index > 0,
+                  modifier = Modifier.size(36.dp),
+                ) {
+                  Icon(
+                    Icons.Filled.KeyboardArrowUp,
+                    contentDescription = "上移",
+                    modifier = Modifier.size(20.dp),
+                  )
+                }
+                IconButton(
+                  onClick = { move(index, 1) },
+                  enabled = index < order.lastIndex,
+                  modifier = Modifier.size(36.dp),
+                ) {
+                  Icon(
+                    Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "下移",
+                    modifier = Modifier.size(20.dp),
+                  )
+                }
+              }
+            }
+          }
+        }
+        TextButton(
+          onClick = { order = defaultCustomOrder(sources) { labelOf(it) } },
+        ) {
+          Text("恢复自然顺序")
+        }
+      }
+    },
+    confirmButton = {
+      Button(onClick = { onSave(order) }, enabled = order.isNotEmpty()) {
+        Text("保存")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) { Text("取消") }
+    },
+  )
+}
+
 @Composable
 private fun EnginePickerDialog(
   onDismiss: () -> Unit,
@@ -2480,8 +2659,9 @@ private fun EnginePickerDialog(
         EngineKind.entries.forEach { engine ->
           val summary = when (engine) {
             EngineKind.MPV -> "功能最全，默认内核"
-            EngineKind.GSY -> "兼容性备用内核，独立播放页"
-            EngineKind.VLC -> "第三个独立内核，适合 mpv/GSY 都不合适的片源"
+            EngineKind.GSY -> "兼容性备用内核，基于 IJK"
+            EngineKind.MEDIA3 -> "Media3 ExoPlayer 内核，适合常见流媒体"
+            EngineKind.VLC -> "VLC 独立内核，适合其他内核不合适的片源"
           }
           TextButton(
             onClick = { onPick(engine) },
@@ -2634,6 +2814,8 @@ private fun MediaSourceSelector(
   onSelect: (String) -> Unit,
   customLabelOf: (String) -> String? = { null },
   onEditLabel: (EmbyMediaSource) -> Unit = {},
+  /** 非空时抽屉底部出现「调整连播顺序」入口（见 EmbyVersionPickerSheet.onEditOrder） */
+  onEditOrder: (() -> Unit)? = null,
 ) {
   var sheetOpen by remember { mutableStateOf(false) }
   val current = sources.firstOrNull { it.Id == selectedId } ?: sources.first()
@@ -2702,6 +2884,12 @@ private fun MediaSourceSelector(
       onEditName = { id ->
         sheetOpen = false
         sources.firstOrNull { it.Id == id }?.let(onEditLabel)
+      },
+      onEditOrder = onEditOrder?.let { edit ->
+        {
+          sheetOpen = false
+          edit()
+        }
       },
     )
   }

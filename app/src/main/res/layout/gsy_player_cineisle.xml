@@ -1,90 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  CineIsle 版 GSY 播放器布局（全新一套，不复用 mpv 的 Compose 控件）。
+  CineIsle GSY 播放器控件。
 
-  这是 CineIsleGsyPlayer.getLayoutId() 指向的布局：GSY 用自己的状态机驱动它，
-  但外观完全按 CineIsle 播放器（player_layout.xml + PlayerControls.kt）重画：
+  排布与 mpv 播放页保持同一套层级：
+  · 顶栏：返回 / 网络速度 / 竖屏快捷键（字幕、音轨、收藏、切换内核）；
+    横屏时标题搬到返回键右侧，快捷键仍靠右。
+  · 正中：后退 10 秒 / 上一集 / 播放暂停 / 下一集 / 前进 10 秒。
+  · 底栏：单行可横向滚动的扩展控制 → 标题（仅竖屏）→ 时间与进度条。
+  · 控件隐藏时仅保留底部 2dp 进度线。
 
-    · 顶栏：玻璃圆底返回键 + 右端动作键（Emby 收藏 / 切换到 mpv）；
-      **横屏时媒体标题也搬到这里**，
-      和返回键同一行（见 CineIsleGsyPlayer.applyTitlePlacement）——横屏横向空间富裕，
-      标题压在顶栏不会跟按钮条抢位置；竖屏则回到底栏、独占一行居中。
-    · 正中：上一集 / 播放暂停 / 下一集 —— 与 mpv 播放页「播放键两侧夹着上下一集」一致
-      （只有播放队列不止一个视频时才出现，见 CineIsleGsyPlayer.playlistNavigationEnabled）。
-    · 底栏（自下而上）：进度条行（已播 / 可拖进度条 / 总时长 / 玻璃圆底全屏键）
-      → 内容键行（截图 / 字幕 / 音轨 / 画中画 / 投屏）
-      → 播放键行（倍速 / 循环 / 比例 / 渲染 / 滤镜 / 静音）
-    · 最底：2dp 细进度线（控件隐藏时仅剩它）
-    · 顶/底各垫一层渐变遮罩，随控件一起淡入淡出
-
-  **只有右下角一个方向键**：`fullscreen` 那个键同时承担「全屏」和「横竖屏切换」——
-  在手机上这本来就是同一件事（全屏 = 横屏全屏），拆成两个键只会让人不知道该点哪个。
-  点它的行为见 GsyPlayerActivity.toggleLandscapeFullscreen()：
-  竖屏 → 横屏全屏；横屏全屏 → 回竖屏。
-
-  按钮分两行的理由：一行塞 11 个键在 360dp 竖屏上必然溢出（每个 42dp + 8dp 间距），
-  分「播放相关」「内容相关」两行既放得下，也比横向滚动更好按。
-
-  ── 必须原样保留的 id 与控件类型（GSYVideoControlView.init() 里按类型 findViewById，
-     少一个就 NPE，类型不对就 ClassCastException）────────────────────────────
-     surface_container : ViewGroup —— 渲染视图的挂载点
-     thumb             : RelativeLayout —— 封面层
-     layout_top        : ViewGroup
-     layout_bottom     : ViewGroup
-     progress          : SeekBar
-     current / total   : TextView
-     title             : TextView
-     back / fullscreen / lock_screen : ImageView
-     start             : View（播放键，仅被 setVisibility 使用）
-     loading           : View（缓冲动画，instanceof 判断后才做动画）
-     bottom_progressbar: ProgressBar
-
-  提示：GSY 只认这些 id，**控件摆哪儿它不管**（title 就是个普通 TextView，只被 setText），
-  所以标题可以在两个容器之间搬来搬去。
-  其余（scrim 遮罩、玻璃按钮条、上/下一集、顶栏动作键）是纯装饰/自管控件，GSY 不认也不会碰。
+  GSYVideoControlView.init() 依赖的 id 与类型必须保留：
+  surface_container(ViewGroup)、thumb(RelativeLayout)、layout_top/layout_bottom(ViewGroup)、
+  progress(SeekBar)、current/total/title(TextView)、back/fullscreen/lock_screen(ImageView)、
+  start(View)、loading(View)、bottom_progressbar(ProgressBar)。
 -->
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@android:color/black">
 
-    <!-- ① 画面挂载点 -->
     <FrameLayout
         android:id="@+id/surface_container"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!--
-      ② 封面层：官方布局里这里是「match_parent + 纯黑背景」，播完/未播时被 GSY 置为
-      VISIBLE 就会整块盖住画面（黑屏的根源）。这里改成透明、且不放任何子 View，
-      于是 GSY 照样显隐它，但永远不会挡住视频。
-    -->
+    <!-- 空透明封面层：保留 GSY 状态机所需 id，但不遮挡画面。 -->
     <RelativeLayout
         android:id="@+id/thumb"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@android:color/transparent" />
 
-    <!-- ③ 顶部渐变遮罩（纯装饰，不拦截触摸；alpha 由 CineIsleGsyPlayer 随控件一起调） -->
     <View
         android:id="@+id/gsy_scrim_top"
         android:layout_width="match_parent"
-        android:layout_height="140dp"
+        android:layout_height="132dp"
         android:layout_alignParentTop="true"
         android:background="@drawable/gsy_scrim_top" />
 
-    <!-- ④ 底部渐变遮罩（同上） -->
     <View
         android:id="@+id/gsy_scrim_bottom"
         android:layout_width="match_parent"
-        android:layout_height="240dp"
+        android:layout_height="190dp"
         android:layout_alignParentBottom="true"
         android:background="@drawable/gsy_scrim_bottom" />
 
-    <!-- ⑤ 顶栏：返回键 + （横屏时才有的标题）+ 弹性占位 + 收藏 / 切换内核。
-         paddingTop 由 GsyPlayerActivity 按状态栏安全区在运行时补齐。
-         标题（id=title）默认不在这里，横屏时才由 CineIsleGsyPlayer 插到返回键右侧，
-         同时把 gsy_top_spacer 置为 GONE，让标题吃满中间的空间。 -->
+    <!-- 顶栏。安全区 paddingTop 由 GsyPlayerActivity 运行时补齐。 -->
     <LinearLayout
         android:id="@+id/layout_top"
         android:layout_width="match_parent"
@@ -106,12 +67,6 @@
             android:scaleType="centerInside"
             android:src="@drawable/gsy_ic_back" />
 
-        <!--
-          网络加载速度指示器：紧挨返回键，跟着顶栏一起显隐（GSY 只管 layout_top 的显隐，
-          看不见它就看不见这个键）。文本由 GsyPlayerActivity 的 1 秒定时器写入；
-          非网络流时 Activity 会把它置为 GONE，这里默认 GONE 起步。
-          字体、字号、阴影与标题/时间码一致（monospace 12sp），观感不突兀。
-        -->
         <TextView
             android:id="@+id/gsy_net_speed"
             android:layout_width="wrap_content"
@@ -128,31 +83,50 @@
             android:typeface="monospace"
             android:visibility="gone" />
 
-        <!-- 竖屏时把右侧那组动作键顶到最右；横屏有标题时会被置为 GONE -->
+        <!-- 竖屏时把快捷键推到右侧；横屏标题进顶栏后收起。 -->
         <View
             android:id="@+id/gsy_top_spacer"
             android:layout_width="0dp"
             android:layout_height="1dp"
             android:layout_weight="1" />
 
-        <!--
-          Emby 收藏：动效与 mpv 播放页完全同一份实现（弹跳 + 星光 + 红心渐变），
-          所以这里直接挂一个 ComposeView 承载 PlayerControlsShared.EmbyFavoritePlayerButton，
-          由 GsyPlayerActivity 在 onCreate 里 setContent。
-          它自己会在「非 Emby 播放」时渲染成空 —— 按钮位置会保留但不可见，不影响排布。
-        -->
+        <!-- 与 mpv 竖屏顶栏一致：轨道类快捷入口放在右侧。 -->
+        <ImageView
+            android:id="@+id/gsy_btn_subtitle"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/gsy_ctrl_circle"
+            android:contentDescription="@string/gsy_control_subtitle"
+            android:padding="9dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/gsy_ic_subtitle" />
+
+        <ImageView
+            android:id="@+id/gsy_btn_audio_track"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/gsy_ctrl_circle"
+            android:contentDescription="@string/gsy_control_audio_track"
+            android:padding="9dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/gsy_ic_audio_track" />
+
         <androidx.compose.ui.platform.ComposeView
             android:id="@+id/gsy_btn_favorite"
             android:layout_width="40dp"
             android:layout_height="40dp"
-            android:layout_marginEnd="4dp" />
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp" />
 
-        <!-- 横竖屏切换已经并到右下角那个 fullscreen 键上，顶栏不再重复放一个 -->
         <ImageView
             android:id="@+id/gsy_btn_engine"
             android:layout_width="40dp"
             android:layout_height="40dp"
-            android:layout_marginStart="4dp"
+            android:layout_marginStart="2dp"
             android:background="@drawable/gsy_ctrl_circle"
             android:contentDescription="@string/gsy_control_switch_engine"
             android:padding="9dp"
@@ -160,25 +134,181 @@
             android:src="@drawable/gsy_ic_switch" />
     </LinearLayout>
 
-    <!-- ⑥ 底栏：标题（竖屏）+ 播放键行 + 内容键行 + 进度条行。
-         paddingBottom 由 GsyPlayerActivity 按导航栏安全区在运行时补齐。 -->
+    <!--
+      底栏采用 mpv 竖屏页的顺序：按钮簇在上、标题紧贴进度条、进度条在最底。
+      横屏时标题会搬到顶栏，底栏自然只剩单行按钮和进度条。
+    -->
     <LinearLayout
         android:id="@+id/layout_bottom"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_alignParentBottom="true"
         android:orientation="vertical"
-        android:paddingTop="6dp">
+        android:paddingTop="4dp">
 
-        <!-- ⑥-a 媒体标题（竖屏位置：压在按钮条与进度条上方，占满整行，居中）。
-             横屏时由 CineIsleGsyPlayer 搬到顶栏返回键右侧。 -->
+        <!--
+          所有次级功能收进一条横向滚动控制带，避免原先两排“工具箱”式堆叠。
+          顺序与 mpv 页一致：播放状态类在前，内容类居中，画面类收在末尾。
+        -->
+        <HorizontalScrollView
+            android:id="@+id/gsy_controls_scroller"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginBottom="2dp"
+            android:clipToPadding="false"
+            android:fadingEdge="horizontal"
+            android:fillViewport="true"
+            android:overScrollMode="never"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/gsy_extra_row"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp">
+
+                <ImageView
+                    android:id="@+id/gsy_btn_speed"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/gsy_ctrl_circle"
+                    android:contentDescription="@string/gsy_control_speed"
+                    android:padding="10dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/gsy_ic_speed" />
+
+                <ImageView
+                    android:id="@+id/gsy_btn_loop"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/gsy_ctrl_circle"
+                    android:contentDescription="@string/gsy_control_loop"
+                    android:padding="10dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/gsy_ic_loop" />
+
+                <ImageView
+                    android:id="@+id/gsy_btn_mute"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/gsy_ctrl_circle"
+                    android:contentDescription="@string/gsy_control_mute"
+                    android:padding="10dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/gsy_ic_volume_on" />
+
+                <ImageView
+                    android:id="@+id/gsy_btn_screenshot"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/gsy_ctrl_circle"
+                    android:contentDescription="@string/gsy_control_screenshot"
+                    android:padding="10dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/gsy_ic_screenshot" />
+
+                <ImageView
+                    android:id="@+id/gsy_btn_chapters"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/gsy_ctrl_circle"
+                    android:contentDescription="@string/gsy_control_chapters"
+                    android:padding="10dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/gsy_ic_chapters" />
+
+                <ImageView
+                    android:id="@+id/gsy_btn_pip"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/gsy_ctrl_circle"
+                    android:contentDescription="@string/gsy_control_pip"
+                    android:padding="10dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/gsy_ic_pip" />
+
+                <ImageView
+                    android:id="@+id/gsy_btn_cast"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/gsy_ctrl_circle"
+                    android:contentDescription="@string/gsy_control_cast"
+                    android:padding="10dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/gsy_ic_cast" />
+
+                <androidx.compose.ui.platform.ComposeView
+                    android:id="@+id/gsy_btn_dislike"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/gsy_ctrl_circle" />
+
+                <ImageView
+                    android:id="@+id/gsy_btn_aspect"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/gsy_ctrl_circle"
+                    android:contentDescription="@string/gsy_control_aspect"
+                    android:padding="10dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/gsy_ic_aspect" />
+
+                <ImageView
+                    android:id="@+id/gsy_btn_render"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/gsy_ctrl_circle"
+                    android:contentDescription="@string/gsy_control_render"
+                    android:padding="10dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/gsy_ic_render" />
+
+                <ImageView
+                    android:id="@+id/gsy_btn_filter"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/gsy_ctrl_circle"
+                    android:contentDescription="@string/gsy_control_filter"
+                    android:padding="10dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/gsy_ic_filter" />
+            </LinearLayout>
+        </HorizontalScrollView>
+
+        <!-- 竖屏紧贴进度条；横屏由 applyTitlePlacement 搬到顶栏。 -->
         <TextView
             android:id="@+id/title"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginStart="14dp"
             android:layout_marginEnd="14dp"
-            android:layout_marginBottom="6dp"
+            android:layout_marginTop="2dp"
+            android:layout_marginBottom="4dp"
             android:ellipsize="end"
             android:gravity="center"
             android:maxLines="1"
@@ -190,191 +320,6 @@
             android:textSize="14sp"
             android:typeface="monospace" />
 
-        <!-- ⑥-b 播放键行：倍速 / 循环 / 比例 / 渲染 / 滤镜 / 静音。
-             这些是 CineIsleGsyPlayer 自己接的，GSY 不认。 -->
-        <LinearLayout
-            android:id="@+id/gsy_extra_row"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="2dp"
-            android:gravity="center"
-            android:orientation="horizontal">
-
-            <ImageView
-                android:id="@+id/gsy_btn_speed"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_speed"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_speed" />
-
-            <ImageView
-                android:id="@+id/gsy_btn_loop"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_loop"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_loop" />
-
-            <ImageView
-                android:id="@+id/gsy_btn_aspect"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_aspect"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_aspect" />
-
-            <ImageView
-                android:id="@+id/gsy_btn_render"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_render"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_render" />
-
-            <ImageView
-                android:id="@+id/gsy_btn_filter"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_filter"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_filter" />
-
-            <ImageView
-                android:id="@+id/gsy_btn_mute"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_mute"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_volume_on" />
-        </LinearLayout>
-
-        <!-- ⑥-c 内容键行：截图 / 字幕 / 音轨 / 画中画 / 投屏 -->
-        <LinearLayout
-            android:id="@+id/gsy_extra_row2"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="4dp"
-            android:gravity="center"
-            android:orientation="horizontal">
-
-            <ImageView
-                android:id="@+id/gsy_btn_screenshot"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_screenshot"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_screenshot" />
-
-            <ImageView
-                android:id="@+id/gsy_btn_subtitle"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_subtitle"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_subtitle" />
-
-            <ImageView
-                android:id="@+id/gsy_btn_audio_track"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_audio_track"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_audio_track" />
-
-            <ImageView
-                android:id="@+id/gsy_btn_chapters"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_chapters"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_chapters" />
-
-            <ImageView
-                android:id="@+id/gsy_btn_pip"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_pip"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_pip" />
-
-            <ImageView
-                android:id="@+id/gsy_btn_cast"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle"
-                android:contentDescription="@string/gsy_control_cast"
-                android:padding="10dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/gsy_ic_cast" />
-
-            <!--
-              「标记为不喜欢」：单击切换、长按写备注。
-
-              ⚠️ 这里是 ComposeView 而不是 ImageView（与顶栏收藏键 `gsy_btn_favorite` 同一套路）：
-               · 图标状态由 `DislikePlayerActions` 单例驱动，Compose 自己订阅它的流 ——
-                 竖屏实例与全屏克隆实例是**两棵视图树**，ImageView 方案要给两棵树各推一次状态，
-                 漏一棵就会出现「全屏里标了、退出全屏还是空心」；Compose 各自订阅则天然同步。
-               · 图标用官方 Material Icon（心碎），未标记空心白、已标记实心红 ——
-                 原来的「拇指向下」被读成"点踩/差评"，且空心↔实心在玻璃按钮上几乎看不出差别。
-              背景圈仍走 `gsy_ctrl_circle`，与同排其它按钮一致。
-            -->
-            <androidx.compose.ui.platform.ComposeView
-                android:id="@+id/gsy_btn_dislike"
-                android:layout_width="42dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:background="@drawable/gsy_ctrl_circle" />
-        </LinearLayout>
-
-        <!-- ⑥-d 进度条行：已播时间 / 可拖进度条 / 总时长 / 全屏（＝横竖屏切换）键 -->
         <LinearLayout
             android:id="@+id/gsy_seek_row"
             android:layout_width="match_parent"
@@ -422,8 +367,6 @@
                 android:textSize="12sp"
                 android:typeface="monospace" />
 
-            <!-- 播放页唯一的方向键：竖屏点它进横屏全屏，横屏点它回竖屏。
-                 图标固定用「旋转」，GSY 的 getEnlargeImageRes / getShrinkImageRes 都指向它。 -->
             <ImageView
                 android:id="@+id/fullscreen"
                 android:layout_width="40dp"
@@ -437,7 +380,6 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- ⑦ 控件隐藏时留在最底的细进度线（nav 安全区的 margin 由 Activity 运行时补齐） -->
     <ProgressBar
         android:id="@+id/bottom_progressbar"
         style="?android:attr/progressBarStyleHorizontal"
@@ -447,79 +389,74 @@
         android:max="100"
         android:progressDrawable="@drawable/gsy_bottom_progress" />
 
-    <!-- ⑧ 上一集（播放队列 > 1 时才显示；显隐跟着正中播放键走） -->
-    <ImageView
-        android:id="@+id/gsy_btn_prev"
-        android:layout_width="52dp"
-        android:layout_height="52dp"
-        android:layout_centerVertical="true"
-        android:layout_marginEnd="26dp"
-        android:layout_toStartOf="@id/start"
-        android:background="@drawable/gsy_ctrl_circle"
-        android:contentDescription="@string/gsy_control_prev"
-        android:padding="13dp"
-        android:scaleType="centerInside"
-        android:src="@drawable/gsy_ic_prev"
-        android:visibility="gone" />
-
-    <!-- ⑧-a 后退10秒（正中控件组最左；显隐跟着正中播放键走） -->
-    <ImageView
-        android:id="@+id/gsy_btn_rewind10"
-        android:layout_width="44dp"
-        android:layout_height="44dp"
-        android:layout_centerVertical="true"
-        android:layout_marginEnd="14dp"
-        android:layout_toStartOf="@id/gsy_btn_prev"
-        android:background="@drawable/gsy_ctrl_circle"
-        android:contentDescription="@string/player_control_rewind_10s"
-        android:padding="11dp"
-        android:scaleType="centerInside"
-        android:src="@drawable/gsy_ic_replay_10"
-        android:visibility="gone" />
-
-    <!-- ⑨ 正中播放/暂停键（图标由 CineIsleGsyPlayer 按播放状态同步） -->
-    <ImageView
-        android:id="@+id/start"
-        android:layout_width="64dp"
-        android:layout_height="64dp"
+    <!-- 中央五键使用一个真实水平组，队列键隐藏后两侧 seek 键仍会自动收拢。 -->
+    <LinearLayout
+        android:id="@+id/gsy_center_controls"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:layout_centerInParent="true"
-        android:background="@drawable/gsy_ctrl_circle"
-        android:contentDescription="@string/player_control_play_pause"
-        android:padding="18dp"
-        android:scaleType="centerInside"
-        android:src="@drawable/gsy_ic_play" />
+        android:gravity="center"
+        android:orientation="horizontal">
 
-    <!-- ⑩ 下一集 -->
-    <ImageView
-        android:id="@+id/gsy_btn_next"
-        android:layout_width="52dp"
-        android:layout_height="52dp"
-        android:layout_centerVertical="true"
-        android:layout_marginStart="26dp"
-        android:layout_toEndOf="@id/start"
-        android:background="@drawable/gsy_ctrl_circle"
-        android:contentDescription="@string/gsy_control_next"
-        android:padding="13dp"
-        android:scaleType="centerInside"
-        android:src="@drawable/gsy_ic_next"
-        android:visibility="gone" />
+        <ImageView
+            android:id="@+id/gsy_btn_rewind10"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/gsy_ctrl_circle"
+            android:contentDescription="@string/player_control_rewind_10s"
+            android:padding="11dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/gsy_ic_replay_10"
+            android:visibility="gone" />
 
-    <!-- ⑩-a 前进10秒（正中控件组最右；显隐跟着正中播放键走） -->
-    <ImageView
-        android:id="@+id/gsy_btn_forward10"
-        android:layout_width="44dp"
-        android:layout_height="44dp"
-        android:layout_centerVertical="true"
-        android:layout_marginStart="14dp"
-        android:layout_toEndOf="@id/gsy_btn_next"
-        android:background="@drawable/gsy_ctrl_circle"
-        android:contentDescription="@string/player_control_forward_10s"
-        android:padding="11dp"
-        android:scaleType="centerInside"
-        android:src="@drawable/gsy_ic_forward_10"
-        android:visibility="gone" />
+        <ImageView
+            android:id="@+id/gsy_btn_prev"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:layout_marginEnd="16dp"
+            android:background="@drawable/gsy_ctrl_circle"
+            android:contentDescription="@string/gsy_control_prev"
+            android:padding="13dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/gsy_ic_prev"
+            android:visibility="gone" />
 
-    <!-- ⑪ 缓冲动画 -->
+        <ImageView
+            android:id="@+id/start"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:background="@drawable/gsy_ctrl_circle"
+            android:contentDescription="@string/player_control_play_pause"
+            android:padding="18dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/gsy_ic_play" />
+
+        <ImageView
+            android:id="@+id/gsy_btn_next"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:layout_marginStart="16dp"
+            android:background="@drawable/gsy_ctrl_circle"
+            android:contentDescription="@string/gsy_control_next"
+            android:padding="13dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/gsy_ic_next"
+            android:visibility="gone" />
+
+        <ImageView
+            android:id="@+id/gsy_btn_forward10"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/gsy_ctrl_circle"
+            android:contentDescription="@string/player_control_forward_10s"
+            android:padding="11dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/gsy_ic_forward_10"
+            android:visibility="gone" />
+    </LinearLayout>
+
     <ProgressBar
         android:id="@+id/loading"
         android:layout_width="36dp"
@@ -529,13 +466,12 @@
         android:indeterminateTint="#FFFFFFFF"
         android:visibility="invisible" />
 
-    <!-- ⑫ 控件锁定键（全屏 + 开启锁定功能时才由 GSY 显示） -->
     <ImageView
         android:id="@+id/lock_screen"
         android:layout_width="40dp"
         android:layout_height="40dp"
-        android:layout_centerVertical="true"
         android:layout_alignParentEnd="true"
+        android:layout_centerVertical="true"
         android:layout_marginEnd="14dp"
         android:background="@drawable/gsy_ctrl_circle"
         android:contentDescription="@string/player_control_lock_controls"

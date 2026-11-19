@@ -317,6 +317,19 @@ open class PlayerActivity :
   private var playlistMediaSourceNames: List<String> = emptyList()
 
   /**
+   * 与 [playlist] 同序的 Emby **媒体源 Id**（`MediaSources[i].Id`；空串 = 该条没指定版本）。
+   *
+   * 为什么必须是平行数组、而不是继续用 `ItemId → MediaSourceId` 的 Map：
+   * **多版本连播时，队列里多个项共用一个 ItemId**，Map 只能存下一个版本，
+   * 切到第二个版本后「当前版本」会退回第一个 —— 顶栏版本名、按版本的进度键、
+   * 在线字幕按版本搜索全都会指向错的版本。
+   *
+   * 与 [playlistItemIds] 一样在换位 / 删除时同步维护。
+   */
+  @Volatile
+  private var playlistMediaSourceIds: List<String> = emptyList()
+
+  /**
    * 与 [playlist] 同序的 Emby **ItemId**（非 Emby 播放为空表）。
    *
    * 为什么既留「路径反查」（[currentEmbyItemId]）又要这个平行数组：
@@ -656,6 +669,11 @@ open class PlayerActivity :
     // Emby 多版本名（与 playlist 下标一一对应，空串占位）——顶栏用它显示「正在播的是哪个版本」
     playlistMediaSourceNames =
       intent.getStringArrayListExtra("emby_media_source_names") ?: emptyList()
+    // Emby 媒体源 Id（与 playlist 同序）—— 同一个 ItemId 的多个版本靠它区分
+    playlistMediaSourceIds =
+      intent.getStringArrayListExtra(
+        app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID,
+      ) ?: emptyList()
     // Emby ItemId（与 playlist 同序）—— 路径反查不到时靠它按当前下标取
     playlistItemIds =
       intent.getStringArrayListExtra(
@@ -936,6 +954,11 @@ open class PlayerActivity :
       app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.idProvider = {
         playlistItemIds.getOrNull(playlistIndex)?.takeIf { it.isNotBlank() }
           ?: currentEmbyItemId()
+      }
+      // 队列下标：多版本连播时队列里**多个项共用同一个 ItemId**，只凭 ItemId 无法判断
+      // 「现在是同片的第几个版本」—— 上报器据此取到正确的那一项（版本 Id 也按下标取）。
+      app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.queueIndexProvider = {
+        playlistIndex
       }
 
       val observer =
@@ -2019,6 +2042,11 @@ open class PlayerActivity :
       n.add(to, n.removeAt(from))
       playlistMediaSourceNames = n
     }
+    if (playlistMediaSourceIds.size == movedItems.size) {
+      val s = playlistMediaSourceIds.toMutableList()
+      s.add(to, s.removeAt(from))
+      playlistMediaSourceIds = s
+    }
     if (playlistItemIds.size == movedItems.size) {
       val i = playlistItemIds.toMutableList()
       i.add(to, i.removeAt(from))
@@ -2067,6 +2095,9 @@ open class PlayerActivity :
     }
     if (playlistMediaSourceNames.size == items.size + 1) {
       playlistMediaSourceNames = playlistMediaSourceNames.toMutableList().also { it.removeAt(index) }
+    }
+    if (playlistMediaSourceIds.size == items.size + 1) {
+      playlistMediaSourceIds = playlistMediaSourceIds.toMutableList().also { it.removeAt(index) }
     }
     if (playlistItemIds.size == items.size + 1) {
       playlistItemIds = playlistItemIds.toMutableList().also { it.removeAt(index) }
@@ -3080,13 +3111,24 @@ private fun cancelAutoplayCountdown() {
   /**
    * 当前播放条目**实际在播的那个版本**的媒体源 Id；单版本 / 非 Emby 返回 null。
    *
-   * 查的是 [embyMediaSourceByItemId]（ItemId → MediaSourceId 的 Map），
-   * 与队列顺序无关 ⇒ 换位、删除、随机播放都不需要同步。
+   * ## 为什么优先按下标取
+   *
+   * 多版本连播时队列里**多个项共用同一个 ItemId**（同片 4K / 1080P），
+   * `ItemId → MediaSourceId` 的 Map 只能记一份 —— 切到第二个版本后仍会读到第一个，
+   * 于是按版本的进度键、在线字幕的版本参数全部指向错的那个源。
+   * 队列下标是「正在播第几项」的唯一真相（换位 / 删除都同步维护这份平行数组），
+   * 所以先按 [playlistIndex] 取，取不到才退回 Map（兼容没有平行数组的旧 intent）。
    */
   fun currentEmbyMediaSourceId(): String? =
-    currentEmbyItemId()
-      ?.let { embyMediaSourceByItemId[it] }
+    // 只在「平行数组与队列等长」时按下标取：单条播放（launchSingle）时数组只有 1 项、
+    // 而队列可能是随后自动生成的（N 项），那种情况下按下标取会张冠李戴。
+    playlistMediaSourceIds
+      .takeIf { playlist.isNotEmpty() && it.size == playlist.size }
+      ?.getOrNull(playlistIndex)
       ?.takeIf { it.isNotBlank() }
+      ?: currentEmbyItemId()
+        ?.let { embyMediaSourceByItemId[it] }
+        ?.takeIf { it.isNotBlank() }
 
   /**
    * 从 intent 里取出「ItemId → 媒体源 Id」映射（多版本条目才有值）。
@@ -3118,8 +3160,8 @@ private fun cancelAutoplayCountdown() {
    * 键形状与详情页算的完全一致（同一份 [EmbyVersionProgress]），两个页面各算各的、
    * 不需要互通。详见该对象的注释：Emby 服务端的进度是按条目共享的，多版本条目只能本地分开记。
    *
-   * ⚠️ ItemId 从 **mpv 当前路径**反查，不用 `playlistIndex` 索引 intent：
-   * 用户拖动过播放队列后下标就与 intent 的原始顺序错位了。
+   * ⚠️ 版本 Id 走 [currentEmbyMediaSourceId]（按下标优先），不能用 ItemId 查 Map：
+   * 多版本连播时队列里多个项共用一个 ItemId，Map 只会给出第一个版本。
    */
   private fun currentEmbyVersionProgressKey(): String? {
     val serverId =
@@ -3128,11 +3170,8 @@ private fun cancelAutoplayCountdown() {
         -1L,
       )
     if (serverId <= 0) return null
-    val itemId =
-      app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter
-        .parseItemIdFromPath(PlayerLib.getPropertyString("path"))
-        ?: return null
-    val sourceId = embyMediaSourceByItemId[itemId]?.takeIf { it.isNotBlank() } ?: return null
+    val itemId = currentEmbyItemId() ?: return null
+    val sourceId = currentEmbyMediaSourceId() ?: return null
     return app.marlboroadvance.mpvex.domain.emby.EmbyVersionProgress.key(serverId, itemId, sourceId)
   }
 
@@ -3267,11 +3306,9 @@ private fun cancelAutoplayCountdown() {
 
       // Handle playlist playback
       if (playlist.isNotEmpty()) {
-        val hasNextItem = if (viewModel.shuffleEnabled.value) {
-          shuffledPosition < shuffledIndices.size - 1
-        } else {
-          playlistIndex < playlist.size - 1
-        }
+        // 走 hasNext() 而不是内联比较 playlist.size：窗口化加载时队列只装了一段，
+        // 真实总数在 playlistTotalCount 里，用 size 判断会把「还有下一集」误判成结束。
+        val hasNextItem = hasNext()
 
         // Check if autoplay next video is enabled
         val autoplayEnabled = playerPreferences.autoplayNextVideo.get()
@@ -4836,6 +4873,11 @@ private fun cancelAutoplayCountdown() {
       // 多版本名同理：换了队列就换，否则会显示上一批的版本名
       playlistMediaSourceNames =
         intent.getStringArrayListExtra("emby_media_source_names") ?: emptyList()
+      // 媒体源 Id 同理：多版本队列里同片多项共用 ItemId，靠这份平行数组区分
+      playlistMediaSourceIds =
+        intent.getStringArrayListExtra(
+          app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID,
+        ) ?: emptyList()
       // ItemId 列表同理：换了队列就换，否则会拿到上一批条目的媒体信息
       playlistItemIds =
         intent.getStringArrayListExtra(

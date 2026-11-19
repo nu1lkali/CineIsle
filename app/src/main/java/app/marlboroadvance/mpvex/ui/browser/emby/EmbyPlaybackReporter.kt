@@ -55,6 +55,17 @@ object EmbyPlaybackReporter {
    */
   @Volatile private var currentItemId: String? = null
 
+  /**
+   * 当前正在上报的那一项的**媒体源 Id**（多版本队列里区分「同片的第几个版本」）。
+   *
+   * 与 [currentItemId] 成对使用：换项判定必须同时看这两个 —— 只看 ItemId 时
+   * 「切到同片的另一个版本」不会被识别成换项（见 [queueIndexProvider]）。
+   */
+  @Volatile private var currentSourceId: String? = null
+
+  /** 当前项在 [itemIds] 里的下标；-1 = 还定位不到（退回按 ItemId 查找）。 */
+  @Volatile private var currentEntryIndex: Int = -1
+
   @Volatile private var playSessionId: String = ""
   @Volatile private var lastReportedTicks: Long = 0L
 
@@ -147,6 +158,25 @@ object EmbyPlaybackReporter {
   var idProvider: (() -> String?)? = null
 
   /**
+   * 由播放页提供的「当前在播队列里的第几项」。
+   *
+   * ## 为什么需要它（多版本连播）
+   *
+   * 同一个 `ItemId` 的多个版本会在队列里各占一项（4K / 1080P / 导演剪辑版）。
+   * 只靠 [idProvider] 拿到的是 `ItemId` —— 切到第二个版本时 Id 没变，
+   * 上报器会认为「没有换片」，于是：
+   *  · 上一个版本的会话永不结算，新版本继续沿用同一个 `PlaySessionId`；
+   *  · 每次 Progress 带的 `MediaSourceId` 都是队列里**第一个**版本；
+   *  · 服务端上这两个版本的播放记录混在一起。
+   * 拿到下标后就能按下标取「这一项自己的 ItemId + MediaSourceId」，
+   * 换项判定也从「ItemId 变了」升级成「ItemId 或版本变了」。
+   *
+   * 返回 null 是正常情况（非 Emby 播放 / 播放页还没就绪），此时退回旧口径。
+   */
+  @Volatile
+  var queueIndexProvider: (() -> Int?)? = null
+
+  /**
    * 由播放页提供的「当前位置」，单位 ticks；读不到返回 null。
    *
    * 为什么需要：本类默认读 `PlayerLib.getPropertyInt("time-pos")`，而
@@ -199,12 +229,18 @@ object EmbyPlaybackReporter {
   private var warmJob: Job? = null
 
   /**
-   * 排队中的下一条预热（`itemId` / 媒体源 Id）。
+   * 排队中的下一条预热（条目 + 版本）。
    *
    * 只保留**最新**一个：切集是往前走的，排一队旧的没有意义；同时保证「永远只有一个
    * 预热在飞」这条硬约束 —— 用户在意的是网盘 CDN 的风控，并发请求是大忌。
    */
-  private var pendingWarm: Pair<String, String?>? = null
+  private var pendingWarm: WarmTarget? = null
+
+  /** 一条待预热的条目；版本 Id 必须一起带着，否则同片多版本会共用同一个去重键。 */
+  private data class WarmTarget(
+    val itemId: String,
+    val mediaSourceId: String?,
+  )
 
   /**
    * 结算「上一场还没收尾的播放」。
@@ -221,9 +257,11 @@ object EmbyPlaybackReporter {
     val itemId = currentItemId ?: return
     val sid = serverId
     val sessionId = playSessionId
-    val sourceId = mediaSourceIdOf(itemId)
+    val sourceId = currentSourceId ?: mediaSourceIdOf(itemId)
     val ticks = lastReportedTicks
     currentItemId = null
+    currentSourceId = null
+    currentEntryIndex = -1
     playSessionId = ""
     if (ticks <= 0L) return
     scope.launch {
@@ -314,6 +352,11 @@ object EmbyPlaybackReporter {
       ?: return false
 
     val firstId = currentItemId ?: return false
+    // 起播永远落在队列第 0 项（启动侧把「用户点的那一条 / 当前版本」轮转到首位），
+    // 所以这里直接把当前项定位到 0：多版本队列里同片的多个版本共用一个 ItemId，
+    // 只靠 ItemId 是分不出「第几个版本」的。
+    currentEntryIndex = 0
+    currentSourceId = sourceIdAt(0)
     // 本地「最近播放」记一笔（起播即记，不等退出：崩溃 / 强杀也算看过）。
     // 为什么必须自己记：这个服务端的 `Items/Resume` 不按播放时间排序，服务端上也没有
     // `LastPlayedDate` 可用，首页只能靠这份账本把刚播的排到最前。详见 EmbyRecentPlays。
@@ -328,7 +371,7 @@ object EmbyPlaybackReporter {
     lastReportedTicks = startPositionTicks
     sessionStartTicks = startPositionTicks
     sessionStartedAt = android.os.SystemClock.elapsedRealtime()
-    val firstSourceId = mediaSourceIdOf(firstId)
+    val firstSourceId = currentSourceId ?: mediaSourceIdOf(firstId)
     val sessionForStart = playSessionId
     startRequestedAt = android.os.SystemClock.elapsedRealtime()
     scope.launch {
@@ -386,7 +429,7 @@ object EmbyPlaybackReporter {
 
     startPolling()
     // 第一条已经在放了 ⇒ 顺手把**下一条**预热掉（服务端 probe 完，切过去就秒开）。
-    warmNextItem(firstId)
+    warmNextItem(0)
     return true
   }
 
@@ -441,6 +484,7 @@ object EmbyPlaybackReporter {
     pendingWarm = null
     // ⚠️ 先摘掉回调再往下走：这些 lambda 捕获着 Activity，不摘就是静态引用把它钉住
     idProvider = null
+    queueIndexProvider = null
     positionProvider = null
     pausedProvider = null
     EmbyPlayerActions.release()
@@ -461,12 +505,15 @@ object EmbyPlaybackReporter {
     }
     // 本场结束：跳转目标跟着作废，避免影响下一场（下一场 start() 也会清一次，这里是兜底）
     PlayerSeekTracker.clear()
-    val stopSourceId = mediaSourceIdOf(itemId)
+    // 先用 currentSourceId：多版本队列里同片多项共用一个 ItemId，按 Id 查只会拿到第一个版本
+    val stopSourceId = currentSourceId ?: mediaSourceIdOf(itemId)
     val sid = serverId
     // ⚠️ session 取**快照**：下面那段是异步发出去的，等它真跑起来时字段可能已经被
     //    下一场播放改写了（快速退出再进入就是这个时序）。
     val sessionId = playSessionId
     currentItemId = null
+    currentSourceId = null
+    currentEntryIndex = -1
     playSessionId = ""
 
     scope.launch {
@@ -536,19 +583,25 @@ object EmbyPlaybackReporter {
    *
    * 预热失败 / 超时都没有后果：切到那一条时播放器自己再请求一次，行为与没有预热时一致。
    */
-  private fun warmNextItem(currentId: String) {
-    val idx = itemIds.indexOf(currentId)
-    if (idx < 0 || idx + 1 >= itemIds.size) return
-    val nextId = itemIds[idx + 1]
-    val key = "$serverId:$nextId"
+  private fun warmNextItem(currentIndex: Int?) {
+    // 定位不到下标时退回按 ItemId 找（老路径：非 Emby 队列 / 播放页没给 provider）
+    val idx = currentIndex?.takeIf { it in itemIds.indices }
+      ?: currentItemId?.let { itemIds.indexOf(it) }?.takeIf { it >= 0 }
+      ?: return
+    if (idx + 1 >= itemIds.size) return
+    val nextIndex = idx + 1
+    val nextId = itemIds[nextIndex]
+    val sourceId = sourceIdAt(nextIndex)
+    // ⚠️ 去重键必须带版本 Id：多版本队列里同片的几项 ItemId 相同，
+    //    只用 ItemId 会让「下一个版本」被当成「已经预热过」而永远不预热。
+    val key = "$serverId:$nextId:${sourceId.orEmpty()}"
     if (key in warmedKeys) return
-    val sourceId = mediaSourceIds.getOrNull(idx + 1)?.takeIf { it.isNotBlank() }
 
     // ⚠️ 顺序要紧：先判「有没有在飞」，再记账。反过来的话，被跳过的那条会被误记成
     //    「已预热」，之后就再也不会真的预热它了。
     if (warmJob?.isActive == true) {
       // 串行但不丢：只保留**最新**一个待办（旧的已经过时了，没必要排一队）
-      pendingWarm = nextId to sourceId
+      pendingWarm = WarmTarget(nextId, sourceId)
       return
     }
     startWarm(nextId, sourceId)
@@ -556,7 +609,7 @@ object EmbyPlaybackReporter {
 
   /** 真正发一条预热（调用方保证同一时刻只有一个在飞） */
   private fun startWarm(itemId: String, mediaSourceId: String?) {
-    val key = "$serverId:$itemId"
+    val key = "$serverId:$itemId:${mediaSourceId.orEmpty()}"
     if (key in warmedKeys) return
     warmedKeys.add(key)
     // 记录别无限长：一场播放的条目数有限，真到几千条时清一次（服务端本来就已缓存）
@@ -572,7 +625,7 @@ object EmbyPlaybackReporter {
       // 跑完再看有没有排队的：有就接着做（仍然只有一个在飞）
       val queued = pendingWarm
       pendingWarm = null
-      if (queued != null) startWarm(queued.first, queued.second)
+      if (queued != null) startWarm(queued.itemId, queued.mediaSourceId)
     }
   }
 
@@ -655,16 +708,24 @@ object EmbyPlaybackReporter {
     val settled = readSettledPosition() ?: return
     val positionTicks = guardAgainstReset(settled.ticks)
     val isPaused = readIsPaused()
-    val playingItemId = readCurrentItemId() ?: currentItemId ?: return
-    val playingSourceId = mediaSourceIdOf(playingItemId)
+    // 先定位「第几项」：多版本队列里同片的多个版本共用一个 ItemId，
+    // 只靠 ItemId 分不出「还是同一个版本」和「切到另一个版本了」。
+    // 定位不到（非 Emby 队列 / provider 未就绪）时退回旧口径：按 ItemId 找第一项。
+    val playingIndex = readCurrentEntryIndex()
+    val playingItemId = itemIdAt(playingIndex) ?: readCurrentItemId() ?: currentItemId ?: return
+    val playingSourceId = sourceIdAt(playingIndex) ?: mediaSourceIdOf(playingItemId)
 
-    if (playingItemId != currentItemId) {
-      // ── 切换了媒体：结束上一集，开始新一集 ──
+    if (playingItemId != currentItemId || playingSourceId != currentSourceId) {
+      // ── 切换了媒体（换条 或 换同片的另一个版本）：结束上一项，开始新一项 ──
       val previousItemId = currentItemId
       val previousTicks = lastReportedTicks
       val previousSessionId = playSessionId
-      val previousSourceId = previousItemId?.let { mediaSourceIdOf(it) }
+      // ⚠️ 必须用 currentSourceId：`mediaSourceIdOf(previousItemId)` 取的是同片**第一个**
+      //    版本，多版本连播时上一版的 Stopped 会被记到第一个版本上。
+      val previousSourceId = currentSourceId
       currentItemId = playingItemId
+      currentSourceId = playingSourceId
+      currentEntryIndex = playingIndex ?: -1
       // ⚠️ 会话必须**紧跟着作废**：这一轮只要在中途抛了（下面几行都是外部调用），
       //    下一轮就会发现 `playingItemId == currentItemId` 而直接拿这个 sessionId 去发
       //    新一集的 Progress —— 上一集的会话记新一集的位置，服务端上两集全乱。
@@ -715,12 +776,14 @@ object EmbyPlaybackReporter {
       sessionStartedAt = android.os.SystemClock.elapsedRealtime()
       // 切到下一条了 ⇒ 立刻把「再下一条」预热掉。这就是 v142 修「随机播放切下一个
       // 还是卡住」的那一刀：卡的不是客户端，是服务端还没 probe 过那条 strm 的远端源。
-      warmNextItem(playingItemId)
+      warmNextItem(playingIndex)
       return
     }
 
     // 手上没有可用 session 就先补一次 Start；补不上本轮跳过（带空串发出去等于白打）
     if (!ensureSession(repository, server, playingItemId, playingSourceId, positionTicks)) return
+    // 同一条目内（下标没变）也刷新一次：拖动换位后 index 可能变了、ItemId/版本都没变
+    currentEntryIndex = playingIndex ?: currentEntryIndex
 
     // ⚠️ 「seek 未落地」闸门：这个位置是跳转目标顶上来的，不是这一拍真看到的画面位置。
     //   实时 Progress 发出去等于替用户宣称「我已经在目标处了」，而播放器还在重连取流。
@@ -906,10 +969,39 @@ object EmbyPlaybackReporter {
     return resolved?.takeIf { itemIds.contains(it) }
   }
 
+  /** 队列第 [index] 项的条目 Id；越界 / 空串返回 null。 */
+  private fun itemIdAt(index: Int?): String? {
+    val i = index ?: return null
+    return itemIds.getOrNull(i)?.takeIf { it.isNotBlank() }
+  }
+
+  /** 队列第 [index] 项的版本 Id；越界 / 空串返回 null。 */
+  private fun sourceIdAt(index: Int?): String? {
+    val i = index ?: return null
+    return mediaSourceIds.getOrNull(i)?.takeIf { it.isNotBlank() }
+  }
+
   /**
-   * 某条目**实际在播的那个版本**的媒体源 Id；单版本 / 不是本次队列里的条目返回 null。
+   * 当前正在播的**队列下标**。
    *
-   * [mediaSourceIds] 与 [itemIds] **同序同长**（启动侧就是这么写的），所以按下标取。
+   * ① 宿主（播放页）知道「现在是第几项」，且这个值在拖动换位 / 删除后是同步维护的；
+   * ② 没有宿主（非 Emby / 还没就绪）才退回「按 ItemId 找第一项」——
+   *    旧口径，多版本队列下会退化成第一个版本（此时宁可退回旧行为，也不猜）。
+   */
+  private fun readCurrentEntryIndex(): Int? {
+    queueIndexProvider?.let { provider ->
+      val index = runCatching { provider() }.getOrNull()
+      if (index != null && index in itemIds.indices) return index
+    }
+    val id = readCurrentItemId() ?: return null
+    return itemIds.indexOf(id).takeIf { it >= 0 }
+  }
+
+  /**
+   * 某条目在**本次队列**里第一个版本的媒体源 Id；单版本 / 不在队列里返回 null。
+   *
+   * ⚠️ 只用于「没有队列下标」的兜底路径。多版本队列里请用 [sourceIdAt]：
+   * 这里的 `indexOf` 永远命中第一个版本。
    */
   private fun mediaSourceIdOf(itemId: String): String? {
     val idx = itemIds.indexOf(itemId)

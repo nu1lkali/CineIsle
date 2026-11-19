@@ -20,12 +20,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -69,6 +71,14 @@ fun EmbyVersionPickerSheet(
   onSelect: (String) -> Unit,
   onDismiss: () -> Unit,
   onEditName: ((String) -> Unit)? = null,
+  /**
+   * 非空时在列表底部显示「调整连播顺序」入口。
+   *
+   * 为什么要放在这个抽屉里：版本（`MediaSources`）和连播顺序是同一件事的两个面 ——
+   * 用户在这一屏认识「有哪几个版本」，紧接着就会想「播完这个该接哪个」。
+   * 放到设置页反而要多跳两层。
+   */
+  onEditOrder: (() -> Unit)? = null,
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   ModalBottomSheet(
@@ -104,6 +114,27 @@ fun EmbyVersionPickerSheet(
             selected = option.id == selectedId,
             onSelect = { onSelect(option.id) },
             onEditName = onEditName?.let { edit -> { edit(option.id) } },
+          )
+        }
+        if (onEditOrder != null) {
+          Spacer(modifier = Modifier.size(4.dp))
+          OutlinedButton(
+            onClick = onEditOrder,
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Icon(
+              Icons.Filled.SwapVert,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("调整连播顺序")
+          }
+          Text(
+            "决定同一影片多个版本之间的衔接次序（保存后切换为「自定义顺序」）",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp),
           )
         }
         Spacer(modifier = Modifier.size(4.dp))
