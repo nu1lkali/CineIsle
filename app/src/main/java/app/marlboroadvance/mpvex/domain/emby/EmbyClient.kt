@@ -1398,31 +1398,44 @@ object EmbyClient {
   }
 
   /**
-   * 条目的**祖先链**（库视图 → … → 直接父目录，不含条目本身、不含服务器根）。
+   * 条目的**上级目录链**（由近到远），不含条目本身。
    *
-   * 对应 SDK：`ItemsServiceApi.getItemsByIdAncestors` → `GET /Items/{Id}/Ancestors`。
+   * 对应 SDK：`ItemsServiceApi.getItemsByIdAncestors` → `GET /Items/{Id}/Ancestors`，
+   * 官方描述是 "Gets all parents of an item"。
    *
    * ## 谁在用
    *
-   * 库页顶栏的「跳转到」下拉导航（`EmbyLibraryScreen` → [EmbyPathNavigatorSheet]）。
+   * 库页顶栏的「跳转到」下拉导航（`EmbyLibraryScreen` → `EmbyPathNavigatorSheet`）。
    * Emby 是 **Id 树**、不是路径树：页面手里只有一个 `libraryId`，光靠它无法知道自己
    * 站在第几层、上面还剩哪几级。这个端点一次就把整条链给全，比在 backStack 里
    * 反查可靠得多 —— 从详情页跳进文件夹时栈里夹着 `EmbyDetailScreen`，
    * 直接进某个库时栈里更是根本没有父级记录。
    *
-   * ## 三件事必须说清
+   * ## 四件事必须说清
    *
-   * 1. **顺序是「根在前」**：数组第一个是最外层的库视图（`CollectionFolder`），
-   *    最后一个是直接父目录。取「上一级」用 `lastOrNull()`。
+   * 1. ⚠️⚠️ **顺序是「由近到远」**：数组第一个是**直接父目录**，最后一个才是最外层的
+   *    容器（`CollectionFolder` / `UserView`）。这个方向与人的直觉相反，且官方文档
+   *    只写了 "all parents" 没写顺序 —— 曾经按「最外层在前」实现，结果导航抽屉整条
+   *    链上下颠倒。凡是要按「上层在上、下层在下」铺的调用方，必须先倒序。
+   *    取「上一级」用 `firstOrNull()`。
    * 2. **不含条目自己**：所以「当前层」要单独用 `itemId` 查一次（本类 [getItem]），
    *    或用调用方手上已有的名字 —— 库页本来就知道自己叫什么。
-   * 3. **可能返回空数组**：条目直接挂在服务器根 / 库根时没有祖先。这不是错误，
+   * 3. **可能返回空数组**：条目直接挂在服务器根时没有祖先。这不是错误，
    *    调用方按「只有一层」处理即可，不要当成失败弹提示。
+   * 4. ⭐⭐ **链的末端（最后一个）通常是「顶层视图」而不是真实目录** ——
+   *    即 `ParentId` 为空的容器，代表 Emby 自己的首页（媒体库入口列表）。
+   *    它**照原样留在链里**，因为「回首页」正是这个导航最该提供的出口之一；
+   *    但它不能用普通文件夹的下钻方式打开（`/Items?ParentId=<它>` 与普通目录
+   *    语义不同，铺出来不是一个正常的库页）—— 调用方必须按「回到首页」处理，
+   *    而不是压一层 `EmbyLibraryScreen`。判据见 `EmbyLibraryScreen` 里的
+   *    `isTopLevelRoot`。
    *
    * ⚠️ 老服务端 / 第三方兼容实现可能没实现这个端点（404）。调用方一律
    * `runCatching` 兜成空列表，退化成「只有当前层」的导航 —— 功能降级，但页面不能挂。
    */
   fun getItemAncestors(server: EmbyServer, itemId: String): List<EmbyItem> =
+    // ⚠️ 写成语句体 + 显式局部类型：表达式体的链式调用里 `List<T>` 推断不出来
+    // （会退化成 Any），跟在后面的集合操作就解析不了。
     getJson(server, "/Items/$itemId/Ancestors")
 
   /**

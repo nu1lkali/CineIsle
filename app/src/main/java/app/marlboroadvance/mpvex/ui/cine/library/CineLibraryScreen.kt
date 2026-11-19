@@ -216,6 +216,8 @@ fun CineLibraryScreen(
             title = item.Name ?: title,
             collectionType = collectionType,
             isFolderDive = true,
+            // 带上当前层作为父级：下钻页再按返回能直接回到本层（按层级退，不靠栈）
+            parentId = libraryId,
           ),
         )
       }

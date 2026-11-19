@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.6.55.svg" alt="Release: v1.6.55" /></a>
+  <a href="https://github.com/nu1lkali/CineIsle/releases"><img src=".github/badges/release-1.6.57.svg" alt="Release: v1.6.57" /></a>
   <img src=".github/badges/flavor-standard.svg" alt="Flavor: standard" />
   <img src=".github/badges/package-cineisle.svg" alt="Package: app.cineisle.player" />
   <img src=".github/badges/kernel-mpv-gsy.svg" alt="Kernel: mpv + GSYVideoPlayer" />

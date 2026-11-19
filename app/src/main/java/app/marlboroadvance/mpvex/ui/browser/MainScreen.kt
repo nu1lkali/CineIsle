@@ -29,6 +29,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -58,6 +59,24 @@ import org.koin.compose.koinInject
 
 @Serializable
 object MainScreen : Screen {
+  /**
+   * 「回到首页」时的目标 tab 票据。
+   *
+   * 为什么需要它：`MainScreen` 是导航栈**栈底**，从库页弹栈回来时这一层根本没被销毁
+   * ——它的 `selectedTab` 是 `rememberSaveable`，会原样保留。于是从「收藏」tab 进库、
+   * 再在目录导航里点「首页」，落回去仍然停在收藏，用户会觉得点了没反应。
+   *
+   * 用进程内单例而不是从库页传参：栈底 entry 已经在组合里了，没有「传参」这条路
+   * （nav3 只允许给新 push 的 entry 传参）。这是项目里已有的「票据 + 进程内表」范式。
+   * 消费后立即清空，避免下次正常的返回操作也被它改 tab。
+   */
+  private var pendingTab: Int? = null
+
+  /** 请求下次回到本页时切到指定 tab（0 = 首页 / 媒体库入口）。 */
+  fun requestTab(tab: Int) {
+    pendingTab = tab
+  }
+
   @Composable
   @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
   override fun Content() {
@@ -75,6 +94,15 @@ object MainScreen : Screen {
     // rememberSaveable restores it after Activity recreation without leaking state across
     // separate MainScreen instances.
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+
+    // 消费「回首页」票据：只在本次进入时生效一次，消费后清空。
+    // 放在 selectedTab 声明之后、Scaffold 之前 —— tab 内容还没组合，切过去不会闪一下旧 tab。
+    LaunchedEffect(Unit) {
+      pendingTab?.let { target ->
+        pendingTab = null
+        selectedTab = target
+      }
+    }
     // AnimatedContent disposes the previous tab after its transition. Keep each tab's
     // rememberSaveable state (notably lazy-list scroll positions and search state) so
     // switching away and back resumes browsing instead of resetting the page.

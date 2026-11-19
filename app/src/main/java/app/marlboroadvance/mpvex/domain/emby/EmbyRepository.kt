@@ -673,7 +673,11 @@ class EmbyRepository(
     withContext(Dispatchers.IO) { EmbyClient.getItem(server, itemId) }
 
   /**
-   * 条目的祖先链（库视图 → … → 直接父目录，不含自己，根在前）。
+   * 条目的上级目录链（直接父目录 → … → 库根，不含自己）。
+   *
+   * ⚠️ 顺序**原样透传**客户端返回的「由近到远」，这里不倒序 —— 归一化的位置在
+   * `EmbyViewModel.loadItemAncestors`，只在那一处翻一次。仓库层保持与 HTTP 语义一致，
+   * 排查时对着抓包就能对上号。
    *
    * 库页顶栏「跳转到」下拉导航的数据来源。**失败一律兜成空列表**：
    * 这个端点只影响导航的便利程度，拿不到就退化成「只有当前层」，

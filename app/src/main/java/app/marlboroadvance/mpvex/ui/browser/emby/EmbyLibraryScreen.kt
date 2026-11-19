@@ -40,8 +40,8 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
@@ -285,6 +285,19 @@ data class EmbyLibraryScreen(
    *    盒子里装的是影片，继承「合集」会把子页滤成一个盒子都没有的空页。
    */
   val inheritCategory: String? = null,
+  /**
+   * 本目录的**直接父目录 Id**（不知道时为 null）。
+   *
+   * 为什么要有：返回手势 / 顶栏返回键的语义定成「退到上一层目录」（文件管理器口径），
+   * 而不是「弹历史栈」。弹栈退的是「上一次看的是哪」，用目录导航跳层之后两者会分叉，
+   * 表现就是「从深目录跳回上层，再按返回又弹回深目录」。
+   *
+   * 有了这个字段，返回时不必先发一次网络请求去问祖先链 —— 已知就直连父级。
+   * ⚠️ null 不等于「没有父级」，而是「这一层不知道自己父级是谁」（页面是由库里
+   * 的 push 点构造的，那些地方未必有祖先信息）。null 时返回退化成「按祖先链现查一次」，
+   * 见 `Content()` 里的 `goToParent`。
+   */
+  val parentId: String? = null,
 ) : Screen {
   // ⚠️ ExperimentalFoundationApi 是为了 `LazyGridScope.stickyHeader`（年份吸顶，清单 4.1）。
   // 它在 foundation 1.7 里从 Experimental 升为 Stable 了，但为兼容旧版本仍保留注解写法。
@@ -487,8 +500,12 @@ data class EmbyLibraryScreen(
     //
     // 为什么 Emby 这边要单独拉数据而不是像网络位置那样从路径拆：Emby 是 **Id 树**，
     // 页面手里只有一个 `libraryId`，既不知道自己是第几层、也不知道上面还剩哪几级。
-    // `/Items/{Id}/Ancestors` 一次给全（根在前，不含自己），比在 backStack 里反查可靠
+    // `/Items/{Id}/Ancestors` 一次给全（不含自己），比在 backStack 里反查可靠
     // ——从详情页跳进文件夹时栈里夹着详情页，直接进库时栈里根本没有父级。
+    //
+    // ⚠️ 顺序口径：这里拿到的是**由远到近**（库根在前、直接父目录在后），
+    // 倒序已在 `EmbyViewModel.loadItemAncestors` 里做过一次。界面直接铺，
+    // **不要再 `.reversed()`** —— 服务端原始顺序是由近到远，两处各翻一次等于没翻。
     var showPathNavigator by remember(libraryId) { mutableStateOf(false) }
     // 祖先链：null = 还没取 / 取失败。只在第一次打开抽屉时拉，不是每次进页面都发请求。
     var ancestors by remember(libraryId) { mutableStateOf<List<EmbyItem>?>(null) }
@@ -500,6 +517,123 @@ data class EmbyLibraryScreen(
       ancestorsLoading = true
       ancestors = viewModel.loadItemAncestors(currentServer, libraryId)
       ancestorsLoading = false
+    }
+
+    // ── 按层级跳转（目录导航 / 返回上一级共用的唯一入口）──
+    //
+    // 语义：跳到 [targetId] 这一层目录。栈里已经有它就截断过去（保住它原有的搜索态
+    // 与滚动位置），没有就压一层。
+    //
+    // ⚠️ 这里**不再费劲维持栈的父子顺序** —— 因为返回的语义已经改成「按层级退到父目录」
+    //    （见 `goToParent`），栈是否恰好等于层级链已经不影响返回的正确性。
+    //    这一层简化同时解决了旧实现的一个坑：目标层不在栈里时直接 push，
+    //    会让栈变成 [.., 深层, 浅层]，一按返回又弹回深层。
+    fun navigateToLibraryLevel(targetId: String, title: String?, collectionType: String?, parentId: String?) {
+      if (targetId == libraryId) return
+      val idx = backStack.indexOfLast { screen ->
+        screen is EmbyLibraryScreen && screen.libraryId == targetId
+      }
+      if (idx >= 0 && idx < backStack.lastIndex) {
+        // ⚠️ 一次性截断，**不能** `while (...) removeLastOrNull()`：
+        // `NavBackStack` 是 `MutableList<T>` 的类型别名，每个元素都是被导航器观察的
+        // entry，逐条移除等于在同一个组合帧里改多次栈 —— 中间态会各触发一次重组。
+        backStack.subList(idx + 1, backStack.size).clear()
+      } else if (idx < 0) {
+        backStack.add(
+          EmbyLibraryScreen(
+            libraryId = targetId,
+            title = title ?: "",
+            // 从祖先链 / 父目录跳过去 = 依然是文件夹视图，口径要跟着继承
+            collectionType = collectionType ?: this.collectionType,
+            isFolderDive = true,
+            inheritCategory = category.name,
+            // 带上父级，这样在目标层再按返回能正确回它的父目录
+            parentId = parentId,
+          ),
+        )
+      }
+    }
+
+    // ── 「返回上一级」= 去本目录的父目录（文件管理器口径）──
+    //
+    // ⚠️ 不用 `backStack.removeLastOrNull()`：弹栈退的是「上一次看的是哪」，
+    // 用目录导航跳层之后两者会分叉（详见 `goToParent` 的说明与 `parentId` 字段）。
+    //
+    // 三级来源，越靠前越省事：
+    //   ① 路由上带下来的 `parentId`（下钻 / 详情页跳转路径都有，零请求）；
+    //   ② 顺手已经拉过的 `ancestors`（打开过抽屉的话就有，取最后一个之外的相邻项）；
+    //   ③ 现查一次祖先链（会等待网络，但保证结果正确）；
+    //   ④ 都拿不到 ⇒ 退回弹栈（等价于旧行为，至少不会卡住）。
+    fun goToParent() {
+      fun goAppHome() {
+        // 栈底是 MainScreen（首页在它的 tab 0）：只清它之上的层，别把首页弹掉；
+        // 同时用票据把 tab 切回 0，否则从收藏 / 历史 tab 进来的库会退回原 tab。
+        app.marlboroadvance.mpvex.ui.browser.MainScreen.requestTab(0)
+        if (backStack.size > 1) backStack.subList(1, backStack.size).clear()
+      }
+
+      fun doPop() {
+        if (backStack.size > 1) backStack.removeLastOrNull()
+      }
+
+      fun goTo(parent: EmbyItem, parentOfParentId: String?) {
+        navigateToLibraryLevel(
+          targetId = parent.Id ?: return,
+          title = parent.Name,
+          collectionType = parent.CollectionType,
+          parentId = parentOfParentId,
+        )
+      }
+
+      // 手上已经有祖先链（打开过目录导航就有）：直接按层级算，零请求。
+      val chain = ancestors
+      if (chain != null) {
+        if (isAtLibraryTopLevel(chain, libraryId)) {
+          // 自己在最上层 ⇒ 返回 = 离开这个库、回 App 首页（文件管理器「盘根再退」的手感）
+          goAppHome()
+          return
+        }
+        val parent = parentInChain(chain, libraryId)
+        if (parent?.Id != null) {
+          goTo(parent, parentInChain(chain, parent.Id)?.Id)
+        } else {
+          // 链里定位不到自己（不该发生）⇒ 保守弹栈
+          doPop()
+        }
+        return
+      }
+
+      // 路由上带了父 Id：可以直接跳，但父级的标题要先问一次服务端
+      // （没有标题的页面顶栏会是空的，比慢一点更糟），顺手把链缓存下来。
+      val currentServer = server
+      val knownParentId = parentId
+      if (currentServer != null) {
+        scope.launch {
+          val fetched = viewModel.loadItemAncestors(currentServer, libraryId)
+          ancestors = fetched
+          if (isAtLibraryTopLevel(fetched, libraryId)) {
+            goAppHome()
+          } else {
+            val parent = parentInChain(fetched, libraryId)
+            val target = parent ?: knownParentId?.let { id -> viewModel.loadItem(currentServer, id) }
+            if (target?.Id != null) {
+              goTo(target, parentInChain(fetched, target.Id)?.Id)
+            } else {
+              doPop()
+            }
+          }
+        }
+      } else if (knownParentId != null) {
+        navigateToLibraryLevel(
+          targetId = knownParentId,
+          title = null,
+          collectionType = null,
+          parentId = null,
+        )
+      } else {
+        // 无服务器 / 端点不支持 ⇒ 退回旧行为，至少不卡住
+        doPop()
+      }
     }
 
     // ── 「照片视频混合库」的处置：内容原样铺开，不再让用户手选档位 ──
@@ -2267,6 +2401,11 @@ data class EmbyLibraryScreen(
     // 返回键对应「上一层」，而搜索是叠在列表之上的一层 —— 直接出栈不符合预期。
     // enabled = searchActive ⇒ 非搜索态完全不拦截，交给系统正常出栈。
     BackHandler(enabled = searchActive) { exitSearch() }
+    // ⭐ 系统手势 / 返回键：退到「上一层目录」而不是弹历史栈。
+    // 只在非搜索态接管 —— 搜索态归上面那个 BackHandler（先退搜索，不退目录）。
+    // `enabled` 的判据用 `!searchActive`：两个 BackHandler 不能同时为真，
+    // 后注册的会盖住先注册的，容易调错顺序。
+    BackHandler(enabled = !searchActive) { goToParent() }
 
     // 进入搜索页 / 换库时拉「本库推荐」。命中缓存则零请求（见 SearchRecommendCache）。
     // 只在没有关键词时拉：有词的时候整页是结果，取推荐纯属浪费一次请求。
@@ -2332,7 +2471,7 @@ data class EmbyLibraryScreen(
           }
         },
         navigationIcon = {
-          IconButton(onClick = { backStack.removeLastOrNull() }) {
+          IconButton(onClick = { goToParent() }) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
           }
         },
@@ -3048,6 +3187,8 @@ data class EmbyLibraryScreen(
                   photoParentId = libraryId,
                   collectionType = collectionType,
                   categoryName = category.name,
+                  // 本页就是子页的父级（下钻后按返回能直接回到这一层）
+                  parentLibraryId = libraryId,
                 )
               }
             },
@@ -3165,6 +3306,7 @@ data class EmbyLibraryScreen(
                         photoParentId = libraryId,
                         collectionType = collectionType,
                         categoryName = category.name,
+                        parentLibraryId = libraryId,
                       )
                     },
                     onLongClick = { offset ->
@@ -3242,6 +3384,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               photoParentId = libraryId,
               collectionType = collectionType,
               categoryName = category.name,
+              parentLibraryId = libraryId,
             )
           },
     onLongClick = { offset ->
@@ -3283,6 +3426,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                           photoParentId = libraryId,
                           collectionType = collectionType,
                           categoryName = category.name,
+                          parentLibraryId = libraryId,
                         )
                       },
                       onLongClick = { offset ->
@@ -3338,45 +3482,51 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
 
       // ── 「跳转到」目录导航（文件夹类别专用）──
       // 范式与网络位置那边一致（`NetworkBrowserScreen.PathNavigatorSheet`）。
-      // 层级 = 祖先链（根在前）+ 当前层；当前层用勾号标出，点它只关窗。
+      // 层级 = 祖先链（**库根在上**）+ 当前层（末尾、勾号）。顺序归一化在
+      // `EmbyViewModel.loadItemAncestors`，这里直接铺，不要再倒序。
       if (showPathNavigator && pathNavEnabled && server != null) {
         EmbyPathNavigatorSheet(
           currentTitle = title,
-          // 祖先链里可能有服务器根（CollectionFolder / UserView），也可能混着库视图 ——
-          // 全都照原样列出来，用户点哪层都跳得过去。
+          // 祖先链从上到下：最外层（可能是 Emby 顶层视图）→ 各级子目录。
           ancestors = ancestors.orEmpty(),
           loading = ancestorsLoading,
           onDismiss = { showPathNavigator = false },
+          // ⭐ 最外层那一行 = 「回首页」。
+          //
+          // 为什么不是压一层目录页：App 首页（媒体库入口列表）**不是导航栈里的一层**，
+          // 它是 `MainScreen` 的固定根页（tab 0）。库页是从首页 push 上来的，
+          // 所以「回首页」等价于「把导航栈弹空」。
+          //
+          // 也正因为如此，不能按普通目录压一层 `EmbyLibraryScreen` —— 压出来的页面
+          // 会把 Emby 顶层视图当文件夹铺，看到的是它的直接子项，跟首页那张
+          // 媒体库卡片列表不是一回事。
+          onGoHome = {
+            showPathNavigator = false
+            // 先把栈底那页的目标 tab 记成「首页」：从收藏 / 历史 tab 进的库，
+            // 弹栈回去时 `MainScreen` 的 selectedTab 是保留的，不指定就会落回原 tab。
+            app.marlboroadvance.mpvex.ui.browser.MainScreen.requestTab(0)
+            // ⚠️⚠️ **必须保留栈底那一项**（`MainScreen`，首页就在它的 tab 0 里）。
+            // 导航栈是 `rememberNavBackStack(MainScreen)` 建起来的 —— 首页本身是栈底
+            // 元素，不是「栈空」的状态。把栈清空等于导航栈没有任何 entry，
+            // 界面会直接空白（而且没有任何页面能再 push 回来）。
+            // 所以这里只清「栈底之上的所有层」，这正是「回到首页」的语义。
+            if (backStack.size > 1) {
+              // 一次性截断，不逐条 remove（同下：避免同一帧内多次改栈）
+              backStack.subList(1, backStack.size).clear()
+            }
+          },
           onSelect = { target ->
             showPathNavigator = false
             val targetId = target.Id
             // 目标就是当前目录 ⇒ 什么都不做（已经在那一层了）
             if (targetId != null && targetId != libraryId) {
-              // 栈里还在那一层 ⇒ **截栈**回去，而不是再压一层。
-              // 压栈会让「深目录 → 点根 → 连按两次返回」变成「退好几屏」，
-              // 也与网络位置点面包屑的语义（丢弃前进历史）不一致；
-              // 截栈还能保住那一层原有的搜索态与滚动位置。
-              val idx = backStack.indexOfLast { screen ->
-                screen is EmbyLibraryScreen && screen.libraryId == targetId
-              }
-              if (idx >= 0 && idx < backStack.lastIndex) {
-                // ⚠️ 一次性截断，**不能** `while (...) removeLastOrNull()`：
-                // `NavBackStack` 是 `MutableList<T>` 的类型别名，每个元素都是被导航器
-                // 观察的 entry，逐条移除等于在同一个组合帧里改多次栈 —— 中间态会各触发
-                // 一次重组（navigate back 多条的正确姿势是让底层一次性看到最终结构）。
-                backStack.subList(idx + 1, backStack.size).clear()
-              } else if (idx < 0) {
-                backStack.add(
-                  EmbyLibraryScreen(
-                    libraryId = targetId,
-                    title = target.Name ?: "",
-                    // 从祖先链跳过去 = 依然是文件夹视图，口径要跟着继承
-                    collectionType = target.CollectionType ?: collectionType,
-                    isFolderDive = true,
-                    inheritCategory = category.name,
-                  ),
-                )
-              }
+              // 带上目标层的父级，这样跳到那一层后再按返回能正确回到它的父目录
+              navigateToLibraryLevel(
+                targetId = targetId,
+                title = target.Name,
+                collectionType = target.CollectionType,
+                parentId = parentInChain(ancestors.orEmpty(), targetId)?.Id,
+              )
             }
           },
         )
@@ -4643,23 +4793,28 @@ private fun isGhostItem(item: EmbyItem): Boolean {
 /**
  * 「跳转到」目录导航抽屉（文件夹类别下的顶栏标题点击后弹出）。
  *
- * 列表内容 = **祖先链（根在前）+ 当前层**，逐级列出，点任意一层直接跳过去。
- * 深目录里不用再一层层按返回，也不止「回库根」一个出口。
+ * 列表内容 = **祖先链（库根在上）+ 当前层（末尾、勾号）**，逐级列出，点任意一层
+ * 直接跳过去。深目录里不用再一层层按返回，也不止「回库根」一个出口。
  *
  * ## 与网络位置那版的差异（都是有意的）
  *
  * 1. **数据来源**：那边从 `currentPath` 拆斜杠；Emby 是 **Id 树**，路径字符串只在
- *    服务器磁盘上有意义、且 `.strm` 条目压根没有本地路径 ⇒ 改用 `/Items/{Id}/Ancestors`。
- * 2. **列表顺序**：祖先链本身就是「根在前」，直接铺即可（那边还专门修过反序问题）。
+ *    服务器磁盘上有意义、且流媒体条目压根没有本地路径 ⇒ 改用 `/Items/{Id}/Ancestors`。
+ * 2. ⚠️ **列表顺序**：这个接口返回的是「由近到远」（直接父目录在前），与自上而下的
+ *    阅读方向相反。倒序**在进入本组件前已做过一次**（`EmbyViewModel.loadItemAncestors`），
+ *    这里直接铺即可 —— 曾按「最外层本来就在前」实现，结果整条路径上下颠倒。
  * 3. **当前层**：祖先链**不含自己**，所以要把当前层补在末尾并用勾号标出；
  *    点它只关窗（已经在那一层，跳过去是空动作）。
  * 4. **加载失败**：祖先链为空时不要显示空抽屉 —— 那时只剩「当前层」一行，
  *    用户点了也没处去。这种情况直接给一句说明，避免让人以为界面坏了。
+ * 5. **名字不截断**：层级行允许折两行。相邻两级经常只差一个前缀或后缀，
+ *    单行省略号会把它们显示成同一个名字，看起来就像「层级对不上」。
  *
  * @param currentTitle 当前目录名（补在列表末尾那一行）
- * @param ancestors 祖先链，根在前、不含自己；空 = 拿不到（老服务端 / 就在根上）
+ * @param ancestors 祖先链，库根在前、不含自己；空 = 拿不到（老服务端 / 就在根上）
  * @param loading 祖先链是否正在加载（给一个明确的「正在取层级」状态）
  * @param onSelect 选中某一层（传该层条目；Id 为空的层级调用方需自行忽略）
+ * @param onGoHome 最外层那一行被点击时调用（回到 App 首页），不走 [onSelect]
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -4669,6 +4824,7 @@ private fun EmbyPathNavigatorSheet(
   loading: Boolean,
   onDismiss: () -> Unit,
   onSelect: (EmbyItem) -> Unit,
+  onGoHome: () -> Unit,
 ) {
   val sheetState = rememberModalBottomSheetState()
 
@@ -4730,14 +4886,22 @@ private fun EmbyPathNavigatorSheet(
               .padding(vertical = 4.dp),
         ) {
           ancestors.forEach { level ->
-            val levelName = level.Name?.takeIf { it.isNotBlank() } ?: "未命名目录"
-            // 最外层如果是服务器根/库视图，给个首页图标更好认
+            // 第一行 = 最外层。它可能是 Emby 的顶层视图（首页），也可能是库根本身 ——
+            // 两种都按「首页」处理：点它 = 退回到 App 首页（媒体库入口列表）。
+            //
+            // ⚠️ 不能把它当普通目录压一层 `EmbyLibraryScreen`：那会把顶层视图按
+            // 「文件夹下钻」口径铺开，与真正的首页不是同一个页面，用户看到的
+            // 是一堆目录而不是「媒体库入口」。首页本来就不是导航栈里的一层
+            // （它是 `MainScreen` 的固定根页），所以「去首页」= 把栈弹空。
             val isOutermost = level === ancestors.first()
+            // 名字照服务端给的原样显示（只兜空名字）；「这是首页」这件事交给下面的
+            // 副标题与图标表达，不覆盖掉容器本来的名字 —— 用户认得出自己那个库列表叫什么。
+            val levelName = level.Name?.takeIf { it.isNotBlank() } ?: "未命名目录"
             Row(
               modifier =
                 Modifier
                   .fillMaxWidth()
-                  .clickable { onSelect(level) }
+                  .clickable { if (isOutermost) onGoHome() else onSelect(level) }
                   .padding(horizontal = 24.dp, vertical = 12.dp),
               verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -4753,14 +4917,19 @@ private fun EmbyPathNavigatorSheet(
                   text = levelName,
                   style = MaterialTheme.typography.bodyLarge,
                   color = MaterialTheme.colorScheme.onSurface,
-                  maxLines = 1,
+                  // 允许折两行：相邻层级常只差前缀 / 后缀，单行省略号会把两级显示成
+                  // 同一个名字，用户会以为层级丢了或顺序错了。
+                  maxLines = 2,
                   overflow = TextOverflow.Ellipsis,
                 )
-                // 副标题给类型，一眼能分清「库视图」与「普通文件夹」。
+                // 副标题：最外层始终标「首页」—— 它代表的是 App 首页，
+                // 不管服务端给这个容器的 Type 是 CollectionFolder 还是 UserView。
+                val typeLabel =
+                  if (isOutermost) "首页" else level.Type?.let(::embyContainerTypeLabel)
                 // 认不出的类型返回 null ⇒ 干脆不画副标题（编不出来的类型名比没有更困惑）
-                level.Type?.let(::embyContainerTypeLabel)?.let { typeLabel ->
+                typeLabel?.let { label ->
                   Text(
-                    text = typeLabel,
+                    text = label,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -4794,7 +4963,9 @@ private fun EmbyPathNavigatorSheet(
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.primary,
-                maxLines = 1,
+                // 与上面几层保持同一折行口径：这里截断的话，最长的那一级
+                // （往往就是当前目录）反而是唯一看不清的
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
               )
               Text(
@@ -4873,6 +5044,13 @@ private fun openItem(
    * 盒子里装的是影片，继承「合集」会把子页滤空。
    */
   categoryName: String? = null,
+  /**
+   * 调用方（父页）自己的目录 Id。
+   *
+   * 下钻出来的子页要把它记为 `parentId`，这样在子页按「返回上一级」才能直接回到
+   * 这一层（按目录层级退，不靠历史栈 —— 两者在跳层之后会分叉）。
+   */
+  parentLibraryId: String? = null,
 ) {
   val id = item.Id
   if (id.isNullOrBlank() || id.contains("://")) {
@@ -4924,6 +5102,8 @@ private fun openItem(
           // 带着父页的档位下钻：在「文件夹」里点文件夹，进来还是「文件夹」，
           // 于是可以一路点下去；本目录若已有自己的记忆，子页会以记忆为准。
           inheritCategory = categoryName,
+          // 本页就是它的父级：子页按返回能直接回到这一层（按层级退，不靠栈）
+          parentId = parentLibraryId,
         ),
       )
 
@@ -4937,6 +5117,7 @@ private fun openItem(
           // 查询口径（MediaTypes / 内容原样档）全跟着错位。这正是「点进文件夹后
           // 照片目录一片空」的根因之一。item 自己带了就用它（极少见），否则继承。
           collectionType = item.CollectionType ?: collectionType,
+          parentId = parentLibraryId,
         ),
       )
 

@@ -2722,13 +2722,20 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     }
 
   /**
-   * 条目的祖先链，供库页顶栏的「跳转到」下拉导航使用。
+   * 条目的上级目录链，供库页顶栏的「跳转到」下拉导航使用。
    *
    * 与 [loadItem] 同风格：**拿不到就是空列表**，不抛、不提示 ——
    * 这个数据只决定导航里能列几层，缺了照样能正常浏览（见 `EmbyRepository.getItemAncestors`）。
+   *
+   * ⚠️ 这里统一做**倒序**，返回「由远到近」（库根在第一个、直接父目录在最后）。
+   * 服务端的原始顺序是「由近到远」，与界面自上而下的阅读方向相反；倒序只在这一处做，
+   * 调用方拿到就能直接铺，别再自己 `.reversed()` —— 两处都翻就等于没翻，
+   * 而且这种「多翻一次也没报错、只是顺序又错了」的 bug 极难看出来。
    */
   suspend fun loadItemAncestors(server: EmbyServer, itemId: String): List<EmbyItem> =
-    withContext(Dispatchers.IO) { repository.getItemAncestors(server, itemId) }
+    withContext(Dispatchers.IO) {
+      repository.getItemAncestors(server, itemId).asReversed()
+    }
 
   /** 条目当前挂着的图片清单（含尺寸与来源，即「图片源数据」） */
   suspend fun loadItemImages(server: EmbyServer, itemId: String): List<EmbyImageInfo> =

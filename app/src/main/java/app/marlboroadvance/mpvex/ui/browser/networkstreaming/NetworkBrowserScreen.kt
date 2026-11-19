@@ -541,38 +541,121 @@ data class NetworkBrowserScreen(
       }
 
     // 跳到某一层（面包屑跳转 = **丢弃「前进历史」**，与文件管理器点面包屑同一语义）。
+    //
+    // ⚠️⚠️ 这里的核心不变量是「**跳完之后按返回，必须回到目标层的父级**」，
+    // 而不是「回到跳转前那一层」。曾经的做法是「栈里找不到目标层就 push 一层」，
+    // 于是从某个深层目录（中间层从未压栈，例如由「收藏目录」一步跳进去）跳回上层的
+    // 某个目录时，栈变成 [..., 深层目录, 上层目录] —— 一按返回又弹回那个深层目录，
+    // 用户看到的就是「跳过去了，但返回反向」。
+    //
+    // 现在分三种情况，顺序不能反：
+    //   ① 目标层就在栈里 ⇒ 截断它之上的层（最理想，前进历史被正确丢弃）；
+    //   ② 目标层不在栈里 ⇒ 但能确定它的父级路径，且父级在栈里 ⇒ 先截到父级，
+    //      再 push 目标层（这样返回 = 父级，语义正确）；
+    //   ③ 连父级都定位不到 ⇒ 只能 push（返回会退到跳转前那层，属于无信息时的退让）。
     fun navigateToPath(target: String) {
       fun normalize(path: String) = path.trimEnd('/').ifEmpty { "/" }
       val normalized = normalize(target)
       if (normalized == normalize(currentPath)) return
-      // 层层下钻时每一层都压在栈里 —— 把目标层之上的都弹掉即可。
-      // 永远保留栈底（MainScreen）：idx >= 0 且 idx <= size-1，不会把栈弹空。
-      val targetIndex =
-        backstack.indexOfLast {
+
+      fun indexOfPath(path: String): Int {
+        val want = normalize(path)
+        return backstack.indexOfLast {
           it is NetworkBrowserScreen &&
             it.connectionId == connectionId &&
-            normalize(it.currentPath) == normalized
+            normalize(it.currentPath) == want
         }
-      if (targetIndex >= 0) {
-        repeat(backstack.size - 1 - targetIndex) { backstack.removeLastOrNull() }
-      } else {
-        // 目标层不在栈里（典型：从「收藏目录」一步进了很深的目录，中间层从未压栈）。
-        // ⚠️ 这里**只 push、绝不先弹栈**。AlistClientN 的 `_navigateToPath` 先用
-        //    `Get.until` 弹栈再判断有没有匹配，路径一旦没匹配上就把整条导航栈弹空了。
-        backstack.add(
-          NetworkBrowserScreen(
-            connectionId = connectionId,
-            connectionName = connectionName,
-            currentPath = normalized,
-          ),
-        )
       }
+
+      val targetIndex = indexOfPath(normalized)
+      if (targetIndex >= 0) {
+        // ⚠️ 一次性截断，不逐条 removeLast：`NavBackStack` 是 `MutableList<T>` 的类型别名，
+        // 每个元素都是被导航器观察的 entry —— 逐条移除等于在同一组合帧里改多次栈，
+        // 中间态会各触发一次重组。
+        if (backstack.size > targetIndex + 1) {
+          backstack.subList(targetIndex + 1, backstack.size).clear()
+        }
+        return
+      }
+
+      // 目标层不在栈里：先看它的父级路径在不在栈里，在的话截到父级再 push。
+      // 根目录没有父级，`substringBeforeLast` 会得到空串 —— 那种情况按 ③ 处理。
+      val parentPath = normalized.trimEnd('/').substringBeforeLast('/', missingDelimiterValue = "")
+      val parentIndex = if (parentPath.isEmpty()) -1 else indexOfPath(parentPath)
+      if (parentIndex >= 0) {
+        // 截到父级（父级本身留着），后面的 push 就是它的直接子级
+        if (backstack.size > parentIndex + 1) {
+          backstack.subList(parentIndex + 1, backstack.size).clear()
+        }
+      }
+      // ⚠️ 这里**只 push、绝不把栈弹空**。AlistClientN 的 `_navigateToPath` 先用
+      //    `Get.until` 弹栈再判断有没有匹配，路径一旦没匹配上就把整条导航栈弹空了。
+      backstack.add(
+        NetworkBrowserScreen(
+          connectionId = connectionId,
+          connectionName = connectionName,
+          currentPath = normalized,
+        ),
+      )
     }
 
     // 一键回首页（MainScreen = 网络模块首页）。导航栈底永远是 MainScreen，
     // 所以「弹到 size == 1」就是回到首页，与连按返回键等价、只是一步到位。
     fun goHome() {
-      while (backstack.size > 1) backstack.removeLastOrNull()
+      // ⚠️ 一次性截断，不能 `while (...) removeLastOrNull()`（理由见 navigateToPath）
+      if (backstack.size > 1) backstack.subList(1, backstack.size).clear()
+    }
+
+    /**
+     * 「返回上一级」= 去**当前目录的父目录**，不是弹历史栈。
+     *
+     * ## 为什么不能用 `backstack.removeLastOrNull()`
+     *
+     * 弹栈退的是「上一次看的是哪」，而文件管理器的返回退的是「上一层在哪」。
+     * 两者只在「一路下钻」时才重合；一旦用面包屑跳层就会分叉：
+     * `a → b → c` 之后点面包屑回到 `a`，此时栈是 `[主屏, a]`（跳层时已丢弃前进历史），
+     * 按返回本该去 a 的父级（根），没问题；但如果目标层不在栈里而被 push，
+     * 栈里就留下了 `[主屏, c, a]` —— 一按返回又弹回 c，而 a 的父级根本不是 c。
+     *
+     * 现在统一按**目录层级**算：父目录路径可由 `currentPath` 直接推出（去掉最后一段），
+     * 完全不依赖栈里有什么。父级在栈里就截断过去，不在就 push 一层。
+     *
+     * 根目录（`/`）没有父级 ⇒ 退到主屏（网络模块首页），与文件管理器「返回上级离开盘」
+     * 的手感一致。
+     */
+    fun goToParentPath() {
+      fun normalize(path: String) = path.trimEnd('/').ifEmpty { "/" }
+
+      val here = normalize(currentPath)
+      val parent = here.substringBeforeLast('/', missingDelimiterValue = "").ifEmpty { "/" }
+
+      if (parent == here) {
+        // 已经在盘根：再退就回网络模块首页（等价于原来的弹栈到底）
+        if (backstack.size > 1) backstack.subList(1, backstack.size).clear()
+        return
+      }
+
+      val parentIndex =
+        backstack.indexOfLast {
+          it is NetworkBrowserScreen &&
+            it.connectionId == connectionId &&
+            normalize(it.currentPath) == parent
+        }
+      if (parentIndex >= 0 && parentIndex < backstack.lastIndex) {
+        // 父级在栈里 ⇒ 截到它（一次性，别逐条 remove）
+        backstack.subList(parentIndex + 1, backstack.size).clear()
+      } else if (parentIndex < 0) {
+        // 父级不在栈里（例如由「收藏目录」一步进到很深的目录）⇒ 直接 push 父级。
+        // 这就是「按层级返回」的好处：栈里没有也不影响返回的正确性。
+        backstack.add(
+          NetworkBrowserScreen(
+            connectionId = connectionId,
+            connectionName = connectionName,
+            currentPath = parent,
+          ),
+        )
+      }
+      // parentIndex == backstack.lastIndex 表示父级就是当前栈顶（理论上不该出现），不做动作
     }
 
     // Load files when connectionId or currentPath changes
@@ -603,7 +686,9 @@ data class NetworkBrowserScreen(
         searchQuery = ""
         searchIsHint = false
       } else {
-        backstack.removeLastOrNull()
+        // ⚠️ 不是 removeLastOrNull()：返回退的是「上一层目录」而不是历史栈，
+        //    理由见 goToParentPath 的 KDoc（点面包屑跳层后两者会分叉）
+        goToParentPath()
       }
     }
 
@@ -696,7 +781,8 @@ data class NetworkBrowserScreen(
           isInSelectionMode = selectionMode,
           selectedCount = selection.selectedCount,
           totalCount = visibleFiles.size,
-          onBackClick = { backstack.removeLastOrNull() },
+          // 顶栏返回键与系统手势同义：退到「上一层目录」，不是弹历史栈
+          onBackClick = { goToParentPath() },
           onCancelSelection = { exitSelection() },
           // 排序不走顶栏：它要常驻又能显示当前状态，放在内容区顶部（见 NetworkSortRow）。
           // 顶栏图标只有 更多 / 搜索 / 设置 三个（「回到首页」收进「更多」菜单里）。
@@ -1218,7 +1304,8 @@ data class NetworkBrowserScreen(
               parentLabel = parentLabel,
               folders = siblings,
               currentPath = currentPath,
-              onGoUp = { backstack.removeLastOrNull() },
+              // 「上一级」同理：按层级退，不按栈退
+              onGoUp = { goToParentPath() },
               onSelect = { folder -> navigateToPath(folder.path) },
               modifier = Modifier.width(240.dp),
             )

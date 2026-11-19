@@ -611,13 +611,17 @@ data class EmbyDetailScreen(
               // collectionType 必须继承本条的（Emby 只在库根写 CollectionType）。
               onOpenFolder = { parentId, collectionType ->
                 scope.launch {
-                  val folderName = viewModel.loadItem(currentServer, parentId)?.Name
+                  val folder = viewModel.loadItem(currentServer, parentId)
+                  // 顺便带上文件夹的父级：进了文件夹后按返回能直接回到它的上一层
+                  // （按目录层级退，而不是弹历史栈）。`ParentId` 已在详情字段清单里，
+                  // 这次 loadItem 顺带就拿到了，不用额外请求。
                   pushChild(
                     EmbyLibraryScreen(
                       libraryId = parentId,
-                      title = folderName?.takeIf { it.isNotBlank() } ?: "文件夹",
+                      title = folder?.Name?.takeIf { it.isNotBlank() } ?: "文件夹",
                       collectionType = collectionType,
                       isFolderDive = true,
+                      parentId = folder?.ParentId?.takeIf { it.isNotBlank() },
                     ),
                   )
                 }
