@@ -3,7 +3,7 @@ package app.marlboroadvance.mpvex.ui.player.controls.components
 import android.content.Context
 import android.os.BatteryManager
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,7 +25,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.marlboroadvance.mpvex.R
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -39,10 +44,13 @@ import java.util.Locale
  * 样式刻意做得"轻"：小号字 + 单色，靠位置和留白与周围控件区分，
  * 不加背板也不加描边 —— 控制条本身已经有玻璃底，再加一层会显得脏。
  *
- * **电量图标内嵌数字**（电池轮廓里写百分比）而不是「图标 + 旁边写数字」：
- * 图标和数字分开时，数字会被误读成进度/时间；套进电池轮廓里，语义自明。
- * 画法是 Canvas 描边电池外壳 + 内部填充比例 + 正中叠文字 ——
- * 用现成 `Icons.Default.BatteryFull` 做不到"图标里带数字"。
+ * **电量数字压在电池轮廓里**（而不是「图标 + 旁边写数字」）：图标和数字并排时，
+ * 数字很容易被读成进度 / 剩余时间；套进电池轮廓里，语义自明，横向还能省下十几 dp。
+ *
+ * 做法是 `Box` 里叠一层 `Canvas`（外壳 + 正极凸起 + 电量填充）和一个居中的 `Text`。
+ * 不用 `Icons.Default.BatteryFull`：那个图标的轮廓里没有能放数字的位置。
+ * 数字只敢用 9sp（再大就顶到轮廓边），所以电池从原来的 22×12dp 放大到 28×15dp ——
+ * `100` 这种三位数也留得出左右边距，边框与数字之间不会糊在一起。
  */
 @Composable
 fun PlayerStatusIndicators(
@@ -170,9 +178,9 @@ private fun rememberBatteryPercent(enabled: Boolean): State<Int> {
 }
 
 /**
- * 电池轮廓 + 内部填充比例 + 轮廓内居中的百分比数字。
+ * 电池轮廓 + 内部电量填充 + 压在轮廓正中的百分比数字。
  *
- * 尺寸 22×12dp（真实电池比例），数字用 `labelSmall` 压在内部。
+ * 尺寸 28×15dp（按真实电池比例放大，为了容得下数字），数字 9sp。
  * 填充颜色跟随系统低电量告警：≤15% 转红，用户一眼知道该插电了。
  */
 @Composable
@@ -185,18 +193,57 @@ private fun BatteryWithPercent(
   // 固定用行业惯例的 15% —— 只影响一个颜色，不需要精确。
   val color = if (percent <= 15) Color(0xFFE5534B) else tint
 
-  Row(
-    modifier = modifier,
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(3.dp),
+  // 读屏念带 % 的完整文案；视觉上只放数字 —— 图标本身已经表达了"这是百分比"，
+  // 轮廓里再挤一个 % 只会把数字压得更小。
+  val label = stringResource(R.string.player_battery_percent, percent)
+
+  val bodyWidth = 28.dp
+  val bodyHeight = 15.dp
+  val capWidth = 2.dp
+
+  Box(
+    modifier =
+      modifier
+        .size(bodyWidth, bodyHeight)
+        // 整块对读屏只报一句话：不清掉子节点语义的话，会单独念出一个没有单位的 "88"
+        .clearAndSetSemantics { contentDescription = label },
   ) {
-    Canvas(modifier = Modifier.size(22.dp, 12.dp)) {
+    Canvas(modifier = Modifier.matchParentSize()) {
       val stroke = 1.2.dp.toPx()
-      val capW = 2.dp.toPx()
-      val bodyW = size.width - capW
+      val cap = capWidth.toPx()
+      val bodyW = size.width - cap
       val bodyH = size.height
 
-      // 外壳
+      // ── ① 电量填充 ────────────────────────────────────────────────
+      //
+      // ⚠️ 顺序是「先填充、后描边」：填充的边**故意伸到描边下面**（pad 只有描边的 0.6 倍），
+      // 由后画的描边把它盖住。早前把填充内缩到 2.4dp（比描边还宽），外壳内圈就多出
+      // 一圈 1.2dp 的空隙 —— 满电时右边也还空着一条，看着就是「有缝隙」。
+      // 现在填充与轮廓之间是**共用一条边**，不存在缝；伸进去的那一点被描边盖住，
+      // 也不会因为抗锯齿在交界处闪出一条亮线。
+      val fillPad = stroke * 0.6f
+      val fillW = (bodyW - fillPad * 2) * (percent.coerceIn(0, 100) / 100f)
+      if (fillW > 0f) {
+        drawRoundRect(
+          color = color.copy(alpha = 0.35f),
+          topLeft = Offset(fillPad, fillPad),
+          size = Size(fillW, bodyH - fillPad * 2),
+          // 圆角取 1.5dp：正好贴着外壳描边的内圈圆角（3dp − 1.2dp），
+          // 再大就会在四个圆角处悄悄留出一点点空隙 —— 又是「缝隙」。
+          cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.5.dp.toPx()),
+        )
+      }
+
+      // ── ② 正极小凸起 ──────────────────────────────────────────────
+      // 起点从「电池身右沿」再往左压半个描边宽：与外壳**共边**，否则抗锯齿会在
+      // 正极和电池身之间留一条发白的细线（同样的「缝隙」问题）。
+      drawRect(
+        color = color.copy(alpha = 0.9f),
+        topLeft = Offset(bodyW - stroke / 2, bodyH / 2 - capWidth.toPx() * 1.5f),
+        size = Size(cap, capWidth.toPx() * 3f),
+      )
+
+      // ── ③ 外壳（最后画，压住上面两块的交界）──────────────────────
       drawRoundRect(
         color = color.copy(alpha = 0.9f),
         topLeft = Offset(stroke / 2, stroke / 2),
@@ -204,29 +251,23 @@ private fun BatteryWithPercent(
         cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()),
         style = Stroke(width = stroke),
       )
-      // 正极小凸起
-      drawRect(
-        color = color.copy(alpha = 0.9f),
-        topLeft = Offset(bodyW, bodyH / 2 - capW / 2),
-        size = Size(capW, capW),
-      )
-      // 填充比例（内部留 1.5dp 内边距）
-      val innerPad = 2.4.dp.toPx()
-      val fillW = (bodyW - innerPad * 2) * (percent.coerceIn(0, 100) / 100f)
-      if (fillW > 0f) {
-        drawRect(
-          color = color,
-          topLeft = Offset(innerPad, innerPad),
-          size = Size(fillW, bodyH - innerPad * 2),
-        )
-      }
     }
-    // 数字放图标右侧而不是内部：22×12dp 里塞两位数字会糊成一团，
-    // 比图标小的字号反而更看不清 —— 这里取「看得清」优先。
+
     Text(
-      text = stringResource(R.string.player_battery_percent, percent),
+      text = percent.toString(),
+      // `padding(end = capWidth)` 把文字整体左移半个正极宽度：
+      // 居中是相对整个 28dp 算的，而视觉中心是「电池身」（26dp）的中心。
+      modifier = Modifier.align(Alignment.Center).padding(end = capWidth),
       color = color,
-      style = MaterialTheme.typography.labelSmall,
+      style =
+        MaterialTheme.typography.labelSmall.copy(
+          fontSize = 9.sp,
+          // 行高跟字号一致 + 关掉首末行留白，文字才会真的落在轮廓正中
+          lineHeight = 9.sp,
+          fontWeight = FontWeight.Medium,
+          letterSpacing = 0.sp,
+          platformStyle = PlatformTextStyle(includeFontPadding = false),
+        ),
       maxLines = 1,
     )
   }
