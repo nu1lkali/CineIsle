@@ -3477,8 +3477,16 @@ android {
     //    零请求，没缓存才现查一次。最上层目录按返回 = 回 App 首页（并切回首页 tab）。
     //  · 网络位置：父目录由路径直接推出，根目录按返回 = 回网络模块首页。
     //  · 层级推导抽成纯函数（EmbyDirectoryHierarchy），经典与 Cine 两套界面共用一份。
-    versionCode = 301
-    versionName = "1.6.57"
+    // 302 / 1.6.58：修目录导航里库根名被裁短（「名字_编号_后缀」只剩「编号」）。
+    //  · 刚进库时标题正确、进子目录后才错 ⇒ 数据源从本页标题切到了祖先链；
+    //    祖先链不带 Fields 时返回精简对象，名字类字段缺失，Name 可能是目录名的一段。
+    //  · 祖先链请求补上 Fields（SortName / OriginalTitle / ParentId / Path）。
+    //  · 显示名统一走 levelDisplayName：名字带下划线分段而 Name 只剩其中一段时，
+    //    改用 Path 末段（磁盘真名）—— 它不经过服务端的显示名处理。
+    //  · 抽屉里点某层 / 返回上一级时，新页面的标题也走同一套取值，
+    //    否则跳过去顶栏会跟着一起错，且那一页再无从纠正。
+    versionCode = 302
+    versionName = "1.6.58"
 
     vectorDrawables {
       useSupportLibrary = true

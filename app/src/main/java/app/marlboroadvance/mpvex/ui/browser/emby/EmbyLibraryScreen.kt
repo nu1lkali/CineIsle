@@ -515,8 +515,19 @@ data class EmbyLibraryScreen(
       if (!showPathNavigator) return@LaunchedEffect
       if (ancestors != null) return@LaunchedEffect
       ancestorsLoading = true
-      ancestors = viewModel.loadItemAncestors(currentServer, libraryId)
+      val fetched = viewModel.loadItemAncestors(currentServer, libraryId)
+      ancestors = fetched
       ancestorsLoading = false
+      // 诊断：把整条祖先链逐层打出来（含 Path 与类型）。只在打开抽屉那一次输出，
+      // 一次最多十几行，不刷屏；名字显示不对时靠它一眼看出是服务端给了什么。
+      android.util.Log.d("PathNav", "current=$title id=$libraryId levels=${fetched.size}")
+      fetched.forEachIndexed { i, a ->
+        android.util.Log.d(
+          "PathNav",
+          "[$i] name=${a.Name} shown=${levelDisplayName(a)} sort=${a.SortName} " +
+            "path=${a.Path} type=${a.Type} id=${a.Id}",
+        )
+      }
     }
 
     // ── 按层级跳转（目录导航 / 返回上一级共用的唯一入口）──
@@ -579,7 +590,9 @@ data class EmbyLibraryScreen(
       fun goTo(parent: EmbyItem, parentOfParentId: String?) {
         navigateToLibraryLevel(
           targetId = parent.Id ?: return,
-          title = parent.Name,
+          // 同样要走 `levelDisplayName`：祖先链里的名字可能被裁剪过，
+          // 直接当标题写进新页面就再也纠正不回来了。
+          title = levelDisplayName(parent),
           collectionType = parent.CollectionType,
           parentId = parentOfParentId,
         )
@@ -624,12 +637,17 @@ data class EmbyLibraryScreen(
           }
         }
       } else if (knownParentId != null) {
-        navigateToLibraryLevel(
-          targetId = knownParentId,
-          title = null,
-          collectionType = null,
-          parentId = null,
-        )
+        // 只有 Id、没有链 ⇒ 先问一次父条目把名字拿到手。查不到才用无标题兜底
+        // （顶栏空着总比显示错名字好，用户还能靠目录导航往下跳）。
+        scope.launch {
+          val parentItem = viewModel.loadItem(currentServer ?: return@launch, knownParentId)
+          navigateToLibraryLevel(
+            targetId = knownParentId,
+            title = parentItem?.let { levelDisplayName(it) },
+            collectionType = parentItem?.CollectionType,
+            parentId = parentItem?.ParentId?.takeIf { it.isNotBlank() },
+          )
+        }
       } else {
         // 无服务器 / 端点不支持 ⇒ 退回旧行为，至少不卡住
         doPop()
@@ -3520,10 +3538,13 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
             val targetId = target.Id
             // 目标就是当前目录 ⇒ 什么都不做（已经在那一层了）
             if (targetId != null && targetId != libraryId) {
-              // 带上目标层的父级，这样跳到那一层后再按返回能正确回到它的父目录
+              // ⚠️ 标题必须走 `levelDisplayName`，不能直接用 `target.Name`：
+              // 祖先链里的容器名不一定等于用户起的那个名字（见该函数注释）。
+              // 直接把 `Name` 当成新页面的 title，跳过去之后顶栏就跟着一起错，
+              // 而且那一页自己再也无从纠正 —— 它就是标题的唯一持有者。
               navigateToLibraryLevel(
                 targetId = targetId,
-                title = target.Name,
+                title = levelDisplayName(target),
                 collectionType = target.CollectionType,
                 parentId = parentInChain(ancestors.orEmpty(), targetId)?.Id,
               )
@@ -4894,9 +4915,11 @@ private fun EmbyPathNavigatorSheet(
             // 是一堆目录而不是「媒体库入口」。首页本来就不是导航栈里的一层
             // （它是 `MainScreen` 的固定根页），所以「去首页」= 把栈弹空。
             val isOutermost = level === ancestors.first()
-            // 名字照服务端给的原样显示（只兜空名字）；「这是首页」这件事交给下面的
-            // 副标题与图标表达，不覆盖掉容器本来的名字 —— 用户认得出自己那个库列表叫什么。
-            val levelName = level.Name?.takeIf { it.isNotBlank() } ?: "未命名目录"
+            // ⚠️ 不能直接用 `level.Name`：祖先链返回的容器名**不总是**用户起的那个名字。
+            //    实测过一类名字里带下划线的库 —— 库根单独打开时标题完全正确，但从子目录
+            //    拉祖先链回来，同一层的 `Name` 就只剩其中一段。所以统一走
+            //    `levelDisplayName`，它会按可靠性依次尝试 Name → Path 末段（磁盘真名）→ SortName。
+            val levelName = levelDisplayName(level) ?: "未命名目录"
             Row(
               modifier =
                 Modifier

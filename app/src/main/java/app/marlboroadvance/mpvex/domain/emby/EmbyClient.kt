@@ -1433,10 +1433,32 @@ object EmbyClient {
    * ⚠️ 老服务端 / 第三方兼容实现可能没实现这个端点（404）。调用方一律
    * `runCatching` 兜成空列表，退化成「只有当前层」的导航 —— 功能降级，但页面不能挂。
    */
-  fun getItemAncestors(server: EmbyServer, itemId: String): List<EmbyItem> =
+  fun getItemAncestors(server: EmbyServer, itemId: String): List<EmbyItem> {
     // ⚠️ 写成语句体 + 显式局部类型：表达式体的链式调用里 `List<T>` 推断不出来
     // （会退化成 Any），跟在后面的集合操作就解析不了。
-    getJson(server, "/Items/$itemId/Ancestors")
+    //
+    // ⭐⭐ `fields` 必须显式要：这个端点不带 Fields 时返回的是**精简对象**，
+    // 各容器只有最基本的几个字段，名字相关的那几项（`SortName` 等）一律为空。
+    // 于是导航里显示的就不是「用户起的那个名字」，而是别的来源的短名 ——
+    // 症状是「某一层显示的名字和它真实叫法对不上」（往往只剩数字后缀之类）。
+    return getJson(server, "/Items/$itemId/Ancestors", mapOf("fields" to ANCESTOR_FIELDS))
+  }
+
+  /**
+   * 祖先链请求要的字段。
+   *
+   * 祖先链只用得上「这一层叫什么、是什么类型、父级是谁」，所以清单刻意很短 ——
+   * 祖先可能有十几层，多要 Fields 只是白拉数据。
+   *
+   * ⚠️ 不要删 `SortName` / `OriginalTitle`：名称类字段在不同服务端版本上
+   * 填充情况不同，少要一项就可能在某一层退回空名字。
+   */
+  private val ANCESTOR_FIELDS: String = listOf(
+    "SortName",
+    "OriginalTitle",
+    "ParentId",
+    "Path",
+  ).joinToString(",")
 
   /**
    * 详情页要的字段清单（基础版）。
