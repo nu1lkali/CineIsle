@@ -44,4 +44,12 @@ internal class EmbyDetailContentState {
 
   /** 单集详情页的「同季 / 特别篇 / 演员相关」分集。 */
   val relatedEpisodesState = mutableStateOf(RelatedEpisodes())
+
+  /**
+   * 字幕信息（详情页只读预览）。
+   *
+   * 与 item / 分集不同，它还会随**版本切换**重查 —— 但状态容器仍挂在这里，
+   * 因为口径是「跟着本页的条目走」，换条目就该整份丢掉。
+   */
+  val subtitleState = mutableStateOf(DetailSubtitleUi())
 }

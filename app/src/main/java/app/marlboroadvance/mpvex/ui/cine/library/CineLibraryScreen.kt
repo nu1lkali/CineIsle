@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
@@ -225,8 +226,13 @@ fun CineLibraryScreen(
             isFolderDive = true,
             // 带上当前层作为父级：下钻页再按返回能直接回到本层（按层级退，不靠栈）
             parentId = libraryId,
-            // 库根名继承：没有就说明本页就是根本身，用本页标题
-            rootTitle = rootTitle ?: title,
+            // 库根名继承：没有就说明本页就是根本身 —— 用媒体库的权威名称
+            // （`/Users/{uid}/Views` 里那个），查不到才退回本页标题。
+            // ⚠️ 不能用磁盘目录名：那跟用户在 Emby 里给库起的名字不是一回事。
+            rootTitle =
+              rootTitle
+                ?: server?.let { EmbyClient.libraryDisplayName(it, rootId ?: libraryId) }
+                ?: title,
             // 那个名字属于哪一层：本页不是根时沿用，否则就是本页自己
             rootId = rootId ?: libraryId,
           ),

@@ -482,10 +482,13 @@ private fun openAggregateItem(
         title = item.Name ?: "",
         collectionType = item.CollectionType ?: parentCollectionType,
         isFolderDive = true,
-        // 从聚合页下钻进来的这个文件夹，就是这条下钻链的起点 —— 它自己的名字
-        // 比聚合库名更贴切（聚合库是跨库拼的，跟这个目录没有从属关系）。
-        // 名字与 Id 成对给，导航里认 Id 才不会贴错层。
-        rootTitle = item.Name?.takeIf { it.isNotBlank() } ?: parentTitle,
+        // 从聚合页下钻进来的这个文件夹，就是这条下钻链的起点。
+        // ⭐ 优先用**聚合库的名称**（父页标题，用户看得见的那个名字），而不是
+        //    `item.Name` —— 后者是磁盘目录名：库叫「Movies_HD」而目录叫 `HD`，
+        //    挂到别的目录又会变成别的名字。库根那一行要稳定显示用户认的名字。
+        //    名字与 Id 成对给，导航里认 Id 才不会贴错层。
+        rootTitle = parentTitle?.takeIf { it.isNotBlank() }
+          ?: item.Name?.takeIf { it.isNotBlank() },
         rootId = id,
       ),
     )

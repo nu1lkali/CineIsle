@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>详情页字幕信息展示 · 设计方案</title>
+<style>
+  :root{
+    --ink:#1a1a1f; --ink2:#4a4a56; --sub:#767683; --line:#e8e8ef; --line2:#f2f2f7;
+    --bg:#f2f3f7; --card:#fff; --soft:#f7f8fc;
+    --acc:#4C6FFF; --acc-ink:#3348b5; --acc-bg:#eef1ff;
+    --warn:#b4541a; --warn-bg:#fdf2e9;
+    --ok:#1f7a5a; --ok-bg:#eaf6f1;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:44px 28px 90px}
+  .eyebrow{font-size:11.5px;letter-spacing:.14em;color:var(--acc);font-weight:700;text-transform:uppercase}
+  h1{font-size:30px;line-height:1.3;margin:10px 0 10px;letter-spacing:-.01em}
+  .lede{font-size:14.5px;line-height:1.85;color:var(--ink2);max-width:820px}
+  .meta{margin-top:14px;display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--sub)}
+  .meta b{color:var(--ink2);font-weight:600}
+
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:26px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px}
+  .kpi .h{font-size:12px;color:var(--sub);margin-bottom:7px}
+  .kpi .v{font-size:14px;line-height:1.65;font-weight:600}
+  .kpi .v span{font-weight:400;color:var(--ink2)}
+
+  section{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:28px 28px 30px;margin-top:20px}
+  h2{font-size:17.5px;margin:0 0 4px;display:flex;align-items:baseline;gap:10px}
+  h2 i{font-style:normal;font-size:12px;font-weight:700;color:var(--acc);background:var(--acc-bg);border-radius:6px;padding:2px 7px}
+  .sec-lede{font-size:13.5px;color:var(--sub);line-height:1.8;margin:8px 0 20px;max-width:900px}
+  h3{font-size:14px;margin:26px 0 10px}
+  h3:first-of-type{margin-top:6px}
+  p{font-size:13.5px;line-height:1.85;color:var(--ink2);margin:10px 0}
+  ul,ol{font-size:13.5px;line-height:1.85;color:var(--ink2);padding-left:20px;margin:10px 0}
+  li{margin:5px 0}
+  b,strong{color:var(--ink);font-weight:600}
+  code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12.2px;background:var(--soft);border:1px solid var(--line2);padding:1px 5px;border-radius:5px;color:#2b3a63}
+  .note{border-left:3px solid var(--acc);background:var(--soft);border-radius:0 10px 10px 0;padding:12px 16px;font-size:13px;line-height:1.8;color:var(--ink2);margin:16px 0}
+  .note b{color:var(--acc-ink)}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:14px 0 4px}
+  th{text-align:left;font-weight:600;font-size:12px;color:var(--ink2);background:var(--soft);padding:10px 12px;border-bottom:1px solid var(--line)}
+  td{padding:10px 12px;border-bottom:1px solid var(--line2);vertical-align:top;line-height:1.65;color:var(--ink2)}
+  td:first-child{color:var(--ink);font-weight:500}
+  tr:last-child td{border-bottom:none}
+  .tag{display:inline-block;font-size:10.5px;font-weight:600;border-radius:999px;padding:1px 7px;background:var(--acc-bg);color:var(--acc-ink);margin-right:4px}
+  .tag.g{background:var(--ok-bg);color:var(--ok)}
+  .tag.w{background:var(--warn-bg);color:var(--warn)}
+  .tag.n{background:#f0f0f5;color:var(--sub)}
+
+  .stage{display:flex;gap:34px;align-items:flex-start;flex-wrap:wrap;margin-top:6px}
+  .stage-col{flex:1 1 300px;min-width:280px}
+
+  /* ── phone ── */
+  .phone{width:322px;border-radius:34px;border:1px solid #dcdce6;background:#fff;
+    box-shadow:0 22px 44px -26px rgba(18,20,40,.35);overflow:hidden;position:relative}
+  .ph-status{height:26px;display:flex;justify-content:space-between;align-items:center;padding:0 18px;font-size:10.5px;color:#3c3c48}
+  .hero{height:100px;background:linear-gradient(135deg,#232b42,#4e5b7d 55%,#8b96b1);position:relative;
+    display:flex;flex-direction:column;justify-content:flex-end;padding:0 16px 10px;color:#fff}
+  .hero .t{font-size:17px;font-weight:700;letter-spacing:.01em}
+  .hero .m{font-size:10.5px;opacity:.82;margin-top:3px}
+  .ph-body{padding:0 14px 18px}
+  .playrow{display:flex;gap:7px;margin-top:11px}
+  .btn-main{flex:1;background:var(--acc);color:#fff;border-radius:11px;height:38px;display:flex;align-items:center;
+    justify-content:center;gap:6px;font-size:12.5px;font-weight:600}
+  .btn-ic{width:38px;height:38px;border-radius:11px;background:#eef0fa;color:var(--acc-ink);
+    display:flex;align-items:center;justify-content:center;font-size:13px}
+  .vchip{margin-top:9px;display:inline-flex;flex-direction:column;gap:1px;background:#eef0fa;color:var(--acc-ink);
+    border-radius:9px;padding:5px 9px;font-size:10.5px}
+  .vchip b{font-size:11px;font-weight:600}
+
+  .card{border:1px solid var(--line);border-radius:14px;background:#fbfbfe;padding:11px 12px;margin-top:11px}
+  .card.focus{border:1.5px dashed var(--acc);background:linear-gradient(180deg,#f6f8ff,#fbfbff)}
+  .card-h{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600}
+  .card-h .badge{background:var(--acc-bg);color:var(--acc-ink);border-radius:999px;padding:1px 6px;font-size:10px}
+  .card-h .go{margin-left:auto;color:var(--acc);font-size:11px;font-weight:500}
+  .concl{margin-top:7px;font-size:11.5px;color:#2c2c36;line-height:1.5}
+  .concl b{color:var(--acc-ink)}
+  .chips{display:flex;gap:5px;margin-top:7px;flex-wrap:wrap}
+  .chip{border:1px solid #e0e0ea;background:#fff;border-radius:7px;padding:2px 7px;font-size:10.5px;color:var(--ink2)}
+  .chip.on{border-color:#b9c4ff;background:var(--acc-bg);color:var(--acc-ink);font-weight:600}
+  .block{border:1px solid var(--line2);border-radius:12px;background:#fbfbfe;padding:10px 12px;margin-top:10px}
+  .block .bt{font-size:11.5px;font-weight:600;color:var(--ink2)}
+  .lines{margin-top:8px}
+  .line{height:7px;border-radius:4px;background:#ececf3;margin:6px 0}
+  .line.s{width:62%}
+  .line.m{width:82%}
+  .skel{height:7px;border-radius:4px;background:linear-gradient(90deg,#e9e9f1 25%,#f6f6fa 37%,#e9e9f1 63%);
+    background-size:400% 100%;animation:sh 1.6s infinite linear;margin:7px 0}
+  @keyframes sh{0%{background-position:100% 0}100%{background-position:0 0}}
+
+  /* ── sheet ── */
+  .sheet{width:322px;border-radius:26px;border:1px solid var(--line);background:#fff;overflow:hidden;
+    box-shadow:0 22px 44px -26px rgba(18,20,40,.35)}
+  .grab{width:34px;height:4px;border-radius:2px;background:#d9d9e3;margin:10px auto 0}
+  .sheet-h{padding:12px 16px 11px;border-bottom:1px solid var(--line2)}
+  .sheet-h .t{font-size:14.5px;font-weight:700}
+  .sheet-h .s{font-size:10.5px;color:var(--sub);margin-top:3px}
+  .si{display:flex;gap:10px;align-items:center;padding:11px 16px;border-bottom:1px solid #f7f7fb}
+  .si .ic{width:32px;height:32px;border-radius:9px;background:var(--acc-bg);color:var(--acc-ink);
+    display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex:none}
+  .si .tx{min-width:0;flex:1}
+  .si .t1{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px}
+  .si .t2{font-size:10.5px;color:var(--sub);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .si .rt{font-size:10px;color:var(--sub);flex:none;text-align:right}
+  .si.off .ic{background:#f0f0f5;color:#9a9aa8}
+  .si.off .t1,.si.off .t2{color:#9a9aa8}
+  .sheet-f{padding:11px 16px 18px;background:var(--soft);font-size:10.5px;color:var(--sub);line-height:1.6}
+
+  .caption{font-size:11.5px;color:var(--sub);margin-top:10px;line-height:1.7}
+  .caption b{color:var(--ink2);font-weight:600}
+
+  .states{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:8px}
+  .state{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+  .state .lbl{font-size:11px;font-weight:700;color:var(--acc-ink);background:var(--acc-bg);
+    display:inline-block;border-radius:6px;padding:2px 7px;margin-bottom:10px}
+  .state .lbl.g{background:var(--ok-bg);color:var(--ok)}
+  .state .lbl.w{background:var(--warn-bg);color:var(--warn)}
+  .state .lbl.n{background:#f0f0f5;color:var(--sub)}
+  .state .mini{border:1px solid var(--line);border-radius:12px;background:#fbfbfe;padding:11px 12px}
+  .state .why{font-size:11.5px;color:var(--sub);line-height:1.7;margin-top:10px}
+
+  .files{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:12px}
+  .file{background:var(--soft);border:1px solid var(--line2);border-radius:12px;padding:13px 15px}
+  .file .p{font-size:11.5px;color:var(--acc-ink);font-weight:600;word-break:break-all}
+  .file .d{font-size:11.5px;color:var(--sub);line-height:1.7;margin-top:6px}
+
+  .phase{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:12px}
+  .phase .p{border:1px solid var(--line);border-radius:14px;padding:15px}
+  .phase .p .k{font-size:11px;font-weight:700;color:var(--acc);letter-spacing:.08em}
+  .phase .p .n{font-size:13px;font-weight:600;margin:6px 0 8px}
+  .phase .p ul{padding-left:16px;margin:0;font-size:12px}
+
+  footer{margin-top:26px;font-size:11.5px;color:var(--sub);text-align:center}
+  @media (max-width:820px){
+    .grid3,.states,.files,.phase{grid-template-columns:1fr}
+    h1{font-size:24px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow">CineIsle · 设计稿 v1 · 草案</div>
+  <h1>详情页字幕信息展示</h1>
+  <p class="lede">
+    播放器已经能通过 <code>POST /Items/{Id}/PlaybackInfo</code> 拿到当前媒体源上服务端识别到的全部字幕。
+    本方案把这批信息提前到<strong>详情页</strong>：让用户在点播放之前就知道<strong>这部片子有哪些字幕、会默认用哪一条</strong>，
+    而不是进了播放页才发现没有中文字幕。
+  </p>
+  <div class="meta">
+    <div><b>范围</b> 详情页只读展示，不改动播放链路</div>
+    <div><b>数据源</b> PlaybackInfo（复用现有发现逻辑）</div>
+    <div><b>日期</b> 2026-11-20</div>
+  </div>
+
+  <div class="grid3">
+    <div class="kpi">
+      <div class="h">放在哪里</div>
+      <div class="v">播放区下方、分集区上方<br><span>一屏内可见，贴着「要不要现在看」的决策点</span></div>
+    </div>
+    <div class="kpi">
+      <div class="h">一眼看到什么</div>
+      <div class="v">一句话结论 + 语言概览<br><span>「将自动使用 简体中文 · ASS · 外挂」优先于条数统计</span></div>
+    </div>
+    <div class="kpi">
+      <div class="h">明细去哪了</div>
+      <div class="v">底部抽屉「全部字幕」<br><span>页面不展开长列表，单层 LazyColumn</span></div>
+    </div>
+  </div>
+
+  <!-- 1 -->
+  <section>
+    <h2><i>01</i>整体位置与信息层级</h2>
+    <p class="sec-lede">
+      详情页现有的顺序是「播放 → 分集 → 类型/标签 → 简介 → 演职员 → 推荐 → 媒体信息」。
+      字幕信息放在播放区正下方：它是<strong>播放决策的补充信息</strong>，不是「诊断信息」。
+      放在页面最底部的媒体信息卡里（现状只有一行「字幕 N 条」）太晚，用户滑到那儿时已经点过播放了。
+    </p>
+
+    <div class="stage">
+      <div class="phone">
+        <div class="ph-status"><span>12:14</span><span>5G&nbsp;&nbsp;86%</span></div>
+        <div class="hero">
+          <div class="t">沙丘 2</div>
+          <div class="m">2024 · 科幻 / 冒险 · 166 分钟</div>
+        </div>
+        <div class="ph-body">
+          <div class="playrow">
+            <div class="btn-main">▶&nbsp;继续播放 01:12:30</div>
+            <div class="btn-ic">⤓</div>
+            <div class="btn-ic">⇪</div>
+          </div>
+          <div class="vchip"><b>版本：4K HDR</b><span>HEVC · 60 Mbps</span></div>
+
+          <div class="card focus">
+            <div class="card-h">
+              <span>字幕</span>
+              <span class="badge">4 条 · 2 种语言</span>
+              <span class="go">全部 ›</span>
+            </div>
+            <div class="concl">将自动使用 <b>简体中文 · ASS · 外挂</b></div>
+            <div class="chips">
+              <span class="chip on">简体中文</span>
+              <span class="chip">繁体中文</span>
+              <span class="chip">英语</span>
+              <span class="chip">+1</span>
+            </div>
+          </div>
+
+          <div class="block">
+            <div class="bt">分集 · 第 1 季</div>
+            <div class="lines">
+              <div class="line m"></div>
+              <div class="line s"></div>
+            </div>
+          </div>
+          <div class="block">
+            <div class="bt">类型 / 标签 / 工作室</div>
+            <div class="lines"><div class="line s"></div></div>
+          </div>
+          <div class="block">
+            <div class="bt">简介</div>
+            <div class="lines">
+              <div class="line m"></div>
+              <div class="line"></div>
+              <div class="line s"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage-col">
+        <h3>四级信息层级</h3>
+        <table>
+          <tr>
+            <th style="width:78px">层级</th><th>内容</th><th style="width:118px">默认可见</th>
+          </tr>
+          <tr>
+            <td>一级</td>
+            <td>模块标题「字幕」+ 条数/语言数</td>
+            <td>是</td>
+          </tr>
+          <tr>
+            <td>二级</td>
+            <td><b>一句话结论</b>：将自动使用哪一条 / 未匹配 / 未附带</td>
+            <td>是（最重要）</td>
+          </tr>
+          <tr>
+            <td>三级</td>
+            <td>语言概览 chip：最多 4 个 +「+N」溢出</td>
+            <td>是</td>
+          </tr>
+          <tr>
+            <td>四级</td>
+            <td>逐条明细：语言、格式、来源、默认/强制/听障、可用性</td>
+            <td>抽屉内</td>
+          </tr>
+        </table>
+
+        <div class="note" style="margin-top:18px">
+          <b>为什么「结论」优先于「条数」</b><br>
+          「4 条字幕」并不回答用户真正的问题。<b>「会不会给我挂上简中」</b>才是。
+          结论行由与播放器<strong>同一个选择函数</strong>（<code>EmbySubtitleSelector</code>）算出，
+          所以详情页说的和播放页实际挂的不会打架。
+        </div>
+
+        <div class="note">
+          <b>与底部「媒体信息」卡去重</b><br>
+          现在媒体信息卡里那行「字幕 4 条 · 外挂 2」来自 <code>item.MediaSources</code>（详情接口），
+          与 PlaybackInfo 的口径可能不一致（字段更少、不含交付方式）。
+          新卡上线后<strong>移除该行</strong>，字幕只在一处展示，避免两个数字对不上。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section>
+    <h2><i>02</i>卡片形态与四种状态</h2>
+    <p class="sec-lede">
+      卡片固定高度基准约 92dp（标题行 + 结论行 + chip 行）。四种状态共用同一外框与内边距，
+      <strong>切换时不跳动</strong>；空态与失败态都保留模块位置，让用户知道「这里本该有字幕信息」。
+    </p>
+
+    <div class="states">
+      <div class="state">
+        <span class="lbl g">就绪</span>
+        <div class="mini">
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><span>字幕</span><span class="badge">4 条 · 2 种语言</span><span class="go">全部 ›</span></div>
+            <div class="concl">将自动使用 <b>简体中文 · ASS · 外挂</b></div>
+            <div class="chips">
+              <span class="chip on">简体中文</span><span class="chip">繁体中文</span>
+              <span class="chip">英语</span><span class="chip">+1</span>
+            </div>
+          </div>
+        </div>
+        <div class="why">主路径。chips 按「将使用 → 默认 → 内嵌优先」排序，同语言不重复。</div>
+      </div>
+
+      <div class="state">
+        <span class="lbl">加载中</span>
+        <div class="mini">
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><span>字幕</span><span class="badge" style="background:#f0f0f5;color:#767683">读取中</span></div>
+            <div class="skel" style="width:58%"></div>
+            <div class="skel" style="width:84%"></div>
+            <div class="chips">
+              <span class="chip" style="border-style:dashed">···</span>
+              <span class="chip" style="border-style:dashed">···</span>
+            </div>
+          </div>
+        </div>
+        <div class="why">骨架屏，不画转圈。切换版本时文案换为「正在读取该版本的字幕」。</div>
+      </div>
+
+      <div class="state">
+        <span class="lbl n">空 · 无字幕</span>
+        <div class="mini">
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><span>字幕</span><span class="badge" style="background:#f0f0f5;color:#767683">0 条</span></div>
+            <div class="concl" style="color:#4a4a56">该版本未附带字幕</div>
+            <div class="concl" style="color:#767683;font-size:10.5px;margin-top:3px">可在播放页「字幕 → 搜索字幕」在线获取</div>
+          </div>
+        </div>
+        <div class="why">不给假按钮。若 <code>totalStreams == 0</code>，文案改为「服务端未返回轨道信息」，
+          说明是探测不到而非真的没有。</div>
+      </div>
+
+      <div class="state">
+        <span class="lbl w">失败</span>
+        <div class="mini">
+          <div class="card" style="margin-top:0">
+            <div class="card-h"><span>字幕</span><span class="badge" style="background:#fdf2e9;color:#b4541a">获取失败</span></div>
+            <div class="concl" style="color:#4a4a56">读取超时，暂无法确认字幕</div>
+            <div class="chips" style="margin-top:8px">
+              <span class="chip on" style="background:#fff">重试</span>
+              <span class="chip" style="border:none;color:#9a9aa8">不影响播放</span>
+            </div>
+          </div>
+        </div>
+        <div class="why">失败<strong>不拦播放</strong>。若此前已有结果，则保留旧数据并在标题右侧标注「上次结果」。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section>
+    <h2><i>03</i>「全部字幕」抽屉</h2>
+    <p class="sec-lede">
+      点卡片任意位置或右侧「全部 ›」拉起 <code>ModalBottomSheet</code>。单层 <code>LazyColumn</code>，
+      底部留 <code>contentPadding</code> 避开系统导航条，<strong>不再套第二层滚动</strong>。
+      抽屉是只读明细视图，切换字幕仍在播放页完成（页脚明确写出，避免用户找不到开关）。
+    </p>
+
+    <div class="stage">
+      <div class="sheet">
+        <div class="grab"></div>
+        <div class="sheet-h">
+          <div class="t">全部字幕 · 4 条</div>
+          <div class="s">沙丘 2 · 4K HDR · 服务端识别</div>
+        </div>
+
+        <div class="si">
+          <div class="ic">ASS</div>
+          <div class="tx">
+            <div class="t1">简体中文 <span class="tag">将使用</span></div>
+            <div class="t2">外挂 · 中英双语 · Chinese (Simplified)</div>
+          </div>
+          <div class="rt">1</div>
+        </div>
+
+        <div class="si">
+          <div class="ic">ASS</div>
+          <div class="tx">
+            <div class="t1">繁体中文 <span class="tag n">默认</span></div>
+            <div class="t2">外挂 · Chinese (Traditional)</div>
+          </div>
+          <div class="rt">2</div>
+        </div>
+
+        <div class="si">
+          <div class="ic">SRT</div>
+          <div class="tx">
+            <div class="t1">英语 <span class="tag w">听障</span></div>
+            <div class="t2">内嵌 · English SDH</div>
+          </div>
+          <div class="rt">3</div>
+        </div>
+
+        <div class="si off">
+          <div class="ic">PGS</div>
+          <div class="tx">
+            <div class="t1">日语</div>
+            <div class="t2">内嵌 · 图像字幕</div>
+          </div>
+          <div class="rt">无法提取</div>
+        </div>
+
+        <div class="sheet-f">字幕切换在播放页完成 · 本页仅展示服务端已识别的字幕</div>
+      </div>
+
+      <div class="stage-col">
+        <h3>列表项信息构成</h3>
+        <ul>
+          <li><b>左侧色块</b>：格式缩写（ASS / SRT / PGS）。一眼区分文本字幕与图像字幕，比图标更快。</li>
+          <li><b>主标题</b>：归一化语言名（简体中文 / 繁体中文 / 英语）。<strong>不用</strong>服务端原文当标题，
+            因为 <code>DisplayTitle</code> 在中文服务器与英文服务器上写法不同。</li>
+          <li><b>副标题</b>：来源 · <code>DisplayTitle</code> 原文。原文常带「中英双语」「SDH」这类有用信息，
+            但不适合做主标题。</li>
+          <li><b>徽标</b>：<span class="tag">将使用</span><span class="tag n">默认</span>
+            <span class="tag w">强制 / 听障</span>。「将使用」来自本机选择结果，「默认」只是服务端标记 —— 两者必须能分开看。</li>
+          <li><b>右侧序号</b>：Emby 的 <code>Index</code>。排查问题时对得上服务端日志，日常不干扰。</li>
+          <li><b>不可用行</b>：不隐藏、置灰、右侧给出「无法提取」，点击弹出原因原文
+            （烧录 / 图像字幕不做 OCR / 播放器不支持该格式）。</li>
+        </ul>
+
+        <div class="note">
+          <b>排序只做一件事</b><br>
+          「将使用」置顶，其余保持服务端返回顺序（即 <code>Index</code> 升序）。
+          不按语言偏好重排 —— 顺序一变，用户下次进来看同一部片，列表位置就全变了。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section>
+    <h2><i>04</i>信息来源与字段映射</h2>
+    <p class="sec-lede">
+      唯一数据源：<code>EmbySubtitleDiscovery.discover(server, itemId, mediaSourceId)</code>，
+      主路径 <code>POST /Items/{Id}/PlaybackInfo</code>（<code>IsPlayback=false</code>、<code>EnableTranscoding=false</code>），
+      失败回退 <code>GET /Items/{Id}</code> 的 <code>MediaSources</code>。
+      已经在用的 <code>SubtitleInfo</code> 就是展示模型，不新增一套解析。
+      详情页只是一个**新的调用点**：<code>withContext(Dispatchers.IO)</code> 里跑一次，结果交给卡片。
+    </p>
+
+    <table>
+      <tr>
+        <th style="width:230px">Emby 字段（Type=Subtitle）</th>
+        <th style="width:200px">界面呈现</th>
+        <th>映射规则 / 注意点</th>
+      </tr>
+      <tr>
+        <td><code>Type</code></td>
+        <td>过滤条件</td>
+        <td>只取 <code>Subtitle</code>；<code>Index</code> 缺失的流整条丢弃（按 Index 取字节，无 Index 无法请求）。</td>
+      </tr>
+      <tr>
+        <td><code>Language</code> / <code>DisplayLanguage</code> / <code>Path</code></td>
+        <td>行主标题 + chip 文案</td>
+        <td>统一走 <code>EmbySubtitleLanguage.resolve(...)</code> 与 <code>label()</code>。简繁靠
+          <code>DisplayLanguage</code>/文件名线索消歧，与播放器同口径。</td>
+      </tr>
+      <tr>
+        <td><code>Codec</code> / <code>DeliveryFormat</code></td>
+        <td>左侧格式块 + 副标题</td>
+        <td><code>EmbySubtitleFormats.normalizeFormat()</code> 归一化后大写显示（subrip → SRT，hdmv_pgs_subtitle → PGS）。</td>
+      </tr>
+      <tr>
+        <td><code>IsExternal</code></td>
+        <td>来源标签「外挂 / 内嵌」</td>
+        <td>与 <code>SubtitleInfo.sourceType</code> 保持一致；<code>EXTERNAL</code> 才显示「外挂」。</td>
+      </tr>
+      <tr>
+        <td><code>DeliveryUrl</code> + <code>IsExternalUrl</code></td>
+        <td>来源标签「服务端交付」</td>
+        <td>只用于判定来源，<strong>不展示 URL、不提供复制</strong>（含鉴权参数，长度也失控）。</td>
+      </tr>
+      <tr>
+        <td><code>DeliveryMethod = Encode</code></td>
+        <td>不可用 + 原因</td>
+        <td>「服务端交付方式为烧录，无法取出独立字幕文件」——直接取 <code>unsupportedReason</code>。</td>
+      </tr>
+      <tr>
+        <td><code>IsDefault</code></td>
+        <td>徽标「默认」</td>
+        <td>仅代表服务端标记。<strong>不等于</strong>本机会自动使用它（首选语言优先于默认标记）。</td>
+      </tr>
+      <tr>
+        <td><code>IsForced</code></td>
+        <td>徽标「强制」</td>
+        <td>强制字幕只覆盖外语片段，需要让用户看得见，否则会误判「字幕不全」。</td>
+      </tr>
+      <tr>
+        <td><code>IsHearingImpaired</code></td>
+        <td>徽标「听障」</td>
+        <td>同语言下自动选择会优先非听障轨；徽标解释「为什么没选这条」。</td>
+      </tr>
+      <tr>
+        <td>图像类 <code>Codec</code>（PGS/VobSub…）</td>
+        <td>格式块显示 PGS，来源标「图像」</td>
+        <td>不可当文本挂载（PGS 的 <code>sup</code> 例外）；置灰并说明，不能当成「下载失败」。</td>
+      </tr>
+      <tr>
+        <td><code>Path</code></td>
+        <td>抽屉行展开后的「服务端路径」</td>
+        <td>只读展示 + 长按复制，<strong>绝不能当本地路径读取</strong>。</td>
+      </tr>
+      <tr>
+        <td><code>MediaSources[].Id</code></td>
+        <td>抽屉副标题里的版本名</td>
+        <td>这份清单属于该媒体源；换版本必须重查。</td>
+      </tr>
+      <tr>
+        <td><code>Discovery.totalStreams</code></td>
+        <td>空态文案的分支依据</td>
+        <td><code>0</code> = 服务端没回轨道（多为 strm / 直链）；<code>&gt;0</code> 且无字幕 = 真的没字幕。</td>
+      </tr>
+      <tr>
+        <td>派生：<code>canMountExternally</code> / <code>unsupportedReason</code></td>
+        <td>行可用性 + 右侧说明</td>
+        <td>判定逻辑集中在 <code>SubtitleInfo</code>，UI 不许自己再判断一次格式。</td>
+      </tr>
+      <tr>
+        <td>派生：<code>EmbySubtitleSelector.select(...)</code></td>
+        <td>结论行 + 「将使用」徽标</td>
+        <td><strong>与播放器同一个纯函数</strong>：详情页不写第二套语言匹配逻辑，预测即真相。</td>
+      </tr>
+    </table>
+
+    <div class="note">
+      <b>不做什么</b><br>
+      不逐条请求 <code>/Stream.{Format}</code> 去验证「字幕文件真的能下」—— 那是播放页的事，
+      会变成 N 次网络请求。详情页只陈述服务端清单里的事实，可用性判断限于格式层面。
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section>
+    <h2><i>05</i>与当前媒体的关联规则</h2>
+
+    <h3>1. 归属键是三元组，不是 itemId</h3>
+    <p>
+      一份字幕清单的稳定标识是 <code>(serverId, itemId, mediaSourceId)</code>，单条字幕再加 <code>streamIndex</code>
+      （即 <code>SubtitleInfo.key</code>）。同一个 Item 的 4K 版与 1080P 版可能挂着完全不同的字幕，
+      <strong>字幕索引只在同一媒体源内有意义</strong>。
+    </p>
+
+    <h3>2. 版本 Id 必须与播放按钮同一条算路</h3>
+    <p>
+      用详情页已有的 <code>effectiveEmbyMediaSourceId(item, selectedMediaSourceId, autoSourcePreference)</code>：
+      用户手选 &gt; 设置里的优先规则 &gt; 首条源。绝不能另算一套，否则会出现
+      「卡片写 4K 的字幕、点播放却起了 1080P」。
+    </p>
+
+    <h3>3. 剧集：先解析「这次要播哪一集」</h3>
+    <ul>
+      <li><code>Movie</code> / <code>Video</code> / <code>Episode</code>：直接用自身 <code>Id</code>。</li>
+      <li><code>Series</code>：用播放键的同一规则取目标集（有进度的那一集，否则第一集），
+        标题追加「第 N 集」，避免「整部剧的字幕」这种不存在的概念。</li>
+      <li>分集尚未加载完成 → 保持加载态；分集加载完为空 → 整块不渲染。</li>
+      <li>不可播类型（合集、季、文件夹、人物页）→ 整块不渲染。</li>
+    </ul>
+
+    <h3>4. 回包校验与竞态</h3>
+    <p>
+      每次发现带一个自增 <code>generation</code>；回包时若 <code>itemId</code> /
+      <code>mediaSourceId</code> 已不是当前值，直接丢弃。用户在版本下拉框里连续切两次，
+      旧请求晚到也不会覆盖新版本的字幕。
+    </p>
+
+    <h3>5. 缓存策略</h3>
+    <ul>
+      <li>进程内 <code>LruCache</code>（约 24 条），键同上，TTL 5 分钟；不落盘。</li>
+      <li>切版本 → 必查（不同键，天然不命中）。</li>
+      <li>下拉刷新 → 强制重查并覆盖缓存（用户在服务端补了字幕，这里要能看到）。</li>
+      <li>从播放器返回 → 不失效，但重新读一次本机「记住的选择」，让结论行跟着变。</li>
+    </ul>
+
+    <h3>6. 不产生副作用</h3>
+    <p>
+      <code>IsPlayback=false</code> + <code>EnableTranscoding=false</code>：不进 Emby 的「正在播放」，
+      不触发转码会话。详情页是纯读操作，进页面查一次、退出即弃。
+    </p>
+
+    <div class="note">
+      <b>不做跨页共享缓存</b><br>
+      播放页的 <code>EmbySubtitleController</code> 有自己的发现与选择流程，第一期<strong>不接</strong>详情页的缓存，
+      避免把「详情页缓存过期」的问题带进播放链路。需要共享时单独评估（见 P2）。
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section>
+    <h2><i>06</i>状态矩阵</h2>
+    <table>
+      <tr>
+        <th style="width:150px">状态</th><th style="width:230px">触发条件</th>
+        <th>卡片表现</th><th style="width:190px">抽屉</th>
+      </tr>
+      <tr>
+        <td>待解析</td>
+        <td>item 未到 / Series 分集未到</td>
+        <td>骨架屏，高度与就绪态一致</td>
+        <td>不可打开</td>
+      </tr>
+      <tr>
+        <td>读取中</td>
+        <td>discover 进行中</td>
+        <td>骨架屏 + 「读取中」小徽标；切版本时文案为「正在读取该版本的字幕」</td>
+        <td>不可打开</td>
+      </tr>
+      <tr>
+        <td>就绪</td>
+        <td>列表非空</td>
+        <td>结论行 + 最多 4 个语言 chip</td>
+        <td>可打开，逐条明细</td>
+      </tr>
+      <tr>
+        <td>空 · 无字幕</td>
+        <td><code>totalStreams &gt; 0</code> 且字幕 0 条</td>
+        <td>「该版本未附带字幕」+ 在线字幕提示</td>
+        <td>不可打开</td>
+      </tr>
+      <tr>
+        <td>空 · 未探测</td>
+        <td><code>totalStreams == 0</code></td>
+        <td>「服务端未返回轨道信息」，弱化语气，不吓人</td>
+        <td>不可打开</td>
+      </tr>
+      <tr>
+        <td>全部不可用</td>
+        <td>有字幕但均 <code>unsupportedReason != null</code></td>
+        <td>「4 条字幕均无法独立提取」（可打开看原因）</td>
+        <td>可打开，行全部置灰</td>
+      </tr>
+      <tr>
+        <td>失败</td>
+        <td><code>error != null</code> 且无旧数据</td>
+        <td>「读取超时 / 请求失败」+ 重试；不拦播放</td>
+        <td>不可打开</td>
+      </tr>
+      <tr>
+        <td>失败但有旧数据</td>
+        <td>刷新时失败</td>
+        <td>保留旧列表，标题右侧标「上次结果」</td>
+        <td>可打开（只读旧数据）</td>
+      </tr>
+      <tr>
+        <td>不适用</td>
+        <td>不可播条目 / 无媒体源</td>
+        <td>整块不渲染（不占位、不留空卡）</td>
+        <td>—</td>
+      </tr>
+    </table>
+    <p style="margin-top:14px">
+      超时不做额外的硬计时：PlaybackInfo 走客户端统一的连接 / 读取超时，超时后按失败处理并给重试。
+      文案专门写「读取超时」，因为这类失败多数是服务端算播放方案慢，重试一次通常就好。
+    </p>
+  </section>
+
+  <!-- 7 -->
+  <section>
+    <h2><i>07</i>实现落点</h2>
+    <p class="sec-lede">数据请求放在页面层（<code>Content()</code>），组件只负责画 —— 与分集、推荐区同一套理由：
+      LazyColumn 的 item 滚出视口会销毁组合，请求写在 item 内会被反复触发。</p>
+
+    <div class="files">
+      <div class="file">
+        <div class="p">ui/browser/emby/components/DetailSubtitleCard.kt</div>
+        <div class="d">新增。折叠态卡片：标题行 / 结论行 / chip 行，含骨架、空、失败三种形态。</div>
+      </div>
+      <div class="file">
+        <div class="p">ui/browser/emby/components/DetailSubtitleSheet.kt</div>
+        <div class="d">新增。ModalBottomSheet + 单层 LazyColumn，列表项与不可用说明。</div>
+      </div>
+      <div class="file">
+        <div class="p">domain/emby/subtitle/SubtitlePresentation.kt</div>
+        <div class="d">新增纯函数：<code>SubtitleInfo</code> → 卡片/列表项文案（标题、副标题、徽标、chip 文案）。
+          纯 JVM 可测，避免把文案规则散在 Composable 里。</div>
+      </div>
+      <div class="file">
+        <div class="p">ui/browser/emby/EmbyDetailContentState.kt</div>
+        <div class="d">增 <code>subtitleState</code>（phase / list / autoPick / sourceId / fromCache / error），随 itemId 重建。</div>
+      </div>
+      <div class="file">
+        <div class="p">ui/browser/emby/EmbyDetailScreen.kt</div>
+        <div class="d"><code>Content()</code> 里加 <code>LaunchedEffect(playTargetId, effectiveSourceId)</code>：
+          <code>withContext(IO) { discover(...) }</code> + generation 守卫 + 6s 超时；
+          <code>DetailBody</code> 在 PlaySection 之后插入 <code>item { DetailSubtitleCard(...) }</code>。</div>
+      </div>
+      <div class="file">
+        <div class="p">domain/emby/EmbyMediaInfo.kt</div>
+        <div class="d">移除 <code>subtitleCount / externalSubtitleCount / subtitleLanguages</code> 三个字段与媒体信息卡里那行字幕（口径去重）。</div>
+      </div>
+    </div>
+
+    <div class="note" style="margin-top:16px">
+      <b>两个必须遵守的既有约束</b><br>
+      ① <code>EmbySubtitleDiscovery.discover</code> 是阻塞调用，必须 <code>withContext(Dispatchers.IO)</code>；<br>
+      ② 详情页任何新状态都放进 <code>EmbyDetailContentState</code> 或页面层 <code>remember</code>，
+      <strong>不能</strong>写在 <code>LazyColumn</code> 的 item 里。
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section>
+    <h2><i>08</i>分期与验收</h2>
+
+    <div class="phase">
+      <div class="p">
+        <div class="k">P0</div>
+        <div class="n">只读展示</div>
+        <ul>
+          <li>卡片四态 + 抽屉明细</li>
+          <li>版本切换联动</li>
+          <li>结论行复用选择器</li>
+          <li>移除媒体信息卡重复行</li>
+        </ul>
+      </div>
+      <div class="p">
+        <div class="k">P1</div>
+        <div class="n">设为优先</div>
+        <ul>
+          <li>抽屉行点击「下次就用这条」</li>
+          <li>先抽 <code>EmbySubtitleChoiceStore</code> 共用写入口</li>
+          <li>与播放页「记住选择」同一份偏好</li>
+        </ul>
+      </div>
+      <div class="p">
+        <div class="k">P2</div>
+        <div class="n">联调优化</div>
+        <ul>
+          <li>与播放页共享发现缓存（需评估失效）</li>
+          <li>Series 整季字幕概览</li>
+          <li>在线字幕搜索入口</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>验收清单</h3>
+    <ul>
+      <li>电影 / 单集：进详情页不滚动即可看到卡片，且结论与实际播放挂载一致。</li>
+      <li>多版本条目：切到 1080P，卡片在 300ms 内进入加载态，回包属于 1080P（副标题版本名对得上）。</li>
+      <li>播放页手动换字幕 → 返回详情页 → 结论行随之更新。</li>
+      <li>断网 / 飞行模式：卡片显示失败 + 重试，播放按钮仍可点。</li>
+      <li>无字幕片源：不出现空白卡片，文案区分「没有」与「没探测到」。</li>
+      <li>底部媒体信息卡不再出现第二个字幕条数。</li>
+    </ul>
+  </section>
+
+  <footer>影屿 · CineIsle — 详情页字幕信息展示设计稿（内部草案，非最终视觉）</footer>
+</div>
+</body>
+</html>

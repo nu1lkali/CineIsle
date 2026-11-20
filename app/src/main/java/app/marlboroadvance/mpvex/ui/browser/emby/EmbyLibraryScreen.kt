@@ -137,6 +137,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyLibraryFilterState
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.domain.emby.LibraryNameIndex
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.domain.smartmerge.OP_DONE
 import app.marlboroadvance.mpvex.domain.smartmerge.SmartMergeCandidate
@@ -301,15 +302,22 @@ data class EmbyLibraryScreen(
   /**
    * 本库（这条下钻链的**根目录**）的名字，由最外层页面确定后**原样继承**下来。
    *
-   * 为什么必须带：
-   * 服务端在「祖先链」这类接口上返回的容器名**不保证**等于用户设置的库名 ——
-   * 实测过一类库（名字用分隔符分成几段）从子目录回看时只剩其中一段。
-   * 而库根那一层的名字在**进库那一刻**是完全可靠的：它是首页媒体库列表里
-   * `library.Name`，或详情页「打开所在文件夹」现拉到的父目录名。
-   * 所以不指望回头去问服务端「这一层叫什么」，而是进库时把答案记下来往下带。
+   * ## 为什么必须以「媒体库名称」为准
+   *
+   * Emby 里媒体库的名字是用户在服务端**手动设置**的，跟它索引的那个磁盘目录名
+   * 完全是两回事：库可以叫「Movies_HD」，而挂的目录叫 `HD`、`张三`，
+   * 甚至一长串无意义的名字 —— 换个挂载点就换个目录名，库名并不跟着变。
+   *
+   * `/Items/{Id}/Ancestors` 返回的那几层是**磁盘目录条目**，`Name` 给的是目录名；
+   * 只有 `GET /Users/{uid}/Views` 里的 `Name` 才是库名，也是唯一权威来源。
+   * 拿目录名当库名，就会出现「同一个库从首页进叫 A、从深层进叫 B」，
+   * 以及「挂到张三目录就显示张三」。
+   *
+   * 所以口径是：库根那一行**只认媒体库列表里的名字**（见 `Content()` 里对
+   * `EmbyClient.libraryDisplayName` 的查询，最终由 `resolveLibraryRowNames`
+   * 统一裁决），`rootTitle` 只是缓存还没热（冷启动直进深层）时的兜底。
    *
    * ⚠️ 口径是「**这条链的根**」，不是「本页的父目录」：一旦带上就不再改写。
-   *    中途改写就等于又去信任祖先链的名字，问题会从别的地方回来。
    * ⚠️ null = 这条链的根名字未知（例如直接进一个深层目录）。此时导航最外层
    *    回落到 `levelDisplayName` 的常规取值。
    */
@@ -323,6 +331,11 @@ data class EmbyLibraryScreen(
    * 真正的库根反而露出被裁短的短名。
    *
    * 有了 Id，导航里认「这一层的 Id 等于库根 Id」即可，不依赖链的形态。
+   *
+   * ⚠️ 但 Id 只覆盖「服务端把库根作为容器返回」这一种形态。实测更常见的是
+   *    库根那一层被标成普通 `Folder`、名字就是磁盘目录名（`HD`），它的 Id
+   *    跟库 Id 对不上 —— 那时要靠 `resolveLibraryRowNames` 的另外几条判据
+   *    （父级 Id / 磁盘目录末段 / 名字分段）才认得出，详见该函数。
    */
   val rootId: String? = null,
 ) : Screen {
@@ -340,21 +353,37 @@ data class EmbyLibraryScreen(
     val scope = rememberCoroutineScope()
 
     /**
-     * 本页要往下传的「库根名」（见 [rootTitle]）。
+     * 上面那个名字属于哪一层。已经有就继承；没有说明**本页就是那条链的根**。
      *
-     * 已经有就直接带走（**只继承不覆盖**）；没有说明本页就是这条链的根 ——
-     * 用本页标题当根名。页面标题在进库那一刻是可靠的（首页媒体库列表里的库名，
-     * 或详情页现拉到的父目录名），所以这个值一旦定下就不再被服务端返回的名字改写。
-     *
-     * ⚠️ 必须声明在 `navigateToLibraryLevel` / `openItem` 调用点**之前**：
+     * ⚠️ 必须声明在 `chainRootTitle` **之前**：后者要按这个 Id 去查权威库名，
      *    局部 `val` 与局部 `fun` 一样，先声明后使用。
      */
-    val chainRootTitle: String =
-      rootTitle?.takeIf { it.isNotBlank() } ?: title.takeIf { it.isNotBlank() } ?: ""
-    /**
-     * 上面那个名字属于哪一层。已经有就继承；没有说明**本页就是那条链的根**。
-     */
     val chainRootId: String = rootId?.takeIf { it.isNotBlank() } ?: libraryId
+
+    /**
+     * 本页要往下传的「库根名」（见 [rootTitle]）。
+     *
+     * ⭐⭐ 取值优先级 —— 用户口径：**不管挂载的根目录叫 `HD`、`张三` 还是一串
+     * 无意义的长名字，库根那一行都以「媒体库的名称」为准**：
+     *
+     * 1. `/Users/{uid}/Views` 里按 [chainRootId] 查到的库名。那是用户在 Emby 里
+     *    手动给库起的名字（如「Movies_HD」），**唯一权威来源**，存在
+     *    `EmbyClient` 的进程级缓存里，任何入口、任何页面都查得到（目录页 / 详情页
+     *    跟首页未必共用同一个 ViewModel 实例，不能去读 `viewModel.libraries`）；
+     * 2. 路由继承下来的 [rootTitle]：缓存还没热（冷启动直进深层）时的兜底；
+     * 3. 本页标题：本页就是链的根时，标题正是进库那一刻看到的名字。
+     *
+     * ⚠️ 祖先链上那些 `Name` 是**磁盘目录名**，绝不参与库根命名 —— 库叫
+     *    「Movies_HD」而它索引的目录叫 `HD`，两者本来就不是一回事。
+     *    `/Items/{Id}/Ancestors` 给的是目录条目，不是库容器。
+     *
+     * ⚠️ 必须声明在 `navigateToLibraryLevel` / `openItem` 调用点**之前**。
+     */
+    val chainRootTitle: String =
+      server?.let { EmbyClient.libraryDisplayName(it, chainRootId) }
+        ?: rootTitle?.takeIf { it.isNotBlank() }
+        ?: title.takeIf { it.isNotBlank() }
+        ?: ""
 
     // ── 媒体库长按快速合并 ──
     // 与 Smart Merge 页共用同一个 Manager（快照 / 历史 / 安全检查完全一致）；
@@ -564,7 +593,14 @@ data class EmbyLibraryScreen(
       ancestorsLoading = false
       // 诊断：把整条祖先链逐层打出来（含 Path 与类型）。只在打开抽屉那一次输出，
       // 一次最多十几行，不刷屏；名字显示不对时靠它一眼看出是服务端给了什么。
-      android.util.Log.d("PathNav", "current=$title id=$libraryId levels=${fetched.size}")
+      // 同时打出「库根名」的三项来源，方便区分「权威库名没查到」和「路由没继承到」。
+      android.util.Log.d(
+        "PathNav",
+        "current=$title id=$libraryId levels=${fetched.size} " +
+          "rootId=$chainRootId rootTitle=$chainRootTitle " +
+          "authoritative=${EmbyClient.libraryDisplayName(currentServer, chainRootId)} " +
+          "resolved=${resolveLibraryRowNames(fetched, EmbyClient.libraryNameIndex(currentServer), chainRootId, chainRootTitle, chainRootTitle)}",
+      )
       fetched.forEachIndexed { i, a ->
         android.util.Log.d(
           "PathNav",
@@ -573,6 +609,33 @@ data class EmbyLibraryScreen(
         )
       }
     }
+
+    // ── 库根那一行叫什么（「Movies_HD」而不是「HD」）──
+    //
+    // 祖先链给的是**磁盘目录条目**，`Name` 天生是目录名（挂 `/mnt/data/HD` 就叫 `HD`、
+    // 挂乱码目录就叫乱码）；用户在 Emby 里设置的库名只存在于 `/Users/{uid}/Views`。
+    // 两者对不上，于是下拉导航里库根那一行显示成了目录名。
+    //
+    // 这里把「库名索引」与祖先链一起交给纯函数 `resolveLibraryRowNames` 算一次，
+    // 得到「哪一行显示库名」。渲染、跳转标题、返回上级的标题都用这同一份结果 ——
+    // 三处各算各的，迟早会出现「下拉里叫库名、跳过去顶栏又叫目录名」。
+    //
+    // ⚠️ 索引是进程级缓存（`EmbyClient`），首页刷过一次库列表就有；冷启动直进
+    //    深层时为空 —— 那时只能退到「调用方已知的库根 Id」这一条，不影响功能。
+    val libraryNameIndex =
+      remember(server?.id, ancestors) {
+        server?.let { EmbyClient.libraryNameIndex(it) } ?: LibraryNameIndex.EMPTY
+      }
+    val libraryRowNames =
+      remember(ancestors, libraryNameIndex, chainRootId, chainRootTitle) {
+        resolveLibraryRowNames(
+          chain = ancestors.orEmpty(),
+          index = libraryNameIndex,
+          rootId = chainRootId,
+          rootTitle = chainRootTitle,
+          libraryName = chainRootTitle,
+        )
+      }
 
     // ── 按层级跳转（目录导航 / 返回上一级共用的唯一入口）──
     //
@@ -635,18 +698,33 @@ data class EmbyLibraryScreen(
         if (backStack.size > 1) backStack.removeLastOrNull()
       }
 
+      // ⚠️⚠️ 本页就是这条链的**根**（库根）⇒ 再退一步就该离开这个库、回 App 首页。
+      //
+      //    这一条必须与目录导航**最外层那一行**的行为一致：那一行显示「首页」、
+      //    点它回 App 首页。用户按返回键却跳到 Emby 的 root 目录页，
+      //    就是「入口 / 跳转目标 / 返回行为三者不一致」。
+      //
+      //    ⚠️ 别用「祖先链里我是不是最外层」来判：祖先链**不含自己**，
+      //    那个判据恒为假（`parentInChain` / `isAtLibraryTopLevel` 因此永远返回
+      //    null / false）。判据就是 `libraryId == chainRootId`。
+      if (libraryId == chainRootId) {
+        goAppHome()
+        return
+      }
+
       fun goTo(parent: EmbyItem, parentOfParentId: String?) {
         val parentIdValue = parent.Id ?: return
         navigateToLibraryLevel(
           targetId = parentIdValue,
-          // 目标是库根本身时用继承下来的那个名字（祖先链给的可能只是短名）；
-          // 其余层走 `levelDisplayName`，它同样会避开被裁剪过的名字。
+          // 目标是库根那类行时，名字与下拉导航里显示的完全一致（`libraryRowNames`
+          // 就是下拉用的那一份）；其余层走 `levelDisplayName`，它同样会避开被裁剪过的名字。
           title =
-            if (parentIdValue == chainRootId) {
-              chainRootTitle.takeIf { it.isNotBlank() } ?: levelDisplayName(parent)
-            } else {
-              levelDisplayName(parent)
-            },
+            libraryRowNames[parentIdValue]
+              ?: if (parentIdValue == chainRootId) {
+                chainRootTitle.takeIf { it.isNotBlank() } ?: levelDisplayName(parent)
+              } else {
+                levelDisplayName(parent)
+              },
           collectionType = parent.CollectionType,
           parentId = parentOfParentId,
         )
@@ -3571,10 +3649,10 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
           // 祖先链从上到下：最外层（可能是 Emby 顶层视图）→ 各级子目录。
           ancestors = ancestors.orEmpty(),
           loading = ancestorsLoading,
-          // ⭐ 库根名用进库那一刻记下的那个（随路由继承），不问服务端 ——
-          //    祖先链里的容器名不保证等于用户设置的库名。
-          rootTitle = rootTitle,
-          rootId = chainRootId,
+          // ⭐ 库根那类行显示什么，由 `libraryRowNames` 一份结果说了算（见 Content()
+          //    里 `resolveLibraryRowNames` 的说明）。这里传的是「行 Id → 名字」，
+          //    抽屉按 Id 认行，不按位置 —— 链的形态（库根之上有没有顶层视图）不固定。
+          libraryNames = libraryRowNames,
           onDismiss = { showPathNavigator = false },
           // ⭐ 最外层那一行 = 「回首页」。
           //
@@ -3605,20 +3683,20 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
             val targetId = target.Id
             // 目标就是当前目录 ⇒ 什么都不做（已经在那一层了）
             if (targetId != null && targetId != libraryId) {
-              // ⚠️ 标题必须走 `levelDisplayName`，不能直接用 `target.Name`：
+              // 目标是库根那类行时，名字用下拉里显示的那一个（`libraryRowNames`）；
+              // 其余层走 `levelDisplayName` —— 不能直接用 `target.Name`：
               // 祖先链里的容器名不一定等于用户起的那个名字（见该函数注释）。
               // 直接把 `Name` 当成新页面的 title，跳过去之后顶栏就跟着一起错，
               // 而且那一页自己再也无从纠正 —— 它就是标题的唯一持有者。
-              //
-              // 目标是库根本身时用继承下来的名字：那一层正是服务端给短名的地方。
               navigateToLibraryLevel(
                 targetId = targetId,
                 title =
-                  if (targetId == chainRootId) {
-                    chainRootTitle.takeIf { it.isNotBlank() } ?: levelDisplayName(target)
-                  } else {
-                    levelDisplayName(target)
-                  },
+                  libraryRowNames[targetId]
+                    ?: if (targetId == chainRootId) {
+                      chainRootTitle.takeIf { it.isNotBlank() } ?: levelDisplayName(target)
+                    } else {
+                      levelDisplayName(target)
+                    },
                 collectionType = target.CollectionType,
                 parentId = parentInChain(ancestors.orEmpty(), targetId)?.Id,
               )
@@ -4910,8 +4988,11 @@ private fun isGhostItem(item: EmbyItem): Boolean {
  * @param loading 祖先链是否正在加载（给一个明确的「正在取层级」状态）
  * @param onSelect 选中某一层（传该层条目；Id 为空的层级调用方需自行忽略）
  * @param onGoHome 最外层那一行被点击时调用（回到 App 首页），不走 [onSelect]
- * @param rootTitle 库根名（进库那一刻记下的，随路由继承）。非空时**最外层那一行**用它，
- *   不再取祖先链里那一层的名字 —— 服务端给的容器名可能只是完整名字的一段。
+ * @param libraryNames `行 Id → 该行显示的名字`，只含**代表媒体库的那一行**
+ *   （由 `resolveLibraryRowNames` 算好）。库根在 Emby 里是虚拟容器，祖先链返回的
+ *   却是磁盘目录条目、`Name` 给的是目录名（挂 `HD` 就叫 `HD`），所以那一行必须
+ *   用用户在 `/Users/{uid}/Views` 里设置的库名覆盖，而且只能按 Id 认行 ——
+ *   链的形态（库根之上有没有顶层视图）不固定，按位置认会贴错层。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -4922,9 +5003,7 @@ private fun EmbyPathNavigatorSheet(
   onDismiss: () -> Unit,
   onSelect: (EmbyItem) -> Unit,
   onGoHome: () -> Unit,
-  rootTitle: String? = null,
-  /** [rootTitle] 属于哪一层（库根 Id）：按 Id 认行，链的形态怎么变都不会贴错 */
-  rootId: String? = null,
+  libraryNames: Map<String, String> = emptyMap(),
 ) {
   val sheetState = rememberModalBottomSheetState()
 
@@ -4947,6 +5026,9 @@ private fun EmbyPathNavigatorSheet(
         )
       }
 
+      // 曾在这里显示一行「「XXX」是媒体库名称，与服务器上的目录名可能不同」的说明。
+      // 用户要求去掉：库根那行已经直接显示媒体库名称，多一句解释只是噪音，
+      // 而且把「目录名」这个概念又摆到台面上。若以后又有人想加回来，先问一句。
       HorizontalDivider()
 
       if (loading && ancestors.isEmpty()) {
@@ -4994,26 +5076,27 @@ private fun EmbyPathNavigatorSheet(
             // 是一堆目录而不是「媒体库入口」。首页本来就不是导航栈里的一层
             // （它是 `MainScreen` 的固定根页），所以「去首页」= 把栈弹空。
             val isOutermost = level === ancestors.first()
-            // ⚠️ 不能直接用 `level.Name`：祖先链返回的容器名**不总是**用户起的那个名字。
-            //    实测过一类库（名字用分隔符分成几段）——库根单独打开时标题完全正确，但从
-            //    子目录拉祖先链回来，同一层的 `Name` 就只剩其中一段。
+            // ⚠️ 不能直接用 `level.Name`：祖先链返回的是**磁盘目录条目**，
+            //    `Name` 给的是目录名（挂 `HD` 就叫 `HD`），跟媒体库名称不是一回事。
             //
-            // ⭐ 按 **Id** 认「哪一行是库根」，不按位置：链里库根之上有没有那层
-            //    「媒体文件夹」顶层视图是不固定的。名字在进库那一刻就确定了
-            //    （首页媒体库列表的库名 / 详情页现拉到的目录名），一路继承下来。
-            val isChainRoot = level.Id != null && level.Id == rootId
-            // ⚠️ 顺序很重要：**先认库根，再认最外层**。
-            //    链里库根之上不一定有那层「媒体文件夹」顶层视图 —— 直接进深层目录时，
-            //    最外层那一行本身就是库根。此时它该显示库名、能跳过去，
-            //    而不是被当成「首页」。
+            // ⭐ [libraryNames] 命中的那一行用库名。按 **Id** 认行、不按位置：
+            //    链里库根之上有没有那层「媒体文件夹」顶层视图是不固定的。
+            //
+            // ⚠️⚠️ 但**最外层那一行永远不是库根** —— 它是「回 App 首页」的入口。
+            //    之前把 AggregateFolder（Emby 服务器根，Id=1、Name="root"）误当成
+            //    库根，结果最上面那一行显示成「root」，点它还跳到 Emby 的 root
+            //    目录页：入口、跳转目标、返回行为三者全不一致。
+            val libraryRowName = level.Id?.let { libraryNames[it] }
             val levelName =
               when {
-                isChainRoot && !rootTitle.isNullOrBlank() -> rootTitle
+                // 最外层 = 回 App 首页。图标、副标题、点击行为都跟着这一条走，
+                // 与返回键在库根处的行为一致（见 `goToParent`）。
                 isOutermost -> "首页"
+                libraryRowName != null -> libraryRowName
                 else -> levelDisplayName(level) ?: "未命名目录"
               }
-            // 只有「不是库根的最外层」才是回首页那一条（它代表顶层视图 / 服务器根）
-            val actsAsHome = isOutermost && !isChainRoot
+            // 最外层 = 回 App 首页（它代表服务器根 / 顶层视图，不是可跳转的目录）
+            val actsAsHome = isOutermost
             Row(
               modifier =
                 Modifier

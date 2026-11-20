@@ -67,6 +67,88 @@ object EmbyClient {
 
   private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
+  // ══════════════════════════════════════════════════════════════════════
+  // 媒体库「权威名称」缓存
+  // ══════════════════════════════════════════════════════════════════════
+  //
+  // ⭐⭐ 为什么需要这个：Emby 里一个媒体库的**名字**是用户在服务端手动设置的
+  // （例：建库时叫「Movies_HD」），跟它索引的那个磁盘目录名（例：`HD`）
+  // 完全是两回事。`/Items/{Id}/Ancestors` 返回的那几层是**磁盘目录条目**，
+  // `Name` 给的是目录名；只有 `/Users/{uid}/Views` 里的 `Name` 才是库名。
+  //
+  // 目录导航要在库根那一行显示库名，就得能按 Id 查到 `/Views` 给的名字。
+  // 但目录页、详情页跟首页未必共用同一个 ViewModel 实例（nav3 每个 entry
+  // 有自己的 ViewModelStoreOwner），直接读 `EmbyViewModel.libraries` 常常是空的。
+  // 所以把这份映射放在**进程级单例**里：任何一次 `getVirtualFolders` 成功都写入，
+  // 任何页面按 (server, libraryId) 查，零网络请求、无生命周期依赖。
+  //
+  // key = "${server.id}:${server.userId}"：同一台服务器换账号，可见库与库名可能不同。
+  private val libraryCatalog = java.util.concurrent.ConcurrentHashMap<String, List<LibraryRecord>>()
+
+  /**
+   * 一个媒体库在客户端这边的全部身份：Id、用户设置的名字、它索引的磁盘目录末段。
+   *
+   * [segments] 是 [EmbyLibraryNaming] 那张对照表的原料，可能为空 ——
+   * `/Views` 不保证回 `Path`，这时只能按 Id 认库。
+   */
+  private data class LibraryRecord(val id: String, val name: String, val segments: List<String>)
+
+  private fun serverKey(server: EmbyServer): String = "${server.id}:${server.userId}"
+
+  /**
+   * 按 Id 取媒体库名称（`/Users/{uid}/Views` 里用户设置的那个名字）。
+   *
+   * 查不到返回 null —— 调用方自己决定退回什么，这里不编名字。
+   */
+  fun libraryDisplayName(server: EmbyServer, libraryId: String?): String? {
+    if (libraryId.isNullOrBlank()) return null
+    return libraryCatalog[serverKey(server)]
+      ?.firstOrNull { it.id == libraryId }
+      ?.name
+      ?.takeIf { it.isNotBlank() }
+  }
+
+  /**
+   * 媒体库名称的完整索引（`库 Id → 库名`、`磁盘目录末段 → 库名`）。
+   *
+   * 给目录导航用：一趟拿到两张表，不必每行都回头查一次缓存。
+   * 冷启动直进深层目录时缓存还没热，返回 [LibraryNameIndex.EMPTY]，
+   * 调用方按「认不出就保持原样」处理即可。
+   */
+  fun libraryNameIndex(server: EmbyServer): LibraryNameIndex {
+    val records = libraryCatalog[serverKey(server)] ?: return LibraryNameIndex.EMPTY
+    val byId = LinkedHashMap<String, String>(records.size)
+    val bySegment = LinkedHashMap<String, String>(records.size)
+    records.forEach { record ->
+      byId[record.id] = record.name
+      record.segments.forEach { segment ->
+        // 同一个目录名被两个库占用时保留先登记的：先到先得比来回改更可预期，
+        // 而且这种配置本身在服务端就已经是歧义的，客户端不该猜。
+        bySegment.putIfAbsent(segment.lowercase(), record.name)
+      }
+    }
+    return LibraryNameIndex(byId = byId, bySegment = bySegment)
+  }
+
+  /** `getVirtualFolders` 成功后调用：把这次看到的库名整批写进缓存。 */
+  private fun cacheLibraryCatalog(server: EmbyServer, libraries: List<EmbyItem>) {
+    val records =
+      libraries.mapNotNull { item ->
+        val id = item.Id?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        val name = item.Name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        LibraryRecord(
+          id = id,
+          name = name,
+          // `/Views` 里带 `Path` 就顺手存下末段（`/mnt/data/HD` → `HD`）：
+          // 这是「目录名 → 库名」唯一的免费来源，不额外发请求。
+          segments = listOfNotNull(pathLastSegment(item.Path)),
+        )
+      }
+    // 整批替换而不是累加：库被删了 / 改名了，下一轮就该以这次的结果为准。
+    // 但请求失败（空列表）时不覆盖 —— 一次网络抖动不该把已有名字清掉。
+    if (records.isNotEmpty()) libraryCatalog[serverKey(server)] = records
+  }
+
   /**
    * 无参数 POST 的请求体。
    *
@@ -380,8 +462,13 @@ object EmbyClient {
    * 对应 SDK：`UserViewsServiceApi.getUsersByUseridViews` → `GET /Users/{UserId}/Views`
    * 返回电影、剧集、音乐等顶层库，而不是把所有根级 Item 平铺。
    */
-  fun getVirtualFolders(server: EmbyServer): EmbyItemsResult =
-    getJson(server, "/Users/${server.userId}/Views")
+  fun getVirtualFolders(server: EmbyServer): EmbyItemsResult {
+    val result: EmbyItemsResult = getJson(server, "/Users/${server.userId}/Views")
+    // 顺手登记权威库名：目录导航要按 Id 查「这个库到底叫什么」，
+    // 而祖先链给的是磁盘目录名，不是库名。所有调用方自动受益，不用各自记一遍。
+    cacheLibraryCatalog(server, result.Items)
+    return result
+  }
 
   /**
    * 继续观看。

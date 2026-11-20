@@ -7,6 +7,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbySubtitleDiscovery
 import app.marlboroadvance.mpvex.domain.emby.EmbySubtitleFetcher
 import app.marlboroadvance.mpvex.domain.emby.SubtitleDiscovery
 import app.marlboroadvance.mpvex.domain.emby.SubtitleFetchResult
+import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleChoices
 import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleSelector
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleInfo
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSelection
@@ -247,29 +248,21 @@ class EmbySubtitleController(
   // 用户手动选择（面板里点一条）
   // ══════════════════════════════════════════════════════════════════════
 
-  /** 记住「这部片子用这条字幕」，下次开播优先它（需求四 第一优先级）。 */
+  /**
+   * 记住「这部片子用这条字幕」，下次开播优先它（需求四 第一优先级）。
+   *
+   * 解析 / 拼装都走 [EmbySubtitleChoices]：详情页读的是同一份存储，
+   * 两处各写一套格式必然对不上（见那个 object 的注释）。
+   */
   fun rememberChoice(itemId: String, subtitle: SubtitleInfo?) {
     val current = subtitlesPreferences.embySubtitleChoices.get()
-    val kept = current.lineSequence()
-      .filter { it.isNotBlank() }
-      .filterNot { it.substringBefore('\t') == itemId }
-      .toMutableList()
-    if (subtitle != null) kept.add("$itemId\t${subtitle.key}")
-    subtitlesPreferences.embySubtitleChoices.set(kept.joinToString("\n"))
+    subtitlesPreferences.embySubtitleChoices.set(
+      EmbySubtitleChoices.withChoice(current, itemId, subtitle?.key),
+    )
   }
 
-  fun rememberedKey(itemId: String): String? {
-    val raw = subtitlesPreferences.embySubtitleChoices.get()
-    if (raw.isBlank()) return null
-    return raw.lineSequence()
-      .mapNotNull { line ->
-        val tab = line.indexOf('\t')
-        if (tab <= 0) null else line.substring(0, tab) to line.substring(tab + 1)
-      }
-      .firstOrNull { it.first == itemId }
-      ?.second
-      ?.takeIf { it.isNotBlank() }
-  }
+  fun rememberedKey(itemId: String): String? =
+    EmbySubtitleChoices.keyOf(subtitlesPreferences.embySubtitleChoices.get(), itemId)
 
   /** 清掉「这部片子记住的字幕」（用户选「自动选择」时） */
   fun forgetChoice(itemId: String) = rememberChoice(itemId, null)

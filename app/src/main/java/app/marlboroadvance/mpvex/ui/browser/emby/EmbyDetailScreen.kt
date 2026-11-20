@@ -57,7 +57,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Subtitles
-import androidx.compose.material.icons.filled.Sync
+
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -139,8 +139,15 @@ import app.marlboroadvance.mpvex.domain.emby.defaultCustomOrder
 import app.marlboroadvance.mpvex.domain.emby.effectiveEmbyMediaSourceId
 import app.marlboroadvance.mpvex.domain.emby.encodeCustomVersionOrder
 import app.marlboroadvance.mpvex.domain.emby.parseCustomVersionOrder
+import app.marlboroadvance.mpvex.domain.emby.sortEpisodesForQueue
 import app.marlboroadvance.mpvex.domain.emby.sortVersionEntries
 import app.marlboroadvance.mpvex.domain.emby.versionQueueEntry
+import app.marlboroadvance.mpvex.domain.emby.EmbySubtitleDiscovery
+import app.marlboroadvance.mpvex.domain.emby.SubtitleDiscovery
+import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleChoices
+import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleSelector
+import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSelection
+import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceLabel
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceResolution
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceSpec
@@ -154,6 +161,8 @@ import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
 import app.marlboroadvance.mpvex.presentation.components.ConfirmDialog
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshBox
+import app.marlboroadvance.mpvex.ui.browser.emby.components.DetailSubtitleCard
+import app.marlboroadvance.mpvex.ui.browser.emby.components.DetailSubtitleSheet
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyIdentifyDialog
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImage
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyRefreshMetadataDialog
@@ -345,6 +354,9 @@ data class EmbyDetailScreen(
     // 只有 `Series` 才发这个请求：`Episode` 自己的详情页不需要，电影更没有。
     var seriesEpisodes by detailState.seriesEpisodesState
     var episodesLoading by detailState.episodesLoadingState
+    // 分集是否已经取过（成功与否都算）：剧集页的「字幕」卡要靠它区分
+    // 「还在解析目标集」与「这部剧一集都没有」
+    var episodesResolved by remember(itemId) { mutableStateOf(false) }
     LaunchedEffect(itemId, item?.Type, server?.id) {
       val current = item ?: return@LaunchedEffect
       val currentServer = server ?: return@LaunchedEffect
@@ -354,7 +366,164 @@ data class EmbyDetailScreen(
         viewModel.loadSeriesEpisodes(currentServer, current.Id ?: itemId)
       }.getOrDefault(emptyList())
       episodesLoading = false
+      episodesResolved = true
     }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 字幕信息（详情页只读预览）
+    // ══════════════════════════════════════════════════════════════════════
+    //
+    // 为什么这里要再问一次服务端：详情接口的 `MediaSources.MediaStreams` 里**没有**
+    // `DeliveryMethod` / `DeliveryUrl` / `IsTextSubtitleStream` —— 那几个字段是服务端
+    // 计算播放方案时才填的。只有 PlaybackInfo 能回答「这条字幕是内嵌、外挂，
+    // 还是根本取不出来」。播放器已经在用同一个函数（`EmbySubtitleDiscovery`）。
+    //
+    // 请求放在本层而不是卡片内部：卡片是 LazyColumn 里的 item，滚出视口会被销毁重建，
+    // 请求写在里面就会随滚动反复触发（与分集 / 推荐区同一个坑）。
+    val subtitlesPreferences = koinInject<SubtitlesPreferences>()
+    val subtitleChoicesRaw by subtitlesPreferences.embySubtitleChoices.collectAsState()
+    val subtitlePreferredRaw by subtitlesPreferences.preferredLanguages.collectAsState()
+    val subtitleAllowedRaw by subtitlesPreferences.embyAllowedLanguages.collectAsState()
+    val subtitleFollowDefault by subtitlesPreferences.embyFollowDefault.collectAsState()
+
+    var subtitleUi by detailState.subtitleState
+    // 手动重试 / 下拉刷新：键不变也要重跑一次
+    var subtitleReloadKey by remember(itemId) { mutableStateOf(0) }
+
+    /**
+     * 字幕清单属于**一个具体条目**：电影 / 单集就是自己；剧集要先选出「这次会播哪一集」，
+     * 规则与播放键完全一致（有进度的第一集 → 第一集未看的 → 首集）。
+     *
+     * 不能拿剧集自身的 Id 去查：`Series` 没有媒体文件，PlaybackInfo 会返回空源。
+     */
+    val subtitleTarget: EmbyItem? = remember(item?.Id, item?.Type, seriesEpisodes) {
+      val current = item ?: return@remember null
+      when (current.Type) {
+        "Series" -> sortEpisodesForQueue(seriesEpisodes).let { list ->
+          list.firstOrNull { (it.UserData?.PlaybackPositionTicks ?: 0L) > 0L }
+            ?: list.firstOrNull { it.UserData?.Played != true }
+            ?: list.firstOrNull()
+        }
+        "Movie", "Episode", "Video", "MusicVideo", "Trailer" -> current
+        // 季 / 合集 / 文件夹 / 音乐专辑这类容器没有单一媒体文件，整块不展示
+        else -> null
+      }
+    }
+    val subtitleTargetLabel = subtitleTarget
+      ?.takeIf { item?.Type == "Series" }
+      ?.let { episode ->
+        val season = episode.ParentIndexNumber
+        val number = episode.IndexNumber
+        when {
+          season != null && season > 1 && number != null -> "第 $season 季 第 $number 集"
+          number != null -> "第 $number 集"
+          else -> episode.Name
+        }
+      }
+
+    // 版本 Id 与播放键同一条算路：用户手选 > 设置规则 > 首条源。
+    // ⚠️ 另算一套就会「卡片上是 4K 的字幕、点播放却起了 1080P」
+    val subtitleSourceId = item?.let {
+      effectiveEmbyMediaSourceId(it, selectedMediaSourceId, autoSourcePreference)
+    }
+    val subtitleVersionLabel = subtitleSourceId
+      ?.let { id -> item?.MediaSources.orEmpty().firstOrNull { source -> source.Id == id } }
+      ?.let { source -> embyMediaSourceTitle(source, source.Id?.let(::customVersionLabelOf)) }
+
+    val subtitleApplicable = when {
+      item == null -> false
+      subtitleTarget != null -> true
+      // 剧集：分集还没回来 ⇒ 先占位（骨架），而不是让卡片闪一下就消失
+      item?.Type == "Series" && !episodesResolved -> true
+      else -> false
+    }
+
+    LaunchedEffect(subtitleTarget?.Id, subtitleSourceId, server?.id, subtitleReloadKey) {
+      val currentServer = server ?: return@LaunchedEffect
+      val targetId = subtitleTarget?.Id ?: return@LaunchedEffect
+      val previous = subtitleUi
+      subtitleUi = previous.copy(
+        phase = DetailSubtitlePhase.LOADING,
+        subtitles = emptyList(),
+        error = null,
+        stale = false,
+        targetItemId = targetId,
+        targetLabel = subtitleTargetLabel,
+        versionLabel = subtitleVersionLabel,
+        requestedSourceId = subtitleSourceId,
+      )
+      // ⚠️ discover 内部是阻塞的 OkHttp 调用（不是 suspend），必须切到 IO
+      val discovery: SubtitleDiscovery = runCatching {
+        withContext(Dispatchers.IO) {
+          EmbySubtitleDiscovery.discover(currentServer, targetId, subtitleSourceId)
+        }
+      }.getOrElse { t ->
+        // 协程被取消（用户退出本页 / 快速切版本）时不要把「取消」当成一次失败写进状态
+        if (t is kotlinx.coroutines.CancellationException) throw t
+        SubtitleDiscovery(
+          mediaSourceId = subtitleSourceId,
+          subtitles = emptyList(),
+          error = t.message ?: "字幕发现失败",
+        )
+      }
+      // 「有 error 但仍有字幕」= 兜底路径部分成功，照常展示；只有彻底空才算失败
+      val failed = discovery.error != null && discovery.subtitles.isEmpty()
+      // 只有同一个目标（条目 + 请求源）的旧结果才允许回填，否则会把 4K 的字幕留在 1080P 上
+      val sameTarget = previous.targetItemId == targetId &&
+        previous.requestedSourceId == subtitleSourceId
+      val keptSubtitles = if (failed && sameTarget) previous.subtitles else emptyList()
+      subtitleUi = DetailSubtitleUi(
+        phase = if (failed) DetailSubtitlePhase.FAILED else DetailSubtitlePhase.READY,
+        subtitles = if (failed) keptSubtitles else discovery.subtitles,
+        totalStreams = if (failed && keptSubtitles.isNotEmpty()) previous.totalStreams else discovery.totalStreams,
+        mediaSourceId = discovery.mediaSourceId ?: subtitleSourceId,
+        requestedSourceId = subtitleSourceId,
+        targetItemId = targetId,
+        targetLabel = subtitleTargetLabel,
+        versionLabel = subtitleVersionLabel,
+        error = discovery.error,
+        stale = failed && keptSubtitles.isNotEmpty(),
+      )
+    }
+
+    // 「会挂哪一条」用**播放器同一个纯函数**算：详情页不写第二套语言匹配逻辑，
+    // 否则用户看到「将使用简中」、进播放页却挂的是英文。
+    val subtitleLocaleHints = remember(context) {
+      runCatching { context.resources.configuration.locales }.getOrNull()?.let { locales ->
+        (0 until locales.size()).mapNotNull { i ->
+          val locale = locales[i] ?: return@mapNotNull null
+          val language = locale.language?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+          val country = locale.country
+          if (country.isNullOrBlank()) language else "$language-$country"
+        }.distinct()
+      }.orEmpty()
+    }
+    val subtitlePick: SubtitleSelection? = remember(
+      subtitleUi.subtitles,
+      subtitleUi.targetItemId,
+      subtitleChoicesRaw,
+      subtitlePreferredRaw,
+      subtitleAllowedRaw,
+      subtitleFollowDefault,
+      subtitleLocaleHints,
+    ) {
+      if (subtitleUi.subtitles.isEmpty()) {
+        null
+      } else {
+        EmbySubtitleSelector.select(
+          subtitles = subtitleUi.subtitles,
+          preferredLanguages = splitSubtitleLanguagePrefs(subtitlePreferredRaw),
+          allowedLanguages = splitSubtitleLanguagePrefs(subtitleAllowedRaw),
+          rememberedKey = EmbySubtitleChoices.keyOf(subtitleChoicesRaw, subtitleUi.targetItemId),
+          allowEmbyDefault = subtitleFollowDefault,
+          localeLanguages = subtitleLocaleHints,
+        )
+      }
+    }
+    // null = 整块不渲染（容器类条目、分集空剧集）
+    val subtitleForUi: DetailSubtitleUi? =
+      if (subtitleApplicable) subtitleUi.copy(pick = subtitlePick) else null
+
 
     // 从播放器返回时刷新详情：播放器的进度/已看上报是异步落到服务器的，而本页组合
     // 在播放期间并未销毁（播放器是另一个 Activity），返回时 LaunchedEffect 不会重跑，
@@ -587,6 +756,8 @@ data class EmbyDetailScreen(
             onRefresh = {
               load()
               recommendReloadKey++
+              // 用户在服务端补了字幕，手动下拉就该看到；不递增的话键没变、effect 不会重跑
+              subtitleReloadKey++
             },
             enabled = collapse.isExpanded,
             listState = listState,
@@ -598,6 +769,9 @@ data class EmbyDetailScreen(
               listState = listState,
               collapse = collapse,
               showRecommendations = showRecommendations,
+              // 字幕预览（null = 本条目不是可播的单一条目：季 / 合集 / 文件夹 / 空剧集）
+              subtitle = subtitleForUi,
+              onRetrySubtitle = { subtitleReloadKey++ },
               // 「打开所在文件夹」：父目录 Id 由 detail 请求里的 ParentId 给（见 EmbyClient 的
               // ITEM_FIELDS_WITH_EXTERNAL_URLS），拿不到就不给入口。
               //
@@ -617,35 +791,48 @@ data class EmbyDetailScreen(
                   // 这次 loadItem 顺带就拿到了，不用额外请求。
                   val folderName = folder?.Name?.takeIf { it.isNotBlank() }
 
-                  // ⭐ 库根名要一路往**上**找，不能只认「直接父目录」。
-                  //    详情页可能是从很深的目录点进来的，直接父目录只是其中一层；
-                  //    而导航里最上面那层是库根，两者不是一回事。
+                  // ⭐⭐ 库根名**以媒体库的名称为准**，不是「第一个有名字的祖先目录」。
                   //
-                  //    做法：顺着 ParentId 逐层上溯，遇到第一个库容器
-                  //    （CollectionFolder / UserView）就是库根，取它的名字。
-                  //    拿不到（层数太深 / 服务端没回 ParentId）就退回直接父目录名 ——
-                  //    名字不完美也能用，总比显示服务端的短名强。
+                  //    Emby 里媒体库的名字是用户在服务端**手动设置**的（如
+                  //    「Movies_HD」），跟它索引的那个磁盘目录名（如 `HD`）
+                  //    完全是两回事。`/Items/{Id}/Ancestors` 返回的那几层是磁盘
+                  //    目录条目，`Name` 给的是目录名；只有 `/Users/{uid}/Views`
+                  //    里的 `Name` 才是库名。拿目录名当库名，就会出现「同一个库
+                  //    从首页进叫 A、从详情页进叫 B」，以及「挂到张三目录就显示张三」。
                   //
-                  //    ⚠️ 上限 8 层：正常库不会更深，纯粹防畸形数据把请求打成死循环。
-                  var probeId = parentId
-                  var probeRootTitle: String? = null
+                  //    所以分两步：先定位**库根是哪一层**，再拿这个 Id 去媒体库列表
+                  //    里查它「官方叫什么」。
+                  //
+                  // ⚠️⚠️ 判库根时**绝不能把 AggregateFolder 当库根**：
+                  //    Emby 的服务器根就是 AggregateFolder（Id=1、Name="root"）。
+                  //    误认成库根的后果是实打实的：目录导航最上面那一行会显示成
+                  //    「root」，点它还会跳到 Emby 的 root 目录页 —— 而不是回 App 首页。
                   var probeRootId: String? = null
+                  var probeRootName: String? = null
+                  var probeId: String? = parentId
+                  var probe: EmbyItem? = folder
                   var depth = 0
-                  while (probeId.isNotBlank() && depth < 8) {
-                    val probe = viewModel.loadItem(currentServer, probeId)
-                      ?: break
-                    val isLibraryRoot =
-                      probe.Type == "CollectionFolder" ||
-                        probe.Type == "UserView" ||
-                        probe.Type == "AggregateFolder"
-                    if (isLibraryRoot) {
-                      probeRootTitle = probe.Name?.takeIf { it.isNotBlank() }
-                      probeRootId = probe.Id
+                  while (depth < 8) {
+                    // probeId 是可空且会被重新赋值，先落成非空局部变量再判断/使用，
+                    // 否则 `isNotBlank()` 与 `loadItem(id)` 都过不了编译
+                    val currentProbeId = probeId?.takeIf { it.isNotBlank() } ?: break
+                    val item = probe ?: viewModel.loadItem(currentServer, currentProbeId) ?: break
+                    // ① 权威判据：这个 Id 就是 `/Users/{uid}/Views` 里的某个媒体库。
+                    //    ⚠️ 必须优先用它：这类库的库根在祖先链上的 `Type` 会显示成
+                    //    Folder（磁盘目录条目），只认 CollectionFolder 会一路走到
+                    //    服务器根去 —— 那正是「顶部显示 root」的成因。
+                    val libraryName = EmbyClient.libraryDisplayName(currentServer, item.Id)
+                    // ② 补充判据：服务端把它标成库容器。
+                    val isLibraryContainer =
+                      item.Type == "CollectionFolder" || item.Type == "UserView"
+                    if (libraryName != null || isLibraryContainer) {
+                      probeRootId = item.Id
+                      probeRootName = libraryName ?: item.Name?.takeIf { it.isNotBlank() }
                       break
                     }
-                    val nextParent = probe.ParentId?.takeIf { it.isNotBlank() }
-                      ?: break
+                    val nextParent = item.ParentId?.takeIf { it.isNotBlank() } ?: break
                     probeId = nextParent
+                    probe = null
                     depth++
                   }
 
@@ -656,9 +843,9 @@ data class EmbyDetailScreen(
                       collectionType = collectionType,
                       isFolderDive = true,
                       parentId = folder?.ParentId?.takeIf { it.isNotBlank() },
-                      // 优先用真正的库根名；找不到就退回直接父目录名
-                      rootTitle = probeRootTitle ?: folderName,
-                      // 名字属于哪一层：找到了就是那个库根，否则就是直接父目录
+                      // 媒体库名称（查不到才退回服务端给的那层名字）
+                      rootTitle = probeRootName ?: folderName,
+                      // 名字属于哪一层：库根 Id；实在定位不到就用直接父目录
                       rootId = probeRootId ?: parentId,
                     ),
                   )
@@ -1495,6 +1682,10 @@ private fun DetailBody(
   genreRecommendItems: List<EmbyItem>,
   /** 是否正在拉起播放器：播放键转圈 + 禁点（转给 [PlaySection]）。 */
   playLaunching: Boolean = false,
+  /** 字幕预览状态；null = 本条目不是可播的单一条目，整块不渲染。 */
+  subtitle: DetailSubtitleUi? = null,
+  /** 字幕读取失败后的重试（重新发一次 PlaybackInfo）。 */
+  onRetrySubtitle: () -> Unit = {},
   /** 多版本媒体：当前选中的版本 Id（null = 默认版本）。转给 [PlaySection] 画下拉框。 */
   selectedMediaSourceId: String? = null,
   /** 多版本媒体：用户在下拉框里选了某个版本。 */
@@ -1543,6 +1734,9 @@ private fun DetailBody(
 ) {
   val isFavorite = item.UserData?.IsFavorite == true
   val isPlayed = item.UserData?.Played == true
+  // 「全部字幕」抽屉的开关。放这里（而非卡片内部）是因为抽屉要盖在整页之上，
+  // 而卡片只是 LazyColumn 里的一行 —— 滚出视口时它的组合会被销毁，状态也就丢了。
+  var subtitleSheetOpen by remember { mutableStateOf(false) }
   // 多版本媒体：真正生效的版本 Id（单版本媒体为 null）。下面「媒体信息」也要按它取源，
   // 否则容器 / 文件大小 / 码率 / 音视频轨道会一直显示第一个版本，与选中的版本对不上。
   // ⚠️ 必须与播放侧用**同一条规则**（autoSourcePreference 同一个值），
@@ -1603,6 +1797,20 @@ private fun DetailBody(
           onPlayFromStart = onPlayFromStart,
           episodes = episodes,
         )
+      }
+
+      // ── 字幕（只读预览）──
+      // 贴在播放区下方：用户在这里决定「要不要现在看」，而「有没有中文字幕」正是这个决策的一部分。
+      // 放在底部「媒体信息」卡里太晚 —— 滑到那里时多数人已经点过播放了。
+      // ⚠️ 数据与请求都在上层（EmbyDetailScreen.Content），这里只负责画。
+      subtitle?.let { subtitleUi ->
+        item {
+          DetailSubtitleCard(
+            ui = subtitleUi,
+            onOpenSheet = { subtitleSheetOpen = true },
+            onRetry = onRetrySubtitle,
+          )
+        }
       }
 
       // ── 分集（电视剧 / 综艺）──
@@ -1885,6 +2093,16 @@ private fun DetailBody(
           onOpenFolder = openFolder,
         )
       }
+    }
+
+    // ── 「全部字幕」抽屉 ──
+    // 挂在 Body 的根 Box 上（不是某个 item 里）：抽屉要盖住整页，且不能随列表滚走。
+    if (subtitleSheetOpen && subtitle != null) {
+      DetailSubtitleSheet(
+        ui = subtitle,
+        itemTitle = item.Name,
+        onDismiss = { subtitleSheetOpen = false },
+      )
     }
 
     // ── 封面区（浮在下层内容之上，随滚动折叠）──
@@ -3316,40 +3534,9 @@ private fun MediaInfoSection(
           )
         }
 
-        if (summary.subtitleCount > 0) {
-          Spacer(modifier = Modifier.height(12.dp))
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-              imageVector = Icons.Default.Subtitles,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-              text = "字幕 ${summary.subtitleCount} 条",
-              style = MaterialTheme.typography.labelMedium,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-            if (summary.externalSubtitleCount > 0) {
-              Text(
-                text = " · 外挂 ${summary.externalSubtitleCount}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
-          if (summary.subtitleLanguages.isNotEmpty()) {
-            Text(
-              text = summary.subtitleLanguages.joinToString(" / "),
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.padding(start = 22.dp, top = 2.dp),
-            )
-          }
-        }
+        // 字幕**不在这里**：本卡的条数来自详情接口的 `MediaSources`，字段更少、也不含
+        // 交付方式，与播放区下方那张用 PlaybackInfo 算出来的字幕卡口径不一致 ——
+        // 两处同时显示必然出现「上面写 4 条、下面写 3 条」。字幕只在上面那一处展示。
       }
     }
   }
@@ -3891,3 +4078,12 @@ private suspend fun loadGenreRecommendations(
     .distinctBy { it.Id }
     .take(RECOMMEND_COUNT)
 }
+
+/**
+ * 语言偏好串（`zh-CN,zh,eng`）→ 列表。
+ *
+ * 分隔符与播放器的 `EmbySubtitleController.preferredLanguageList()` 保持一致：
+ * 详情页只**读**它来复现「播放器会选哪一条」，不写回、不另存一份。
+ */
+private fun splitSubtitleLanguagePrefs(raw: String): List<String> =
+  raw.split(',', ' ', ';').map { it.trim() }.filter { it.isNotEmpty() }
