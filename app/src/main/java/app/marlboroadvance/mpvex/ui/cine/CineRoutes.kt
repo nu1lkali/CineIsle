@@ -73,6 +73,8 @@ fun CineRoute(
           collectionType = route.collectionType,
           includeItemTypes = route.includeItemTypes,
           folderDive = route.isFolderDive,
+          // 库根名随路由继承（首页进库时为空 ⇒ 子页拿本页标题当根名）
+          rootTitle = route.rootTitle,
         )
       }
     }

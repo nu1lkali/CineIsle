@@ -279,7 +279,14 @@ data class EmbyAggregateLibraryScreen(
                       progress = playbackProgress(item),
                       isFavorite = item.UserData?.IsFavorite == true,
                       onClick = {
-                        openAggregateItem(backStack, item, aggregate?.collectionType)
+                        openAggregateItem(
+                          backStack = backStack,
+                          item = item,
+                          parentCollectionType = aggregate?.collectionType,
+                          // 聚合库名当根名：这一页本身不是某个库的目录，
+                          // 但下钻页要有个可靠的起点名（避免回落到服务端短名）
+                          parentTitle = aggregate?.name,
+                        )
                       },
                       style = cardStyle,
                       fallbackImageUrl = server?.let { embyVm.imageUrl(it, item, "Thumb", 480) },
@@ -431,6 +438,8 @@ private fun openAggregateItem(
   backStack: NavBackStack<Screen>,
   item: EmbyItem,
   parentCollectionType: String?,
+  /** 父页标题：聚合页没有「某个库」的概念，下钻时拿它当库根名兜底 */
+  parentTitle: String? = null,
 ) {
   val id = item.Id
   if (id.isNullOrBlank() || id.contains("://")) {
@@ -473,6 +482,9 @@ private fun openAggregateItem(
         title = item.Name ?: "",
         collectionType = item.CollectionType ?: parentCollectionType,
         isFolderDive = true,
+        // 聚合页是跨库的，没有单一库根；把父页标题当根名，至少比服务端短名靠谱
+        // （真进到某个库内部后，那一层会带上自己正确的 rootTitle 继续往下传）
+        rootTitle = parentTitle,
       ),
     )
 
@@ -481,6 +493,8 @@ private fun openAggregateItem(
         libraryId = id,
         title = item.Name ?: "",
         collectionType = item.CollectionType ?: parentCollectionType,
+        // 这里进的是「某个库的根」：它自己的名字就是根名，比父页标题更准
+        rootTitle = item.Name?.takeIf { it.isNotBlank() } ?: parentTitle,
       ),
     )
 

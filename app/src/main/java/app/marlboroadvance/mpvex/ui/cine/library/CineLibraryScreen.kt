@@ -110,6 +110,11 @@ fun CineLibraryScreen(
   modifier: Modifier = Modifier,
   /** true = 这是点进一个文件夹后的下钻页（口径见 [EmbyLibraryScreen.isFolderDive]） */
   folderDive: Boolean = false,
+  /**
+   * 下钻链的库根名（进库那一刻记下的）。下钻子页要继续往下带，
+   * 否则子页会拿自己的标题当根名，一路退回去时库根名就变了。
+   */
+  rootTitle: String? = null,
 ) {
   val context = LocalContext.current
   val app = context.applicationContext as Application
@@ -218,6 +223,8 @@ fun CineLibraryScreen(
             isFolderDive = true,
             // 带上当前层作为父级：下钻页再按返回能直接回到本层（按层级退，不靠栈）
             parentId = libraryId,
+            // 库根名继承：没有就说明本页就是根本身，用本页标题
+            rootTitle = rootTitle ?: title,
           ),
         )
       }

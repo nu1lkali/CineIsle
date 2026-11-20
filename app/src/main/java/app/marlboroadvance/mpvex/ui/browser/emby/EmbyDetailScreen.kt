@@ -615,13 +615,17 @@ data class EmbyDetailScreen(
                   // 顺便带上文件夹的父级：进了文件夹后按返回能直接回到它的上一层
                   // （按目录层级退，而不是弹历史栈）。`ParentId` 已在详情字段清单里，
                   // 这次 loadItem 顺带就拿到了，不用额外请求。
+                  // 这一层的名字是**现拉**父目录得到的（同样走带 Fields 的接口），
+                  // 所以它就是这条下钻链的根名，往下逐层继承即可。
+                  val folderName = folder?.Name?.takeIf { it.isNotBlank() }
                   pushChild(
                     EmbyLibraryScreen(
                       libraryId = parentId,
-                      title = folder?.Name?.takeIf { it.isNotBlank() } ?: "文件夹",
+                      title = folderName ?: "文件夹",
                       collectionType = collectionType,
                       isFolderDive = true,
                       parentId = folder?.ParentId?.takeIf { it.isNotBlank() },
+                      rootTitle = folderName,
                     ),
                   )
                 }
