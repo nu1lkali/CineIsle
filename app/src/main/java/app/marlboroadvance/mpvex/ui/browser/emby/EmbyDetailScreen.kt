@@ -615,9 +615,40 @@ data class EmbyDetailScreen(
                   // 顺便带上文件夹的父级：进了文件夹后按返回能直接回到它的上一层
                   // （按目录层级退，而不是弹历史栈）。`ParentId` 已在详情字段清单里，
                   // 这次 loadItem 顺带就拿到了，不用额外请求。
-                  // 这一层的名字是**现拉**父目录得到的（同样走带 Fields 的接口），
-                  // 所以它就是这条下钻链的根名，往下逐层继承即可。
                   val folderName = folder?.Name?.takeIf { it.isNotBlank() }
+
+                  // ⭐ 库根名要一路往**上**找，不能只认「直接父目录」。
+                  //    详情页可能是从很深的目录点进来的，直接父目录只是其中一层；
+                  //    而导航里最上面那层是库根，两者不是一回事。
+                  //
+                  //    做法：顺着 ParentId 逐层上溯，遇到第一个库容器
+                  //    （CollectionFolder / UserView）就是库根，取它的名字。
+                  //    拿不到（层数太深 / 服务端没回 ParentId）就退回直接父目录名 ——
+                  //    名字不完美也能用，总比显示服务端的短名强。
+                  //
+                  //    ⚠️ 上限 8 层：正常库不会更深，纯粹防畸形数据把请求打成死循环。
+                  var probeId = parentId
+                  var probeRootTitle: String? = null
+                  var probeRootId: String? = null
+                  var depth = 0
+                  while (probeId.isNotBlank() && depth < 8) {
+                    val probe = viewModel.loadItem(currentServer, probeId)
+                      ?: break
+                    val isLibraryRoot =
+                      probe.Type == "CollectionFolder" ||
+                        probe.Type == "UserView" ||
+                        probe.Type == "AggregateFolder"
+                    if (isLibraryRoot) {
+                      probeRootTitle = probe.Name?.takeIf { it.isNotBlank() }
+                      probeRootId = probe.Id
+                      break
+                    }
+                    val nextParent = probe.ParentId?.takeIf { it.isNotBlank() }
+                      ?: break
+                    probeId = nextParent
+                    depth++
+                  }
+
                   pushChild(
                     EmbyLibraryScreen(
                       libraryId = parentId,
@@ -625,7 +656,10 @@ data class EmbyDetailScreen(
                       collectionType = collectionType,
                       isFolderDive = true,
                       parentId = folder?.ParentId?.takeIf { it.isNotBlank() },
-                      rootTitle = folderName,
+                      // 优先用真正的库根名；找不到就退回直接父目录名
+                      rootTitle = probeRootTitle ?: folderName,
+                      // 名字属于哪一层：找到了就是那个库根，否则就是直接父目录
+                      rootId = probeRootId ?: parentId,
                     ),
                   )
                 }

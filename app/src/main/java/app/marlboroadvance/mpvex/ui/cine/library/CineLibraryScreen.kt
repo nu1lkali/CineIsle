@@ -115,6 +115,8 @@ fun CineLibraryScreen(
    * 否则子页会拿自己的标题当根名，一路退回去时库根名就变了。
    */
   rootTitle: String? = null,
+  /** [rootTitle] 属于哪一层（库根 Id），与它成对继承 */
+  rootId: String? = null,
 ) {
   val context = LocalContext.current
   val app = context.applicationContext as Application
@@ -225,6 +227,8 @@ fun CineLibraryScreen(
             parentId = libraryId,
             // 库根名继承：没有就说明本页就是根本身，用本页标题
             rootTitle = rootTitle ?: title,
+            // 那个名字属于哪一层：本页不是根时沿用，否则就是本页自己
+            rootId = rootId ?: libraryId,
           ),
         )
       }

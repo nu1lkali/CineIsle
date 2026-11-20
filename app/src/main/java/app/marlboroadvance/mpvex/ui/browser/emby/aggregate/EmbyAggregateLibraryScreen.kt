@@ -482,9 +482,11 @@ private fun openAggregateItem(
         title = item.Name ?: "",
         collectionType = item.CollectionType ?: parentCollectionType,
         isFolderDive = true,
-        // 聚合页是跨库的，没有单一库根；把父页标题当根名，至少比服务端短名靠谱
-        // （真进到某个库内部后，那一层会带上自己正确的 rootTitle 继续往下传）
-        rootTitle = parentTitle,
+        // 从聚合页下钻进来的这个文件夹，就是这条下钻链的起点 —— 它自己的名字
+        // 比聚合库名更贴切（聚合库是跨库拼的，跟这个目录没有从属关系）。
+        // 名字与 Id 成对给，导航里认 Id 才不会贴错层。
+        rootTitle = item.Name?.takeIf { it.isNotBlank() } ?: parentTitle,
+        rootId = id,
       ),
     )
 
@@ -495,6 +497,8 @@ private fun openAggregateItem(
         collectionType = item.CollectionType ?: parentCollectionType,
         // 这里进的是「某个库的根」：它自己的名字就是根名，比父页标题更准
         rootTitle = item.Name?.takeIf { it.isNotBlank() } ?: parentTitle,
+        // 这一层就是库根，名字属于它自己
+        rootId = id,
       ),
     )
 

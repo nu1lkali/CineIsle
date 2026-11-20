@@ -314,6 +314,17 @@ data class EmbyLibraryScreen(
    *    回落到 `levelDisplayName` 的常规取值。
    */
   val rootTitle: String? = null,
+  /**
+   * [rootTitle] 属于哪一层（库根目录的 Id），与它成对出现、一起继承。
+   *
+   * 为什么要 Id 而不靠位置：祖先链的层数**不是固定的**。库根之上通常还有一层
+   * Emby 的顶层视图（「媒体文件夹」），但直接进深层目录时链里又可能没有那层。
+   * 按「第几行」去贴名字，一旦形态不同就贴错层 —— 实测出现过库名被贴到顶层视图上、
+   * 真正的库根反而露出被裁短的短名。
+   *
+   * 有了 Id，导航里认「这一层的 Id 等于库根 Id」即可，不依赖链的形态。
+   */
+  val rootId: String? = null,
 ) : Screen {
   // ⚠️ ExperimentalFoundationApi 是为了 `LazyGridScope.stickyHeader`（年份吸顶，清单 4.1）。
   // 它在 foundation 1.7 里从 Experimental 升为 Stable 了，但为兼容旧版本仍保留注解写法。
@@ -340,6 +351,10 @@ data class EmbyLibraryScreen(
      */
     val chainRootTitle: String =
       rootTitle?.takeIf { it.isNotBlank() } ?: title.takeIf { it.isNotBlank() } ?: ""
+    /**
+     * 上面那个名字属于哪一层。已经有就继承；没有说明**本页就是那条链的根**。
+     */
+    val chainRootId: String = rootId?.takeIf { it.isNotBlank() } ?: libraryId
 
     // ── 媒体库长按快速合并 ──
     // 与 Smart Merge 页共用同一个 Manager（快照 / 历史 / 安全检查完全一致）；
@@ -592,6 +607,7 @@ data class EmbyLibraryScreen(
             // ⭐ 库根名一路继承：跳到别层之后，那层的导航最外层仍然是同一个库名，
             // 不会因为服务端在祖先链上给了个短名就变样。
             rootTitle = chainRootTitle,
+            rootId = chainRootId,
           ),
         )
       }
@@ -620,11 +636,17 @@ data class EmbyLibraryScreen(
       }
 
       fun goTo(parent: EmbyItem, parentOfParentId: String?) {
+        val parentIdValue = parent.Id ?: return
         navigateToLibraryLevel(
-          targetId = parent.Id ?: return,
-          // 同样要走 `levelDisplayName`：祖先链里的名字可能被裁剪过，
-          // 直接当标题写进新页面就再也纠正不回来了。
-          title = levelDisplayName(parent),
+          targetId = parentIdValue,
+          // 目标是库根本身时用继承下来的那个名字（祖先链给的可能只是短名）；
+          // 其余层走 `levelDisplayName`，它同样会避开被裁剪过的名字。
+          title =
+            if (parentIdValue == chainRootId) {
+              chainRootTitle.takeIf { it.isNotBlank() } ?: levelDisplayName(parent)
+            } else {
+              levelDisplayName(parent)
+            },
           collectionType = parent.CollectionType,
           parentId = parentOfParentId,
         )
@@ -3241,6 +3263,7 @@ data class EmbyLibraryScreen(
                   parentLibraryId = libraryId,
                   // 库根名顺着下钻链传下去
                   libraryRootTitle = chainRootTitle,
+                  libraryRootId = chainRootId,
                 )
               }
             },
@@ -3360,6 +3383,7 @@ data class EmbyLibraryScreen(
                         categoryName = category.name,
                         parentLibraryId = libraryId,
                         libraryRootTitle = chainRootTitle,
+                        libraryRootId = chainRootId,
                       )
                     },
                     onLongClick = { offset ->
@@ -3439,6 +3463,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               categoryName = category.name,
               parentLibraryId = libraryId,
               libraryRootTitle = chainRootTitle,
+              libraryRootId = chainRootId,
             )
           },
     onLongClick = { offset ->
@@ -3482,6 +3507,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                           categoryName = category.name,
                           parentLibraryId = libraryId,
                           libraryRootTitle = chainRootTitle,
+                          libraryRootId = chainRootId,
                         )
                       },
                       onLongClick = { offset ->
@@ -3548,6 +3574,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
           // ⭐ 库根名用进库那一刻记下的那个（随路由继承），不问服务端 ——
           //    祖先链里的容器名不保证等于用户设置的库名。
           rootTitle = rootTitle,
+          rootId = chainRootId,
           onDismiss = { showPathNavigator = false },
           // ⭐ 最外层那一行 = 「回首页」。
           //
@@ -3582,9 +3609,16 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               // 祖先链里的容器名不一定等于用户起的那个名字（见该函数注释）。
               // 直接把 `Name` 当成新页面的 title，跳过去之后顶栏就跟着一起错，
               // 而且那一页自己再也无从纠正 —— 它就是标题的唯一持有者。
+              //
+              // 目标是库根本身时用继承下来的名字：那一层正是服务端给短名的地方。
               navigateToLibraryLevel(
                 targetId = targetId,
-                title = levelDisplayName(target),
+                title =
+                  if (targetId == chainRootId) {
+                    chainRootTitle.takeIf { it.isNotBlank() } ?: levelDisplayName(target)
+                  } else {
+                    levelDisplayName(target)
+                  },
                 collectionType = target.CollectionType,
                 parentId = parentInChain(ancestors.orEmpty(), targetId)?.Id,
               )
@@ -4889,6 +4923,8 @@ private fun EmbyPathNavigatorSheet(
   onSelect: (EmbyItem) -> Unit,
   onGoHome: () -> Unit,
   rootTitle: String? = null,
+  /** [rootTitle] 属于哪一层（库根 Id）：按 Id 认行，链的形态怎么变都不会贴错 */
+  rootId: String? = null,
 ) {
   val sheetState = rememberModalBottomSheetState()
 
@@ -4962,26 +4998,32 @@ private fun EmbyPathNavigatorSheet(
             //    实测过一类库（名字用分隔符分成几段）——库根单独打开时标题完全正确，但从
             //    子目录拉祖先链回来，同一层的 `Name` 就只剩其中一段。
             //
-            //    最外层那一行更不该去问服务端：它的名字在**进库那一刻**就确定了
-            //    （首页媒体库列表的 `library.Name`，或详情页现拉到的父目录名），
-            //    一路随路由继承下来（`rootTitle`）。现在有就用它，没有才回落到
-            //    `levelDisplayName` 的常规取值。
+            // ⭐ 按 **Id** 认「哪一行是库根」，不按位置：链里库根之上有没有那层
+            //    「媒体文件夹」顶层视图是不固定的。名字在进库那一刻就确定了
+            //    （首页媒体库列表的库名 / 详情页现拉到的目录名），一路继承下来。
+            val isChainRoot = level.Id != null && level.Id == rootId
+            // ⚠️ 顺序很重要：**先认库根，再认最外层**。
+            //    链里库根之上不一定有那层「媒体文件夹」顶层视图 —— 直接进深层目录时，
+            //    最外层那一行本身就是库根。此时它该显示库名、能跳过去，
+            //    而不是被当成「首页」。
             val levelName =
-              if (isOutermost) {
-                rootTitle?.takeIf { it.isNotBlank() } ?: levelDisplayName(level) ?: "未命名目录"
-              } else {
-                levelDisplayName(level) ?: "未命名目录"
+              when {
+                isChainRoot && !rootTitle.isNullOrBlank() -> rootTitle
+                isOutermost -> "首页"
+                else -> levelDisplayName(level) ?: "未命名目录"
               }
+            // 只有「不是库根的最外层」才是回首页那一条（它代表顶层视图 / 服务器根）
+            val actsAsHome = isOutermost && !isChainRoot
             Row(
               modifier =
                 Modifier
                   .fillMaxWidth()
-                  .clickable { if (isOutermost) onGoHome() else onSelect(level) }
+                  .clickable { if (actsAsHome) onGoHome() else onSelect(level) }
                   .padding(horizontal = 24.dp, vertical = 12.dp),
               verticalAlignment = Alignment.CenterVertically,
             ) {
               Icon(
-                imageVector = if (isOutermost) Icons.Default.Home else Icons.Default.Folder,
+                imageVector = if (actsAsHome) Icons.Default.Home else Icons.Default.Folder,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(22.dp),
@@ -5000,7 +5042,7 @@ private fun EmbyPathNavigatorSheet(
                 // 副标题：最外层始终标「首页」—— 它代表的是 App 首页，
                 // 不管服务端给这个容器的 Type 是 CollectionFolder 还是 UserView。
                 val typeLabel =
-                  if (isOutermost) "首页" else level.Type?.let(::embyContainerTypeLabel)
+                  if (actsAsHome) "首页" else level.Type?.let(::embyContainerTypeLabel)
                 // 认不出的类型返回 null ⇒ 干脆不画副标题（编不出来的类型名比没有更困惑）
                 typeLabel?.let { label ->
                   Text(
@@ -5133,6 +5175,8 @@ private fun openItem(
    * 与 [parentLibraryId] 同一个理由。
    */
   libraryRootTitle: String? = null,
+  /** 与 [libraryRootTitle] 成对：那个名字属于哪一层（库根 Id） */
+  libraryRootId: String? = null,
 ) {
   val id = item.Id
   if (id.isNullOrBlank() || id.contains("://")) {
@@ -5149,6 +5193,7 @@ private fun openItem(
           includeItemTypes = listOf("Season"),
           // 剧集 / 季也在同一个库里，根名照传（层级导航即便当前档位不显示，后续切过来也对）
           rootTitle = libraryRootTitle,
+          rootId = libraryRootId,
         ),
       )
 
@@ -5158,6 +5203,7 @@ private fun openItem(
           title = item.Name ?: "",
           includeItemTypes = listOf("Episode"),
           rootTitle = libraryRootTitle,
+          rootId = libraryRootId,
         ),
       )
 
@@ -5191,6 +5237,7 @@ private fun openItem(
           parentId = parentLibraryId,
           // 库根名继续往下传：反正是同一个库，根名不该在中途换一个说法
           rootTitle = libraryRootTitle,
+          rootId = libraryRootId,
         ),
       )
 
@@ -5207,6 +5254,7 @@ private fun openItem(
           parentId = parentLibraryId,
           // 同样是同一个库里的容器（合集 / 顶层视图），根名照传
           rootTitle = libraryRootTitle,
+          rootId = libraryRootId,
         ),
       )
 
