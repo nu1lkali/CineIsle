@@ -2226,8 +2226,8 @@ private fun NetworkBrowserContent(
   // 别甩一个空网格让人猜。
   val filteredEmptyMessage =
     when {
-      searchQuery.isNotBlank() -> "没有匹配「$searchQuery」的内容，换个关键词试试"
-      anyTypeHidden -> "当前筛选条件下没有内容，勾选上方更多类型试试"
+      searchQuery.isNotBlank() -> "没有匹配「$searchQuery」的内容，换个关键词"
+      anyTypeHidden -> "当前筛选条件下没有内容，可勾选上方更多类型"
       else -> "此目录下只有其他类型文件（字幕、nfo 等）；切换到列表视图可查看全部文件"
     }
 

@@ -388,7 +388,7 @@ object NetworkToolboxPlanner {
             if (skipped > 0) add("已在目标文件夹里的 $skipped 个不动")
             add("整理完成后会删除腾空的子文件夹")
           }
-          if (budget.truncated) add("已达扫描上限，只处理已扫到的部分")
+          if (budget.truncated) add("已达扫描上限，仅处理已扫描到的部分")
         }
         ToolPlan(
           tool = tool,

@@ -341,7 +341,7 @@ private fun CineFailoverCard(
       Spacer(Modifier.height(6.dp))
       Text(
         text = "一次真实请求失败后补一次轻量探活，两者都失败才切换；" +
-          "之后每 20 秒探一次原服务器，恢复即切回。手动点选的服务器不会被改回来。",
+          "之后每 20 秒探测一次原服务器，恢复即切回。手动选定的服务器不会被改回。",
         style = type.cardMeta,
         color = colors.onSurfaceVariant.copy(alpha = 0.78f),
       )

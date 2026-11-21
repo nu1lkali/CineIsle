@@ -484,7 +484,7 @@ fun CinePersonScreen(
             CineStatePanel(
               icon = Icons.Outlined.Search,
               title = if (query.isNotBlank()) "没有匹配的作品" else "没有作品",
-              description = error ?: "换一个筛选条件试试",
+              description = error ?: "换一个筛选条件",
               primaryLabel = "返回",
               onPrimary = { backStack.removeLastOrNull() },
             )
@@ -567,7 +567,7 @@ fun CinePersonScreen(
             if (selected) {
               Text(
                 text = when {
-                  index == 4 -> "再点换一批"
+                  index == 4 -> "再次点击换一批"
                   sortAsc -> "升序"
                   else -> "降序"
                 },

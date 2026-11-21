@@ -1067,7 +1067,7 @@ private enum class FavoriteSort(
   // 退回入库时间当近似值 —— 它不会比「刚收藏的」更晚，所以新收藏永远排在前头。
   FAVORITED("收藏时间", "旧 → 新", "新 → 旧", naturalAsc = false),
   // 随机：不分升降序，再点一次换一批
-  RANDOM("随机", "再点一次换一批", "再点一次换一批", naturalAsc = true),
+  RANDOM("随机", "再次点击换一批", "再次点击换一批", naturalAsc = true),
   ;
 
   /** 是否带方向（随机没有） */

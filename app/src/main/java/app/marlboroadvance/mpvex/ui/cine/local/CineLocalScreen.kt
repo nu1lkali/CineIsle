@@ -296,7 +296,7 @@ private fun CineAlbumFolderBrowser(modifier: Modifier = Modifier) {
           icon = Icons.Filled.Folder,
           title = if (query.isNotBlank()) "没有匹配的文件夹" else "还没有视频文件夹",
           description = if (query.isNotBlank()) {
-            "换个关键词试试，搜索会同时匹配文件夹名和路径"
+            "换个关键词；搜索会同时匹配文件夹名和路径"
           } else {
             "把视频放进设备后回到这里下拉刷新即可"
           },

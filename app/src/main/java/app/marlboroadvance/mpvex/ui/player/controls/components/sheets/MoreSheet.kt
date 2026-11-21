@@ -375,6 +375,9 @@ val scope = rememberCoroutineScope()
         // 反向切换内核：只在 mpv 播放页出现 —— GSY 播放页顶部自己有「切回 mpv」按钮，
         // 两边各留一个入口、不互相重复。点一下把当前视频 + 整份播放队列 + 进度
         // 一起交给 GSY，规则和 GSY 切回 mpv 完全对称。
+        // ⚠️ 格子固定 76dp、labelSmall 单行省略，大约只排得下 6 个汉字；大写拉丁字母
+        // 比汉字更占宽，所以带 "GSY" 的句子很早就顶到边。文案定为「GSY 内核」，
+        // 写成「切换到 GSY 内核」会在真机上截成「切换到 GS…」。
         if (engineKind == EngineKind.MPV) {
           QuickActionItem(
             icon = Icons.Outlined.SwapHoriz,

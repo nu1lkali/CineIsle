@@ -878,7 +878,7 @@ fun EmbyHomeScreen(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                      text = "换个关键词，或检查拼写试试",
+                      text = "换个关键词，或检查拼写",
                       style = MaterialTheme.typography.bodyMedium,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                       textAlign = TextAlign.Center,
@@ -948,7 +948,7 @@ fun EmbyHomeScreen(
                     if (searchTruncated && searchTab == EmbySearchTab.ALL) {
                       item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                         Text(
-                          text = "只显示前 ${searchResults.size} 条，试试更精确的关键词或勾选类型筛选",
+                          text = "只显示前 ${searchResults.size} 条，可用更精确的关键词，或勾选类型筛选",
                           style = MaterialTheme.typography.bodySmall,
                           color = MaterialTheme.colorScheme.onSurfaceVariant,
                           modifier = Modifier
@@ -1227,7 +1227,7 @@ fun EmbyEmptyState(
     if (isError) {
       OopsErrorAnimation(
         modifier = Modifier.size(width = 128.dp, height = 132.dp),
-        caption = "哎呀，出了点小问题",
+        caption = "加载失败",
       )
     } else {
       Icon(
@@ -1305,7 +1305,7 @@ fun EmbyErrorBanner(
       modifier = Modifier
         .size(width = 112.dp, height = 116.dp)
         .padding(bottom = 8.dp),
-      caption = "哎呀，出了点小问题",
+      caption = "加载失败",
     )
     Text(
       text = message,

@@ -245,7 +245,7 @@ fun NetworkToolboxSheet(
       if (plan.truncated) {
         Spacer(Modifier.height(8.dp))
         Text(
-          text = "⚠️ 已达扫描上限，只处理已扫到的部分（重新点一次可继续处理剩下的）",
+          text = "⚠️ 已达扫描上限，本次仅处理已扫描到的部分（可再次执行以处理剩余项）",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.error,
         )

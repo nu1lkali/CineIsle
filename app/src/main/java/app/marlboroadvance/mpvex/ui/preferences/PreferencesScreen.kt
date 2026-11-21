@@ -882,7 +882,7 @@ object PreferencesScreen : Screen {
                 summary = {
                   Text(
                     text = if (photoFilmstrip) {
-                      "底部显示一排缩略图，点一下跳到那张" +
+                      "底部显示一排缩略图，点击跳到该张" +
                         "（Emby 媒体库与网络位置的照片都生效，会占一点画面高度）"
                     } else {
                       "整屏只显示当前这张，画面最大"

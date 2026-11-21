@@ -201,7 +201,7 @@ fun SubtitleSearchSheet(
         Column(modifier = Modifier.weight(1f)) {
           Text("只看精确匹配", style = MaterialTheme.typography.bodyMedium)
           Text(
-            text = "结果通常只剩几条，但都是按文件名哈希对上本片的",
+            text = "结果通常只剩几条，均按文件名哈希与本片匹配",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )

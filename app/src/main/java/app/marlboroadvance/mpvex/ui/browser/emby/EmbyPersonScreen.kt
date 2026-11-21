@@ -724,7 +724,7 @@ private enum class PersonSort(
   RATING("评分", "低 → 高", "高 → 低", naturalAsc = false),
   ADDED("最新添加", "旧 → 新", "新 → 旧", naturalAsc = false),
   // 随机：不分升降序（那两个箭头对它没意义），**再点一次就换一批**（重新洗牌）
-  RANDOM("随机", "再点一次换一批", "再点一次换一批", naturalAsc = true),
+  RANDOM("随机", "再次点击换一批", "再次点击换一批", naturalAsc = true),
   ;
 
   /** 是否带方向（随机没有） */

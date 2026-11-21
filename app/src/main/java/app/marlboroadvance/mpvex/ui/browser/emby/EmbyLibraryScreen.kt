@@ -5672,6 +5672,8 @@ private fun FilterDropdownRow(
  *    不写死 —— 状态栏 / 字体缩放变化都不会让面板盖到工具行；
  *  - **右缘贴屏幕右缘**：锚点是全宽 Box（不是被 padding 内缩的 Row），
  *    `Alignment.TopEnd` 天然贴死；
+ *  - **宽度只够排下最长的项**（176dp）：排序项最长 4 个汉字，最宽也就「文字 + 箭头 + 对勾」，
+ *    再宽就是右半边的死白（见下面 Surface 的注释）。
  *  - 入场从右滑入（`slideInHorizontally`），出场随 Popup 一起消失：
  *    focusable Popup 会吃掉「点面板外」与「返回键」，都走 [onDismissRequest] → [onDismiss]。
  *
@@ -5740,7 +5742,11 @@ private fun SortMenu(
         shadowElevation = 8.dp,
         tonalElevation = 2.dp,
         modifier = Modifier
-          .width(240.dp)
+          // 宽度只按「最长的一项」定：4 个汉字（播放次数 / 影评评分）+ 升降序箭头 +
+          // 右侧对勾大约 132dp，176dp 再留一点余量给放大的字号。
+          // 早先 240dp 时右半边空着一大片（用户反馈「留白很多」）—— 面板窄下来之后，
+          // 文字与对勾的距离才回到正常菜单的密度。
+          .width(176.dp)
           .heightIn(max = panelMaxHeight),
       ) {
         Column(
@@ -5750,7 +5756,7 @@ private fun SortMenu(
             text = title,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 6.dp),
+            modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 6.dp),
           )
           HorizontalDivider(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),

@@ -657,7 +657,7 @@
   <string name="gsy_control_unmute">取消静音</string>
   <string name="gsy_control_prev">上一集</string>
   <string name="gsy_control_next">下一集</string>
-  <string name="gsy_control_switch_engine">切换到 mpv 播放器</string>
+  <string name="gsy_control_switch_engine">切换到 mpv 内核</string>
   <string name="gsy_control_orientation">横竖屏切换</string>
   <string name="gsy_control_screenshot">截图</string>
   <string name="gsy_control_subtitle">字幕</string>
@@ -754,7 +754,7 @@
   <!-- ===== 播放器「更多」面板：快捷功能宫格 ===== -->
   <string name="player_sheets_more_quick_actions">快捷功能</string>
   <!-- 「更多」宫格里的内核切换入口：把当前视频（含整份播放队列与进度）交给 GSY 播放页 -->
-  <string name="player_more_switch_to_gsy">用 GSY 播放</string>
+  <string name="player_more_switch_to_gsy">GSY 内核</string>
   <!-- 拿不到可播地址时（理论上不该发生）的内核切换提示 -->
   <string name="player_engine_switch_unavailable">无法切换内核：没有可播放的地址</string>
   <string name="player_sheets_more_chapters">章节</string>

@@ -513,7 +513,7 @@ internal fun AlbumPickerGrid(
           val hint =
             when {
               searchResult?.truncated == true ->
-                "只显示前 ${AlbumMediaSource.SEARCH_LIMIT} 条结果，换个更精确的关键词试试"
+                "只显示前 ${AlbumMediaSource.SEARCH_LIMIT} 条结果，换个更精确的关键词"
               // 搜索中不提供「加载更多」：搜索结果来自整库，与时间游标无关
               searchResult != null -> null
               hasMore -> null // 有「加载更多」按钮就够，不必再写一遍

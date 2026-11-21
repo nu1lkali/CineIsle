@@ -351,7 +351,7 @@ private fun DirSizeBlock(
     )
     if (entry.truncated) {
       Text(
-        text = "已达统计上限，只算了已扫到的部分",
+        text = "已达统计上限，仅统计已扫描到的部分",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.error,
       )

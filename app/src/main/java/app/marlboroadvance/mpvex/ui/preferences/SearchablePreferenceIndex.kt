@@ -181,7 +181,7 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
     ))
     add(SearchablePreference(
         title = "照片浏览器显示底部缩略图",
-        summary = "底部显示一排缩略图，点一下跳到那张",
+        summary = "底部显示一排缩略图，点击跳到该张",
         category = "Emby 照片浏览与保存",
         screen = PreferencesScreen,
     ))
@@ -391,7 +391,7 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
     ))
     add(SearchablePreference(
         title = "片尾提示下一集",
-        summary = "片尾前 \${preferences.nextUpShowSeconds.get()} 秒在右下角提示下一集，点一下立刻切",
+        summary = "片尾前 \${preferences.nextUpShowSeconds.get()} 秒在右下角提示下一集，点击即刻切换",
         category = "常规",
         screen = PlayerPreferencesScreen,
     ))
@@ -838,7 +838,7 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
     ))
     add(SearchablePreference(
         title = "全屏响应手势",
-        summary = "官方 setIsTouchWigetFull。全屏时手势更顺手，一般保持开启",
+        summary = "官方 setIsTouchWigetFull。全屏时手势更灵敏，通常保持开启",
         category = "手势",
         screen = GsyPreferencesScreen,
     ))

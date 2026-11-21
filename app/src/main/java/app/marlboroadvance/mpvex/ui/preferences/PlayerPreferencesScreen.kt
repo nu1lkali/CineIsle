@@ -279,7 +279,7 @@ object PlayerPreferencesScreen : Screen {
                 summary = {
                   Text(
                     text = if (showNextUp) {
-                      "片尾前 ${preferences.nextUpShowSeconds.get()} 秒在右下角提示下一集，点一下立刻切"
+                      "片尾前 ${preferences.nextUpShowSeconds.get()} 秒在右下角提示下一集，点击即刻切换"
                     } else {
                       "不提示，播完按连播设置自动切"
                     },

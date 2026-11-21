@@ -174,13 +174,13 @@ object GsyPreferencesScreen : Screen {
                   Text(
                     text = when (playbackEngine) {
                       "GSY" ->
-                        "默认用 GSY 播放页。GSY 是独立播放页，配置见本页；" +
+                        "默认使用 GSY 播放页。GSY 是独立播放页，配置见本页；" +
                           "mpv 播放页的滤镜 / 字幕排版 / 解码器切换 / 章节在 GSY 下不可用"
                       "VLC" ->
                         "默认用 VLC 播放页。VLC 是独立内核，配置见 VLC 设置；" +
                           "外挂字幕文件选择 / 投屏 / 后台播放仍在补齐"
                       else ->
-                        "默认用 mpv 播放页（功能最全）；详情页长按播放可临时选 GSY / VLC"
+                        "默认使用 mpv 播放页（功能最全）；详情页长按播放可临时选择 GSY / VLC"
                     },
                     color = MaterialTheme.colorScheme.outline,
                   )
@@ -606,7 +606,7 @@ object GsyPreferencesScreen : Screen {
                 title = { Text("全屏响应手势", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
-                    text = "官方 setIsTouchWigetFull。全屏时手势更顺手，一般保持开启",
+                    text = "官方 setIsTouchWigetFull。全屏时手势更灵敏，通常保持开启",
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },

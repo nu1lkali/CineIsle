@@ -516,7 +516,7 @@ class PlayerDanmakuState(
     if (title.isBlank()) {
       // 还没进过 onEpisodeChanged（极少见：叠层是在播放页里建的，理论上必先切集）。
       // 但静默返回会让用户完全看不到反应，所以给一句可读的说明。
-      _sheet.value = _sheet.value.copy(error = "还没拿到片名，稍等片刻再点一次试试")
+      _sheet.value = _sheet.value.copy(error = "尚未获取片名，请稍候重试")
       return
     }
     // 手动选过番（且勾了「记住手动选择」）优先 —— 与 onEpisodeChanged 的优先级保持一致

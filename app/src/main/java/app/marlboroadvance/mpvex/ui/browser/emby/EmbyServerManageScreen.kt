@@ -386,7 +386,7 @@ private fun FailoverCard(
       Text(
         text = "判定方式：一次真实请求失败后补一次轻量探活，两者都失败才切换；" +
           "之后每 20 秒探一次原服务器，恢复即自动切回。" +
-          "手动点选的服务器不会被后台改回来。",
+          "手动选定的服务器不会被后台改回。",
         style = MaterialTheme.typography.labelSmall,
         color = if (troubled) {
           MaterialTheme.colorScheme.onErrorContainer

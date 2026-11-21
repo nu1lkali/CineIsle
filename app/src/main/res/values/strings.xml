@@ -674,7 +674,7 @@
   <string name="gsy_control_unmute">Unmute</string>
   <string name="gsy_control_prev">Previous video</string>
   <string name="gsy_control_next">Next video</string>
-  <string name="gsy_control_switch_engine">Switch to the mpv player</string>
+  <string name="gsy_control_switch_engine">Switch to the mpv engine</string>
   <string name="gsy_control_orientation">Switch portrait / landscape</string>
   <string name="gsy_control_screenshot">Take screenshot</string>
   <string name="gsy_control_subtitle">Subtitles</string>
@@ -770,7 +770,7 @@
   <string name="player_sheets_more_quick_actions">Quick actions</string>
   <string name="player_sheets_more_chapters">Chapters</string>
   <!-- 「更多」宫格里的内核切换入口：把当前视频（含整份播放队列与进度）交给 GSY 播放页 -->
-  <string name="player_more_switch_to_gsy">Play with GSY</string>
+  <string name="player_more_switch_to_gsy">GSY engine</string>
   <!-- 拿不到可播地址时（理论上不该发生）的内核切换提示 -->
   <string name="player_engine_switch_unavailable">Cannot switch engine: no playable source</string>
 
