@@ -65,6 +65,9 @@ internal fun DetailSubtitleCard(
   }
   val picked = ui.pick?.chosen
   val pickedTitle = picked?.let { SubtitlePresentation.titleOf(it) }
+  // 「将自动使用」那一行先给**实际名称**：用户要确认的是「哪一条」，不是「什么语言」
+  val pickedName = picked?.let { SubtitlePresentation.actualNameOf(it) }
+  val pickedSummary = picked?.describe()
 
   Surface(
     shape = RoundedCornerShape(18.dp),
@@ -134,7 +137,8 @@ internal fun DetailSubtitleCard(
         else -> SubtitleReadyBody(
           ui = ui,
           pickedTitle = pickedTitle,
-          pickedText = picked?.describe(),
+          pickedName = pickedName,
+          pickedSummary = pickedSummary,
           chips = chips,
           hiddenChipCount = hiddenChipCount,
           allUnavailable = allUnavailable,
@@ -260,13 +264,16 @@ private fun SubtitleFailedBody(error: String?, onRetry: () -> Unit) {
 private fun SubtitleReadyBody(
   ui: DetailSubtitleUi,
   pickedTitle: String?,
-  pickedText: String?,
+  /** 要加载的那一条的实际名称（外挂文件名 / 服务端 DisplayTitle）；拿不到为 null */
+  pickedName: String?,
+  /** 技术口径一句话：`简体中文 · ASS · 外挂 · 默认` */
+  pickedSummary: String?,
   chips: List<String>,
   hiddenChipCount: Int,
   allUnavailable: Boolean,
 ) {
   Column {
-    if (pickedText != null) {
+    if (pickedSummary != null) {
       Row {
         Text(
           text = "将自动使用",
@@ -275,12 +282,24 @@ private fun SubtitleReadyBody(
         )
         Spacer(modifier = Modifier.width(5.dp))
         Text(
-          text = pickedText,
+          // 有实际名称就显示名称：同一语言下可能有好几条，只有名字能区分是哪一条
+          text = pickedName ?: pickedSummary,
           style = MaterialTheme.typography.labelLarge,
           color = MaterialTheme.colorScheme.primary,
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
           modifier = Modifier.weight(1f),
+        )
+      }
+      if (pickedName != null) {
+        // 名称已经说了「是哪一条」，第二行退成技术口径，不抢主次
+        Text(
+          text = pickedSummary,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.padding(top = 2.dp),
         )
       }
     } else {

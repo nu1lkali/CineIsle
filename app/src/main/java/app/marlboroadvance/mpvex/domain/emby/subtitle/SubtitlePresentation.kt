@@ -17,7 +17,7 @@ data class SubtitleRowModel(
   val streamIndex: Int,
   /** 主标题：归一化后的语言名（简体中文 / 繁体中文 / 英语…） */
   val title: String,
-  /** 副标题：来源 + 服务端原文（为空则不显示） */
+  /** 副标题：实际名称 + 来源（为空则不显示） */
   val detail: String?,
   /** 左侧格式块（ASS / SRT / PGS）；拿不到格式时给 SUB */
   val formatLabel: String,
@@ -38,7 +38,8 @@ object SubtitlePresentation {
    *
    * ⚠️ **不能**直接用 `displayName`：那是 `DisplayTitle` 原文，中文服务器给「简体中文」，
    * 英文服务器给「Chinese (Simplified)」—— 服务器换个语言设置，同一份字幕就换个说法。
-   * 语言名一律走 [EmbySubtitleLanguage.label] 的归一化口径。
+   * 语言名一律走 [EmbySubtitleLanguage.label] 的归一化口径；原文只在
+   * [actualNameOf] 里作为「具体是哪一条」的补充出现。
    */
   fun titleOf(subtitle: SubtitleInfo): String {
     val label = EmbySubtitleLanguage.label(subtitle.languageKey)
@@ -51,6 +52,48 @@ object SubtitlePresentation {
       ?: subtitle.codec?.takeIf { it.isNotBlank() }?.uppercase()?.take(4)
       ?: "SUB"
 
+  /**
+   * 这条字幕**实际叫什么** —— 也就是「播放时会被自动加载的那一条」的名字。
+   *
+   * 为什么主标题不用它：主标题要的是稳定口径（同一份字幕换服务器语言就换个说法不行），
+   * 但「将使用哪一条」必须给得出具体名字 —— 一部片常常有三四条简中
+   * （正片 / 双语 / 听障 / 不同字幕组），光写「简体中文」根本分不出是哪一条。
+   *
+   * 取值顺序：
+   * 1. **外挂字幕**取磁盘文件名（`Path` 末段，保留扩展名）：服务端 `DisplayTitle`
+   *    常只给「中文（简体）- 外挂」，几条会完全撞名，只有文件名能定位到具体文件；
+   * 2. 其余（内嵌轨 / 服务端交付）取 `DisplayTitle` 原文；
+   * 3. 拿不到、或与归一化语言名一模一样 ⇒ null（宁可不显示，也不重复一遍）。
+   *
+   * ⚠️ `Path` 只用来切末段做展示，**绝不能**当客户端路径去读。
+   */
+  fun actualNameOf(subtitle: SubtitleInfo): String? {
+    val title = titleOf(subtitle)
+    val fromFile = if (subtitle.isExternal) fileNameOf(subtitle.path) else null
+    val fromServer = subtitle.displayName.takeIf { it.isNotBlank() }
+    // 服务端没给 DisplayTitle 时，Mapper 会拼一个「语言 · 格式」的占位名 —— 那不是
+    // 实际名称，显示出来只会和下面的技术口径重复一遍。
+    val synthesized = "$title · ${formatLabelOf(subtitle)}"
+    return (fromFile ?: fromServer)
+      ?.takeIf { it.isNotBlank() && it != title && it != synthesized }
+  }
+
+  /**
+   * 路径末段。只切分隔符、不改内容（POSIX `/`、Windows `\`、SMB 混写都能取到）。
+   *
+   * 不复用 `domain/emby` 里的同名工具：本包要能在**只有 kotlin-stdlib** 的环境里
+   * 独立编译跑单测（见 `.verify/run_emby_subtitle_tests.py`）。
+   */
+  fun fileNameOf(path: String?): String? {
+    val trimmed = path?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    // 以分隔符结尾的是目录：宁可返回 null，也别把目录名当成字幕名显示出来
+    if (trimmed.endsWith('\\') || trimmed.endsWith('/')) return null
+    return trimmed
+      .substringAfterLast('\\')
+      .substringAfterLast('/')
+      .takeIf { it.isNotBlank() }
+  }
+
   /** 来源标签。与 `SubtitleSourceType` 一一对应，别在 UI 里另写 when。 */
   fun sourceLabelOf(subtitle: SubtitleInfo): String = when (subtitle.sourceType) {
     SubtitleSourceType.EMBEDDED -> "内嵌"
@@ -60,12 +103,17 @@ object SubtitlePresentation {
     SubtitleSourceType.UNKNOWN -> "未知来源"
   }
 
-  /** 副标题：`外挂 · 中英双语`。服务端原文与主标题重复时只留来源。 */
-  fun detailOf(subtitle: SubtitleInfo): String? {
-    val title = titleOf(subtitle)
-    val original = subtitle.displayName.takeIf { it.isNotBlank() && it != title }
-    return listOfNotNull(sourceLabelOf(subtitle), original).joinToString(" · ").takeIf { it.isNotBlank() }
-  }
+  /**
+   * 副标题：`实际名称 · 来源`，例如 `Movie.2020.chs.ass · 外挂`。
+   *
+   * 实际名称缺失时只剩来源，不留一个空的「·」。
+   * `distinct()` 兜住一种偶发情况：服务端 `DisplayTitle` 直接就叫「外挂」。
+   */
+  fun detailOf(subtitle: SubtitleInfo): String? =
+    listOfNotNull(actualNameOf(subtitle), sourceLabelOf(subtitle))
+      .distinct()
+      .joinToString(" · ")
+      .takeIf { it.isNotBlank() }
 
   /** 徽标。顺序固定：默认 → 强制 → 听障（与播放器面板的阅读顺序一致）。 */
   fun tagsOf(subtitle: SubtitleInfo): List<String> = buildList {
