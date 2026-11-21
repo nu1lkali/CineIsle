@@ -3,11 +3,7 @@ package app.marlboroadvance.mpvex.domain.emby
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -188,51 +184,13 @@ object EmbyClient {
    */
   private const val PROBE_TIMEOUT_MS = 2_500L
 
-  /** 请求 Emby 时统一附加的扩展字段 */
-  internal const val ITEM_FIELDS =
-    "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources," +
-    // Size 是「按文件大小排序」的数据来源，Emby 默认不返回，必须显式索取
-    "Tags,SortName,ProductionLocations,Path,Size"
-
-  /**
-   * [ITEM_FIELDS] + **本地排序要用的那几个键**：年份 / 评分 / 添加时间 / 首播日期。
-   *
-   * ⚠️ 这几个字段 Emby **默认不回传**（不带 Fields 的 `/Items` 只回
-   * Name / Id / Type / UserData / ImageTags，其余全是 null），而 [ITEM_FIELDS] 里也没有它们。
-   * 于是「按年份 / 评分 / 最新添加排序」时每条的键都是 null，稳定排序退化为**原顺序** ——
-   * 表现就是「排序只有名称（SortName 在 ITEM_FIELDS 里）和随机有效，其余点了没反应」。
-   *
-   * 凡是**要在客户端本地排序**的列表（收藏页、演员 / 导演作品页）都必须用这一份。
-   */
-  internal const val ITEM_FIELDS_WITH_SORT_KEYS =
-    "$ITEM_FIELDS,ProductionYear,CommunityRating,DateCreated,PremiereDate"
-
-  /**
-   * 拉照片（Photo）列表时索要的扩展字段。
-   *
-   * 只用 OpenAPI 文档列出的合法 Fields 名（Overview/Genres/Taglines/SortName/
-   * ProductionLocations/Path）—— 服务端对不认识的字段名有可能直接 400，
-   * 不放没把握的值进去。
-   *
-   * ⚠️ **宽高 / MIME / EXIF（CameraMake 等）不在这个串里，也不该加**：
-   * OpenAPI 的 Fields 可选值清单里根本没有它们 —— 这些字段由服务端在库扫描时
-   * 从图片 EXIF 写进条目实体，对 Photo 条目**自动返回**，与 Fields 无关。
-   * 见 [app.marlboroadvance.mpvex.domain.emby.EmbyModels] 里 EmbyItem 的照片字段段。
-   */
-  internal const val PHOTO_FIELDS =
-    "Overview,Genres,Taglines,SortName,ProductionLocations,Path"
-
-  /**
-   * 取「整份条目原文」时索要的字段（演职员合并回写用）。
-   *
-   * 要点是**必须包含 `People`**：不带的话返回体里没有 People，
-   * [app.marlboroadvance.mpvex.domain.emby.rewriteItemPeople] 会认为这条不用改从而静默跳过。
-   * 其余是编辑元数据时用户可能已经改过的字段，一并要回来，
-   * 免得整包回写时把它们从「有值」变成「缺字段」。
-   */
-  private const val RAW_ITEM_FIELDS =
-    "Overview,OriginalTitle,SortName,Genres,Tags,Studios,ProductionLocations,People," +
-      "OfficialRating,CommunityRating,PremiereDate,ProductionYear,Path,ProviderIds,Taglines"
+  // Fields 取值已搬到 [EmbyItemFields]（重构：god-class 拆分，逐字搬迁）。
+  // 这里保留同名 const 别名：外部写 `EmbyClient.ITEM_FIELDS` 的调用方一行都不用改，
+  // const 是编译期内联，值与原来完全一致。
+  internal const val ITEM_FIELDS = EmbyItemFields.CORE
+  internal const val ITEM_FIELDS_WITH_SORT_KEYS = EmbyItemFields.WITH_SORT_KEYS
+  internal const val PHOTO_FIELDS = EmbyItemFields.PHOTO
+  private const val RAW_ITEM_FIELDS = EmbyItemFields.RAW
 
   /** 统计演员作品数时每页拉多少条。开大一点，几千条的库几次就能拉完 */
   private const val COUNT_PAGE_SIZE = 500
@@ -2955,61 +2913,20 @@ object EmbyClient {
 
   // ════════════════════════════════════════════════════════════════════════
   // 4. 播放进度上报（Playstate）
+  // 实现已搬到 EmbySessionApi（重构：god-class 拆分），此处仅保留对外签名
   // ════════════════════════════════════════════════════════════════════════
+  //
+  // ⚠️ 这一段是全项目最容易「看起来成功、其实一条没记上」的地方，
+  // 三条约束（PlaySessionId 自生成 / MediaSourceId 必带 / 空串不许发）
+  // 的完整说明见 `EmbySessionApi` 内的 KDoc，搬迁时逐字保留。
 
-  /**
-   * 上报播放开始。调用时机：播放页准备开始播放时。
-   *
-   * @param playSessionId **客户端自己生成的**会话 id（见下方说明）。传了就会写进 body，
-   *   返回值也会在服务端不回显时退回它。
-   * @return 本次播放的会话 id —— 服务端回显的就用它的，否则就是传进来的那个。
-   */
-  /**
-   * 向服务器要一个**它签发的**播放会话（`POST /Items/{id}/PlaybackInfo`，`IsPlayback=true`）。
-   *
-   * @return `PlaySessionId to MediaSources[0].Id`；拿不到（老版本 / 该条目没有可用源 / 网络失败）
-   *   返回 null，调用方退回自生成的 UUID。
-   *
-   * ## 为什么要这一步（v231）
-   *
-   * v226 起我们是自己造 UUID 当 `PlaySessionId` 的 —— Start / Progress / Stopped 三处一致，
-   * 进度确实能记上（位置、百分比都对）。但「**条目什么时候被顶到继续观看最前面**」取决于
-   * 服务端有没有把 `LastPlayedDate` 刷新，而那是挂在**服务端会话**上的：自己造的 id 服务端
-   * 根本没有这条会话，收尾时就跳过了这一步。
-   *
-   * 现象因此非常割裂：详情页有进度（位置写了）、首页却不往前提（时间没写）。
-   * 实测同一条服务器上，别的播放器（Yamby 先 PlaybackInfo 再上报）播过的片会立刻排到第一。
-   *
-   * 代价：每次起播多一次请求。它和「预解析直链」无关 —— PlaybackInfo 只打到自己的 Emby，
-   * 不碰网盘 CDN，也不会跟 302。
-   */
+  /** 向服务器要一个它签发的播放会话（`POST /Items/{id}/PlaybackInfo`，`IsPlayback=true`）。 */
   suspend fun requestPlaybackSession(
     server: EmbyServer,
     itemId: String,
-  ): Pair<String, String?>? {
-    val payload =
-      jsonObjectOf(
-        mapOf(
-          "UserId" to server.userId.takeIf { it.isNotEmpty() },
-          // IsPlayback=true 才是「我要播了」（false 是探测），会话的语义在这里
-          "IsPlayback" to true,
-          "AutoOpenLiveStream" to false,
-          "EnableDirectPlay" to true,
-          "EnableDirectStream" to true,
-          "EnableTranscoding" to true,
-        ),
-      ).toString()
-    val info = runCatching {
-      execJson<PlaybackInfoResult>(
-        authedRequest(server, "/Items/$itemId/PlaybackInfo")
-          .post(payload.toRequestBody(jsonMedia))
-          .build(),
-      )
-    }.getOrNull() ?: return null
-    val sessionId = info.PlaySessionId?.takeIf { it.isNotBlank() } ?: return null
-    return sessionId to info.MediaSources?.firstOrNull()?.Id
-  }
+  ): Pair<String, String?>? = EmbySessionApi.requestPlaybackSession(server, itemId)
 
+  /** 上报播放开始。返回本次会话 id（服务端不回显时退回 [playSessionId]）。 */
   fun reportPlaybackStart(
     server: EmbyServer,
     itemId: String,
@@ -3017,56 +2934,20 @@ object EmbyClient {
     audioStreamIndex: Int? = null,
     subtitleStreamIndex: Int? = null,
     playMethod: String = "DirectStream",
-    /** 多版本媒体：本次播放的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
     mediaSourceId: String? = null,
-    /**
-     * 会话 id（客户端生成，官方客户端也是自己生成 GUID 带上来的）。
-     *
-     * ⚠️ 为什么必须由客户端给：Emby 的 `POST /Sessions/Playing` 正常返回 **204**（空 body）
-     * 或 `{}`，**里面没有 `PlaySessionId` 字段**。只从响应里读的话永远是空串，而
-     * Progress / Stopped 拿着空 id 去对账，服务端既匹配不上会话、又不会按 ItemId 兜底，
-     * 整场播放一条进度都记不下来 —— 现象就是「退出后已观看 0%，剩余=总时长」。
-     */
     playSessionId: String? = null,
-  ): String {
-    val obj = buildMap {
-      put("ItemId", itemId)
-      if (!playSessionId.isNullOrBlank()) put("PlaySessionId", playSessionId)
-      put("PositionTicks", positionTicks)
-      put("PlayMethod", playMethod)
-      mediaSourceId?.let { put("MediaSourceId", it) }
-      audioStreamIndex?.let { put("AudioStreamIndex", it) }
-      subtitleStreamIndex?.let { put("SubtitleStreamIndex", it) }
-      put("CanSeek", true)
-      put("IsMuted", false)
-      put("IsPaused", false)
-    }
-    val body = json.encodeToString(JsonObject.serializer(), jsonObjectOf(obj))
-    val req = authedRequest(server, "/Sessions/Playing")
-      .post(body.toRequestBody(jsonMedia))
-      .build()
-    val resp = execString(req)
-    // 服务端回显了就用它的（个别版本会）；没回显（204 / 空 JSON，最常见）就用我们自己的。
-    return try {
-      json.parseToJsonElement(resp).jsonObject["PlaySessionId"]?.jsonPrimitive?.contentOrNull
-        ?.takeIf { it.isNotBlank() }
-        ?: playSessionId.orEmpty()
-    } catch (_: Exception) {
-      playSessionId.orEmpty()
-    }
-  }
+  ): String = EmbySessionApi.reportPlaybackStart(
+    server = server,
+    itemId = itemId,
+    positionTicks = positionTicks,
+    audioStreamIndex = audioStreamIndex,
+    subtitleStreamIndex = subtitleStreamIndex,
+    playMethod = playMethod,
+    mediaSourceId = mediaSourceId,
+    playSessionId = playSessionId,
+  )
 
-  /**
-   * 上报播放进度（建议每 10 秒一次 + 暂停/恢复时）。
-   *
-   * 两个字段**不能省**，理由都是「服务端要靠它们把这条进度归到哪一集、哪个版本」：
-   *
-   * · `MediaSourceId`：多版本条目（4K / 1080P 各一条）上，Start 带了它、Progress 不带，
-   *   服务端会把这次进度记到**默认版本**上，于是别的版本续播位置一直是旧的。
-   * · `PlaySessionId`：只在**非空**时发送。送一个空串过去，服务端既匹配不上既有会话，
-   *   又不会走「按 ItemId 找当前会话」的兜底，这条 Progress 就被丢掉了；
-   *   整个字段缺席反而能命中兜底。
-   */
+  /** 上报播放进度（建议每 10 秒一次 + 暂停/恢复时）。 */
   fun reportPlaybackProgress(
     server: EmbyServer,
     itemId: String,
@@ -3074,45 +2955,31 @@ object EmbyClient {
     positionTicks: Long,
     isPaused: Boolean = false,
     isMuted: Boolean = false,
-    /** 多版本媒体：正在播的那个版本（`MediaSources[i].Id`）；null = 未知 / 单版本 */
     mediaSourceId: String? = null,
-  ) {
-    val obj = buildMap {
-      put("ItemId", itemId)
-      if (playSessionId.isNotBlank()) put("PlaySessionId", playSessionId)
-      put("PositionTicks", positionTicks)
-      put("IsPaused", isPaused)
-      put("IsMuted", isMuted)
-      put("PlayMethod", "DirectStream")
-      mediaSourceId?.let { put("MediaSourceId", it) }
-    }
-    val body = json.encodeToString(JsonObject.serializer(), jsonObjectOf(obj))
-    val req = authedRequest(server, "/Sessions/Playing/Progress")
-      .post(body.toRequestBody(jsonMedia))
-      .build()
-    execString(req)
-  }
+  ) = EmbySessionApi.reportPlaybackProgress(
+    server = server,
+    itemId = itemId,
+    playSessionId = playSessionId,
+    positionTicks = positionTicks,
+    isPaused = isPaused,
+    isMuted = isMuted,
+    mediaSourceId = mediaSourceId,
+  )
 
-  /** 上报播放停止（退出播放页时调用）。[playSessionId] / [mediaSourceId] 的取舍同上。 */
+  /** 上报播放停止（退出播放页时调用）。 */
   fun reportPlaybackStopped(
     server: EmbyServer,
     itemId: String,
     playSessionId: String,
     positionTicks: Long,
     mediaSourceId: String? = null,
-  ) {
-    val obj = buildMap {
-      put("ItemId", itemId)
-      if (playSessionId.isNotBlank()) put("PlaySessionId", playSessionId)
-      put("PositionTicks", positionTicks)
-      mediaSourceId?.let { put("MediaSourceId", it) }
-    }
-    val body = json.encodeToString(JsonObject.serializer(), jsonObjectOf(obj))
-    val req = authedRequest(server, "/Sessions/Playing/Stopped")
-      .post(body.toRequestBody(jsonMedia))
-      .build()
-    execString(req)
-  }
+  ) = EmbySessionApi.reportPlaybackStopped(
+    server = server,
+    itemId = itemId,
+    playSessionId = playSessionId,
+    positionTicks = positionTicks,
+    mediaSourceId = mediaSourceId,
+  )
 
   // ════════════════════════════════════════════════════════════════════════
   // 5. 图片 / 视频流 URL 构造（不调用，只生成 URL 给 Coil/PlayerActivity）
@@ -3522,174 +3389,50 @@ object EmbyClient {
     format: String = "srt",
   ) = EmbySubtitles.downloadSubtitleStream(server, itemId, mediaSourceId, subtitleIndex, format)
   // ════════════════════════════════════════════════════════════════════════
-  // 5.7 合集（Collection / 官方客户端叫 BoxSet）—— 媒体库结构管理
+  // 5.7 合集（Collection / 官方客户端叫 BoxSet）—— 实现在 EmbyCollectionsApi.kt
   // ════════════════════════════════════════════════════════════════════════
-  // ⚠️ **本节最容易踩的坑：REST 路径是 `/Collections`，不是 `/BoxSets`**
-  // `/BoxSets` 是 **Jellyfin** 的命名。Emby 官方 Java 客户端里 BoxSet 走的是
-  // `CollectionServiceApi` → `/Collections`。照着 Jellyfin 的文档 / 网上教程写必然 404。
-  // 另一个要记的：**参数名是 `Ids` 不是 `EntryIds`**。
-  // 口诀 —— BoxSet(Collection) 一律 `Ids`；只有 Playlist 增删条目才用 `EntryIds`。
-  // 写错参数名服务端不报错，只是**静默不生效**（合集内容不变），极难排查。
+  // ⚠️ REST 路径是 `/Collections` 不是 `/BoxSets`（后者是 Jellyfin 命名）；
+  // 参数名是 `Ids` 不是 `EntryIds`。完整说明见 EmbyCollectionsApi 文件头。
 
-  /**
-   * 列出全部合集。
-   *
-   * 和播放列表一样，**没有** `GET /Collections` 这种「按类型拿」的专用端点 ——
-   * 合集本身就是一种 Item，只能走 `/Users/{id}/Items` + `IncludeItemTypes=BoxSet`。
-   *
-   * ⚠️ 返回里的 `ChildCount` 是服务端算的合集条目数，可能与实际差一
-   * （有条目被删但合集没刷新）。UI 显示它没问题，**拿它做判断条件不行**。
-   */
   fun getCollections(
     server: EmbyServer,
     startIndex: Int = 0,
     limit: Int = 100,
-  ): EmbyItemsResult = getJson(
-    server,
-    "/Users/${server.userId}/Items",
-    mapOf(
-      "StartIndex" to startIndex.toString(),
-      "Limit" to limit.toString(),
-      "IncludeItemTypes" to "BoxSet",
-      "Fields" to "Overview,DateCreated,ChildCount,Genres,ProductionYear",
-      "SortBy" to "SortName",
-      "SortOrder" to "Ascending",
-      "EnableImages" to "true",
-      "ImageTypeLimit" to "1",
-      "EnableUserData" to "true",
-    ),
-  )
+  ): EmbyItemsResult = EmbyCollectionsApi.getCollections(server, startIndex, limit)
 
-  /**
-   * 取合集里的条目（分页）。
-   *
-   * 对应 `GET /Collections/{Id}/Items`。
-   *
-   * 不用通用 `getItems(parentId = ...)` 的理由和播放列表一样：
-   * `ParentId` 传播合集 Id 时部分服务端会算成空，老实用专用端点。
-   */
   fun getCollectionItems(
     server: EmbyServer,
     collectionId: String,
     startIndex: Int = 0,
     limit: Int = 100,
-  ): EmbyItemsResult = getJson(
-    server,
-    "/Collections/$collectionId/Items",
-    mapOf(
-      "UserId" to server.userId,
-      "StartIndex" to startIndex.toString(),
-      "Limit" to limit.toString(),
-      "Fields" to ITEM_FIELDS,
-      "EnableImages" to "true",
-      "ImageTypeLimit" to "1",
-      "EnableUserData" to "true",
-      "EnableTotalRecordCount" to "true",
-    ),
-  )
+  ): EmbyItemsResult =
+    EmbyCollectionsApi.getCollectionItems(server, collectionId, startIndex, limit)
 
-  /**
-   * 新建合集。`POST /Collections`。
-   *
-   * ⚠️ **参数是 query 不是 body**（参考客户端里 `localVarPostBody = null`）。
-   * 传成 body 的话服务端会当没收到，建出一个**空的没有名字的合集**。
-   *
-   * @param name 合集名
-   * @param itemIds 初始条目（可空 = 建空合集）
-   * @param parentId 挂在哪个媒体库下；null 表示用户根
-   */
   fun createCollection(
     server: EmbyServer,
     name: String,
     itemIds: List<String> = emptyList(),
     parentId: String? = null,
-  ): EmbyCollectionCreationResult = postJson(
-    server = server,
-    path = "/Collections",
-    bodyJson = "{}",
-    query = buildMap {
-      put("Name", name)
-      put("Ids", itemIds.joinToString(",").ifEmpty { null })
-      put("ParentId", parentId)
-      put("UserId", server.userId)
-    },
-  )
+  ): EmbyCollectionCreationResult =
+    EmbyCollectionsApi.createCollection(server, name, itemIds, parentId)
 
-  /**
-   * 往合集追加条目：`POST /Collections/{Id}/Items`。
-   *
-   * ⚠️ `Ids` 是 **query**（同 [createCollection]）。
-   * 返回体是空的，所以调用方拿不到「实际加了几条」——
-   * 重复添加是幂等的，UI 只能自己判断要不要刷新。
-   */
   fun addToCollection(
     server: EmbyServer,
     collectionId: String,
     itemIds: List<String>,
-  ): Boolean {
-    if (itemIds.isEmpty()) return true
-    val req = authedRequest(
-      server,
-      "/Collections/$collectionId/Items",
-      mapOf("Ids" to itemIds.joinToString(","), "UserId" to server.userId),
-    ).post("{}".toRequestBody(jsonMedia)).build()
-    httpClient.newCall(req).execute().use { resp ->
-      if (!resp.isSuccessful) {
-        throw EmbyApiException(resp.code, resp.body.string().ifEmpty { resp.message })
-      }
-    }
-    return true
-  }
+  ): Boolean = EmbyCollectionsApi.addToCollection(server, collectionId, itemIds)
 
-  /**
-   * 从合集移除条目：`DELETE /Collections/{Id}/Items`。
-   *
-   * ⚠️ **参数是 `Ids` 且指的是「媒体 Id」，不是合集内的条目 Id**
-   * （和 `POST /Playlists/{Id}/Items/Move` 那个 `ItemId` 正好相反，
-   * 那边要的是播放列表内的条目 Id —— 两者极易搞混）。
-   *
-   * 这是真 DELETE（不是 POST 一个 `Ids` 标记），响应体为空。
-   */
   fun removeFromCollection(
     server: EmbyServer,
     collectionId: String,
     itemIds: List<String>,
-  ): Boolean {
-    if (itemIds.isEmpty()) return true
-    val req = authedRequest(
-      server,
-      "/Collections/$collectionId/Items",
-      mapOf("Ids" to itemIds.joinToString(","))
-        .plus("UserId" to server.userId),
-    ).delete().build()
-    httpClient.newCall(req).execute().use { resp ->
-      if (!resp.isSuccessful) {
-        throw EmbyApiException(resp.code, resp.body.string().ifEmpty { resp.message })
-      }
-    }
-    return true
-  }
+  ): Boolean = EmbyCollectionsApi.removeFromCollection(server, collectionId, itemIds)
 
   // ════════════════════════════════════════════════════════════════════════
-  // 5.8 显示偏好（DisplayPreferences）
+  // 5.8 显示偏好（DisplayPreferences）—— 实现在 EmbyDisplayPrefsApi.kt
   // ════════════════════════════════════════════════════════════════════════
-  // ⚠️ 三条容易踩空的真相，实现前务必先读完：
-  // 1. **粒度是「每个目标」而不是「每个用户」**。落点的Id 叫
-  //    `DisplayPreferencesId`，来自 `BaseItemDto.DisplayPreferencesId`，
-  //    媒体库和单条目各有一份。所以不存在「一个用户一份显示偏好」这种写法 ——
-  //    想让整个 App 的偏好跟着走，就得遍历所有目标库逐个写（见 EmbyDisplayPrefsSync）。
-  // 2. **`Client` 是必填的分区键**，不是可选的 UA。`GET` 时它是 query 参数
-  //    （`POST` 时它只在 body 里，见下），取不同值就读到不同的偏好副本。
-  //    本 App 用 [DISPLAY_PREFS_CLIENT] 作为一个**独立分区**，
-  //    好处是绝不会把 Emby Web 的排版偏好冲掉；代价是**不与网页端互通**，
-  //    这是有意取舍，不是没做完。
-  // 3. **不要写到 `/Users/{Id}/Configuration`**。`UserConfiguration` 的 17 个字段
-  //    （音频语言 / 字幕语言 / ProfilePin / 跳过片头 / 重播剩余秒数…）**全是播放类**，
-  //    一个显示字段都没有，网格密度写不进去。
-  // 参数位置逐条照抄 SDK（`DisplayPreferencesServiceApi`）：
-  //   GET  /DisplayPreferences/{Id}?UserId&Client← 只有 {Id} 在路径里
-  //   POST /DisplayPreferences/{DisplayPreferencesId}?UserId
-  //        body = 整个 DisplayPreferences（含 Client），**返回 Void（空 body）**
+  // 三条容易踩空的真相（每目标粒度 / Client 是分区键 / 别写 UserConfiguration）
+  // 见 EmbyDisplayPrefsApi 的文件头注释。
 
   /**
    * 本 App 在服务端显示偏好里的分区标识。
@@ -3699,55 +3442,24 @@ object EmbyClient {
    */
   const val DISPLAY_PREFS_CLIENT = "mpvex-android"
 
-  /**
-   * 读某个目标（媒体库 / 条目）的显示偏好。
-   *
-   * 目标不存在时部分部署返回 **404**，也有返回空对象的 —— 两种都当「还没有偏好」处理，
-   * 由调用方决定是回落默认值还是提示用户。
-   */
   fun getDisplayPreferences(
     server: EmbyServer,
     displayPreferencesId: String,
     client: String = DISPLAY_PREFS_CLIENT,
-  ): EmbyDisplayPreferences? = getJson(
-    server,
-    "/DisplayPreferences/$displayPreferencesId",
-    mapOf(
-      "UserId" to server.userId,
-      "Client" to client,
-    ),
-  )
+  ): EmbyDisplayPreferences? =
+    EmbyDisplayPrefsApi.getDisplayPreferences(server, displayPreferencesId, client)
 
   /**
-   * 写某个目标的显示偏好。**整体覆盖**（不是增量合并），所以调用方必须
-   * 先读出原有 `CustomPrefs` 再把自己的键merge 进去，否则会把别的客户端
-   * 或本客户端的其它键一起抹掉。
-   *
-   * 返回 true = 服务端收下了。注意这条路径**成功时返回空 body**，
-   * 不能拿去反序列化 —— 所以这里只判 HTTP 状态码。
+   * 写某个目标的显示偏好（整体覆盖，见实现侧说明）。
    */
   fun postDisplayPreferences(
     server: EmbyServer,
     displayPreferencesId: String,
     client: String,
     preferences: EmbyDisplayPreferences,
-  ): Boolean {
-    val body = json.encodeToString(preferences)
-    val req = authedRequest(
-      server,
-      "/DisplayPreferences/$displayPreferencesId",
-      mapOf("UserId" to server.userId),
-    )
-      .post(body.toRequestBody(jsonMedia))
-      .header("Accept", "application/json")
-      .build()
-    httpClient.newCall(req).execute().use { resp ->
-      if (!resp.isSuccessful) {
-        throw EmbyApiException(resp.code, resp.body.string().ifEmpty { resp.message })
-      }
-    }
-    return true
-  }
+  ): Boolean = EmbyDisplayPrefsApi.postDisplayPreferences(
+    server, displayPreferencesId, client, preferences,
+  )
 
   // ════════════════════════════════════════════════════════════════════════
   // 6. 辅助：基于 Android 设备 ID（用于 X-Emby-Authorization）
@@ -3862,54 +3574,6 @@ private fun buildMessage(code: Int, body: String): String {
   val detail = body.trim().take(120)
   return if (detail.isEmpty()) "$head（$code）" else "$head（$code）：$detail"
 }
-
-/** kotlinx.serialization 的 JsonObject 构造辅助（避免每次写 JsonObject(mapOf(...)) 套娃） */
-private fun jsonObjectOf(entries: Map<String, Any?>): JsonObject {
-  val map = LinkedHashMap<String, kotlinx.serialization.json.JsonElement>()
-  entries.forEach { (k, v) ->
-    val e = when (v) {
-      null -> kotlinx.serialization.json.JsonNull
-      is String -> kotlinx.serialization.json.JsonPrimitive(v)
-      is Number -> kotlinx.serialization.json.JsonPrimitive(v)
-      is Boolean -> kotlinx.serialization.json.JsonPrimitive(v)
-      else -> kotlinx.serialization.json.JsonPrimitive(v.toString())
-    }
-    map[k] = e
-  }
-  return JsonObject(map)
-}
-
-/**
- * `POST /Items/{id}/PlaybackInfo` 的响应。
- *
- * 只声明 [transcodeStreamUrl] 真正用得到的那几个字段 —— Emby 的完整响应有几十个字段，
- * 靠 `ignoreUnknownKeys` 忽略掉即可（`json` 已配置）。
- */
-@Serializable
-private data class PlaybackInfoResult(
-  val MediaSources: List<PlaybackMediaSource>? = null,
-  /** 本次转码会话 Id，自己拼 URL 时要带上，服务器靠它复用 / 回收转码进程 */
-  val PlaySessionId: String? = null,
-  /** 拿不到可用源时的错误码，例如 `NoCompatibleStream` */
-  val ErrorCode: String? = null,
-)
-
-/** [PlaybackInfoResult] 里的一条媒体源 */
-@Serializable
-private data class PlaybackMediaSource(
-  /** 即 MediaSourceId */
-  val Id: String? = null,
-  /** 服务器拼好的转码地址（通常是 HLS 的 master.m3u8），优先用它 */
-  val TranscodingUrl: String? = null,
-  val DirectStreamUrl: String? = null,
-  /**
-   * 媒体路径。对 `.strm` 条目，Emby 在这里返回的是 **strm 文件里的远端地址**
-   * （同时 `Protocol=Http` / `IsRemote=true`），这是「STRM 直链播放」的来源。
-   */
-  val Path: String? = null,
-  /** 这条媒体源要求客户端拉流时携带的请求头（可能为空）。 */
-  val RequiredHttpHeaders: Map<String, String>? = null,
-)
 
 /**
  * `GET /Users/{id}` 的响应，只为拿 [Policy]。
