@@ -1,2 +1,19 @@
-# Auto detect text files and perform LF normalization
+# 文本文件按 LF 入库（Windows 检出时再按 core.autocrlf 转换）
 * text=auto
+
+# ── GitHub 语言统计 ──────────────────────────────────────────────────────
+# 本仓库是 Kotlin 项目（Compose + mpv），但仓库里还有一批**随源码附带的
+# 第三方 / 生成代码**是 Java，体量比 Kotlin 还大，导致 GitHub 把 Java 认成
+# 主语言、搜索结果里显示成 Java 项目。
+#
+# 下面这些路径里没有一行是本项目自己写的：
+#   app/embyclient-reference            Emby OpenAPI 生成的 Java 客户端（参考副本）
+#   app/src/main/java/master/flame      DanmakuFlameMaster 弹幕库
+#   app/src/main/java/tv/cjump          DanmakuFlameMaster 的 JNI 工具
+#   nextlib-patched/**/*.java           NextLib 的补丁副本（它的 .kt 仍算本项目代码）
+#
+# linguist-vendored = 不计入语言占比。凭这条 GitHub 才会把 Kotlin 显示为主语言。
+app/embyclient-reference/** linguist-vendored
+app/src/main/java/master/flame/** linguist-vendored
+app/src/main/java/tv/cjump/** linguist-vendored
+nextlib-patched/**/*.java linguist-vendored
