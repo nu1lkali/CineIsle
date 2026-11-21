@@ -52,4 +52,72 @@ object EmbyItemFields {
   const val RAW =
     "Overview,OriginalTitle,SortName,Genres,Tags,Studios,ProductionLocations,People," +
       "OfficialRating,CommunityRating,PremiereDate,ProductionYear,Path,ProviderIds,Taglines"
+
+  /**
+   * 祖先链请求要的字段。
+   *
+   * 祖先链只用得上「这一层叫什么、是什么类型、父级是谁」，所以清单刻意很短 ——
+   * 祖先可能有十几层，多要 Fields 只是白拉数据。
+   *
+   * ⚠️ 不要删 `SortName` / `OriginalTitle`：名称类字段在不同服务端版本上
+   * 填充情况不同，少要一项就可能在某一层退回空名字。
+   */
+  internal val ANCESTOR_FIELDS: String = listOf(
+    "SortName",
+    "OriginalTitle",
+    "ParentId",
+    "Path",
+  ).joinToString(",")
+
+  /**
+   * 详情页要的字段清单（基础版）。
+   *
+   * 抽成常量而不是写在 [EmbyItemsApi.getItem] 里：它有两个使用者 —— 正常路径和
+   * 「ExternalUrls 不被接受时的降级重试」，两处必须逐字一致。
+   */
+  internal val ITEM_FIELDS_CORE: String = listOf(
+    "Overview",
+    "OriginalTitle",
+    "SortName",
+    "Genres",
+    "Tags",
+    "Studios",
+    "ProductionLocations",
+    "People",
+    "OfficialRating",
+    "CommunityRating",
+    "PremiereDate",
+    "ProductionYear",
+    "MediaSources",
+    "MediaStreams",
+    // 详情页「宣传语」一行 + 「外部链接」一行的数据来源，官方 ItemFields 里确实有这两个值
+    "Taglines",
+    "ProviderIds",
+  ).joinToString(",")
+
+  /**
+   * [ITEM_FIELDS_CORE] + `ExternalUrls`（详情页「外部链接」一行的**首选**数据源）。
+   *
+   * 为什么要单列一个、还要在失败时重试：`ExternalUrls` 在 Emby SDK 的 `ItemFields`
+   * 枚举里是有的（`BaseItemDto.ExternalUrls` 是标准字段），但它**没被写进官方 OpenAPI
+   * 那段 `Fields` 可选值描述**（那段描述本身也不全，例如 `Size` / `Chapters` 都不在里面）。
+   * 服务端对不认识的字段名**可能直接 400**，而详情页一旦 400 就整页打不开 ——
+   * 这个代价（整页挂掉）远大于收益（少一个降级路径）。
+   * 所以：带上它、失败就退回 [ITEM_FIELDS_CORE] 重来一次。
+   *
+   * 拿到 `ExternalUrls` 的价值：它的 `Url` 是**服务端/元数据插件拼好的完整地址**
+   * （如 `http://<host>:<port>/?redirect=JavBus:ACZD-218`），与 Emby Web / Yamby
+   * 打开的是同一条链接；拿 `ProviderIds` 自己拼容易拼错（见 `EmbyDetailScreen`）。
+   */
+  internal val ITEM_FIELDS_WITH_EXTERNAL_URLS: String =
+    // SiblingIds：单集详情页要拿「同季其它集」。它是标准 BaseItemDto 字段，
+    // 但同样不一定被老服务端认 —— 所以放在这个「失败就降级」的清单里，
+    // 而不是塞进 [ITEM_FIELDS_CORE]（那会把降级路径一起弄坏）。
+    //
+    // ParentId：详情页的「打开所在文件夹」（`EmbyDetailScreen` → `MediaInfoSection`）
+    // 要拿这一条**直接父目录**的 Id 才能压栈库页下钻。`BaseItemDto.ParentId` 是标准字段，
+    // 但同样属于「不索取就不返回」的那一类 —— 不写进 Fields 时 `EmbyItem.ParentId` 恒为 null。
+    // 归到这条降级清单而不是 `ITEM_FIELDS_CORE`：代价一样，收益是拿不到时按钮不出现、
+    // 整页照样能开。
+    "$ITEM_FIELDS_CORE,ExternalUrls,SiblingIds,ParentId"
 }
