@@ -46,26 +46,24 @@ data class EmbySpeedTestResult(
 }
 
 object EmbyClient {
-  private val json = Json {
-    ignoreUnknownKeys = true
-    isLenient = true
-    coerceInputValues = true
-  }
+  // ── 传输层转发（重构：从「一个 object 装 12 种职责」拆出，行为零变化）──
+  //
+  // 真正的实现在 [EmbyHttpCore]。这里保留同名成员只为「本文件内剩余代码与
+  // 全部外部调用方一行都不用改」：全部是 getter / 一行委托。
+
+  private val json: Json get() = EmbyHttpCore.json
 
   /**
    * 走 [EmbyHttp.shared]（共享连接池 + 统一 UA + 指数退避重试 + 401 自动重登）。
-   *
-   * 原来是这里自己 `OkHttpClient.Builder()` 造一个，与另外 5 个客户端各建各的连接池，
-   * 详见 [EmbyHttp] 的说明。
    *
    * `internal` 而非 `private`：拆出去的 [EmbySubtitles] 需要它 —— 字幕下载要拿
    * **原始字节**（走完服务端格式转换的响应体），不能经过 [execString] 那条
    * 「按文本解码 + 抛异常」的路径。同理它必须显式写 `EmbyClient.httpClient`，
    * `internal` 不会把成员导入到别的 object 作用域里。
    */
-  internal val httpClient: OkHttpClient = EmbyHttp.shared
+  internal val httpClient: OkHttpClient get() = EmbyHttpCore.httpClient
 
-  private val jsonMedia = "application/json; charset=utf-8".toMediaType()
+  private val jsonMedia get() = EmbyHttpCore.jsonMedia
 
   // ══════════════════════════════════════════════════════════════════════
   // 媒体库「权威名称」缓存
@@ -155,10 +153,10 @@ object EmbyClient {
    * 不能直接发空字符串：Emby 走的是 ServiceStack，对 Content-Type 为 json、
    * body 却是空的 POST 有概率返回 400，请求压根没到业务逻辑。发一个空对象最稳。
    */
-  private const val EMPTY_JSON_BODY = "{}"
+  private val EMPTY_JSON_BODY get() = EmbyHttpCore.EMPTY_JSON_BODY
 
   /** 无 body 的 POST（OkHttp 的 post 必须给 body，给空串就是 content-length=0，跟 Web 端一致） */
-  private val EMPTY_BODY = "".toRequestBody(null)
+  private val EMPTY_BODY get() = EmbyHttpCore.EMPTY_BODY
 
   /**
    * 收藏 / 已播放等开关型请求附带的客户端标识 query 参数。
@@ -168,13 +166,7 @@ object EmbyClient {
    * Web 完全一致后写入才真正生效。X-Emby-* 是 Emby 的标准客户端标识参数，
    * 所有服务端都接受，带上没有副作用。
    */
-  private val WEB_CLIENT_QUERY: Map<String, String> = mapOf(
-    "X-Emby-Client" to "Emby Web",
-    "X-Emby-Device-Name" to "Chrome Windows",
-    "X-Emby-Device-Id" to "ca3b0a8f-2ff0-46ea-aa02-a6abf72f0061",
-    "X-Emby-Client-Version" to "4.10.1.0",
-    "X-Emby-Language" to "zh-cn",
-  )
+  private val WEB_CLIENT_QUERY: Map<String, String> get() = EmbyHttpCore.WEB_CLIENT_QUERY
 
   /**
    * 拉流时统一使用的 User-Agent。
@@ -187,15 +179,6 @@ object EmbyClient {
 
   /** 视频类媒体（用于把音乐、图片从影视列表中过滤掉） */
   private const val VIDEO_MEDIA_TYPE = "Video"
-
-  /**
-   * 超过这个耗时的请求，在 [execString] 的计时日志里按「慢请求」标出（毫秒）。
-   *
-   * 定 1500 是因为正常局域网内一次 `/Items` 查询在几十到几百毫秒量级；
-   * 持续超过 1.5 秒基本就是服务端那边在扫大表（十万级条目库里
-   * `SortBy=Random` 这类无法走索引的排序尤其明显），值得单独看一眼。
-   */
-  private const val SLOW_REQUEST_MS = 1_500L
 
   /**
    * [probeStreamUrl] 的单次探测超时（毫秒）。
@@ -288,105 +271,43 @@ object EmbyClient {
   private const val TRANSCODE_VIDEO_BITRATE = 6_000_000
   private const val TRANSCODE_AUDIO_BITRATE = 192_000
 
-  // ─── 内部工具 ───
+  // ─── 内部工具（转发到 [EmbyHttpCore]，本文件内剩余代码与外部调用方零改动）───
 
   internal fun authedRequest(
     server: EmbyServer,
     path: String,
     extraQuery: Map<String, String?> = emptyMap(),
-  ): Request.Builder {
-    val sb = StringBuilder("${EmbyEndpoints.hostUrl(server)}/emby$path")
-    if (extraQuery.isNotEmpty()) {
-      sb.append('?')
-      extraQuery.entries.filter { it.value != null }.joinTo(sb, "&") { (k, v) ->
-        "$k=${java.net.URLEncoder.encode(v!!, "UTF-8")}"
-      }
-    }
-    val b = Request.Builder().url(sb.toString())
-    if (server.apiToken.isNotEmpty()) {
-      // 已登录：用 X-Emby-Token header（也可用 ?api_key=，二选一即可）
-      b.header("X-Emby-Token", server.apiToken)
-    }
-    return b
-  }
+  ): Request.Builder = EmbyHttpCore.authedRequest(server, path, extraQuery)
 
   internal fun authedRequestWithApiKey(
     server: EmbyServer,
     path: String,
     extraQuery: Map<String, String?> = emptyMap(),
-  ): Request.Builder {
-    // 带 api_key query 参数（用于 stream/images，便于直接拼 URL 给 PlayerActivity）
-    val withKey = extraQuery.toMutableMap()
-    if (server.apiToken.isNotEmpty()) withKey["api_key"] = server.apiToken
-    return authedRequest(server, path, withKey)
-  }
+  ): Request.Builder = EmbyHttpCore.authedRequestWithApiKey(server, path, extraQuery)
 
-  internal fun execString(request: Request): String {
-    // 计时日志：所有 Emby API 请求（GET/POST/DELETE）都走这一个收口点，所以在这里
-    // 打一行就够覆盖全部。用途是回答「到底哪个端点在慢」—— 大媒体库（十万级条目）下
-    // `/Items` 系列查询的耗时会随库规模上涨，而外观上只表现为「首页转圈很久」，
-    // 没有这行日志根本分不清是哪一个请求、等了多久。
-    // ⚠️ 只打 path 不打 query：query 里可能有用户输入的搜索词，不进日志。
-    val startedAt = System.nanoTime()
-    try {
-      httpClient.newCall(request).execute().use { resp ->
-        val body = resp.body.string()
-        if (!resp.isSuccessful) {
-          throw EmbyApiException(resp.code, body.ifEmpty { resp.message })
-        }
-        return body
-      }
-    } finally {
-      val ms = (System.nanoTime() - startedAt) / 1_000_000
-      val line = "${ms}ms ${request.method} ${request.url.encodedPath}"
-      // 慢的单独按 warn 标出：这标签本身是诊断用的（`adb logcat -s EmbyDiag`），
-      // 一屏能刷很多行，慢请求要能一眼挑出来。
-      if (ms >= SLOW_REQUEST_MS) EmbyLog.warn("慢请求 $line") else EmbyLog.info(line)
-    }
-  }
+  internal fun execString(request: Request): String = EmbyHttpCore.execString(request)
 
-  internal inline fun <reified T> execJson(request: Request): T {
-    val body = execString(request)
-    if (body.isEmpty()) {
-      // 返回空 body 时，尝试构造默认实例（kotlinx 不支持反射 default ctor，所以特殊处理）
-      @Suppress("UNCHECKED_CAST")
-      return when (T::class) {
-        Unit::class -> Unit as T
-        else -> json.decodeFromString(body.ifBlank { "null" })
-      }
-    }
-    return json.decodeFromString(body)
-  }
+  internal inline fun <reified T> execJson(request: Request): T =
+    EmbyHttpCore.execJson<T>(request)
 
   internal inline fun <reified T> postJson(
     server: EmbyServer,
     path: String,
     bodyJson: String,
     query: Map<String, String?> = emptyMap(),
-  ): T {
-    val req = authedRequest(server, path, query)
-      .post(bodyJson.toRequestBody(jsonMedia))
-      .build()
-    return execJson(req)
-  }
+  ): T = EmbyHttpCore.postJson<T>(server, path, bodyJson, query)
 
   internal inline fun <reified T> getJson(
     server: EmbyServer,
     path: String,
     query: Map<String, String?> = emptyMap(),
-  ): T {
-    val req = authedRequest(server, path, query).get().build()
-    return execJson(req)
-  }
+  ): T = EmbyHttpCore.getJson<T>(server, path, query)
 
   internal inline fun <reified T> deleteJson(
     server: EmbyServer,
     path: String,
     query: Map<String, String?> = emptyMap(),
-  ): T {
-    val req = authedRequest(server, path, query).delete().build()
-    return execJson(req)
-  }
+  ): T = EmbyHttpCore.deleteJson<T>(server, path, query)
 
   // ════════════════════════════════════════════════════════════════════════
   // 1. 认证 / 服务器信息
