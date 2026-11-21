@@ -3566,7 +3566,13 @@ android {
     //    而「切换到 GSY 内核」= 5 个汉字 + 3 个大写拉丁字母，拉丁字母按字宽算更占地方，
     //    实测溢出一截。文案收成「GSY 内核」（英文 `GSY engine`），与其他格子（解码器 /
     //    录制 GIF / 自动裁黑边）同一量级，语义仍是切换内核，不改布局也不改字号。
-    versionCode = 311
+    // 312（重构轮，versionName 仍为 1.6.62）：EmbyClient 超大类按职责拆分。
+    //  · 纯结构改动，无功能增删；拆出 EmbyHttpCore / EmbyItemFields / EmbyCollectionsApi /
+    //    EmbyDisplayPrefsApi / EmbySessionApi / EmbyJsonObjects / EmbyPlaybackInfo /
+    //    EmbyStreamApi / EmbyDeviceId / EmbyItemsApi / EmbyPeopleApi，
+    //    EmbyClient 由 4010 行降到 2000 行量级，对外签名字与方法体行为逐字不变。
+    //  · 目的：后续改 Emby 接口时不再挤在一个类里，改动面可预测。
+    versionCode = 312
     versionName = "1.6.62"
 
     vectorDrawables {
