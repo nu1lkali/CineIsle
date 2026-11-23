@@ -227,14 +227,27 @@ object SubtitleTimeline {
   }
 
   /**
-   * 解码字节：先 UTF-8 严格模式，失败再 GBK。
+   * 解码字节：BOM 优先 → 严格 UTF-8 → 多候选择优。
    *
-   * 严格模式是关键 —— `String(bytes, UTF_8)` 遇到非法字节会静默替换成 `�`，
-   * 于是 GBK 文件也能「解码成功」，只是内容全废。
+   * ## 为什么不能「UTF-8 失败就退 GBK」
+   *
+   * 旧实现这么做，遇到了必然乱码：Big5（繁体站）、Shift_JIS（日文）、EUC-KR、
+   * 以及**没有 BOM 的 UTF-16**，用 GBK 解都能「成功」—— 双字节编码彼此几乎不会报错，
+   * 只是每个字都解成另一个字。界面上就是满屏乱码。
+   *
+   * ## 怎么选
+   *
+   * 每个候选编码都解一遍，按「解出来的文本像不像人话」打分：
+   * · 常用汉字 / 假名 / 谚文加分（[COMMON_CJK] 收录常用简体与繁体字）；
+   * · 生僻汉字扣分 —— 解错时的典型结果就是一串没人用的字；
+   * · 替换符 `�`、控制字符、私用区字符、Latin-1 扩展残留大幅扣分；
+   * 取最高分的候选。UTF-16 无 BOM 也靠「控制字符（NUL）扣分」被自然淘汰。
+   *
+   * 严格 UTF-8 仍然先试：九成文件是 UTF-8，不必进入打分。
    */
   fun decode(bytes: ByteArray): String {
-    // UTF-16 BOM：一部分 ASS 是这样存的。不先认 BOM 的话，整篇会被当成非法字节，
-    // 严格 UTF-8 解码失败后退到 GBK，得到的是纯乱码（比「不给看」更糟）。
+    if (bytes.isEmpty()) return ""
+    // UTF-16 BOM：一部分 ASS 是这样存的。不先认 BOM 的话，整篇会被当成非法字节。
     if (bytes.size >= 2) {
       val b0 = bytes[0].toInt() and 0xFF
       val b1 = bytes[1].toInt() and 0xFF
@@ -266,8 +279,129 @@ object SubtitleTimeline {
           .toString()
       }.getOrNull()
     if (strictUtf8 != null) return strictUtf8
-    val gbk = runCatching { String(bytes, Charset.forName("GBK")) }.getOrNull()
-    return gbk ?: String(bytes, Charsets.UTF_8)
+
+    var best: String? = null
+    var bestScore = Double.NEGATIVE_INFINITY
+    for (name in candidates(bytes)) {
+      val text = runCatching { String(bytes, Charset.forName(name)) }.getOrNull() ?: continue
+      val score = plausibility(text)
+      if (score > bestScore) {
+        bestScore = score
+        best = text
+      }
+    }
+    return best ?: String(bytes, Charsets.UTF_8)
+  }
+
+  /**
+   * 候选编码：统计检测器的结论排在最前，再接固定候选表。
+   *
+   * 统计检测（[detectedByChardet]）在长样本上很准，但**短文本会瞎猜**
+   * （GBK 常被报成 windows-1252），所以它只是候选之一，胜负仍由 [plausibility] 判定。
+   */
+  private fun candidates(bytes: ByteArray): List<String> {
+    val out = LinkedHashSet<String>()
+    detectedByChardet(bytes)?.let { name ->
+      // UTF-16 结论必须与字节结构一致才收：GBK 文本按 UTF-16 解会落进谚文区，
+      // 打分器会误判成韩文（实测踩过）。
+      val isUtf16 = name.startsWith("UTF-16", ignoreCase = true)
+      if (!isUtf16 || looksLikeUtf16(bytes)) out += name
+    }
+    out += fallbackCharsets(bytes)
+    return out.toList()
+  }
+
+  /**
+   * Mozilla universalchardet 的统计检测结果（字符集名，可能为 null）。
+   *
+   * 任何异常都吞掉：识别编码是「尽力而为」的辅助，不能因为它让整条字幕读不出来。
+   */
+  private fun detectedByChardet(bytes: ByteArray): String? =
+    runCatching {
+      val detector = org.mozilla.universalchardet.UniversalDetector(null)
+      detector.handleData(bytes, 0, bytes.size)
+      detector.dataEnd()
+      detector.detectedCharset
+    }.getOrNull()
+
+  /**
+   * 固定候选表。GB18030 覆盖 GBK / GB2312；Big5 管繁体；Shift_JIS / EUC-KR 管日韩；
+   * windows-1252 兜西文。
+   *
+   * **UTF-16 只有在字节结构像 UTF-16 时才列入**：GBK 中文的字节按 UTF-16BE 解，
+   * 会落在谚文区（0xAC00–0xD7AF），打分器会误以为「这是韩文」。字幕文件一定带
+   * 时间码等 ASCII 结构，UTF-16 下这些字符有一半字节是 0x00 —— 用这个特征先筛一遍。
+   */
+  private fun fallbackCharsets(bytes: ByteArray): List<String> =
+    if (looksLikeUtf16(bytes)) UTF16_CHARSETS else NON_UTF16_CHARSETS
+
+  private val NON_UTF16_CHARSETS =
+    listOf("GB18030", "Big5", "Shift_JIS", "EUC-KR", "windows-1252")
+
+  private val UTF16_CHARSETS =
+    listOf("GB18030", "Big5", "UTF-16LE", "UTF-16BE", "Shift_JIS", "EUC-KR", "windows-1252")
+
+  /** 某种字节序下 0x00 的占比是否达到 UTF-16 的典型水平（≥1/8）。 */
+  private fun looksLikeUtf16(bytes: ByteArray): Boolean {
+    val limit = minOf(bytes.size, 8 * 1024)
+    if (limit < 16) return false
+    var zerosEven = 0
+    var zerosOdd = 0
+    for (i in 0 until limit) {
+      if (bytes[i] == 0.toByte()) {
+        if (i % 2 == 0) zerosEven++ else zerosOdd++
+      }
+    }
+    val threshold = (limit / 2) / 8
+    return zerosEven > threshold || zerosOdd > threshold
+  }
+
+  /**
+   * 常用汉字表（简 + 繁）。只用来给「解码结果像不像中文」打分，
+   * 不做任何替换 —— 表里没有的字照样保留，只是不加分。
+   */
+  private val COMMON_CJK =
+    (
+      "的一是不了在人有我他这个们中来上大为和国地到以说时要就出会可也你对生能而子那得于着" +
+        "下自之年过发后作里用道行所然家种事成方多经么去法学如都同现当没动面起看定天分还进" +
+        "好小部其些主样理心她本前开但因只从想实日军者意无力它与长把机十民第公此已工使情明" +
+        "性知全三又关点正业外将两高间由问很最重并物手应战向头文体政美相见被利什二等产或新" +
+        "己制身果加西斯月话合回特代内信表化老给世位次度门任常先海通教儿原东声提立及比员解" +
+        "水名真论处走义各入几口认条平系气题活尔更别打女变四神总何电数安少报才结反受目太量" +
+        "再感建务做接必场件计管期市直德资命山金指克许统区保至队形社便空决治展马科司五基眼" +
+        "書這個們為時來會說對開關後麼樣發現點與無話語頭問題實學應該經濟業務電話電腦網絡國" +
+        "電影視頻時間內容繁體簡體語譯員樂買賣讀寫聽聲道車東門長馬鳥魚龍鳳華萬歲點線條變讓" +
+        "從愛親師學問鄉間陽陰醫療護照顧資源資訊軟體硬體網路伺服器檔案設定執行編輯選擇確認"
+    ).toSet()
+
+  /**
+   * 文本「像不像正确解码」的启发式评分。
+   *
+   * 判据是可解释的：正确解码出来的是常用字 + 标点；错误解码出来的是生僻汉字、
+   * 替换符、控制字符。不做统计模型，也不引入第三方库。
+   */
+  private fun plausibility(text: String): Double {
+    var score = 0.0
+    for (ch in text) {
+      val code = ch.code
+      score +=
+        when {
+          ch == '\uFFFD' -> -20.0
+          ch in COMMON_CJK -> 3.0
+          code in 0x4E00..0x9FFF -> -0.7 // 生僻汉字：解错的典型落点
+          code in 0x3400..0x4DBF -> -1.2 // 扩展 A：正常字幕几乎不会用
+          code in 0x3040..0x30FF -> 2.5 // 假名
+          code in 0xAC00..0xD7AF -> 2.5 // 谚文
+          code in 0x3000..0x303F -> 1.5 // 中日标点
+          code in 0xFF00..0xFFEF -> 0.5 // 全角符号
+          code < 0x20 && ch != '\n' && ch != '\r' && ch != '\t' -> -15.0 // NUL 等控制符
+          code in 0x7F..0x9F -> -10.0 // C1 控制符
+          code in 0xE000..0xF8FF -> -12.0 // 私用区
+          code in 0xA0..0x2FF -> -0.3 // Latin-1 扩展：mojibake 常见残留
+          else -> 0.0
+        }
+    }
+    return score
   }
 
   /** `mm:ss` / `h:mm:ss`，列表里用。 */

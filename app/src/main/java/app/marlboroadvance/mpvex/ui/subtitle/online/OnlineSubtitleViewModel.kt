@@ -64,6 +64,8 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
     val cues: List<SubtitleCue> = emptyList(),
     val truncated: Boolean = false,
     val error: String? = null,
+    /** true = 来自「已下载」列表（读本地文件）；false = 来自搜索结果（可能需要联网取内容）。 */
+    val fromLibrary: Boolean = false,
   )
 
   data class UiState(
@@ -313,26 +315,61 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
    */
   fun previewTimeline(item: OnlineSubtitle) {
     val current = target ?: return
+    startTimelinePreview(item.id, item.title, fromLibrary = false) {
+      val record = library.find(current.serverKey, current.itemId, item.id)
+      val localFile = record?.let { library.fileOf(it) }
+      if (localFile != null && localFile.isFile) {
+        SubtitleTimeline.parseFileDetailed(localFile)
+      } else {
+        val fetched = downloader.fetch(item)
+        SubtitleTimeline.parseTextDetailed(
+          SubtitleTimeline.decode(fetched.bytes),
+          fetched.format,
+        )
+      }
+    }
+  }
+
+  /**
+   * 打开「已下载」列表里某条字幕的时间线预览。
+   *
+   * 只读本地文件，零请求；文件被外部删掉时给一句可操作的说明，而不是空列表。
+   */
+  fun previewTimeline(record: DownloadedSubtitle) {
+    startTimelinePreview(record.originId, record.title, fromLibrary = true) {
+      val file = library.fileOf(record)
+      if (!file.isFile) throw java.io.IOException("字幕文件已不存在，请重新下载该字幕")
+      SubtitleTimeline.parseFileDetailed(file)
+    }
+  }
+
+  /**
+   * 预览流程的公共部分：先置 loading、取消上一条请求，再在 IO 里取内容解析。
+   *
+   * 状态更新前核对 `originId`：用户可能已经关掉弹窗或换了一条，迟到的结果不许覆盖。
+   */
+  private fun startTimelinePreview(
+    originId: String,
+    title: String,
+    fromLibrary: Boolean,
+    load: suspend () -> SubtitleTimeline.ParsedTimeline,
+  ) {
     timelineJob?.cancel()
-    _state.update { it.copy(timelinePreview = TimelinePreview(item.id, item.title)) }
+    _state.update {
+      it.copy(
+        timelinePreview = TimelinePreview(
+          originId = originId,
+          title = title,
+          fromLibrary = fromLibrary,
+        ),
+      )
+    }
     timelineJob =
       viewModelScope.launch {
         val result =
           withContext(Dispatchers.IO) {
             try {
-              val record = library.find(current.serverKey, current.itemId, item.id)
-              val localFile = record?.let { library.fileOf(it) }
-              if (localFile != null && localFile.isFile) {
-                Result.success(SubtitleTimeline.parseFileDetailed(localFile))
-              } else {
-                val fetched = downloader.fetch(item)
-                Result.success(
-                  SubtitleTimeline.parseTextDetailed(
-                    SubtitleTimeline.decode(fetched.bytes),
-                    fetched.format,
-                  ),
-                )
-              }
+              Result.success(load())
             } catch (cancel: kotlinx.coroutines.CancellationException) {
               throw cancel
             } catch (error: Throwable) {
@@ -340,20 +377,20 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
             }
           }
         _state.update { state ->
-          // 迟到 / 已关闭的结果不许覆盖新的预览
-          if (state.timelinePreview?.originId != item.id) {
+          if (state.timelinePreview?.originId != originId) {
             state
           } else {
             val parsed = result.getOrNull()
             state.copy(
               timelinePreview =
                 TimelinePreview(
-                  originId = item.id,
-                  title = item.title,
+                  originId = originId,
+                  title = title,
                   loading = false,
                   cues = parsed?.cues.orEmpty(),
                   truncated = parsed?.truncated == true,
                   error = result.exceptionOrNull()?.let(::humanizeTimelineError),
+                  fromLibrary = fromLibrary,
                 ),
             )
           }

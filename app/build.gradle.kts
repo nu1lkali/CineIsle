@@ -3644,8 +3644,15 @@ android {
     //  · 【修复】ASS 被判「不是可识别的字幕」：嗅探改为 BOM 感知（UTF-8 / UTF-16LE /
     //    UTF-16BE）、标记按包含匹配 + `[Events]`+`Dialogue:` 兜底、识别 PK 头自动解 zip；
     //    失败提示区分网页 / 压缩包 / 二进制。`SubtitleTimeline.decode` 同步补 UTF-16。
-    versionCode = 317
-    versionName = "1.6.67"
+    // 318 / 1.6.68：时间线预览的两处补强。
+    //  · 网络字幕面板的「已下载」条目也能看时间线（只读本地文件，零请求）。
+    //  · 编码自动识别：旧逻辑「严格 UTF-8 失败就退 GBK」，遇到 Big5 / Shift_JIS /
+    //    EUC-KR / 无 BOM UTF-16 必然整篇乱码（双字节编码互不报错）。改为
+    //    BOM 优先 → 严格 UTF-8 → 候选编码打分裁决（常用字加分、生僻字与替换符扣分），
+    //    候选由 universalchardet 统计检测 + 固定表组成，UTF-16 需通过字节结构闸门。
+    //    实测覆盖 UTF-8/GBK/Big5/Shift_JIS/EUC-KR/UTF-16(含无 BOM)/windows-1252。
+    versionCode = 318
+    versionName = "1.6.68"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -3917,6 +3924,10 @@ dependencies {
   // 应用锁判「是不是真的退出了 App」用 ProcessLifecycleOwner（进程级生命周期）——
   // 它不在 activity-compose 的传递依赖里，必须显式声明；版本与 lifecycle-runtime 对齐（2.10.0）。
   implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+  // 字幕编码自动识别（Mozilla universalchardet 的 Java 版，纯 JVM、无 Android 依赖）。
+  // 只作为 `SubtitleTimeline.decode` 的**候选来源**之一，最终仍由内置打分器裁决 ——
+  // 短文本上它常把 GBK 报成 windows-1252，直接采信会解出乱码。
+  implementation("com.googlecode.juniversalchardet:juniversalchardet:1.0.3")
   implementation(platform(libs.androidx.compose.bom))
   implementation(libs.androidx.ui)
   implementation(libs.androidx.ui.graphics)

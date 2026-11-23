@@ -168,7 +168,11 @@ internal fun OnlineSubtitleTimelineDialog(
               )
             }
             Text(
-              text = "共 ${preview.cues.size} 条 · 预览只读取内容，不会保存到本地",
+              text = if (preview.fromLibrary) {
+                "共 ${preview.cues.size} 条 · 读取自本机已下载文件"
+              } else {
+                "共 ${preview.cues.size} 条 · 预览只读取内容，不会保存到本地"
+              },
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),

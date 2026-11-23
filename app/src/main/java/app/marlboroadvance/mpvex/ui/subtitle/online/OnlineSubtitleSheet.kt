@@ -209,6 +209,7 @@ fun OnlineSubtitleSheet(
               },
               onDelete = { confirmDelete = record },
               useEnabled = onUse != null,
+              onPreviewTimeline = { vm.previewTimeline(record) },
             )
           }
         }
@@ -567,6 +568,8 @@ internal fun DownloadedRow(
   onUse: () -> Unit,
   onDelete: () -> Unit,
   useEnabled: Boolean,
+  /** 打开该条已下载字幕的时间线（读本地文件，零请求）。null = 不显示入口。 */
+  onPreviewTimeline: (() -> Unit)? = null,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
@@ -604,6 +607,10 @@ internal fun DownloadedRow(
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
+    }
+    if (onPreviewTimeline != null) {
+      // 已下载的字幕同样能核对待内容：读本地文件，不发请求
+      TextButton(onClick = onPreviewTimeline) { Text("时间线") }
     }
     if (useEnabled) {
       TextButton(onClick = onUse) { Text("使用") }

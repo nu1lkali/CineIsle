@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.domain.subtitle.online
 
 import android.util.Log
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTimeline
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
@@ -198,35 +199,18 @@ class OnlineSubtitleDownloader {
       return null
     }
 
-    /** 取头部按 BOM 决定的编码解成文本（UTF-8 / UTF-16LE / UTF-16BE）。 */
+    /**
+     * 取头部并解码成文本。
+     *
+     * 直接复用 [SubtitleTimeline.decode] 的编码判定（BOM / 严格 UTF-8 / 多候选择优）：
+     * 嗅探与时间线预览必须得出同一个编码，否则会出现「能下能挂、但预览乱码」这种
+     * 两套结论打架的情况。只看前 16KB，成本可以忽略。
+     */
     private fun decodeHead(bytes: ByteArray): String {
-      if (bytes.size >= 2) {
-        val b0 = bytes[0].toInt() and 0xFF
-        val b1 = bytes[1].toInt() and 0xFF
-        if (b0 == 0xFF && b1 == 0xFE) return slice(bytes, 2, Charsets.UTF_16LE)
-        if (b0 == 0xFE && b1 == 0xFF) return slice(bytes, 2, Charsets.UTF_16BE)
-      }
-      val start =
-        if (bytes.size >= 3 &&
-          bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()
-        ) {
-          3
-        } else {
-          0
-        }
-      return slice(bytes, start, Charsets.UTF_8)
-    }
-
-    private fun slice(
-      bytes: ByteArray,
-      start: Int,
-      charset: java.nio.charset.Charset,
-    ): String {
-      if (start >= bytes.size) return ""
-      var length = minOf(bytes.size - start, HEAD_BYTES)
-      // UTF-16 按两字节对齐：截到半个字符会解码出替换符
-      if (charset == Charsets.UTF_16LE || charset == Charsets.UTF_16BE) length -= length % 2
-      return String(bytes, start, length, charset)
+      if (bytes.isEmpty()) return ""
+      val limit = minOf(bytes.size, HEAD_BYTES * 2)
+      val head = if (limit == bytes.size) bytes else bytes.copyOf(limit)
+      return SubtitleTimeline.decode(head)
     }
 
     private fun isZip(bytes: ByteArray): Boolean =
