@@ -2,7 +2,11 @@ package app.marlboroadvance.mpvex.ui.subtitle.lab
 
 import android.view.LayoutInflater
 import android.view.View
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,13 +29,13 @@ import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,13 +52,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
@@ -341,6 +353,7 @@ internal fun LabPreviewPane(
         volume = volume,
         subVisible = subVisible,
         hasSubtitle = subtitle != null,
+        offsetMs = subtitle?.offsetMs,
         onTogglePause = {
           val next = !paused
           engine?.setPaused(next)
@@ -360,47 +373,8 @@ internal fun LabPreviewPane(
           subVisible = next
           engine?.setSubtitleVisible(next)
         },
+        onOffsetChange = onOffsetChange,
       )
-      // 偏移快捷档：与下方「已下载字幕」卡片是同一组动作，放在这里是为了
-      // 「边看画面边拧」——需求 8 要求偏移调整时预览立即同步。
-      if (subtitle != null) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF151515))
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          Text(
-            text = "偏移",
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = 0.7f),
-          )
-          listOf(-500L to "-500", -100L to "-100", 100L to "+100", 500L to "+500").forEach { (delta, label) ->
-            TextButton(
-              onClick = { onOffsetChange(delta) },
-              modifier = Modifier.height(28.dp),
-              contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                horizontal = 6.dp,
-                vertical = 0.dp,
-              ),
-            ) {
-              Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.92f),
-              )
-            }
-          }
-          Spacer(modifier = Modifier.weight(1f))
-          Text(
-            text = formatOffsetMs(subtitle.offsetMs),
-            style = MaterialTheme.typography.labelSmall,
-            color = Color(0xFFFFC46B),
-          )
-        }
-      }
     }
   }
 }
@@ -493,39 +467,71 @@ private fun PreviewControls(
   volume: Int,
   subVisible: Boolean,
   hasSubtitle: Boolean,
+  /** 当前字幕的偏移量；null = 没有挂字幕，不显示偏移档。 */
+  offsetMs: Long?,
   onTogglePause: () -> Unit,
   onSkip: (Double) -> Unit,
   onSeek: (Double) -> Unit,
   onVolume: (Int) -> Unit,
   onToggleSubtitle: () -> Unit,
+  onOffsetChange: (Long) -> Unit,
 ) {
+  // 点喇叭图标静音 / 恢复：记住静音前的音量，恢复时不会突然变回 100。
+  var lastAudible by remember { mutableIntStateOf(if (volume > 0) volume else 80) }
+  val muted = volume <= 0
+
   Column(
     modifier = Modifier
       .fillMaxWidth()
-      .background(Color(0xFF151515))
-      .padding(horizontal = 10.dp, vertical = 6.dp),
+      .background(Color(0xFF101012))
+      .padding(horizontal = 12.dp, vertical = 8.dp),
   ) {
+    // ── 进度 ──
+    // 时间分列两端、进度条占满中间：读数与滑块同一条基线，扫一眼就知道「现在到哪」。
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Text(
+        text = formatClock(position),
+        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+        color = Color.White.copy(alpha = 0.92f),
+      )
+      SlimSlider(
+        fraction = if (duration > 0) (position / duration).toFloat() else 0f,
+        enabled = duration > 0,
+        onSeek = { fraction -> if (duration > 0) onSeek(fraction * duration) },
+        modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+      )
+      Text(
+        text = formatClock(duration),
+        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+        color = Color.White.copy(alpha = 0.5f),
+      )
+    }
+
+    Spacer(modifier = Modifier.height(2.dp))
+
+    // ── 播放 / 音量 / 字幕 ──
     Row(verticalAlignment = Alignment.CenterVertically) {
       IconButton(onClick = { onSkip(-10.0) }, modifier = Modifier.size(34.dp)) {
         Icon(
           Icons.Default.FastRewind,
           contentDescription = "后退 10 秒",
-          tint = Color.White,
-          modifier = Modifier.size(20.dp),
+          tint = Color.White.copy(alpha = 0.86f),
+          modifier = Modifier.size(19.dp),
         )
       }
+      // 主按钮：实心白圆 + 深色图标，是整块面板唯一的强对比焦点
       Box(
         modifier = Modifier
-          .size(38.dp)
+          .size(42.dp)
           .clip(CircleShape)
-          .background(Color.White.copy(alpha = 0.14f)),
+          .background(Color.White),
         contentAlignment = Alignment.Center,
       ) {
-        IconButton(onClick = onTogglePause, modifier = Modifier.size(38.dp)) {
+        IconButton(onClick = onTogglePause, modifier = Modifier.size(42.dp)) {
           Icon(
             imageVector = if (paused) Icons.Default.PlayArrow else Icons.Default.Pause,
             contentDescription = if (paused) "播放" else "暂停",
-            tint = Color.White,
+            tint = Color(0xFF121214),
             modifier = Modifier.size(22.dp),
           )
         }
@@ -534,57 +540,172 @@ private fun PreviewControls(
         Icon(
           Icons.Default.FastForward,
           contentDescription = "前进 10 秒",
-          tint = Color.White,
-          modifier = Modifier.size(20.dp),
+          tint = Color.White.copy(alpha = 0.86f),
+          modifier = Modifier.size(19.dp),
         )
       }
-      Spacer(modifier = Modifier.width(6.dp))
-      Text(
-        text = "${formatClock(position)} / ${formatClock(duration)}",
-        style = MaterialTheme.typography.labelSmall,
-        color = Color.White.copy(alpha = 0.85f),
-      )
+
       Spacer(modifier = Modifier.weight(1f))
+
+      IconButton(
+        onClick = {
+          if (muted) {
+            onVolume(lastAudible.coerceIn(1, 100))
+          } else {
+            lastAudible = volume
+            onVolume(0)
+          }
+        },
+        modifier = Modifier.size(30.dp),
+      ) {
+        Icon(
+          if (muted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+          contentDescription = if (muted) "取消静音" else "静音",
+          tint = Color.White.copy(alpha = if (muted) 0.42f else 0.78f),
+          modifier = Modifier.size(17.dp),
+        )
+      }
+      SlimSlider(
+        fraction = volume / 100f,
+        onSeek = { onVolume((it * 100f).roundToInt().coerceIn(0, 100)) },
+        modifier = Modifier.width(76.dp),
+        trackHeight = 2.5.dp,
+        thumbRadius = 4.dp,
+        accent = Color.White.copy(alpha = 0.82f),
+      )
+      Text(
+        text = "$volume%",
+        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+        color = Color.White.copy(alpha = 0.45f),
+        modifier = Modifier.width(34.dp),
+        textAlign = TextAlign.End,
+      )
+
       if (hasSubtitle) {
-        IconButton(onClick = onToggleSubtitle, modifier = Modifier.size(34.dp)) {
+        IconButton(onClick = onToggleSubtitle, modifier = Modifier.size(32.dp)) {
           Icon(
             Icons.Default.Subtitles,
             contentDescription = if (subVisible) "隐藏字幕" else "显示字幕",
-            tint = if (subVisible) Color.White else Color.White.copy(alpha = 0.35f),
-            modifier = Modifier.size(19.dp),
+            tint = if (subVisible) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.3f),
+            modifier = Modifier.size(18.dp),
           )
         }
       }
     }
 
-    Slider(
-      value = if (duration > 0) (position / duration).toFloat().coerceIn(0f, 1f) else 0f,
-      onValueChange = { fraction ->
-        if (duration > 0) onSeek(fraction * duration)
-      },
-      modifier = Modifier.fillMaxWidth().height(24.dp),
-    )
-
-    Row(verticalAlignment = Alignment.CenterVertically) {
-      Icon(
-        Icons.Default.VolumeUp,
-        contentDescription = null,
-        tint = Color.White.copy(alpha = 0.7f),
-        modifier = Modifier.size(16.dp),
+    // ── 偏移快捷档 ──
+    // 与「已下载字幕」卡片是同一组动作；放在这里是为了边看画面边拧。
+    if (offsetMs != null) {
+      Box(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(top = 6.dp)
+          .height(1.dp)
+          .background(Color.White.copy(alpha = 0.07f)),
       )
-      Slider(
-        value = volume.toFloat(),
-        onValueChange = { onVolume(it.toInt().coerceIn(0, 100)) },
-        valueRange = 0f..100f,
-        modifier = Modifier.width(120.dp).height(20.dp),
-      )
-      Spacer(modifier = Modifier.weight(1f))
-      Text(
-        text = "预览与播放器共用同一套渲染",
-        style = MaterialTheme.typography.labelSmall,
-        color = Color.White.copy(alpha = 0.38f),
-      )
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        Text(
+          text = "偏移",
+          style = MaterialTheme.typography.labelSmall,
+          color = Color.White.copy(alpha = 0.5f),
+        )
+        listOf(-500L to "-500", -100L to "-100", 100L to "+100", 500L to "+500").forEach { (delta, label) ->
+          Box(
+            modifier = Modifier
+              .clip(RoundedCornerShape(999.dp))
+              .background(Color.White.copy(alpha = 0.08f))
+              .clickable { onOffsetChange(delta) }
+              .padding(horizontal = 10.dp, vertical = 4.dp),
+          ) {
+            Text(
+              text = label,
+              style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+              color = Color.White.copy(alpha = 0.9f),
+            )
+          }
+        }
+        Spacer(modifier = Modifier.weight(1f))
+        Text(
+          text = formatOffsetMs(offsetMs),
+          style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+          color = Color(0xFFFFC46B),
+        )
+      }
     }
+  }
+}
+
+/**
+ * 细轨道滑块：进度与音量共用。
+ *
+ * 为什么不用 `Slider`：Material3 的滑块自带 48dp 高度与 20dp 圆点，塞进预览窗格会
+ * 把控制条撑成两条厚横带。这里画 3dp 轨道 + 10dp 圆点，按下时圆点放大，
+ * 拖动过程中**只在松手时**才真正 seek —— 逐帧 seek 会把 mpv 拖到卡顿。
+ */
+@Composable
+private fun SlimSlider(
+  fraction: Float,
+  onSeek: (Float) -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  trackHeight: Dp = 3.dp,
+  thumbRadius: Dp = 5.dp,
+  accent: Color = Color.White,
+) {
+  var dragging by remember { mutableStateOf(false) }
+  var dragFraction by remember { mutableFloatStateOf(0f) }
+  val shown = (if (dragging) dragFraction else fraction).coerceIn(0f, 1f)
+
+  Canvas(
+    modifier = modifier
+      .height(24.dp)
+      .pointerInput(enabled) {
+        if (!enabled) return@pointerInput
+        awaitEachGesture {
+          val width = size.width.toFloat()
+          if (width <= 0f) return@awaitEachGesture
+          val down = awaitFirstDown(requireUnconsumed = false)
+          dragging = true
+          dragFraction = (down.position.x / width).coerceIn(0f, 1f)
+          while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+            dragFraction = (change.position.x / width).coerceIn(0f, 1f)
+            change.consume()
+          }
+          dragging = false
+          onSeek(dragFraction)
+        }
+      },
+  ) {
+    val centerY = size.height / 2f
+    val track = trackHeight.toPx()
+    val dot = if (dragging) thumbRadius.toPx() * 1.6f else thumbRadius.toPx()
+    val progressX = (size.width * shown).coerceIn(0f, size.width)
+
+    drawRoundRect(
+      color = accent.copy(alpha = if (enabled) 0.2f else 0.1f),
+      topLeft = Offset(0f, centerY - track / 2f),
+      size = Size(size.width, track),
+      cornerRadius = CornerRadius(track / 2f),
+    )
+    drawRoundRect(
+      color = accent.copy(alpha = if (enabled) 0.95f else 0.3f),
+      topLeft = Offset(0f, centerY - track / 2f),
+      size = Size(progressX, track),
+      cornerRadius = CornerRadius(track / 2f),
+    )
+    // 圆点在两端时别被裁掉一半：内缩到半径范围内
+    drawCircle(
+      color = accent,
+      radius = dot,
+      center = Offset(progressX.coerceIn(dot, (size.width - dot).coerceAtLeast(dot)), centerY),
+    )
   }
 }
 

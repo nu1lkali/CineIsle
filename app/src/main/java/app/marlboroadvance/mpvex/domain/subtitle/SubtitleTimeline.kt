@@ -40,8 +40,9 @@ data class SubtitleCue(
  *
  * ## 编码
  *
- * 中文站点的 SRT 常见 **GBK**，而下载器按字节原样落盘。这里先按 UTF-8 严格解码，
- * 失败再退 GBK —— 不这样做的话，列表里会是一串 `锟斤拷`，比不给看更糟。
+ * 中文站点的 SRT 常见 **GBK**，繁体站是 **Big5**，日文站是 **Shift_JIS / EUC-JP**，
+ * 而下载器按字节原样落盘。这里按 BOM → 严格 UTF-8 → 多候选择优 → 二次编码还原
+ * 逐级判定（见 [decode]），否则列表里会是一串 `锟斤拷`，比不给看更糟。
  */
 object SubtitleTimeline {
   /** 单条字幕上限：再多的片子也不会有意义地超过这个数量，防手滑选中巨大文件。 */
@@ -227,7 +228,7 @@ object SubtitleTimeline {
   }
 
   /**
-   * 解码字节：BOM 优先 → 严格 UTF-8 → 多候选择优。
+   * 解码字节：BOM 优先 → 严格 UTF-8 → 多候选择优 → 二次编码还原。
    *
    * ## 为什么不能「UTF-8 失败就退 GBK」
    *
@@ -237,16 +238,26 @@ object SubtitleTimeline {
    *
    * ## 怎么选
    *
-   * 每个候选编码都解一遍，按「解出来的文本像不像人话」打分：
+   * 每个候选编码都解一遍，按「解出来的文本像不像人话」打分（按字符数归一，
+   * 否则长短不同的候选之间没法比）：
    * · 常用汉字 / 假名 / 谚文加分（[COMMON_CJK] 收录常用简体与繁体字）；
    * · 生僻汉字扣分 —— 解错时的典型结果就是一串没人用的字；
-   * · 替换符 `�`、控制字符、私用区字符、Latin-1 扩展残留大幅扣分；
-   * 取最高分的候选。UTF-16 无 BOM 也靠「控制字符（NUL）扣分」被自然淘汰。
+   * · 替换符 `�`、控制字符、私用区字符、拉丁扩展残留大幅扣分；
+   * 取平均分最高的候选。UTF-16 无 BOM 也靠「控制字符（NUL）扣分」被自然淘汰。
    *
    * 严格 UTF-8 仍然先试：九成文件是 UTF-8，不必进入打分。
+   *
+   * ## 为什么候选表里必须有 UTF-8
+   *
+   * 严格解码是「全有或全无」的：一个坏字节就让整篇失败。若候选表里没有
+   * UTF-8（替换式解码），那份**九成正确、只坏了一两个字节**的 UTF-8 文件
+   * 会被硬塞给 GB18030 解，整篇 CJK 变成乱码 —— 比原来的两个坏字节糟得多。
    */
   fun decode(bytes: ByteArray): String {
     if (bytes.isEmpty()) return ""
+    // UTF-32 BOM 必须排在 UTF-16 之前：UTF-32LE 的 BOM 前两字节同样是 FF FE，
+    // 先按 UTF-16LE 解会把后面每 4 字节当 2 个字符，整篇错位。
+    utf32Bom(bytes)?.let { return repairDoubleEncoding(it) }
     // UTF-16 BOM：一部分 ASS 是这样存的。不先认 BOM 的话，整篇会被当成非法字节。
     if (bytes.size >= 2) {
       val b0 = bytes[0].toInt() and 0xFF
@@ -254,13 +265,13 @@ object SubtitleTimeline {
       if (b0 == 0xFF && b1 == 0xFE) {
         // 按偶数长度取：多出的半个字符直接丢掉，避免解码出替换符
         val even = (bytes.size - 2) - ((bytes.size - 2) % 2)
-        if (even > 0) return String(bytes, 2, even, Charsets.UTF_16LE)
-        return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+        if (even > 0) return repairDoubleEncoding(String(bytes, 2, even, Charsets.UTF_16LE))
+        return repairDoubleEncoding(String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE))
       }
       if (b0 == 0xFE && b1 == 0xFF) {
         val even = (bytes.size - 2) - ((bytes.size - 2) % 2)
-        if (even > 0) return String(bytes, 2, even, Charsets.UTF_16BE)
-        return String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
+        if (even > 0) return repairDoubleEncoding(String(bytes, 2, even, Charsets.UTF_16BE))
+        return repairDoubleEncoding(String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE))
       }
     }
     if (bytes.size >= 3 &&
@@ -268,7 +279,7 @@ object SubtitleTimeline {
       bytes[1] == 0xBB.toByte() &&
       bytes[2] == 0xBF.toByte()
     ) {
-      return String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
+      return repairDoubleEncoding(String(bytes, 3, bytes.size - 3, Charsets.UTF_8))
     }
     val strictUtf8 =
       runCatching {
@@ -278,13 +289,40 @@ object SubtitleTimeline {
           .decode(java.nio.ByteBuffer.wrap(bytes))
           .toString()
       }.getOrNull()
-    if (strictUtf8 != null) return strictUtf8
+    if (strictUtf8 != null) return repairDoubleEncoding(strictUtf8)
 
+    return repairDoubleEncoding(bestByScoring(bytes))
+  }
+
+  /** UTF-32 的 BOM（`FF FE 00 00` / `00 00 FE FF`）；没有就返回 null。 */
+  private fun utf32Bom(bytes: ByteArray): String? {
+    if (bytes.size < 8) return null
+    fun at(index: Int) = bytes[index].toInt() and 0xFF
+    val body = bytes.size - 4
+    val usable = body - (body % 4)
+    // 某些 ROM 上 UTF-32 不在标准字符集里，取不到就当作没有 BOM，交给后面的打分流程。
+    return when {
+      at(0) == 0xFF && at(1) == 0xFE && at(2) == 0x00 && at(3) == 0x00 ->
+        runCatching { String(bytes, 4, usable, Charsets.UTF_32LE) }.getOrNull()
+      at(0) == 0x00 && at(1) == 0x00 && at(2) == 0xFE && at(3) == 0xFF ->
+        runCatching { String(bytes, 4, usable, Charsets.UTF_32BE) }.getOrNull()
+      else -> null
+    }
+  }
+
+  /**
+   * 候选编码逐个解码，取**平均**可信度最高的一个。
+   *
+   * 归一化（除以字符数）是必要的：UTF-16 解出来只有一半字符，若用总分比较，
+   * 字符数少的候选在全是负分时反而占便宜。
+   */
+  private fun bestByScoring(bytes: ByteArray): String {
     var best: String? = null
     var bestScore = Double.NEGATIVE_INFINITY
     for (name in candidates(bytes)) {
       val text = runCatching { String(bytes, Charset.forName(name)) }.getOrNull() ?: continue
-      val score = plausibility(text)
+      if (text.isEmpty()) continue
+      val score = plausibility(text) / text.length
       if (score > bestScore) {
         bestScore = score
         best = text
@@ -325,21 +363,37 @@ object SubtitleTimeline {
     }.getOrNull()
 
   /**
-   * 固定候选表。GB18030 覆盖 GBK / GB2312；Big5 管繁体；Shift_JIS / EUC-KR 管日韩；
-   * windows-1252 兜西文。
+   * 固定候选表。
    *
-   * **UTF-16 只有在字节结构像 UTF-16 时才列入**：GBK 中文的字节按 UTF-16BE 解，
-   * 会落在谚文区（0xAC00–0xD7AF），打分器会误以为「这是韩文」。字幕文件一定带
-   * 时间码等 ASCII 结构，UTF-16 下这些字符有一半字节是 0x00 —— 用这个特征先筛一遍。
+   * · `GB18030` 覆盖 GBK / GB2312；
+   * · `Big5` 管繁体；
+   * · `UTF-8` 兜「只坏了个别字节」的 UTF-8（严格解码已经失败才会走到这里）；
+   * · `Shift_JIS` / `EUC-JP` 管日文，`EUC-KR` 管韩文；
+   * · `windows-1252` 兜西文 / 已二次编码的拉丁残留。
+   *
+   * **UTF-16 / UTF-32 只有在字节结构像 UTF-16 时才列入**：GBK 中文的字节按
+   * UTF-16BE 解，会落在谚文区（0xAC00–0xD7AF），打分器会误以为「这是韩文」。
+   * 字幕文件一定带时间码等 ASCII 结构，UTF-16 下这些字符有一半字节是 0x00 ——
+   * 用这个特征先筛一遍。
    */
   private fun fallbackCharsets(bytes: ByteArray): List<String> =
     if (looksLikeUtf16(bytes)) UTF16_CHARSETS else NON_UTF16_CHARSETS
 
   private val NON_UTF16_CHARSETS =
-    listOf("GB18030", "Big5", "Shift_JIS", "EUC-KR", "windows-1252")
+    listOf("GB18030", "Big5", "UTF-8", "Shift_JIS", "EUC-JP", "EUC-KR", "windows-1252")
 
   private val UTF16_CHARSETS =
-    listOf("GB18030", "Big5", "UTF-16LE", "UTF-16BE", "Shift_JIS", "EUC-KR", "windows-1252")
+    listOf(
+      "GB18030",
+      "Big5",
+      "UTF-8",
+      "UTF-16LE",
+      "UTF-16BE",
+      "Shift_JIS",
+      "EUC-JP",
+      "EUC-KR",
+      "windows-1252",
+    )
 
   /** 某种字节序下 0x00 的占比是否达到 UTF-16 的典型水平（≥1/8）。 */
   private fun looksLikeUtf16(bytes: ByteArray): Boolean {
@@ -354,6 +408,42 @@ object SubtitleTimeline {
     }
     val threshold = (limit / 2) / 8
     return zerosEven > threshold || zerosOdd > threshold
+  }
+
+  /**
+   * 还原「二次编码」：UTF-8 字节被当成 Latin-1 / CP1252 读过一遍再存成 UTF-8。
+   *
+   * 站点上这类文件很常见（转码脚本链走错一步），表现是满屏 `Ã¤Â¸Â­` 那种拉丁字母
+   * 加变音符号的组合。它的字节其实是**合法的 UTF-8**，所有解码器都会「成功」，
+   * 只能靠这种逆向重排救回来。
+   *
+   * 严格限制触发条件，避免把正常文本改坏：
+   * · 文本里不能有码点 > 0xFF 的字符（真有中文就不可能是这种 mojibake）；
+   * · 拉丁扩展字符（0x80–0xFF）至少 3 个，太少说明只是正常的外文标点；
+   * · 还原后可信度必须**明显**变高（≥ 0.6 分/字符），否则保持原样。
+   */
+  private fun repairDoubleEncoding(text: String): String {
+    if (text.isEmpty()) return text
+    var latin = 0
+    for (ch in text) {
+      val code = ch.code
+      if (code > 0xFF) return text
+      if (code in 0x80..0xFF) latin++
+    }
+    if (latin < 3) return text
+    val bytes = runCatching { text.toByteArray(Charsets.ISO_8859_1) }.getOrNull() ?: return text
+    val retried =
+      runCatching {
+        Charsets.UTF_8.newDecoder()
+          .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+          .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+          .decode(java.nio.ByteBuffer.wrap(bytes))
+          .toString()
+      }.getOrNull() ?: return text
+    if (retried.isEmpty()) return text
+    val before = plausibility(text) / text.length
+    val after = plausibility(retried) / retried.length
+    return if (after - before >= 0.6) retried else text
   }
 
   /**
@@ -393,6 +483,7 @@ object SubtitleTimeline {
           code in 0x3040..0x30FF -> 2.5 // 假名
           code in 0xAC00..0xD7AF -> 2.5 // 谚文
           code in 0x3000..0x303F -> 1.5 // 中日标点
+          code in 0xFF61..0xFF9F -> -1.5 // 半角片假名：真实字幕几乎不用，是 Shift_JIS 误判的典型残留
           code in 0xFF00..0xFFEF -> 0.5 // 全角符号
           code < 0x20 && ch != '\n' && ch != '\r' && ch != '\t' -> -15.0 // NUL 等控制符
           code in 0x7F..0x9F -> -10.0 // C1 控制符
