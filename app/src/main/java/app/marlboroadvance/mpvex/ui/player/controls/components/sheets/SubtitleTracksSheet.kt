@@ -160,6 +160,14 @@ fun SubtitlesSheet(
    * 网盘直链）没有 itemId 和服务端，在线搜索对它无意义，传 null 就自动隐藏。
    */
   onSearchOnline: (() -> Unit)? = null,
+  /**
+   * 打开「网络字幕」（迅雷 / SubtitleCat 直连搜索）。
+   *
+   * 与 [onSearchOnline] 是两条完全不同的路：那个搜的是 Emby **服务端**提供方并入库，
+   * 这个直接下载到客户端本地库。两者并列给出，谁都不顶替谁 —— 服务端没配字幕源时，
+   * 这条路仍然可用。非 Emby 播放传 null 即自动隐藏。
+   */
+  onSearchWebSubtitle: (() -> Unit)? = null,
   onOpenSubtitleSettings: () -> Unit,
   onOpenSubtitleDelay: () -> Unit,
   onRemoveSubtitle: (Int) -> Unit,
@@ -342,6 +350,11 @@ fun SubtitlesSheet(
           if (onSearchOnline != null) {
             IconButton(onClick = onSearchOnline) {
               Icon(Icons.Default.CloudDownload, contentDescription = "在线字幕")
+            }
+          }
+          if (onSearchWebSubtitle != null) {
+            IconButton(onClick = onSearchWebSubtitle) {
+              Icon(Icons.Default.Language, contentDescription = "网络字幕")
             }
           }
           IconButton(onClick = onOpenSubtitleSettings) {

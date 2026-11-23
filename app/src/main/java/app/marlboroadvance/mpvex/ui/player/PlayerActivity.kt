@@ -3899,6 +3899,34 @@ private fun cancelAutoplayCountdown() {
       withTimeoutOrNull(1200) { autoloadJob.join() }
       applyRestoredSubtitleSelection()
 
+      // ── 客户端网络字幕（详情页 / 字幕实验室下载的）：按 ItemId 挂回来 ──
+      //
+      // 为什么不走 SubtitleBindings：那边是**片名键**，而详情页拿到的是文件路径末段
+      // （`ABC-123.mkv`），播放页的 `media-title` 是 Emby 显示标题 —— 归一化后对不上，
+      // 于是「详情页下完字幕 → 点播放」时面板里既看不到这条、也没有被挂上。
+      // 本地网络字幕库是按 `EmbyServer.id + ItemId` 落的，那才是这部片子的稳定身份。
+      //
+      // 位置：必须在 applyRestoredSubtitleSelection **之后** —— 存档里「上次选的就是
+      // 这条」由它先还原；这里只负责「把库里所有已下载字幕挂成轨道，且在用户没有
+      // 明确存档选择时选一条」，不推翻已有选择。
+      val onlineMounted =
+        runCatching {
+          val embyServerId = currentEmbyServerId()
+          val embyItemId = currentEmbyItemId()
+          if (embyServerId == null || embyItemId == null) {
+            false
+          } else {
+            viewModel.mountOnlineLibrarySubtitles(
+              serverKey = embyServerId.toString(),
+              itemId = embyItemId,
+              allowSelect = restoredSubtitleSid <= 0 && !viewModel.boundSubtitleApplied,
+            )
+          }
+        }.getOrElse { error ->
+          Log.w(TAG, "mount online library subtitles failed", error)
+          false
+        }
+
       // ── Emby 字幕：用服务端已识别的字幕做自动选择 ──
       //
       // ⚠️ 闸门**不能**用 `hasState`：它只表示「这部片子有播放记录」，而几乎每部重看的
@@ -3917,6 +3945,11 @@ private fun cancelAutoplayCountdown() {
       // 仍然只是 launch，不阻塞首帧。
       if (intent.hasExtra("subs.enable")) {
         Log.d(TAG, "skip emby subtitle auto: 外部应用指定了字幕（subs.enable）")
+      } else if (onlineMounted) {
+        // 用户为这部片子下过网络字幕，且本次已经挂上（可能还选好了）：
+        // Emby 的自动策略不再抢选择，但清单仍要拉给面板 —— 用户可能想换成内嵌那条。
+        Log.d(TAG, "skip emby subtitle auto: 网络字幕已挂载")
+        launch { applyEmbySubtitleDiscoveryOnly() }
       } else if (restoredSubtitleSid > 0) {
         Log.d(TAG, "skip emby subtitle auto: 存档已选定字幕 sid=$restoredSubtitleSid")
         launch { applyEmbySubtitleDiscoveryOnly() }

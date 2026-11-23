@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -180,6 +181,23 @@ internal object SettingsRegistry {
       keywords = listOf("audio", "track", "volume", "delay"),
     )
 
+  /**
+   * 字幕实验室。
+   *
+   * 放在「媒体渲染」而不是「高级」：它服务的是字幕这条主线（搜索 / 下载 / 校准），
+   * 而不是排障工具。图标沿用 Subtitle 系列，与「字幕」设置页同族。
+   */
+  val subtitleLab =
+    SettingsDestination(
+      id = "subtitle_lab",
+      section = "媒体渲染",
+      titleText = "字幕实验室",
+      summaryText = "网络字幕搜索与下载 · 已下载字幕管理 · 时间轴校准",
+      icon = Icons.Outlined.Science,
+      screen = SubtitleLabScreen,
+      keywords = listOf("subtitle", "lab", "search", "字幕", "实验室", "下载", "校准", "偏移"),
+    )
+
   val aggregate =
     SettingsDestination(
       id = "aggregate_library",
@@ -247,6 +265,7 @@ internal object SettingsRegistry {
       folders,
       decoder,
       subtitles,
+      subtitleLab,
       audio,
       aggregate,
       personMerge,

@@ -167,6 +167,8 @@ fun PlayerSheets(
       val hostPlayer = LocalActivity.current as? app.marlboroadvance.mpvex.ui.player.PlayerActivity
       val embyContext = rememberEmbySubtitleContext { hostPlayer?.playlistIndex ?: 0 }
       var showOnlineSubtitles by remember { mutableStateOf(false) }
+      // 网络字幕（迅雷 / SubtitleCat 直连）：与上面的 Emby 服务端搜索是两条独立的路
+      var showWebSubtitles by remember { mutableStateOf(false) }
       val subtitleScope = rememberCoroutineScope()
 
       // Emby 服务端已识别的字幕（发现 / 选择 / 下载状态）
@@ -193,8 +195,31 @@ fun PlayerSheets(
         )
       }
 
-      if (showFilePicker) {
-          app.marlboroadvance.mpvex.ui.browser.dialogs.FilePickerDialog(
+      // ── 网络字幕：迅雷 / SubtitleCat 直连，下载到客户端本地库后立即挂载 ──
+      // 不进 Emby 服务端、不改任何服务端字幕轨（需求 1.12）。
+      if (showWebSubtitles && embyContext != null) {
+        app.marlboroadvance.mpvex.ui.subtitle.online.OnlineSubtitleSheet(
+          target =
+            app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleTarget(
+              serverKey = embyContext.server.id.toString(),
+              itemId = embyContext.itemId,
+              // 匹配与落盘都按「文件名」口径：番号就在文件名里，itemName 只是片名
+              mediaTitle = currentMediaTitle.ifBlank { embyContext.itemName },
+              embyTitle = embyContext.itemName,
+              mediaSourceId = embyContext.mediaSourceId,
+            ),
+          primaryActionLabel = "下载并挂载",
+          onUse = { uri ->
+            bindManualSubtitle(uri)
+            subtitleScope.launch {
+              viewModel.loadSubtitle(uri, select = true, silent = false)
+            }
+          },
+          onDismiss = { showWebSubtitles = false },
+        )
+      }
+
+      if (showFilePicker) {          app.marlboroadvance.mpvex.ui.browser.dialogs.FilePickerDialog(
               isOpen = true,
               currentPath = savedPickerPath.ifBlank { android.os.Environment.getExternalStorageDirectory().absolutePath },
               onDismiss = { showFilePicker = false },
@@ -233,6 +258,9 @@ fun PlayerSheets(
         // 只有「正在播 Emby 媒体」时才给在线搜索 —— 本地文件 / 网盘直链
         // 没有 itemId，按钮留着只会点了报错
         onSearchOnline = embyContext?.let { { showOnlineSubtitles = true } },
+        // 网络字幕与上面同一条前置条件（需要 itemId / 服务器来建立本地关联），
+        // 但走的是直连站点下载，不依赖服务端是否配置了字幕提供方
+        onSearchWebSubtitle = embyContext?.let { { showWebSubtitles = true } },
         onRemoveSubtitle = onRemoveSubtitle,
         onOpenSubtitleSettings = { onOpenPanel(Panels.SubtitleSettings) },
         onOpenSubtitleDelay = { onOpenPanel(Panels.SubtitleDelay) },

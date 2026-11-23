@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  字幕实验室的预览画面层。
+
+  ── 为什么单独一份布局，不复用 view_feed_mpv.xml ──
+  两份布局的内容此刻一样（InertTouch 容器 + MPVView），但**归属不同**：视界流那份跟着
+  视界流演进（截图、翻页、手势都依赖它的 id），实验室这份跟着预览控制器演进。
+  共用一个布局文件意味着任何一侧改 id 都会打断另一侧，代价远高于这十几行重复。
+
+  ── 为什么根节点是 InertTouchFrameLayout ──
+  画面层是 SurfaceView，由系统单独合成；Compose 的命中测试会先把指针事件交给这层
+  AndroidView，一旦被消费，叠在上面的「播放 / 暂停 / 进度条」就点不动了。
+  在容器这一层短路掉分发（dispatchTouchEvent 返回 false），控件才有反应。
+  详细推导见 ui/player/feed/InertTouchFrameLayout.kt 的类注释。
+
+  ── 为什么画面不裁剪圆角 ──
+  SurfaceView 不参与 Compose 的裁剪，外层加 roundedCorner 只会裁到叠加的控件、
+  画面本身仍是直角。所以这里让预览区**满宽**显示（直角），视觉上是一块独立的监视器，
+  而不是一张圆角卡片里躺着一条直角视频。
+-->
+<app.marlboroadvance.mpvex.ui.player.feed.InertTouchFrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/labMpvRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <app.marlboroadvance.mpvex.ui.player.MPVView
+        android:id="@+id/labMpv"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center" />
+
+</app.marlboroadvance.mpvex.ui.player.feed.InertTouchFrameLayout>

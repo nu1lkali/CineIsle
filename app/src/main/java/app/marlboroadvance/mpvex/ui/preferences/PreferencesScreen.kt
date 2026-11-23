@@ -303,6 +303,10 @@ object PreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              SettingsDestinationRow(SettingsRegistry.subtitleLab) { backstack.add(it) }
+
+              PreferenceDivider()
+
               SettingsDestinationRow(SettingsRegistry.audio) { backstack.add(it) }
             }
           }

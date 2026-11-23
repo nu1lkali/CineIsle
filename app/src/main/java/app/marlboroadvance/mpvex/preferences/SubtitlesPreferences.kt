@@ -111,6 +111,17 @@ class SubtitlesPreferences(
    * 悄悄扩散成全局规则 —— 那正是设计里明令禁止的事。
    */
   val subtitleCodeAliases = preferenceStore.getString("sub_code_aliases", "")
+
+  /**
+   * 本地在线字幕库索引：一行一条记录，字段以 `\t` 分隔，见
+   * [app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle]。
+   *
+   * 记的是「哪部片子（服务器 + ItemId）用过哪一条下载来的字幕、时间轴偏移多少」。
+   * 与 [subtitleBindings] 分开：那个是「片名 → 任意本地文件」，这个是
+   * 「媒体身份 → 我们管得着的那个文件」，三个入口（播放器 / 详情页 / 字幕实验室）
+   * 都靠它认出彼此下载的字幕。
+   */
+  val onlineSubtitleLibrary = preferenceStore.getString("sub_online_library", "")
 }
 
 enum class SubtitleJustification(

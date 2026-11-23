@@ -28,6 +28,8 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleLanguage
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleInfo
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSourceType
+import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
+import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
 import app.marlboroadvance.mpvex.ui.player.subtitle.ExternalSubtitleArchive
 import app.marlboroadvance.mpvex.ui.player.subtitle.SubtitleBindings
 import app.marlboroadvance.mpvex.ui.player.subtitle.emby.EmbySubtitleController
@@ -1038,6 +1040,129 @@ class PlayerViewModel(
     }
   }
 
+  // ==================== 客户端网络字幕（迅雷 / SubtitleCat 下载的） ====================
+  //
+  // 与上面两条路径（目录扫描、片名绑定）的本质区别：**身份用 `EmbyServer.id + ItemId`**。
+  //
+  // 为什么不能沿用片名：详情页给在线字幕建库 / 建绑定时用的是**文件路径末段**
+  // （`ABC-123.mkv`，番号在那里），而播放页的 `media-title` 是 Emby 的**显示标题**
+  // （`title` extra 优先于 `filename`，见 PlayerActivity.getFileName）。两者归一化后
+  // 完全对不上 ⇒ 用户在详情页下载完再点播放，面板里既看不到这条、也没有被挂上。
+  // 本地在线字幕库本来就是按 ItemId 落的，这里直接用那份身份，绕开片名口径。
+
+  private val onlineSubtitleLibrary: OnlineSubtitleLibrary by lazy {
+    OnlineSubtitleLibrary(host.context.applicationContext, subtitlesPreferences)
+  }
+
+  private val _onlineSubtitles = MutableStateFlow<List<DownloadedSubtitle>>(emptyList())
+
+  /** 当前这部片子在本地库里的网络字幕（按 ItemId 关联，供面板 / 调试查看）。 */
+  val onlineSubtitles: StateFlow<List<DownloadedSubtitle>> = _onlineSubtitles.asStateFlow()
+
+  /**
+   * 把「这部片子已经下载过的网络字幕」挂进 mpv。
+   *
+   * 所有条目都 `sub-add`（`auto`，不抢选择），只有 [allowSelect] 为真时才把
+   * 「优先使用」那条（没有优先则取最新下载）选中 —— 这样详情页下载完第一次播放
+   * 就是「有字幕且已挂上」；而存档里已经选定过别的字幕时，只把它们列进面板。
+   *
+   * ⚠️ 必须等 mpv 把媒体真正加载起来（`track-list/count > 0`）再 `sub-add`：
+   * 早发的命令会被丢掉，轨道列表里就永远没有这一条。与 [restoreBoundSubtitle] 同一口径。
+   *
+   * ⚠️ 读 mpv native 属性（`track-list` 那一族）**只能在主线程**：调用方常常在 IO 协程里
+   * （PlayerActivity 的 handleFileLoaded 就是），所以这里显式切回 Main 再碰 mpv。
+   *
+   * @return true = 至少有一条挂上了（调用方据此跳过 Emby 的自动抢选）
+   */
+  suspend fun mountOnlineLibrarySubtitles(
+    serverKey: String,
+    itemId: String,
+    allowSelect: Boolean,
+  ): Boolean {
+    if (serverKey.isBlank() || itemId.isBlank()) return false
+    // 索引是磁盘 / SharedPreferences 读，放 IO；读完立刻回到主线程做 mpv 交互。
+    val records = withContext(Dispatchers.IO) { onlineSubtitleLibrary.forMedia(serverKey, itemId) }
+    _onlineSubtitles.value = records
+    Log.i("PlayerViewModel", "online library lookup: server=$serverKey item=$itemId records=${records.size}")
+    if (records.isEmpty()) return false
+
+    return withContext(Dispatchers.Main) {
+      var waited = 0L
+      while (waited < 8_000L && (PlayerLib.getPropertyInt("track-list/count") ?: 0) <= 0) {
+        delay(120)
+        waited += 120
+      }
+      if ((PlayerLib.getPropertyInt("track-list/count") ?: 0) <= 0) return@withContext false
+
+      val titleSnapshot = currentMediaTitle
+      var mounted = 0
+      // 旧的先挂：mpv 的轨道 id 随挂载顺序递增，按下载时间升序挂上去，
+      // 面板里最近下载的那条在最后 —— 与「最新下的最可能是用户想要的」一致。
+      records.sortedBy { it.downloadedAt }.forEach { record ->
+        val file = onlineSubtitleLibrary.fileOf(record)
+        if (!file.isFile) {
+          Log.w("PlayerViewModel", "online subtitle file missing: ${record.id}")
+          return@forEach
+        }
+        val uriString = Uri.fromFile(file).toString()
+        if (findSubtitleTrackIdOf(uriString) == null) {
+          loadSubtitle(Uri.fromFile(file), select = false, silent = true, title = record.title.take(60))
+          // `sub-add` 是异步的：必须等到轨道真的出现在 track-list 里才算数。
+          // 早先这里是无条件置「已挂上」，文件其实没挂上去也报成功 ——
+          // 调用方据此跳过 Emby 的自动字幕，结果画面上一条字幕都没有，
+          // 用户只能到「网络字幕」里手点一下。这里改成以轨道是否真的出现为准。
+          var waitedTrack = 0L
+          while (waitedTrack < 1_000L && findSubtitleTrackIdOf(uriString) == null) {
+            delay(80)
+            waitedTrack += 80
+          }
+        }
+        if (findSubtitleTrackIdOf(uriString) != null) {
+          mounted++
+        } else {
+          Log.w("PlayerViewModel", "online subtitle not mounted: ${record.title}")
+        }
+      }
+      if (mounted == 0) {
+        Log.w("PlayerViewModel", "no online subtitle mounted: item=$itemId records=${records.size}")
+        return@withContext false
+      }
+
+      if (allowSelect && currentMediaTitle == titleSnapshot) {
+        val pick = records.firstOrNull { it.preferred } ?: records.maxByOrNull { it.downloadedAt }
+        if (pick != null && onlineSubtitleLibrary.fileOf(pick).isFile) {
+          val uriString = Uri.fromFile(onlineSubtitleLibrary.fileOf(pick)).toString()
+          // `sub-add` 是异步的：轨道还没进 track-list 时设 sid 会被 mpv 丢掉，
+          // 等一小会儿（最长 1.5s）再选，避免「下标到但没选中」。
+          var trackId = findSubtitleTrackIdOf(uriString)
+          var tries = 0
+          while (trackId == null && tries < 25) {
+            delay(60)
+            trackId = findSubtitleTrackIdOf(uriString)
+            tries++
+          }
+          if (trackId != null) {
+            ensureSubtitleSelected(trackId)
+            boundSubtitleApplied = true
+            // 顺手补一条「当前媒体名 → 文件」的绑定：详情页写的那条键对不上播放页，
+            // 补上之后 hasBoundSubtitle / restoreBoundSubtitle 也能直接命中。
+            // 只在没有绑定时才补 —— 有绑定时说明用户亲手挑过，不能被库里的默认值顶掉。
+            if (currentMediaTitle.isNotBlank() &&
+              SubtitleBindings.find(subtitlesPreferences, currentMediaTitle).isNullOrBlank()
+            ) {
+              runCatching { SubtitleBindings.bind(subtitlesPreferences, currentMediaTitle, uriString) }
+            }
+            Log.i(
+              "PlayerViewModel",
+              "online subtitle mounted by itemId: item=$itemId trackId=$trackId title=${pick.title}",
+            )
+          }
+        }
+      }
+      mounted > 0
+    }
+  }
+
   // ==================== Emby 字幕（服务端已识别的字幕） ====================
   //
   // 与既有两条字幕路径的边界（三者**互斥**，不要混着改）：
@@ -1493,6 +1618,8 @@ class PlayerViewModel(
       resetExternalSubtitles()
       // Emby 字幕状态也是「按片」的：不清的话面板会显示上一集的 Emby 字幕清单
       resetEmbySubtitleState()
+      // 网络字幕清单同理：上一部的条目留在界面上会被误当成这一部也下过
+      _onlineSubtitles.value = emptyList()
       // Scan for previously downloaded/added subtitles
       scanLocalSubtitles(mediaTitle)
       // 用户上次为这部片子手动挂过的字幕：自动挂回去（进程被杀也不丢）

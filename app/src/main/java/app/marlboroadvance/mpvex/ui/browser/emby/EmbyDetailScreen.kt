@@ -1737,8 +1737,57 @@ private fun DetailBody(
   // 「全部字幕」抽屉的开关。放这里（而非卡片内部）是因为抽屉要盖在整页之上，
   // 而卡片只是 LazyColumn 里的一行 —— 滚出视口时它的组合会被销毁，状态也就丢了。
   var subtitleSheetOpen by remember { mutableStateOf(false) }
-  // 多版本媒体：真正生效的版本 Id（单版本媒体为 null）。下面「媒体信息」也要按它取源，
-  // 否则容器 / 文件大小 / 码率 / 音视频轨道会一直显示第一个版本，与选中的版本对不上。
+  // 「网络字幕」抽屉（迅雷 / SubtitleCat）。与上面的「全部字幕」并列：
+  // 那个看的是服务端已识别的轨，这个是去互联网加一条本地字幕。
+  var webSubtitleSheetOpen by remember { mutableStateOf(false) }
+  // 网络字幕的媒体上下文。文件名优先取 Path 末段（番号在那里），拿不到退化成片名。
+  val webSubtitleTarget =
+    remember(item.Id, item.Name, item.Path, server?.id) {
+      val serverId = server?.id
+      val itemId = item.Id
+      if (serverId == null || itemId == null) {
+        null
+      } else {
+        app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleTarget(
+          serverKey = serverId.toString(),
+          itemId = itemId,
+          mediaTitle =
+            item.Path
+              ?.substringAfterLast('/')
+              ?.substringAfterLast('\\')
+              ?.takeIf { it.isNotBlank() }
+              ?: item.Name.orEmpty(),
+          embyTitle = item.Name,
+          // 网络字幕按片名/番号检索，与具体版本无关；关联用的是 ItemId
+          mediaSourceId = null,
+        )
+      }
+    }
+  // ── 本机已下载的网络字幕（需求 6.5）──
+  // 只看本地索引，不发网络请求：详情页要能一眼说出「这部片我下过几条字幕」，
+  // 而不是让用户再打开搜索面板找一遍。搜索面板关闭后重读一次，反映刚下完的那条。
+  val localSubtitlePrefs = koinInject<app.marlboroadvance.mpvex.preferences.SubtitlesPreferences>()
+  val localSubtitleContext = LocalContext.current.applicationContext
+  var localSubtitleRecords by remember(item.Id) {
+    mutableStateOf(
+      emptyList<app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle>(),
+    )
+  }
+  LaunchedEffect(item.Id, server?.id, webSubtitleSheetOpen) {
+    val serverId = server?.id ?: return@LaunchedEffect
+    val itemId = item.Id ?: return@LaunchedEffect
+    localSubtitleRecords =
+      withContext(Dispatchers.IO) {
+        runCatching {
+          app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary(
+            localSubtitleContext,
+            localSubtitlePrefs,
+          ).forMedia(serverId.toString(), itemId)
+        }.getOrDefault(emptyList())
+      }
+  }
+
+  // 多版本媒体：真正生效的版本 Id（单版本媒体为 null）。下面「媒体信息」也要按它取源，  // 否则容器 / 文件大小 / 码率 / 音视频轨道会一直显示第一个版本，与选中的版本对不上。
   // ⚠️ 必须与播放侧用**同一条规则**（autoSourcePreference 同一个值），
   // 否则会出现「顶栏写着一个版本、媒体信息里写着另一个」。
   val browserPrefsForSource = koinInject<BrowserPreferences>()
@@ -1809,6 +1858,8 @@ private fun DetailBody(
             ui = subtitleUi,
             onOpenSheet = { subtitleSheetOpen = true },
             onRetry = onRetrySubtitle,
+            onSearchWebSubtitle = webSubtitleTarget?.let { { webSubtitleSheetOpen = true } },
+            localSubtitles = localSubtitleRecords,
           )
         }
       }
@@ -2103,6 +2154,25 @@ private fun DetailBody(
         itemTitle = item.Name,
         onDismiss = { subtitleSheetOpen = false },
       )
+    }
+
+    // ── 「网络字幕」抽屉 ──
+    // 下载后只做「本地关联」：文件进应用私有库，记录挂到 Emby ItemId 上。
+    // **不**调服务端接口、**不**声称改了服务器默认字幕（需求 6.4 末段）。
+    if (webSubtitleSheetOpen) {
+      webSubtitleTarget?.let { target ->
+        app.marlboroadvance.mpvex.ui.subtitle.online.OnlineSubtitleSheet(
+          target = target,
+          primaryActionLabel = "下载",
+          // 详情页没有播放器实例，这里只做「下载 + 按 ItemId 入库」。
+          // 用户下次进播放页时，播放器按 `EmbyServer.id + ItemId` 读本地网络字幕库，
+          // 把这些条目挂成字幕轨并自动选中 → 面板里能看到、画面上直接有字幕。
+          // （不能只依赖 SubtitleBindings：那边用片名做键，而详情页拿到的是文件路径末段、
+          //  播放页拿到的是显示标题，两者天然对不上。）
+          onUse = null,
+          onDismiss = { webSubtitleSheetOpen = false },
+        )
+      }
     }
 
     // ── 封面区（浮在下层内容之上，随滚动折叠）──

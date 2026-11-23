@@ -10,13 +10,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -31,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitlePresentation
+import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
 import app.marlboroadvance.mpvex.ui.browser.emby.DetailSubtitlePhase
 import app.marlboroadvance.mpvex.ui.browser.emby.DetailSubtitleUi
 
@@ -49,12 +53,18 @@ import app.marlboroadvance.mpvex.ui.browser.emby.DetailSubtitleUi
  *
  * @param onOpenSheet 点「全部」或卡片主体（有明细时）
  * @param onRetry 失败态的重试
+ * @param onSearchWebSubtitle 打开网络字幕搜索（迅雷 / SubtitleCat）。null 时该入口不渲染
+ *   —— 非可播条目（季 / 合集）没有稳定的 ItemId 关联，留着只会下错地方。
+ * @param localSubtitles 已经下载到本机、并关联到这条媒体的网络字幕（需求 6.5：
+ *   「已关联 N 条字幕」要能一眼看出，不要每次重新搜索）
  */
 @Composable
 internal fun DetailSubtitleCard(
   ui: DetailSubtitleUi,
   onOpenSheet: () -> Unit,
   onRetry: () -> Unit,
+  onSearchWebSubtitle: (() -> Unit)? = null,
+  localSubtitles: List<DownloadedSubtitle> = emptyList(),
   modifier: Modifier = Modifier,
 ) {
   val (chips, hiddenChipCount) = remember(ui.subtitles) {
@@ -142,6 +152,64 @@ internal fun DetailSubtitleCard(
           chips = chips,
           hiddenChipCount = hiddenChipCount,
           allUnavailable = allUnavailable,
+        )
+      }
+
+      // ── 已下载的网络字幕（需求 6.5）──
+      // 与上面那段「服务端已识别的轨」分开摆：两者不是同一种资源，
+      // 混在一行里会让人以为服务器上多了几条字幕。这里只陈述本机事实。
+      if (localSubtitles.isNotEmpty()) {
+        val bySource =
+          localSubtitles
+            .groupingBy { it.source.label }
+            .eachCount()
+            .entries
+            .joinToString(" · ") { "${it.key} ${it.value}" }
+        Text(
+          text = "本机已关联 ${localSubtitles.size} 条网络字幕 · $bySource",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.primary,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.padding(top = 8.dp),
+        )
+        Text(
+          text = "播放该媒体时自动挂载，可在字幕面板切换",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.padding(top = 1.dp),
+        )
+      }
+
+      // ── 网络字幕入口（用户反馈 6）──
+      // 原来只是标题行右侧一个 28dp 的「网络字幕」小链接：字小、位置偏，
+      // 用户根本不知道那是个能下载字幕的按钮。改成整行按钮，动作一目了然。
+      if (onSearchWebSubtitle != null) {
+        Spacer(modifier = Modifier.height(10.dp))
+        FilledTonalButton(
+          onClick = onSearchWebSubtitle,
+          modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.CloudDownload,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(
+            text = "搜索网络字幕并下载",
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            softWrap = false,
+          )
+        }
+        Text(
+          text = "从迅雷 / SubtitleCat 检索，下载到本机并关联该媒体",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(top = 4.dp),
         )
       }
     }
