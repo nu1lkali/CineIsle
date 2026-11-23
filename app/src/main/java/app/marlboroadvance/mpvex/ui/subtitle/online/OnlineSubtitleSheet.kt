@@ -70,6 +70,25 @@ import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleMatchLevel
 import kotlinx.coroutines.launch
 
 /**
+ * 网络字幕抽屉与字幕时间线浮层的**统一高度**（占窗口高度的比例）。
+ *
+ * 两个面板是同一张"从底部升起的抽屉"的两个态：在抽屉里点「时间线」后，时间线必须
+ * **正好盖住**抽屉，而不是短一截、让后面那张从顶上露出来。所以高度只能有一份常量 ——
+ * 之前抽屉写 0.86f、时间线写 0.78f，一开时间线就是「短面板叠在长面板上」。
+ */
+internal const val ONLINE_SUBTITLE_PANEL_HEIGHT_FRACTION = 0.86f
+
+/**
+ * 底部抽屉自带拖拽把手占的高度（M3 `BottomSheetDefaults.DragHandle`：4dp 横条 +
+ * 上下各 22dp）。
+ *
+ * 抽屉的整体高度 = 把手 + 上面的内容，而 [ONLINE_SUBTITLE_PANEL_HEIGHT_FRACTION]
+ * 只作用于内容。时间线浮层要跟抽屉**整体**对齐，就得把这截加回去，否则抽屉顶部
+ * 的把手会从时间线上沿露出一条。
+ */
+internal val ONLINE_SUBTITLE_DRAG_HANDLE_HEIGHT = 48.dp
+
+/**
  * 网络字幕（迅雷 / SubtitleCat）搜索面板 —— 三个入口共用。
  *
  * ## 与既有「在线字幕」（Emby 字幕源）的区别
@@ -114,7 +133,8 @@ fun OnlineSubtitleSheet(
     LazyColumn(
       // 固定高度而不是「内容多高就多高」：搜索结果是分两路先后到达的，内容高度会跳变，
       // 拖拽关闭时每一帧重新测量 ⇒ 手感和位置都会抖（与实验室选片面板同一个问题）。
-      modifier = Modifier.fillMaxWidth().fillMaxHeight(0.86f),
+      // ⚠️ 高度与时间线浮层共用 [ONLINE_SUBTITLE_PANEL_HEIGHT_FRACTION]，改一处等于改两处。
+      modifier = Modifier.fillMaxWidth().fillMaxHeight(ONLINE_SUBTITLE_PANEL_HEIGHT_FRACTION),
       contentPadding = PaddingValues(bottom = 24.dp),
     ) {
       item(key = "header") {

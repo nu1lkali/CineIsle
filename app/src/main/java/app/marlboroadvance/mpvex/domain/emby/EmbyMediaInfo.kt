@@ -286,9 +286,14 @@ fun effectiveEmbyMediaSourceId(
  *
  * 优先用服务端给的 `Name`（网页端下拉显示的也是它）—— 两边显示同一个词，
  * 用户才不会觉得「选的和播的不是一个版本」。没有 `Name` 才按分辨率 / 编码 / 体积拼。
+ *
+ * ⚠️ 但 `Name` 会被服务端削掉公共前缀（见 [completeEmbyVersionPrefix]），
+ * 所以先拿文件名回填一次，补不回来才原样用它。
  */
 fun embyMediaSourceLabel(source: EmbyMediaSource): String {
-  source.Name?.takeIf { it.isNotBlank() }?.let { return it }
+  val embyName = source.Name?.takeIf { it.isNotBlank() }
+  completeEmbyVersionPrefix(embyName, source.Path)?.let { return it }
+  if (embyName != null) return embyName
   val video = source.MediaStreams?.firstOrNull { it.Type == "Video" }
   val parts = mutableListOf<String>()
   video?.Height?.takeIf { it > 0 }?.let { h ->
@@ -304,6 +309,55 @@ fun embyMediaSourceLabel(source: EmbyMediaSource): String {
   source.Size?.takeIf { it > 0 }?.let { parts += formatFileSize(it) }
   if (parts.isEmpty()) source.Container?.uppercase()?.let { parts += it }
   return parts.joinToString(" · ").ifBlank { "版本" }
+}
+
+/** 「补全前缀」最多回填多少个字符：再长就不是番号前缀，而是整条片名了。 */
+private const val MAX_VERSION_PREFIX_CHARS = 12
+
+/**
+ * 把 Emby 削掉的版本名前缀补回来：`522A.` + `KAWD-522A.mp4` ⇒ `KAWD-522A`。
+ *
+ * ## 为什么要补
+ *
+ * 多版本名的来源是**文件名**，而服务端在合并版本时会把多个文件共有的前缀切掉
+ * （见 `EmbyVersionLabels` / Smart Merge 的说明）。于是 `KAWD-522A.mp4` 与
+ * `KAWD-522B.mp4` 在下拉框里只剩 `522A.` / `522B.` —— 光看这一行认不出是哪部片，
+ * 而同一个条目里另一部作品的版本名可能恰好也叫 `522A.`。
+ *
+ * 文件名本身没被动过（`MediaSource.Path`），前缀一直在那儿，所以能对上就把那截接回来。
+ *
+ * ## 只在「确实是被削了」时动手
+ *
+ * 判据是「Emby 名 = 文件名的**后缀片段**」，且被削掉的那截像番号前缀：
+ *  - 不含空白、不含 `.`（片名 / 年份段一补就长得没法看，不如留着短名）；
+ *  - 长度 ≤ [MAX_VERSION_PREFIX_CHARS]；
+ *  - 以 `-` / `_` 收尾（`KAWD-`、`SSIS_`），这样 `A` 这种纯碎片不会被硬接成半个词。
+ *
+ * 任何一条不满足就返回 null，调用方继续用 Emby 原名 —— 补全只能是「更好认」，
+ * 不能把 `1080P` 这种本来清爽的名字糊成一长串。
+ *
+ * @return 补好的名字；不需要 / 补不了时 null
+ */
+internal fun completeEmbyVersionPrefix(
+  name: String?,
+  path: String?,
+): String? {
+  val raw = name?.trim().orEmpty()
+  if (raw.isEmpty()) return null
+  val stem = bareFileName(path)
+  if (stem.isBlank()) return null
+  // Emby 截出来的名字常带尾随分隔符（`522A.`），比对前先削掉
+  val core = raw.trimEnd('.', '-', '_', ' ', '\u3000')
+  if (core.isEmpty() || core.length >= stem.length) return null
+  val index = stem.indexOf(core, ignoreCase = true)
+  // index == 0 ⇒ 前缀根本没被削，不用补
+  if (index <= 0) return null
+  val prefix = stem.substring(0, index)
+  if (prefix.length > MAX_VERSION_PREFIX_CHARS) return null
+  if (prefix.any { it.isWhitespace() || it == '.' }) return null
+  if (prefix.last() != '-' && prefix.last() != '_') return null
+  // 用 stem 里的原始大小写（Emby 名可能被改过大小写），后缀之后的残留（`-C` 之类）截掉
+  return stem.substring(0, index + core.length)
 }
 
 /**

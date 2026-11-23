@@ -3692,8 +3692,21 @@ android {
     //  · 【UI】网络字幕的时间线预览浮层改成**贴底抽屉**：`usePlatformDefaultWidth=false`
     //    + 底对齐 + 只圆上两角 + 顶部拖拽把手（下拖 96dp 关闭，回弹走 Animatable），
     //    打开时从底部升起；内容补 `navigationBarsPadding()` 不被手势条压住。
-    versionCode = 320
-    versionName = "1.6.70"
+    // 321 / 1.6.71：多版本名补前缀 + 网络字幕抽屉与时间线同高（用户反馈两件）。
+    //  · 【多版本】Emby 合并版本时会削掉多个文件共有的前缀，于是 `KAWD-522A.mp4` /
+    //    `KAWD-522B.mp4` 在详情页版本下拉里只剩 `522A.` / `522B.` —— 光看这一行认不出
+    //    是哪部片。新增 `completeEmbyVersionPrefix`：拿 `MediaSources[].Path` 的文件名
+    //    把被削掉的那一段接回来（只在「Emby 名 = 文件名后缀片段」且那段前缀像番号时动手：
+    //    不含空白 / 点、≤12 字、以 `-` / `_` 收尾），`1080P` 这类本来就清爽的名字不动。
+    //    详情页下拉、媒体信息、播放页版本名、连播队列共用同一个 `embyMediaSourceLabel`，
+    //    一处修好四处一致；本机自定义名仍然优先。
+    //  · 【UI】网络字幕抽屉（内容 0.86 窗口高）与字幕时间线浮层（0.78，且它的 Dialog
+    //    窗口先被系统栏裁掉一截）高度不一致 ⇒ 时间线一开就是「短面板压着长面板」，
+    //    后面那张从顶上露出一条。现在高度共用 `ONLINE_SUBTITLE_PANEL_HEIGHT_FRACTION`，
+    //    时间线再补上抽屉自带的拖拽把手（48dp）并把 Dialog 改成 edge-to-edge，
+    //    两者升到同一位置、完全对齐。
+    versionCode = 321
+    versionName = "1.6.71"
 
     vectorDrawables {
       useSupportLibrary = true

@@ -8,11 +8,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -79,6 +79,12 @@ import kotlinx.coroutines.launch
  *
  * 用户在这里做的事是「核对这条字幕对不对」：台词内容、出现时间、条目数量。
  * 看完关掉，本地库里不会多出任何文件。
+ *
+ * ## 高度必须与抽屉一致
+ *
+ * 它盖在「网络字幕」抽屉上，两者高度不一样就会出现「短面板压着长面板、后面那张
+ * 从顶上露出来」的破面。所以高度取自 [ONLINE_SUBTITLE_PANEL_HEIGHT_FRACTION]
+ * （与抽屉同一份常量）并加上抽屉把手的 [ONLINE_SUBTITLE_DRAG_HANDLE_HEIGHT]。
  */
 @Composable
 internal fun OnlineSubtitleTimelineDialog(
@@ -112,16 +118,23 @@ internal fun OnlineSubtitleTimelineDialog(
 
   Dialog(
     onDismissRequest = onClose,
-    properties = DialogProperties(usePlatformDefaultWidth = false),
+    // decorFitsSystemWindows = false：网络字幕抽屉（ModalBottomSheet）是满屏 edge-to-edge
+    // 的窗口，这里必须同样是满屏，两边按同一个比例算出来的高度才可比 —— 否则本窗口
+    // 先被系统栏裁掉一截，同样的 0.86f 会比抽屉矮，抽屉就会从上面露出来。
+    properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
   ) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+      // 与网络字幕抽屉同高：内容那一截共用同一个比例，再加上抽屉自己的拖拽把手
+      // （抽屉整体 = 把手 + 内容），这样时间线升上来正好**盖住**抽屉，不会露出后一张。
+      val panelHeight = maxHeight * ONLINE_SUBTITLE_PANEL_HEIGHT_FRACTION +
+        ONLINE_SUBTITLE_DRAG_HANDLE_HEIGHT
       Surface(
         // 只圆上两角：下沿与屏幕底边齐平，才像抽屉而不是浮动卡片
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier
           .fillMaxWidth()
-          .fillMaxHeight(0.78f)
+          .height(panelHeight)
           .onSizeChanged { sheetHeightPx = it.height }
           .offset { IntOffset(0, offsetY.value.roundToInt()) },
       ) {

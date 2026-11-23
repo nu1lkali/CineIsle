@@ -104,4 +104,51 @@ class EmbyMediaInfoSummaryTest {
     assertEquals("1920×1080", summary.resolution)
     assertEquals("/media/hd.mp4", summary.path)
   }
+
+  // ── 版本名前缀补全（Emby 会削掉多版本文件的公共前缀）──
+
+  @Test
+  fun `stripped version prefix is completed from the file name`() {
+    val a = EmbyMediaSource(Id = "a", Name = "522A.", Container = "mp4", Path = "/media/HD/KAWD-522A.mp4")
+    val b = EmbyMediaSource(Id = "b", Name = "522B.", Container = "mp4", Path = "/media/HD/KAWD-522B.mp4")
+
+    assertEquals("KAWD-522A", embyMediaSourceLabel(a))
+    assertEquals("KAWD-522B", embyMediaSourceLabel(b))
+  }
+
+  @Test
+  fun `version prefix completion also works with dash separated codes and windows paths`() {
+    val fourK = EmbyMediaSource(
+      Id = "4k",
+      Name = "229-4K",
+      Container = "mkv",
+      Path = "D:\\media\\HD\\DGCEMD-229-4K\\DGCEMD-229-4K.mkv",
+    )
+    assertEquals("DGCEMD-229-4K", embyMediaSourceLabel(fourK))
+
+    val underscore = EmbyMediaSource(Id = "u", Name = "123", Path = "/media/SSIS_123.mp4")
+    assertEquals("SSIS_123", embyMediaSourceLabel(underscore))
+  }
+
+  @Test
+  fun `clean version names are left alone`() {
+    // 前缀里带点 ⇒ 那是片名/年份段，补上去只会更长更乱
+    val byYear = EmbyMediaSource(Id = "y", Name = "1080p", Path = "/media/Demo.2024.1080p.mkv")
+    assertEquals("1080p", embyMediaSourceLabel(byYear))
+
+    // 名字根本不是文件名后缀 ⇒ 无从补起
+    val unrelated = EmbyMediaSource(Id = "x", Name = "1080P", Path = "/media/hd.mp4")
+    assertEquals("1080P", embyMediaSourceLabel(unrelated))
+
+    // 没有 Path / Name 为空 ⇒ 走原来的兜底
+    val noPath = EmbyMediaSource(Id = "n", Name = "4K")
+    assertEquals("4K", embyMediaSourceLabel(noPath))
+  }
+
+  @Test
+  fun `local custom label still wins over the completed prefix`() {
+    val source = EmbyMediaSource(Id = "a", Name = "522A.", Path = "/media/KAWD-522A.mp4")
+    assertEquals("KAWD-522A", embyMediaSourceTitle(source))
+    assertEquals("中字 4K", embyMediaSourceTitle(source, "中字 4K"))
+  }
 }
