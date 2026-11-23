@@ -93,6 +93,23 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
     val timelineError: String? = null,
     /** 条目数超过 [SubtitleTimeline.MAX_CUES]，尾部被截断（界面需提示，不能装作完整）。 */
     val timelineTruncated: Boolean = false,
+    // ── 本地库治理（按媒体分组 / 磁盘占用 / 孤儿清理）──
+    val stats: LibraryStats = LibraryStats(),
+    val cleaning: Boolean = false,
+  )
+
+  /**
+   * 已下载字幕的占用概况。
+   *
+   * @property mediaCount 关联的影片数（同一部片下多条字幕算一部）
+   * @property orphanCount 磁盘上存在、但没有任何记录指向的字幕文件数
+   */
+  data class LibraryStats(
+    val recordCount: Int = 0,
+    val mediaCount: Int = 0,
+    val totalBytes: Long = 0L,
+    val orphanCount: Int = 0,
+    val orphanBytes: Long = 0L,
   )
 
   private val _state = MutableStateFlow(State())
@@ -322,8 +339,57 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
 
   fun refreshLibrary() {
     viewModelScope.launch {
-      val records = withContext(Dispatchers.IO) { library.all() }
-      _state.update { it.copy(library = records) }
+      val snapshot =
+        withContext(Dispatchers.IO) {
+          // 先 all() 再 usage()：all() 会顺手剔掉「记录还在、文件没了」的条目，
+          // 之后统计出来的数字才与界面上看到的列表一致。
+          val records = library.all()
+          records to library.usage()
+        }
+      val records = snapshot.first
+      val usage = snapshot.second
+      _state.update {
+        it.copy(
+          library = records,
+          stats =
+            LibraryStats(
+              recordCount = records.size,
+              mediaCount = records.map { record -> record.serverKey to record.itemId }.distinct().size,
+              totalBytes = usage.totalBytes,
+              orphanCount = usage.orphanCount,
+              orphanBytes = usage.orphanBytes,
+            ),
+        )
+      }
+    }
+  }
+
+  /**
+   * 清理「磁盘上有、索引里没有」的字幕文件。
+   *
+   * 这一类残留不会自己消失也不会显示在列表里：索引被清空过、下载过程异常退出、
+   * 旧版本留下的目录……用户在设置里怎么看都看不到它们，只有占用的空间是真的。
+   */
+  fun purgeOrphans() {
+    if (_state.value.cleaning) return
+    viewModelScope.launch {
+      _state.update { it.copy(cleaning = true) }
+      val before = withContext(Dispatchers.IO) { library.usage() }
+      val after = withContext(Dispatchers.IO) { library.purgeOrphans() }
+      val removed = (before.orphanCount - after.orphanCount).coerceAtLeast(0)
+      val freed = (before.orphanBytes - after.orphanBytes).coerceAtLeast(0L)
+      _state.update { it.copy(cleaning = false) }
+      refreshLibrary()
+      _state.update {
+        it.copy(
+          message =
+            if (removed > 0) {
+              "已清理 $removed 个未关联的字幕文件，释放 ${formatBytes(freed)}"
+            } else {
+              "本地库已整洁，没有需要清理的文件"
+            },
+        )
+      }
     }
   }
 

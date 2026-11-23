@@ -48,6 +48,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -136,9 +137,12 @@ internal fun LabPreviewPane(
   onStart: () -> Unit,
   onStop: () -> Unit,
   onOffsetChange: (Long) -> Unit,
+  /** 播放位置回调（秒），250ms 一次。时间线用它做「跟随播放」的高亮与滚动。 */
+  onPositionChange: (Double) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
+  val positionListener by rememberUpdatedState(onPositionChange)
 
   var engine by remember { mutableStateOf<LabPreviewEngine?>(null) }
   var hostView by remember { mutableStateOf<View?>(null) }
@@ -242,13 +246,17 @@ internal fun LabPreviewPane(
     e.setPaused(true)
     e.seekTo(req.seconds)
     position = req.seconds
+    // 立刻把落点告诉时间线：等 250ms 心跳的话，用户会看到高亮还停在上一条
+    positionListener(req.seconds)
   }
 
   // ⑥ 进度心跳：250ms 一次。mpv 属性只能在主线程读，所以用 Main 上的 LaunchedEffect。
   LaunchedEffect(engine) {
     val e = engine ?: return@LaunchedEffect
     while (true) {
-      position = e.positionSec()
+      val current = e.positionSec()
+      position = current
+      positionListener(current)
       duration = e.durationSec()
       paused = e.isPaused()
       buffering = e.isBuffering() || (duration <= 0.0 && !e.hasPicture())

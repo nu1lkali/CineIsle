@@ -100,6 +100,87 @@ class OnlineSubtitleLibrary(
 
   fun fileOf(record: DownloadedSubtitle): File = File(root, record.fileName)
 
+  /**
+   * 本地库占用情况。
+   *
+   * [orphanCount] / [orphanBytes] 是**反向孤儿**：磁盘上存在、但没有任何索引记录指向的字幕文件。
+   * [all] 只清「索引有、文件没了」，反过来的这些（索引被清空过、下载中断留下的
+   * `.part` 之外的残留、旧版本遗留目录）会一直占着空间且永远显示不出来 —— 这是
+   * 「一键清理」真正要处理的那一类。
+   */
+  data class Usage(
+    val recordCount: Int = 0,
+    val totalBytes: Long = 0L,
+    val orphanCount: Int = 0,
+    val orphanBytes: Long = 0L,
+  )
+
+  fun usage(): Usage =
+    synchronized(lock) {
+      val records = read()
+      val referenced = HashSet<String>(records.size * 2)
+      var total = 0L
+      records.forEach { record ->
+        val file = fileOf(record)
+        referenced += file.absolutePath
+        if (file.isFile) total += file.length()
+      }
+      var orphanCount = 0
+      var orphanBytes = 0L
+      candidateFiles().forEach { file ->
+        if (file.absolutePath !in referenced) {
+          orphanCount++
+          orphanBytes += file.length()
+        }
+      }
+      Usage(
+        recordCount = records.size,
+        totalBytes = total,
+        orphanCount = orphanCount,
+        orphanBytes = orphanBytes,
+      )
+    }
+
+  /**
+   * 清掉未被任何记录引用的字幕文件（连同因此变空的媒体目录）。
+   *
+   * 只删**字幕扩展名**的文件：这里扫的是整个本地库根目录，万一以后有别的东西放进来，
+   * `*.db`、缩略图缓存之类不该被当成孤儿顺手删掉。
+   */
+  fun purgeOrphans(): Usage {
+    synchronized(lock) {
+      val records = read()
+      val referenced = records.map { fileOf(it).absolutePath }.toHashSet()
+      candidateFiles().forEach { file ->
+        if (file.absolutePath !in referenced) {
+          runCatching { if (!file.delete()) Log.w(TAG, "purge failed: ${file.name}") }
+        }
+      }
+      root.listFiles()?.forEach { dir ->
+        if (dir.isDirectory && dir.listFiles().isNullOrEmpty()) runCatching { dir.delete() }
+      }
+      return usage()
+    }
+  }
+
+  /** 本地库里所有「看起来是字幕」的文件（跳过 `.part` 之类的临时文件）。 */
+  private fun candidateFiles(): List<File> {
+    val dir = root
+    if (!dir.isDirectory) return emptyList()
+    val out = ArrayList<File>()
+    dir.listFiles()?.forEach { child ->
+      if (child.isDirectory) {
+        child.listFiles()?.forEach { file ->
+          if (file.isFile && !file.name.startsWith(".") && isSubtitleFileName(file.name)) out += file
+        }
+      }
+    }
+    return out
+  }
+
+  private fun isSubtitleFileName(name: String): Boolean =
+    name.substringAfterLast('.', "").lowercase() in SUBTITLE_EXTENSIONS
+
   /** 文件 → 相对库根目录的路径（写记录用）。 */
   fun relativePathOf(file: File): String = runCatching { file.relativeTo(root).path }.getOrDefault(file.name)
 
@@ -255,6 +336,10 @@ class OnlineSubtitleLibrary(
     private const val TAG = "OnlineSubtitleLibrary"
     private const val ROOT_DIR = "online_subtitles"
     private const val FIELD = '\t'
+
+    /** 清理孤儿文件时认的扩展名（`sub`/`idx` 是 VobSub 成对出现的两个文件）。 */
+    private val SUBTITLE_EXTENSIONS =
+      setOf("srt", "ass", "ssa", "vtt", "txt", "sup", "sub", "idx")
 
     /** 目录名 / 文件名用：只留安全字符，避免 `:` `/` 之类在文件系统上报错。 */
     fun safeSegment(raw: String): String {

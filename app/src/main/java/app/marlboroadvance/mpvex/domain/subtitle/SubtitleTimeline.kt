@@ -279,7 +279,8 @@ object SubtitleTimeline {
       bytes[1] == 0xBB.toByte() &&
       bytes[2] == 0xBF.toByte()
     ) {
-      return repairDoubleEncoding(String(bytes, 3, bytes.size - 3, Charsets.UTF_8))
+      val body = bytes.copyOfRange(3, bytes.size)
+      return repairMixedLines(body, repairDoubleEncoding(String(body, Charsets.UTF_8)))
     }
     val strictUtf8 =
       runCatching {
@@ -289,9 +290,9 @@ object SubtitleTimeline {
           .decode(java.nio.ByteBuffer.wrap(bytes))
           .toString()
       }.getOrNull()
-    if (strictUtf8 != null) return repairDoubleEncoding(strictUtf8)
+    if (strictUtf8 != null) return repairMixedLines(bytes, repairDoubleEncoding(strictUtf8))
 
-    return repairDoubleEncoding(bestByScoring(bytes))
+    return repairMixedLines(bytes, repairDoubleEncoding(bestByScoring(bytes)))
   }
 
   /** UTF-32 的 BOM（`FF FE 00 00` / `00 00 FE FF`）；没有就返回 null。 */
@@ -330,6 +331,121 @@ object SubtitleTimeline {
     }
     return best ?: String(bytes, Charsets.UTF_8)
   }
+
+  /**
+   * 逐行校正：把「文件内部混了两种编码」的那几行单独重解。
+   *
+   * ## 为什么整篇选出一个编码还不够
+   *
+   * 用户报的现象是「**有的**字幕乱码」，而不是整篇乱码。整个文件统一解码时，
+   * 只要选错编码就应该**全篇**都错；出现「一部分对、一部分错」只有一种解释：
+   * 文件里混着两种编码（常见于把两三条字幕拼起来、或站点用不同脚本分批转码）。
+   * 整篇打分只能取平均，少数行的编码与主体不同时，这些行必然整行报废。
+   *
+   * ## 怎么判「这一行不对」
+   *
+   * 逐行算 [plausibility] 的平均分：正常中文行通常在 1.5 分/字符以上，
+   * 而被错误编码解出来的行会大面积落在生僻汉字（-0.7）或替换符（-20），
+   * 平均分掉到 0.5 以下。低于门槛才值得重解，正常行一律不动 ——
+   * 这是「宁可不修，也不能把对的改错」。
+   *
+   * 重解时要求新结果比现状**好 0.5 分/字符**以上，避免在两种都别扭的结果间反复横跳。
+   *
+   * ## 两个刻意的取舍
+   *
+   * · 候选里**不含日韩编码**（[LINE_CHARSETS]）。中日韩混排在同一个字幕文件里几乎
+   *   不存在，而 GBK 字节用 EUC-KR 解会得到大片谚文、按现有打分反而比正确的中文更高分
+   *   —— 逐行放开日韩，等于给「中文变韩文」开门。日文字幕文件由整篇判定负责。
+   * · 行数对不上就直接放弃（老式 `\r` 单换行等）。字节切行只在 8-bit 编码族里成立：
+   *   UTF-16 / UTF-32 已在上游按 BOM 返回，不会走到这里。
+   */
+  private fun repairMixedLines(bytes: ByteArray, text: String): String {
+    if (text.isEmpty() || bytes.size < 64 || bytes.size > LINE_REPAIR_MAX_BYTES) return text
+    val byteLines = splitByteLines(bytes)
+    val lines = text.split('\n')
+    // 行数不等说明「字节里的换行」与「解出来的换行」对不上（例如只按 \r 换行），
+    // 此时按行重解的对应关系不成立，宁可整篇不动。
+    if (byteLines.size != lines.size) return text
+
+    val out = ArrayList<String>(lines.size)
+    var changed = false
+    for (index in lines.indices) {
+      val raw = lines[index]
+      val hasCr = raw.endsWith('\r')
+      val plain = if (hasCr) raw.dropLast(1) else raw
+      val fixed = repairLine(byteLines[index], plain)
+      if (fixed == null) {
+        out += raw
+      } else {
+        changed = true
+        out += if (hasCr) fixed + "\r" else fixed
+      }
+    }
+    return if (changed) out.joinToString("\n") else text
+  }
+
+  /** 按 `\n` 切字节行（保留空行），返回的每一段都不含换行符。 */
+  private fun splitByteLines(bytes: ByteArray): List<ByteArray> {
+    val out = ArrayList<ByteArray>(64)
+    var start = 0
+    for (index in bytes.indices) {
+      if (bytes[index] == '\n'.code.toByte()) {
+        out += bytes.copyOfRange(start, index)
+        start = index + 1
+      }
+    }
+    out += bytes.copyOfRange(start, bytes.size)
+    return out
+  }
+
+  /**
+   * 重解一行；返回 null 表示「这一行没问题，别动」。
+   *
+   * 纯 ASCII 行（序号、时间码、ASS 样式头）直接跳过：所有 8-bit 候选对 < 0x80 的
+   * 字节解出来完全一致，试也是白试。
+   */
+  private fun repairLine(lineBytes: ByteArray, line: String): String? {
+    if (lineBytes.isEmpty()) return null
+    var hasHighByte = false
+    for (byte in lineBytes) {
+      if (byte < 0) {
+        hasHighByte = true
+        break
+      }
+    }
+    if (!hasHighByte) return null
+    val before = if (line.isEmpty()) 0.0 else plausibility(line) / line.length
+    if (before >= LINE_TRUSTWORTHY) return null
+
+    var best: String? = null
+    var bestScore = before + LINE_GAIN
+    for (name in LINE_CHARSETS) {
+      val candidate = runCatching { String(lineBytes, Charset.forName(name)) }.getOrNull() ?: continue
+      val candidateText = candidate.trimEnd('\r', '\n')
+      if (candidateText.isEmpty()) continue
+      val score = plausibility(candidateText) / candidateText.length
+      if (score > bestScore) {
+        bestScore = score
+        best = candidateText
+      }
+    }
+    return best?.let { repairDoubleEncoding(it) }
+  }
+
+  /**
+   * 逐行重解时允许的候选（**故意不含** Shift_JIS / EUC-JP / EUC-KR，理由见
+   * [repairMixedLines]）。windows-1252 留着是为了救「某几行是拉丁乱码」的极端情况。
+   */
+  private val LINE_CHARSETS = listOf("GB18030", "Big5", "UTF-8", "windows-1252")
+
+  /** 一行平均分达到这个值就认为解码正确，不再尝试重解。 */
+  private const val LINE_TRUSTWORTHY = 0.5
+
+  /** 逐行替换的门槛：新结果必须比现状好这么多（每字符）才采用。 */
+  private const val LINE_GAIN = 0.5
+
+  /** 超过 8MB 不做逐行校正：字幕不可能这么大，逐行扫描的收益抵不上开销。 */
+  private const val LINE_REPAIR_MAX_BYTES = 8 * 1024 * 1024
 
   /**
    * 候选编码：统计检测器的结论排在最前，再接固定候选表。

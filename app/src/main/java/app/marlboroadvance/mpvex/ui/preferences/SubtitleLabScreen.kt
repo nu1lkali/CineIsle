@@ -31,9 +31,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Timeline
@@ -63,6 +65,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -131,6 +134,9 @@ object SubtitleLabScreen : Screen {
     var infoRecord by remember { mutableStateOf<DownloadedSubtitle?>(null) }
     var libraryQuery by remember { mutableStateOf("") }
     val snackbar = remember { SnackbarHostState() }
+    // 预览播放位置单独放一个 State：只让「时间线」这一个读取方重组。
+    // 若塞进 viewModel.state，250ms 一次的心跳会把整页（含列表）全部重组一遍。
+    val playhead = remember { mutableDoubleStateOf(0.0) }
 
     // 已下载字幕可能积累到几十条，按片名 / 字幕标题 / 文件名 / 来源 / 语言 / 格式过滤。
     // 多个关键词用空格分隔，全部命中才算匹配（「片名 简体」这种组合能直接收敛结果）。
@@ -139,6 +145,18 @@ object SubtitleLabScreen : Screen {
         val query = libraryQuery.trim()
         if (query.isBlank()) state.library else state.library.filter { it.matchesQuery(query) }
       }
+
+    // 按媒体分组：同一部片下了四五条字幕时，平铺列表看不出它们是同一部片，
+    // 删除 / 设默认都很容易点错行。分组只影响展示，顺序按片名排。
+    val groupedLibrary =
+      remember(filteredLibrary) {
+        filteredLibrary
+          .groupBy { it.serverKey to it.itemId }
+          .map { (key, records) -> key to records.sortedByDescending { it.downloadedAt } }
+          .sortedBy { (_, records) -> records.first().mediaTitle.lowercase(Locale.getDefault()) }
+      }
+    // 只有一部片子时不显示分组标题：上方「目标影片」卡片已经写着片名了，再加一行是噪音
+    val showGroupHeaders = groupedLibrary.size > 1
 
     // 所有动作的反馈都走这里（下载成功 / 设为默认 / 删除 / 取流失败…）
     LaunchedEffect(state.message) {
@@ -183,6 +201,7 @@ object SubtitleLabScreen : Screen {
           onStart = vm::startPreview,
           onStop = vm::stopPreview,
           onOffsetChange = vm::adjustPreviewOffset,
+          onPositionChange = { seconds -> playhead.doubleValue = seconds },
         )
 
         LazyColumn(
@@ -271,6 +290,21 @@ object SubtitleLabScreen : Screen {
             }
           }
 
+          // ── 本地库概况 + 孤儿清理 ──
+          if (state.library.isNotEmpty() || state.stats.orphanCount > 0) {
+            item(key = "library_stats") {
+              LibraryStatsCard(
+                recordCount = state.stats.recordCount,
+                mediaCount = state.stats.mediaCount,
+                totalBytes = state.stats.totalBytes,
+                orphanCount = state.stats.orphanCount,
+                orphanBytes = state.stats.orphanBytes,
+                cleaning = state.cleaning,
+                onPurge = vm::purgeOrphans,
+              )
+            }
+          }
+
           if (state.library.isEmpty()) {
             item(key = "library_empty") {
               Surface(
@@ -324,29 +358,40 @@ object SubtitleLabScreen : Screen {
               }
             }
           } else {
-            items(filteredLibrary, key = { it.id }) { record ->
-              LibraryCard(
-                record = record,
-                previewing = state.previewSubtitle?.recordId == record.id,
-                timelineActive = state.timelineRecordId == record.id,
-                redownloading = state.redownloading == record.id,
-                redownloadProgress = if (state.redownloading == record.id) state.redownloadProgress else null,
-                onPreview = { vm.previewRecord(record) },
-                onUse = { vm.useRecord(record) },
-                onTimeline = {
-                  vm.loadTimeline(record)
-                  timelineOpen = true
-                },
-                onInfo = { infoRecord = record },
-                onRedownload = { vm.redownload(record) },
-                onMinus500 = { vm.adjustOffset(record, -500) },
-                onMinus100 = { vm.adjustOffset(record, -100) },
-                onPlus100 = { vm.adjustOffset(record, 100) },
-                onPlus500 = { vm.adjustOffset(record, 500) },
-                onExact = { offsetEditing = record },
-                onReset = { vm.setOffset(record, 0L) },
-                onDelete = { deleteConfirm = record },
-              )
+            groupedLibrary.forEach { (key, records) ->
+              if (showGroupHeaders) {
+                item(key = "group_${key.first}_${key.second}") {
+                  MediaGroupHeader(
+                    title = records.first().mediaTitle.ifBlank { records.first().title },
+                    count = records.size,
+                    totalBytes = records.sumOf { it.sizeBytes },
+                  )
+                }
+              }
+              items(records, key = { it.id }) { record ->
+                LibraryCard(
+                  record = record,
+                  previewing = state.previewSubtitle?.recordId == record.id,
+                  timelineActive = state.timelineRecordId == record.id,
+                  redownloading = state.redownloading == record.id,
+                  redownloadProgress = if (state.redownloading == record.id) state.redownloadProgress else null,
+                  onPreview = { vm.previewRecord(record) },
+                  onUse = { vm.useRecord(record) },
+                  onTimeline = {
+                    vm.loadTimeline(record)
+                    timelineOpen = true
+                  },
+                  onInfo = { infoRecord = record },
+                  onRedownload = { vm.redownload(record) },
+                  onMinus500 = { vm.adjustOffset(record, -500) },
+                  onMinus100 = { vm.adjustOffset(record, -100) },
+                  onPlus100 = { vm.adjustOffset(record, 100) },
+                  onPlus500 = { vm.adjustOffset(record, 500) },
+                  onExact = { offsetEditing = record },
+                  onReset = { vm.setOffset(record, 0L) },
+                  onDelete = { deleteConfirm = record },
+                )
+              }
             }
           }
 
@@ -405,6 +450,9 @@ object SubtitleLabScreen : Screen {
         loading = state.timelineLoading,
         error = state.timelineError,
         truncated = state.timelineTruncated,
+        playheadSeconds = playhead.doubleValue,
+        // 预览里挂的是**这条**字幕才算「正在播这条」；否则高亮没有意义
+        previewing = state.previewSource != null && state.previewSubtitle?.recordId == timelineRecord.id,
         onSeek = vm::seekToCue,
         onDismiss = { timelineOpen = false },
       )
@@ -818,6 +866,97 @@ private fun MediaCandidateRow(
 // ════════════════════════════ 已下载字幕 ════════════════════════════
 
 /**
+ * 本地库概况：条数 / 影片数 / 占用空间 / 未关联的残留文件。
+ *
+ * 只有「未关联的文件」需要用户动手 —— 它们不在列表里、也不会自己消失，
+ * 除了点这里清理没有第二个入口。
+ */
+@Composable
+private fun LibraryStatsCard(
+  recordCount: Int,
+  mediaCount: Int,
+  totalBytes: Long,
+  orphanCount: Int,
+  orphanBytes: Long,
+  cleaning: Boolean,
+  onPurge: () -> Unit,
+) {
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = MaterialTheme.colorScheme.surfaceContainerLow,
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Column(modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+          text = "$recordCount 条 · $mediaCount 部影片 · " +
+            (if (totalBytes > 0) formatSize(totalBytes) else "0 B"),
+          style = MaterialTheme.typography.bodySmall,
+          fontWeight = FontWeight.Medium,
+          modifier = Modifier.weight(1f),
+        )
+        if (orphanCount > 0) {
+          TextButton(onClick = onPurge, enabled = !cleaning) {
+            Text(
+              text = if (cleaning) "清理中…" else "清理残留",
+              style = MaterialTheme.typography.labelMedium,
+            )
+          }
+        }
+      }
+      Text(
+        text =
+          if (orphanCount > 0) {
+            "另有 $orphanCount 个未关联任何影片的字幕文件（${formatSize(orphanBytes)}），不显示在下方列表中。"
+          } else {
+            "全部字幕都已关联到影片，没有多余占用。"
+          },
+        style = MaterialTheme.typography.labelSmall,
+        color =
+          if (orphanCount > 0) MaterialTheme.colorScheme.tertiary
+          else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 2.dp, end = 8.dp),
+      )
+    }
+  }
+}
+
+/** 分组标题：片名 + 该片已下载条数 + 合计大小。 */
+@Composable
+private fun MediaGroupHeader(
+  title: String,
+  count: Int,
+  totalBytes: Long,
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(top = 10.dp, start = 2.dp, end = 2.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Icon(
+      Icons.Outlined.Movie,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.primary,
+      modifier = Modifier.size(15.dp),
+    )
+    Spacer(Modifier.width(6.dp))
+    Text(
+      text = title,
+      style = MaterialTheme.typography.labelLarge,
+      fontWeight = FontWeight.SemiBold,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.weight(1f),
+    )
+    Spacer(Modifier.width(8.dp))
+    Text(
+      text = "$count 条 · ${if (totalBytes > 0) formatSize(totalBytes) else "0 B"}",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+/**
  * 一条已下载字幕：信息 + 动作 chips + 时间轴校准。
  *
  * ## 为什么用 chips 而不是排成一行的 TextButton
@@ -1131,12 +1270,17 @@ private fun TimelineSheet(
   loading: Boolean,
   error: String?,
   truncated: Boolean,
+  /** 当前播放位置（秒）；用于高亮「此刻正在播的那一句」。 */
+  playheadSeconds: Double,
+  /** 播放位置是否可信（预览没开时为 false，不做跟随）。 */
+  previewing: Boolean,
   onSeek: (SubtitleCue) -> Unit,
   onDismiss: () -> Unit,
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   val scope = rememberCoroutineScope()
   var filter by remember { mutableStateOf("") }
+  var follow by remember { mutableStateOf(true) }
   val listState = rememberLazyListState()
 
   // 「收起」不能直接把面板从组合里摘掉：那样 ModalBottomSheet 一帧内消失，没有任何过渡。
@@ -1152,6 +1296,31 @@ private fun TimelineSheet(
       val key = filter.trim()
       if (key.isBlank()) cues else cues.filter { it.text.contains(key, ignoreCase = true) }
     }
+
+  // 字幕时间轴是**文件时间**：偏移 +100ms 表示整条字幕延后 100ms，
+  // 那么画面播到 P 秒时，正在显示的其实是文件时间 P - offset 处的那一句。
+  val activeIndex =
+    remember(visible, playheadSeconds, previewing, record.offsetMs) {
+      if (!previewing || visible.isEmpty()) {
+        -1
+      } else {
+        val fileTimeMs = (playheadSeconds * 1000.0).toLong() - record.offsetMs
+        visible.indexOfFirst { fileTimeMs >= it.startMs && fileTimeMs < it.endMs }
+      }
+    }
+
+  // 跟随播放：只在「正在预览 + 开着跟随 + 用户没在手动滑」时滚动。
+  // 三者缺一都会变成「我正翻列表，它自己往下跳」。
+  LaunchedEffect(activeIndex, follow) {
+    if (!follow || activeIndex < 0) return@LaunchedEffect
+    if (listState.isScrollInProgress) return@LaunchedEffect
+    val first = listState.firstVisibleItemIndex
+    val last = first + listState.layoutInfo.visibleItemsInfo.size - 1
+    // 已经在视野内就不动，避免每句台词都把列表居中一次（画面会抖）
+    if (activeIndex < first || activeIndex > last - 1) {
+      listState.animateScrollToItem(activeIndex)
+    }
+  }
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -1181,6 +1350,18 @@ private fun TimelineSheet(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
           )
+        }
+        if (previewing && cues.isNotEmpty()) {
+          // 跟随开关：默认开，用户往下翻看别的段落时点一下即可停止自动滚动
+          TextButton(onClick = { follow = !follow }) {
+            Icon(
+              if (follow) Icons.Filled.PauseCircle else Icons.Filled.PlayCircleOutline,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(if (follow) "跟随中" else "已暂停跟随", style = MaterialTheme.typography.labelMedium)
+          }
         }
         TextButton(onClick = closeAnimated) { Text("收起") }
       }
@@ -1256,6 +1437,7 @@ private fun TimelineSheet(
             CueRow(
               index = index + 1,
               cue = cue,
+              active = previewing && index == activeIndex,
               onClick = { onSeek(cue) },
             )
           }
@@ -1269,25 +1451,44 @@ private fun TimelineSheet(
  * 一句台词：序号 + 起止时间 + 正文。
  *
  * 点击即让预览跳到这句的起点 —— 这是「时间轴对不上」时唯一的实用定位手段。
+ *
+ * [active] 表示画面此刻正在播这一句：给底色 + 左侧竖条。只靠改字色不够显眼，
+ * 而「哪一句正在播」正是校准偏移时要盯的那个参照点。
  */
 @Composable
 private fun CueRow(
   index: Int,
   cue: SubtitleCue,
+  active: Boolean = false,
   onClick: () -> Unit,
 ) {
   Row(
     modifier = Modifier
       .fillMaxWidth()
       .clip(RoundedCornerShape(8.dp))
+      .background(
+        if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
+      )
       .clickable(onClick = onClick)
       .padding(vertical = 7.dp, horizontal = 4.dp),
     verticalAlignment = Alignment.Top,
   ) {
+    // 左侧竖条：告诉用户「这一条正在播」，同时不改变行高（避免列表跳动）
+    Box(
+      modifier = Modifier
+        .padding(top = 1.dp)
+        .width(3.dp)
+        .heightIn(min = 28.dp)
+        .clip(RoundedCornerShape(999.dp))
+        .background(
+          if (active) MaterialTheme.colorScheme.primary else Color.Transparent,
+        ),
+    )
+    Spacer(Modifier.width(5.dp))
     Text(
       text = "#$index",
       style = MaterialTheme.typography.labelSmall,
-      color = MaterialTheme.colorScheme.outline,
+      color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
       // 以前写死 34dp：四位数序号（#1234）在那个宽度里会被 Compose 折成两行或直接裁掉。
       // 改成「最小 34dp、能撑就撑」，对齐基线保持不变，序号再长也完整显示。
       maxLines = 1,
