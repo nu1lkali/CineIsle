@@ -5121,6 +5121,7 @@ private fun cancelAutoplayCountdown() {
   ): Boolean {
     val isTrackSheetOpen =
       viewModel.sheetShown.value == Sheets.SubtitleTracks ||
+        viewModel.sheetShown.value == Sheets.SubtitleTimeline ||
         viewModel.sheetShown.value == Sheets.AudioTracks
     val isNoSheetOpen = viewModel.sheetShown.value == Sheets.None
 

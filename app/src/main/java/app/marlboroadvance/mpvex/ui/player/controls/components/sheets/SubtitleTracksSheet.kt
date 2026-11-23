@@ -164,6 +164,13 @@ fun SubtitlesSheet(
   isSecondarySubtitleSelected: (Int) -> Boolean = { false },
   onAddSubtitle: () -> Unit,
   /**
+   * 打开「字幕时间线」（按台词定位 + 跟随高亮）。
+   *
+   * 只有存在**外挂轨道**（有磁盘文件可读）时才由调用方传入非空；内嵌轨读不到时间轴，
+   * 留一个点了只会看到「读不到」的入口没有意义。
+   */
+  onOpenTimeline: (() -> Unit)? = null,
+  /**
    * 打开「在线字幕搜索」（Emby 字幕源）。默认关闭 —— 非 Emby 播放（本地文件 /
    * 网盘直链）没有 itemId 和服务端，在线搜索对它无意义，传 null 就自动隐藏。
    */
@@ -373,13 +380,47 @@ fun SubtitlesSheet(
           }
         },
       )
+      // 「按台词定位」入口：不塞进上面那行（右侧已有 4 个图标，再来一个中文按钮会被压扁），
+      // 单独一行可点区域，标题 + 一句说明，和「添加字幕」同级。
+      if (onOpenTimeline != null) {
+        Row(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .clickable(onClick = onOpenTimeline)
+              .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.small),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.smaller),
+        ) {
+          Icon(
+            Icons.Default.Timeline,
+            contentDescription = null,
+            modifier = Modifier.size(22.dp),
+            tint = MaterialTheme.colorScheme.primary,
+          )
+          Column(modifier = Modifier.weight(1f)) {
+            Text(text = "字幕时间线", style = MaterialTheme.typography.bodyLarge)
+            Text(
+              text = "搜索台词、点一句跳过去；播放到哪句就高亮哪句",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+          Icon(
+            Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
       // 没有任何轨道时不出这一行：那时唯一要做的事是「添加字幕」，摆个搜索框纯属占地方。
       // 但字幕目录里有匹配项时破例 —— 那时列表本身就有内容可筛。
       // 放在 header 里 ⇒ 它是**钉住**的，列表滚动时不会跟着走。
       if (tracks.isNotEmpty() || suggestions.isNotEmpty()) {
         SubtitleFilterField(query = filter, onQueryChange = { filter = it })
-      }
-      // 勾选框容易被理解成「随便勾几条都行」，实际只有两个槽位：主（下方）+ 副（上方）。
+      }      // 勾选框容易被理解成「随便勾几条都行」，实际只有两个槽位：主（下方）+ 副（上方）。
       // 轨道多于一条时把这条规则写在钉住的 header 里，勾到第三条时用户不会以为是 bug。
       if (tracks.size >= 2) {
         Text(

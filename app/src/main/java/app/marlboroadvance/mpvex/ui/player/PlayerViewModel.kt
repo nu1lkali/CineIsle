@@ -1798,6 +1798,25 @@ class PlayerViewModel(
   }
 
   /**
+   * 把某条轨道切成**主字幕**（`sid`）。
+   *
+   * 与 [toggleSubtitle] 分工不同：那个是「点一下开 / 关」，会在主副两个槽位之间轮转；
+   * 这个是「我就要这一条当主字幕」—— 字幕时间线里的「设为主字幕」用它。
+   *
+   * 若这条正占着副字幕槽位（`secondary-sid`），必须先清槽再设 `sid`：
+   * mpv 不允许同一条轨同时占两个槽位，顺序反了会被服务端拒绝（同 [removeSubtitle]）。
+   */
+  fun setPrimarySubtitle(id: Int) {
+    if (id <= 0) return
+    // 用户手动指定 ⇒ 这就是本次播放的字幕决定，自动挂载不得再覆盖
+    suppressEmbyAutoSubtitle()
+    if (getSecondarySubtitleId() == id) {
+      PlayerLib.setPropertyString("secondary-sid", "no")
+    }
+    PlayerLib.setPropertyInt("sid", id)
+  }
+
+  /**
    * Ensures that if only one subtitle track is active, it is always the primary
    * subtitle (`sid`), which is positioned at the bottom of the screen.
    */

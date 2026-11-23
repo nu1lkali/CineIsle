@@ -222,6 +222,8 @@ enum class Sheets {
   None,
   PlaybackSpeed,
   SubtitleTracks,
+  /** 字幕时间线：按台词定位 + 跟随高亮（见 `SubtitleTimelineSheet`） */
+  SubtitleTimeline,
   AudioTracks,
   Chapters,
   Decoders,

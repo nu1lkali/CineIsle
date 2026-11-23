@@ -22,6 +22,7 @@ import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.GifRecordS
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.MoreSheet
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.PlaybackSpeedSheet
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.PlaylistSheet
+import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.SubtitleTimelineSheet
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.SubtitlesSheet
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.VideoZoomSheet
 import app.marlboroadvance.mpvex.dlna.DlnaSheet
@@ -258,6 +259,14 @@ fun PlayerSheets(
         isSubtitleSelected = isSubtitleSelected,
         isSecondarySubtitleSelected = isSecondarySubtitleSelected,
         onAddSubtitle = { showFilePicker = true },
+        // 只有存在外挂轨（有磁盘文件）时才给「时间线」入口：内嵌轨读不到时间轴，
+        // 给一个点了只能说「读不到」的按钮没有意义
+        onOpenTimeline =
+          if (subtitles.any { it.external == true && !it.externalFilename.isNullOrBlank() }) {
+            { onShowSheet(Sheets.SubtitleTimeline) }
+          } else {
+            null
+          },
         // 只有「正在播 Emby 媒体」时才给在线搜索 —— 本地文件 / 网盘直链
         // 没有 itemId，按钮留着只会点了报错
         onSearchOnline = embyContext?.let { { showOnlineSubtitles = true } },
@@ -318,6 +327,27 @@ fun PlayerSheets(
         },
         // 「关闭字幕」：关掉当前字幕并压制本次自动挂载（下载中的那条也不会再打开）
         onDisableSubtitles = embyContext?.let { { viewModel.disableSubtitles() } },
+      )
+    }
+
+    // 字幕时间线：**独立一层**面板，不叠在字幕面板上。
+    // 播放器的面板都吃满底部 90% 高度，两层叠一起只会出现「矮的压着高的」；
+    // 换层最干净，关掉/返回时再回到轨道面板。
+    Sheets.SubtitleTimeline -> {
+      // 副字幕不在 track-list 的 `selected` 里，先认它，再从 `selected` 里排掉，
+      // 免得两槽都占着时把副字幕当成主字幕
+      val secondarySid = subtitles.firstOrNull { isSecondarySubtitleSelected(it.id) }?.id ?: 0
+      val primarySid = subtitles.firstOrNull { it.isSelected && it.id != secondarySid }?.id ?: 0
+      SubtitleTimelineSheet(
+        tracks = subtitles,
+        primaryId = primarySid,
+        secondaryId = secondarySid,
+        // 只在这一层读 `time-pos`：别的面板开着时不订阅，免得整块 1 秒重组一次
+        positionSeconds = viewModel.pos ?: 0,
+        onSeekToMs = { ms -> viewModel.seekTo((ms / 1000L).toInt()) },
+        onPromoteToPrimary = { viewModel.setPrimarySubtitle(it) },
+        onBackToTracks = { onShowSheet(Sheets.SubtitleTracks) },
+        onDismissRequest = onDismissRequest,
       )
     }
 
