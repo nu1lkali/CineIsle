@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.Timeline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -175,6 +176,7 @@ fun OnlineSubtitleSheet(
                     if (uri != null) onUse?.invoke(uri)
                   }
                 },
+                onPreviewTimeline = { vm.previewTimeline(item) },
                 onCancel = { vm.cancelDownload(item.id) },
                 onRetry = { vm.retry(item) },
               )
@@ -236,6 +238,18 @@ fun OnlineSubtitleSheet(
       },
       dismissButton = {
         TextButton(onClick = { confirmDelete = null }) { Text("取消") }
+      },
+    )
+  }
+
+  // ── 时间线预览（叠在抽屉之上的只读浮层，不下载、不落盘）──
+  state.timelinePreview?.let { preview ->
+    OnlineSubtitleTimelineDialog(
+      preview = preview,
+      onClose = vm::closeTimelinePreview,
+      onRetry = {
+        val item = state.items.firstOrNull { it.id == preview.originId }
+        if (item != null) vm.previewTimeline(item) else vm.closeTimelinePreview()
       },
     )
   }
@@ -375,6 +389,7 @@ private fun SubtitleResultRow(
   download: OnlineSubtitleViewModel.DownloadState?,
   primaryActionLabel: String,
   onPrimary: () -> Unit,
+  onPreviewTimeline: () -> Unit,
   onCancel: () -> Unit,
   onRetry: () -> Unit,
 ) {
@@ -398,15 +413,24 @@ private fun SubtitleResultRow(
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.weight(1f, fill = false),
         )
       }
-      Text(
-        text = item.summary,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.weight(1f, fill = false),
+    }
+
+    // 来源 / 格式 / 语言：每项单独一个包裹框，和上面的匹配等级同一种视觉口径。
+    // 原来拼成「迅雷 · SRT · 中文（简体）」一整串，窄屏下会被截掉后半段，
+    // 而用户恰恰要靠「语言」决定下哪条。
+    FlowRow(
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
+      verticalArrangement = Arrangement.spacedBy(3.dp),
+      modifier = Modifier.padding(top = 3.dp),
+    ) {
+      InfoChip(item.source.label)
+      InfoChip(item.format?.uppercase() ?: "格式未知")
+      InfoChip(
+        item.language?.takeIf { it.isNotBlank() }?.let { OnlineSubtitle.languageLabel(it) }
+          ?: "语言未知",
       )
     }
 
@@ -450,21 +474,28 @@ private fun SubtitleResultRow(
       downloaded -> {
         Row(
           modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-          horizontalArrangement = Arrangement.End,
           verticalAlignment = Alignment.CenterVertically,
         ) {
+          TimelineButton(onClick = onPreviewTimeline)
+          Spacer(Modifier.weight(1f))
           Text(
             text = "已在本地库",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
           )
-          Spacer(Modifier.width(8.dp))
+          Spacer(Modifier.width(6.dp))
           TextButton(onClick = onPrimary) { Text("再次使用") }
         }
       }
 
       else -> {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          // 先看后下：不必为了一条不确定的字幕先占本地库
+          TimelineButton(onClick = onPreviewTimeline)
+          Spacer(Modifier.weight(1f))
           TextButton(onClick = onPrimary) {
             Icon(
               Icons.Default.CloudDownload,
@@ -477,6 +508,33 @@ private fun SubtitleResultRow(
         }
       }
     }
+  }
+}
+
+/** 搜索结果里的「时间线」入口：先看内容，再决定要不要下载。 */
+@Composable
+private fun TimelineButton(onClick: () -> Unit) {
+  TextButton(onClick = onClick) {
+    Icon(Icons.Outlined.Timeline, contentDescription = null, modifier = Modifier.size(16.dp))
+    Spacer(Modifier.width(6.dp))
+    Text("时间线")
+  }
+}
+
+/** 搜索结果里的一枚中性信息徽章（来源 / 格式 / 语言）：与匹配等级同一种包裹样式。 */
+@Composable
+private fun InfoChip(text: String) {
+  Surface(
+    shape = RoundedCornerShape(5.dp),
+    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+  ) {
+    Text(
+      text = text,
+      style = MaterialTheme.typography.labelSmall,
+      maxLines = 1,
+      modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+    )
   }
 }
 

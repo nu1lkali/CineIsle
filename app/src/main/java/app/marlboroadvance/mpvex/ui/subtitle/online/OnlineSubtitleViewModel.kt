@@ -7,6 +7,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleCue
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTimeline
 import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitle
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleDownloader
@@ -48,6 +50,22 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
   /** 一条候选的下载状态。progress = null 表示服务器没给长度（不确定进度）。 */
   data class DownloadState(val progress: Float?, val error: String? = null)
 
+  /**
+   * 搜索结果的时间线预览。
+   *
+   * 与「下载」是两件不同的事：这里只把字幕内容读进内存解析，**不落盘、不进本地库**。
+   * 用户先看到「这句台词在 03:12 出现」，再决定要不要下这条 —— 不必为了试一条
+   * 错版本而反复下载 / 删除。
+   */
+  data class TimelinePreview(
+    val originId: String,
+    val title: String,
+    val loading: Boolean = true,
+    val cues: List<SubtitleCue> = emptyList(),
+    val truncated: Boolean = false,
+    val error: String? = null,
+  )
+
   data class UiState(
     val keyword: String = "",
     /** 关键词从哪来（`影片编号` / `清理后的标题` / `手动输入`…），面板上要回显。 */
@@ -64,6 +82,8 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
     val downloaded: List<DownloadedSubtitle> = emptyList(),
     /** 下载完成的那条，对应到候选 id，用于列表里打「已下载」。 */
     val downloadedOriginIds: Set<String> = emptySet(),
+    /** 搜索结果的时间线预览（null = 没打开）。 */
+    val timelinePreview: TimelinePreview? = null,
   )
 
   private val _state = MutableStateFlow(UiState())
@@ -71,6 +91,7 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
 
   private var target: OnlineSubtitleTarget? = null
   private var searchJob: Job? = null
+  private var timelineJob: Job? = null
   private val downloadJobs = mutableMapOf<String, Job>()
 
   /**
@@ -92,6 +113,7 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
         failure = null,
         notice = null,
         downloads = emptyMap(),
+        timelinePreview = null,
       )
     }
     refreshLibrary()
@@ -282,6 +304,84 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
     viewModelScope.launch { download(item) }
   }
 
+  /**
+   * 打开某条搜索结果的时间线预览。
+   *
+   * 已下载过的条目直接读本地文件（零请求）；没下载的把内容读进内存再解析，
+   * **不写盘**。解析规则复用字幕实验室那一份 [SubtitleTimeline]，两边看到的时间轴
+   * 口径完全一致。
+   */
+  fun previewTimeline(item: OnlineSubtitle) {
+    val current = target ?: return
+    timelineJob?.cancel()
+    _state.update { it.copy(timelinePreview = TimelinePreview(item.id, item.title)) }
+    timelineJob =
+      viewModelScope.launch {
+        val result =
+          withContext(Dispatchers.IO) {
+            try {
+              val record = library.find(current.serverKey, current.itemId, item.id)
+              val localFile = record?.let { library.fileOf(it) }
+              if (localFile != null && localFile.isFile) {
+                Result.success(SubtitleTimeline.parseFileDetailed(localFile))
+              } else {
+                val fetched = downloader.fetch(item)
+                Result.success(
+                  SubtitleTimeline.parseTextDetailed(
+                    SubtitleTimeline.decode(fetched.bytes),
+                    fetched.format,
+                  ),
+                )
+              }
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+              throw cancel
+            } catch (error: Throwable) {
+              Result.failure(error)
+            }
+          }
+        _state.update { state ->
+          // 迟到 / 已关闭的结果不许覆盖新的预览
+          if (state.timelinePreview?.originId != item.id) {
+            state
+          } else {
+            val parsed = result.getOrNull()
+            state.copy(
+              timelinePreview =
+                TimelinePreview(
+                  originId = item.id,
+                  title = item.title,
+                  loading = false,
+                  cues = parsed?.cues.orEmpty(),
+                  truncated = parsed?.truncated == true,
+                  error = result.exceptionOrNull()?.let(::humanizeTimelineError),
+                ),
+            )
+          }
+        }
+      }
+  }
+
+  /** 关闭时间线预览（同时取消还在跑的请求）。 */
+  fun closeTimelinePreview() {
+    timelineJob?.cancel()
+    timelineJob = null
+    _state.update { it.copy(timelinePreview = null) }
+  }
+
+  /**
+   * 网络层的英文异常不直接甩给用户：
+   * 自己抛的都是中文说明（「返回的是网页而不是字幕文件」），原样展示；
+   * 其余（`UnknownHostException` / `SocketTimeoutException`…）收敛成一句人话。
+   */
+  private fun humanizeTimelineError(error: Throwable): String {
+    val message = error.message?.trim().orEmpty()
+    return when {
+      message.isEmpty() -> "无法获取字幕内容"
+      message.any { it.code in 0x4E00..0x9FFF } -> message
+      else -> "无法获取字幕内容，请检查网络后重试"
+    }
+  }
+
   /** 重新读本地库（下载 / 删除 / 参数变更后调）。 */
   fun refreshLibrary() {
     val current = target ?: return
@@ -344,6 +444,7 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
 
   override fun onCleared() {
     searchJob?.cancel()
+    timelineJob?.cancel()
     downloadJobs.values.forEach { it.cancel() }
     super.onCleared()
   }

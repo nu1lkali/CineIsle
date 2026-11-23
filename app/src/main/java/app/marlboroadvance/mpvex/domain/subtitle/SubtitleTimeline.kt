@@ -233,6 +233,23 @@ object SubtitleTimeline {
    * 于是 GBK 文件也能「解码成功」，只是内容全废。
    */
   fun decode(bytes: ByteArray): String {
+    // UTF-16 BOM：一部分 ASS 是这样存的。不先认 BOM 的话，整篇会被当成非法字节，
+    // 严格 UTF-8 解码失败后退到 GBK，得到的是纯乱码（比「不给看」更糟）。
+    if (bytes.size >= 2) {
+      val b0 = bytes[0].toInt() and 0xFF
+      val b1 = bytes[1].toInt() and 0xFF
+      if (b0 == 0xFF && b1 == 0xFE) {
+        // 按偶数长度取：多出的半个字符直接丢掉，避免解码出替换符
+        val even = (bytes.size - 2) - ((bytes.size - 2) % 2)
+        if (even > 0) return String(bytes, 2, even, Charsets.UTF_16LE)
+        return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+      }
+      if (b0 == 0xFE && b1 == 0xFF) {
+        val even = (bytes.size - 2) - ((bytes.size - 2) % 2)
+        if (even > 0) return String(bytes, 2, even, Charsets.UTF_16BE)
+        return String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
+      }
+    }
     if (bytes.size >= 3 &&
       bytes[0] == 0xEF.toByte() &&
       bytes[1] == 0xBB.toByte() &&

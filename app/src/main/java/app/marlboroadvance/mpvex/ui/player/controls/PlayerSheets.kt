@@ -51,6 +51,8 @@ fun PlayerSheets(
   onAddSubtitle: (Uri) -> Unit,
   onToggleSubtitle: (Int) -> Unit,
   isSubtitleSelected: (Int) -> Boolean,
+  /** 副字幕槽位（`secondary-sid`）判定：面板据此标出「副字幕」，见 [SubtitlesSheet]。 */
+  isSecondarySubtitleSelected: (Int) -> Boolean = { false },
   onRemoveSubtitle: (Int) -> Unit,
   // audio sheet
   audioTracks: ImmutableList<TrackNode>,
@@ -254,6 +256,7 @@ fun PlayerSheets(
         tracks = subtitles.toImmutableList(),
         onToggleSubtitle = onToggleSubtitle,
         isSubtitleSelected = isSubtitleSelected,
+        isSecondarySubtitleSelected = isSecondarySubtitleSelected,
         onAddSubtitle = { showFilePicker = true },
         // 只有「正在播 Emby 媒体」时才给在线搜索 —— 本地文件 / 网盘直链
         // 没有 itemId，按钮留着只会点了报错

@@ -154,6 +154,14 @@ fun SubtitlesSheet(
   tracks: ImmutableList<TrackNode>,
   onToggleSubtitle: (Int) -> Unit,
   isSubtitleSelected: (Int) -> Boolean,
+  /**
+   * 是否占着「副字幕」槽位（mpv `secondary-sid`，显示在画面上方）。
+   *
+   * 面板允许同时勾选**两条**轨道：第一条进 `sid`（下方主字幕），第二条进 `secondary-sid`
+   * （上方副字幕）。两槽都占满后再勾第三条，会把主字幕换掉。这里用它给副字幕那行
+   * 打标，用户才能区分「我勾了两条，哪条在上、哪条在下」。
+   */
+  isSecondarySubtitleSelected: (Int) -> Boolean = { false },
   onAddSubtitle: () -> Unit,
   /**
    * 打开「在线字幕搜索」（Emby 字幕源）。默认关闭 —— 非 Emby 播放（本地文件 /
@@ -371,6 +379,21 @@ fun SubtitlesSheet(
       if (tracks.isNotEmpty() || suggestions.isNotEmpty()) {
         SubtitleFilterField(query = filter, onQueryChange = { filter = it })
       }
+      // 勾选框容易被理解成「随便勾几条都行」，实际只有两个槽位：主（下方）+ 副（上方）。
+      // 轨道多于一条时把这条规则写在钉住的 header 里，勾到第三条时用户不会以为是 bug。
+      if (tracks.size >= 2) {
+        Text(
+          text = "可同时勾选两条：第一条显示在画面下方，第二条显示在上方（标为副字幕）；" +
+            "再勾第三条会替换主字幕。",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(
+            start = MaterialTheme.spacing.medium,
+            end = MaterialTheme.spacing.medium,
+            bottom = MaterialTheme.spacing.extraSmall,
+          ),
+        )
+      }
     },
     track = { item ->
       when (item) {
@@ -380,6 +403,7 @@ fun SubtitlesSheet(
             title = getTrackTitle(track),
             isSelected = isSubtitleSelected(track.id),
             isExternal = track.external == true,
+            isSecondary = isSecondarySubtitleSelected(track.id),
             onToggle = { onToggleSubtitle(track.id) },
             onRemove = { onRemoveSubtitle(track.id) },
           )
@@ -891,6 +915,8 @@ fun SubtitleTrackRow(
   isExternal: Boolean,
   onToggle: () -> Unit,
   onRemove: () -> Unit,
+  /** 占着副字幕槽位（`secondary-sid`，画面上方）时为 true，行尾打「副字幕」标。 */
+  isSecondary: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   Row(
@@ -900,6 +926,21 @@ fun SubtitleTrackRow(
   ) {
     Checkbox(checked = isSelected, onCheckedChange = { onToggle() })
     Text(title, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f))
+    // 两条同时勾选时，光看勾选框分不出哪条在上、哪条在下 —— 副字幕单独标一个。
+    if (isSecondary) {
+      Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+      ) {
+        Text(
+          text = "副字幕",
+          style = MaterialTheme.typography.labelSmall,
+          maxLines = 1,
+          modifier = Modifier.padding(horizontal = 7.dp, vertical = 1.dp),
+        )
+      }
+    }
     if (isExternal) {
       IconButton(onClick = onRemove) { Icon(Icons.Default.Delete, contentDescription = null) }
     }

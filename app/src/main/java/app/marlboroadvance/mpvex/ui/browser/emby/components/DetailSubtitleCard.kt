@@ -115,7 +115,7 @@ internal fun DetailSubtitleCard(
           fontWeight = FontWeight.SemiBold,
         )
         Spacer(modifier = Modifier.width(6.dp))
-        SubtitleCountBadge(ui)
+        SubtitleCountBadge(ui = ui, localCount = localSubtitles.size)
         Spacer(modifier = Modifier.weight(1f))
         if (ui.hasData) {
           Text(
@@ -142,7 +142,7 @@ internal fun DetailSubtitleCard(
           SubtitleFailedBody(error = ui.error, onRetry = onRetry)
 
         ui.subtitles.isEmpty() ->
-          SubtitleEmptyBody(totalStreams = ui.totalStreams)
+          SubtitleEmptyBody(totalStreams = ui.totalStreams, localCount = localSubtitles.size)
 
         else -> SubtitleReadyBody(
           ui = ui,
@@ -216,15 +216,29 @@ internal fun DetailSubtitleCard(
   }
 }
 
-/** 标题右侧的小徽标：条数 / 读取中 / 空 / 失败。 */
+/**
+ * 标题右侧的小徽标：条数 / 读取中 / 空 / 失败。
+ *
+ * 条数**分两段写**（`Emby 3 · 网络 2`），不合并成一个数字：服务端轨与本机下载的
+ * 网络字幕是两种资源，合成「5 条」会让人以为库里凭空多了两条字幕。
+ * 任一侧为 0 时省略该段，两侧都空才显示「0 条」。
+ */
 @Composable
-private fun SubtitleCountBadge(ui: DetailSubtitleUi) {
+private fun SubtitleCountBadge(
+  ui: DetailSubtitleUi,
+  localCount: Int = 0,
+) {
   val (text, isAlert) = when {
     ui.phase == DetailSubtitlePhase.IDLE || ui.phase == DetailSubtitlePhase.LOADING ->
       "读取中" to false
     ui.phase == DetailSubtitlePhase.FAILED && !ui.hasData -> "获取失败" to true
-    ui.subtitles.isEmpty() -> "0 条" to false
-    else -> "${ui.subtitles.size} 条" to false
+    else -> {
+      val parts = buildList {
+        if (ui.subtitles.isNotEmpty()) add("Emby ${ui.subtitles.size}")
+        if (localCount > 0) add("网络 $localCount")
+      }
+      (if (parts.isEmpty()) "0 条" else parts.joinToString(" · ")) to false
+    }
   }
   Surface(
     shape = RoundedCornerShape(999.dp),
@@ -242,6 +256,8 @@ private fun SubtitleCountBadge(ui: DetailSubtitleUi) {
     Text(
       text = text,
       style = MaterialTheme.typography.labelSmall,
+      maxLines = 1,
+      softWrap = false,
       modifier = Modifier.padding(horizontal = 7.dp, vertical = 1.dp),
     )
   }
@@ -279,19 +295,26 @@ private fun SkeletonBar(widthFraction: Float) {
  * · == 0 ⇒ 连轨道都没拿到（远程 strm / 直链常见），不能断言「没有字幕」。
  */
 @Composable
-private fun SubtitleEmptyBody(totalStreams: Int) {
+private fun SubtitleEmptyBody(
+  totalStreams: Int,
+  localCount: Int = 0,
+) {
   Column {
     Text(
-      text = if (totalStreams > 0) "该版本未附带字幕" else "服务端未返回轨道信息",
+      text = when {
+        localCount > 0 -> "服务端未附带字幕，本机已下载 $localCount 条网络字幕"
+        totalStreams > 0 -> "该版本未附带字幕"
+        else -> "服务端未返回轨道信息"
+      },
       style = MaterialTheme.typography.bodyMedium,
       color = MaterialTheme.colorScheme.onSurface,
     )
     Spacer(modifier = Modifier.height(2.dp))
     Text(
-      text = if (totalStreams > 0) {
-        "可在播放页「字幕 → 搜索字幕」在线获取"
-      } else {
-        "播放时可在播放页里查看实际可用字幕"
+      text = when {
+        localCount > 0 -> "播放该媒体时自动挂载，可在字幕面板切换"
+        totalStreams > 0 -> "可在播放页「字幕 → 搜索字幕」在线获取"
+        else -> "播放时可在播放页里查看实际可用字幕"
       },
       style = MaterialTheme.typography.labelSmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,

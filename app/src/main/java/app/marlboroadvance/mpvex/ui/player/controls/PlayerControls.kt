@@ -1787,6 +1787,10 @@ fun PlayerControls(
         }
       },
       isSubtitleSelected = viewModel::isSubtitleSelected,
+      // 组合在主线程，读 native 属性是安全的（和 isSubtitleSelected 同一条路径）
+      isSecondarySubtitleSelected = { id ->
+        id > 0 && viewModel.getSecondarySubtitleId() == id
+      },
       onRemoveSubtitle = viewModel::removeSubtitle,
       audioTracks = audioTracks.toImmutableList(),
       onAddAudio = viewModel::addAudio,

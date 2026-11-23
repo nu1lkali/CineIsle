@@ -65,6 +65,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,6 +91,7 @@ import app.marlboroadvance.mpvex.ui.subtitle.lab.LabPreviewPane
 import app.marlboroadvance.mpvex.ui.subtitle.online.OnlineSubtitleSheet
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import java.util.Locale
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
 /**
@@ -127,7 +129,16 @@ object SubtitleLabScreen : Screen {
     var offsetEditing by remember { mutableStateOf<DownloadedSubtitle?>(null) }
     var deleteConfirm by remember { mutableStateOf<DownloadedSubtitle?>(null) }
     var infoRecord by remember { mutableStateOf<DownloadedSubtitle?>(null) }
+    var libraryQuery by remember { mutableStateOf("") }
     val snackbar = remember { SnackbarHostState() }
+
+    // 已下载字幕可能积累到几十条，按片名 / 字幕标题 / 文件名 / 来源 / 语言 / 格式过滤。
+    // 多个关键词用空格分隔，全部命中才算匹配（「片名 简体」这种组合能直接收敛结果）。
+    val filteredLibrary =
+      remember(state.library, libraryQuery) {
+        val query = libraryQuery.trim()
+        if (query.isBlank()) state.library else state.library.filter { it.matchesQuery(query) }
+      }
 
     // 所有动作的反馈都走这里（下载成功 / 设为默认 / 删除 / 取流失败…）
     LaunchedEffect(state.message) {
@@ -211,9 +222,51 @@ object SubtitleLabScreen : Screen {
                 modifier = Modifier.weight(1f),
               )
               Text(
-                text = "${state.library.size} 条",
+                text = if (libraryQuery.isBlank()) {
+                  "${state.library.size} 条"
+                } else {
+                  "${filteredLibrary.size} / ${state.library.size} 条"
+                },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+
+          // 字幕积累到几十条后逐条翻找不现实，这里按「片名 / 字幕标题 / 文件名 / 来源 / 语言」
+          // 过滤；搜索框只在已有字幕时出现，没有字幕时不占版面。
+          if (state.library.isNotEmpty()) {
+            item(key = "library_search") {
+              OutlinedTextField(
+                value = libraryQuery,
+                onValueChange = { libraryQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall,
+                placeholder = {
+                  Text(
+                    text = "搜索片名、字幕标题或文件名",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                },
+                leadingIcon = {
+                  Icon(
+                    imageVector = Icons.Outlined.Search,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                  )
+                },
+                trailingIcon = {
+                  if (libraryQuery.isNotEmpty()) {
+                    TextButton(onClick = { libraryQuery = "" }) {
+                      Text("清除", style = MaterialTheme.typography.labelMedium)
+                    }
+                  }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                shape = RoundedCornerShape(12.dp),
               )
             }
           }
@@ -241,8 +294,37 @@ object SubtitleLabScreen : Screen {
                 }
               }
             }
+          } else if (filteredLibrary.isEmpty()) {
+            item(key = "library_no_match") {
+              Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth(),
+              ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                  Text(
+                    text = "没有匹配的字幕",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                  )
+                  Text(
+                    text = "当前关键词「${libraryQuery.trim()}」在 ${state.library.size} 条已下载字幕中没有命中。" +
+                      "可尝试只输入片名的前几个字，或点击右上角清除关键词。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                  )
+                  TextButton(
+                    onClick = { libraryQuery = "" },
+                    modifier = Modifier.padding(top = 2.dp),
+                  ) {
+                    Text("清除关键词", style = MaterialTheme.typography.labelMedium)
+                  }
+                }
+              }
+            }
           } else {
-            items(state.library, key = { it.id }) { record ->
+            items(filteredLibrary, key = { it.id }) { record ->
               LibraryCard(
                 record = record,
                 previewing = state.previewSubtitle?.recordId == record.id,
@@ -1053,8 +1135,17 @@ private fun TimelineSheet(
   onDismiss: () -> Unit,
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  val scope = rememberCoroutineScope()
   var filter by remember { mutableStateOf("") }
   val listState = rememberLazyListState()
+
+  // 「收起」不能直接把面板从组合里摘掉：那样 ModalBottomSheet 一帧内消失，没有任何过渡。
+  // 走 sheetState.hide() 让 M3 播完它自己的收起动画（下移 + 遮罩淡出），动画结束再关状态。
+  val closeAnimated: () -> Unit = {
+    scope
+      .launch { runCatching { sheetState.hide() } }
+      .invokeOnCompletion { if (!sheetState.isVisible) onDismiss() }
+  }
 
   val visible =
     remember(cues, filter) {
@@ -1091,7 +1182,7 @@ private fun TimelineSheet(
             overflow = TextOverflow.Ellipsis,
           )
         }
-        TextButton(onClick = onDismiss) { Text("收起") }
+        TextButton(onClick = closeAnimated) { Text("收起") }
       }
 
       // 条目超上限时解析层会截断；不提示的话用户会以为字幕只到那句话为止。
@@ -1284,3 +1375,32 @@ private fun formatSize(bytes: Long): String =
     bytes < 1024L * 1024L -> String.format(Locale.US, "%.0f KB", bytes / 1024f)
     else -> String.format(Locale.US, "%.1f MB", bytes / (1024f * 1024f))
   }
+
+/**
+ * 已下载字幕的关键词匹配（纯函数，便于单独验证）。
+ *
+ * 覆盖用户在列表里能看到的全部可辨识信息：片名（`mediaTitle`）、字幕标题、
+ * 实际文件名、来源站名、语言与格式。语言走 [OnlineSubtitle.languageLabel]，
+ * 这样输入「简体」也能命中 `zh-CN` 这类代码。
+ *
+ * 多个关键词按空格拆分，**全部命中**才算匹配 —— 与「片名 + 语言」这种收窄式检索一致。
+ */
+private fun DownloadedSubtitle.matchesQuery(rawQuery: String): Boolean {
+  val tokens =
+    rawQuery
+      .trim()
+      .lowercase(Locale.getDefault())
+      .split(Regex("\\s+"))
+      .filter { it.isNotBlank() }
+  if (tokens.isEmpty()) return true
+  val haystack =
+    buildString {
+      append(mediaTitle).append('\n')
+      append(title).append('\n')
+      append(fileName).append('\n')
+      append(format).append('\n')
+      append(source.label).append('\n')
+      language?.let { append(OnlineSubtitle.languageLabel(it)) }
+    }.lowercase(Locale.getDefault())
+  return tokens.all { haystack.contains(it) }
+}
