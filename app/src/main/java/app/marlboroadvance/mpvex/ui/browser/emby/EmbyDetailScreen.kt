@@ -148,6 +148,7 @@ import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleChoices
 import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleSelector
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSelection
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
+import app.marlboroadvance.mpvex.domain.emby.bareFileName
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceLabel
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceResolution
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceSpec
@@ -428,7 +429,9 @@ data class EmbyDetailScreen(
     }
     val subtitleVersionLabel = subtitleSourceId
       ?.let { id -> item?.MediaSources.orEmpty().firstOrNull { source -> source.Id == id } }
-      ?.let { source -> embyMediaSourceTitle(source, source.Id?.let(::customVersionLabelOf)) }
+      ?.let { source ->
+        embyMediaSourceTitle(source, source.Id?.let(::customVersionLabelOf), item?.Name)
+      }
 
     val subtitleApplicable = when {
       item == null -> false
@@ -733,7 +736,7 @@ data class EmbyDetailScreen(
           val playSourceLabel = playSourceId
             ?.let { id -> current.MediaSources.orEmpty().firstOrNull { it.Id == id } }
             ?.let { source ->
-              embyMediaSourceTitle(source, source.Id?.let(::customVersionLabelOf))
+              embyMediaSourceTitle(source, source.Id?.let(::customVersionLabelOf), current.Name)
             }
           // 该条目当前的下载任务（没有就是 null）：按钮的文字、进度、图标都由它决定
           val currentDownload = current.Id?.let { id ->
@@ -1331,6 +1334,7 @@ data class EmbyDetailScreen(
         val labelItemId = item?.Id ?: itemId
         VersionLabelDialog(
           source = labelSource,
+          titleHint = item?.Name,
           customLabel = versionLabels[
             EmbyVersionLabels.key(labelServer.id, labelItemId, labelSourceId)
           ],
@@ -2612,7 +2616,7 @@ private fun PlaySection(
   val versionQueueEnabled = remember { browserPrefsForVersionQueue.embyVersionQueueEnabled.get() }
   var orderEditorOpen by remember { mutableStateOf(false) }
   fun versionLabelOf(source: EmbyMediaSource): String =
-    embyMediaSourceTitle(source, source.Id?.let(customVersionLabelOf))
+    embyMediaSourceTitle(source, source.Id?.let(customVersionLabelOf), item.Name)
   val openOrderEditor: (() -> Unit)? = if (versionQueueEnabled) {
     { orderEditorOpen = true }
   } else {
@@ -2833,6 +2837,7 @@ private fun PlaySection(
         customLabelOf = customVersionLabelOf,
         onEditLabel = onEditVersionLabel,
         onEditOrder = openOrderEditor,
+        titleHint = item.Name,
       )
     }
 
@@ -2871,7 +2876,7 @@ private fun PlaySection(
       val entries = mediaSources.mapNotNull { source ->
         versionQueueEntry(
           source,
-          embyMediaSourceTitle(source, source.Id?.let(customVersionLabelOf)),
+          embyMediaSourceTitle(source, source.Id?.let(customVersionLabelOf), item.Name),
         )
       }
       if (saved.isEmpty()) {
@@ -3193,6 +3198,8 @@ private fun MediaSourceSelector(
   onEditLabel: (EmbyMediaSource) -> Unit = {},
   /** 非空时抽屉底部出现「调整连播顺序」入口（见 EmbyVersionPickerSheet.onEditOrder） */
   onEditOrder: (() -> Unit)? = null,
+  /** 条目标题：版本名被 Emby 削掉前缀时，靠它把番号接回来 */
+  titleHint: String? = null,
 ) {
   var sheetOpen by remember { mutableStateOf(false) }
   val current = sources.firstOrNull { it.Id == selectedId } ?: sources.first()
@@ -3214,7 +3221,7 @@ private fun MediaSourceSelector(
       ) {
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "版本：${embyMediaSourceTitle(current, currentCustom)}",
+            text = "版本：${embyMediaSourceTitle(current, currentCustom, titleHint)}",
             style = MaterialTheme.typography.labelLarge,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -3246,7 +3253,7 @@ private fun MediaSourceSelector(
         val custom = customLabelOf(id)
         EmbyVersionOption(
           id = id,
-          title = embyMediaSourceTitle(source, custom),
+          title = embyMediaSourceTitle(source, custom, titleHint),
           badge = embyMediaSourceResolution(source).orEmpty(),
           spec = embyMediaSourceSpecParts(source),
           customName = custom != null,
@@ -3285,6 +3292,8 @@ private fun VersionLabelDialog(
   onSave: (String) -> Unit,
   onClear: () -> Unit,
   onDismiss: () -> Unit,
+  /** 条目标题：版本名被 Emby 削掉前缀时，靠它把番号接回来 */
+  titleHint: String? = null,
 ) {
   var text by remember(source.Id, customLabel) { mutableStateOf(customLabel.orEmpty()) }
   AlertDialog(
@@ -3292,11 +3301,30 @@ private fun VersionLabelDialog(
     title = { Text("编辑版本名") },
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        val effectiveName = embyMediaSourceLabel(source, titleHint)
         Text(
-          "Emby 原名：${embyMediaSourceLabel(source)}",
+          "Emby 原名：$effectiveName",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // 自动补过前缀 ⇒ 把「服务端真正给的名字 / 文件名」也亮出来。
+        // 这一行是给「补得不对 / 没补上」时的现场证据：看得见是数据缺 Path 还是规则没命中，
+        // 不用再靠猜。原文与补全后一致时不显示，避免噪音。
+        val rawName = source.Name?.takeIf { it.isNotBlank() }
+        if (rawName != null && rawName.trim() != effectiveName) {
+          Text(
+            "服务端原名：$rawName",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+          )
+        }
+        bareFileName(source.Path).takeIf { it.isNotBlank() }?.let { file ->
+          Text(
+            "文件名：$file",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+          )
+        }
         val spec = embyMediaSourceSpec(source)
         if (spec.isNotBlank()) {
           Text(

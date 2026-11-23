@@ -60,7 +60,7 @@ fun buildEmbyMediaInfoEntries(
       ?: allSources.firstOrNull()
 
   if (allSources.count { !it.Id.isNullOrBlank() } > 1 && source != null) {
-    add("版本", embyMediaSourceTitle(source, customVersionLabel))
+    add("版本", embyMediaSourceTitle(source, customVersionLabel, item.Name))
   }
   // ⚠️ 这里只能给**条目级**的首次入库时间：Emby 的 `MediaSourceInfo` 里根本没有日期字段
   // （官方文档的属性清单、本项目 `embyclient-reference` 生成的 MediaSourceInfo 都没有
@@ -233,7 +233,7 @@ fun buildEmbyMediaInfoSummary(
 
   return EmbyMediaInfoSummary(
     version = if (sources.count { !it.Id.isNullOrBlank() } > 1 && source != null) {
-      embyMediaSourceTitle(source, customVersionLabel)
+      embyMediaSourceTitle(source, customVersionLabel, item.Name)
     } else {
       null
     },
@@ -289,10 +289,16 @@ fun effectiveEmbyMediaSourceId(
  *
  * ⚠️ 但 `Name` 会被服务端削掉公共前缀（见 [completeEmbyVersionPrefix]），
  * 所以先拿文件名回填一次，补不回来才原样用它。
+ *
+ * @param titleHint 条目标题（`EmbyItem.Name`）。`MediaSource.Path` 缺失时只能靠它
+ *        认出番号前缀 —— 详情页 / 播放页都能顺手传进来，成本为零。
  */
-fun embyMediaSourceLabel(source: EmbyMediaSource): String {
+fun embyMediaSourceLabel(
+  source: EmbyMediaSource,
+  titleHint: String? = null,
+): String {
   val embyName = source.Name?.takeIf { it.isNotBlank() }
-  completeEmbyVersionPrefix(embyName, source.Path)?.let { return it }
+  completeEmbyVersionPrefix(embyName, source.Path, titleHint)?.let { return it }
   if (embyName != null) return embyName
   val video = source.MediaStreams?.firstOrNull { it.Type == "Video" }
   val parts = mutableListOf<String>()
@@ -315,6 +321,47 @@ fun embyMediaSourceLabel(source: EmbyMediaSource): String {
 private const val MAX_VERSION_PREFIX_CHARS = 12
 
 /**
+ * Emby 把容器名留在版本名尾巴上的样子：`522A.(mp4)` / `522A [mkv]` / `522A.mp4`。
+ *
+ * 服务端生成版本名时只切掉扩展名里的 `mp4` 三个字符、把点留下，
+ * 少数版本还会带一层括注。比对文件名前必须先把这层噪音剥掉，
+ * 否则 `522A.(mp4)` 永远不可能是 `KAWD-522A` 的子串 —— 这就是上一版
+ * 「有的能补、有的补不了」的直接原因。
+ *
+ * 括注是可选的：`522A.mp4` 这种裸扩展名同样要剥。剥多了也不影响显示，
+ * 这段只用于「和文件名比对」，比对不成功时调用方仍然原样用 `Name`。
+ */
+private val VERSION_CONTAINER_TAIL = Regex(
+  """[\s.\-_]*[(\[（【{]?\s*(mp4|mkv|avi|ts|m2ts|iso|wmv|flv|mov|rmvb|rm|webm|m4v|mpg|mpeg|vob|strm)\s*[)\]）】}]?\s*$""",
+  RegexOption.IGNORE_CASE,
+)
+
+/** 从标题里认出番号：`KAWD-522 某标题` ⇒ `KAWD-` + `522`（分隔符也可以是 `_`）。 */
+private val VERSION_TITLE_CODE = Regex("""([A-Za-z][A-Za-z0-9]{0,9})([-_])(\d{2,5})""")
+
+/** 版本名里真正参与比对的那截：剥掉容器括注与收尾分隔符（`522A.(mp4)` → `522A`）。 */
+private fun versionNameCore(raw: String): String {
+  var core = raw.trim()
+  while (true) {
+    val stripped = core.replace(VERSION_CONTAINER_TAIL, "").trim()
+    if (stripped == core) break
+    core = stripped
+  }
+  return core.trimEnd('.', '-', '_', ' ', '\u3000')
+}
+
+/**
+ * 被削掉的那截像不像番号前缀：`KAWD-` / `SSIS_` 算，`A` / `Some Movie ` 不算。
+ *
+ * 三条一起用是为了「补不成就别补」—— 补错名比短名更难认。
+ */
+private fun isVersionCodePrefix(prefix: String): Boolean =
+  prefix.isNotEmpty() &&
+    prefix.length <= MAX_VERSION_PREFIX_CHARS &&
+    prefix.none { it.isWhitespace() || it == '.' } &&
+    (prefix.last() == '-' || prefix.last() == '_')
+
+/**
  * 把 Emby 削掉的版本名前缀补回来：`522A.` + `KAWD-522A.mp4` ⇒ `KAWD-522A`。
  *
  * ## 为什么要补
@@ -324,7 +371,13 @@ private const val MAX_VERSION_PREFIX_CHARS = 12
  * `KAWD-522B.mp4` 在下拉框里只剩 `522A.` / `522B.` —— 光看这一行认不出是哪部片，
  * 而同一个条目里另一部作品的版本名可能恰好也叫 `522A.`。
  *
- * 文件名本身没被动过（`MediaSource.Path`），前缀一直在那儿，所以能对上就把那截接回来。
+ * ## 两条独立的补全路径
+ *
+ * ① **文件名**（[EmbyMediaSource.Path]）：前缀一直在盘上，能对上就接回来。
+ * ② **标题**（[titleHint]）：`Path` 缺失、或文件名与版本名写法差太远时，
+ *    用标题里的番号（`KAWD-522`）接上下半截（`522A`）。这条是给
+ *    「详情页拿到的 `MediaSources` 没有 `Path`」那类情况兜底的 —— 只靠 ①
+ *    会表现为「别人的片子能补、这一部怎么都不补」。
  *
  * ## 只在「确实是被削了」时动手
  *
@@ -341,34 +394,64 @@ private const val MAX_VERSION_PREFIX_CHARS = 12
 internal fun completeEmbyVersionPrefix(
   name: String?,
   path: String?,
+  titleHint: String? = null,
 ): String? {
-  val raw = name?.trim().orEmpty()
-  if (raw.isEmpty()) return null
+  val core = versionNameCore(name?.trim().orEmpty())
+  if (core.isEmpty()) return null
+
+  // ① 文件名：同一个 core 可能在名字里出现多次（`KAWD-522A` 里的 `A`），
+  //    所以逐个位置试，挑第一个「前面正好是番号前缀」的。
   val stem = bareFileName(path)
-  if (stem.isBlank()) return null
-  // Emby 截出来的名字常带尾随分隔符（`522A.`），比对前先削掉
-  val core = raw.trimEnd('.', '-', '_', ' ', '\u3000')
-  if (core.isEmpty() || core.length >= stem.length) return null
-  val index = stem.indexOf(core, ignoreCase = true)
-  // index == 0 ⇒ 前缀根本没被削，不用补
-  if (index <= 0) return null
-  val prefix = stem.substring(0, index)
-  if (prefix.length > MAX_VERSION_PREFIX_CHARS) return null
-  if (prefix.any { it.isWhitespace() || it == '.' }) return null
-  if (prefix.last() != '-' && prefix.last() != '_') return null
-  // 用 stem 里的原始大小写（Emby 名可能被改过大小写），后缀之后的残留（`-C` 之类）截掉
-  return stem.substring(0, index + core.length)
+  if (stem.isNotBlank() && core.length < stem.length) {
+    var from = 0
+    while (true) {
+      val index = stem.indexOf(core, from, ignoreCase = true)
+      if (index < 0) break
+      // index == 0 ⇒ 前缀根本没被削，不用补
+      if (index > 0 && isVersionCodePrefix(stem.substring(0, index))) {
+        // 用 stem 里的原始大小写（Emby 名可能被改过大小写），后缀之后的残留（`-C` 之类）截掉
+        return stem.substring(0, index + core.length)
+      }
+      from = index + 1
+    }
+  }
+
+  // ② 标题：`Path` 不可用时退到这条
+  return completeEmbyVersionPrefixFromTitle(core, titleHint)
 }
 
 /**
- * 版本标题：**本机手动补全的名字** > Emby `Name` > 自动拼出的短名。
+ * 用标题里的番号补版本名：标题 `KAWD-522 …` + 版本名 `522A` ⇒ `KAWD-522A`。
+ *
+ * 只认「版本名以番号里的那段数字开头」的情况（`522A` / `522-4K`），
+ * 且要求数字是完整一段（`5220P` 不会被当成 `522`）。
+ */
+private fun completeEmbyVersionPrefixFromTitle(
+  core: String,
+  titleHint: String?,
+): String? {
+  val title = titleHint?.trim().orEmpty()
+  if (title.isEmpty()) return null
+  val match = VERSION_TITLE_CODE.find(title) ?: return null
+  val digits = match.groupValues[3]
+  if (!core.startsWith(digits, ignoreCase = true)) return null
+  // `522A` 的 `522` 后面不能再跟数字，否则 `5220` 会被误认成 `522` + `0`
+  if (core.getOrNull(digits.length)?.isDigit() == true) return null
+  val prefix = match.value.dropLast(digits.length)
+  if (!isVersionCodePrefix(prefix)) return null
+  return prefix + core
+}
+
+/**
+ * 版本标题：**本机手动补全的名字** > Emby `Name`（必要时补回番号前缀）> 自动拼出的短名。
  *
  * 手动名只在本地生效（见 [EmbyVersionLabels]），不会写回 Emby；清空后自动回退。
  */
 fun embyMediaSourceTitle(
   source: EmbyMediaSource,
   customLabel: String? = null,
-): String = customLabel?.takeIf { it.isNotBlank() } ?: embyMediaSourceLabel(source)
+  titleHint: String? = null,
+): String = customLabel?.takeIf { it.isNotBlank() } ?: embyMediaSourceLabel(source, titleHint)
 
 /**
  * 版本的完整技术规格，与标题分开显示。
@@ -440,8 +523,9 @@ fun embyMediaSourceResolution(source: EmbyMediaSource): String? =
 fun embyMediaSourceDetailedLabel(
   source: EmbyMediaSource,
   customLabel: String? = null,
+  titleHint: String? = null,
 ): String {
-  val title = embyMediaSourceTitle(source, customLabel)
+  val title = embyMediaSourceTitle(source, customLabel, titleHint)
   val spec = embyMediaSourceSpec(source)
   return if (spec.isBlank()) title else "$title · $spec"
 }

@@ -1822,6 +1822,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       embyMediaSourceTitle(
         source,
         labels[EmbyVersionLabels.key(server.id, itemId, source.Id.orEmpty())],
+        item.Name,
       )
 
     val queue = buildMediaSourceQueue(

@@ -151,4 +151,59 @@ class EmbyMediaInfoSummaryTest {
     assertEquals("KAWD-522A", embyMediaSourceTitle(source))
     assertEquals("中字 4K", embyMediaSourceTitle(source, "中字 4K"))
   }
+
+  // ── 回归：用户现场那两行（`522A.(mp4)` / `522B.(mp4)`）──
+
+  @Test
+  fun `container annotation left by emby is stripped before matching`() {
+    // Emby 生成版本名时只切掉扩展名、把点留下，个别版本还带一层容器括注：
+    // 直接把 `522A.(mp4)` 当子串比，永远匹配不到 `KAWD-522A` —— 这是上一版漏掉的主因
+    val a = EmbyMediaSource(
+      Id = "a",
+      Name = "522A.(mp4)",
+      Container = "mp4",
+      Path = "/media/HD/KAWD-522A.mp4",
+    )
+    val b = EmbyMediaSource(
+      Id = "b",
+      Name = "522B.(mp4)",
+      Container = "mp4",
+      Path = "/media/HD/KAWD-522B.mp4",
+    )
+
+    assertEquals("KAWD-522A", embyMediaSourceLabel(a))
+    assertEquals("KAWD-522B", embyMediaSourceLabel(b))
+
+    // 裸扩展名（没括注）同样要剥
+    val bare = EmbyMediaSource(Id = "c", Name = "522A.mp4", Path = "/media/HD/KAWD-522A.mp4")
+    assertEquals("KAWD-522A", embyMediaSourceLabel(bare))
+  }
+
+  @Test
+  fun `prefix is completed from the item title when media source has no path`() {
+    // 详情页拿到的 MediaSources 不一定带 Path（不同查询 / 不同服务端版本），
+    // 这时只能靠标题里的番号兜底：标题 `KAWD-522 …` + 版本名 `522A` ⇒ `KAWD-522A`
+    val noPath = EmbyMediaSource(Id = "a", Name = "522A.", Container = "mp4")
+    assertEquals("KAWD-522A", embyMediaSourceLabel(noPath, titleHint = "KAWD-522 某部影片"))
+    assertEquals("KAWD-522A", embyMediaSourceTitle(noPath, null, "KAWD-522 某部影片"))
+
+    // 带容器括注的写法同样能补
+    val annotated = EmbyMediaSource(Id = "a", Name = "522A.(mp4)")
+    assertEquals("KAWD-522A", embyMediaSourceLabel(annotated, titleHint = "KAWD-522 某部影片"))
+  }
+
+  @Test
+  fun `title based completion refuses names that are not the code tail`() {
+    // 分辨率类版本名与番号里的数字无关 ⇒ 不动
+    val hd = EmbyMediaSource(Id = "h", Name = "1080p")
+    assertEquals("1080p", embyMediaSourceLabel(hd, titleHint = "KAWD-522 某部影片"))
+
+    // `5220P` 的前四位是 `5220`，不能当成番号 `522` 后面跟个 `0`
+    val bogus = EmbyMediaSource(Id = "x", Name = "5220P")
+    assertEquals("5220P", embyMediaSourceLabel(bogus, titleHint = "KAWD-522 某部影片"))
+
+    // 标题里压根没有番号 ⇒ 不猜
+    val noCode = EmbyMediaSource(Id = "n", Name = "522A.")
+    assertEquals("522A.", embyMediaSourceLabel(noCode, titleHint = "某部影片"))
+  }
 }
