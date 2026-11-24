@@ -3,6 +3,8 @@ package app.marlboroadvance.mpvex.preferences
 import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleMarks
 import app.marlboroadvance.mpvex.domain.emby.EmbyLibraryFilterState
 import app.marlboroadvance.mpvex.domain.emby.PersonMergeRule
+import app.marlboroadvance.mpvex.domain.emby.aggregate.AggregateMergeMode
+import app.marlboroadvance.mpvex.domain.emby.aggregate.AggregateSort
 import app.marlboroadvance.mpvex.preferences.preference.Preference
 import app.marlboroadvance.mpvex.preferences.preference.PreferenceStore
 import app.marlboroadvance.mpvex.preferences.preference.getEnum
@@ -25,6 +27,43 @@ class BrowserPreferences(
    * 媒体库工具行上的「随机播放 / 随机播放收藏」、以及视界流（仿抖音竖屏连播）。
    */
   val randomPlayCount = preferenceStore.getInt("random_play_count", 100)
+
+  /**
+   * 聚合搜索的参与范围：逗号分隔的 `EmbyServer.id`。**空串 = 全部参与**。
+   *
+   * 为什么「空 = 全部」而不是「空 = 一台都不搜」：前者让**新添加的服务器自动纳入**。
+   * 若存的是「显式选中的 id 列表」，用户加完服务器进聚合搜索会搜不到 ——
+   * 表现就是「明明加了服务器却用不上」。
+   *
+   * 读取侧必须与当前服务器列表求交集：服务器被删除后会留下失效 id，
+   * 交集运算天然把它收敛掉（见 `AggregateSearchViewModel.resolveScope`）。
+   */
+  val embyAggregateServerIds = preferenceStore.getString("emby_aggregate_servers", "")
+
+  /**
+   * 聚合搜索的结果组织方式。
+   *
+   * - [AggregateMergeMode.MERGE]（默认）：同一部影片跨服务器合并为一条，多台挂台数角标；
+   * - [AggregateMergeMode.GROUP]：按服务器分段，完全不合并。
+   *
+   * 两种方式共用同一份取数结果，只是分桶不同。`GROUP` 同时是合并逻辑的对照基线 ——
+   * 合并出错（多合 / 漏合）时切过去一眼能看出来。
+   */
+  val embyAggregateMergeMode =
+    preferenceStore.getEnum("emby_aggregate_merge_mode", AggregateMergeMode.MERGE)
+
+  /**
+   * 聚合搜索的结果排序。
+   *
+   * 只作用于**结果集内部的行顺序**，不改变「默认打开哪一台」（那由
+   * `AggregateSearchRank.compareHits` 按当前服务器 / 体积决定）——
+   * 换个体积排序不该让「点开哪台」也跟着变。
+   *
+   * 可选项见 [app.marlboroadvance.mpvex.domain.emby.aggregate.AggregateSort]：
+   * 客户端的排序口径，不冒充服务端全库排序。
+   */
+  val embyAggregateSort =
+    preferenceStore.getEnum("emby_aggregate_sort", AggregateSort.MATCH)
 
   /**
    * 随机播放 / 视界流的**手势分工**：true = 单击下钻、长按只播当前目录（默认）。

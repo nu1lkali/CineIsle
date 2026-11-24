@@ -345,6 +345,10 @@ private fun EmbyHomeRoute() {
         ),
       )
     },
+    // 「聚合检索」：多服务器并发检索独立页（与首页搜索互不共享状态）
+    onOpenAggregateSearch = {
+      backStack.add(app.marlboroadvance.mpvex.ui.browser.emby.aggsearch.AggregateSearchScreen)
+    },
   )
 }
 

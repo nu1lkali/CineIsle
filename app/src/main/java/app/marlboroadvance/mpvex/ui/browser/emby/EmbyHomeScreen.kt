@@ -167,6 +167,13 @@ fun EmbyHomeScreen(
    * 导航栈在 [MainScreen] 手里，首页拿不到。
    */
   onOpenAggregate: (app.marlboroadvance.mpvex.database.entities.AggregateLibraryEntity) -> Unit = {},
+  /**
+   * 打开「聚合检索」页（多服务器并发检索）。
+   *
+   * 与 [onOpenAggregate]（聚合**库**）不是一回事：那个是「多个库并成一个网格浏览」，
+   * 这个是「一次关键词并发查多台服务器」。同样只传回调不自己 push。
+   */
+  onOpenAggregateSearch: () -> Unit = {},
 ) {
   val context = LocalContext.current
   val viewModel: EmbyViewModel = viewModel(
@@ -727,6 +734,10 @@ fun EmbyHomeScreen(
         focusRequester = searchFocusRequester,
         // 从详情页返回时不抢焦点：用户要的是继续看那批结果，不是马上再打字
         autoFocus = restoredSearch == null,
+        // 聚合检索入口。**不在这里判断台数**：首页没有服务器列表的订阅，
+        // 为它多拉一条状态只为藏一个图标不划算；单台时聚合页自己会给
+        // 「需要两台以上，单台请用首页搜索」的说明。
+        onOpenAggregateSearch = onOpenAggregateSearch,
       )
     }
 

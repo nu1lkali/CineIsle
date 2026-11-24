@@ -679,6 +679,8 @@ object EmbyClient {
      */
     parentId: String? = null,
     recursive: Boolean = true,
+    /** 字段清单；默认 CORE（与改造前一致）。聚合搜索要 ProviderIds 时显式覆盖。 */
+    fields: String = EmbyItemFields.CORE,
   ): EmbyItemsResult = EmbyItemsApi.searchItems(
     server = server,
     term = term,
@@ -688,6 +690,7 @@ object EmbyClient {
     sortOrder = sortOrder,
     parentId = parentId,
     recursive = recursive,
+    fields = fields,
   )
 
   fun getSeasons(

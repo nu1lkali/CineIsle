@@ -194,6 +194,21 @@ object EmbyServerManageScreen : Screen {
               )
             }
           }
+          // 聚合检索入口：只有两台以上才有「跨服务器」可言。
+          // 放列表首行而不是再来一个 FAB —— FAB 在这里已经被「添加服务器」占用，
+          // 两个 FAB 叠着会互相遮挡。
+          if (servers.size >= 2) {
+            item(key = "aggregate-search") {
+              AggregateSearchEntryCard(
+                serverCount = servers.size,
+                onClick = {
+                  backStack.add(
+                    app.marlboroadvance.mpvex.ui.browser.emby.aggsearch.AggregateSearchScreen,
+                  )
+                },
+              )
+            }
+          }
           items(servers, key = { it.id }) { server ->
             ServerCard(
               server = server,
@@ -1003,5 +1018,65 @@ private fun parseServerAddress(raw: String): Triple<String, Int, Boolean>? {
     // 用 Emby 自带的 https 端口 8920 的话，端口框里填 8920 即可。
     val defaultPort = if (useHttps) HTTPS_PORT else DEFAULT_HTTP_PORT
     Triple(input, defaultPort, useHttps)
+  }
+}
+
+/**
+ * 「聚合检索」入口卡。
+ *
+ * 只做导航，不持有任何状态：点它跳到独立路由，
+ * 参与范围、关键词、结果都在那一页自己的 ViewModel 里。
+ *
+ * 文案说明具体行为（并发查几台、多台都有时合并），因为「聚合」两个字
+ * 在项目里已经指「聚合库」（多库并成一个网格），不说清楚会被理解成同一件事。
+ */
+@Composable
+private fun AggregateSearchEntryCard(
+  serverCount: Int,
+  onClick: () -> Unit,
+) {
+  Card(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(16.dp),
+    colors =
+      CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+      ),
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .clickable(onClick = onClick)
+        .padding(horizontal = 16.dp, vertical = 14.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Filled.Dns,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.size(22.dp),
+      )
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = "聚合检索",
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+        Text(
+          text = "在 $serverCount 台服务器中并发检索；同一部影片多台都有时合并为一条",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      Text(
+        text = "进入",
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSecondaryContainer,
+      )
+    }
   }
 }

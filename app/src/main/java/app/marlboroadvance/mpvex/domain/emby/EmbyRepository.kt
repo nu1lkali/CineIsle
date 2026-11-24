@@ -293,6 +293,21 @@ class EmbyRepository(
       .getOrNull()
   }
 
+  /**
+   * 确保某台服务器处于已登录状态，但**不改变当前服务器**。
+   *
+   * 与 [ensureLoggedIn] 的唯一区别：后者成功后会把 [currentServer] 设成它，
+   * 这在聚合搜索里是灾难 —— 用户搜一次就把正在浏览的服务器换掉了。
+   *
+   * 只对「库里存着账号密码但 token 失效」的服务器有用；无凭据返回 null，
+   * 由调用方标记为「需重新登录」。
+   */
+  suspend fun ensureLoggedInNoSwitch(server: EmbyServer): EmbyServer? {
+    if (server.isLoggedIn) return server
+    if (server.username.isBlank() || server.password.isBlank()) return null
+    return runCatching { relogin(server) }.getOrNull()
+  }
+
   // ─── 服务器管理（透传给 EmbyServerRepository）───
   val servers = serverRepo.allServers
 
@@ -1178,6 +1193,13 @@ class EmbyRepository(
     /** 搜索范围：null = 全服；非 null + [recursive] = false 即「仅本目录」 */
     parentId: String? = null,
     recursive: Boolean = true,
+    /**
+     * 字段清单。默认 [EmbyItemFields.CORE]（既有调用行为不变）。
+     *
+     * 聚合搜索传 `CORE + ProviderIds` —— 跨服务器判断「同一部片」只能靠外部元数据 id，
+     * 而 CORE 不含 ProviderIds。
+     */
+    fields: String = EmbyItemFields.CORE,
   ): EmbyItemsResult = withContext(Dispatchers.IO) {
     EmbyClient.searchItems(
       server = server,
@@ -1188,6 +1210,7 @@ class EmbyRepository(
       sortOrder = sortOrder,
       parentId = parentId,
       recursive = recursive,
+      fields = fields,
     )
   }
 

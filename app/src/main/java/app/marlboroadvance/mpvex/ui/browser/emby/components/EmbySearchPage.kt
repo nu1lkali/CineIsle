@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
@@ -124,6 +125,14 @@ fun EmbySearchTopBar(
    * 键盘一弹上来会把列表顶掉一半（Cine 版对这件事有同名取舍）。
    */
   autoFocus: Boolean = true,
+  /**
+   * 「聚合检索」入口（多服务器并发检索）。
+   *
+   * **只负责导航**：点它只是跳到独立路由，本组件不参与、也不知道聚合检索的任何状态。
+   * 默认 `null` ⇒ 不画这个按钮，现有调用点的行为与版式**完全不变**
+   * （入口按需开，不在所有复用点强制出现）。
+   */
+  onOpenAggregateSearch: (() -> Unit)? = null,
 ) {
   if (autoFocus) {
     // 放在本组件内部而不是调用方：调用方那一层还没组合出输入框，
@@ -226,6 +235,24 @@ fun EmbySearchTopBar(
             modifier = Modifier.size(18.dp),
           )
         }
+      }
+    }
+
+    // 聚合检索入口：只跳转，不参与本页任何搜索状态（见参数 KDoc）
+    if (onOpenAggregateSearch != null) {
+      Box(
+        modifier = Modifier
+          .size(40.dp)
+          .clip(CircleShape)
+          .clickable { onOpenAggregateSearch.invoke() },
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Filled.Dns,
+          contentDescription = "聚合检索（多服务器）",
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.size(20.dp),
+        )
       }
     }
 

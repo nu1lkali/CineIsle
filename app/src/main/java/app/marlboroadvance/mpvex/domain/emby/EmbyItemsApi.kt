@@ -648,6 +648,13 @@ object EmbyItemsApi {
      */
     parentId: String? = null,
     recursive: Boolean = true,
+    /**
+     * 覆盖默认的 [EmbyItemFields.CORE]。
+     *
+     * 聚合搜索要按 `ProviderIds` 跨服务器判断「是不是同一部片」，而 CORE 里没有这一项
+     * （不带 Fields 时服务端不回）。默认值保持 CORE ⇒ 现有调用行为逐字不变。
+     */
+    fields: String = EmbyItemFields.CORE,
   ): EmbyItemsResult = getItems(
     server,
     parentId = parentId,
@@ -658,6 +665,7 @@ object EmbyItemsApi {
     startIndex = 0,
     limit = limit,
     recursive = recursive,
+    fields = fields,
   )
 
   /**

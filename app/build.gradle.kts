@@ -3832,8 +3832,34 @@ android {
     //    放在用户本来就会做的那一步，而不是藏进二级菜单。清单缺失（旧版本下载的、用户
     //    手工拷入的）不做猜测性重建 —— 那类文件仍由 `LocalSubtitleScanner` 按番号 / 标题
     //    在保存目录里匹配，不重建索引不会「完全用不了」，只是不进「已下载」列表。
-    versionCode = 329
-    versionName = "1.6.79"
+    // ── v330：聚合检索（多服务器并发检索，独立页）──
+    //  · 【独立新功能】不改首页全库搜索的任何状态：入口是独立路由
+    //    `AggregateSearchScreen`，关键词 / 结果 / 历史都在 `AggregateSearchViewModel`
+    //    自持，历史写 `serverId = -1` 的独立分区 ⇒ 与现有搜索互不干扰、各司其职。
+    //    复用的只有**无状态展示组件**（`EmbySearchTopBar` / `EmbySearchTabRow` /
+    //    `EmbyMediaCard`），它们本身不持有搜索状态。
+    //  · 【并发】`AggregateSearchEngine.search()` 用 `channelFlow` + 每台一个
+    //    `Dispatchers.IO` 协程 + `Semaphore(4)` 并发，**每台返回一次就发一次**：
+    //    一台慢不拖住其余（`awaitAll` 那类写法会让 8 台里 1 台卡 6 秒变成整页等 6 秒）。
+    //  · 【不切服务器】新增 `EmbyRepository.ensureLoggedInNoSwitch()`：原
+    //    `ensureLoggedIn()` 成功会 `setCurrentServer()`，聚合检索时每查一台就把用户
+    //    当前服务器换一次，是不可接受的副作用。单台失败只影响自己那一格。
+    //  · 【去重】`AggregateSearchKey`：ProviderIds（Tmdb → Imdb → Tvdb）优先，
+    //    缺失时要求「名称 + 年份」同时可用，Episode 要求剧名 + 季 + 集三者齐全，
+    //    Person 一律不合并 —— 原则是宁可少合并（看到两条重复）也不错合并
+    //    （点开一部片进去是另一部）。
+    //  · 【可区分】单台命中的卡片不加任何标记；多台命中右上角「N 台」角标，
+    //    长按展开逐台副本（画质 · 体积 · 观看进度，首行标「默认」）；
+    //    另有「分组视图」按服务器分段、完全不合并，作为合并逻辑的对照基线。
+    //  · 【参与范围】chip 填充 = 参与，左侧状态点 = 查询状态；点击切换参与，
+    //    长按 = 只搜这一台。偏好存**包含集**（全选写空串），服务器被删后与当前列表
+    //    求交自然收敛；取消参与不发请求，恢复参与只补查那一台。
+    //  · 【入口】搜索页顶栏新增「聚合检索」图标（只导航，不参与该页搜索状态）；
+    //    服务器管理页首行加一张入口卡（两台以上才显示）。
+    //  · 【取值】`searchItems` 全链路补 `fields` 参数（默认 `CORE`，聚合检索显式带
+    //    `ProviderIds`）—— 默认值保证既有调用零变化。
+    versionCode = 330
+    versionName = "1.6.80"
 
     vectorDrawables {
       useSupportLibrary = true

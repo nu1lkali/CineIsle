@@ -1,0 +1,176 @@
+package app.marlboroadvance.mpvex.ui.browser.emby.aggsearch
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import app.marlboroadvance.mpvex.domain.emby.aggregate.ServerOutcome
+import app.marlboroadvance.mpvex.domain.emby.aggregate.ServerPhase
+
+/**
+ * 服务器参与范围条。
+ *
+ * ## 一个 chip 同时表达两件事
+ *
+ * - **填充与否** = 这台是否参与本次检索（可点，点击切换）；
+ * - **左侧状态点** = 这台此刻的查询状态（进行中 / 已返回 / 空 / 失败 / 未开始）。
+ *
+ * 两件事必须放在同一个控件里：分成「选择区」和「状态区」两条会让人对不上「这个数字是哪台的」。
+ *
+ * ## 为什么长按 = 只搜这一台
+ *
+ * 「排除其余全部」是排查「到底哪台有这个片」的最短路径，比逐个点掉便宜。
+ * 长按不额外开菜单，落点明确：只剩这一台参与，并立即重查。
+ *
+ * ## 为什么手写而不是 FilterChip
+ *
+ * `FilterChip` 的 `onClick` 自己吃掉手势，长按要再挂一层就会与它抢事件；
+ * 这里用 [combinedClickable] 一次挂好两个手势，交互稳定。视觉沿用项目里
+ * 搜索历史胶囊那一套（圆角胶囊 + 发丝边 + `surfaceContainerHigh` 底）。
+ */
+@Composable
+fun AggregateServerStrip(
+  outcomes: List<ServerOutcome>,
+  isParticipating: (Long) -> Boolean,
+  onToggle: (Long) -> Unit,
+  onOnly: (Long) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  LazyRow(
+    modifier = modifier.fillMaxWidth(),
+    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    items(outcomes, key = { it.serverId }) { outcome ->
+      ServerChip(
+        outcome = outcome,
+        selected = isParticipating(outcome.serverId),
+        onClick = { onToggle(outcome.serverId) },
+        onLongClick = { onOnly(outcome.serverId) },
+      )
+    }
+  }
+}
+
+@Composable
+private fun ServerChip(
+  outcome: ServerOutcome,
+  selected: Boolean,
+  onClick: () -> Unit,
+  onLongClick: () -> Unit,
+) {
+  val shape = RoundedCornerShape(50)
+  val container =
+    if (selected) {
+      MaterialTheme.colorScheme.primaryContainer
+    } else {
+      MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+  val content =
+    if (selected) {
+      MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+      MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+  Row(
+    modifier = Modifier
+      .height(34.dp)
+      .clip(shape)
+      .background(container)
+      .border(
+        width = 1.dp,
+        color =
+          if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+          } else {
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+          },
+        shape = shape,
+      )
+      .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+      .padding(start = 11.dp, end = 12.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(7.dp),
+  ) {
+    // 状态点：未参与的台不显示 —— 它本来就没查，给个灰点反而像「查了但没结果」
+    if (selected) {
+      Box(
+        modifier = Modifier
+          .size(6.dp)
+          .clip(CircleShape)
+          .background(phaseColor(outcome.phase)),
+      )
+    }
+    Text(
+      text = outcome.name,
+      style = MaterialTheme.typography.labelLarge,
+      color = content,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.widthIn(max = 132.dp),
+    )
+    val trailing = trailingLabel(outcome, selected)
+    if (trailing != null) {
+      Text(
+        text = trailing,
+        style = MaterialTheme.typography.labelSmall,
+        color = content.copy(alpha = 0.7f),
+        maxLines = 1,
+      )
+    }
+  }
+}
+
+/**
+ * 尾部计数。
+ *
+ * 只在**有意义**的时候出现：
+ * - `Ok` → 条数；
+ * - `Empty` → 「空」；
+ * - `Failed` / `Skipped` → 「失败」/「未登录」；
+ * - 未参与 → 不显示（灰 chip 已经表达了）；
+ * - 进行中 / 未开始 → 不显示（状态点已经表达了，写「查询中」会把胶囊撑得很长）。
+ */
+private fun trailingLabel(outcome: ServerOutcome, selected: Boolean): String? {
+  if (!selected) return null
+  return when (outcome.phase) {
+    ServerPhase.Ok -> outcome.count.toString()
+    ServerPhase.Empty -> "空"
+    ServerPhase.Failed -> "失败"
+    ServerPhase.Skipped -> "未登录"
+    ServerPhase.Running, ServerPhase.Pending -> null
+  }
+}
+
+/** 状态点颜色。刻意不用红色表示「空」：空是正常结果，不是错误 */
+@Composable
+private fun phaseColor(phase: ServerPhase): Color =
+  when (phase) {
+    ServerPhase.Running -> MaterialTheme.colorScheme.primary
+    ServerPhase.Ok -> MaterialTheme.colorScheme.primary
+    ServerPhase.Empty -> MaterialTheme.colorScheme.outline
+    ServerPhase.Failed -> MaterialTheme.colorScheme.error
+    ServerPhase.Skipped -> MaterialTheme.colorScheme.outlineVariant
+    ServerPhase.Pending -> MaterialTheme.colorScheme.outlineVariant
+  }
