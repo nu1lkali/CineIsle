@@ -4,9 +4,14 @@ import android.content.Context
 import android.content.res.Configuration
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +19,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -47,11 +53,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -66,6 +74,7 @@ import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 import app.marlboroadvance.mpvex.ui.theme.spacing
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -85,6 +94,15 @@ private sealed interface CueLoad {
 
 /** 正在看的那条轨道此刻在播什么角色 —— 决定要不要高亮 + 用哪份延迟。 */
 private enum class TrackRole { Primary, Secondary, Inactive }
+
+/** 横屏悬浮面板的进场时长。出场稍短，收起来要显得利落。 */
+private const val TIMELINE_PANEL_ENTER_MS = 240
+
+/** 横屏悬浮面板的出场时长（播完才落 `Sheets.None`，否则动画从一开始就被扯断）。 */
+private const val TIMELINE_PANEL_HIDE_MS = 190
+
+/** 出场位移：略大于面板宽度上限（380dp），滑出屏幕右缘即彻底不可见。 */
+private const val TIMELINE_PANEL_SLIDE_DP = 420f
 
 /**
  * 播放页「字幕时间线」面板。
@@ -268,6 +286,37 @@ fun SubtitleTimelineSheet(
   }
 
   val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+
+  // ── 横屏悬浮面板的进出场 ──
+  //
+  // `PlayerSheets` 是个裸 `when`，状态一落 `Sheets.None` 这棵子树立刻被摘掉 ——
+  // 面板会「啪」一下消失。所以关面板分两步：先播滑出 + 淡出，**播完**再落状态。
+  // [slide] 1 = 完全收起（在屏幕右缘外），0 = 完全展开。
+  val panelScope = rememberCoroutineScope()
+  val slide = remember { Animatable(if (isPortrait) 0f else 1f) }
+  var dismissing by remember { mutableStateOf(false) }
+
+  /** 关闭面板的唯一出口：竖屏交给 `PlayerSheet`，横屏先播动画。 */
+  val closePanel: () -> Unit = {
+    when {
+      isPortrait -> onDismissRequest()
+      dismissing -> Unit
+      else -> {
+        dismissing = true
+        panelScope.launch {
+          slide.animateTo(1f, tween(TIMELINE_PANEL_HIDE_MS, easing = FastOutLinearInEasing))
+          onDismissRequest()
+        }
+      }
+    }
+  }
+
+  if (!isPortrait) {
+    LaunchedEffect(Unit) {
+      slide.animateTo(0f, tween(TIMELINE_PANEL_ENTER_MS, easing = FastOutSlowInEasing))
+    }
+  }
+
   // 标题里要显示「看的是哪条」；getTrackTitle 内部走 stringResource，先取出来再拼串
   val viewedTitle = viewed?.let { getTrackTitle(it) } ?: "未选择字幕"
 
@@ -319,7 +368,7 @@ fun SubtitleTimelineSheet(
       TextButton(onClick = onBackToTracks) { Text("字幕列表") }
       // 抽屉形态可以下滑/点空白关闭；悬浮面板不拦画面点击，必须留一个明确的关闭
       if (!isPortrait) {
-        IconButton(onClick = onDismissRequest) {
+        IconButton(onClick = closePanel) {
           Icon(Icons.Default.Close, contentDescription = "关闭时间线", modifier = Modifier.size(20.dp))
         }
       }
@@ -502,15 +551,38 @@ fun SubtitleTimelineSheet(
       }
     }
   } else {
-    // 横屏：右侧半透明悬浮面板，不加遮罩 —— 看时间线的同时画面照常在播。
-    // 返回键要关面板而不是退出播放（抽屉形态由 PlayerSheet 自己接管，这里得自己挂）。
-    BackHandler(onBack = onDismissRequest)
-    DraggablePanel(
-      header = header,
-      scrollable = false,
-      heightFraction = 0.96f,
-    ) {
-      body()
+    // 横屏：右侧半透明悬浮面板，不做遮罩变暗 —— 看时间线的同时画面照常在播。
+    //
+    // 但**点击要能收回**：铺一层全屏透明点击层（不画任何东西、不压暗画面），
+    // 面板之外任意位置被点到就收起。竖屏抽屉由 `PlayerSheet` 的全屏遮罩做同一件事，
+    // 两种形态的「点空白关闭」口径才一致。
+    //
+    // 返回键同理：关面板而不是退出播放（抽屉形态由 PlayerSheet 自己接管，这里得自己挂）。
+    BackHandler(onBack = closePanel)
+    Box(modifier = Modifier.fillMaxSize()) {
+      Box(
+        modifier =
+          Modifier
+            .fillMaxSize()
+            .clickable(
+              interactionSource = remember { MutableInteractionSource() },
+              indication = null,
+              onClick = closePanel,
+            ),
+      )
+      DraggablePanel(
+        modifier =
+          Modifier.graphicsLayer {
+            // [slide] 直接读在 layer 里 ⇒ 每帧只重绘、不重组
+            translationX = slide.value * TIMELINE_PANEL_SLIDE_DP.dp.toPx()
+            alpha = 1f - slide.value
+          },
+        header = header,
+        scrollable = false,
+        heightFraction = 0.96f,
+      ) {
+        body()
+      }
     }
   }
 }

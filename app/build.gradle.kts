@@ -3748,8 +3748,16 @@ android {
     //  · 【跳转】`seekTo(position, exact = true)`：普通 seek 是 `absolute+keyframes`，
     //    长 GOP 片源会落在目标之前最近的关键帧上（差好几秒），现场表现就是
     //    「时间线写 2:03、点下去落在 1:56」。点台词要的是那一句，不是最近的关键帧。
-    versionCode = 324
-    versionName = "1.6.74"
+    //
+    // ── v325：时间线两种形态都「点画面即收回」+ 横屏进出场动画 ──
+    //  · 【收回】横屏面板上方铺一层全屏**透明**点击层（不压暗画面）：面板之外任意位置被点到
+    //    就收起。竖屏原本就有 —— `PlayerSheet` 的全屏遮罩做的是同一件事，两种形态口径统一。
+    //  · 【动画】`PlayerSheets` 是裸 `when`，状态一落 `Sheets.None` 子树立刻被摘掉 ⇒ 面板会「啪」
+    //    一下消失。所以关面板改成两步：先播滑出 + 淡出（190ms，`Animatable` 驱动、位移 420dp、
+    //    读在 `graphicsLayer` 里只重绘不重组），**播完**再落状态；进场同样补 240ms 滑入。
+    //    关闭入口（X / 返回键 / 点画面）统一走 `closePanel`，不会有一条路径跳过动画。
+    versionCode = 325
+    versionName = "1.6.75"
 
     vectorDrawables {
       useSupportLibrary = true
