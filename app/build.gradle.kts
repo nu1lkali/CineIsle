@@ -3773,8 +3773,20 @@ android {
     //  · 【详情页字幕卡】空态与「本机已关联网络字幕」两处都写了「播放该媒体时自动挂载，可在字幕
     //    面板切换」⇒ 同一句话出现两次。空态收敛为只陈述服务端事实、本机那一行只报条数与来源；
     //    并在「服务端轨」与「网络字幕」之间加一条 `HorizontalDivider`（左右各内缩 2dp，不顶到卡片圆角）。
-    versionCode = 326
-    versionName = "1.6.76"
+    //
+    // ── v327：竖屏时间线「黑边停靠」+ 抽屉半透明 ──
+    //  · 【问题】竖屏放横屏影片时画面只占屏幕中间一条（16:9 在 360×800dp 上约 202dp 高），
+    //    上下各留约 299dp 黑边；抽屉按屏高比例给（0.66 ≈ 528dp）必然压到画面。
+    //  · 【停靠】新增纯函数 `letterboxBars(aspect, w, h)`（口径同 `GestureHandler` 的 fit 逻辑），
+    //    量出下黑边高度，面板整块停靠进去 ⇒ 画面零遮挡。黑边扣掉导航栏后不足 240dp、
+    //    读不到 `video-params/aspect`、或 `video-zoom` / `video-pan-y` 非 0（画面被手动缩放过，
+    //    算出的黑边是错的）、或输入法弹起 ⇒ 一律退回 0.66 抽屉，不硬停。
+    //  · 【留白】`PlayerSheet` 新增 `reserveStatusBar`：停靠形态不再预留状态栏高度
+    //    （整块已在屏幕下半部，再吃一个状态栏高度会白少一行）。
+    //  · 【透明】抽屉表面不透明度 0.88（`surfaceColor` + `tonalElevation = 0.dp`），
+    //    停靠时更接近「从黑边里长出来」，退回大抽屉时还能隐约看见画面。
+    versionCode = 327
+    versionName = "1.6.77"
 
     vectorDrawables {
       useSupportLibrary = true

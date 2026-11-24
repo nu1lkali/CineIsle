@@ -96,6 +96,14 @@ fun PlayerSheet(
    * **键盘弹出时这个比例不生效** —— 那时高度必须给足，否则搜索框会被键盘顶到看不见。
    */
   heightFraction: Float = 0.90f,
+  /**
+   * 面板内部是否预留状态栏高度。
+   *
+   * 抽屉整体贴在屏幕底部时这层留白没有意义（它只是让内容往下挪一点），但影响不大，
+   * 所以默认保留。**「停靠黑边」形态必须传 false**：那一整块本来就落在屏幕下半部，
+   * 再吃掉一个状态栏高度，列表会白白少掉一行。
+   */
+  reserveStatusBar: Boolean = true,
   content: @Composable () -> Unit,
 ) {
   val scope = rememberCoroutineScope()
@@ -202,7 +210,13 @@ fun PlayerSheet(
             orientation = Orientation.Vertical,
           ).windowInsetsPadding(
             WindowInsets.systemBars
-              .only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+              .only(
+                if (reserveStatusBar) {
+                  WindowInsetsSides.Top + WindowInsetsSides.Horizontal
+                } else {
+                  WindowInsetsSides.Horizontal
+                },
+              ),
           ).imePadding(),
       shape = MaterialTheme.shapes.extraLarge.copy(bottomEnd = ZeroCornerSize, bottomStart = ZeroCornerSize),
       color = surfaceColor ?: MaterialTheme.colorScheme.surface,

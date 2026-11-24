@@ -19,11 +19,14 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -62,6 +65,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,6 +74,7 @@ import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTimeline
 import app.marlboroadvance.mpvex.presentation.components.PlayerSheet
 import app.marlboroadvance.mpvex.ui.player.TrackNode
 import app.marlboroadvance.mpvex.ui.player.controls.components.panels.DraggablePanel
+import app.marlboroadvance.mpvex.ui.player.controls.letterboxBars
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 import app.marlboroadvance.mpvex.ui.theme.spacing
 import kotlinx.collections.immutable.ImmutableList
@@ -103,6 +108,23 @@ private const val TIMELINE_PANEL_HIDE_MS = 190
 
 /** 出场位移：略大于面板宽度上限（380dp），滑出屏幕右缘即彻底不可见。 */
 private const val TIMELINE_PANEL_SLIDE_DP = 420f
+
+/**
+ * 竖屏「黑边停靠」可接受的最小高度（dp）。
+ *
+ * 停靠后这块高度还要装下标题行 + 轨道 chip + 搜索框（约 165dp），低于 240 就只剩
+ * 一两行台词，与其勉强停靠不如退回大抽屉 —— 至少列表可用。
+ */
+private const val PORTRAIT_DOCK_MIN_DP = 240f
+
+/**
+ * 竖屏抽屉的不透明度。
+ *
+ * 留一点透明度，面板才不像一块实心板压上来：停靠黑边时背后是纯黑，观感更接近
+ * 「黑边里长出来的」；退回大抽屉时背后是画面，也能隐约看见画面还在动。
+ * 再低（< 0.8）正文对比度就撑不住了。
+ */
+private const val TIMELINE_SHEET_ALPHA = 0.88f
 
 /**
  * 播放页「字幕时间线」面板。
@@ -359,6 +381,40 @@ fun SubtitleTimelineSheet(
   }
 
   val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+
+  // ── 竖屏：黑边停靠 ──
+  //
+  // 竖屏放横屏影片时画面只占屏幕中间一条（16:9 在 360×800dp 上只有约 202dp 高），
+  // 上下各留一大截黑边。此时抽屉若还按屏高比例给（0.66 ≈ 528dp），必然压到画面 ——
+  // 所以这里先**量出下黑边的高度，让面板整块停靠进去**，画面一点不挡。
+  //
+  // 三种情况下不硬停：
+  //  · 读不到画幅（首帧前 `video-params/aspect` 为空）；
+  //  · 用户手动缩放过画面（`video-zoom` / `video-pan-y` 非 0 ⇒ 画面不再是居中 fit，
+  //    算出来的黑边是错的）；
+  //  · 下黑边扣掉导航栏后不足 [PORTRAIT_DOCK_MIN_DP]，或输入法弹着（要让搜索框可用）。
+  //   这些情况一律退回原来的 0.66 抽屉。
+  val density = LocalDensity.current
+  val screenWidthDp = LocalConfiguration.current.screenWidthDp.toFloat()
+  val screenHeightDp = LocalConfiguration.current.screenHeightDp.toFloat()
+  // 画幅与缩放只在面板打开时取一次：一次播放里不会变，没必要每秒订阅
+  val videoAspect = remember { PlayerLib.getPropertyDouble("video-params/aspect") }
+  val pictureTransformed =
+    remember {
+      fun nonzero(key: String): Boolean = (PlayerLib.getPropertyDouble(key) ?: 0.0).let { it > 1e-3 || it < -1e-3 }
+      nonzero("video-zoom") || nonzero("video-pan-y")
+    }
+  val imeVisible = WindowInsets.ime.getBottom(density) > 0
+  val navigationBarDp = with(density) { WindowInsets.systemBars.getBottom(density).toDp().value }
+  val dockHeightDp =
+    if (pictureTransformed || imeVisible) {
+      null
+    } else {
+      letterboxBars(videoAspect, screenWidthDp, screenHeightDp)
+        ?.bottom
+        ?.minus(navigationBarDp)
+        ?.takeIf { it >= PORTRAIT_DOCK_MIN_DP }
+    }
 
   // ── 横屏悬浮面板的进出场 ──
   //
@@ -622,16 +678,21 @@ fun SubtitleTimelineSheet(
   }
 
   if (isPortrait) {
-    // 竖屏：底部抽屉。
+    // 竖屏：底部抽屉，两种高度
     //
-    // 两处「少挡画面」，缺一条都会回到「一开面板整块画面就黑了」：
-    //  · `scrimAlpha = 0` —— 遮罩仍在（点空白依旧能关），但不画黑色，上方画面不变暗；
-    //  · `heightFraction = 0.66` —— 抽屉只占约三分之二屏高，上方三分之一完整露出。
-    //    键盘弹出时 PlayerSheet 会自动忽略这个比例，搜索框不会被键盘压住。
+    //  · 有黑边可停（[dockHeightDp] 非空）⇒ 面板高度＝下黑边高度，整块落在黑边里，
+    //    画面完全不挡；此时不再预留状态栏高度（那一块本来就贴着屏幕下半部）。
+    //  · 没有黑边 / 画面被缩放 / 键盘弹起 ⇒ 退回 0.66 屏高的抽屉。[scrimAlpha = 0]
+    //    保证遮罩不画黑（点空白仍能关），上方画面不被压暗。
     PlayerSheet(
       onDismissRequest = onDismissRequest,
       scrimAlpha = 0f,
       heightFraction = 0.66f,
+      customMaxHeight = dockHeightDp?.dp,
+      reserveStatusBar = dockHeightDp == null,
+      // 稍微透一点：停靠时像从黑边里长出来的，退回大抽屉时还能看见画面在动
+      surfaceColor = MaterialTheme.colorScheme.surface.copy(alpha = TIMELINE_SHEET_ALPHA),
+      tonalElevation = 0.dp,
     ) {
       Column(modifier = Modifier.fillMaxWidth()) {
         header()
