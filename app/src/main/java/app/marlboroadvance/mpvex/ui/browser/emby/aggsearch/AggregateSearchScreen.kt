@@ -118,6 +118,7 @@ object AggregateSearchScreen : Screen {
     val sort by vm.sort.collectAsState()
     val drawerEntry by vm.drawerEntry.collectAsState()
     val servers by vm.servers.collectAsState()
+    val scopeIds by vm.scopeIds.collectAsState()
     val history by vm.history.collectAsState()
 
     val browserPreferences = koinInject<BrowserPreferences>()
@@ -176,7 +177,21 @@ object AggregateSearchScreen : Screen {
             },
         )
 
+        // 参与范围：**输入关键词之前就能选**。没选中的台不会收到任何请求，
+        // 所以这块必须在空词态也可见（不能等搜过一次才出现）。
+        // ⚠️ 判定必须基于 `scopeIds` 这个状态流，不能只在点击回调里同步读：
+        //    chip 填充态与「已选 N/M 台」都要跟着偏好走，否则恢复页面时会显示旧值。
+        val selectedCount =
+          remember(servers, scopeIds) {
+            val declared = scopeIds
+            if (declared == null) servers.size else servers.count { it.id in declared }
+          }
         if (servers.size >= 2) {
+          AggregateScopeHeader(
+            selected = selectedCount,
+            total = servers.size,
+            onSelectAll = vm::selectAllServers,
+          )
           AggregateServerStrip(
             outcomes = outcomes,
             isParticipating = vm::isParticipating,
@@ -191,7 +206,15 @@ object AggregateSearchScreen : Screen {
           onToggleMode = vm::toggleMergeMode,
           sort = sort,
           onSortChange = vm::setSort,
-          status = toolbarStatus(mergeMode, snapshot, outcomes, running),
+          status =
+            toolbarStatus(
+              term = term,
+              mergeMode = mergeMode,
+              snapshot = snapshot,
+              outcomes = outcomes,
+              running = running,
+              selectedCount = selectedCount,
+            ),
           running = running,
           canRetry =
             outcomes.any {
@@ -203,6 +226,7 @@ object AggregateSearchScreen : Screen {
         if (term.isBlank()) {
           AggregateLanding(
             serversCount = servers.size,
+            selectedCount = selectedCount,
             history = history,
             onPickHistory = vm::pickHistory,
             onRemoveHistory = vm::removeHistory,
@@ -260,7 +284,10 @@ object AggregateSearchScreen : Screen {
           when {
             // 首屏还没有任何一批到达：不画空态 —— 空态的意思是「搜完了没有」
             !hasContent && running && snapshot.rawCount == 0 ->
-              AggregateProgress(serverCount = outcomes.count { !it.phase.isTerminal })
+              // 只数**仍在查询**的台：未参与的台一直是 Pending，算进去会把 2 台说成 3 台
+              AggregateProgress(
+                serverCount = outcomes.count { it.phase == ServerPhase.Running },
+              )
 
             !hasContent && !running && snapshot.rawCount == 0 ->
               EmbyEmptyState(
@@ -465,6 +492,55 @@ private fun SortMenu(
   }
 }
 
+/**
+ * 参与范围的标题行：`参与范围 · 已选 2/3 台` + 右侧「全选」。
+ *
+ * 存在的理由是**顺序**：用户要先知道「这次会问哪几台」，再输入关键词。
+ * 只给一排 chip 而不说明「这些是什么、选中了几台」，很难看出「没选的不会发请求」。
+ */
+@Composable
+private fun AggregateScopeHeader(
+  selected: Int,
+  total: Int,
+  onSelectAll: () -> Unit,
+) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(start = 16.dp, end = 8.dp, bottom = 4.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Text(
+      text = "参与范围",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+      text = if (selected >= total) "全部参与（$total 台）" else "已选 $selected/$total 台",
+      style = MaterialTheme.typography.labelSmall,
+      color =
+        if (selected >= total) {
+          MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+          MaterialTheme.colorScheme.primary
+        },
+      maxLines = 1,
+    )
+    Spacer(Modifier.weight(1f))
+    if (selected < total) {
+      TextButton(
+        onClick = onSelectAll,
+        // ⚠️ 不给这个按钮加固定 `height`：M3 按钮会被裁字（见 ui-patterns 的结论），
+        //    这里靠 contentPadding 收窄即可
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+      ) {
+        Text("全选", style = MaterialTheme.typography.labelSmall)
+      }
+    }
+  }
+}
+
 @Composable
 private fun ModeChip(
   label: String,
@@ -565,6 +641,7 @@ private fun AggregateCard(
 @Composable
 private fun AggregateLanding(
   serversCount: Int,
+  selectedCount: Int,
   history: List<String>,
   onPickHistory: (String) -> Unit,
   onRemoveHistory: (String) -> Unit,
@@ -585,8 +662,9 @@ private fun AggregateLanding(
     Text(
       text =
         if (serversCount >= 2) {
-          "输入关键词后并发查询参与范围的 $serversCount 台服务器；同一部影片在多台上都有时合并为一条，" +
-            "长按卡片可查看逐台副本。"
+          "先在上方「参与范围」选定本次检索的服务器，再输入关键词；" +
+            "未参与的服务器不会收到请求。当前将查询 $selectedCount 台，" +
+            "同一部影片多台都有时合并为一条，长按卡片可查看逐台副本。"
         } else {
           "当前仅配置了 $serversCount 台服务器。聚合检索需要两台以上；单台检索请使用首页搜索。"
         },
@@ -709,17 +787,28 @@ private fun AggregateProgress(serverCount: Int) {
 
 // ==================== 文案 ====================
 
-/** 工具栏右侧状态：只写事实（已返回几台、多少条），不写「正在努力加载」这类话 */
+/**
+ * 工具栏状态行：只写事实（参与几台、已返回几台、多少条），不写「正在努力加载」这类话。
+ *
+ * ⚠️ 分母是**参与台数**而不是 `outcomes.size`：chip 条里还挂着未参与的台，
+ * 用 `outcomes.size` 当分母会出现「已返回 2/3 台」而实际只问了 2 台。
+ */
 private fun toolbarStatus(
+  term: String,
   mergeMode: AggregateMergeMode,
   snapshot: AggregateSnapshot,
   outcomes: List<ServerOutcome>,
   running: Boolean,
+  selectedCount: Int,
 ): String {
   if (outcomes.isEmpty()) return "未选择服务器"
+  if (term.isBlank()) {
+    // 空词态没有结果可言，报「合并后 0 条」会像搜过了
+    return if (selectedCount > 0) "参与 $selectedCount 台 · 等待关键词" else "未选择服务器"
+  }
   val done = outcomes.count { it.phase.isTerminal }
   return if (running) {
-    "已返回 $done/${outcomes.size} 台"
+    "已返回 $done/$selectedCount 台"
   } else if (mergeMode == AggregateMergeMode.MERGE) {
     "合并后 ${snapshot.entries.size} 条 · 原始 ${snapshot.rawCount} 条"
   } else {

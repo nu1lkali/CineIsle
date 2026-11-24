@@ -83,6 +83,15 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
    */
   private val _scopeIds = MutableStateFlow<Set<Long>?>(readScope())
 
+  /**
+   * 参与范围（UI 可观察）。`null` = 全部参与。
+   *
+   * 必须暴露成 StateFlow 而不是只留一个同步读方法：chip 的填充态、
+   * 「已选 N/M 台」这类文案都依赖它，靠 `outcomes` 变化顺带触发重组太隐晦，
+   * 一旦某条路径只改范围不改 outcomes，界面就会停在旧选中态。
+   */
+  val scopeIds: StateFlow<Set<Long>?> = _scopeIds.asStateFlow()
+
   // ─── 结果 ───
 
   private val _outcomes = MutableStateFlow<List<ServerOutcome>>(emptyList())
@@ -127,8 +136,55 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
   private val arrived = LinkedHashMap<Long, ServerBatch>()
 
   init {
-    // 首屏就把参与范围铺出来：用户一进来能看见「哪几台参与、哪几台不参与」
+    // 首屏就把参与范围铺出来：用户一进来能看见「哪几台参与、哪几台不参与」，
+    // **先选定范围、再输入关键词** —— 没选中的台一个请求都不会收到。
     refreshOutcomes()
+    // ⚠️ `servers` 是 stateIn(Eagerly) 出来的，构造时还是空列表：只在 init 里铺一次
+    //    会导致「刚进页面看不到任何 chip，搜过一次之后才出现」。
+    //    这里订阅列表变化重新铺一遍（服务器增删也走这条）。
+    viewModelScope.launch {
+      servers.collect { list -> syncWithServers(list) }
+    }
+  }
+
+  /**
+   * 服务器列表变化时的对齐。
+   *
+   * 三种情况必须区分：
+   * - **没有会话**（还没输入关键词）：整条按当前偏好重铺 Pending，用户此刻就能选；
+   * - **会话进行中**：保留已到达的状态，只补上新出现的参与台、剔除已消失的台；
+   * - **刚启动**：`previousIds` 为空，等价于第一种。
+   *
+   * 不在这里重发整轮请求：列表变化不是「用户改主意」，重查所有台既慢又浪费；
+   * 新出现的台单独补查一台即可。
+   */
+  private fun syncWithServers(all: List<EmbyServer>) {
+    val participants = all.filter { isParticipating(it.id) }
+    val previousIds = sessionServers.map { it.id }.toSet()
+    val currentIds = participants.map { it.id }.toSet()
+
+    sessionServers = participants
+    // ⚠️ 铺的是**全部**服务器，不是只有参与的那些：
+    //    chip 条是唯一能把某台切回参与范围的地方，取消参与的台若从条上消失，
+    //    用户就只能靠「全选」把它找回来。
+    _outcomes.value =
+      all.map { server ->
+        val known = _outcomes.value.firstOrNull { it.serverId == server.id }
+        // 会话进行中才保留已知状态；否则一律 Pending（上一轮的结果不该留在 chip 上）
+        if (sessionTerm.isNotEmpty() && known != null) {
+          known
+        } else {
+          ServerOutcome(server.id, server.name, ServerPhase.Pending)
+        }
+      }
+
+    if (sessionTerm.isEmpty()) return
+
+    // 台被删 / 被取消参与 ⇒ 丢掉它的批次，避免结果里留着一条打不开的
+    (previousIds - currentIds).forEach { arrived.remove(it) }
+    publishSnapshot()
+    // 新出现的参与台：只补查它自己
+    participants.filter { it.id !in previousIds }.forEach { querySingle(it) }
   }
 
   // ==================== 输入 ====================
@@ -312,8 +368,16 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
     sessionServers = all.filter { isParticipating(it.id) }
     arrived.clear()
     _snapshot.value = AggregateSnapshot()
+    // 同 syncWithServers：chip 条要保**全部**服务器，未参与的留 Pending（灰 chip）
+    val participants = sessionServers.map { it.id }.toSet()
     _outcomes.value =
-      sessionServers.map { ServerOutcome(it.id, it.name, ServerPhase.Running) }
+      all.map { server ->
+        ServerOutcome(
+          serverId = server.id,
+          name = server.name,
+          phase = if (server.id in participants) ServerPhase.Running else ServerPhase.Pending,
+        )
+      }
     _running.value = sessionServers.isNotEmpty()
 
     if (sessionServers.isEmpty()) {
@@ -384,18 +448,24 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
     refreshOutcomes()
   }
 
-  /** 按当前参与范围铺一遍「未开始」状态（没在搜索时也要看得见 chip 的参与态） */
+  /**
+   * 按当前参与范围铺一遍 chip 条。
+   *
+   * ⚠️ 铺的是**全部**服务器而不是只有参与的那些：chip 条是唯一能把某台切回
+   * 参与范围的地方，未参与的台若从条上消失，用户就只能靠「全选」找回。
+   * 未参与的台给 [ServerPhase.Pending]，渲染成灰 chip，不参与也不会发请求。
+   */
   private fun refreshOutcomes() {
     val all = servers.value
-    val participants = all.filter { isParticipating(it.id) }
-    sessionServers = participants
+    sessionServers = all.filter { isParticipating(it.id) }
     _outcomes.value =
-      participants.map { server ->
+      all.map { server ->
         val known = _outcomes.value.firstOrNull { it.serverId == server.id }
-        if (sessionTerm.isEmpty()) {
-          ServerOutcome(server.id, server.name, ServerPhase.Pending)
+        // 会话进行中才保留已知状态；否则一律 Pending（上一轮结果不该留在 chip 上）
+        if (sessionTerm.isNotEmpty() && known != null) {
+          known
         } else {
-          known ?: ServerOutcome(server.id, server.name, ServerPhase.Pending)
+          ServerOutcome(server.id, server.name, ServerPhase.Pending)
         }
       }
   }
