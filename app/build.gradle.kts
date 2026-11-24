@@ -3806,8 +3806,34 @@ android {
     //  · 【验证】`.verify/subtitle_encoding/` 独立编译跑 124 项断言：19 条迅雷源真实
     //    样本 + 20 份构造样本，覆盖 GBK / Big5 / Shift_JIS / EUC-JP / EUC-KR / UTF-16 /
     //    二次编码 / 混合编码 / 稀疏 CJK / 已损坏。
-    versionCode = 328
-    versionName = "1.6.78"
+    //
+    // ── v329：「字幕保存目录」入口补回 + 重装后从目录恢复本地字幕库 ──
+    //  · 【缺口】`SubtitlesPreferences.subtitleSaveFolder`（键 `sub_save_folder`）此前
+    //    **只有读、没有写**：注释与 toast 都让用户「去设置 → 字幕里选一个」，但那一页
+    //    没有这个条目 ⇒ 另存与本地扫描两条链永远是空跑。
+    //  · 【入口】设置 → 字幕 末尾新增「字幕保存目录」：选目录走 **自研
+    //    `FolderPickerDialog`**（与照片保存目录同一套交互，落绝对路径），摘要显示
+    //    「内部存储/…」短标签，右侧「恢复」与「清除」两个动作；同步挂 `settingsAnchor`
+    //    并进搜索索引。旧的 SAF 树 URI 值只作兜底保留（`sub_save_folder`），新设置一律
+    //    写 `sub_save_dir_path`；两者解析集中在 `SubtitleSaveStore`（绝对路径优先）。
+    //  · 【一份逻辑】新增 `SaveNode` 抽象（`FileSaveNode` / `TreeSaveNode`），另存、
+    //    清单、恢复、播放目录扫描四处共用它 ⇒ 不会出现「新写的绝对路径分支忘了同名覆盖」
+    //    这类分叉。
+    //  · 【为什么需要清单】卸载重装会清掉私有字节**和**偏好里的本地库索引
+    //    （`serverKey + itemId → 文件`），而保存目录里的副本文件名不含这两个字段。
+    //    只凭文件名恢复只能靠片名猜，同名不同片（重制版 / 合集 / 同系列）会挂错。
+    //    ⇒ 新增 `SubtitleSaveManifest`：下载另存成功后，把「记录主键 → 子目录 + 文件名」
+    //    写进保存目录根部的 `_cineisle_subtitles.tsv`（.tsv 不在字幕扩展名里，不会被
+    //    播放侧当候选扫进来）。清单行陈旧无害：文件不存在时恢复流程直接跳过。
+    //  · 【恢复】新增 `SubtitleSaveRestore`：`plan()` 只统计（可恢复 / 已在本地 / 文件已
+    //    不存在），`restore()` 才写盘 —— 读用户目录字节 → `SubtitleEncoding.normalize`
+    //    再归一一次 → 写私有媒体目录 → `upsert` 重建索引（偏移量、优先标记一并还原）。
+    //  · 【触发点】选完目录立即统计一次：重装后重新选目录是恢复索引的唯一入口，把提示
+    //    放在用户本来就会做的那一步，而不是藏进二级菜单。清单缺失（旧版本下载的、用户
+    //    手工拷入的）不做猜测性重建 —— 那类文件仍由 `LocalSubtitleScanner` 按番号 / 标题
+    //    在保存目录里匹配，不重建索引不会「完全用不了」，只是不进「已下载」列表。
+    versionCode = 329
+    versionName = "1.6.79"
 
     vectorDrawables {
       useSupportLibrary = true

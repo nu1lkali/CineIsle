@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import app.marlboroadvance.mpvex.domain.emby.EmbyRemoteSubtitle
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import app.marlboroadvance.mpvex.utils.media.ChecksumUtils
 import app.marlboroadvance.mpvex.utils.media.MediaInfoParser
@@ -69,7 +70,13 @@ class SubtitleSearchViewModel(application: Application) : AndroidViewModel(appli
 
   init {
     // 初始化时读一次字幕保存目录，让 UI 能提前提示「还没配目录，下了也没地方放」
-    runCatching { _saveFolderConfigured.value = subtitlesPreferences.subtitleSaveFolder.get().isNotBlank() }
+    runCatching {
+      _saveFolderConfigured.value =
+        SubtitleSaveStore.isConfigured(
+          subtitlesPreferences.subtitleSaveDirPath.get(),
+          subtitlesPreferences.subtitleSaveFolder.get(),
+        )
+    }
   }
 
   private val _candidates = MutableStateFlow<List<EmbyRemoteSubtitle>>(emptyList())
@@ -282,16 +289,19 @@ class SubtitleSearchViewModel(application: Application) : AndroidViewModel(appli
     mediaTitle: String,
     suffix: String,
   ): Uri? = withContext(Dispatchers.IO) {
-    val saveFolderUri = subtitlesPreferences.subtitleSaveFolder.get()
-    _saveFolderConfigured.value = saveFolderUri.isNotBlank()
-    if (saveFolderUri.isBlank()) {
+    val legacyTreeUri = subtitlesPreferences.subtitleSaveFolder.get()
+    val saveDirPath = subtitlesPreferences.subtitleSaveDirPath.get()
+    val configured = SubtitleSaveStore.isConfigured(saveDirPath, legacyTreeUri)
+    _saveFolderConfigured.value = configured
+    if (!configured) {
       _error.value = "还没设置字幕保存目录，去「设置 → 字幕」里选一个"
       return@withContext null
     }
     try {
-      val parentDir =
-        DocumentFile.fromTreeUri(app, Uri.parse(saveFolderUri))
-          ?: return@withContext null.also { _error.value = "字幕目录已失效，请重新选择" }
+      // 绝对路径 / SAF 树两种形态统一成 SaveNode，命名与落盘只写一份
+      val root =
+        SubtitleSaveStore.open(app, saveDirPath, legacyTreeUri)
+          ?: return@withContext null.also { _error.value = "字幕目录不可用，请重新选择" }
 
       val sanitized = MediaInfoParser.parse(mediaTitle).title
       val full = mediaTitle.substringBeforeLast(".")
@@ -301,21 +311,13 @@ class SubtitleSearchViewModel(application: Application) : AndroidViewModel(appli
         sanitized,
       ).distinct()
 
-      var movieDir: DocumentFile? = candidates.asSequence()
-        .map { parentDir.findFile(it) }
-        .filterNotNull()
-        .firstOrNull { it.isDirectory }
-
-      if (movieDir == null) {
-        // 都不存在 ⇒ 新建净化名那个（用户可读）
-        movieDir = parentDir.findFile(sanitized)?.takeIf { it.isDirectory }
-          ?: parentDir.createDirectory(sanitized)
-      }
-      val dir = movieDir
-      if (dir == null || !dir.canWrite()) {
-        _error.value = "字幕目录不可写，检查一下权限"
-        return@withContext null
-      }
+      // 三个候选目录里已有任何一个就复用；都不存在才新建净化名（用户看得懂的那个）
+      val movieDir =
+        candidates.asSequence()
+          .mapNotNull { root.child(it) }
+          .firstOrNull { it.isDirectory }
+          ?: root.mkdir(sanitized)
+          ?: return@withContext null.also { _error.value = "字幕目录不可写，检查一下权限" }
 
       // 文件名带来源与语言，便于用户辨认；后缀决定播放器能不能认（见 isValidSubtitleFile）
       val fileName = buildString {
@@ -325,14 +327,10 @@ class SubtitleSearchViewModel(application: Application) : AndroidViewModel(appli
         append('.')
         append(suffix)
       }
-      val existing = dir.findFile(fileName)
-      if (existing != null) existing.delete() // 同名覆盖，避免旧内容残留
-      val created = dir.createFile("application/octet-stream", fileName)
-        ?: return@withContext null.also { _error.value = "字幕文件创建失败" }
-
-      app.contentResolver.openOutputStream(created.uri)?.use { out ->
-        out.write(bytes)
-      } ?: return@withContext null.also { _error.value = "字幕写入失败" }
+      // write() 同名先删后建，不会生成 "xxx (1).srt"
+      val created =
+        movieDir.write(fileName, bytes)
+          ?: return@withContext null.also { _error.value = "字幕写入失败" }
 
       created.uri
     } catch (t: Throwable) {

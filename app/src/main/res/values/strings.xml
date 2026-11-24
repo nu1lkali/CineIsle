@@ -212,6 +212,16 @@
   <string name="pref_custom_lua_summary">Manage custom player buttons with Lua code</string>
   <string name="pref_preferred_languages">Preferred languages</string>
   <string name="pref_subtitles_fonts_dir">Fonts directory</string>
+  <string name="pref_subtitles_save_dir">Subtitle save folder</string>
+  <string name="pref_subtitles_save_dir_summary">Downloads keep an extra copy here. After a reinstall the folder can be re-imported to rebuild the local subtitle library.</string>
+  <string name="not_set_subtitle_save_dir">Not set (copies exist only in app storage)</string>
+  <string name="clear_subtitle_save_dir">Clear subtitle save folder</string>
+  <string name="subtitle_restore_title">Restore subtitle library</string>
+  <string name="subtitle_restore_message">Save-folder manifest: %1$d restorable, about %2$s; %3$d already present. Restoring copies the files into app storage and rebuilds the index, after which they appear in the downloaded list and subtitle lab.</string>
+  <string name="subtitle_restore_confirm">Restore</string>
+  <string name="subtitle_restore_cancel">Cancel</string>
+  <string name="subtitle_restore_result">Restored %1$d, failed %2$d</string>
+  <string name="subtitle_restore_empty">Nothing to restore: the manifest is empty, or the files it lists no longer exist</string>
   <string name="pref_subtitles_autoload_title">Automatically load subtitles</string>
   <string name="pref_subtitles_autoload_summary">Automatically load external subtitles with the same name.</string>
   <string name="pref_audio">Audio</string>

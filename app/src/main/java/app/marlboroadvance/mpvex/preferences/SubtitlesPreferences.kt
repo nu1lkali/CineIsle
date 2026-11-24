@@ -91,6 +91,19 @@ class SubtitlesPreferences(
   
   val pickerPath = preferenceStore.getString("sub_picker_path")
   
+  /**
+   * 字幕保存目录（**绝对路径**，自研 `FolderPickerDialog` 的产物）。空 = 未设置。
+   *
+   * 与照片目录同一套选择器：本地播放器本来就有「所有文件访问权限」，走 `java.io.File`
+   * 比 SAF 树 URI 直接得多，用户看到的也是「内部存储/Movies」这种能对上的路径。
+   *
+   * 优先级高于 [subtitleSaveFolder]（后者是早期 `ACTION_OPEN_DOCUMENT_TREE` 的遗留值，
+   * 只在绝对路径为空时才用）。两者的解析集中在
+   * [app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore]。
+   */
+  val subtitleSaveDirPath = preferenceStore.getString("sub_save_dir_path", "")
+
+  /** SAF 树 URI 形态的字幕保存目录。**仅作兼容保留**，新设置一律写 [subtitleSaveDirPath]。 */
   val subtitleSaveFolder = preferenceStore.getString("sub_save_folder", "")
 
   /**

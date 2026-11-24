@@ -12,6 +12,7 @@ import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTimeline
 import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleDownloader
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
+import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitlePersist
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleTarget
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
@@ -477,7 +478,11 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
     val file = library.fileOf(record)
     val exists = file.isFile
     val size = if (exists) file.length() else record.sizeBytes
-    val saveFolder = preferences.subtitleSaveFolder.get()
+    val saveConfigured =
+      SubtitleSaveStore.isConfigured(
+        preferences.subtitleSaveDirPath.get(),
+        preferences.subtitleSaveFolder.get(),
+      )
     return buildString {
       appendLine("字幕：${record.title}")
       appendLine("来源：${record.source.label}　格式：${record.format.uppercase()}")
@@ -490,8 +495,8 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
       appendLine(
         when {
           record.archived -> "字幕目录：已另存一份（设置 → 字幕）"
-          saveFolder.isBlank() -> "字幕目录：未设置，仅存于应用内部目录"
-          else -> "字幕目录：这次未另存（目录权限可能已失效）"
+          !saveConfigured -> "字幕目录：未设置，仅存于应用内部目录"
+          else -> "字幕目录：这次未另存（目录不可用）"
         },
       )
       append("内部路径：${file.absolutePath}")

@@ -1,10 +1,10 @@
 package app.marlboroadvance.mpvex.ui.player.subtitle
 
 import android.content.Context
-import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
-import androidx.documentfile.provider.DocumentFile
+import app.marlboroadvance.mpvex.domain.subtitle.online.SaveNode
+import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore
 import app.marlboroadvance.mpvex.ui.player.subtitle.smart.ConfidenceLevel
 import app.marlboroadvance.mpvex.ui.player.subtitle.smart.MatchLogger
 import app.marlboroadvance.mpvex.ui.player.subtitle.smart.MatchReason
@@ -62,7 +62,10 @@ data class LocalSubtitleScan(
 )
 
 /**
- * 在「字幕保存目录」（设置 → 字幕 → 字幕保存目录，SAF tree Uri）里找与当前片子相关的字幕。
+ * 在「字幕保存目录」（设置 → 字幕 → 字幕保存目录）里找与当前片子相关的字幕。
+ *
+ * 目录有两种形态（绝对路径 / 遗留 SAF 树 URI），统一由
+ * [SubtitleSaveStore] 解析成 [SaveNode] —— 这里的遍历与判分只写一份。
  *
  * ## 为什么分两段
  *
@@ -106,16 +109,18 @@ object LocalSubtitleScanner {
 
   suspend fun scan(
     context: Context,
-    treeUri: String,
+    saveDirPath: String,
+    legacyTreeUri: String,
     query: MediaQuery,
     durationMs: Long? = null,
   ): LocalSubtitleScan {
-    if (treeUri.isBlank() || query.isEmpty) return LocalSubtitleScan()
+    if (!SubtitleSaveStore.isConfigured(saveDirPath, legacyTreeUri)) return LocalSubtitleScan()
+    if (query.isEmpty) return LocalSubtitleScan()
     return withContext(Dispatchers.IO) {
       try {
-        val root = DocumentFile.fromTreeUri(context, Uri.parse(treeUri))
-        if (root == null || !root.isDirectory || !root.canRead()) {
-          Log.w(TAG, "subtitle folder unavailable: $treeUri")
+        val root = SubtitleSaveStore.open(context, saveDirPath, legacyTreeUri)
+        if (root == null || !root.isDirectory || !root.canRead) {
+          Log.w(TAG, "subtitle folder unavailable: ${saveDirPath.ifBlank { legacyTreeUri }}")
           return@withContext LocalSubtitleScan()
         }
 
@@ -134,7 +139,7 @@ object LocalSubtitleScanner {
           dirs++
           val children =
             try {
-              node.dir.listFiles()
+              node.dir.children()
             } catch (t: Throwable) {
               Log.w(TAG, "listFiles failed at ${node.prefix}: ${t.message}")
               continue
@@ -142,8 +147,8 @@ object LocalSubtitleScanner {
 
           for (child in children) {
             if (SystemClock.elapsedRealtime() > deadline) break
-            val name = child.name ?: continue
-            if (name.startsWith(".")) continue
+            val name = child.name
+            if (name.isBlank() || name.startsWith(".")) continue
 
             if (child.isDirectory) {
               if (node.depth + 1 < MAX_DEPTH) {
@@ -159,7 +164,7 @@ object LocalSubtitleScanner {
                 name = name,
                 relativePath = node.prefix + name,
                 uri = child.uri.toString(),
-                sizeBytes = child.length(),
+                sizeBytes = child.size,
               )
           }
         }
@@ -252,7 +257,7 @@ object LocalSubtitleScanner {
 
   private fun isSubtitleFile(fileName: String): Boolean = SubtitleFileTypes.isSubtitle(fileName)
 
-  private data class DirNode(val dir: DocumentFile, val depth: Int, val prefix: String)
+  private data class DirNode(val dir: SaveNode, val depth: Int, val prefix: String)
 
   private data class Entry(
     val name: String,

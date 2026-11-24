@@ -1029,6 +1029,13 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
         screen = SubtitlesPreferencesScreen,
     ))
     add(SearchablePreference(
+        titleRes = R.string.pref_subtitles_save_dir,
+        summaryRes = R.string.pref_subtitles_save_dir_summary,
+        screenKeywords = listOf("字幕", "subtitle", "目录", "folder", "保存", "恢复", "备份"),
+        category = "general",
+        screen = SubtitlesPreferencesScreen,
+    ))
+    add(SearchablePreference(
         titleRes = R.string.player_sheets_sub_override_ass,
         summaryRes = R.string.player_sheets_sub_override_ass_subtitle,
         category = "general",

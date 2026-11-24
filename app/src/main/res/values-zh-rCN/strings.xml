@@ -213,6 +213,16 @@
   <string name="pref_custom_lua_summary">用 Lua 代码管理自定义播放按钮</string>
   <string name="pref_preferred_languages">首选语言</string>
   <string name="pref_subtitles_fonts_dir">字体目录</string>
+  <string name="pref_subtitles_save_dir">字幕保存目录</string>
+  <string name="pref_subtitles_save_dir_summary">下载时另存一份副本到该目录；重装后由该目录恢复本地字幕库</string>
+  <string name="not_set_subtitle_save_dir">未设置（副本仅存于应用内部目录）</string>
+  <string name="clear_subtitle_save_dir">清除字幕保存目录</string>
+  <string name="subtitle_restore_title">恢复本地字幕库</string>
+  <string name="subtitle_restore_message">保存目录清单：可恢复 %1$d 条（约 %2$s），已在本地 %3$d 条。恢复将把文件写入应用私有目录并重建索引，完成后出现在已下载列表与字幕实验室。</string>
+  <string name="subtitle_restore_confirm">恢复</string>
+  <string name="subtitle_restore_cancel">取消</string>
+  <string name="subtitle_restore_result">已恢复 %1$d 条，失败 %2$d 条</string>
+  <string name="subtitle_restore_empty">无可恢复字幕：清单为空，或清单中的文件已不存在</string>
   <string name="pref_subtitles_autoload_title">自动加载字幕</string>
   <string name="pref_subtitles_autoload_summary">自动加载同名的外挂字幕</string>
   <string name="pref_audio">音频</string>

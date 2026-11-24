@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.preferences
 
+import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.documentfile.provider.DocumentFile
@@ -37,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +48,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.ui.browser.dialogs.FolderPickerDialog
+import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
+import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveRestore
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
@@ -69,6 +74,7 @@ import androidx.compose.material.icons.outlined.AspectRatio
 import androidx.compose.material.icons.outlined.ClosedCaption
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.SettingsBackupRestore
 import androidx.compose.material.icons.outlined.Subtitles
 import android.net.Uri
 import org.koin.compose.koinInject
@@ -484,12 +490,235 @@ object SubtitlesPreferencesScreen : Screen {
                   }
                 }
               }
+
+              PreferenceDivider()
+
+              // 字幕保存目录：下载时另存一份副本，并把「哪条记录对应哪个文件」写进目录里的
+              // 清单 —— 卸载重装后私有库与索引都会被清掉，这份清单是唯一能精确还原的依据。
+              SubtitleSaveFolderPreference(
+                context = context,
+                preferences = preferences,
+              )
             }
           }
 
         }
       }
     }
+  }
+}
+
+/** 字节数 → 容量文本。固定 `Locale.US`，避免部分区域把小数点渲染成逗号。 */
+private fun formatBytesCompact(bytes: Long): String =
+  if (bytes >= 1024L * 1024L) {
+    String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+  } else {
+    String.format(java.util.Locale.US, "%.0f KB", bytes / 1024.0)
+  }
+
+/**
+ * 「字幕保存目录」设置项。
+ *
+ * ## 三项职责
+ *
+ * 1. 选择目录（自研 [FolderPickerDialog]，与照片保存目录同一套交互，落绝对路径）；
+ * 2. 显示当前目录名与说明；
+ * 3. 从该目录恢复本地字幕库 —— 卸载重装后私有库与索引都被清空，保存目录里的副本
+ *    与清单是唯一可用的还原依据（见 [SubtitleSaveRestore]）。
+ *
+ * ## 为什么选完目录就统计一次
+ *
+ * 重装后重新选目录是恢复索引的唯一入口。若把恢复藏在二级菜单里，用户不会主动去找，
+ * 结果就是「字幕还在磁盘上，但已下载列表是空的」。选完即统计、有内容就弹确认，
+ * 让这个动作落在用户本来就会做的那一步上。
+ */
+@Composable
+private fun SubtitleSaveFolderPreference(
+  context: Context,
+  preferences: SubtitlesPreferences,
+) {
+  val scope = rememberCoroutineScope()
+  val library = remember { OnlineSubtitleLibrary(context.applicationContext, preferences) }
+  var dirPath by remember { mutableStateOf(preferences.subtitleSaveDirPath.get()) }
+  // 早期版本存的是 SAF 树 URI。这里只用来兜底展示，新选择一律写绝对路径。
+  var legacyTreeUri by remember { mutableStateOf(preferences.subtitleSaveFolder.get()) }
+  var showPicker by remember { mutableStateOf(false) }
+  var pending by remember { mutableStateOf<SubtitleSaveRestore.Plan?>(null) }
+  var busy by remember { mutableStateOf(false) }
+  var resultText by remember { mutableStateOf<String?>(null) }
+
+  val configured =
+    remember(dirPath, legacyTreeUri) {
+      app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore
+        .isConfigured(dirPath, legacyTreeUri)
+    }
+  // 展示用短标签：绝对路径去掉 `/storage/emulated/0` 前缀，遗留 URI 解成「内部存储/…」
+  val locationLabel =
+    remember(dirPath, legacyTreeUri) {
+      app.marlboroadvance.mpvex.ui.browser.emby.photo.PhotoStorage.displayPathLabel(dirPath)
+        ?: app.marlboroadvance.mpvex.ui.browser.emby.photo.PhotoStorage.displayLabel(legacyTreeUri)
+        ?: ""
+    }
+
+  fun planRestore(showWhenEmpty: Boolean) {
+    if (!configured || busy) return
+    scope.launch {
+      busy = true
+      val plan = SubtitleSaveRestore.plan(context, dirPath, legacyTreeUri, library)
+      busy = false
+      when {
+        !plan.isEmpty -> pending = plan
+        showWhenEmpty -> resultText = context.getString(R.string.subtitle_restore_empty)
+        else -> Unit
+      }
+    }
+  }
+
+  if (showPicker) {
+    FolderPickerDialog(
+      isOpen = true,
+      currentPath =
+        dirPath.ifBlank { android.os.Environment.getExternalStorageDirectory().absolutePath },
+      onDismiss = { showPicker = false },
+      onFolderSelected = { path ->
+        showPicker = false
+        preferences.subtitleSaveDirPath.set(path)
+        // 选了绝对路径就清掉遗留 SAF 值：两套值并存时优先级虽明确，但界面上会出现
+        // 「改了目录却还显示旧目录」的错觉。
+        preferences.subtitleSaveFolder.set("")
+        dirPath = path
+        legacyTreeUri = ""
+        resultText = null
+        // 选完立刻统计一次：重装后重新选目录是恢复索引的唯一入口
+        planRestore(showWhenEmpty = false)
+      },
+    )
+  }
+
+  Box(
+    modifier =
+      Modifier
+        // 这一行与字体目录一样是手写的，生成器看不见，锚点手动挂
+        .settingsAnchor(R.string.pref_subtitles_save_dir)
+        .fillMaxWidth()
+        .clickable(enabled = !busy) { showPicker = true }
+        .padding(vertical = 16.dp, horizontal = 16.dp),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          stringResource(R.string.pref_subtitles_save_dir),
+          style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+          text =
+            when {
+              !configured -> stringResource(R.string.not_set_subtitle_save_dir)
+              locationLabel.isNotBlank() -> locationLabel
+              else -> dirPath.ifBlank { legacyTreeUri }
+            },
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+          stringResource(R.string.pref_subtitles_save_dir_summary),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        )
+        resultText?.let {
+          Text(
+            it,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+          )
+        }
+      }
+
+      if (configured) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          if (busy) {
+            Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+              CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+              )
+            }
+          } else {
+            IconButton(onClick = { planRestore(showWhenEmpty = true) }) {
+              Icon(
+                Icons.Outlined.SettingsBackupRestore,
+                contentDescription = stringResource(R.string.subtitle_restore_title),
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            }
+          }
+          IconButton(
+            onClick = {
+              preferences.subtitleSaveDirPath.set("")
+              preferences.subtitleSaveFolder.set("")
+              dirPath = ""
+              legacyTreeUri = ""
+              pending = null
+              resultText = null
+            },
+          ) {
+            Icon(
+              Icons.Default.Clear,
+              contentDescription = stringResource(R.string.clear_subtitle_save_dir),
+              tint = MaterialTheme.colorScheme.tertiary,
+            )
+          }
+        }
+      }
+    }
+  }
+
+  pending?.let { plan ->
+    AlertDialog(
+      onDismissRequest = { if (!busy) pending = null },
+      title = { Text(stringResource(R.string.subtitle_restore_title)) },
+      text = {
+        Text(
+          stringResource(
+            R.string.subtitle_restore_message,
+            plan.restorable,
+            formatBytesCompact(plan.bytes),
+            plan.alreadyPresent,
+          ),
+        )
+      },
+      confirmButton = {
+        TextButton(
+          enabled = !busy,
+          onClick = {
+            val items = plan.items
+            busy = true
+            scope.launch {
+              val outcome =
+                SubtitleSaveRestore.restore(context, dirPath, legacyTreeUri, library, items)
+              busy = false
+              pending = null
+              resultText =
+                context.getString(R.string.subtitle_restore_result, outcome.restored, outcome.failed)
+            }
+          },
+        ) {
+          Text(stringResource(R.string.subtitle_restore_confirm))
+        }
+      },
+      dismissButton = {
+        TextButton(enabled = !busy, onClick = { pending = null }) {
+          Text(stringResource(R.string.subtitle_restore_cancel))
+        }
+      },
+    )
   }
 }
 

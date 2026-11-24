@@ -39,12 +39,19 @@ object OnlineSubtitlePersist {
   ): DownloadedSubtitle =
     withContext(Dispatchers.IO) {
       val bindTitle = mediaTitle.ifBlank { item.title }
+      // 保存目录：绝对路径优先，SAF 树 URI 是早期版本遗留。只打开一次，
+      // 另存与清单写的是同一个目录句柄 —— 两次 open 有可能命中不同形态（用户刚改过设置）。
+      val saveRoot =
+        SubtitleSaveStore.open(
+          context = context,
+          dirPath = preferences.subtitleSaveDirPath.get(),
+          legacyTreeUri = saveFolderUri,
+        )
       // 另存一份到用户配置的字幕目录（未配置则跳过）。失败不影响主记录 ——
       // 私有目录那份才是播放真正读的文件。
-      val archivedUri =
+      val mirrored =
         OnlineSubtitleSaveFolder.mirror(
-          context = context,
-          saveFolderUri = saveFolderUri,
+          root = saveRoot,
           mediaTitle = bindTitle,
           source = result.file,
           format = result.format,
@@ -66,9 +73,35 @@ object OnlineSubtitlePersist {
           preferred = false,
           originId = item.id,
           originUrl = item.downloadUrl,
-          archived = archivedUri != null,
+          archived = mirrored != null,
         )
-      library.upsert(record)
+      val saved = library.upsert(record)
+      // 清单写的是「哪条记录对应用户目录里的哪个文件」，所以必须用落库后的记录
+      // （偏移量 / 优先标记可能被 upsert 合并过），而不是刚构造的这份。
+      if (mirrored != null) {
+        SubtitleSaveManifest.upsert(
+          root = saveRoot,
+          entry =
+            SubtitleSaveManifest.Entry(
+              serverKey = saved.serverKey,
+              itemId = saved.itemId,
+              originId = saved.originId,
+              mediaTitle = saved.mediaTitle,
+              title = saved.title,
+              sourceKey = saved.source.key,
+              dirName = mirrored.dirName,
+              fileName = mirrored.fileName,
+              format = saved.format,
+              language = saved.language,
+              sizeBytes = saved.sizeBytes,
+              downloadedAt = saved.downloadedAt,
+              offsetMs = saved.offsetMs,
+              preferred = saved.preferred,
+              originUrl = saved.originUrl,
+            ),
+        )
+      }
+      saved
     }
 
   /**

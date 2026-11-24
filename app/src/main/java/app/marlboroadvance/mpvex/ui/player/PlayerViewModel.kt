@@ -31,6 +31,7 @@ import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSourceType
 import app.marlboroadvance.mpvex.domain.subtitle.SubtitleFileNormalizer
 import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
+import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore
 import app.marlboroadvance.mpvex.ui.player.subtitle.ExternalSubtitleArchive
 import app.marlboroadvance.mpvex.ui.player.subtitle.SubtitleBindings
 import app.marlboroadvance.mpvex.ui.player.subtitle.emby.EmbySubtitleController
@@ -1028,25 +1029,26 @@ class PlayerViewModel(
 
   private fun scanLocalSubtitles(mediaTitle: String) {
     viewModelScope.launch(Dispatchers.IO) {
-      val saveFolderUri = subtitlesPreferences.subtitleSaveFolder.get()
-      if (saveFolderUri.isBlank()) return@launch
-      
+      val legacyTreeUri = subtitlesPreferences.subtitleSaveFolder.get()
+      val saveDirPath = subtitlesPreferences.subtitleSaveDirPath.get()
+      if (!SubtitleSaveStore.isConfigured(saveDirPath, legacyTreeUri)) return@launch
+
       try {
         val sanitizedTitle = MediaInfoParser.parse(mediaTitle).title
         val fullTitle = mediaTitle.substringBeforeLast(".")
         val checksumTitle = ChecksumUtils.getCRC32(mediaTitle)
-        val parentDir = DocumentFile.fromTreeUri(host.context, Uri.parse(saveFolderUri)) ?: return@launch
-        
+        // 绝对路径 / SAF 树两种形态统一成 SaveNode，下面的目录口径只写一份
+        val parentDir =
+          SubtitleSaveStore.open(host.context, saveDirPath, legacyTreeUri) ?: return@launch
+
         // Scan potential folder names for compatibility: checksum, full, and sanitized
         listOf(checksumTitle, fullTitle, sanitizedTitle).distinct().forEach { folderName ->
-          val movieDir = parentDir.findFile(folderName) ?: return@forEach
-          if (movieDir.isDirectory) {
-            movieDir.listFiles().forEach { file ->
-              if (file.isFile && isValidSubtitleFile(file.name ?: "")) {
-                withContext(Dispatchers.Main) {
-                  // Don't auto-select during scan, just make available
-                  addSubtitle(file.uri, select = false, silent = true)
-                }
+          val movieDir = parentDir.child(folderName)?.takeIf { it.isDirectory } ?: return@forEach
+          movieDir.children().forEach { file ->
+            if (file.isFile && isValidSubtitleFile(file.name)) {
+              withContext(Dispatchers.Main) {
+                // Don't auto-select during scan, just make available
+                addSubtitle(file.uri, select = false, silent = true)
               }
             }
           }

@@ -135,7 +135,13 @@ fun PlayerSheets(
       // 只取 media-title：PlayerActivity 开播时把它设成文件名（force-media-title），
       // 番号就在那里面。Emby 的 `itemName` 实际存的是 itemId（见 EmbySubtitleContext），
       // 当名字用会把「匹配钥匙」变成一串 32 位十六进制。
-      val saveFolder by subtitlesPreferences.subtitleSaveFolder.collectAsState()
+      val saveDirPath by subtitlesPreferences.subtitleSaveDirPath.collectAsState()
+      val saveTreeUri by subtitlesPreferences.subtitleSaveFolder.collectAsState()
+      val saveFolderConfigured =
+        remember(saveDirPath, saveTreeUri) {
+          app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore
+            .isConfigured(saveDirPath, saveTreeUri)
+        }
       val hostContext = LocalContext.current.applicationContext
       // 用户确认过的番号别名（设置里撤销过、或刚在本面板确认过都会让 revision +1）
       var aliasRevision by remember { mutableStateOf(0) }
@@ -148,14 +154,27 @@ fun PlayerSheets(
       // 拿不到（0）时那一步自然跳过，判分仍只看名字。
       val durationMs = (viewModel.duration ?: 0).toLong() * 1000L
       val localScan by
-        produceState(initialValue = LocalSubtitleScan(), localQuery, saveFolder, durationMs) {
+        produceState(
+          initialValue = LocalSubtitleScan(),
+          localQuery,
+          saveDirPath,
+          saveTreeUri,
+          durationMs,
+        ) {
           // 目录没配、或一个可用条件都没有 ⇒ 不扫。此时面板与旧版逐行一致。
-          if (saveFolder.isBlank() || localQuery.isEmpty) {
+          if (!saveFolderConfigured || localQuery.isEmpty) {
             value = LocalSubtitleScan()
             return@produceState
           }
           value = LocalSubtitleScan(scanning = true)
-          value = LocalSubtitleScanner.scan(hostContext, saveFolder, localQuery, durationMs)
+          value =
+            LocalSubtitleScanner.scan(
+              hostContext,
+              saveDirPath,
+              saveTreeUri,
+              localQuery,
+              durationMs,
+            )
         }
 
       var showFilePicker by remember { mutableStateOf(false) }
