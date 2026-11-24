@@ -265,6 +265,20 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
     applyScope(all, all.map { it.id }.toSet())
   }
 
+  /**
+   * 取消全部参与（「取消全选」）。
+   *
+   * 不允许出现「一台都不参与」——那会让页面永远搜不出东西、也没有恢复入口，
+   * 所以保留**当前服务器**一台（不在列表里时保留第一台）。
+   * 保留当前服务器而不是第一台：用户刚看过的那台通常是这次想查的那台。
+   */
+  fun deselectAllServers() {
+    val all = servers.value
+    if (all.size < 2) return
+    val keep = all.firstOrNull { it.id == currentServer.value?.id } ?: all.first()
+    applyScope(all, setOf(keep.id))
+  }
+
   private fun applyScope(all: List<EmbyServer>, next: Set<Long>) {
     val normalized = next.intersect(all.map { it.id }.toSet())
     if (normalized.isEmpty()) return

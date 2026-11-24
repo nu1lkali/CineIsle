@@ -3858,7 +3858,14 @@ android {
     //    服务器管理页首行加一张入口卡（两台以上才显示）。
     //  · 【取值】`searchItems` 全链路补 `fields` 参数（默认 `CORE`，聚合检索显式带
     //    `ProviderIds`）—— 默认值保证既有调用零变化。
-    versionCode = 330
+    // ── v331（修复轮，versionName 仍为 1.6.80）：参与范围可读性与跳动 ──
+    //  · 【状态可辨】chip 的「未参与」底色由 `surfaceContainerHigh` 改为**透明**：
+    //    本主题下它与 `primaryContainer` 都是浅蓝，并排时两种状态无法区分（现场反馈）。
+    //    现在填充只有一种含义 = 参与；未参与是透明底 + `outline` 描边 + 常规字重。
+    //  · 【位置固定】标题行右侧动作常驻，按状态在「全选 / 取消全选」之间切换文案，
+    //    槽位给 `widthIn(min = 78.dp)`。此前是「全选时才不画按钮」，点掉一台后按钮
+    //    突然出现，标题与 chip 条整体被顶下去。取消全选保留当前服务器一台（不允许零参与）。
+    versionCode = 331
     versionName = "1.6.80"
 
     vectorDrawables {

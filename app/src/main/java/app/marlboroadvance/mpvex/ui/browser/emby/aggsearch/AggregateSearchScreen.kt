@@ -191,6 +191,7 @@ object AggregateSearchScreen : Screen {
             selected = selectedCount,
             total = servers.size,
             onSelectAll = vm::selectAllServers,
+            onDeselectAll = vm::deselectAllServers,
           )
           AggregateServerStrip(
             outcomes = outcomes,
@@ -493,17 +494,23 @@ private fun SortMenu(
 }
 
 /**
- * 参与范围的标题行：`参与范围 · 已选 2/3 台` + 右侧「全选」。
+ * 参与范围的标题行：`参与范围 · 已选 2/3 台` + 右侧「全选 / 取消全选」。
  *
  * 存在的理由是**顺序**：用户要先知道「这次会问哪几台」，再输入关键词。
  * 只给一排 chip 而不说明「这些是什么、选中了几台」，很难看出「没选的不会发请求」。
+ *
+ * ⚠️ 右侧动作**常驻**，不按状态增删：此前是「全选时才不画按钮」，
+ * 点掉一台后按钮突然出现，标题与 chip 条整体被顶下去（现场反馈「有跳动」）。
+ * 现在槽位固定最小宽度，只切换文案 —— 行高、位置都不动。
  */
 @Composable
 private fun AggregateScopeHeader(
   selected: Int,
   total: Int,
   onSelectAll: () -> Unit,
+  onDeselectAll: () -> Unit,
 ) {
+  val isAll = selected >= total
   Row(
     modifier = Modifier
       .fillMaxWidth()
@@ -517,10 +524,10 @@ private fun AggregateScopeHeader(
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Text(
-      text = if (selected >= total) "全部参与（$total 台）" else "已选 $selected/$total 台",
+      text = if (isAll) "全部参与（$total 台）" else "已选 $selected/$total 台",
       style = MaterialTheme.typography.labelSmall,
       color =
-        if (selected >= total) {
+        if (isAll) {
           MaterialTheme.colorScheme.onSurfaceVariant
         } else {
           MaterialTheme.colorScheme.primary
@@ -528,14 +535,22 @@ private fun AggregateScopeHeader(
       maxLines = 1,
     )
     Spacer(Modifier.weight(1f))
-    if (selected < total) {
+    // 固定槽位：文案在「全选」「取消全选」之间切换时按钮外框尺寸不变
+    Box(
+      modifier = Modifier.widthIn(min = 78.dp),
+      contentAlignment = Alignment.CenterEnd,
+    ) {
       TextButton(
-        onClick = onSelectAll,
+        onClick = if (isAll) onDeselectAll else onSelectAll,
         // ⚠️ 不给这个按钮加固定 `height`：M3 按钮会被裁字（见 ui-patterns 的结论），
         //    这里靠 contentPadding 收窄即可
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
       ) {
-        Text("全选", style = MaterialTheme.typography.labelSmall)
+        Text(
+          text = if (isAll) "取消全选" else "全选",
+          style = MaterialTheme.typography.labelSmall,
+          maxLines = 1,
+        )
       }
     }
   }

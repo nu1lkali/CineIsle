@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.domain.emby.aggregate.ServerOutcome
@@ -45,8 +46,9 @@ import app.marlboroadvance.mpvex.domain.emby.aggregate.ServerPhase
  * ## 为什么手写而不是 FilterChip
  *
  * `FilterChip` 的 `onClick` 自己吃掉手势，长按要再挂一层就会与它抢事件；
- * 这里用 [combinedClickable] 一次挂好两个手势，交互稳定。视觉沿用项目里
- * 搜索历史胶囊那一套（圆角胶囊 + 发丝边 + `surfaceContainerHigh` 底）。
+ * 这里用 [combinedClickable] 一次挂好两个手势，交互稳定。形状沿用项目里
+ * 搜索历史胶囊那一套（圆角胶囊 + 发丝边），但**填充只用于表达「参与」**：
+ * 未参与是透明底 + `outline` 描边，避免两种状态都出现浅蓝底色而无法分辨。
  */
 @Composable
 fun AggregateServerStrip(
@@ -80,17 +82,21 @@ private fun ServerChip(
   onLongClick: () -> Unit,
 ) {
   val shape = RoundedCornerShape(50)
-  val container =
-    if (selected) {
-      MaterialTheme.colorScheme.primaryContainer
-    } else {
-      MaterialTheme.colorScheme.surfaceContainerHigh
-    }
+  // ⚠️ 未参与必须用**透明**底，不能用 `surfaceContainerHigh`：本主题里它也是偏蓝的浅色，
+  //    与 `primaryContainer` 并排时两者都像「选中」，用户无法分辨（现场反馈）。
+  //    透明 + 描边读作「未选」；填充只有一种含义 = 参与。
+  val container = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
   val content =
     if (selected) {
       MaterialTheme.colorScheme.onPrimaryContainer
     } else {
       MaterialTheme.colorScheme.onSurfaceVariant
+    }
+  val stroke =
+    if (selected) {
+      MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+    } else {
+      MaterialTheme.colorScheme.outline
     }
 
   Row(
@@ -98,16 +104,7 @@ private fun ServerChip(
       .height(34.dp)
       .clip(shape)
       .background(container)
-      .border(
-        width = 1.dp,
-        color =
-          if (selected) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-          } else {
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-          },
-        shape = shape,
-      )
+      .border(width = 1.dp, color = stroke, shape = shape)
       .combinedClickable(onClick = onClick, onLongClick = onLongClick)
       .padding(start = 11.dp, end = 12.dp),
     verticalAlignment = Alignment.CenterVertically,
@@ -125,6 +122,8 @@ private fun ServerChip(
     Text(
       text = outcome.name,
       style = MaterialTheme.typography.labelLarge,
+      // 选中再叠一层字重差：只靠色块，色弱用户与低亮度屏上仍然难分辨
+      fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
       color = content,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
