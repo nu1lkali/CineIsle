@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -142,8 +141,18 @@ fun DraggablePanel(
                         content()
                     }
                 } else {
-                    // 内容自己滚（LazyColumn）：吃掉头部剩下的高度即可
-                    Column(modifier = Modifier.fillMaxHeight()) {
+                    // 内容自己滚（LazyColumn）：吃掉头部**剩下的**高度。
+                    //
+                    // ⚠️⚠️ 这里必须是 `weight(1f)`，不能是 `fillMaxHeight()`。
+                    //   `fillMaxHeight()` 在 Column 里等于「按父约束的上限占满」——
+                    //   它拿到的是 Surface 的**整个**高度，于是这个内层 Column 从
+                    //   「拖拽把手 + header」之下再伸出一整屏，尾巴被 Surface 的圆角裁掉。
+                    //   表现是：列表视口比真正看得见的区域高出一截（约 header + 18dp），
+                    //   `layoutInfo.visibleItemsInfo` 把**已经裁掉、肉眼看不见**的那几行
+                    //   也当成可见 ⇒ 跟随判定永远晚几行才触发，高亮走着走着就沉到裁切区里
+                    //   消失，看起来就是「没有自动跟随、也没有高亮」。
+                    //   横屏字幕时间线正是这样坏的（竖屏走 PlayerSheet，不经过这里）。
+                    Column(modifier = Modifier.weight(1f)) {
                         content()
                     }
                 }

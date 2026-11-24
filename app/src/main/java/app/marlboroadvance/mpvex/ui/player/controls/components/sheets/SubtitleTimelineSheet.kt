@@ -115,7 +115,8 @@ private const val TIMELINE_PANEL_SLIDE_DP = 420f
  *
  * ## 容器按朝向分两种（同一个面板，两种形态）
  *
- * · **竖屏** → 底部抽屉（[PlayerSheet]）。竖屏画面本来就窄，抽屉不挤压可用的画面宽度。
+ * · **竖屏** → 底部抽屉（[PlayerSheet]）。竖屏画面本来就窄，抽屉不挤压可用的画面宽度；
+ *   抽屉高度只取约三分之二屏高，且 `scrimAlpha = 0` —— 遮罩不压暗画面（点空白仍可关闭）。
  * · **横屏** → 右侧悬浮面板（[DraggablePanel]），半透明、可横向拖动，**不盖住画面主体**，
  *   也不加遮罩：点时间线的同时还能看见画面在播什么，与「字幕延迟」面板同一种壳。
  *
@@ -179,22 +180,51 @@ fun SubtitleTimelineSheet(
       tracks.filter { it.isSubtitle && it.external == true && !it.externalFilename.isNullOrBlank() }
     }
 
+  // ── 当前挂在 mpv 上的字幕槽 ──
+  //
+  // ⚠️⚠️ 不能只信上层透传的 `primaryId` / `secondaryId`：那两个值来自 track-list 的**一次快照**，
+  //   面板刚打开时它可能还没把 `selected` 报上来（读到 0）⇒ 这里会判定「这条轨没在播」，
+  //   于是既不画高亮、也不跟随，列表就停在原地（现场：字幕已经在画面上换了好几句，
+  //   面板却一直在老的那条）。直接问 mpv 的 `sid` / `secondary-sid` —— 那是权威值，
+  //   字幕一挂上就有；读不到时再退回透传值。
+  val sidFlow = remember { PlayerLib.propInt["sid"] }
+  val secondarySidFlow = remember { PlayerLib.propInt["secondary-sid"] }
+  val liveSid by sidFlow.collectAsState()
+  val liveSecondarySid by secondarySidFlow.collectAsState()
+  val activePrimaryId = liveSid?.takeIf { it > 0 } ?: primaryId
+  val activeSecondaryId = liveSecondarySid?.takeIf { it > 0 } ?: secondaryId
+
   // 默认看「已经在播的那条」，其次副字幕，再次第一条可读的
   var viewedId by remember { mutableStateOf(0) }
-  LaunchedEffect(viewable, primaryId, secondaryId) {
-    if (viewable.none { it.id == viewedId }) {
-      viewedId =
-        listOf(primaryId, secondaryId).firstOrNull { id -> viewable.any { it.id == id } }
-          ?: viewable.firstOrNull()?.id
-          ?: 0
+  // 用户有没有自己在 chip 上挑过轨道。挑过就不再自动纠正 —— 否则他特意去看
+  // 「一条没启用的轨」，会被立刻拽回主字幕。
+  var userPicked by remember { mutableStateOf(false) }
+  // 主 / 副槽里当前真正生效的那一条（有些片只有副槽挂着字幕）
+  val effectiveId =
+    listOf(activePrimaryId, activeSecondaryId)
+      .firstOrNull { id -> id > 0 && viewable.any { it.id == id } }
+  LaunchedEffect(viewable, activePrimaryId, activeSecondaryId) {
+    when {
+      // 看的那条已经不在可读列表里（文件被清理 / 轨被删）⇒ 重新挑
+      viewable.none { it.id == viewedId } ->
+        viewedId = effectiveId ?: viewable.firstOrNull()?.id ?: 0
+
+      // 先挑了「第一条可读的轨」之后，主/副槽才报上来 ⇒ 必须跟上，否则会一直停在
+      // 一条**未启用**的轨上（未启用就没有高亮，连「跟随中」都不出现）。
+      // 只在用户没自己挑过轨时纠正。
+      !userPicked && effectiveId != null && viewedId != effectiveId -> viewedId = effectiveId
+
+      else -> Unit
     }
   }
   val viewed = viewable.firstOrNull { it.id == viewedId }
 
+  // viewedId 还是 0（没挑出来）时不能落进 Primary —— 那会把一条根本不存在的轨当成「正在播」
   val role =
-    when (viewedId) {
-      primaryId -> TrackRole.Primary
-      secondaryId -> TrackRole.Secondary
+    when {
+      viewed == null || viewedId <= 0 -> TrackRole.Inactive
+      viewedId == activePrimaryId -> TrackRole.Primary
+      viewedId == activeSecondaryId -> TrackRole.Secondary
       else -> TrackRole.Inactive
     }
 
@@ -256,32 +286,75 @@ fun SubtitleTimelineSheet(
 
   fun fileToPlaybackMs(fileMs: Long): Long = (fileMs / speed + delayMs).toLong().coerceAtLeast(0L)
 
+  // ── 播放位置：跟随与高亮的唯一依据 ──
+  //
+  // 自己在面板里订阅 mpv 的 `time-pos`，不只依赖上层透传的秒数：上层那个值是在
+  // `PlayerSheets` 里读一次再传下来的，任何一次「该重组没重组」都会让这里停在旧值 ——
+  // 表现就是「字幕明明已经在播，面板一动不动」。自己订阅之后，这个面板只认 mpv 的真实时间。
+  val livePosFlow = remember { PlayerLib.propInt["time-pos"] }
+  val livePos by livePosFlow.collectAsState()
+  val currentSeconds = livePos ?: positionSeconds
+
+  // 反算：当前播放位置对应字幕文件里的哪一刻（delay / speed 取默认值时就是恒等变换）
+  val fileMs = ((currentSeconds * 1000L - delayMs) * speed).toLong()
+
+  /** 真的正在播的那一句：严格落在 `[startMs, endMs)` 内才算。空隙里画面上没有台词，不画高亮。 */
   val activeIndex =
-    remember(visible, positionSeconds, role, delayMs, speed) {
+    remember(visible, fileMs, role) {
       if (role == TrackRole.Inactive || visible.isEmpty()) {
         -1
       } else {
-        // 反算：当前播放位置对应字幕文件里的哪一刻
-        val fileMs = ((positionSeconds * 1000L - delayMs) * speed).toLong()
         visible.indexOfFirst { fileMs >= it.startMs && fileMs < it.endMs }
+      }
+    }
+
+  /**
+   * 列表该停在哪一行（跟随锚点）。
+   *
+   * 与 [activeIndex] 分开是有意的：片头、静音段、两句之间的空隙里没有「正在播的那句」，
+   * 但列表不能因此停在第 1 行不动 —— 那看起来就是「没跟随、没高亮」。
+   * 这时退到「接下来这一句」（没有下一句就取最后一句），列表始终贴着播放位置。
+   */
+  val anchorIndex =
+    remember(visible, fileMs, role, activeIndex) {
+      when {
+        role == TrackRole.Inactive || visible.isEmpty() -> -1
+        activeIndex >= 0 -> activeIndex
+        else -> {
+          val next = visible.indexOfFirst { it.startMs > fileMs }
+          if (next >= 0) next else visible.lastIndex
+        }
       }
     }
 
   var follow by remember { mutableStateOf(true) }
   val listState = rememberLazyListState()
 
-  // 跟随播放：三者缺一都会变成「我正翻列表，它自己往下跳」——
+  // 打开面板的第一件事：把列表直接落到播放位置。
+  // 必须用 `scrollToItem`（立即落位）而不是 `animateScrollToItem`：首帧里列表还在测第一遍，
+  // 动画滚动可能被随后的布局吞掉 —— 现场表现正是「面板停在第 1 行，看不到任何高亮」。
+  var positioned by remember { mutableStateOf(false) }
+  LaunchedEffect(anchorIndex, visible.size) {
+    if (positioned || anchorIndex < 0) return@LaunchedEffect
+    listState.scrollToItem(anchorIndex)
+    positioned = true
+  }
+
+  // 之后跟着播放走：只有锚点跑出视野才滚（每句都居中会让画面一直抖）。
+  // 四者缺一都会变成「我正翻列表，它自己往下跳」——
+  //  · 首次定位还没落定（交给上一条 effect）
   //  · follow 被用户关掉
-  //  · 当前句不在视野内时才有必要滚（每句都居中会让画面一直抖）
   //  · 用户正在滑动
   //  · 正在搜索（搜台词就是去看别处）
-  LaunchedEffect(activeIndex, follow, tokens) {
-    if (!follow || activeIndex < 0 || tokens.isNotEmpty()) return@LaunchedEffect
+  LaunchedEffect(anchorIndex, follow, tokens, positioned) {
+    if (!positioned || !follow || anchorIndex < 0 || tokens.isNotEmpty()) return@LaunchedEffect
     if (listState.isScrollInProgress) return@LaunchedEffect
     val first = listState.firstVisibleItemIndex
-    val last = first + listState.layoutInfo.visibleItemsInfo.size - 1
-    if (activeIndex < first || activeIndex > last - 1) {
-      listState.animateScrollToItem(activeIndex)
+    // 「最后一条已经布好的行」的下标，比 first + size - 1 更稳（空列表时不会算出 first - 1）
+    val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: first
+    // 提前一行就滚：等高亮贴到底边才滚，视觉上会「掉出去一下再跳回来」
+    if (anchorIndex < first || anchorIndex >= last) {
+      listState.animateScrollToItem(anchorIndex)
     }
   }
 
@@ -350,8 +423,10 @@ fun SubtitleTimelineSheet(
           overflow = TextOverflow.Ellipsis,
         )
       }
-      // 跟随开关：默认开；用户往下翻看别的段落时点一下即可停止自动滚动
-      if (activeIndex >= 0 && tokens.isEmpty()) {
+      // 跟随开关：默认开；用户往下翻看别的段落时点一下即可停止自动滚动。
+      // 用锚点判断而不是「正在播某句」—— 片头 / 静音段没有正在播的句子，
+      // 但跟随这件事依然是有效的（列表贴着播放位置），按钮不该消失。
+      if (anchorIndex >= 0 && tokens.isEmpty()) {
         TextButton(onClick = { follow = !follow }) {
           Icon(
             if (follow) Icons.Filled.PauseCircle else Icons.Filled.PlayCircleOutline,
@@ -408,7 +483,11 @@ fun SubtitleTimelineSheet(
           val isViewed = track.id == viewedId
           FilterChip(
             selected = isViewed,
-            onClick = { viewedId = track.id },
+            onClick = {
+              // 用户自己挑的轨 ⇒ 此后不再被「自动跟上主字幕」纠正
+              userPicked = true
+              viewedId = track.id
+            },
             label = {
               Text(
                 text = getTrackTitle(track),
@@ -422,8 +501,8 @@ fun SubtitleTimelineSheet(
             leadingIcon = {
               val badge =
                 when (track.id) {
-                  primaryId -> "主"
-                  secondaryId -> "副"
+                  activePrimaryId -> "主"
+                  activeSecondaryId -> "副"
                   else -> null
                 }
               if (badge != null) {
@@ -543,8 +622,17 @@ fun SubtitleTimelineSheet(
   }
 
   if (isPortrait) {
-    // 竖屏：底部抽屉
-    PlayerSheet(onDismissRequest = onDismissRequest) {
+    // 竖屏：底部抽屉。
+    //
+    // 两处「少挡画面」，缺一条都会回到「一开面板整块画面就黑了」：
+    //  · `scrimAlpha = 0` —— 遮罩仍在（点空白依旧能关），但不画黑色，上方画面不变暗；
+    //  · `heightFraction = 0.66` —— 抽屉只占约三分之二屏高，上方三分之一完整露出。
+    //    键盘弹出时 PlayerSheet 会自动忽略这个比例，搜索框不会被键盘压住。
+    PlayerSheet(
+      onDismissRequest = onDismissRequest,
+      scrimAlpha = 0f,
+      heightFraction = 0.66f,
+    ) {
       Column(modifier = Modifier.fillMaxWidth()) {
         header()
         body()
@@ -662,7 +750,7 @@ private fun CueRow(
           .padding(horizontal = MaterialTheme.spacing.smaller)
           .clip(RoundedCornerShape(8.dp))
           .background(
-            if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
+            if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else Color.Transparent,
           )
           .clickable(onClick = onClick)
           .padding(vertical = 7.dp, horizontal = 4.dp),
@@ -689,11 +777,19 @@ private fun CueRow(
         Text(
           text = timeLabel,
           style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.primary,
+          // 未选中的行不能也用 primary：每行时间都是强调色，正在播的那行就淹没在里头了
+          fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+          color =
+            if (active) {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            },
         )
         Text(
           text = cue.text,
           style = MaterialTheme.typography.bodySmall,
+          fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
           maxLines = 3,
           overflow = TextOverflow.Ellipsis,
           modifier = Modifier.padding(top = 1.dp),

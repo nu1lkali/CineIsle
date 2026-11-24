@@ -3756,8 +3756,25 @@ android {
     //    一下消失。所以关面板改成两步：先播滑出 + 淡出（190ms，`Animatable` 驱动、位移 420dp、
     //    读在 `graphicsLayer` 里只重绘不重组），**播完**再落状态；进场同样补 240ms 滑入。
     //    关闭入口（X / 返回键 / 点画面）统一走 `closePanel`，不会有一条路径跳过动画。
-    versionCode = 325
-    versionName = "1.6.75"
+    //
+    // ── v326：横屏时间线跟随/高亮 + 竖屏少挡画面 + 详情页字幕卡 ──
+    //  · 【横屏跟随高亮失效】根因不在 `SubtitleTimelineSheet` 的判定逻辑，而在
+    //    `DraggablePanel` 的非滚动分支用了 `fillMaxHeight()`：它拿的是 Surface 的**整个**高度，
+    //    于是内层 Column 从「拖拽把手 + header」之下再伸出一整屏，尾巴被 Surface 圆角裁掉。
+    //    列表视口因此比肉眼可见区域高出一截，`layoutInfo.visibleItemsInfo` 把**已被裁掉**的行
+    //    也算成可见 ⇒ 跟随永远晚几行才触发、高亮沉进裁切区消失（横屏「没有跟随和高亮」）。
+    //    改成 `weight(1f)`（吃掉 header 剩下的高度），视口与可见区域一致。
+    //    顺带把跟随判据换成 `visibleItemsInfo.lastOrNull()?.index`，并提前一行滚动（贴到底边
+    //    才滚会「掉出去一下再跳回来」）。
+    //  · 【竖屏少挡画面】`PlayerSheet` 新增 `scrimAlpha`（真正接到 `.background(Color.Black.copy())`
+    //    的那条链上）与 `heightFraction`（竖屏高度比例，键盘弹出时自动让位、不再压住搜索框）。
+    //    时间线竖屏传 `scrimAlpha = 0f`（遮罩仍在、点空白仍能关，但不画黑）+ `heightFraction = 0.66f`
+    //    ⇒ 上方三分之一画面完整露出且不被压暗。
+    //  · 【详情页字幕卡】空态与「本机已关联网络字幕」两处都写了「播放该媒体时自动挂载，可在字幕
+    //    面板切换」⇒ 同一句话出现两次。空态收敛为只陈述服务端事实、本机那一行只报条数与来源；
+    //    并在「服务端轨」与「网络字幕」之间加一条 `HorizontalDivider`（左右各内缩 2dp，不顶到卡片圆角）。
+    versionCode = 326
+    versionName = "1.6.76"
 
     vectorDrawables {
       useSupportLibrary = true

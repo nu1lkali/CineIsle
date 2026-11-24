@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -155,9 +156,24 @@ internal fun DetailSubtitleCard(
         )
       }
 
+      // ── 服务端轨 ⇄ 本机网络字幕 的分界 ──
+      //
+      // 上面是「服务器认得的轨」，下面是「本机下载的网络字幕」，两种资源。光靠留白分不开，
+      // 一块读下来像同一段；给一条分割线，读起来才是两段。
+      // 左右各内缩 2dp：卡片内边距 14dp + 2dp，线条不会顶到卡片圆角边缘。
+      val hasNetworkSection = localSubtitles.isNotEmpty() || onSearchWebSubtitle != null
+      if (hasNetworkSection) {
+        HorizontalDivider(
+          color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+          modifier = Modifier.padding(horizontal = 2.dp, vertical = 10.dp),
+        )
+      }
+
       // ── 已下载的网络字幕（需求 6.5）──
       // 与上面那段「服务端已识别的轨」分开摆：两者不是同一种资源，
-      // 混在一行里会让人以为服务器上多了几条字幕。这里只陈述本机事实。
+      // 混在一行里会让人以为服务器上多了几条字幕。这里只陈述本机事实 ——
+      // 「播放时会自动挂载」那句由空态负责（本机有字幕而服务端没有时就在空态里），
+      // 不在这里重复第二次。
       if (localSubtitles.isNotEmpty()) {
         val bySource =
           localSubtitles
@@ -171,15 +187,6 @@ internal fun DetailSubtitleCard(
           color = MaterialTheme.colorScheme.primary,
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
-          modifier = Modifier.padding(top = 8.dp),
-        )
-        Text(
-          text = "播放该媒体时自动挂载，可在字幕面板切换",
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 2,
-          overflow = TextOverflow.Ellipsis,
-          modifier = Modifier.padding(top = 1.dp),
         )
       }
 
@@ -187,7 +194,8 @@ internal fun DetailSubtitleCard(
       // 原来只是标题行右侧一个 28dp 的「网络字幕」小链接：字小、位置偏，
       // 用户根本不知道那是个能下载字幕的按钮。改成整行按钮，动作一目了然。
       if (onSearchWebSubtitle != null) {
-        Spacer(modifier = Modifier.height(10.dp))
+        // 分割线自带 10dp 下边距；本机已有网络字幕时再让一档，免得按钮贴着那行字
+        if (localSubtitles.isNotEmpty()) Spacer(modifier = Modifier.height(10.dp))
         FilledTonalButton(
           onClick = onSearchWebSubtitle,
           modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
@@ -293,6 +301,9 @@ private fun SkeletonBar(widthFraction: Float) {
  * 空态分两支：
  * · [totalStreams] > 0 ⇒ 服务端回了轨道，但里面没有字幕轨，是真的「没附带」；
  * · == 0 ⇒ 连轨道都没拿到（远程 strm / 直链常见），不能断言「没有字幕」。
+ *
+ * 这里只陈述**服务端**的事实。本机下载的网络字幕由卡片下半段单独列（条数、来源、按钮），
+ * 同一件事不在这儿说第二遍 —— 否则「服务端没有」和「本机有」会挤成两行近似的话。
  */
 @Composable
 private fun SubtitleEmptyBody(
@@ -301,18 +312,14 @@ private fun SubtitleEmptyBody(
 ) {
   Column {
     Text(
-      text = when {
-        localCount > 0 -> "服务端未附带字幕，本机已下载 $localCount 条网络字幕"
-        totalStreams > 0 -> "该版本未附带字幕"
-        else -> "服务端未返回轨道信息"
-      },
+      text = if (totalStreams > 0) "该版本未附带字幕" else "服务端未返回轨道信息",
       style = MaterialTheme.typography.bodyMedium,
       color = MaterialTheme.colorScheme.onSurface,
     )
     Spacer(modifier = Modifier.height(2.dp))
     Text(
       text = when {
-        localCount > 0 -> "播放该媒体时自动挂载，可在字幕面板切换"
+        localCount > 0 -> "本机已关联网络字幕，播放该媒体时自动挂载，可在字幕面板切换"
         totalStreams > 0 -> "可在播放页「字幕 → 搜索字幕」在线获取"
         else -> "播放时可在播放页里查看实际可用字幕"
       },

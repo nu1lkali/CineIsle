@@ -81,6 +81,21 @@ fun PlayerSheet(
   customMaxWidth: Dp? = null,
   customMaxHeight: Dp? = null,
   surfaceColor: Color? = null,
+  /**
+   * 遮罩浓度（0 = 完全透明）。
+   *
+   * 默认 0.5 会把画面压暗一半。**需要「不挡画面」的面板要传 0** ——
+   * 遮罩仍然存在、仍然吃掉遮罩区的点击（点空白关闭），只是不绘制黑色。
+   * 播放器字幕时间线竖屏形态就是靠这个把上方画面留亮。
+   */
+  scrimAlpha: Float = 0.5f,
+  /**
+   * 竖屏高度上限（占屏高比例），默认 0.90。
+   *
+   * 需要「少挡画面」的抽屉（播放器字幕时间线）传更小的值：抽屉矮一截，上方画面才露得出来。
+   * **键盘弹出时这个比例不生效** —— 那时高度必须给足，否则搜索框会被键盘顶到看不见。
+   */
+  heightFraction: Float = 0.90f,
   content: @Composable () -> Unit,
 ) {
   val scope = rememberCoroutineScope()
@@ -94,12 +109,17 @@ fun PlayerSheet(
     420.dp
   }
   val isImeVisible = WindowInsets.ime.getBottom(density) > 0
+  val screenHeight = LocalConfiguration.current.screenHeightDp.dp
   val maxHeight = customMaxHeight ?: when {
-    isImeVisible -> LocalConfiguration.current.screenHeightDp.dp
+    isImeVisible -> screenHeight
     LocalConfiguration.current.orientation == ORIENTATION_PORTRAIT ->
-      LocalConfiguration.current.screenHeightDp.dp * .90f
-    else -> LocalConfiguration.current.screenHeightDp.dp
+      screenHeight * heightFraction.coerceIn(0.2f, 1f)
+    else -> screenHeight
   }
+
+  // 遮罩目标浓度：clamp 一次，后面所有「回到展开位 / 打开」的赋值都用它，
+  // 否则关掉再打开会被写回默认 0.5，把「不压暗画面」的意图悄悄抹掉。
+  val targetScrimAlpha = scrimAlpha.coerceIn(0f, 1f)
 
   var backgroundAlpha by remember { mutableFloatStateOf(0f) }
   val alpha by animateFloatAsState(
@@ -122,7 +142,7 @@ fun PlayerSheet(
   /** 把已经滑走的面板拉回展开位（用于「此刻不允许关闭」）。 */
   val springBack = {
     scope.launch {
-      backgroundAlpha = 0.5f
+      backgroundAlpha = targetScrimAlpha
       anchoredDraggableState.animateTo(0)
     }
   }
@@ -197,7 +217,7 @@ fun PlayerSheet(
     )
 
     LaunchedEffect(true) {
-      backgroundAlpha = 0.5f
+      backgroundAlpha = targetScrimAlpha
     }
 
     LaunchedEffect(anchoredDraggableState) {
@@ -211,7 +231,7 @@ fun PlayerSheet(
           } else {
             // 拖拽 / 惯性把它甩到了关闭位，但调用方此刻不让关 → 弹回展开位。
             // 这里绝不能「什么都不做」：那正是面板消失后整屏点击失灵的原因。
-            backgroundAlpha = 0.5f
+            backgroundAlpha = targetScrimAlpha
             anchoredDraggableState.animateTo(0)
           }
         }
