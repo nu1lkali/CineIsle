@@ -28,6 +28,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleLanguage
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleInfo
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSourceType
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleFileNormalizer
 import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
 import app.marlboroadvance.mpvex.ui.player.subtitle.ExternalSubtitleArchive
@@ -844,7 +845,23 @@ class PlayerViewModel(
         }
       }
 
-      val mpvPath = uri.resolveUri(host.context) ?: uri.toString()
+      val rawPath = uri.resolveUri(host.context) ?: uri.toString()
+
+      // ⚠️⚠️ 挂之前先把字节归一成 UTF-8。
+      //
+      // `sub-add` 之后是 **mpv 自己再判一次编码**，它的判据与时间线预览不同：
+      // 同一份 Big5 繁体字幕，预览按 Big5 解对了，画面上却是 GBK 乱码 ——
+      // 这不是谁判错，而是两套判定各自为政的必然结果。
+      // 归一之后 mpv 不需要再猜，画面与预览读的是同一份文本。
+      //
+      // 只处理真实文件路径：`fd://`（SAF 选的文件）与 `http(s)://`（网络同名字幕）
+      // 没有本地字节可读，硬抄一遍反而多一次 IO 与 fd 开销，留给 mpv 自己处理。
+      val mpvPath =
+        withContext(Dispatchers.IO) {
+          runCatching {
+            SubtitleFileNormalizer.forPlayback(host.context, rawPath)
+          }.getOrDefault(rawPath)
+        }
 
       // Store mapping for reliable physical deletion later
       mpvPathToUriMap[mpvPath] = uriString

@@ -30,6 +30,7 @@ class App : Application() {
   private val dislikeRepository: app.marlboroadvance.mpvex.domain.dislike.DislikeRepository by inject()
   private val browserPreferences: app.marlboroadvance.mpvex.preferences.BrowserPreferences by inject()
   private val appearancePreferences: app.marlboroadvance.mpvex.preferences.AppearancePreferences by inject()
+  private val subtitlesPreferences: app.marlboroadvance.mpvex.preferences.SubtitlesPreferences by inject()
 
   companion object {
     private var instance: App? = null
@@ -195,7 +196,46 @@ class App : Application() {
         triggerMediaScanOnLaunch()
       }
     }
+
+    // 字幕编码归一化（一次性）：旧版本按字节原样落盘，私有字幕库里混着 GBK / Big5 /
+    // UTF-16 的文件 —— 时间线预览能解对，mpv 挂载却是乱码。这里把它们就地重写成
+    // UTF-8（原文件留 `.bak`），从此预览 / 播放 / 导出读的是同一份字节。
+    // 放后台、整体 runCatching：转码失败只影响那条字幕的显示，绝不能拖住启动。
+    applicationScope.launch {
+      runCatching { migrateSubtitleEncoding() }
+        .onFailure { trace("subtitle encoding migration failed: ${it.stackTraceToString()}") }
+    }
     trace("App.onCreate done")
+  }
+
+  /**
+   * 把私有目录里非 UTF-8 的字幕文件就地重写（只做一次）。
+   *
+   * ## 为什么需要它
+   *
+   * 落盘归一化只能管住**升级之后**新下载的字幕。用户升级前已经下载好的那些
+   * （迅雷 / SubtitleCat 拉下来的 GBK、Big5 文件）仍在磁盘上，mpv 挂载时照样会
+   * 自己猜一次编码 ⇒ 「预览正常、画面乱码」的老问题会继续存在。
+   *
+   * ## 为什么改文件是安全的
+   *
+   * 扫的两个目录都在应用私有存储里（`filesDir/online_subtitles`、`cacheDir/emby_subtitles`），
+   * 内容本来就是我们自己下载的，用户没有别的途径去编辑它们。
+   * 每条重写前都会留一份 `<name>.bak`，万一判定失误还能取回原始字节。
+   */
+  private fun migrateSubtitleEncoding() {
+    val target = 1
+    if (subtitlesPreferences.subtitleEncodingMigrationVersion.get() >= target) return
+    val online =
+      app.marlboroadvance.mpvex.domain.subtitle.SubtitleFileNormalizer
+        .normalizeTree(File(filesDir, "online_subtitles"))
+    val emby =
+      app.marlboroadvance.mpvex.domain.subtitle.SubtitleFileNormalizer
+        .normalizeTree(File(cacheDir, "emby_subtitles"))
+    subtitlesPreferences.subtitleEncodingMigrationVersion.set(target)
+    if (online > 0 || emby > 0) {
+      trace("subtitle encoding migration v$target: online=$online emby=$emby rewritten as UTF-8")
+    }
   }
 
   /**

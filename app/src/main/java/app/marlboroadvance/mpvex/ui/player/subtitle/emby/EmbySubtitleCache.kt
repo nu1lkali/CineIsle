@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.player.subtitle.emby
 import android.content.Context
 import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleFormats
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleInfo
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleEncoding
 import java.io.File
 import java.security.MessageDigest
 
@@ -63,9 +64,13 @@ class EmbySubtitleCache(private val context: Context) {
       val prefix = hashFor(itemId, info)
       val ext = EmbySubtitleFormats.fileExtension(format)
       val target = File(dir, "$prefix.$ext")
+      // 落盘前归一成 UTF-8：服务端给的可能是 GBK / Big5 / UTF-16，而 `sub-add` 之后
+      // 是 mpv 自己再判一次编码 —— 同一份繁体字幕会出现「时间线预览正常、画面乱码」。
+      // 在唯一一次写盘的时机把编码定下来，缓存里就永远只有一种编码。
+      val payload = SubtitleEncoding.normalize(bytes).utf8
       // 先写临时文件再改名：中途被杀不会留下半截字幕（半截字幕会解析出诡异时间轴）
       val tmp = File(dir, "$prefix.$ext.part")
-      tmp.writeBytes(bytes)
+      tmp.writeBytes(payload)
       // 同一条流的其它扩展名（上一次成功用的是别的格式）一并清掉，只留这一份。
       // ⚠️ 必须排除 tmp 自己 —— 循环条件 `startsWith(prefix.)` 会连 `.part` 一起命中，
       // 早先就因此在 rename 前把刚写好的文件删了，缓存永远写不进（每播一次重下一次）。

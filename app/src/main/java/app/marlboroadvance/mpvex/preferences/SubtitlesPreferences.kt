@@ -122,6 +122,15 @@ class SubtitlesPreferences(
    * 都靠它认出彼此下载的字幕。
    */
   val onlineSubtitleLibrary = preferenceStore.getString("sub_online_library", "")
+
+  /**
+   * 字幕编码归一化迁移的版本号（一次性）。
+   *
+   * 旧版本下载字幕时按字节原样落盘，本地库里因此混着 GBK / Big5 / UTF-16 的文件 ——
+   * 时间线预览能解对，mpv 挂载却是乱码（它自己又猜了一次编码）。升级后扫描私有字幕
+   * 目录把这类文件就地重写成 UTF-8（原文件留 `.bak`），做完置版本号，不再重复扫。
+   */
+  val subtitleEncodingMigrationVersion = preferenceStore.getInt("sub_encoding_migration_v", 0)
 }
 
 enum class SubtitleJustification(

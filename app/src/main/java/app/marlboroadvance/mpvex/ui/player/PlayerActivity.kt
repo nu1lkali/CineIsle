@@ -1750,7 +1750,14 @@ open class PlayerActivity :
         val flag = if (subsToEnable.any { it == suburi }) "select" else "auto"
 
         Log.v(TAG, "Adding subtitles from intent extras: $subfile")
-        PlayerLib.command("sub-add", subfile, flag)
+        // 归一成 UTF-8 再挂：否则 mpv 会自己猜编码，Big5 繁体字幕被当 GBK 解就是乱码。
+        // 这里已经在 Default 线程，读盘 + 转码不会卡 UI。
+        val mpvSubPath =
+          runCatching {
+            app.marlboroadvance.mpvex.domain.subtitle.SubtitleFileNormalizer
+              .forPlayback(applicationContext, subfile)
+          }.getOrDefault(subfile)
+        PlayerLib.command("sub-add", mpvSubPath, flag)
       }
     }
   }
@@ -4537,6 +4544,7 @@ private fun cancelAutoplayCountdown() {
           videoFileName = fileName,
           networkConnectionId = networkConnectionId,
           autoSelectFirst = autoSelectFirst,
+          context = applicationContext,
         )
       } else {
         // Regular file or direct network stream
@@ -4546,6 +4554,7 @@ private fun cancelAutoplayCountdown() {
             videoFilePath = filePath,
             videoFileName = fileName,
             autoSelectFirst = autoSelectFirst,
+            context = applicationContext,
           )
         }
       }

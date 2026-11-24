@@ -3785,8 +3785,29 @@ android {
     //    （整块已在屏幕下半部，再吃一个状态栏高度会白少一行）。
     //  · 【透明】抽屉表面不透明度 0.88（`surfaceColor` + `tonalElevation = 0.dp`），
     //    停靠时更接近「从黑边里长出来」，退回大抽屉时还能隐约看见画面。
-    versionCode = 327
-    versionName = "1.6.77"
+    //
+    // ── v328：字幕编码「预览对、播放乱码」的根因修复 + 已下载字幕文件就地修复 ──
+    //  · 【根因】`sub-add` 之后是 **mpv 自己再判一次编码**，判据与时间线预览不同。
+    //    同一份 Big5 繁体字幕：预览按 Big5 解对了，画面上却是 GBK 乱码。不是谁判错，
+    //    是两套判定各自为政的必然结果（样本 19 条里 2 条 Big5、其余 GBK / UTF-8）。
+    //  · 【归一】新增 `SubtitleEncoding`：判定只保留 `SubtitleTimeline.decodeDetailed`
+    //    一处，落盘 / 挂载前统一写成 UTF-8。三处写盘（迅雷下载、Emby 字幕缓存、
+    //    私有库迁移）与四处挂载（播放页、同目录自动加载、intent extras、字幕实验室）
+    //    全部接上 ⇒ mpv 不再需要猜编码。
+    //  · 【损坏闸门】严格 UTF-8 成功**不等于**文件是好的：上游把 GBK/Big5 按替换式解过
+    //    再另存，丢掉的字节变成字面量 `U+FFFD` 永久留在文件里（真实样本里 8/19 条占
+    //    12~16%）。旧版会把这些行当「解错了」换编码 ⇒ 产出与原文毫无关系的第三种乱码
+    //    （windows-1252 / EUC-KR）。现在一旦越线就停在 UTF-8 直读结果上，不再换编码，
+    //    并在时间线面板如实提示「文件本身已损坏，约 N% 字符不可恢复」。
+    //  · 【就地修复】新增 `SubtitleFileNormalizer`：`filesDir/online_subtitles` 与
+    //    `cacheDir/emby_subtitles` 里的非 UTF-8 文件在启动时一次性重写为 UTF-8
+    //    （原文件留 `.bak`，版本标记 `sub_encoding_migration_v`）。外部目录的文件
+    //    一律不碰，只生成带 size+mtime 键的缓存副本给 `sub-add`。
+    //  · 【验证】`.verify/subtitle_encoding/` 独立编译跑 124 项断言：19 条迅雷源真实
+    //    样本 + 20 份构造样本，覆盖 GBK / Big5 / Shift_JIS / EUC-JP / EUC-KR / UTF-16 /
+    //    二次编码 / 混合编码 / 稀疏 CJK / 已损坏。
+    versionCode = 328
+    versionName = "1.6.78"
 
     vectorDrawables {
       useSupportLibrary = true

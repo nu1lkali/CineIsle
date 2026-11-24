@@ -2,6 +2,7 @@ package app.marlboroadvance.mpvex.utils.media
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import android.util.Log
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleFileNormalizer
 import app.marlboroadvance.mpvex.repository.NetworkRepository
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.proxy.NetworkStreamingProxy
 import `is`.xyz.mpv.MPVLib
@@ -39,12 +40,15 @@ object SubtitleOps : KoinComponent {
    *
    * @param autoSelectFirst 是否自动选中找到的第一条字幕。**恢复上次播放状态时必须传 false**，
    *   否则这里会把用户上次记住的字幕选择抢掉（存档里的选择在恢复流程后面才套）。
+   * @param context 用于把本地字幕归一成 UTF-8（缓存目录要它）。为 null 时跳过归一，
+   *   行为退回旧版 —— 只是为了不破坏没有 Context 的调用方，正式调用点都应传。
    */
   suspend fun autoloadSubtitles(
     videoFilePath: String,
     videoFileName: String,
     networkConnectionId: Long = -1L,
     autoSelectFirst: Boolean = true,
+    context: android.content.Context? = null,
   ) = withContext(Dispatchers.IO) {
     try {
       // Skip file descriptor URIs (these don't have a parent directory concept)
@@ -72,7 +76,7 @@ object SubtitleOps : KoinComponent {
         autoloadNetworkSubtitles(videoFilePath, videoFileName, autoSelectFirst)
       } else {
         // For local files, scan the directory
-        autoloadLocalSubtitles(videoFilePath, videoFileName, autoSelectFirst)
+        autoloadLocalSubtitles(videoFilePath, videoFileName, autoSelectFirst, context)
       }
     } catch (e: Exception) {
       Log.e(TAG, "Error loading subtitles", e)
@@ -193,6 +197,7 @@ object SubtitleOps : KoinComponent {
     videoFilePath: String,
     videoFileName: String,
     autoSelectFirst: Boolean,
+    context: android.content.Context?,
   ) {
     val videoFile = File(videoFilePath)
     val videoDirectory = videoFile.parentFile ?: return
@@ -206,13 +211,27 @@ object SubtitleOps : KoinComponent {
       } ?: emptyList()
 
     if (subtitles.isNotEmpty()) {
+      // 同目录的字幕是**用户自己的文件**，不能就地改字节 —— 只生成 UTF-8 缓存副本，
+      // 让 mpv 不必自己猜编码（否则 Big5 繁体字幕会被它当 GBK 解，画面上就是乱码）。
+      // 归一化是读盘 + 转码，必须在 IO 上做完再上主线程发命令。
+      val prepared =
+        subtitles.map { file ->
+          val path =
+            context
+              ?.let { ctx ->
+                runCatching { SubtitleFileNormalizer.forPlayback(ctx, file.absolutePath) }
+                  .getOrDefault(file.absolutePath)
+              }
+              ?: file.absolutePath
+          file to path
+        }
       withContext(Dispatchers.Main) {
-        subtitles.forEachIndexed { index, subtitle ->
+        prepared.forEachIndexed { index, (subtitle, path) ->
           // MPV command format: sub-add <url> [<flags> [<title>]]
           // Use "select" for the first autoloaded subtitle so it is enabled by default
           // （恢复存档时 autoSelectFirst=false：只把字幕挂上去，选哪条由存档说了算）
           val flag = if (index == 0 && autoSelectFirst) "select" else "auto"
-          PlayerLib.command("sub-add", subtitle.absolutePath, flag, subtitle.name)
+          PlayerLib.command("sub-add", path, flag, subtitle.name)
           Log.d(TAG, "Loaded local subtitle: ${subtitle.name} (flag=$flag)")
         }
       }

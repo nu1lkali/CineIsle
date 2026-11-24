@@ -90,6 +90,10 @@ private sealed interface CueLoad {
   data class Ready(
     val cues: List<SubtitleCue>,
     val truncated: Boolean,
+    /** 源文件里替换符的占比；> 0 说明这条字幕在上游就被吃过字符。 */
+    val damagedRatio: Float = 0f,
+    /** 越过门槛 ⇒ 换编码救不回来，只能如实告知。 */
+    val damaged: Boolean = false,
   ) : CueLoad
 
   data class Failed(
@@ -616,6 +620,20 @@ fun SubtitleTimelineSheet(
       )
     }
 
+    // 源文件在上游就被替换符吃掉一部分字符时，换任何编码都只会得到**另一种**乱码 ——
+    // 这里必须说清楚是文件本身缺字，否则用户会以为是我们解析坏了，反复重下同一条。
+    if (load is CueLoad.Ready && load.damaged) {
+      Text(
+        text =
+          "这条字幕文件本身已损坏：约 " +
+            "%.0f".format(load.damagedRatio * 100f) +
+            "% 的字符在来源处就已丢失，无法通过换编码恢复。建议换一条字幕重新下载。",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.error,
+        modifier = Modifier.padding(horizontal = MaterialTheme.spacing.medium),
+      )
+    }
+
     // ── 搜台词 ──
     if (cues.isNotEmpty()) {
       OutlinedTextField(
@@ -872,10 +890,17 @@ private fun loadCues(
   val file =
     resolveSubtitleFile(context, raw)
       ?: return CueLoad.Failed("找不到这条字幕的文件（可能已被清理），回字幕面板重新挂载一次")
-  val parsed = runCatching { SubtitleTimeline.parseFileDetailed(file) }.getOrNull()
-  if (parsed == null) return CueLoad.Failed("字幕文件读取失败，可能已被清理或没有读取权限")
-  if (parsed.cues.isEmpty()) return CueLoad.Failed("这个字幕里没有可读的台词（可能是图像字幕，或格式无法解析）")
-  return CueLoad.Ready(parsed.cues, parsed.truncated)
+  val info = runCatching { SubtitleTimeline.parseFileInfo(file) }.getOrNull()
+    ?: return CueLoad.Failed("字幕文件读取失败，可能已被清理或没有读取权限")
+  if (info.timeline.cues.isEmpty()) {
+    return CueLoad.Failed("这个字幕里没有可读的台词（可能是图像字幕，或格式无法解析）")
+  }
+  return CueLoad.Ready(
+    cues = info.timeline.cues,
+    truncated = info.timeline.truncated,
+    damagedRatio = info.decoded.damagedRatio,
+    damaged = info.decoded.damaged,
+  )
 }
 
 /**

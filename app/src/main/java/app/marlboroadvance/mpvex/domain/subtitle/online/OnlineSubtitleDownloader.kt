@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.domain.subtitle.online
 
 import android.util.Log
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleEncoding
 import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTimeline
 import java.io.File
 import java.io.IOException
@@ -69,8 +70,24 @@ class OnlineSubtitleDownloader {
   ): Result =
     withContext(Dispatchers.IO) {
       val fetched = fetchBytes(item, onProgress)
-      val bytes = fetched.bytes
+      // ⚠️ 落盘即归一成 UTF-8，不留原始字节。
+      //
+      // 站点给的字幕常见 GBK / Big5 / UTF-16，而 `sub-add` 之后是 **mpv 自己再判一次
+      // 编码**。两边判据不同，就会「预览按 Big5 解对了、画面却是 GBK 乱码」。
+      // 在唯一一次落盘的时机把文本定下来，本地库里的每一份文件从此都是 UTF-8，
+      // 预览 / 播放 / 导出 / 另存读到的都是同一份字节。
+      val normalized = SubtitleEncoding.normalize(fetched.bytes)
+      val bytes = normalized.utf8
       val finalFormat = fetched.format
+      if (normalized.decoded.damaged) {
+        // 源文件自身已被替换符破坏（真实样本里同一部片 19 条中有 8 条如此）。
+        // 换编码救不回来，也不能拦住用户 —— 照常落盘，由界面提示「这条本身缺字」。
+        Log.w(
+          TAG,
+          "downloaded subtitle is damaged at source: ${item.title} " +
+            "(missing ${"%.1f".format(normalized.decoded.damagedRatio * 100)}% chars)",
+        )
+      }
 
       if (!targetDir.exists() && !targetDir.mkdirs()) throw IOException("无法创建字幕目录")
       val target = File(targetDir, "$baseName.${finalFormat.takeIf { it in KNOWN_FORMATS } ?: "srt"}")
@@ -85,7 +102,11 @@ class OnlineSubtitleDownloader {
       } finally {
         if (tmp.exists()) tmp.delete()
       }
-      Log.i(TAG, "downloaded ${item.source.label} subtitle: ${bytes.size} bytes ($finalFormat)")
+      Log.i(
+        TAG,
+        "downloaded ${item.source.label} subtitle: ${bytes.size} bytes ($finalFormat, " +
+          "was ${normalized.decoded.encoding}${if (normalized.changed) " -> UTF-8" else ""})",
+      )
       Result(file = target, format = target.extension.lowercase(), sizeBytes = bytes.size.toLong())
     }
 

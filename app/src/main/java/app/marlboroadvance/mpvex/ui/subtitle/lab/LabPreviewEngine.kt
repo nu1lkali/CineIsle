@@ -7,9 +7,12 @@ import android.view.LayoutInflater
 import android.view.SurfaceHolder
 import android.view.View
 import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleFileNormalizer
 import app.marlboroadvance.mpvex.ui.player.MPVView
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils as MpvUtils
 
@@ -237,13 +240,19 @@ internal class LabPreviewEngine(
     offsetMs: Long,
   ): Boolean {
     if (mpvView == null) return false
+    // 先归一成 UTF-8（读盘 + 转码），再回主线程碰 MPVLib —— 否则实验室里挂出来的
+    // 字幕会和播放页一样，由 mpv 自己猜编码，Big5 繁体被当 GBK 解成乱码。
+    val normalizedPath =
+      withContext(Dispatchers.IO) {
+        runCatching { SubtitleFileNormalizer.forPlayback(context, path) }.getOrDefault(path)
+      }
     val before = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
     val readable = title?.trim()?.takeIf { it.isNotEmpty() }
     runCatching {
       if (readable != null) {
-        MPVLib.command("sub-add", path, "select", readable)
+        MPVLib.command("sub-add", normalizedPath, "select", readable)
       } else {
-        MPVLib.command("sub-add", path, "select")
+        MPVLib.command("sub-add", normalizedPath, "select")
       }
     }
     // 等轨道真的建出来（最多 1.5s）。不等就设 sid 会被当成「不存在的轨道」丢掉。

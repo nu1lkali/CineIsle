@@ -4,6 +4,22 @@ import java.io.File
 import java.nio.charset.Charset
 
 /**
+ * 判定「源文件自身已被替换符破坏」的比例门槛。
+ *
+ * 真实样本（迅雷源同一部片的 19 条字幕）里，坏文件是 12.2% 与 15.6%，
+ * 正常文件是 0 —— 中间地带极宽。取 0.2% 既不会误伤偶发一个 `�` 的正常字幕，
+ * 也能在任何「成片丢字」的文件上立刻成立。
+ *
+ * 之所以要这个判据，是因为**严格 UTF-8 解码成功不代表文件是好的**：
+ * 上游把 GBK/Big5 字节按 UTF-8 替换式解码后另存，丢失的字节就变成了字面量
+ * `U+FFFD` 永久留在文件里。此时再换任何编码，得到的都是另一种乱码。
+ */
+private const val DAMAGED_RATIO = 0.002f
+
+/** 判定损坏前至少要有这么多替换符，避免超短文件被一个字符带偏。 */
+private const val DAMAGED_MIN_CHARS = 4
+
+/**
  * 一条字幕（一个时间轴条目）。
  *
  * @property startMs 起始毫秒
@@ -42,7 +58,11 @@ data class SubtitleCue(
  *
  * 中文站点的 SRT 常见 **GBK**，繁体站是 **Big5**，日文站是 **Shift_JIS / EUC-JP**，
  * 而下载器按字节原样落盘。这里按 BOM → 严格 UTF-8 → 多候选择优 → 二次编码还原
- * 逐级判定（见 [decode]），否则列表里会是一串 `锟斤拷`，比不给看更糟。
+ * 逐级判定（见 [decodeDetailed]），否则列表里会是一串 `锟斤拷`，比不给看更糟。
+ *
+ * 判定结果同时是**挂载路径的编码来源**：`sub-add` 之前用同一份结论把字节归一成
+ * UTF-8（见 `SubtitleEncoding`），否则预览与播放会各说各话 —— 预览按 Big5 解对了，
+ * mpv 自己猜成 GBK，画面上就是乱码。
  */
 object SubtitleTimeline {
   /** 单条字幕上限：再多的片子也不会有意义地超过这个数量，防手滑选中巨大文件。 */
@@ -67,15 +87,60 @@ object SubtitleTimeline {
     val truncated: Boolean = false,
   )
 
+  /**
+   * 一次解码的完整结论。
+   *
+   * @property text 解码后的文本
+   * @property encoding 实际采用的编码标签（`UTF-8` / `GB18030` / `Big5` / `UTF-16LE` …）
+   * @property damagedRatio 文本中**字面量** `U+FFFD` 占全部字符的比例。
+   *   注意它和「解码失败替换符」不是一回事：严格 UTF-8 解码成功、但文件里本来就存着
+   *   `U+FFFD` 时，这些字符是**已经丢失的数据**，任何编码都换不回来。
+   * @property damaged 源文件自身已被替换符破坏（[damagedRatio] 越过门槛且数量足够）。
+   * @property repaired 是否做过二次编码还原或逐行编码修复。为 true 说明原字节不是
+   *   规范 UTF-8，挂载前必须重写成 UTF-8，否则 mpv 会按它自己的猜法再解一次。
+   */
+  data class Decoded(
+    val text: String,
+    val encoding: String,
+    val damagedRatio: Float = 0f,
+    val damaged: Boolean = false,
+    val repaired: Boolean = false,
+  ) {
+    /**
+     * 这份字节能否原样交给 mpv。
+     *
+     * 判据是「严格 UTF-8 且解码过程没改动过任何字符」。损坏文件不在其中做特殊处理：
+     * 它本身是合法 UTF-8，mpv 直读得到的文本与预览完全一致（缺字就都缺字），
+     * 重写成同样的字节毫无意义。
+     */
+    val mpvSafe: Boolean get() = !repaired && encoding == "UTF-8"
+  }
+
   /** 从文件读并解析；读不到返回空表（调用方负责区分「空」与「失败」）。 */
   fun parseFile(file: File): List<SubtitleCue> = parseFileDetailed(file).cues
 
   /** 同 [parseFile]，但额外带出「是否因条目过多被截断」。 */
-  fun parseFileDetailed(file: File): ParsedTimeline {
-    if (!file.isFile) return ParsedTimeline(emptyList())
-    val bytes = runCatching { file.readBytes() }.getOrNull() ?: return ParsedTimeline(emptyList())
-    if (bytes.isEmpty()) return ParsedTimeline(emptyList())
-    return parseTextDetailed(decode(bytes), file.extension)
+  fun parseFileDetailed(file: File): ParsedTimeline = parseFileInfo(file).timeline
+
+  /**
+   * 解析结果 + 解码结论。
+   *
+   * 面板需要后者才能如实说明「这条字幕本身缺字」—— 那是文件在上游就被替换符吃掉的
+   * 字符，换编码救不回来；不说清楚，用户只会以为是我们解析坏了。
+   */
+  data class ParsedFile(
+    val timeline: ParsedTimeline,
+    val decoded: Decoded,
+  )
+
+  /** 读文件、判编码、解析，一次把结论都带出来。 */
+  fun parseFileInfo(file: File): ParsedFile {
+    if (!file.isFile) return ParsedFile(ParsedTimeline(emptyList()), Decoded("", "UTF-8"))
+    val bytes = runCatching { file.readBytes() }.getOrNull()
+      ?: return ParsedFile(ParsedTimeline(emptyList()), Decoded("", "UTF-8"))
+    if (bytes.isEmpty()) return ParsedFile(ParsedTimeline(emptyList()), Decoded("", "UTF-8"))
+    val decoded = decodeDetailed(bytes)
+    return ParsedFile(parseTextDetailed(decoded.text, file.extension), decoded)
   }
 
   /**
@@ -253,11 +318,28 @@ object SubtitleTimeline {
    * UTF-8（替换式解码），那份**九成正确、只坏了一两个字节**的 UTF-8 文件
    * 会被硬塞给 GB18030 解，整篇 CJK 变成乱码 —— 比原来的两个坏字节糟得多。
    */
-  fun decode(bytes: ByteArray): String {
-    if (bytes.isEmpty()) return ""
+  fun decode(bytes: ByteArray): String = decodeDetailed(bytes).text
+
+  /**
+   * 同 [decode]，但把「用了哪个编码 / 是否已损坏 / 是否做过修复」一并带出来。
+   *
+   * ## 为什么必须有损坏闸门
+   *
+   * 严格 UTF-8 成功**不等于**文件是好的。上游把 GBK/Big5 字节按 UTF-8 替换式解码
+   * 再另存，丢掉的字节就变成字面量 `U+FFFD` 永久留在文件里。此时：
+   *
+   * · 逐行修复会把这些 `U+FFFD` 行当成「解错了」，换成别的编码 —— 于是本来只是
+   *   缺字的句子被改成韩文 / 拉丁乱码，比原样更糟（真实样本里 8/19 条都是这样）；
+   * · 换整篇编码同理，只会得到与原文无关的第三种乱码。
+   *
+   * 所以一旦确认源文件已损坏，就**停在 UTF-8 直读结果上**，不做任何修复，
+   * 让界面如实告诉用户「这个文件本身缺字」，而不是假装修好了。
+   */
+  fun decodeDetailed(bytes: ByteArray): Decoded {
+    if (bytes.isEmpty()) return Decoded("", "UTF-8")
     // UTF-32 BOM 必须排在 UTF-16 之前：UTF-32LE 的 BOM 前两字节同样是 FF FE，
     // 先按 UTF-16LE 解会把后面每 4 字节当 2 个字符，整篇错位。
-    utf32Bom(bytes)?.let { return repairDoubleEncoding(it) }
+    utf32Bom(bytes)?.let { return settle(it, null, "UTF-32") }
     // UTF-16 BOM：一部分 ASS 是这样存的。不先认 BOM 的话，整篇会被当成非法字节。
     if (bytes.size >= 2) {
       val b0 = bytes[0].toInt() and 0xFF
@@ -265,13 +347,14 @@ object SubtitleTimeline {
       if (b0 == 0xFF && b1 == 0xFE) {
         // 按偶数长度取：多出的半个字符直接丢掉，避免解码出替换符
         val even = (bytes.size - 2) - ((bytes.size - 2) % 2)
-        if (even > 0) return repairDoubleEncoding(String(bytes, 2, even, Charsets.UTF_16LE))
-        return repairDoubleEncoding(String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE))
+        val body = if (even > 0) even else bytes.size - 2
+        // ⚠️ UTF-16 的 `\n` 是两字节，逐行修复的字节切分不成立 ⇒ 传 null 跳过
+        return settle(String(bytes, 2, body, Charsets.UTF_16LE), null, "UTF-16LE")
       }
       if (b0 == 0xFE && b1 == 0xFF) {
         val even = (bytes.size - 2) - ((bytes.size - 2) % 2)
-        if (even > 0) return repairDoubleEncoding(String(bytes, 2, even, Charsets.UTF_16BE))
-        return repairDoubleEncoding(String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE))
+        val body = if (even > 0) even else bytes.size - 2
+        return settle(String(bytes, 2, body, Charsets.UTF_16BE), null, "UTF-16BE")
       }
     }
     if (bytes.size >= 3 &&
@@ -280,7 +363,7 @@ object SubtitleTimeline {
       bytes[2] == 0xBF.toByte()
     ) {
       val body = bytes.copyOfRange(3, bytes.size)
-      return repairMixedLines(body, repairDoubleEncoding(String(body, Charsets.UTF_8)))
+      return settle(String(body, Charsets.UTF_8), body, "UTF-8")
     }
     val strictUtf8 =
       runCatching {
@@ -290,9 +373,54 @@ object SubtitleTimeline {
           .decode(java.nio.ByteBuffer.wrap(bytes))
           .toString()
       }.getOrNull()
-    if (strictUtf8 != null) return repairMixedLines(bytes, repairDoubleEncoding(strictUtf8))
+    if (strictUtf8 != null) return settle(strictUtf8, bytes, "UTF-8")
 
-    return repairMixedLines(bytes, repairDoubleEncoding(bestByScoring(bytes)))
+    val scored = bestByScoring(bytes)
+    return settle(scored.text, bytes, scored.encoding)
+  }
+
+  /**
+   * 收口：先判断损坏，再决定要不要做二次编码还原 / 逐行修复。
+   *
+   * @param mixedLines 用于逐行修复的原始字节；传 null 表示不能按行切字节
+   *   （UTF-16 / UTF-32 的换行是两字节以上）
+   */
+  private fun settle(text: String, mixedLines: ByteArray?, encoding: String): Decoded {
+    if (text.isEmpty()) return Decoded("", encoding)
+    val ratio = replacementRatio(text)
+    if (isDamaged(text, ratio)) {
+      // 已损坏：保持直读结果，绝不再换编码（换出来的东西与原文无关）
+      return Decoded(text = text, encoding = encoding, damagedRatio = ratio, damaged = true)
+    }
+    val retried = repairDoubleEncoding(text)
+    val mixed = if (mixedLines != null) repairMixedLines(mixedLines, retried) else retried
+    return Decoded(
+      text = mixed,
+      encoding = encoding,
+      damagedRatio = ratio,
+      repaired = mixed != text,
+    )
+  }
+
+  /** 字面量 `U+FFFD` 的占比。 */
+  private fun replacementRatio(text: String): Float {
+    if (text.isEmpty()) return 0f
+    var count = 0
+    for (ch in text) if (ch == '\uFFFD') count++
+    return count.toFloat() / text.length
+  }
+
+  /**
+   * 是否判定为「源文件已损坏」。
+   *
+   * 双条件：比例越线 **且** 绝对数量足够。只比例不数量时，一个 20 字的短片段
+   * 出现 1 个 `�`（5%）会被误判；只数量不比例时，一句台词里几个 `�` 又会漏掉。
+   */
+  private fun isDamaged(text: String, ratio: Float): Boolean {
+    if (ratio < DAMAGED_RATIO) return false
+    var count = 0
+    for (ch in text) if (ch == '\uFFFD') count++
+    return count >= DAMAGED_MIN_CHARS
   }
 
   /** UTF-32 的 BOM（`FF FE 00 00` / `00 00 FE FF`）；没有就返回 null。 */
@@ -316,9 +444,13 @@ object SubtitleTimeline {
    *
    * 归一化（除以字符数）是必要的：UTF-16 解出来只有一半字符，若用总分比较，
    * 字符数少的候选在全是负分时反而占便宜。
+   *
+   * 返回时把胜出的编码名一并带出 —— 挂载路径要按同一个编码把字节重写成 UTF-8，
+   * 只回文本的话，那边就得再猜一次，两处结论会漂。
    */
-  private fun bestByScoring(bytes: ByteArray): String {
+  private fun bestByScoring(bytes: ByteArray): Scoring {
     var best: String? = null
+    var bestName = "UTF-8"
     var bestScore = Double.NEGATIVE_INFINITY
     for (name in candidates(bytes)) {
       val text = runCatching { String(bytes, Charset.forName(name)) }.getOrNull() ?: continue
@@ -327,10 +459,14 @@ object SubtitleTimeline {
       if (score > bestScore) {
         bestScore = score
         best = text
+        bestName = name
       }
     }
-    return best ?: String(bytes, Charsets.UTF_8)
+    return Scoring(best ?: String(bytes, Charsets.UTF_8), bestName)
   }
+
+  /** [bestByScoring] 的返回：解码文本 + 胜出的编码名。 */
+  private data class Scoring(val text: String, val encoding: String)
 
   /**
    * 逐行校正：把「文件内部混了两种编码」的那几行单独重解。
