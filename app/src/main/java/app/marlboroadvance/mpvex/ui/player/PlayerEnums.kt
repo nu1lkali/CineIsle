@@ -222,7 +222,14 @@ enum class Sheets {
   None,
   PlaybackSpeed,
   SubtitleTracks,
-  /** 字幕时间线：按台词定位 + 跟随高亮（见 `SubtitleTimelineSheet`） */
+  /**
+   * 字幕时间线：按台词定位 + 跟随高亮（见 `SubtitleTimelineSheet`）。
+   *
+   * 名字还挂在 `Sheets` 上是历史原因：它**不是**纯抽屉 —— 竖屏渲染成底部抽屉，
+   * 横屏渲染成右侧悬浮面板（同一个 composable 按朝向换壳）。
+   * 之所以仍走 `sheetShown` 这一个状态：两条入口（字幕面板内、「字幕时间线」按钮）
+   * 只需要说「打开时间线」，不必各自判断朝向。
+   */
   SubtitleTimeline,
   AudioTracks,
   Chapters,

@@ -3735,8 +3735,21 @@ android {
     //  · 【搜索】按台词文本过滤（空格分词 AND，忽略大小写），命中数写进标题；搜索时自动停跟，
     //    否则一按搜索就被拽回播放位置。
     //  · 【降级】无轨道 / 全是内嵌轨 / 文件被清理 / 解析不出条目，各自给一句人话 + 「字幕列表」出口。
-    versionCode = 323
-    versionName = "1.6.73"
+    //
+    // ── v324：时间线改悬浮面板 + 独立按钮 + 落点改帧精确 ──
+    //  · 【位置】竖屏仍是底部抽屉（竖屏画面窄，抽屉不挤占可用宽度），横屏改成**右侧半透明悬浮面板**
+    //    （`DraggablePanel`，与「字幕延迟」同一个壳）：不加遮罩、不盖画面主体，看时间线时画面照常在播。
+    //    同一个 composable 按 `Configuration.orientation` 换壳，header / body 共用一份，
+    //    所以主副切换、搜索、跟随、时间换算不会在两种形态间走岔。
+    //  · 【入口】新增独立控件按钮 `PlayerButton.SUBTITLE_TIMELINE`（编号列表图标）：
+    //    原来只能从字幕面板里进，等于「挂在字幕设置下面」；现在一键直达。
+    //    老用户的控件簇 CSV 已落盘，改默认值无效 ⇒ `App.seedSubtitleTimelineButton()`
+    //    启动时往横屏顶栏右侧 / 竖屏底部各追加一次（置标记，永不重复播种）。
+    //  · 【跳转】`seekTo(position, exact = true)`：普通 seek 是 `absolute+keyframes`，
+    //    长 GOP 片源会落在目标之前最近的关键帧上（差好几秒），现场表现就是
+    //    「时间线写 2:03、点下去落在 1:56」。点台词要的是那一句，不是最近的关键帧。
+    versionCode = 324
+    versionName = "1.6.74"
 
     vectorDrawables {
       useSupportLibrary = true

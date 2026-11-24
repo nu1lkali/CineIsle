@@ -99,7 +99,7 @@ class AppearancePreferences(
   val topRightControls =
     preferenceStore.getString(
       "top_right_controls",
-      "CURRENT_CHAPTER,EMBY_FAVORITE,CAST,MORE_OPTIONS,DISLIKE",
+      "CURRENT_CHAPTER,EMBY_FAVORITE,CAST,MORE_OPTIONS,DISLIKE,SUBTITLE_TIMELINE",
     )
 
   /**
@@ -150,8 +150,18 @@ class AppearancePreferences(
     preferenceStore.getString(
       "portrait_bottom_controls_v3",
       "PREVIOUS,NEXT,EMBY_FAVORITE,DISLIKE,REPEAT_MODE,LOCK_CONTROLS," +
-        "PICTURE_IN_PICTURE,SCREEN_ROTATION,CAST,MORE_OPTIONS",
+        "PICTURE_IN_PICTURE,SCREEN_ROTATION,CAST,MORE_OPTIONS,SUBTITLE_TIMELINE",
     )
+
+  /**
+   * 「字幕时间线」按钮是否已经补进老用户的控件布局（一次性播种标记）。
+   *
+   * 与 [topRightControls] 的默认值配套：默认值只对**全新用户**生效（老用户的 CSV
+   * 早已写进本地存储），老用户由 `App.seedSubtitleTimelineButton()` 在启动时补一次。
+   * 播完置 true，之后不再动 —— 用户把它从所有簇里删掉是他的布局决定。
+   */
+  val subtitleTimelineButtonSeeded =
+    preferenceStore.getBoolean("subtitle_timeline_btn_seeded", false)
 
   fun parseButtons(
     csv: String,

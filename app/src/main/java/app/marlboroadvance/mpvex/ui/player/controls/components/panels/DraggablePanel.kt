@@ -8,6 +8,8 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -41,16 +43,23 @@ import kotlin.math.roundToInt
 
 /**
  * A draggable panel with an optional fixed header and scrollable content.
- * 
+ *
  * @param modifier Modifier for the panel
  * @param header Optional composable for the fixed header that stays constant during scroll
- * @param content The scrollable content of the panel
+ * @param scrollable 是否由本组件负责纵向滚动。**内容自带 `LazyColumn` 时必须传 false**：
+ *   外面再套一层 `verticalScroll` 会让 LazyColumn 拿到无限高约束，直接抛
+ *   `Vertically scrollable component was measured with an infinity maximum height constraints`。
+ * @param heightFraction 面板高度占「可用高度」的比例；null = 随内容收缩（旧行为）。
+ *   需要内部滚动列表的面板必须给值 —— 没有确定高度，列表既画不满也不会有滚动条。
+ * @param content The content of the panel（给了 `ColumnScope` receiver，内部可用 `weight`）
  */
 @Composable
 fun DraggablePanel(
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
-    content: @Composable () -> Unit
+    scrollable: Boolean = true,
+    heightFraction: Float? = null,
+    content: @Composable ColumnScope.() -> Unit
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
     var panelWidth by remember { mutableIntStateOf(0) }
@@ -73,6 +82,8 @@ fun DraggablePanel(
 
         // In portrait, cap panel height to 50% of available height
         val panelMaxHeight = if (isPortrait) maxHeight * 0.5f else maxHeight
+        // 给了比例就固定高度：内部有 LazyColumn 时需要确定高度才能滚动
+        val fixedHeight = heightFraction?.let { panelMaxHeight * it }
 
         val colors = panelCardsColors()
         Surface(
@@ -80,7 +91,13 @@ fun DraggablePanel(
                 .offset { IntOffset(offsetX.roundToInt(), 0) }
                 .onSizeChanged { panelWidth = it.width }
                 .widthIn(max = 380.dp)
-                .heightIn(max = panelMaxHeight),
+                .then(
+                    if (fixedHeight != null) {
+                        Modifier.height(fixedHeight)
+                    } else {
+                        Modifier.heightIn(max = panelMaxHeight)
+                    }
+                ),
             shape = MaterialTheme.shapes.extraLarge,
             color = colors.containerColor,
             contentColor = colors.contentColor,
@@ -118,10 +135,17 @@ fun DraggablePanel(
                 }
                 
                 // Scrollable content
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState())
-                ) {
-                    content()
+                if (scrollable) {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState())
+                    ) {
+                        content()
+                    }
+                } else {
+                    // 内容自己滚（LazyColumn）：吃掉头部剩下的高度即可
+                    Column(modifier = Modifier.fillMaxHeight()) {
+                        content()
+                    }
                 }
             }
         }

@@ -184,6 +184,9 @@ class App : Application() {
       // 必须排在 load() 之后是刻意的：两者都碰同一批偏好/库，串起来跑省得并发。
       runCatching { seedDislikeButtonIntoPlayerLayout() }
         .onFailure { trace("dislike layout seed failed: ${it.stackTraceToString()}") }
+      // 同批播种：「字幕时间线」按钮（v324 新增），只补一次。
+      runCatching { seedSubtitleTimelineButton() }
+        .onFailure { trace("subtitle timeline seed failed: ${it.stackTraceToString()}") }
     }
 
     // Trigger media scan on app launch to detect new videos
@@ -235,6 +238,33 @@ class App : Application() {
     // 不管这次有没有真的写入都要落版本号：
     // 已经齐了的就别再算一遍，缺的这次补完，下次也不必再算。
     browserPreferences.dislikeLayoutSeedVersion.set(targetVersion)
+  }
+
+  /**
+   * 把「字幕时间线」按钮补进已有布局（**只补一次**）。
+   *
+   * 与 [seedDislikeButtonIntoPlayerLayout] 同一个问题：控件簇的 CSV 一旦被读过就落进
+   * 本地存储，改 `getString` 默认值只对全新用户生效。老用户升级后按钮本来会「查无此键」——
+   * 设置页里能看到它，播放器里却到处找不到，看上去像功能没做。
+   *
+   * 只往**两个出厂位置的末尾追加**，不动已有顺序：
+   *  · 横屏顶栏右侧（字幕相关，与「更多」同一带）；
+   *  · 竖屏底部按钮条（竖屏顶栏刻意只放 5 个，塞第 6 个会把标题压成省略号）。
+   *
+   * 用户后来把按钮从所有簇里删掉是他的布局决定，所以必须置标记、永不重复播种。
+   */
+  private fun seedSubtitleTimelineButton() {
+    if (appearancePreferences.subtitleTimelineButtonSeeded.get()) return
+    val target = app.marlboroadvance.mpvex.preferences.PlayerButton.SUBTITLE_TIMELINE.name
+    listOf(
+      appearancePreferences.topRightControls,
+      appearancePreferences.portraitBottomControls,
+    ).forEach { pref ->
+      val csv = pref.get()
+      val present = csv.split(',').any { it.trim().equals(target, ignoreCase = true) }
+      if (!present) pref.set(if (csv.isBlank()) target else "$csv,$target")
+    }
+    appearancePreferences.subtitleTimelineButtonSeeded.set(true)
   }
 
   /**

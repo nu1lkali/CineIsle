@@ -995,6 +995,7 @@
   <string name="btn_label_lock">Lock Controls</string>
   <string name="btn_label_audio">Audio Track</string>
   <string name="btn_label_subtitles">Subtitles</string>
+  <string name="btn_label_subtitle_timeline">Subtitle Timeline</string>
   <string name="btn_label_more">More Options</string>
   <string name="btn_label_chapter">Current Chapter</string>
   <string name="btn_label_repeat_mode">Repeat Mode</string>

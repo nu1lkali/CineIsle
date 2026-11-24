@@ -330,9 +330,9 @@ fun PlayerSheets(
       )
     }
 
-    // 字幕时间线：**独立一层**面板，不叠在字幕面板上。
-    // 播放器的面板都吃满底部 90% 高度，两层叠一起只会出现「矮的压着高的」；
-    // 换层最干净，关掉/返回时再回到轨道面板。
+    // 字幕时间线：竖屏是底部抽屉、横屏是右侧悬浮面板（见 `SubtitleTimelineSheet`）。
+    // ⚠️ 跳转必须 `exact = true`：普通 seek 落在关键帧上，长 GOP 片源会早好几秒，
+    //    看起来像「时间线写 2:03、点下去落在 1:56」。
     Sheets.SubtitleTimeline -> {
       // 副字幕不在 track-list 的 `selected` 里，先认它，再从 `selected` 里排掉，
       // 免得两槽都占着时把副字幕当成主字幕
@@ -344,7 +344,7 @@ fun PlayerSheets(
         secondaryId = secondarySid,
         // 只在这一层读 `time-pos`：别的面板开着时不订阅，免得整块 1 秒重组一次
         positionSeconds = viewModel.pos ?: 0,
-        onSeekToMs = { ms -> viewModel.seekTo((ms / 1000L).toInt()) },
+        onSeekToMs = { ms -> viewModel.seekTo((ms / 1000L).toInt(), exact = true) },
         onPromoteToPrimary = { viewModel.setPrimarySubtitle(it) },
         onBackToTracks = { onShowSheet(Sheets.SubtitleTracks) },
         onDismissRequest = onDismissRequest,

@@ -8,6 +8,7 @@ import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.Camera
 import androidx.compose.material.icons.outlined.Cast
+import androidx.compose.material.icons.outlined.FormatListNumbered
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.MoreVert
@@ -55,6 +56,12 @@ enum class PlayerButton(
   LOCK_CONTROLS(Icons.Outlined.LockOpen),
   AUDIO_TRACK(Icons.Outlined.Audiotrack),
   SUBTITLES(Icons.Outlined.Subtitles),
+  /**
+   * 字幕时间线（按台词定位）。与 [SUBTITLES] 分开是刻意的：
+   * 字幕面板管「挂哪条轨」，时间线管「按台词跳」，两件事的使用时机完全不同。
+   * 图标用「编号列表」——时间线就是一句一行、前面带序号。
+   */
+  SUBTITLE_TIMELINE(Icons.Outlined.FormatListNumbered),
   MORE_OPTIONS(Icons.Outlined.MoreVert),
   CURRENT_CHAPTER(Icons.Outlined.Bookmarks), // <-- CHANGED ICON
   REPEAT_MODE(Icons.Outlined.Repeat),
@@ -108,6 +115,7 @@ fun getPlayerButtonLabel(button: PlayerButton): String =
     PlayerButton.LOCK_CONTROLS -> stringResource(R.string.btn_label_lock)
     PlayerButton.AUDIO_TRACK -> stringResource(R.string.btn_label_audio)
     PlayerButton.SUBTITLES -> stringResource(R.string.btn_label_subtitles)
+    PlayerButton.SUBTITLE_TIMELINE -> stringResource(R.string.btn_label_subtitle_timeline)
     PlayerButton.MORE_OPTIONS -> stringResource(R.string.btn_label_more)
     PlayerButton.CURRENT_CHAPTER -> stringResource(R.string.btn_label_chapter)
     PlayerButton.REPEAT_MODE -> stringResource(R.string.btn_label_repeat_mode)

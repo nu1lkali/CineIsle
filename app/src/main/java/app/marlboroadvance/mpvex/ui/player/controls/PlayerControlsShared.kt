@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.FitScreen
+import androidx.compose.material.icons.filled.FormatListNumbered
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PictureInPictureAlt
@@ -652,6 +653,17 @@ fun RenderPlayerButton(
         Icons.Default.Subtitles,
         onClick = { onOpenSheet(Sheets.SubtitleTracks) },
         onLongClick = { onOpenPanel(Panels.SubtitleDelay) },
+        color = controlColor,
+        modifier = Modifier.size(buttonSize),
+      )
+    }
+
+    // 字幕时间线：一键打开「按台词定位」面板（竖屏抽屉 / 横屏右侧悬浮）。
+    // 与上一颗分家的理由见 [PlayerButton.SUBTITLE_TIMELINE] 的注释。
+    PlayerButton.SUBTITLE_TIMELINE -> {
+      ControlsButton(
+        Icons.Default.FormatListNumbered,
+        onClick = { onOpenSheet(Sheets.SubtitleTimeline) },
         color = controlColor,
         modifier = Modifier.size(buttonSize),
       )

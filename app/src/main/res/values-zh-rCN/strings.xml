@@ -980,6 +980,7 @@
   <string name="btn_label_lock">锁定控件</string>
   <string name="btn_label_audio">音轨</string>
   <string name="btn_label_subtitles">字幕</string>
+  <string name="btn_label_subtitle_timeline">字幕时间线</string>
   <string name="btn_label_more">更多选项</string>
   <string name="btn_label_chapter">当前章节</string>
   <string name="btn_label_repeat_mode">循环模式</string>

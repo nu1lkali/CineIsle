@@ -1,13 +1,16 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
 
 import android.content.Context
+import android.content.res.Configuration
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -49,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,6 +61,7 @@ import app.marlboroadvance.mpvex.domain.subtitle.SubtitleCue
 import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTimeline
 import app.marlboroadvance.mpvex.presentation.components.PlayerSheet
 import app.marlboroadvance.mpvex.ui.player.TrackNode
+import app.marlboroadvance.mpvex.ui.player.controls.components.panels.DraggablePanel
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 import app.marlboroadvance.mpvex.ui.theme.spacing
 import kotlinx.collections.immutable.ImmutableList
@@ -90,6 +95,14 @@ private enum class TrackRole { Primary, Secondary, Inactive }
  * 没有参照物。这里把**当前已加载字幕**的整条时间轴列出来：点一句就跳过去，
  * 画面播到哪儿就高亮哪一句，并且自动把它滚进视野。
  *
+ * ## 容器按朝向分两种（同一个面板，两种形态）
+ *
+ * · **竖屏** → 底部抽屉（[PlayerSheet]）。竖屏画面本来就窄，抽屉不挤压可用的画面宽度。
+ * · **横屏** → 右侧悬浮面板（[DraggablePanel]），半透明、可横向拖动，**不盖住画面主体**，
+ *   也不加遮罩：点时间线的同时还能看见画面在播什么，与「字幕延迟」面板同一种壳。
+ *
+ * 两种形态共用同一份 `header` / `body`，所以切主副轨、搜索、跟随、换算逻辑不会走岔。
+ *
  * ## 与字幕轨道的联动
  *
  * · 主字幕（`sid`）与副字幕（`secondary-sid`）同时挂着时，顶部两个 chip 可切换
@@ -104,6 +117,19 @@ private enum class TrackRole { Primary, Secondary, Inactive }
  * 与字幕实验室同一套口径：默认跟随，只在「当前句不在视野内」时才滚动（每句都居中的话
  * 画面会一直抖）；用户手动滑过列表后不会被他自己的滚动打断；搜索时自动停跟 ——
  * 搜台词是为了看别处，这时把列表拽回播放位置只会让人找不到刚搜到的结果。
+ *
+ * ## 时间基准
+ *
+ * 列表里的时间、点击跳转、高亮跟随**统一按「播放位置」**：字幕文件时间先过
+ * `播放位置 = 文件时间 / sub-speed + sub-delay` 再显示 / 跳转。
+ *
+ * 所以调过字幕延迟之后，列表上的数字会和字幕文件里写的差那么多 —— 这是对的：
+ * 用户要的是「跳到画面上哪一刻能看到这句」，不是「字幕文件第几秒」。反过来，
+ * 只把跳转或只把显示换算过来都会自相矛盾。
+ *
+ * ⚠️ 跳转必须走 `exact`（见调用点 `seekTo(sec, exact = true)`）：普通 seek 默认落在
+ * **关键帧**上，长 GOP 的片源会早好几秒 —— 那是「写着 2:03、点下去落在 1:56」的另一个来源，
+ * 与字幕延迟无关。点台词要的是那一句，不是最近的关键帧。
  *
  * ## 降级
  *
@@ -182,19 +208,43 @@ fun SubtitleTimelineSheet(
       }
     }
 
-  // 字幕延迟（`sub-delay` 秒）：正数表示字幕整体延后，于是「画面这一刻」对应的是
-  // 文件时间里更早的位置。副字幕有自己的 `secondary-sub-delay`，但本项目的延迟面板
-  // 两个属性写的是同一个值（见 MPVView.setSubDelay），这里取主属性即可。
-  val delayFlow = remember { PlayerLib.propDouble["sub-delay"] }
-  val subDelay by delayFlow.collectAsState()
-  val offsetMs = if (role == TrackRole.Inactive) 0L else ((subDelay ?: 0.0) * 1000.0).toLong()
+  // ── 时间基准（列表显示 / 点击跳转 / 跟随高亮共用这一套）──
+  //
+  // 字幕文件里的时间是「文件时间」，画面上看到它的时刻还要过 mpv 的两道换算：
+  //     播放位置 = 文件时间 / sub-speed + sub-delay
+  // （正的 sub-delay = 字幕整体延后显示；sub-speed > 1 = 字幕以更快的速度推进。）
+  //
+  // ⚠️⚠️ 旧版是「列表与跳转用文件时间、高亮用换算后的时间」—— 两边差了一个 delay，
+  // 于是只要用户调过字幕延迟，就会出现「写着 2:03、点下去跳到 1:56」。
+  // 现在三处都走下面这组换算（delay 为 0 / speed 为 1 时它就是恒等变换，没有副作用）。
+  val primaryDelayFlow = remember { PlayerLib.propDouble["sub-delay"] }
+  val secondaryDelayFlow = remember { PlayerLib.propDouble["secondary-sub-delay"] }
+  val subSpeedFlow = remember { PlayerLib.propDouble["sub-speed"] }
+  val primaryDelay by primaryDelayFlow.collectAsState()
+  val secondaryDelay by secondaryDelayFlow.collectAsState()
+  val subSpeedRaw by subSpeedFlow.collectAsState()
+
+  // 没启用的轨道谈不上「显示延迟」，按文件时间原样用
+  val delaySec =
+    when (role) {
+      TrackRole.Primary -> primaryDelay ?: 0.0
+      TrackRole.Secondary -> secondaryDelay ?: 0.0
+      TrackRole.Inactive -> 0.0
+    }
+  val speed = (subSpeedRaw ?: 1.0).takeIf { it in 0.1..10.0 } ?: 1.0
+  val delayMs = (delaySec * 1000.0).toLong()
+  /** 有没有偏移 / 变速：没有时列表直接显示文件时间，不额外拼串 */
+  val shifted = delayMs != 0L || speed != 1.0
+
+  fun fileToPlaybackMs(fileMs: Long): Long = (fileMs / speed + delayMs).toLong().coerceAtLeast(0L)
 
   val activeIndex =
-    remember(visible, positionSeconds, role, offsetMs) {
+    remember(visible, positionSeconds, role, delayMs, speed) {
       if (role == TrackRole.Inactive || visible.isEmpty()) {
         -1
       } else {
-        val fileMs = positionSeconds * 1000L - offsetMs
+        // 反算：当前播放位置对应字幕文件里的哪一刻
+        val fileMs = ((positionSeconds * 1000L - delayMs) * speed).toLong()
         visible.indexOfFirst { fileMs >= it.startMs && fileMs < it.endMs }
       }
     }
@@ -217,195 +267,250 @@ fun SubtitleTimelineSheet(
     }
   }
 
-  PlayerSheet(onDismissRequest = onDismissRequest) {
-    // 标题里要显示「看的是哪条」；getTrackTitle 内部走 stringResource，先取出来再拼串
-    val viewedTitle = viewed?.let { getTrackTitle(it) } ?: "未选择字幕"
+  val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+  // 标题里要显示「看的是哪条」；getTrackTitle 内部走 stringResource，先取出来再拼串
+  val viewedTitle = viewed?.let { getTrackTitle(it) } ?: "未选择字幕"
 
-    Column(modifier = Modifier.fillMaxWidth()) {
-      // ── 标题 / 跟随 / 返回 ──
+  val header: @Composable () -> Unit = {
+    // ── 标题 / 跟随 / 返回 ──
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .padding(start = MaterialTheme.spacing.medium, end = MaterialTheme.spacing.small, top = MaterialTheme.spacing.small),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = "字幕时间线",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+          text = buildString {
+            append(viewedTitle)
+            if (cues.isNotEmpty()) append(" · ${cues.size} 句")
+            if (tokens.isNotEmpty()) {
+              append(" · 命中 ")
+              append(if (visible.size == cues.size) "全部" else "${visible.size} 句")
+            }
+          },
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      // 跟随开关：默认开；用户往下翻看别的段落时点一下即可停止自动滚动
+      if (activeIndex >= 0 && tokens.isEmpty()) {
+        TextButton(onClick = { follow = !follow }) {
+          Icon(
+            if (follow) Icons.Filled.PauseCircle else Icons.Filled.PlayCircleOutline,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(Modifier.width(4.dp))
+          Text(
+            text = if (follow) "跟随中" else "已暂停跟随",
+            style = MaterialTheme.typography.labelMedium,
+          )
+        }
+      }
+      TextButton(onClick = onBackToTracks) { Text("字幕列表") }
+      // 抽屉形态可以下滑/点空白关闭；悬浮面板不拦画面点击，必须留一个明确的关闭
+      if (!isPortrait) {
+        IconButton(onClick = onDismissRequest) {
+          Icon(Icons.Default.Close, contentDescription = "关闭时间线", modifier = Modifier.size(20.dp))
+        }
+      }
+    }
+  }
+
+  val body: @Composable ColumnScope.() -> Unit = {
+    // 调过字幕延迟 / 速度时，列表里的数字和字幕文件里写的不一样 —— 必须说明一句，
+    // 否则用户会以为时间轴算错了（旧版正是这里没交代，才让人以为是「跳转偏了 7 秒」）。
+    if (shifted) {
+      Text(
+        text = buildString {
+          append("字幕")
+          if (delayMs != 0L) append("偏移 ").append("%+.1fs".format(delaySec))
+          if (delayMs != 0L && speed != 1.0) append(" · ")
+          if (speed != 1.0) append("速度 ").append("%.2f×".format(speed))
+          append("，下列时间已按播放位置换算")
+        },
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.tertiary,
+        modifier = Modifier.padding(horizontal = MaterialTheme.spacing.medium),
+      )
+    }
+
+    // ── 轨道切换：主 / 副 ──
+    if (viewable.size >= 2 || (viewable.size == 1 && role != TrackRole.Primary)) {
       Row(
         modifier =
           Modifier
             .fillMaxWidth()
-            .padding(start = MaterialTheme.spacing.medium, end = MaterialTheme.spacing.small, top = MaterialTheme.spacing.small),
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.extraSmall),
+        horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.extraSmall),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "字幕时间线",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-          )
-          Text(
-            text = buildString {
-              append(viewedTitle)
-              if (cues.isNotEmpty()) append(" · ${cues.size} 句")
-              if (tokens.isNotEmpty()) {
-                append(" · 命中 ")
-                append(if (visible.size == cues.size) "全部" else "${visible.size} 句")
+        viewable.forEach { track ->
+          val isViewed = track.id == viewedId
+          FilterChip(
+            selected = isViewed,
+            onClick = { viewedId = track.id },
+            label = {
+              Text(
+                text = getTrackTitle(track),
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                // 轨道标题可能是长文件名；不给上限会把 chip 撑到把整行挤满
+                modifier = Modifier.widthIn(max = 180.dp),
+              )
+            },
+            leadingIcon = {
+              val badge =
+                when (track.id) {
+                  primaryId -> "主"
+                  secondaryId -> "副"
+                  else -> null
+                }
+              if (badge != null) {
+                Text(
+                  text = badge,
+                  style = MaterialTheme.typography.labelSmall,
+                  color =
+                    if (isViewed) {
+                      MaterialTheme.colorScheme.onSecondaryContainer
+                    } else {
+                      MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
               }
             },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            colors =
+              FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+              ),
           )
         }
-        // 跟随开关：默认开；用户往下翻看别的段落时点一下即可停止自动滚动
-        if (activeIndex >= 0 && tokens.isEmpty()) {
-          TextButton(onClick = { follow = !follow }) {
-            Icon(
-              if (follow) Icons.Filled.PauseCircle else Icons.Filled.PlayCircleOutline,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-              text = if (follow) "跟随中" else "已暂停跟随",
-              style = MaterialTheme.typography.labelMedium,
-            )
-          }
-        }
-        TextButton(onClick = onBackToTracks) { Text("字幕列表") }
       }
+    }
 
-      // ── 轨道切换：主 / 副 ──
-      if (viewable.size >= 2 || (viewable.size == 1 && role != TrackRole.Primary)) {
-        Row(
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .horizontalScroll(rememberScrollState())
-              .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.extraSmall),
-          horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.extraSmall),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          viewable.forEach { track ->
-            val isViewed = track.id == viewedId
-            FilterChip(
-              selected = isViewed,
-              onClick = { viewedId = track.id },
-              label = {
-                Text(
-                  text = getTrackTitle(track),
-                  style = MaterialTheme.typography.labelMedium,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                  // 轨道标题可能是长文件名；不给上限会把 chip 撑到把整行挤满
-                  modifier = Modifier.widthIn(max = 180.dp),
-                )
-              },
-              leadingIcon = {
-                val badge =
-                  when (track.id) {
-                    primaryId -> "主"
-                    secondaryId -> "副"
-                    else -> null
-                  }
-                if (badge != null) {
-                  Text(
-                    text = badge,
-                    style = MaterialTheme.typography.labelSmall,
-                    color =
-                      if (isViewed) {
-                        MaterialTheme.colorScheme.onSecondaryContainer
-                      } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                      },
-                  )
-                }
-              },
-              colors =
-                FilterChipDefaults.filterChipColors(
-                  selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                ),
-            )
-          }
-        }
-      }
-
-      // 查看的不是主字幕 ⇒ 给一步「真的把它切成主字幕」，这才是改变播放状态的动作
-      val otherSelected = role == TrackRole.Secondary
-      if (role != TrackRole.Primary && viewed != null) {
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(horizontal = MaterialTheme.spacing.medium),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Text(
-            text =
-              if (otherSelected) {
-                "这一条是副字幕（画面上方），时间轴可定位，但高亮跟随的是主字幕。"
-              } else {
-                "这一条当前没有启用，时间轴可用于按台词定位。"
-              },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-          )
-          TextButton(onClick = { onPromoteToPrimary(viewed.id) }) {
-            Text("设为主字幕", style = MaterialTheme.typography.labelMedium)
-          }
-        }
-      }
-
-      if (load is CueLoad.Ready && load.truncated) {
+    // 查看的不是主字幕 ⇒ 给一步「真的把它切成主字幕」，这才是改变播放状态的动作
+    val otherSelected = role == TrackRole.Secondary
+    if (role != TrackRole.Primary && viewed != null) {
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = MaterialTheme.spacing.medium),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
         Text(
-          text = "该字幕条目数超过 ${SubtitleTimeline.MAX_CUES} 条，此处仅列出前 ${SubtitleTimeline.MAX_CUES} 条",
+          text =
+            if (otherSelected) {
+              "这一条是副字幕（画面上方），时间轴可定位，但高亮跟随的是主字幕。"
+            } else {
+              "这一条当前没有启用，时间轴可用于按台词定位。"
+            },
           style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.tertiary,
-          modifier = Modifier.padding(horizontal = MaterialTheme.spacing.medium),
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.weight(1f),
         )
-      }
-
-      // ── 搜台词 ──
-      if (cues.isNotEmpty()) {
-        OutlinedTextField(
-          value = query,
-          onValueChange = { query = it },
-          singleLine = true,
-          textStyle = MaterialTheme.typography.bodyMedium,
-          placeholder = { Text("搜索台词文本", style = MaterialTheme.typography.bodyMedium) },
-          leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-          trailingIcon = {
-            if (query.isNotEmpty()) {
-              IconButton(onClick = { query = "" }) {
-                Icon(Icons.Default.Close, contentDescription = "清空搜索")
-              }
-            }
-          },
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.extraSmall),
-        )
-      }
-
-      // 轨道 / 轨道上的台词一条都没有时，先给一句为什么（搜索框这时也不出现，
-      // 没有东西可搜）
-      if (visible.isEmpty()) {
-        EmptyHint(load = load, hasTracks = tracks.isNotEmpty(), hasViewable = viewable.isNotEmpty(), query = query.trim())
-      }
-
-      if (visible.isNotEmpty()) {
-        LazyColumn(
-          state = listState,
-          modifier = Modifier.fillMaxWidth(),
-          contentPadding = PaddingValues(bottom = MaterialTheme.spacing.large),
-        ) {
-          itemsIndexed(visible) { index, cue ->
-            CueRow(
-              index = index + 1,
-              cue = cue,
-              active = index == activeIndex,
-              onClick = {
-                // 点了某句 = 明确要「去那里」，所以把跟随打开，跳完继续跟着播
-                follow = true
-                onSeekToMs(cue.startMs)
-              },
-            )
-          }
+        TextButton(onClick = { onPromoteToPrimary(viewed.id) }) {
+          Text("设为主字幕", style = MaterialTheme.typography.labelMedium)
         }
       }
+    }
+
+    if (load is CueLoad.Ready && load.truncated) {
+      Text(
+        text = "该字幕条目数超过 ${SubtitleTimeline.MAX_CUES} 条，此处仅列出前 ${SubtitleTimeline.MAX_CUES} 条",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.tertiary,
+        modifier = Modifier.padding(horizontal = MaterialTheme.spacing.medium),
+      )
+    }
+
+    // ── 搜台词 ──
+    if (cues.isNotEmpty()) {
+      OutlinedTextField(
+        value = query,
+        onValueChange = { query = it },
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyMedium,
+        placeholder = { Text("搜索台词文本", style = MaterialTheme.typography.bodyMedium) },
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+        trailingIcon = {
+          if (query.isNotEmpty()) {
+            IconButton(onClick = { query = "" }) {
+              Icon(Icons.Default.Close, contentDescription = "清空搜索")
+            }
+          }
+        },
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.extraSmall),
+      )
+    }
+
+    // 轨道 / 轨道上的台词一条都没有时，先给一句为什么（搜索框这时也不出现，
+    // 没有东西可搜）
+    if (visible.isEmpty()) {
+      EmptyHint(load = load, hasTracks = tracks.isNotEmpty(), hasViewable = viewable.isNotEmpty(), query = query.trim())
+    }
+
+    if (visible.isNotEmpty()) {
+      LazyColumn(
+        state = listState,
+        // 面板给的是固定高度，列表吃掉剩余空间；不 weight 的话它只按内容量一次长，
+        // 反而会把整个面板撑破（横屏时尤其明显）
+        modifier = Modifier.fillMaxWidth().weight(1f),
+        contentPadding = PaddingValues(bottom = MaterialTheme.spacing.large),
+      ) {
+        itemsIndexed(visible) { index, cue ->
+          CueRow(
+            index = index + 1,
+            cue = cue,
+            // 有偏移 / 变速时显示「播放位置时间」：写多少就跳到多少，和进度条对得上
+            timeLabel =
+              if (shifted) {
+                "${SubtitleTimeline.clock(fileToPlaybackMs(cue.startMs))} → " +
+                  SubtitleTimeline.clock(fileToPlaybackMs(cue.endMs))
+              } else {
+                cue.timeLabel
+              },
+            active = index == activeIndex,
+            onClick = {
+              // 点了某句 = 明确要「去那里」，所以把跟随打开，跳完继续跟着播
+              follow = true
+              onSeekToMs(fileToPlaybackMs(cue.startMs))
+            },
+          )
+        }
+      }
+    }
+  }
+
+  if (isPortrait) {
+    // 竖屏：底部抽屉
+    PlayerSheet(onDismissRequest = onDismissRequest) {
+      Column(modifier = Modifier.fillMaxWidth()) {
+        header()
+        body()
+      }
+    }
+  } else {
+    // 横屏：右侧半透明悬浮面板，不加遮罩 —— 看时间线的同时画面照常在播。
+    // 返回键要关面板而不是退出播放（抽屉形态由 PlayerSheet 自己接管，这里得自己挂）。
+    BackHandler(onBack = onDismissRequest)
+    DraggablePanel(
+      header = header,
+      scrollable = false,
+      heightFraction = 0.96f,
+    ) {
+      body()
     }
   }
 }
@@ -472,6 +577,8 @@ private fun EmptyHint(
 private fun CueRow(
   index: Int,
   cue: SubtitleCue,
+  /** 显示用的「起 → 止」。有字幕偏移 / 变速时是播放位置时间，否则是文件时间 */
+  timeLabel: String,
   active: Boolean,
   onClick: () -> Unit,
 ) {
@@ -508,7 +615,7 @@ private fun CueRow(
       )
       Column(modifier = Modifier.weight(1f)) {
         Text(
-          text = cue.timeLabel,
+          text = timeLabel,
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.primary,
         )

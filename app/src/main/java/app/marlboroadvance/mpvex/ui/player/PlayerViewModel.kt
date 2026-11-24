@@ -2015,9 +2015,21 @@ class PlayerViewModel(
     coalesceSeek(offset)
   }
 
-  fun seekTo(position: Int) {
+  /**
+   * 跳到某个绝对位置（秒）。
+   *
+   * [exact] = true 时**强制帧精确**（`absolute+exact`），不跟随全局 `hr-seek` 设置。
+   * 用于「点某一句台词跳到那里」这类**落点有明确语义**的跳转：默认的
+   * `absolute+keyframes` 会落在目标之前最近的关键帧上，长 GOP 片源能差好几秒，
+   * 表现就是「时间线写着 2:03、点下去落在 1:56」。进度条拖动不需要它
+   * （那里图的是跟手，帧精确反而更慢）。
+   */
+  fun seekTo(
+    position: Int,
+    exact: Boolean = false,
+  ) {
     renewSeekPauseSafetyNet()
-    dispatchAbsoluteSeek(position)
+    dispatchAbsoluteSeek(position, exact)
   }
 
   /**
@@ -2077,7 +2089,10 @@ class PlayerViewModel(
    * 真正把绝对定位发给 mpv（IO 线程，单飞：新 seek 取消旧的）。
    * [seekTo]（跳章节、跳过片头这类单点跳转）与拖动节流共用这一条路。
    */
-  private fun dispatchAbsoluteSeek(position: Int) {
+  private fun dispatchAbsoluteSeek(
+    position: Int,
+    exact: Boolean = false,
+  ) {
     scrubSeekJob?.cancel()
     scrubSeekJob =
       viewModelScope.launch(Dispatchers.IO) {
@@ -2118,9 +2133,10 @@ class PlayerViewModel(
         seekCoalesceJob?.cancel()
         pendingSeekOffset = 0
 
-        // Use precise seeking for videos shorter than 2 minutes (120 seconds) or if preference is enabled
+        // Use precise seeking for videos shorter than 2 minutes (120 seconds) or if preference is enabled.
+        // [exact] 优先于一切：点台词这种「落点必须就是那一句」的跳转不能被 keyframes 降级。
         val shouldUsePreciseSeeking =
-          playerPreferences.usePreciseSeeking.get() || (knownDuration ?: 0) < 120
+          exact || playerPreferences.usePreciseSeeking.get() || (knownDuration ?: 0) < 120
         val seekMode = if (shouldUsePreciseSeeking) "absolute+exact" else "absolute+keyframes"
         // ⚠️⚠️ 记账**必须紧贴命令之前**：这次跳转的目标是「seek 真的落地之前，位置读数
         //   不能代表用户在哪儿」的唯一凭据（详见 [PlayerSeekTracker]）。
