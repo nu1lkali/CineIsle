@@ -195,7 +195,7 @@ object AggregateSearchScreen : Screen {
           )
           AggregateServerStrip(
             outcomes = outcomes,
-            isParticipating = vm::isParticipating,
+            scopeIds = scopeIds,
             onToggle = vm::toggleServer,
             onOnly = vm::searchOnlyServer,
             modifier = Modifier.padding(bottom = 6.dp),

@@ -1027,8 +1027,9 @@ private fun parseServerAddress(raw: String): Triple<String, Int, Boolean>? {
  * 只做导航，不持有任何状态：点它跳到独立路由，
  * 参与范围、关键词、结果都在那一页自己的 ViewModel 里。
  *
- * 文案说明具体行为（并发查几台、多台都有时合并），因为「聚合」两个字
- * 在项目里已经指「聚合库」（多库并成一个网格），不说清楚会被理解成同一件事。
+ * 描述文案采用工程化表述：写明检索范围、并发方式、归并规则与可用视图，
+ * 不用「一起搜」「多台都有时」这类口语。另一个原因是「聚合」在项目里
+ * 已经指「聚合库」（多库并成一个网格），不写清边界会被理解成同一件事。
  */
 @Composable
 private fun AggregateSearchEntryCard(
@@ -1065,7 +1066,7 @@ private fun AggregateSearchEntryCard(
           color = MaterialTheme.colorScheme.onSecondaryContainer,
         )
         Text(
-          text = "在 $serverCount 台服务器中并发检索；同一部影片多台都有时合并为一条",
+          text = "并行检索 $serverCount 台服务器；重复条目归并为单条，支持参与范围控制与分组视图",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
           maxLines = 2,

@@ -49,24 +49,39 @@ import app.marlboroadvance.mpvex.domain.emby.aggregate.ServerPhase
  * 这里用 [combinedClickable] 一次挂好两个手势，交互稳定。形状沿用项目里
  * 搜索历史胶囊那一套（圆角胶囊 + 发丝边），但**填充只用于表达「参与」**：
  * 未参与是透明底 + `outline` 描边，避免两种状态都出现浅蓝底色而无法分辨。
+ *
+ * ## 参与范围必须是参数，不能是 lambda
+ *
+ * ⚠️ 早期版本传 `vm::isParticipating`（方法引用），它内部读 `StateFlow.value`——
+ * 那不是 Compose 能订阅的 snapshot state；而 `LazyRow` 按 `serverId` 复用 item，
+ * `ServerOutcome` 内容没变时 item 被整体 skip，`selected` 永远不重算。
+ * 结果是点「全选」后标题行的「已选 N/M 台」变了，chip 却只有一部分跟着变。
+ * 现在把 [scopeIds] 作为参数传入，并把 `selected` 折进 items 的**数据**：
+ * 它成了 item 的输入值，范围一变该 item 必然重组。
  */
 @Composable
 fun AggregateServerStrip(
   outcomes: List<ServerOutcome>,
-  isParticipating: (Long) -> Boolean,
+  /** 参与集；`null` = 全部参与 */
+  scopeIds: Set<Long>?,
   onToggle: (Long) -> Unit,
   onOnly: (Long) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  // `selected` 必须是 item 数据的一部分，不能在 itemContent 里靠捕获的外部 lambda 现算。
+  val rows =
+    outcomes.map { outcome ->
+      outcome to (scopeIds?.contains(outcome.serverId) ?: true)
+    }
   LazyRow(
     modifier = modifier.fillMaxWidth(),
     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    items(outcomes, key = { it.serverId }) { outcome ->
+    items(rows, key = { it.first.serverId }) { (outcome, selected) ->
       ServerChip(
         outcome = outcome,
-        selected = isParticipating(outcome.serverId),
+        selected = selected,
         onClick = { onToggle(outcome.serverId) },
         onLongClick = { onOnly(outcome.serverId) },
       )

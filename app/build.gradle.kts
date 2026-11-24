@@ -3865,7 +3865,16 @@ android {
     //  · 【位置固定】标题行右侧动作常驻，按状态在「全选 / 取消全选」之间切换文案，
     //    槽位给 `widthIn(min = 78.dp)`。此前是「全选时才不画按钮」，点掉一台后按钮
     //    突然出现，标题与 chip 条整体被顶下去。取消全选保留当前服务器一台（不允许零参与）。
-    versionCode = 331
+    // ── v332（修复轮，versionName 仍为 1.6.80）：参与范围 chip 刷新 + 入口文案工程化 ──
+    //  · 【chip 不刷新】`AggregateServerStrip` 原先传 `vm::isParticipating` 方法引用，
+    //    它内部读 `StateFlow.value`（非 Compose snapshot state）；`LazyRow` 按 serverId
+    //    复用 item，`ServerOutcome` 内容没变时 item 被 skip ⇒ `selected` 永不重算。
+    //    现场表现：点「全选」后「已选 N/M 台」变了，chip 却只有一部分跟着变；
+    //    单独点选某台也不见底色变化。⇒ 改为把 `scopeIds` 作为参数传入，并把
+    //    `selected` 折进 items 的数据（Pair），让它成为 item 输入值，范围一变必然重组。
+    //  · 【文案工程化】服务器管理页入口卡描述改为「并行检索 N 台服务器；重复条目
+    //    归并为单条，支持参与范围控制与分组视图」，去掉「在…中」「多台都有时」口语。
+    versionCode = 332
     versionName = "1.6.80"
 
     vectorDrawables {
