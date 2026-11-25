@@ -11,7 +11,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,10 +28,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.CurrencyRupee
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.filled.MonetizationOn
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -40,7 +45,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -58,8 +62,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -312,11 +319,15 @@ object AboutScreen : Screen {
               ) {
                 AboutGlassButton(
                   text = stringResource(id = R.string.pref_about_oss_libraries),
+                  icon = Icons.AutoMirrored.Outlined.Article,
                   modifier = Modifier.weight(1f),
                   onClick = { backstack.add(LibrariesScreen) },
                 )
                 AboutGlassButton(
                   text = "GitHub",
+                  // 品牌按钮用 GitHub 官方 mark（单色 vector，随 tint 适配深浅主题），
+                  // 而不是通用的「代码」图标。
+                  iconPainter = painterResource(R.drawable.ic_github),
                   modifier = Modifier.weight(1f),
                   onClick = {
                     // 没装浏览器时 startActivity 会抛 ActivityNotFoundException，静默吞掉
@@ -344,6 +355,7 @@ object AboutScreen : Screen {
                 HorizontalDivider(color = cs.onPrimaryContainer.copy(alpha = 0.12f))
                 AboutActionRow(
                   label = "检查更新",
+                  icon = Icons.Filled.Update,
                   value = if (checking) "正在检查…" else "当前 v$versionName",
                   enabled = !checking,
                   onClick = { updateViewModel.checkForUpdate(manual = true) },
@@ -356,6 +368,7 @@ object AboutScreen : Screen {
               HorizontalDivider(color = cs.onPrimaryContainer.copy(alpha = 0.12f))
               AboutActionRow(
                 label = stringResource(id = R.string.i18n_about_contact_developer),
+                icon = Icons.Filled.Mail,
                 value = DEVELOPER_EMAIL,
                 onClick = {
                   runCatching {
@@ -377,6 +390,9 @@ object AboutScreen : Screen {
               // 只重排展示，不改变粘贴给开发者的那份诊断串。
               DeviceInfoPanel(
                 raw = collectDeviceInfo(),
+                // 与主卡共用同一个呼吸相位：设备面板不是「又一张静态卡」，
+                // 而是浮在主卡渐变之上、跟着它一起起伏的一层玻璃。
+                breath = fraction,
                 onCopy = {
                   clipboardManager.setText(AnnotatedString(collectDeviceInfo()))
                   Toast.makeText(context, "已复制设备信息", Toast.LENGTH_SHORT).show()
@@ -606,9 +622,10 @@ private data class DeviceInfoRow(
   val value: String,
 )
 
-/** 一组同类信息（应用与设备 / 播放内核）。 */
+/** 一组同类信息（应用与设备 / 播放内核）。[icon] 给分组标题做视觉锚点。 */
 private data class DeviceInfoGroup(
   val title: String,
+  val icon: ImageVector,
   val rows: List<DeviceInfoRow>,
 )
 
@@ -638,6 +655,7 @@ private fun deviceInfoGroups(raw: String): List<DeviceInfoGroup> {
     listOf(
       DeviceInfoGroup(
         title = "应用与设备",
+        icon = Icons.Filled.PhoneAndroid,
         rows =
           listOf(
             DeviceInfoRow("版本", valueOf("App version")),
@@ -649,6 +667,7 @@ private fun deviceInfoGroups(raw: String): List<DeviceInfoGroup> {
       ),
       DeviceInfoGroup(
         title = "播放内核",
+        icon = Icons.Filled.Movie,
         rows =
           listOf(
             DeviceInfoRow("mpv", valueOf("MPV version")),
@@ -678,21 +697,71 @@ private fun deviceInfoGroups(raw: String): List<DeviceInfoGroup> {
 @Composable
 private fun DeviceInfoPanel(
   raw: String,
+  breath: Float,
   onCopy: () -> Unit,
 ) {
   val cs = MaterialTheme.colorScheme
   val groups = remember(raw) { deviceInfoGroups(raw) }
+  val shape = RoundedCornerShape(20.dp)
 
-  Surface(
-    modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(18.dp),
-    // 比卡片底色再深一层（5%），是「面板」而不是「又一张卡」；
-    // 1dp 描边用同色 10% 透明度，在浅色与深色主题下都能立住，不引入硬编码色。
-    color = cs.onPrimaryContainer.copy(alpha = 0.05f),
-    border = BorderStroke(1.dp, cs.onPrimaryContainer.copy(alpha = 0.10f)),
+  // 这层不铺任何不透明底色：主卡是一张会呼吸的彩色渐变玻璃卡，设备面板浮在它
+  // 上面，只叠「极淡磨砂 + 一层随同一相位游走的柔光 + 顶部高光 + 玻璃内描边」，
+  // 于是底下那片渐变照旧透出来，光斑跟着主卡一起起伏 —— 有渐变、会呼吸、有质感，
+  // 却不再是闷在渐变里的一块浅蓝，也不是干巴巴一片分隔线。
+  Box(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clip(shape)
+        .drawWithCache {
+          // 呼吸光斑：与主卡共用 [breath]，但在面板范围内走一条更短的路径，
+          // 看上去就是这层玻璃在跟着大卡一起「吸气 / 呼气」。
+          val cx = size.width * (0.20f + 0.60f * breath)
+          val cy = size.height * (0.12f + 0.72f * (1f - breath))
+          val radius = size.maxDimension * 1.05f
+          val frost = Color.White.copy(alpha = 0.09f)
+          val glow =
+            Brush.radialGradient(
+              0f to Color.White.copy(alpha = 0.22f),
+              0.5f to Color.White.copy(alpha = 0.07f),
+              1f to Color.Transparent,
+              center = Offset(cx, cy),
+              radius = radius,
+            )
+          val sheen =
+            Brush.verticalGradient(
+              colors = listOf(Color.White.copy(alpha = 0.26f), Color.Transparent),
+              startY = 0f,
+              endY = size.height * 0.5f,
+            )
+          // 上亮下暗的细边：与主卡同一套玻璃语言，把面板从渐变里「托」起来。
+          val edge =
+            Brush.verticalGradient(
+              colors =
+                listOf(
+                  Color.White.copy(alpha = 0.50f),
+                  Color.White.copy(alpha = 0.06f),
+                ),
+            )
+          val cr = CornerRadius(20.dp.toPx())
+          onDrawBehind {
+            drawRoundRect(color = frost, cornerRadius = cr)
+            drawRoundRect(brush = glow, cornerRadius = cr)
+            drawRoundRect(brush = sheen, cornerRadius = cr)
+            drawRoundRect(brush = edge, cornerRadius = cr, style = Stroke(1.dp.toPx()))
+          }
+        }
+        .padding(horizontal = 18.dp, vertical = 16.dp),
   ) {
-    Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
+    Column {
       Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+          imageVector = Icons.Filled.Devices,
+          contentDescription = null,
+          modifier = Modifier.size(20.dp),
+          tint = cs.onPrimaryContainer.copy(alpha = 0.9f),
+        )
+        Spacer(modifier = Modifier.width(10.dp))
         Text(
           text = stringResource(R.string.i18n_device_info),
           style = MaterialTheme.typography.titleSmall,
@@ -704,16 +773,24 @@ private fun DeviceInfoPanel(
           modifier =
             Modifier
               .clip(RoundedCornerShape(percent = 50))
-              .background(cs.onPrimaryContainer.copy(alpha = 0.08f))
+              .background(Color.White.copy(alpha = 0.16f))
+              .border(1.dp, Color.White.copy(alpha = 0.28f), RoundedCornerShape(percent = 50))
               .clickable(onClick = onCopy)
               .padding(horizontal = 12.dp, vertical = 6.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
+          Icon(
+            imageVector = Icons.Filled.ContentCopy,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = cs.onPrimaryContainer.copy(alpha = 0.85f),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
           Text(
             text = "复制",
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Medium,
-            color = cs.onPrimaryContainer.copy(alpha = 0.85f),
+            color = cs.onPrimaryContainer.copy(alpha = 0.9f),
           )
         }
       }
@@ -727,16 +804,40 @@ private fun DeviceInfoPanel(
           color = cs.onPrimaryContainer.copy(alpha = 0.85f),
         )
       } else {
-        groups.forEach { group ->
-          Spacer(modifier = Modifier.height(16.dp))
-          Text(
-            text = group.title,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 0.08.sp,
-            color = cs.onPrimaryContainer.copy(alpha = 0.62f),
-          )
-          Spacer(modifier = Modifier.height(4.dp))
+        groups.forEachIndexed { groupIndex, group ->
+          if (groupIndex > 0) {
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider(color = Color.White.copy(alpha = 0.30f))
+          }
+          Spacer(modifier = Modifier.height(14.dp))
+          // 分组标题：左侧一根主色引导条 + 图标，是整块玻璃里唯一的有色点缀，
+          // 让「分组」被一眼读出来，而不是靠一堆分隔线硬切。
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+              modifier =
+                Modifier
+                  .width(3.dp)
+                  .height(14.dp)
+                  .clip(RoundedCornerShape(2.dp))
+                  .background(cs.primary),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+              imageVector = group.icon,
+              contentDescription = null,
+              modifier = Modifier.size(15.dp),
+              tint = cs.onPrimaryContainer.copy(alpha = 0.72f),
+            )
+            Spacer(modifier = Modifier.width(7.dp))
+            Text(
+              text = group.title,
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.SemiBold,
+              letterSpacing = 0.08.sp,
+              color = cs.onPrimaryContainer.copy(alpha = 0.72f),
+            )
+          }
+          Spacer(modifier = Modifier.height(6.dp))
           group.rows.forEach { row ->
             Row(
               modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -776,10 +877,15 @@ private fun DeviceInfoPanel(
 private fun AboutGlassButton(
   text: String,
   modifier: Modifier = Modifier,
+  // 二选一：普通按钮给矢量图标；品牌按钮（GitHub）给单色 drawable，
+  // 两者都随同一个 tint 着色，深浅主题自动适配。
+  icon: ImageVector? = null,
+  iconPainter: Painter? = null,
   onClick: () -> Unit,
 ) {
   val cs = MaterialTheme.colorScheme
   val shape = RoundedCornerShape(14.dp)
+  val iconTint = cs.onPrimaryContainer.copy(alpha = 0.9f)
   Box(
     modifier =
       modifier
@@ -790,12 +896,31 @@ private fun AboutGlassButton(
         .clickable(onClick = onClick),
     contentAlignment = Alignment.Center,
   ) {
-    Text(
-      text = text,
-      style = MaterialTheme.typography.titleSmall,
-      fontWeight = FontWeight.SemiBold,
-      color = cs.onPrimaryContainer,
-    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      when {
+        iconPainter != null ->
+          Icon(
+            painter = iconPainter,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = iconTint,
+          )
+        icon != null ->
+          Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = iconTint,
+          )
+      }
+      Spacer(modifier = Modifier.width(8.dp))
+      Text(
+        text = text,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = cs.onPrimaryContainer,
+      )
+    }
   }
 }
 
@@ -809,6 +934,7 @@ private fun AboutGlassButton(
 @Composable
 private fun AboutActionRow(
   label: String,
+  icon: ImageVector,
   value: String,
   enabled: Boolean = true,
   onClick: () -> Unit,
@@ -823,6 +949,13 @@ private fun AboutActionRow(
         .padding(vertical = 13.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
+    Icon(
+      imageVector = icon,
+      contentDescription = null,
+      modifier = Modifier.size(20.dp),
+      tint = cs.onPrimaryContainer.copy(alpha = if (enabled) 0.7f else 0.4f),
+    )
+    Spacer(modifier = Modifier.width(14.dp))
     Text(
       text = label,
       style = MaterialTheme.typography.bodyMedium,

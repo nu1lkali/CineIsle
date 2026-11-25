@@ -21,6 +21,8 @@ import app.marlboroadvance.mpvex.domain.network.pickFolderCover
 import app.marlboroadvance.mpvex.domain.network.type
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.AlistClient
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.SearchCapability
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.SearchableNetworkClient
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.download.NetworkDownloadCenter
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkFileOps
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkOpResult
@@ -616,6 +618,177 @@ class NetworkBrowserViewModel(
       // 单张失败不该影响其它张，更不能让异常冒进 viewModelScope（没人接 ⇒ 崩进程）
       runCatching { loader.enqueue(NetworkPhotoImageLoader.thumbRequest(application, url)) }
     }
+  }
+
+  // ── 服务端全库搜索（AList 索引 / SearchableNetworkClient）──
+
+  /**
+   * 搜索能力探测结论。只有 [SearchCapability.Available] 时 UI 才显示全库搜索入口。
+   *
+   * 非 AList 协议**不发探针**、直接留 [SearchCapability.Unknown] —— 界面保持原样，
+   * 不会给 SMB / FTP / WebDAV 平白多一行说明。探测结论是连接级配置，
+   * [AlistClient] 会话内缓存，所以每层目录顺手问一次也不会重复发请求。
+   */
+  private val _searchCapability = MutableStateFlow<SearchCapability>(SearchCapability.Unknown)
+  val searchCapability: StateFlow<SearchCapability> = _searchCapability.asStateFlow()
+
+  /** 结果态（Idle / Loading / Content / Empty / Error），见 [ServerSearchUiState] */
+  private val _serverSearch = MutableStateFlow<ServerSearchUiState>(ServerSearchUiState.Idle)
+  val serverSearch: StateFlow<ServerSearchUiState> = _serverSearch.asStateFlow()
+
+  /** 在途搜索协程：改词 / 退出 / 续页都要先取消它 */
+  private var searchJob: kotlinx.coroutines.Job? = null
+
+  /**
+   * 会话序号：每次「新一次搜索」+1，请求回来对不上就直接丢弃。
+   *
+   * 与聚合检索的 sessionSeq 同一个作用：debounce 没取消干净、或网络慢导致上一批
+   * 迟到时，旧词的结果不能盖掉新词的结果。续页属于同一次搜索，**不**递增。
+   */
+  private var searchSeq = 0
+
+  /** 取具备搜索能力的客户端；非 AList / 连接已失效返回 null。复用 Repository 的活跃客户端缓存 */
+  private suspend fun searchClient(): SearchableNetworkClient? {
+    val connection =
+      cachedConnection
+        ?: repository.getConnectionById(connectionId)?.also { cachedConnection = it }
+        ?: return null
+    return runCatching { repository.clientFor(connection) }.getOrNull() as? SearchableNetworkClient
+  }
+
+  /** 探测服务端是否开了搜索索引。非 AList 直接跳过，界面保持改造前的样子。 */
+  fun probeServerSearch() {
+    viewModelScope.launch {
+      val connection =
+        cachedConnection
+          ?: repository.getConnectionById(connectionId)?.also { cachedConnection = it }
+          ?: return@launch
+      if (connection.protocol != NetworkProtocol.ALIST) return@launch
+      val client =
+        runCatching { repository.clientFor(connection) }.getOrNull() as? SearchableNetworkClient
+      _searchCapability.value = client?.probeSearch() ?: SearchCapability.Unknown
+    }
+  }
+
+  /**
+   * 用户改词：debounce [SEARCH_DEBOUNCE_MS] 后重搜第一页。
+   *
+   * 先取消上一个 Job 再 +1 [searchSeq]：连打几个字的中间态不会各发一次请求，
+   * 迟到的旧响应也因为 seq 不符被丢弃。空词回 [ServerSearchUiState.Idle]。
+   */
+  fun onServerSearchQueryChange(keyword: String) {
+    searchJob?.cancel()
+    val q = keyword.trim()
+    if (q.isEmpty()) {
+      searchSeq++
+      _serverSearch.value = ServerSearchUiState.Idle
+      return
+    }
+    val seq = ++searchSeq
+    _serverSearch.value = ServerSearchUiState.Loading(q)
+    searchJob =
+      viewModelScope.launch {
+        delay(SEARCH_DEBOUNCE_MS)
+        runSearch(seq, q, page = 1, append = false)
+      }
+  }
+
+  /** 进入结果态时立即用当前词发第一页（不走 debounce，用户已经明确点了「全库」）。 */
+  fun submitServerSearch(keyword: String) {
+    searchJob?.cancel()
+    val q = keyword.trim()
+    if (q.isEmpty()) {
+      searchSeq++
+      _serverSearch.value = ServerSearchUiState.Idle
+      return
+    }
+    val seq = ++searchSeq
+    _serverSearch.value = ServerSearchUiState.Loading(q)
+    searchJob = viewModelScope.launch { runSearch(seq, q, page = 1, append = false) }
+  }
+
+  /** 续页：只在 Content 且 hasMore、且没在续页时有效；沿用同一次搜索的 seq。 */
+  fun loadMoreServerSearch() {
+    val current = _serverSearch.value as? ServerSearchUiState.Content ?: return
+    if (!current.hasMore || current.loadingMore) return
+    _serverSearch.value = current.copy(loadingMore = true, loadMoreError = null)
+    val seq = searchSeq
+    val page = current.nextPage
+    searchJob?.cancel()
+    searchJob = viewModelScope.launch { runSearch(seq, current.keyword, page, append = true) }
+  }
+
+  /** 重试：首屏失败用原词重发（续页失败由 [loadMoreServerSearch] 就地处理）。 */
+  fun retryServerSearch() {
+    val q = _serverSearch.value.keywordOrNull ?: return
+    submitServerSearch(q)
+  }
+
+  /** 退出结果态：取消在途请求、作废迟到响应、清状态。 */
+  fun clearServerSearch() {
+    searchJob?.cancel()
+    searchSeq++
+    _serverSearch.value = ServerSearchUiState.Idle
+  }
+
+  /**
+   * 真正发一次搜索并落状态。首屏与续页共用，差别只在 [append]：
+   * - 首屏失败 ⇒ [ServerSearchUiState.Error]（整页给「重试 / 改用当前目录搜索」）；
+   * - 续页失败 ⇒ [ServerSearchUiState.Content.loadMoreError]（结果照常留着，底栏就地重试），
+   *   不能因为一页没拉到就把已经看到的几十条全清掉。
+   */
+  private suspend fun runSearch(
+    seq: Int,
+    keyword: String,
+    page: Int,
+    append: Boolean,
+  ) {
+    val client = searchClient()
+    if (client == null) {
+      if (seq == searchSeq) {
+        val current = _serverSearch.value
+        val message = "当前连接不支持服务端搜索"
+        _serverSearch.value =
+          if (append && current is ServerSearchUiState.Content) {
+            current.copy(loadingMore = false, loadMoreError = message)
+          } else {
+            ServerSearchUiState.Error(keyword, message)
+          }
+      }
+      return
+    }
+    val result = client.search(keyword, page, SEARCH_PER_PAGE)
+    // 迟到批次：词已经换了 / 已经退出结果态，结果一律丢弃
+    if (seq != searchSeq) return
+    result.fold(
+      onSuccess = { data ->
+        val current = _serverSearch.value
+        val base = if (append && current is ServerSearchUiState.Content) current.hits else emptyList()
+        val merged = base + data.hits
+        val carriedTotal = if (current is ServerSearchUiState.Content) current.total else 0
+        _serverSearch.value =
+          if (merged.isEmpty()) {
+            ServerSearchUiState.Empty(keyword)
+          } else {
+            ServerSearchUiState.Content(
+              keyword = keyword,
+              hits = merged,
+              total = maxOf(data.total, carriedTotal),
+              hasMore = data.hasMore,
+              nextPage = page + 1,
+            )
+          }
+      },
+      onFailure = { e ->
+        val message = e.message ?: "搜索失败"
+        val current = _serverSearch.value
+        if (append && current is ServerSearchUiState.Content) {
+          _serverSearch.value = current.copy(loadingMore = false, loadMoreError = message)
+        } else {
+          _serverSearch.value = ServerSearchUiState.Error(keyword, message)
+        }
+      },
+    )
   }
 
   // ── 写操作（目前只有 AList 有官方接口） ──
@@ -1564,6 +1737,12 @@ class NetworkBrowserViewModel(
 
   companion object {
     private const val TAG = "NetworkBrowserVM"
+
+    /** 全库搜索每页条数。与 [AlistClient] 的搜索分页口径保持一致 */
+    private const val SEARCH_PER_PAGE = 50
+
+    /** 改词防抖：连打字时只在停手后发一次请求 */
+    private const val SEARCH_DEBOUNCE_MS = 350L
 
     /**
      * 文件夹封面「列目录」最多试几次（含首次）。

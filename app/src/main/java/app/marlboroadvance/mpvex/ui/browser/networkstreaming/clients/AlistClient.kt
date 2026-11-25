@@ -27,6 +27,8 @@ import okhttp3.Response
 import okio.BufferedSink
 import java.io.IOException
 import java.io.InputStream
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -83,12 +85,21 @@ import java.util.concurrent.TimeUnit
  * 而 `/api/fs/list`（列目录）走的是 `middlewares.Auth`，照样只认 `Authorization`
  * —— 于是「目录能列、图片全挂」。见 [getFileStream] 的三级取值。
  */
-class AlistClient(private val connection: NetworkConnection) : NetworkClient {
+class AlistClient(
+  private val connection: NetworkConnection,
+) : NetworkClient,
+  SearchableNetworkClient {
   companion object {
     private const val TAG = "AlistClient"
 
     /** AList 的 `code` 字段：200 = 成功；401 = token 失效需要重登 */
     private const val CODE_OK = 200
+
+    /** 服务端全库搜索每页条数（UI 触底续页，10 页封顶 = 500 条） */
+    private const val SEARCH_PER_PAGE = 50
+
+    /** 搜索结果最多拉几页：防止宽泛关键词把索引翻到底 */
+    private const val SEARCH_MAX_PAGES = 10
 
     /**
      * `fs/list` 每页条数 —— **必须是显式正数**，别写 0。
@@ -171,6 +182,17 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
 
   @Volatile
   private var connected = false
+
+  /**
+   * 服务端搜索能力探测结论，**只在本次连接会话内**缓存。
+   *
+   * ⚠️ 刻意不落盘：管理员随时可能在后台打开索引，重进连接必须重新问。
+   * 本字段只为「一次会话里别每敲一个字都发一次探针」而存在，`disconnect()`
+   * 会把它清回 [SearchCapability.Unknown]。`Unknown`（探测失败）不缓存，
+   * 下次仍可重试。
+   */
+  @Volatile
+  private var searchCapability: SearchCapability = SearchCapability.Unknown
 
   /**
    * 路径 → 签名 的进程内缓存（key = **相对路径**，与 [NetworkFile.path] 同一口径）。
@@ -315,6 +337,8 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
       // 断开 = 这一轮的会话 / 签名全部作废，别把旧签名留给下一次连接
       signCache.clear()
       failedSigns.clear()
+      // 搜索能力是运行期配置，换服务器 / 换账号 / 重连都必须重新探测
+      searchCapability = SearchCapability.Unknown
     }
   }
 
@@ -511,6 +535,183 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
   suspend fun getFileSize(path: String): Result<Long> =
     withContext(Dispatchers.IO) {
       runCatching { getFileMeta(path).size }
+    }
+
+  // ── 服务端全库搜索（SearchableNetworkClient）──
+
+  /**
+   * 探测服务端是否开了搜索索引。
+   *
+   * 手段是**空关键词探针**：`POST /api/fs/search` 带 `keywords = ""`。开了索引返回
+   * `code = 200`，没开则报错——这是唯一权威判据（版本号、公开设置接口都不可靠，
+   * 索引是运行期配置）。
+   *
+   * 结论在 [searchCapability] 里缓存到本次会话结束：
+   * - `Available` / `Unavailable` 会缓存，避免每敲一个字都发一次探针；
+   * - `Unknown`（网络异常 / 超时）**不缓存**，下次仍可重试，也符合「管理员随时可能
+   *   打开索引，下次连接必须重新问」的要求（断连时字段会被清空）。
+   */
+  override suspend fun probeSearch(): SearchCapability =
+    withContext(Dispatchers.IO) {
+      val cached = searchCapability
+      if (cached is SearchCapability.Available || cached is SearchCapability.Unavailable) {
+        return@withContext cached
+      }
+      val outcome =
+        runCatching {
+          val parsed = postSearch(keyword = "", page = 1, perPage = 1)
+          if (parsed.code == CODE_OK) {
+            SearchCapability.Available
+          } else {
+            SearchCapability.Unavailable(classifySearchFailure(parsed.code, parsed.message))
+          }
+        }.getOrElse { e -> classifySearchException(e) }
+
+      // 只对「问清楚了」的结论做会话内缓存；网络类 Unknown 留给下次重试
+      if (outcome is SearchCapability.Available || outcome is SearchCapability.Unavailable) {
+        searchCapability = outcome
+      }
+      outcome
+    }
+
+  /**
+   * 执行一次全库搜索。
+   *
+   * 结果项**没有 sign / thumb**（服务端不给），[NetworkFile] 相应置 null；起播靠既有
+   * `getFileUri` → `fs/get` 回落链换签名，封面走占位回退，都不需要新代码。
+   *
+   * `hasMore` 以 `content.size >= perPage` 为准而非 `total`——索引脏时 total 可能
+   * 与实际条数不符；同时受 [SEARCH_MAX_PAGES] 封顶，避免宽泛关键词把索引翻到底。
+   */
+  override suspend fun search(
+    keyword: String,
+    page: Int,
+    perPage: Int,
+  ): Result<SearchPage> =
+    withContext(Dispatchers.IO) {
+      runCatching {
+        val parsed = postSearch(keyword, page, perPage)
+        if (parsed.code != CODE_OK) {
+          // 索引被关 / 检索权限变了：把能力降级，UI 的入口随之消失
+          searchCapability =
+            SearchCapability.Unavailable(classifySearchFailure(parsed.code, parsed.message))
+          throw AlistApiException(parsed.code, parsed.message.ifBlank { "搜索失败" })
+        }
+        val data = parsed.data
+        val items = data?.content.orEmpty()
+        val hits = items.mapNotNull { it.toSearchHit() }
+        SearchPage(
+          hits = hits,
+          total = data?.total ?: 0,
+          page = page,
+          hasMore = page < SEARCH_MAX_PAGES && items.size >= perPage,
+        )
+      }.onFailure { e ->
+        // 401 / 业务错误同样可能意味着能力变了，回填让下次探测拿到最新结论
+        val cap = classifySearchException(e)
+        if (cap is SearchCapability.Unavailable) searchCapability = cap
+      }
+    }
+
+  /**
+   * 发一次 `fs/search`，返回解析后的完整响应（**不校验业务码**，交给调用方判定原因）。
+   *
+   * 业务码 401 会抛 [AlistApiException]，借 [withAuthRetry] 重登一次再试；HTTP 层 401
+   * 由 [execute] 抛出，同样走这条重登链。
+   *
+   * `parent` 用 [fsPath] 的空路径（即 `/`）——与 `listFiles("/")` 完全同源，只搜
+   * **本连接挂载点**，不会捞出用户在这个连接里根本点不进去的结果。
+   */
+  private fun postSearch(
+    keyword: String,
+    page: Int,
+    perPage: Int,
+  ): AlistResp<AlistSearchData> =
+    withAuthRetry {
+      val raw =
+        postJson(
+          endpoint = "fs/search",
+          body =
+            buildJsonObject {
+              put("parent", fsPath(""))
+              put("keywords", keyword)
+              put("scope", 0)
+              put("page", page)
+              put("per_page", perPage)
+              put("password", "")
+            },
+          withAuth = true,
+        )
+      val parsed = json.decodeFromString<AlistResp<AlistSearchData>>(raw)
+      if (parsed.code == 401) throw AlistApiException(401, parsed.message)
+      parsed
+    }
+
+  /**
+   * 把搜索结果里的 `parent`（AList 绝对路径，可能含 base path）转成**项目内部相对路径**
+   * 口径，与 `fs/list` 拼出来的 [NetworkFile.path] 完全一致——否则点结果跳目录 / 起播
+   * 会因路径对不上而失效。
+   *
+   * 剥掉 [app.marlboroadvance.mpvex.domain.network.NetworkConnection.path] 前缀；
+   * 不在该前缀下的（异常数据）保留原样，至少不会丢信息。
+   */
+  private fun relativeParentOf(absoluteParent: String): String {
+    val trimmed = absoluteParent.trim('/')
+    val base = connection.path.trim('/')
+    if (base.isNotEmpty() && (trimmed == base || trimmed.startsWith("$base/"))) {
+      return trimmed.removePrefix(base).trim('/')
+    }
+    return trimmed
+  }
+
+  private fun AlistSearchItem.toSearchHit(): SearchHit? {
+    val itemName = name
+    if (itemName.isBlank()) return null
+    val relParent = relativeParentOf(parent)
+    val path = if (relParent.isEmpty()) itemName else "$relParent/$itemName"
+    val file =
+      NetworkFile(
+        name = itemName,
+        path = path,
+        size = size,
+        isDirectory = isDir,
+        lastModified = 0L,
+        mimeType = if (isDir) null else guessNetworkMimeType(itemName),
+        sign = null,
+        thumb = null,
+      )
+    return SearchHit(
+      file = file,
+      parentLabel = if (relParent.isEmpty()) "/" else "/$relParent",
+    )
+  }
+
+  /** 把业务码 + message 翻成「为什么不可用」。索引未启用是最常见的一档。 */
+  private fun classifySearchFailure(
+    code: Int,
+    message: String,
+  ): SearchUnavailableReason {
+    val msg = message.lowercase()
+    val indexOff = listOf("index", "索引", "not enabled", "未启用", "not support", "不支持", "search is not")
+    return when {
+      code == 401 || code == 403 -> SearchUnavailableReason.UNAUTHORIZED
+      indexOff.any { msg.contains(it) } -> SearchUnavailableReason.INDEX_DISABLED
+      else -> SearchUnavailableReason.SERVER_ERROR
+    }
+  }
+
+  /**
+   * 把异常翻成能力结论：网络抖一下 / 超时一律 [SearchCapability.Unknown]（不下结论、
+   * 不缓存、可重试）；只有明确的鉴权 / 业务错误才判 Unavailable。
+   */
+  private fun classifySearchException(e: Throwable): SearchCapability =
+    when {
+      e is SocketTimeoutException || e is InterruptedIOException -> SearchCapability.Unknown
+      e is AlistApiException && (e.code == 401 || e.code == 403) ->
+        SearchCapability.Unavailable(SearchUnavailableReason.UNAUTHORIZED)
+      e is AlistApiException ->
+        SearchCapability.Unavailable(classifySearchFailure(e.code, e.message.orEmpty()))
+      else -> SearchCapability.Unknown
     }
 
   // ── 写操作（AList 官方 API） ──
@@ -1212,6 +1413,32 @@ private data class AlistFsGet(
   val thumb: String = "",
   val type: Int = 0,
   @SerialName("raw_url") val rawUrl: String = "",
+)
+
+/**
+ * `fs/search` 的 data。
+ *
+ * ⚠️ 搜索结果的条目与 `fs/list` **不是同一套字段**：只有
+ * `parent / name / is_dir / size / type`，没有 `sign`、`thumb`、`modified`。
+ * 所以这里单独定义一个 data class，不复用 [AlistFsItem]（复用会让缺失字段静默
+ * 变成默认值，反而掩盖「搜索结果不带签名」这个重要事实）。
+ *
+ * `parent` 是**绝对路径**（含 base path），`total` 是服务端估计的总命中数，
+ * 索引脏时可能与 `content` 不一致，判「还有没有下一页」一律以 [content] 为准。
+ */
+@Serializable
+private data class AlistSearchData(
+  val content: List<AlistSearchItem>? = null,
+  val total: Int = 0,
+)
+
+@Serializable
+private data class AlistSearchItem(
+  val parent: String = "",
+  val name: String = "",
+  @SerialName("is_dir") val isDir: Boolean = false,
+  val size: Long = 0,
+  val type: Int = 0,
 )
 
 /**
