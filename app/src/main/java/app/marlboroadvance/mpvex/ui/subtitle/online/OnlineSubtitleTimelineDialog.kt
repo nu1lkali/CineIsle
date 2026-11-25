@@ -249,8 +249,8 @@ internal fun OnlineSubtitleTimelineDialog(
                       fontWeight = FontWeight.Medium,
                     )
                     Text(
-                      text = "图片字幕（PGS / VobSub）与未知格式无法列出条目。" +
-                        "可以先用下方按钮下载，再到字幕实验室里用播放器试看。",
+                      text = "图片字幕（PGS / VobSub）与未知格式无法列出条目；" +
+                        "可先下载，再在字幕实验室中用播放器试看。",
                       style = MaterialTheme.typography.labelSmall,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                       modifier = Modifier.padding(top = 4.dp),

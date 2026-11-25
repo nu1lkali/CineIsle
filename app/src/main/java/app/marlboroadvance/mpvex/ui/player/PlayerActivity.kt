@@ -61,6 +61,7 @@ import androidx.lifecycle.lifecycleScope
 import app.marlboroadvance.mpvex.database.entities.PlaybackStateEntity
 import app.marlboroadvance.mpvex.databinding.PlayerLayoutBinding
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
+import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.StreamProbe
 import app.marlboroadvance.mpvex.domain.playbackstate.repository.PlaybackStateRepository
 import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
@@ -3213,8 +3214,38 @@ private fun cancelAutoplayCountdown() {
         return
       }
     val mediaSourceId = currentEmbyMediaSourceId()
-    runCatching { viewModel.autoLoadEmbySubtitle(server, itemId, mediaSourceId) }
-      .onFailure { Log.e(TAG, "emby subtitle auto load failed: item=$itemId", it) }
+    val applied =
+      runCatching { viewModel.autoLoadEmbySubtitle(server, itemId, mediaSourceId) }
+        .onFailure { Log.e(TAG, "emby subtitle auto load failed: item=$itemId", it) }
+        .getOrDefault(false)
+    // 服务端没给出任何字幕 ⇒ 走「网络字幕兜底」（设置开启时才动作）
+    if (!applied) maybeAutoFetchOnlineSubtitle(server, itemId, mediaSourceId)
+  }
+
+  /**
+   * 无字幕兜底：检索网络字幕并按匹配阈值挂载。
+   *
+   * ## 为什么提示只覆盖两种结果
+   *
+   * 这次请求不是用户发起的，所以「检索无结果 / 站点失败」一律静默；
+   * 真正需要告知的只有两种：**已经替他挂上了**（否则字幕凭空出现会很困惑），
+   * 以及**有候选但不够准**（告诉他可以手动去面板挑）。
+   */
+  private suspend fun maybeAutoFetchOnlineSubtitle(
+    server: EmbyServer,
+    itemId: String,
+    mediaSourceId: String?,
+  ) {
+    if (!subtitlesPreferences.onlineAutoFetch.get()) return
+    // 画面上已经有字幕就不再兜底（服务端自动挂上 / 用户本集开过）
+    if ((PlayerLib.getPropertyInt("sid") ?: -1) > 0) return
+    val result =
+      runCatching { viewModel.autoFetchOnlineSubtitle(server, itemId, mediaSourceId) }
+        .onFailure { Log.w(TAG, "online subtitle auto fetch failed: item=$itemId", it) }
+        .getOrNull() ?: return
+    if (result.message.isNotBlank()) {
+      android.widget.Toast.makeText(this, result.message, android.widget.Toast.LENGTH_SHORT).show()
+    }
   }
 
   /**

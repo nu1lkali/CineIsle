@@ -262,9 +262,9 @@ fun CineNetworkScreen(modifier: Modifier = Modifier) {
             icon = Icons.Outlined.SignalWifiConnectedNoInternet4,
             title = if (keyword.isEmpty()) "还没有网络连接" else "没有匹配的连接",
             description = if (keyword.isEmpty()) {
-              "支持 SMB / FTP / WebDAV / AList；添加后可在这里直接浏览并起播"
+              "支持 SMB / FTP / WebDAV / AList"
             } else {
-              "可以搜名称、地址或协议（SMB / FTP / WebDAV / AList）"
+              "可搜名称、地址或协议"
             },
             primaryLabel = if (keyword.isEmpty()) "添加连接" else null,
             onPrimary = if (keyword.isEmpty()) ({ showAdd = true }) else null,

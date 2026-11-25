@@ -226,6 +226,8 @@ object SubtitleLabScreen : Screen {
               onTimeline = { timelineOpen = true },
               onPreview = vm::startPreview,
               onStopPreview = vm::stopPreview,
+              importingFromSaveDir = state.importingFromSaveDir,
+              onImportFromSaveDir = vm::importFromSaveDir,
             )
           }
 
@@ -319,8 +321,7 @@ object SubtitleLabScreen : Screen {
                     fontWeight = FontWeight.Medium,
                   )
                   Text(
-                    text = "请先在上方选择目标影片，再使用「搜索并下载字幕」。已下载的字幕会显示在此处，" +
-                      "可试看、校准时间轴与设为默认。",
+                    text = "已下载的字幕可试看、校准时间轴与设为默认",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp),
@@ -396,7 +397,7 @@ object SubtitleLabScreen : Screen {
           }
 
           item(key = "footer") {
-            HelpFooter()
+            Spacer(Modifier.height(8.dp))
           }
         }
       }
@@ -547,6 +548,8 @@ private fun TargetMediaCard(
   onTimeline: () -> Unit,
   onPreview: () -> Unit,
   onStopPreview: () -> Unit,
+  importingFromSaveDir: Boolean = false,
+  onImportFromSaveDir: () -> Unit = {},
 ) {
   Surface(
     shape = RoundedCornerShape(14.dp),
@@ -570,7 +573,7 @@ private fun TargetMediaCard(
 
       if (!hasTarget) {
         Text(
-          text = error ?: "先选一部影片：搜索时按它生成番号，下载的字幕也挂在它下面。",
+          text = error ?: "需先选择影片，检索据此生成番号，下载的字幕关联到该影片",
           style = MaterialTheme.typography.bodySmall,
           color = if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -640,6 +643,17 @@ private fun TargetMediaCard(
             )
             Spacer(Modifier.width(4.dp))
             Text(if (previewing) "关闭画面" else "试看画面", maxLines = 1)
+          }
+          // 「已下载」列表只认索引；旧版本下载 / 手工拷进保存目录的字幕没有索引，
+          // 由这里按当前影片补录（归属来自用户选中的影片，不做启发式猜测）。
+          OutlinedButton(onClick = onImportFromSaveDir, enabled = !importingFromSaveDir) {
+            Icon(
+              Icons.Outlined.FolderOpen,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(if (importingFromSaveDir) "正在导入" else "从目录导入", maxLines = 1)
           }
         }
 
@@ -1207,44 +1221,6 @@ private fun OffsetButton(
       maxLines = 1,
       softWrap = false,
     )
-  }
-}
-
-@Composable
-private fun HelpFooter() {
-  Surface(
-    shape = RoundedCornerShape(12.dp),
-    color = MaterialTheme.colorScheme.surfaceContainerLow,
-    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-  ) {
-    Column(modifier = Modifier.padding(12.dp)) {
-      Text(
-        text = "使用步骤",
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.SemiBold,
-      )
-      val steps =
-        listOf(
-          "1. 选择目标影片，使用「搜索并下载字幕」（迅雷 / SubtitleCat 同时检索）",
-          "2. 下载完成后使用「试看」，上方预览窗口会加载该字幕",
-          "3. 打开「时间线」选择某一条字幕，画面会跳转到对应时间点；时间不匹配时使用 ±100 / ±500 微调",
-        )
-      steps.forEach {
-        Text(
-          text = it,
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.padding(top = 3.dp),
-        )
-      }
-      Text(
-        text = "下载的字幕保存在应用私有目录；若在「设置 → 字幕」中配置了字幕保存目录，" +
-          "会额外另存一份，供播放页与本地扫描直接使用。",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.outline,
-        modifier = Modifier.padding(top = 8.dp),
-      )
-    }
   }
 }
 

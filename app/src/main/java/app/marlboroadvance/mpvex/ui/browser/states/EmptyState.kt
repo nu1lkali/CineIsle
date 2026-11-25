@@ -34,7 +34,7 @@ import androidx.compose.ui.unit.dp
 fun EmptyState(
   icon: ImageVector,
   title: String,
-  message: String,
+  message: String = "",
   modifier: Modifier = Modifier,
 ) {
   // Animated alpha for subtle pulsing effect
@@ -91,16 +91,18 @@ fun EmptyState(
         color = MaterialTheme.colorScheme.onSurface,
       )
 
-      Spacer(modifier = Modifier.height(8.dp))
+      // Message（仅在需要补充信息时渲染，避免与标题重复表达）
+      if (message.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(8.dp))
 
-      // Message
-      Text(
-        text = message,
-        style = MaterialTheme.typography.bodyMedium,
-        textAlign = TextAlign.Center,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        lineHeight = MaterialTheme.typography.bodyMedium.lineHeight,
-      )
+        Text(
+          text = message,
+          style = MaterialTheme.typography.bodyMedium,
+          textAlign = TextAlign.Center,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          lineHeight = MaterialTheme.typography.bodyMedium.lineHeight,
+        )
+      }
     }
   }
 }

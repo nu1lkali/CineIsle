@@ -60,11 +60,16 @@ object AggregateSearchRank {
    * ```text
    * 1. 匹配层级   同上（各台命名不同时，名字更贴切的排前）
    * 2. 类型权重
-   * 3. 当前服务器 命中优先 —— 不切服是最符合预期的行为
-   * 4. 文件大小   大的在前（同片多版本时通常是画质更好的那份）
-   * 5. 服务器序
-   * 6. 名称
+   * 3. 观看进度   进度比例大的在前 —— 「我在哪台看到一半」是多服用户的真实问题
+   * 4. 当前服务器 命中优先 —— 不切服是最符合预期的行为
+   * 5. 文件大小   大的在前（同片多版本时通常是画质更好的那份）
+   * 6. 服务器序
+   * 7. 名称
    * ```
+   *
+   * 进度排在「当前服务器」之前是刻意的：多台都有同一部片时，用户点它的意图
+   * 大多是「接着看」。两边进度都为 0（都没看过）时这一级判平，自然回到
+   * 「当前服务器优先」—— 既有手感不变。
    *
    * @param currentServerId 用户此刻正在用的服务器；null = 无偏好
    */
@@ -74,6 +79,10 @@ object AggregateSearchRank {
       if (r != 0) return@Comparator r
 
       r = typeWeight(a.item).compareTo(typeWeight(b.item))
+      if (r != 0) return@Comparator r
+
+      // 降序：进度靠前的在前
+      r = b.playedRatio.compareTo(a.playedRatio)
       if (r != 0) return@Comparator r
 
       r = currentBias(a, currentServerId).compareTo(currentBias(b, currentServerId))

@@ -229,7 +229,7 @@ data class PersonMergeScreen(
       val s = server ?: return
       val t = term.trim()
       if (t.isEmpty()) {
-        searchMessage = "先输入要搜的名字"
+        searchMessage = "请输入检索关键词"
         return
       }
       scope.launch {
@@ -373,7 +373,7 @@ data class PersonMergeScreen(
           item {
             SectionCard(title = "尚未连接服务器") {
               Text(
-                text = "请先到「设置 → Emby」里添加并选中一个服务器，再回来使用演职员合并。",
+                text = "请在「设置 → Emby」中添加并选中服务器后再使用演职员合并。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
@@ -519,8 +519,8 @@ data class PersonMergeScreen(
           item {
             SectionCard(title = "判重规则") {
               Text(
-                text = "名字一样的人到底算不算同一个人，不同库差别很大 —— 下面三档只影响「自动合并」会碰哪些组；" +
-                  "扫描结果始终全量列出，手动合并任何时候都能用。",
+                text = "同名的演员是否视为同一人因媒体库而异。以下三档仅约束「自动合并」的候选范围，" +
+                  "扫描结果始终全量列出，手动合并不受影响。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
@@ -626,15 +626,15 @@ data class PersonMergeScreen(
           item {
             SectionCard(title = "自动合并") {
               Text(
-                text = "按上面的规则，一次性合并全部符合条件的组（${mergeRuleLabel(mergeRule)}）：" +
-                  mergeRuleHint(mergeRule) + " 每组合并前仍会列出保留项让你确认。",
+                text = "按当前规则一次性合并全部符合条件的分组（${mergeRuleLabel(mergeRule)}）：" +
+                  mergeRuleHint(mergeRule) + "每组执行前仍需确认保留项。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
               Spacer(Modifier.height(8.dp))
               if (groups == null) {
                 Text(
-                  text = "先点上面的「扫描重复演员」，这里才知道有多少组可合并。",
+                  text = "需先执行「扫描重复演员」以确定可合并的分组。",
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -653,8 +653,8 @@ data class PersonMergeScreen(
           item {
             SectionCard(title = "孤立演员清理") {
               Text(
-                text = "合并后，被并掉的演员不再挂在任何作品上，但服务器可能还留着条目与头像。" +
-                  "清理会触发服务端自己的「刷新人员」任务把它们回收 —— 不会删除任何影片。",
+                text = "合并后，被合并的演员不再关联任何作品，但服务器条目与头像仍可能保留。" +
+                  "清理会触发服务端的「刷新人员」任务回收这些条目，不会删除影片。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
@@ -666,7 +666,7 @@ data class PersonMergeScreen(
                 Column(modifier = Modifier.weight(1f)) {
                   Text("合并完成后自动清理", style = MaterialTheme.typography.bodyMedium)
                   Text(
-                    text = "会替你触发一次服务端任务；任务跑了什么你看不见，所以默认关。",
+                    text = "合并后触发一次服务端任务，执行过程不可见",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                   )
@@ -855,9 +855,9 @@ data class PersonMergeScreen(
               }
               if (sameNameCount > 0) {
                 Text(
-                  text = "其中 $sameNameCount 条与保留项同名：会先把它们临时改名" +
-                    "（如「${canon.name} #尾号」）再合并 —— 服务器按名字归并演员，" +
-                    "同名会互相顶掉；撤销时自动恢复原名。",
+                  text = "其中 $sameNameCount 条与保留项同名：合并前将临时改名" +
+                    "（如「${canon.name} #尾号」）。服务端按名称归并演员，同名会互相覆盖；" +
+                    "撤销时自动恢复原名。",
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -973,9 +973,8 @@ data class PersonMergeScreen(
         title = { Text("扫描全部演员") },
         text = {
           Text(
-            text = "这一步会把服务器上**每一位**演员都问一遍作品数，" +
-              "人员多的时候会比较慢（每人一次请求）。\n\n" +
-              "它会把「本来就没作品、但你还想留着」的演员也列出来。如果不确定，建议先用左边的「清理孤立演员」。",
+            text = "将逐个查询服务器上全部演员的作品数，人员较多时耗时较长（每人一次请求）。\n\n" +
+              "无作品但需保留的演员也会被列出；无法判定时建议先执行「清理孤立演员」。",
           )
         },
         confirmButton = {
@@ -1036,17 +1035,12 @@ private fun InfoCard(isAdmin: Boolean?) {
     )
     Spacer(Modifier.height(6.dp))
     Text(
-      text = "这里做的事：把多条 Person 的作品引用统一到一条上，写入服务器元数据，" +
-        "所有客户端立即生效，之后可以撤销。",
+      text = "将多条 Person 的作品引用统一至一条并写入服务端元数据，所有客户端立即生效，可撤销；" +
+        "不修改姓名与头像，不删除 Person。",
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.height(6.dp))
-    Text(
-      text = "改不了名字、删不了 Person、换不了头像 —— 保留项叫什么、用什么头像，由你选哪条决定。",
-      style = MaterialTheme.typography.bodySmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
     if (isAdmin == false) {
       Spacer(Modifier.height(8.dp))
       Surface(

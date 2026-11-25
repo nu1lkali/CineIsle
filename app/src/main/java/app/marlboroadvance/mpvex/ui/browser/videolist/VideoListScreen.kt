@@ -633,7 +633,6 @@ private fun VideoListContent(
         EmptyState(
           icon = Icons.Filled.VideoLibrary,
           title = "该文件夹中没有视频",
-          message = "你添加到此文件夹的视频会显示在这里",
         )
       }
     }

@@ -345,7 +345,7 @@ object EmbyDiscoverScreen : Screen {
               verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
               Text(
-                text = "还没有内容。先选一个种子，再看推荐。",
+                text = "选择种子内容后显示推荐",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -495,7 +495,7 @@ private fun SeedPickerDialog(
     title = { Text("选一个种子") },
     text = {
       if (candidates.isEmpty()) {
-        Text("最近没有看过的内容。先去首页看点什么，再回来选种子。")
+        Text("暂无观看记录")
       } else {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
           FlowRow(

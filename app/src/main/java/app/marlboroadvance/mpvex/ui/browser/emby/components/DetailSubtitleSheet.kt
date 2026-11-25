@@ -114,7 +114,7 @@ internal fun DetailSubtitleSheet(
       }
 
       Text(
-        text = "字幕切换在播放页完成 · 本页只展示服务端已识别的字幕",
+        text = "字幕切换在播放页完成 · 本页仅展示服务端已识别字幕",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier

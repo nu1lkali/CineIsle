@@ -330,10 +330,10 @@ private fun ToolListPane(
     Text(
       text =
         if (atRoot) {
-          "根目录只开放「大文件排行」（只读）。整理 / 清理类会把整块存储顶层的文件搬走或删掉，" +
-            "先进到具体目录再用。"
+          "根目录仅开放「大文件排行」（只读）。整理与清理操作会改动存储顶层文件，" +
+            "请进入具体目录后使用。"
         } else {
-          "先扫描目录、把要做的改动列成清单，确认之后才会向服务器发送请求。「大文件排行」只读，只出报告。"
+          "先扫描目录并生成改动清单，确认后才向服务器发送请求。「大文件排行」为只读，仅输出报告。"
         },
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,

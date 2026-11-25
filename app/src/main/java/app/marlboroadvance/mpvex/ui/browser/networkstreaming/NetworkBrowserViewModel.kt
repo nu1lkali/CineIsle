@@ -864,7 +864,7 @@ class NetworkBrowserViewModel(
     // （按类型归类会建「图片/视频」把顶层文件全搬走），而这个位置往往就是
     // 所有网盘挂载的汇合处 —— 一次误点代价太大。UI 那边同样置灰，这里是第二道闸。
     if (!tool.readOnly && isAtRoot()) {
-      onResult(null, "根目录下不开放整理工具，请先进入具体目录")
+      onResult(null, "根目录不支持整理工具，请进入具体目录后使用")
       return
     }
     toolJob =

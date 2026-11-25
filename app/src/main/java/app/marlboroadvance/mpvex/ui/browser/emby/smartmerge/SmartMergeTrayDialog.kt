@@ -96,8 +96,8 @@ internal fun SmartMergeTrayDialog(
 
         if (codeBodies.size > 1) {
           Text(
-            "注意：清单里包含不同番号（${codeLabels.joinToString(" / ")}）。" +
-              "组合后它们会变成同一个作品的多个版本，请确认这是你要的结果。",
+            "清单包含不同番号（${codeLabels.joinToString(" / ")}）。" +
+              "组合后这些条目将成为同一作品的多个版本。",
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,

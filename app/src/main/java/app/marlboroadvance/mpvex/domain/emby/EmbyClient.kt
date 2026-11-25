@@ -659,6 +659,8 @@ object EmbyClient {
     term: String,
     includeItemTypes: List<String>? = null,
     limit: Int = 60,
+    /** 分页起点（聚合检索翻页用）；既有调用不传，行为不变 */
+    startIndex: Int = 0,
     /**
      * 排序方式。默认 SortName（按名称），与改造前行为一致。
      *
@@ -686,6 +688,7 @@ object EmbyClient {
     term = term,
     includeItemTypes = includeItemTypes,
     limit = limit,
+    startIndex = startIndex,
     sortBy = sortBy,
     sortOrder = sortOrder,
     parentId = parentId,

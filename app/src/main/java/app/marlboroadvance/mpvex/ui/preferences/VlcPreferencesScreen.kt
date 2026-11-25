@@ -115,7 +115,7 @@ object VlcPreferencesScreen : Screen {
             )
             VlcSwitchRow(
               title = "丢晚帧 / 跳帧",
-              summary = "解码跟不上时优先保持音画同步；关闭后宁可掉帧也不丢画面。",
+              summary = "解码性能不足时优先保持音画同步；关闭后优先保证画面完整，允许丢帧。",
               checked = dropLateFrames,
               onCheckedChange = prefs.dropLateFrames::set,
             )

@@ -53,9 +53,9 @@ internal fun AltEndpointDialog(
     text = {
       Column {
         Text(
-          text = "同一台服务器的另一个入口，例如家里的内网地址。" +
-            "应用会在网络变化时同时探测两个地址，谁先连通就用谁；" +
-            "两个都不通才会判定这台服务器有问题。",
+          text = "同一服务器的备用入口，例如内网地址。" +
+            "网络状态变化时同时探测两个地址并优先使用可达者；" +
+            "两者均不可达时判定该服务器异常。",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

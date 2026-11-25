@@ -452,7 +452,7 @@ private fun PlaceholderBody(
 
       else -> {
         Text(
-          text = "先选一部影片",
+          text = "请选择影片",
           style = MaterialTheme.typography.bodySmall,
           color = Color.White.copy(alpha = 0.8f),
         )

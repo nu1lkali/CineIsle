@@ -10,6 +10,15 @@ object AppLockMethod {
 
   /** 3×3 点阵滑动连线（至少 4 点）。 */
   const val PATTERN = "pattern"
+
+  /**
+   * 打地鼠：完成指定次数的点击即解锁。
+   *
+   * ⚠️ 这是**技能完成**，不是凭证校验 —— 没有秘密，看得见屏幕的人都能过。
+   * 它降低的是误入概率，不提供访问控制。相关文案三处（方式说明 / 确认弹窗 /
+   * 解锁页底部）必须都写明这一点。
+   */
+  const val HIT_MOLE = "hit_mole"
 }
 
 /**
@@ -49,6 +58,13 @@ class AppLockPreferences(preferenceStore: PreferenceStore) {
   val patternHash = preferenceStore.getString("app_lock_pattern_hash", "")
 
   /**
+   * 打地鼠需要敲中的次数（3 / 5 / 8）。
+   *
+   * 存进去的值可能被外部改坏（比如手工改 prefs），读取时统一收敛到合法档位。
+   */
+  val hitMoleTarget = preferenceStore.getInt("app_lock_hit_mole_target", DEFAULT_HIT_MOLE_TARGET)
+
+  /**
    * 凭证正确后是否**自动解锁**（PIN 免按确定键；图案本来就是画完即验）。
    *
    * 默认关 —— 这是改变解锁手感的行为，由用户自己开（红线：习惯入侵型功能一律可选）。
@@ -67,6 +83,16 @@ class AppLockPreferences(preferenceStore: PreferenceStore) {
     method.set(AppLockMethod.PATTERN)
   }
 
+  /**
+   * 把解锁方式切成打地鼠。
+   *
+   * 没有凭证要存 —— 这个方式刻意不设密码。切过来之后 [pinHash] / [patternHash]
+   * 原样保留，将来切回 PIN / 图案不用重新设。
+   */
+  fun setHitMole() {
+    method.set(AppLockMethod.HIT_MOLE)
+  }
+
   /** 校验输入的 PIN。没设置过（哈希为空）时一律返回 false。 */
   fun verifyPin(pin: String): Boolean {
     val stored = pinHash.get()
@@ -80,13 +106,18 @@ class AppLockPreferences(preferenceStore: PreferenceStore) {
   }
 
   /**
-   * 当前方式是否已配置好凭证。
+   * 当前方式是否能解锁（门禁用它决定「该不该锁」）。
    *
-   * 门禁用它决定「该不该锁」：开了开关但凭证为空（理论上进不去，防御性判断）
-   * 时不能锁 —— 否则用户被永久关在门外。
+   * ⚠️ 名字里的 credential 有误导性：它的真实语义是**「这个方式能不能过去」**。
+   * 打地鼠没有凭证，但一定能过，所以这里必须返回 true —— 漏掉这条分支的后果是
+   * 用户开了开关却被判「无凭证」⇒ 完全不锁，而且不会有任何报错。
+   *
+   * PIN / 图案则要看哈希是否为空：开了开关但凭证为空（理论上进不去）时不能锁，
+   * 否则用户被永久关在门外。
    */
   fun hasCredential(): Boolean = when (method.get()) {
     AppLockMethod.PATTERN -> patternHash.get().isNotEmpty()
+    AppLockMethod.HIT_MOLE -> true
     else -> pinHash.get().isNotEmpty()
   }
 
@@ -104,6 +135,9 @@ class AppLockPreferences(preferenceStore: PreferenceStore) {
 
     /** 九宫格的边长（3 ⇒ 3×3 = 9 个点）。 */
     const val PATTERN_GRID = 3
+
+    /** 打地鼠默认敲中次数（3 / 5 / 8 三档，默认中间那档）。 */
+    const val DEFAULT_HIT_MOLE_TARGET = 5
 
     /** 连续输错这么多次就进冷却，防穷举。 */
     const val MAX_ATTEMPTS = 5

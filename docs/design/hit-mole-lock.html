@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>打地鼠解锁 · 交互原型</title>
+<style>
+:root{
+  --bg:#F4F5F1; --card:#FFFFFF; --line:rgba(0,0,0,.10);
+  --text:#2C2C2A; --text2:#5F5E5A; --text3:#888780;
+  --cell:#EAF3DE; --cellStroke:#C0DD97; --cellUp:#F2F8E7;
+  --active:#FAEEDA; --activeStroke:#BA7517;
+  --done:#C0DD97; --doneInk:#3B6D11;
+  --hole:#3C3D33; --mound:#DFEDC6; --rim:#CBE0A6; --grass:#7FB047; --grassDim:#639922;
+  --accent:#639922; --track:#E4E6DE;
+}
+[data-theme="dark"]{
+  --bg:#161615; --card:#232322; --line:rgba(255,255,255,.12);
+  --text:#F1EFE8; --text2:#B4B2A9; --text3:#888780;
+  --cell:#27500A; --cellStroke:#C0DD97; --cellUp:#2C5A0B;
+  --active:#633806; --activeStroke:#EF9F27;
+  --done:#3B6D11; --doneInk:#C0DD97;
+  --hole:#101208; --mound:#1E3D07; --rim:#2E5A0D; --grass:#97C459; --grassDim:#C0DD97;
+  --accent:#97C459; --track:#33332F;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  display:flex; align-items:flex-start; justify-content:center; gap:28px;
+  padding:36px 20px; flex-wrap:wrap;
+  -webkit-tap-highlight-color:transparent;
+}
+.device{
+  position:relative; width:330px; background:var(--card); border-radius:24px;
+  border:.5px solid var(--line); padding:22px 20px 18px; user-select:none;
+  box-shadow:0 1px 0 rgba(0,0,0,.02);
+}
+.head{display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:6px}
+.head h1{margin:0; font-size:19px; font-weight:500; letter-spacing:.2px}
+.head .sub{margin:4px 0 0; font-size:12px; line-height:1.5; color:var(--text3); max-width:200px}
+.count{font-size:13px; color:var(--text2); font-variant-numeric:tabular-nums; white-space:nowrap; padding-top:4px}
+.bar{display:flex; gap:5px; margin:14px 0 16px}
+.bar i{flex:1; height:4px; border-radius:2px; background:var(--track); transition:background .16s}
+.bar i.on{background:var(--accent)}
+.grid{display:grid; grid-template-columns:repeat(3,1fr); gap:9px}
+.cell{
+  position:relative; aspect-ratio:9/10; padding:0; border-radius:14px; cursor:pointer;
+  background:var(--cell); border:1.5px solid transparent; outline:none;
+  overflow:hidden; transition:background .12s, border-color .12s, transform .06s;
+  -webkit-appearance:none; appearance:none;
+}
+.cell:nth-child(n){border-color:var(--cellStroke)}
+.cell.up{background:var(--cellUp); border-color:var(--activeStroke)}
+.cell.slam{transform:translateY(1.5px)}
+.cell.shake{animation:shake 200ms ease-in-out}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-3px)}50%{transform:translateX(3px)}75%{transform:translateX(-2px)}}
+.ground{position:absolute; inset:0; width:100%; height:100%; z-index:1; pointer-events:none}
+.front{position:absolute; inset:0; width:100%; height:100%; z-index:3; pointer-events:none}
+.ground path,.front path{fill:none; stroke:var(--grass); stroke-width:1.9; stroke-linecap:round}
+.ground .dim path,.front .dim path{stroke:var(--grassDim)}
+.eyes-cry{opacity:0}
+.cell.cry .eyes-open{opacity:0}
+.cell.cry .eyes-cry{opacity:1}
+.cell.cry .tear{animation:tearDrop 320ms ease-in forwards}
+@keyframes tearDrop{
+  0%{opacity:0; transform:translateY(0)}
+  25%{opacity:1}
+  100%{opacity:0; transform:translateY(11px)}
+}
+.mole{position:absolute; inset:0; z-index:2; transform:translateY(74%); transition:transform 120ms cubic-bezier(.22,.9,.28,1)}
+.cell.up .mole{transform:translateY(0)}
+.moleInner{display:block; width:100%; height:100%; transform-origin:50% 100%; transition:transform 55ms linear}
+.moleInner.squash{transform:translateY(3px) scale(1.06,.86)}
+.art{width:100%; height:100%; display:block}
+.layer{position:absolute; inset:0; width:100%; height:100%; z-index:4; pointer-events:none; overflow:visible}
+.hammer{opacity:0; transform-box:view-box; transform-origin:83.333% 96%}
+.hammer.swing{animation:swing 290ms linear forwards}
+@keyframes swing{
+  0%{transform:rotate(8deg); opacity:0; animation-timing-function:ease-out}
+  8%{transform:rotate(2deg); opacity:1}
+  31%{transform:rotate(-6deg); opacity:1; animation-timing-function:cubic-bezier(.45,0,.95,1)}
+  55%{transform:rotate(-26deg); opacity:1; animation-timing-function:linear}
+  69%{transform:rotate(-26deg); opacity:1; animation-timing-function:ease-out}
+  93%{transform:rotate(-12deg); opacity:1}
+  100%{transform:rotate(-12deg); opacity:0}
+}
+.impact{opacity:0; transform-box:view-box; transform-origin:47.8% 31%}
+.impact.on{animation:pop 140ms ease-out}
+@keyframes pop{0%{opacity:0; transform:scale(.55)}35%{opacity:1}100%{opacity:0; transform:scale(1.2)}}
+.badge{
+  position:absolute; left:50%; top:50%; width:30%; aspect-ratio:1; transform:translate(-50%,-50%) scale(.7);
+  border-radius:50%; background:var(--done); display:flex; align-items:center; justify-content:center;
+  opacity:0; transition:opacity .16s, transform .16s; z-index:5;
+}
+.cell.done .badge{opacity:1; transform:translate(-50%,-50%) scale(1)}
+.cell.done .mole{opacity:0; transition:transform 120ms ease-in, opacity 60ms 60ms}
+.badge svg{width:58%; height:58%}
+.foot{margin-top:16px; text-align:center}
+.foot .hint{margin:0; font-size:11.5px; line-height:1.5; color:var(--text3)}
+.foot .stat{margin:6px 0 0; font-size:11px; color:var(--text3); font-variant-numeric:tabular-nums}
+
+.panel{width:300px; font-size:12.5px; color:var(--text2)}
+.panel h2{font-size:13px; font-weight:500; color:var(--text); margin:0 0 10px}
+.field{margin-bottom:14px}
+.field label{display:flex; justify-content:space-between; font-size:12px; color:var(--text3); margin-bottom:5px; font-variant-numeric:tabular-nums}
+input[type=range]{width:100%; accent-color:var(--accent)}
+.seg{display:flex; gap:6px}
+.seg button{
+  flex:1; padding:6px 0; font-size:12.5px; border-radius:9px; cursor:pointer;
+  border:.5px solid var(--line); background:transparent; color:var(--text2); font-family:inherit;
+}
+.seg button.sel{background:var(--accent); color:#fff; border-color:transparent}
+.row{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px}
+.btn{
+  width:100%; padding:9px 0; border-radius:10px; cursor:pointer; font-family:inherit; font-size:13px;
+  border:.5px solid var(--line); background:transparent; color:var(--text);
+}
+.btn.primary{background:var(--accent); color:#fff; border-color:transparent}
+.tip{font-size:11.5px; line-height:1.6; color:var(--text3); margin:14px 0 0; border-top:.5px solid var(--line); padding-top:12px}
+
+.modal{
+  position:fixed; inset:0; background:rgba(20,20,18,.45); display:flex; align-items:center; justify-content:center;
+  padding:20px; z-index:50;
+}
+.modal[hidden]{display:none}
+.sheet{
+  width:300px; background:var(--card); border-radius:18px; padding:20px; color:var(--text);
+}
+.sheet h3{margin:0 0 10px; font-size:15px; font-weight:500}
+.sheet p{margin:0 0 10px; font-size:12.5px; line-height:1.65; color:var(--text2)}
+.sheet .fine{font-size:11.5px; color:var(--text3)}
+.sheet .acts{display:flex; gap:8px; margin-top:16px}
+.sheet .acts .btn{flex:1}
+.over{
+  position:absolute; inset:0; border-radius:24px; background:var(--card); z-index:30;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
+  opacity:0; pointer-events:none; transition:opacity .2s;
+}
+.over.on{opacity:1; pointer-events:auto}
+.over .big{font-size:15px; font-weight:500; color:var(--text)}
+.over .small{font-size:12px; color:var(--text3); font-variant-numeric:tabular-nums}
+.over .btn{width:140px; margin-top:6px}
+</style>
+</head>
+<body>
+
+<div class="device">
+  <div class="head">
+    <div>
+      <h1>打地鼠</h1>
+      <p class="sub">完成指定次数点击后解锁，不校验凭证</p>
+    </div>
+    <div class="count"><span id="hits">0</span> / <span id="targetLabel">5</span></div>
+  </div>
+  <div class="bar" id="bar"></div>
+  <div class="grid" id="grid"></div>
+  <div class="foot">
+    <p class="hint">不校验凭证，任何持有设备的人均可完成</p>
+    <p class="stat" id="stat">用时 0.0s · 漏掉 0 只</p>
+  </div>
+  <div class="over" id="over">
+    <div class="big">已解锁</div>
+    <div class="small" id="overStat"></div>
+    <button class="btn primary" id="again">再玩一次</button>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>参数（真机调试用）</h2>
+  <div class="field">
+    <label>目标次数</label>
+    <div class="seg" id="segTarget">
+      <button data-v="3">3</button>
+      <button data-v="5" class="sel">5</button>
+      <button data-v="8">8</button>
+    </div>
+  </div>
+  <div class="field">
+    <label>单只存留 <span id="holdLabel">760–1140ms</span></label>
+    <input type="range" id="holdMin" min="500" max="1200" step="20" value="760">
+    <input type="range" id="holdMax" min="600" max="1600" step="20" value="1140">
+  </div>
+  <div class="field">
+    <label>出洞间隔 <span id="gapLabel">380–720ms</span></label>
+    <input type="range" id="gapMin" min="150" max="800" step="10" value="380">
+    <input type="range" id="gapMax" min="200" max="1200" step="10" value="720">
+  </div>
+  <div class="row">
+    <span>深色主题</span>
+    <button class="btn" id="theme" style="width:88px;padding:5px 0;font-size:12px">切换</button>
+  </div>
+  <button class="btn primary" id="apply">应用并重开</button>
+  <p class="tip">仅原型：计时用 setTimeout，真机改 Compose 的 Animatable。命中判定、压扁、震动都在落锤到位那一刻（160ms）触发。</p>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <div class="sheet">
+    <h3>使用打地鼠解锁</h3>
+    <p>该方式不设置密码，解锁条件为完成指定次数的点击。任何持有设备的人均可通过，不具备访问控制作用。</p>
+    <p class="fine">可随时在「应用锁」中关闭并改用数字 PIN 或九宫格图案。</p>
+    <div class="acts">
+      <button class="btn" id="cancelModal">取消</button>
+      <button class="btn primary" id="startModal">开始</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var MOLE = ''
+    + '<ellipse cx="20" cy="84" rx="7" ry="5" fill="#B4B2A9"/>'
+    + '<ellipse cx="70" cy="84" rx="7" ry="5" fill="#B4B2A9"/>'
+    + '<ellipse cx="45" cy="56" rx="29" ry="30" fill="#888780"/>'
+    + '<ellipse cx="22" cy="37" rx="4.5" ry="3.5" fill="#5F5E5A"/>'
+    + '<ellipse cx="68" cy="37" rx="4.5" ry="3.5" fill="#5F5E5A"/>'
+    + '<ellipse cx="45" cy="64" rx="21" ry="17" fill="#B4B2A9"/>'
+    + '<ellipse cx="25" cy="69" rx="6" ry="4" fill="#F4C0D1" opacity="0.85"/>'
+    + '<ellipse cx="65" cy="69" rx="6" ry="4" fill="#F4C0D1" opacity="0.85"/>'
+    + '<g class="eyes-open">'
+    + '<ellipse cx="34" cy="50" rx="4.2" ry="4.8" fill="#2C2C2A"/>'
+    + '<ellipse cx="56" cy="50" rx="4.2" ry="4.8" fill="#2C2C2A"/>'
+    + '<circle cx="35.9" cy="48.7" r="1.5" fill="#FFFFFF"/>'
+    + '<circle cx="57.9" cy="48.7" r="1.5" fill="#FFFFFF"/>'
+    + '</g>'
+    + '<g class="eyes-cry">'
+    + '<path d="M30 47 L36 51 L30 55" fill="none" stroke="#2C2C2A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
+    + '<path d="M60 47 L54 51 L60 55" fill="none" stroke="#2C2C2A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
+    + '<ellipse class="tear" cx="32" cy="58" rx="2.1" ry="3.1" fill="#85B7EB"/>'
+    + '<ellipse class="tear" cx="58" cy="58" rx="2.1" ry="3.1" fill="#85B7EB"/>'
+    + '</g>'
+    + '<g stroke="#5F5E5A" stroke-width="1.2" stroke-linecap="round">'
+    + '<path d="M26 61 L15 57"/><path d="M26 65.5 L15 67"/>'
+    + '<path d="M64 61 L75 57"/><path d="M64 65.5 L75 67"/></g>'
+    + '<ellipse cx="45" cy="61.5" rx="7" ry="5.5" fill="#F09595"/>'
+    + '<rect x="39.5" y="68" width="5.4" height="9.5" rx="1.6" fill="#FFFFFF"/>'
+    + '<rect x="45.1" y="68" width="5.4" height="9.5" rx="1.6" fill="#FFFFFF"/>';
+
+  var HAMMER = ''
+    + '<rect x="72.4" y="28.8" width="5.2" height="67.2" rx="2.6" fill="#633806"/>'
+    + '<rect x="64.5" y="19.3" width="21" height="9.5" rx="4.4" fill="#BA7517"/>'
+    + '<ellipse cx="85.5" cy="24" rx="2.1" ry="4" fill="#EF9F27"/>';
+
+  var IMPACT = ''
+    + '<g stroke="#BA7517" stroke-width="1.8" stroke-linecap="round">'
+    + '<path d="M34 22 L28 16"/><path d="M52 22 L58 16"/>'
+    + '<path d="M30 33 L22 36"/><path d="M56 33 L64 36"/></g>';
+
+  var TUFT = '<path d="M0 0C-1 -3.6 -3.6 -6.4 -5.6 -7.6"/>'
+    + '<path d="M0.5 0C0.4 -4.4 0 -8 -0.4 -10.4"/>'
+    + '<path d="M0 0C1.4 -3.6 4 -6 6.4 -7.2"/>';
+
+  function prng(seed) {
+    var a = seed | 0;
+    return function () {
+      a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  function tuft(x, y, s, dim, flip, tilt) {
+    return '<g transform="translate(' + x + ',' + y + ') rotate(' + (tilt || 0) + ') scale('
+      + (flip ? -s : s) + ',' + s + ')"' + (dim ? ' class="dim"' : '') + '>' + TUFT + '</g>';
+  }
+
+  function grassFor(i) {
+    var r = prng(i * 977 + 13);
+    var j = function (base, span) { return (base + (r() * 2 - 1) * span).toFixed(1); };
+    var back = tuft(j(22, 3.5), j(82, 1.5), j(0.82, 0.08), true, r() < 0.5, j(0, 8))
+      + tuft(j(68, 3.5), j(83, 1.5), j(0.8, 0.08), true, r() < 0.5, j(0, 8));
+    var side = tuft(j(8, 2), j(97, 1.5), j(1, 0.1), false, r() < 0.5, j(0, 10))
+      + tuft(j(82, 2), j(98, 1.5), j(1.02, 0.1), false, r() < 0.5, j(0, 10))
+      + tuft(r() < 0.5 ? j(30, 10) : j(60, 10), j(93.5, 2.5), j(0.72, 0.12), true, r() < 0.5, j(0, 12));
+    var front = tuft(j(26, 7), j(100, 1), j(0.86, 0.12), false, r() < 0.5, j(0, 10))
+      + tuft(j(62, 7), j(101, 1), j(0.84, 0.12), r() < 0.5, r() < 0.5, j(0, 10));
+    return {
+      ground: '<svg viewBox="0 0 90 100" class="ground">'
+        + '<ellipse cx="45" cy="110" rx="58" ry="34" fill="var(--mound)"/>'
+        + '<ellipse cx="45" cy="89" rx="36" ry="14" fill="var(--rim)"/>'
+        + back
+        + '<ellipse cx="45" cy="91" rx="34" ry="13" fill="var(--hole)"/>'
+        + side
+        + '</svg>',
+      front: '<svg viewBox="0 0 90 100" class="front">' + front + '</svg>'
+    };
+  }
+
+  var CHECK = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="currentColor" opacity="0"/><path d="M7 12.4l3.2 3.2L17 8.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  var cfg = {
+    target: 5,
+    holdMin: 760, holdMax: 1140,
+    gapMin: 380, gapMax: 720,
+    rise: 120, retract: 120,
+    swing: 290, impactAt: 160
+  };
+
+  var S = {
+    running: false, done: false,
+    hits: 0, misses: 0, active: -1, last: -1,
+    phase: 'idle', holdMs: 0, gapMs: 0,
+    startAt: 0, timers: []
+  };
+
+  var grid = document.getElementById('grid');
+  var bar = document.getElementById('bar');
+  var hitsEl = document.getElementById('hits');
+  var targetLabel = document.getElementById('targetLabel');
+  var statEl = document.getElementById('stat');
+  var overEl = document.getElementById('over');
+  var overStat = document.getElementById('overStat');
+  var cells = [];
+
+  function later(fn, ms) {
+    var id = setTimeout(fn, ms);
+    S.timers.push(id);
+    return id;
+  }
+  function clearTimers() {
+    S.timers.forEach(clearTimeout);
+    S.timers = [];
+  }
+  function rand(lo, hi) {
+    return lo + Math.floor(Math.random() * (hi - lo + 1));
+  }
+
+  function build() {
+    grid.innerHTML = '';
+    cells = [];
+    for (var i = 0; i < 9; i++) {
+      var c = document.createElement('button');
+      c.className = 'cell';
+      c.type = 'button';
+      c.dataset.i = i;
+      var g = grassFor(i);
+      c.innerHTML =
+        g.ground +
+        '<span class="mole"><span class="moleInner"><svg viewBox="0 0 90 100" class="art">' + MOLE + '</svg></span></span>' +
+        g.front +
+        '<svg viewBox="0 0 90 100" class="layer">' +
+          '<g class="impact">' + IMPACT + '</g>' +
+          '<g class="hammer">' + HAMMER + '</g>' +
+        '</svg>' +
+        '<span class="badge" style="color:var(--doneInk)">' + CHECK + '</span>';
+      (function (idx) {
+        c.addEventListener('click', function () { tap(idx); });
+      })(i);
+      grid.appendChild(c);
+      cells.push(c);
+    }
+    buildBar();
+  }
+
+  function buildBar() {
+    bar.innerHTML = '';
+    for (var i = 0; i < cfg.target; i++) {
+      var s = document.createElement('i');
+      bar.appendChild(s);
+    }
+    paintBar();
+  }
+
+  function paintBar() {
+    var segs = bar.children;
+    for (var i = 0; i < segs.length; i++) {
+      segs[i].className = i < S.hits ? 'on' : '';
+    }
+  }
+
+  function reset() {
+    clearTimers();
+    S.running = true; S.done = false;
+    S.hits = 0; S.misses = 0; S.active = -1; S.last = -1;
+    S.phase = 'idle';
+    S.startAt = performance.now();
+    cells.forEach(function (c) {
+      c.className = 'cell';
+    });
+    hitsEl.textContent = '0';
+    targetLabel.textContent = String(cfg.target);
+    overEl.classList.remove('on');
+    buildBar();
+    spawn(cfg.gapMin);
+  }
+
+  function spawn(delay) {
+    S.phase = 'gap';
+    later(function () {
+      if (!S.running) return;
+      var pick;
+      do { pick = Math.floor(Math.random() * 9); } while (pick === S.last);
+      S.last = pick;
+      S.active = pick;
+      S.holdMs = rand(cfg.holdMin, cfg.holdMax);
+      S.gapMs = rand(cfg.gapMin, cfg.gapMax);
+      var c = cells[pick];
+      c.classList.remove('done');
+      c.classList.add('up');
+      S.phase = 'rising';
+      later(function () {
+        if (!S.running) return;
+        S.phase = 'visible';
+        later(function () {
+          if (!S.running || S.phase !== 'visible') return;
+          timeout();
+        }, S.holdMs);
+      }, cfg.rise);
+    }, delay);
+  }
+
+  function timeout() {
+    var c = cells[S.active];
+    S.misses++;
+    c.classList.remove('up');
+    S.active = -1;
+    spawn(S.gapMs);
+  }
+
+  function tap(i) {
+    if (!S.running || S.done) return;
+    var c = cells[i];
+    if (i === S.active && (S.phase === 'visible' || S.phase === 'rising')) {
+      hit(i);
+    } else if (S.phase !== 'hit') {
+      c.classList.remove('shake');
+      void c.offsetWidth;
+      c.classList.add('shake');
+      if (navigator.vibrate) navigator.vibrate(6);
+    }
+  }
+
+  function hit(i) {
+    var c = cells[i];
+    S.phase = 'hit';
+    var hammer = c.querySelector('.hammer');
+    var imp = c.querySelector('.impact');
+    imp.classList.remove('on');
+    hammer.classList.remove('swing');
+    hammer.classList.add('swing');
+
+    later(function () {
+      c.classList.add('slam');
+      c.classList.add('cry');
+      c.querySelector('.moleInner').classList.add('squash');
+      imp.classList.add('on');
+      if (navigator.vibrate) navigator.vibrate(14);
+      S.hits++;
+      hitsEl.textContent = String(S.hits);
+      paintBar();
+      later(function () { c.classList.remove('cry'); }, 340);
+    }, cfg.impactAt);
+
+    later(function () { c.classList.remove('slam'); }, cfg.impactAt + 60);
+    later(function () { c.querySelector('.moleInner').classList.remove('squash'); }, cfg.impactAt + 70);
+
+    later(function () {
+      c.classList.remove('up');
+      S.active = -1;
+      hammer.classList.remove('swing');
+      later(function () { imp.classList.remove('on'); }, 40);
+      later(function () {
+        c.classList.add('done');
+        later(function () {
+          if (!S.done) c.classList.remove('done');
+        }, 600);
+      }, 130);
+      if (S.hits >= cfg.target) {
+        complete();
+      } else {
+        S.phase = 'gap';
+        spawn(Math.max(S.gapMs, cfg.retract));
+      }
+    }, cfg.swing);
+  }
+
+  function complete() {
+    S.done = true;
+    S.running = false;
+    S.phase = 'done';
+    cells.forEach(function (c) { c.classList.add('done'); });
+    var secs = ((performance.now() - S.startAt) / 1000).toFixed(1);
+    overStat.textContent = '用时 ' + secs + 's · 漏掉 ' + S.misses + ' 只';
+    statEl.textContent = '用时 ' + secs + 's · 漏掉 ' + S.misses + ' 只';
+    later(function () { overEl.classList.add('on'); }, 300);
+  }
+
+  var ticking = false;
+  function tick() {
+    if (ticking) return;
+    ticking = true;
+    function loop() {
+      if (!S.running) { ticking = false; return; }
+      var secs = ((performance.now() - S.startAt) / 1000).toFixed(1);
+      statEl.textContent = '用时 ' + secs + 's · 漏掉 ' + S.misses + ' 只';
+      requestAnimationFrame(loop);
+    }
+    loop();
+  }
+
+  document.getElementById('again').addEventListener('click', function () {
+    reset();
+    tick();
+  });
+
+  var modal = document.getElementById('modal');
+  document.getElementById('cancelModal').addEventListener('click', function () {
+    modal.hidden = true;
+    S.running = false;
+  });
+  document.getElementById('startModal').addEventListener('click', function () {
+    modal.hidden = true;
+    reset();
+    tick();
+  });
+
+  var segTarget = document.getElementById('segTarget');
+  segTarget.addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    [].forEach.call(segTarget.children, function (x) { x.classList.remove('sel'); });
+    b.classList.add('sel');
+    cfg.target = parseInt(b.dataset.v, 10);
+  });
+
+  var holdMin = document.getElementById('holdMin');
+  var holdMax = document.getElementById('holdMax');
+  var gapMin = document.getElementById('gapMin');
+  var gapMax = document.getElementById('gapMax');
+  var holdLabel = document.getElementById('holdLabel');
+  var gapLabel = document.getElementById('gapLabel');
+
+  function syncLabels() {
+    var a = parseInt(holdMin.value, 10), b = parseInt(holdMax.value, 10);
+    if (b <= a) { b = a + 40; holdMax.value = b; }
+    cfg.holdMin = a; cfg.holdMax = b;
+    holdLabel.textContent = a + '–' + b + 'ms';
+    var c = parseInt(gapMin.value, 10), d = parseInt(gapMax.value, 10);
+    if (d <= c) { d = c + 40; gapMax.value = d; }
+    cfg.gapMin = c; cfg.gapMax = d;
+    gapLabel.textContent = c + '–' + d + 'ms';
+  }
+  [holdMin, holdMax, gapMin, gapMax].forEach(function (el) {
+    el.addEventListener('input', syncLabels);
+  });
+  syncLabels();
+
+  document.getElementById('apply').addEventListener('click', function () {
+    reset();
+    tick();
+  });
+
+  document.getElementById('theme').addEventListener('click', function () {
+    var root = document.documentElement;
+    root.dataset.theme = root.dataset.theme === 'dark' ? '' : 'dark';
+  });
+
+  build();
+  modal.hidden = false;
+  statEl.textContent = '用时 0.0s · 漏掉 0 只';
+})();
+</script>
+</body>
+</html>

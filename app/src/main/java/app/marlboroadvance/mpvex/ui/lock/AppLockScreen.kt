@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.outlined.Backspace
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Dialpad
 import androidx.compose.material.icons.outlined.Grid3x3
+import androidx.compose.material.icons.outlined.SportsEsports
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.BasicAlertDialog
@@ -132,6 +133,7 @@ fun AppLockGate(content: @Composable () -> Unit) {
     AppLockUnlockScreen(
       method = prefs.method.get(),
       autoUnlock = prefs.autoUnlock.get(),
+      hitMoleTarget = prefs.hitMoleTarget.get(),
       onVerifyPin = prefs::verifyPin,
       onVerifyPattern = prefs::verifyPattern,
       onUnlocked = { locked = false },
@@ -142,11 +144,13 @@ fun AppLockGate(content: @Composable () -> Unit) {
 }
 
 /**
- * 全屏解锁页（PIN / 图案共用外壳）。
+ * 全屏解锁页（PIN / 图案 / 打地鼠共用外壳）。
  *
  * 连续输错 [AppLockPreferences.MAX_ATTEMPTS] 次进 30 秒冷却（带倒计时）——
  * PIN 只有 4~6 位、图案只有 9 个点，不设防就是穷举题。计数器只在内存里，
  * 进程重启即忘（重启本身也是一次「重新锁上」）。
+ *
+ * 打地鼠不走冷却：它不是凭证校验，没有可穷举的秘密，也没有「输错」的概念。
  *
  * [autoUnlock] 为真时：PIN 每输一位就试一次，**输对即解锁**（隐藏确定键）；
  * 图案本来就是画完即验，所以这个开关只影响 PIN 的手感。
@@ -155,11 +159,13 @@ fun AppLockGate(content: @Composable () -> Unit) {
 private fun AppLockUnlockScreen(
   method: String,
   autoUnlock: Boolean,
+  hitMoleTarget: Int,
   onVerifyPin: (String) -> Boolean,
   onVerifyPattern: (List<Int>) -> Boolean,
   onUnlocked: () -> Unit,
 ) {
   val isPattern = method == AppLockMethod.PATTERN
+  val isHitMole = method == AppLockMethod.HIT_MOLE
 
   var pin by remember { mutableStateOf("") }
   var wrong by remember { mutableStateOf(false) }
@@ -238,45 +244,56 @@ private fun AppLockUnlockScreen(
 
       Spacer(Modifier.height(28.dp))
 
+      val titleText = when {
+        isHitMole -> stringResource(R.string.app_lock_hit_mole_unlock_title, hitMoleTarget)
+        isPattern -> stringResource(R.string.app_lock_pattern_unlock_title)
+        else -> stringResource(R.string.app_lock_unlock_title)
+      }
       Text(
-        text = stringResource(
-          if (isPattern) R.string.app_lock_pattern_unlock_title else R.string.app_lock_unlock_title,
-        ),
+        text = titleText,
         style = MaterialTheme.typography.titleMedium,
       )
 
       Spacer(Modifier.height(20.dp))
 
-      if (isPattern) {
-        PatternLockView(
-          modifier = Modifier.fillMaxWidth(0.72f),
-          enabled = cooldownRemain == 0,
-          error = wrong,
-          onPattern = { pattern ->
-            if (cooldownRemain == 0) {
-              when {
-                // 太短要**明说**，且不算一次失败尝试（还没构成一个图案）
-                pattern.size < AppLockPreferences.MIN_PATTERN_DOTS -> {
-                  hint = tooShortText
-                  wrong = false
-                }
-                onVerifyPattern(pattern) -> onUnlocked()
-                else -> {
-                  hint = null
-                  fail()
+      when {
+        isHitMole -> HitMoleUnlock(
+          target = hitMoleTarget,
+          onUnlocked = onUnlocked,
+          modifier = Modifier.fillMaxWidth(0.92f),
+        )
+        isPattern -> {
+          PatternLockView(
+            modifier = Modifier.fillMaxWidth(0.72f),
+            enabled = cooldownRemain == 0,
+            error = wrong,
+            onPattern = { pattern ->
+              if (cooldownRemain == 0) {
+                when {
+                  // 太短要**明说**，且不算一次失败尝试（还没构成一个图案）
+                  pattern.size < AppLockPreferences.MIN_PATTERN_DOTS -> {
+                    hint = tooShortText
+                    wrong = false
+                  }
+                  onVerifyPattern(pattern) -> onUnlocked()
+                  else -> {
+                    hint = null
+                    fail()
+                  }
                 }
               }
-            }
-          },
-        )
-      } else {
-        PinDots(length = pin.length)
+            },
+          )
+        }
+        else -> PinDots(length = pin.length)
       }
 
       Spacer(Modifier.height(12.dp))
 
       val hintText = hint
       val message: String = when {
+        // 打地鼠没有「错误」也没有冷却，这一行整块留空（底部提示在控件自己身上）
+        isHitMole -> ""
         cooldownRemain > 0 -> cooldownText
         wrong -> if (isPattern) wrongPatternText else wrongPinText
         hintText != null -> hintText
@@ -296,7 +313,7 @@ private fun AppLockUnlockScreen(
 
       Spacer(Modifier.height(16.dp))
 
-      if (!isPattern) {
+      if (!isPattern && !isHitMole) {
         PinPad(
           enabled = cooldownRemain == 0,
           showSubmit = !autoUnlock,
@@ -462,12 +479,15 @@ private fun PinKey(
 fun AppLockManageDialog(
   method: String,
   autoUnlock: Boolean,
+  hitMoleTarget: Int,
   onToggleAutoUnlock: (Boolean) -> Unit,
+  onPickHitMoleTarget: (Int) -> Unit,
   onDisable: () -> Unit,
   onChangeCredential: () -> Unit,
   onDismiss: () -> Unit,
 ) {
   val isPattern = method == AppLockMethod.PATTERN
+  val isHitMole = method == AppLockMethod.HIT_MOLE
   AlertDialog(
     onDismissRequest = onDismiss,
     // 允许点弹窗外部任意空白处关闭（dismiss = 放弃/取消，所有流程都能安全中断：
@@ -478,35 +498,57 @@ fun AppLockManageDialog(
     text = {
       Column {
         Text(
-          text = stringResource(R.string.app_lock_manage_message),
+          text = stringResource(
+            if (isHitMole) {
+              R.string.app_lock_manage_message_hit_mole
+            } else {
+              R.string.app_lock_manage_message
+            },
+          ),
           style = MaterialTheme.typography.bodyMedium,
           color = AlertDialogDefaults.textContentColor,
         )
         Spacer(Modifier.height(16.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = stringResource(R.string.app_lock_auto_unlock_title),
-              style = MaterialTheme.typography.bodyLarge,
-            )
-            Text(
-              text = stringResource(R.string.app_lock_auto_unlock_summary),
-              style = MaterialTheme.typography.bodySmall,
-              color = AlertDialogDefaults.textContentColor,
-            )
+        if (isHitMole) {
+          // 打地鼠没有凭证可改，能调的只有难度；自动解锁对它也没有意义
+          Text(
+            text = stringResource(R.string.app_lock_hit_mole_target_title),
+            style = MaterialTheme.typography.bodyLarge,
+          )
+          Spacer(Modifier.height(8.dp))
+          HitMoleTargetChips(selected = hitMoleTarget, onSelect = onPickHitMoleTarget)
+        } else {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = stringResource(R.string.app_lock_auto_unlock_title),
+                style = MaterialTheme.typography.bodyLarge,
+              )
+              Text(
+                text = stringResource(R.string.app_lock_auto_unlock_summary),
+                style = MaterialTheme.typography.bodySmall,
+                color = AlertDialogDefaults.textContentColor,
+              )
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(checked = autoUnlock, onCheckedChange = onToggleAutoUnlock)
           }
-          Spacer(Modifier.width(12.dp))
-          Switch(checked = autoUnlock, onCheckedChange = onToggleAutoUnlock)
         }
       }
     },
     confirmButton = {
-      TextButton(onClick = onChangeCredential) {
-        Text(
-          text = stringResource(
-            if (isPattern) R.string.app_lock_change_pattern else R.string.app_lock_change_pin,
-          ),
-        )
+      if (isHitMole) {
+        TextButton(onClick = onDismiss) {
+          Text(stringResource(R.string.generic_confirm))
+        }
+      } else {
+        TextButton(onClick = onChangeCredential) {
+          Text(
+            text = stringResource(
+              if (isPattern) R.string.app_lock_change_pattern else R.string.app_lock_change_pin,
+            ),
+          )
+        }
       }
     },
     dismissButton = {
@@ -527,6 +569,7 @@ fun AppLockManageDialog(
 fun UnlockMethodDialog(
   onPickPin: () -> Unit,
   onPickPattern: () -> Unit,
+  onPickHitMole: () -> Unit,
   onDismiss: () -> Unit,
 ) {
   BasicAlertDialog(
@@ -563,6 +606,13 @@ fun UnlockMethodDialog(
           onClick = onPickPattern,
         )
         Spacer(Modifier.height(8.dp))
+        MethodRow(
+          icon = Icons.Outlined.SportsEsports,
+          title = stringResource(R.string.app_lock_method_hit_mole),
+          description = stringResource(R.string.app_lock_method_hit_mole_desc),
+          onClick = onPickHitMole,
+        )
+        Spacer(Modifier.height(8.dp))
         Row(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.End,
@@ -571,6 +621,165 @@ fun UnlockMethodDialog(
             Text(stringResource(R.string.generic_cancel))
           }
         }
+      }
+    }
+  }
+}
+
+/**
+ * 选用打地鼠解锁前的确认弹窗。
+ *
+ * 这个弹窗存在的唯一理由是：必须在用户**做选择的那一刻**讲清楚「它不校验凭证」。
+ * 只写在摘要里不够 —— 用户点进来时不会读摘要。正文里明说「任何持有设备的人均可通过，
+ * 不具备访问控制作用」，否则功能名里带「锁」字，很容易被当成密码锁用。
+ *
+ * 顺带在这里选敲中次数（3 / 5 / 8），省得再开一层设置。
+ */
+@Composable
+fun AppLockHitMoleConfirmDialog(
+  initialTarget: Int,
+  onDismiss: () -> Unit,
+  onConfirm: (Int) -> Unit,
+) {
+  var target by remember { mutableStateOf(initialTarget) }
+
+  BasicAlertDialog(
+    onDismissRequest = onDismiss,
+    properties = DialogProperties(dismissOnClickOutside = true),
+  ) {
+    Surface(
+      shape = MaterialTheme.shapes.extraLarge,
+      color = AlertDialogDefaults.containerColor,
+      tonalElevation = AlertDialogDefaults.TonalElevation,
+    ) {
+      Column(modifier = Modifier.padding(24.dp)) {
+        Text(
+          text = stringResource(R.string.app_lock_hit_mole_confirm_title),
+          style = MaterialTheme.typography.headlineSmall,
+          fontWeight = FontWeight.Bold,
+          color = AlertDialogDefaults.titleContentColor,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+          text = stringResource(R.string.app_lock_hit_mole_confirm_message),
+          style = MaterialTheme.typography.bodyMedium,
+          color = AlertDialogDefaults.textContentColor,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+          text = stringResource(R.string.app_lock_hit_mole_confirm_note),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(18.dp))
+        Text(
+          text = stringResource(R.string.app_lock_hit_mole_target_title),
+          style = MaterialTheme.typography.bodyMedium,
+          color = AlertDialogDefaults.textContentColor,
+        )
+        Spacer(Modifier.height(8.dp))
+        HitMoleTargetChips(selected = target, onSelect = { target = it })
+        Spacer(Modifier.height(18.dp))
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.End,
+        ) {
+          TextButton(onClick = onDismiss) {
+            Text(stringResource(R.string.generic_cancel))
+          }
+          Spacer(Modifier.width(8.dp))
+          TextButton(onClick = { onConfirm(target) }) {
+            Text(stringResource(R.string.app_lock_hit_mole_start), fontWeight = FontWeight.Bold)
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 「关闭应用锁」在打地鼠模式下的验证替代：玩一局通过即关闭。
+ *
+ * 这个模式没有凭证可验，所以「验证」只能是再玩一次。不提供 PIN 兜底 ——
+ * 选了打地鼠的用户本来就没有 PIN，问他 PIN 等于把人锁在门外。
+ */
+@Composable
+fun AppLockHitMoleDisableDialog(
+  target: Int,
+  onDismiss: () -> Unit,
+  onConfirmed: () -> Unit,
+) {
+  BasicAlertDialog(
+    onDismissRequest = onDismiss,
+    properties = DialogProperties(dismissOnClickOutside = true),
+  ) {
+    Surface(
+      shape = MaterialTheme.shapes.extraLarge,
+      color = AlertDialogDefaults.containerColor,
+      tonalElevation = AlertDialogDefaults.TonalElevation,
+    ) {
+      Column(
+        modifier = Modifier.padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+      ) {
+        Text(
+          text = stringResource(R.string.app_lock_hit_mole_disable_title),
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold,
+          color = AlertDialogDefaults.titleContentColor,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+          text = stringResource(R.string.app_lock_hit_mole_disable_message),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(16.dp))
+        HitMoleUnlock(
+          target = target,
+          onUnlocked = onConfirmed,
+          modifier = Modifier.fillMaxWidth(0.86f),
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.End,
+        ) {
+          TextButton(onClick = onDismiss) {
+            Text(stringResource(R.string.generic_cancel))
+          }
+        }
+      }
+    }
+  }
+}
+
+/** 敲中次数三档选择（3 / 5 / 8）。确认弹窗与管理弹窗共用。 */
+@Composable
+private fun HitMoleTargetChips(selected: Int, onSelect: (Int) -> Unit) {
+  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    HitMoleGameState.TARGET_CHOICES.forEach { choice ->
+      val isSelected = choice == selected
+      Surface(
+        onClick = { onSelect(choice) },
+        shape = RoundedCornerShape(10.dp),
+        color = if (isSelected) {
+          MaterialTheme.colorScheme.primary
+        } else {
+          MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        contentColor = if (isSelected) {
+          MaterialTheme.colorScheme.onPrimary
+        } else {
+          MaterialTheme.colorScheme.onSurface
+        },
+      ) {
+        Text(
+          text = stringResource(R.string.app_lock_hit_mole_target_value, choice),
+          style = MaterialTheme.typography.bodyMedium,
+          modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
       }
     }
   }

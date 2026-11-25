@@ -1066,7 +1066,7 @@ private fun AggregateSearchEntryCard(
           color = MaterialTheme.colorScheme.onSecondaryContainer,
         )
         Text(
-          text = "并行检索 $serverCount 台服务器；重复条目归并为单条，支持参与范围控制与分组视图",
+          text = "并行检索 $serverCount 台服务器，重复条目归并为单条",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
           maxLines = 2,

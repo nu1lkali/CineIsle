@@ -231,7 +231,7 @@ object EmbyPlaylistScreen : Screen {
             )
             Spacer(Modifier.size(8.dp))
             Text(
-              text = "先建空的，之后在详情页往里加片子。",
+              text = "创建后可在详情页添加影片",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -1260,7 +1260,7 @@ fun EmbyIdentifyDialog(
           Spacer(modifier = Modifier.height(10.dp))
         }
         Text(
-          text = "留空的外部 ID 不参与匹配；填了 ID 会优先按 ID 精确匹配。",
+          text = "留空的外部 ID 不参与匹配；填写后优先按 ID 精确匹配",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

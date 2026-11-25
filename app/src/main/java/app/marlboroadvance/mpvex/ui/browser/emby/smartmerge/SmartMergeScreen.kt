@@ -567,7 +567,7 @@ private fun PendingTab(
             style = MaterialTheme.typography.titleMedium,
           )
           Text(
-            if (lastScanAt == 0L) "先选择媒体库并扫描。" else "已合并或已忽略的候选不会出现在这里。",
+            if (lastScanAt == 0L) "选择媒体库后执行扫描" else "已合并或已忽略的候选不在此列出",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )

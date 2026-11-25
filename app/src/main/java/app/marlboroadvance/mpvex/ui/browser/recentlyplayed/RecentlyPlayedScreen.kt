@@ -343,7 +343,6 @@ object RecentlyPlayedScreen : Screen {
             EmptyState(
               icon = Icons.Filled.History,
               title = "暂无最近播放的视频",
-              message = "你播放过的视频会显示在这里",
             )
           }
         }

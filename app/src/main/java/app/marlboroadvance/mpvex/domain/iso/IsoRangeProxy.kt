@@ -473,7 +473,7 @@ internal fun InputStream.skipFully(n: Long): InputStream {
   while (remaining > 0) {
     val want = minOf(remaining, buf.size.toLong()).toInt()
     val read = read(buf, 0, want)
-    if (read <= 0) throw IOException("流比预期的短 $n 字节，跳不动了")
+    if (read <= 0) throw IOException("流长度比预期短 $n 字节，无法跳转")
     remaining -= read
   }
   return this

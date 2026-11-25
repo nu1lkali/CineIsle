@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import app.marlboroadvance.mpvex.database.repository.SearchHistoryRepository
+import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.aggregate.AggregateEntry
@@ -103,6 +104,23 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
   private val _running = MutableStateFlow(false)
   val running: StateFlow<Boolean> = _running.asStateFlow()
 
+  /** 正在补页（与首屏的 [running] 分开：翻页时不该让状态行说「检索中」） */
+  private val _loadingMore = MutableStateFlow(false)
+  val loadingMore: StateFlow<Boolean> = _loadingMore.asStateFlow()
+
+  /**
+   * 还有可继续拉取的页。
+   *
+   * 判据是「某台尚未到底、未失败、未达单台页数上限」，而不是「已渲染条数 < 上限」——
+   * 后者在结果本就稀疏时会一直为真，触底就无限重试同一页。
+   */
+  private val _hasMore = MutableStateFlow(false)
+  val hasMore: StateFlow<Boolean> = _hasMore.asStateFlow()
+
+  /** 已累积到全局安全上限 [AggregateSearchLimits.MAX_ENTRIES]（界面提示「已达上限」） */
+  private val _atLimit = MutableStateFlow(false)
+  val atLimit: StateFlow<Boolean> = _atLimit.asStateFlow()
+
   private val _mergeMode = MutableStateFlow(browserPreferences.embyAggregateMergeMode.get())
   val mergeMode: StateFlow<AggregateMergeMode> = _mergeMode.asStateFlow()
 
@@ -132,8 +150,17 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
   /** 当前会话的参与服务器（顺序稳定，合并与分组都按它排） */
   private var sessionServers: List<EmbyServer> = emptyList()
 
-  /** 当前会话已到达的批次，按 serverId 索引 */
+  /** 当前会话已到达的批次，按 serverId 索引（翻页时是**累积后**的合并结果） */
   private val arrived = LinkedHashMap<Long, ServerBatch>()
+
+  /** 各台媒体流的下一页起点（服务端口径，不是已渲染条数） */
+  private val nextIndex = HashMap<Long, Int>()
+
+  /** 各台已拉取的页数（含首屏那一页），用于单台上限 */
+  private val pages = HashMap<Long, Int>()
+
+  /** 已经到底的台（返回不满一页 / 到总数 / 该页失败） */
+  private val exhaustedServers = HashSet<Long>()
 
   init {
     // 首屏就把参与范围铺出来：用户一进来能看见「哪几台参与、哪几台不参与」，
@@ -181,7 +208,7 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
     if (sessionTerm.isEmpty()) return
 
     // 台被删 / 被取消参与 ⇒ 丢掉它的批次，避免结果里留着一条打不开的
-    (previousIds - currentIds).forEach { arrived.remove(it) }
+    (previousIds - currentIds).forEach { dropServer(it) }
     publishSnapshot()
     // 新出现的参与台：只补查它自己
     participants.filter { it.id !in previousIds }.forEach { querySingle(it) }
@@ -300,7 +327,7 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
     sessionServers = participants
 
     // 取消参与：本地剔除即可，不必发请求
-    (wasParticipating - participants.map { it.id }.toSet()).forEach { id -> arrived.remove(id) }
+    (wasParticipating - participants.map { it.id }.toSet()).forEach { id -> dropServer(id) }
     // 新增参与：只补查这一台（其余批次还在，不重头再来）
     val toQuery = participants.filter { it.id !in wasParticipating }
     refreshOutcomes()
@@ -381,6 +408,12 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
     val all = servers.value
     sessionServers = all.filter { isParticipating(it.id) }
     arrived.clear()
+    nextIndex.clear()
+    pages.clear()
+    exhaustedServers.clear()
+    _atLimit.value = false
+    _hasMore.value = false
+    _loadingMore.value = false
     _snapshot.value = AggregateSnapshot()
     // 同 syncWithServers：chip 条要保**全部**服务器，未参与的留 Pending（灰 chip）
     val participants = sessionServers.map { it.id }.toSet()
@@ -406,6 +439,7 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
     if (seq == sessionSeq) {
       _running.value = false
       publishSnapshot()
+      recomputePaging()
     }
   }
 
@@ -424,24 +458,49 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
     }
   }
 
-  private fun acceptBatch(batch: ServerBatch) {
+  /**
+   * 收下一批。
+   *
+   * @param append true = 翻页结果，与已到达的条目合并（按条目 Id 去重）；
+   *   false = 该台的首屏结果，直接替换
+   */
+  private fun acceptBatch(batch: ServerBatch, append: Boolean = false) {
     if (sessionServers.none { it.id == batch.server.id }) return
-    arrived[batch.server.id] = batch
+    val id = batch.server.id
+    val prev = if (append) arrived[id] else null
+    val combined =
+      if (prev == null) {
+        batch
+      } else {
+        batch.copy(
+          items = mergeItems(prev.items, batch.items),
+          // 合并后的批次不代表某一页，起点归零免得被误当作分页游标
+          startIndex = 0,
+        )
+      }
+    arrived[id] = combined
+    nextIndex[id] = batch.nextStartIndex
+    pages[id] = (pages[id] ?: 0) + 1
+    // 取数失败也算到底：否则触底会对着同一页无限重试
+    if (batch.exhausted || batch.error != null || batch.skipped) exhaustedServers += id
+
     val phase =
       when {
         batch.skipped -> ServerPhase.Skipped
-        batch.error != null -> ServerPhase.Failed
-        batch.items.isEmpty() -> ServerPhase.Empty
+        // 补页失败时保留已拿到的结果，不把整台降级成失败（chip 变红会让人以为一条都没有）
+        batch.error != null ->
+          if (append && combined.items.isNotEmpty()) ServerPhase.Ok else ServerPhase.Failed
+        combined.items.isEmpty() -> ServerPhase.Empty
         else -> ServerPhase.Ok
       }
     _outcomes.update { list ->
       list.map { outcome ->
-        if (outcome.serverId != batch.server.id) {
+        if (outcome.serverId != id) {
           outcome
         } else {
           outcome.copy(
             phase = phase,
-            count = batch.items.size,
+            count = combined.items.size,
             elapsedMs = batch.elapsedMs,
             message = batch.failureMessage,
           )
@@ -449,16 +508,117 @@ class AggregateSearchViewModel(application: Application) : AndroidViewModel(appl
       }
     }
     publishSnapshot()
+    recomputePaging()
     _running.value = _outcomes.value.any { !it.phase.isTerminal }
+  }
+
+  /**
+   * 触底补页：对**尚未到底**的参与台各拉一页。
+   *
+   * 串行而不是并发：翻页是低频动作，一次放大成 N 个并发请求只会把弱网拖慢，
+   * 而首屏那次并发是为了「先回来的先出现」，两者目的不同。
+   */
+  fun loadMore() {
+    if (_loadingMore.value || !_hasMore.value) return
+    val seq = sessionSeq
+    val term = sessionTerm
+    if (term.isEmpty()) return
+
+    val targets =
+      sessionServers.filter { server ->
+        val id = server.id
+        val landed = arrived[id]
+        id !in exhaustedServers &&
+          (pages[id] ?: 0) < AggregateSearchLimits.MAX_PAGES_PER_SERVER &&
+          landed != null &&
+          landed.error == null &&
+          !landed.skipped
+      }
+    if (targets.isEmpty()) {
+      recomputePaging()
+      return
+    }
+
+    _loadingMore.value = true
+    viewModelScope.launch {
+      for (server in targets) {
+        if (seq != sessionSeq) break
+        val start = nextIndex[server.id] ?: 0
+        val batch = engine.queryOne(server, serverOrderOf(server), term, itemTypes = null, startIndex = start)
+        if (seq != sessionSeq) break
+        if (sessionServers.none { it.id == server.id }) continue
+        acceptBatch(batch, append = true)
+      }
+      if (seq == sessionSeq) {
+        _loadingMore.value = false
+        recomputePaging()
+      }
+    }
+  }
+
+  /**
+   * 重算「还能不能翻页」与「是否到达安全上限」。
+   *
+   * 上限按**已累积的原始条数**判（各台 items 之和），而不是合并后的行数：
+   * 合并视图下去重会削掉条目，按行数判会让上限永远达不到。
+   */
+  private fun recomputePaging() {
+    val raw = arrived.values.sumOf { it.items.size }
+    val atLimit = raw >= AggregateSearchLimits.MAX_ENTRIES
+    _atLimit.value = atLimit
+    _hasMore.value =
+      !atLimit &&
+        sessionTerm.isNotEmpty() &&
+        sessionServers.any { server ->
+          val id = server.id
+          val landed = arrived[id]
+          id !in exhaustedServers &&
+            (pages[id] ?: 0) < AggregateSearchLimits.MAX_PAGES_PER_SERVER &&
+            landed != null &&
+            landed.error == null &&
+            !landed.skipped
+        }
+  }
+
+  /** 丢掉一台的全部会话痕迹（批次 / 游标 / 页数 / 到底标记） */
+  private fun dropServer(id: Long) {
+    arrived.remove(id)
+    nextIndex.remove(id)
+    pages.remove(id)
+    exhaustedServers.remove(id)
+  }
+
+  /**
+   * 合并两页条目并按条目 Id 去重。
+   *
+   * 服务端翻页窗口在「同一秒内新增了条目」时会滑动，跨页重复是可能发生的；
+   * 没有 Id 的条目用「名称 + 类型」兜底键，避免全部被当成同一条。
+   */
+  private fun mergeItems(old: List<EmbyItem>, fresh: List<EmbyItem>): List<EmbyItem> {
+    if (fresh.isEmpty()) return old
+    if (old.isEmpty()) return fresh
+    val seen = HashSet<String>((old.size + fresh.size) * 2)
+    val out = ArrayList<EmbyItem>(old.size + fresh.size)
+    for (item in old + fresh) {
+      val key = item.Id?.takeIf { it.isNotBlank() } ?: "${item.Name}|${item.Type}"
+      if (seen.add(key)) out.add(item)
+    }
+    return out
   }
 
   private fun abandonSession() {
     sessionSeq += 1
     sessionTerm = ""
     arrived.clear()
+    nextIndex.clear()
+    pages.clear()
+    exhaustedServers.clear()
     sessionServers = emptyList()
     _snapshot.value = AggregateSnapshot()
     _running.value = false
+    _loadingMore.value = false
+    _hasMore.value = false
+    _atLimit.value = false
     refreshOutcomes()
   }
 

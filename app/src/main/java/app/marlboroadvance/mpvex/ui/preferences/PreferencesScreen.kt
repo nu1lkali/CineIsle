@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Gesture
+import androidx.compose.material.icons.outlined.SportsEsports
 import androidx.compose.material.icons.outlined.Grid3x3
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Layers
@@ -109,6 +110,8 @@ import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyGachaStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader
 import app.marlboroadvance.mpvex.ui.browser.emby.photo.EmbyPhotoSaver
 import app.marlboroadvance.mpvex.ui.browser.dialogs.FolderPickerDialog
+import app.marlboroadvance.mpvex.ui.lock.AppLockHitMoleConfirmDialog
+import app.marlboroadvance.mpvex.ui.lock.AppLockHitMoleDisableDialog
 import app.marlboroadvance.mpvex.ui.lock.AppLockManageDialog
 import app.marlboroadvance.mpvex.ui.lock.PatternChangeDialog
 import app.marlboroadvance.mpvex.ui.lock.PatternSetupDialog
@@ -465,7 +468,7 @@ object PreferencesScreen : Screen {
                         "否则该服务器可能返回空"
                     SimilarAlgorithm.LOCAL ->
                       "由本机按类型 / 年代 / 评分 / 阵容打分排序；不依赖服务端，"+
-                        "库里还有别的内容就一定有结果"
+                        "媒体库存在内容即可返回结果"
                   },
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.outline,
@@ -545,8 +548,8 @@ object PreferencesScreen : Screen {
                 valueSteps = 3,
                 summary = {
                   Text(
-                    text = "「猜你喜欢」页里「连播列表」那一块，一行放几张海报，当前 $mixColumns 个。" +
-                      "数字越小海报越大，封面上的字看得更清；不影响媒体库的每行个数。",
+                    text = "「猜你喜欢」页「连播列表」每行海报数，当前 $mixColumns 个。" +
+                      "数值越小海报越大，不影响媒体库每行个数",
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },
@@ -586,8 +589,8 @@ object PreferencesScreen : Screen {
                 title = { Text(text = "预解析直链（302）", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
-                    text = "播放前先取出跳转后的真实地址。用于网盘 / STRM 这类带 302 跳转、" +
-                      "直链有有效期的源；解析失败会自动回退，不影响正常播放。",
+                    text = "播放前取出跳转后的真实地址。适用于网盘 / STRM 等带 302 跳转、" +
+                      "直链有有效期的源；解析失败自动回退，不影响正常播放。",
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },
@@ -854,9 +857,9 @@ object PreferencesScreen : Screen {
                 summary = {
                   Text(
                     text = if (photoAutoSlideshow) {
-                      "打开照片即按间隔自动翻页，播放中可随时暂停"
+                      "打开照片即按间隔自动翻页，播放中可暂停"
                     } else {
-                      "打开照片停在第一张，是否播放由你点播放键决定"
+                      "打开照片停留于第一张，需手动开始播放"
                     },
                     color = MaterialTheme.colorScheme.outline,
                   )
@@ -1399,8 +1402,8 @@ object PreferencesScreen : Screen {
                 summary = {
                   Text(
                     text = "当前「${gachaStyle.label}」 · 仅单抽（1 张）生效；" +
-                      "滚动揭晓是卡片自右向左滚动、先加速后减速停在中奖卡上；" +
-                      "多抽仍走经典翻牌",
+                      "滚动揭晓为卡片自右向左滚动、先加速后减速停于中奖卡；" +
+                      "多抽使用经典翻牌",
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },
@@ -1547,16 +1550,23 @@ object PreferencesScreen : Screen {
             val appLockEnabled by appLockPreferences.enabled.collectAsState()
             val appLockMethod by appLockPreferences.method.collectAsState()
             val appLockAutoUnlock by appLockPreferences.autoUnlock.collectAsState()
+            val appLockHitMoleTarget by appLockPreferences.hitMoleTarget.collectAsState()
             var showMethodPicker by remember { mutableStateOf(false) }
             var showPinSetup by remember { mutableStateOf(false) }
             var showPatternSetup by remember { mutableStateOf(false) }
+            var showHitMoleConfirm by remember { mutableStateOf(false) }
             var showManage by remember { mutableStateOf(false) }
             var showChangeCredential by remember { mutableStateOf(false) }
             var showDisableVerify by remember { mutableStateOf(false) }
 
             val isPattern = appLockMethod == AppLockMethod.PATTERN
+            val isHitMole = appLockMethod == AppLockMethod.HIT_MOLE
             val methodLabel = stringResource(
-              if (isPattern) R.string.app_lock_method_pattern else R.string.app_lock_method_pin,
+              when {
+                isHitMole -> R.string.app_lock_method_hit_mole
+                isPattern -> R.string.app_lock_method_pattern
+                else -> R.string.app_lock_method_pin
+              },
             )
             val autoBadge = stringResource(R.string.app_lock_auto_unlock_badge)
 
@@ -1575,7 +1585,11 @@ object PreferencesScreen : Screen {
                 },
                 icon = {
                   Icon(
-                    if (isPattern) Icons.Outlined.Grid3x3 else Icons.Outlined.Lock,
+                    when {
+                      isHitMole -> Icons.Outlined.SportsEsports
+                      isPattern -> Icons.Outlined.Grid3x3
+                      else -> Icons.Outlined.Lock
+                    },
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                   )
@@ -1595,6 +1609,10 @@ object PreferencesScreen : Screen {
                 onPickPattern = {
                   showMethodPicker = false
                   showPatternSetup = true
+                },
+                onPickHitMole = {
+                  showMethodPicker = false
+                  showHitMoleConfirm = true
                 },
                 onDismiss = { showMethodPicker = false },
               )
@@ -1617,11 +1635,25 @@ object PreferencesScreen : Screen {
                 },
               )
             }
+            if (showHitMoleConfirm) {
+              AppLockHitMoleConfirmDialog(
+                initialTarget = appLockHitMoleTarget,
+                onDismiss = { showHitMoleConfirm = false },
+                onConfirm = { target ->
+                  appLockPreferences.hitMoleTarget.set(target)
+                  appLockPreferences.setHitMole()
+                  appLockPreferences.enabled.set(true)
+                  showHitMoleConfirm = false
+                },
+              )
+            }
             if (showManage) {
               AppLockManageDialog(
                 method = appLockMethod,
                 autoUnlock = appLockAutoUnlock,
+                hitMoleTarget = appLockHitMoleTarget,
                 onToggleAutoUnlock = { appLockPreferences.autoUnlock.set(it) },
+                onPickHitMoleTarget = { appLockPreferences.hitMoleTarget.set(it) },
                 onChangeCredential = {
                   showManage = false
                   showChangeCredential = true
@@ -1633,7 +1665,7 @@ object PreferencesScreen : Screen {
                 onDismiss = { showManage = false },
               )
             }
-            if (showChangeCredential) {
+            if (showChangeCredential && !isHitMole) {
               if (isPattern) {
                 PatternChangeDialog(
                   onDismiss = { showChangeCredential = false },
@@ -1649,7 +1681,17 @@ object PreferencesScreen : Screen {
               }
             }
             if (showDisableVerify) {
-              if (isPattern) {
+              if (isHitMole) {
+                // 打地鼠没有凭证可验，「验证」只能是再玩一局
+                AppLockHitMoleDisableDialog(
+                  target = appLockHitMoleTarget,
+                  onDismiss = { showDisableVerify = false },
+                  onConfirmed = {
+                    appLockPreferences.disable()
+                    showDisableVerify = false
+                  },
+                )
+              } else if (isPattern) {
                 PatternVerifyDialog(
                   title = stringResource(R.string.app_lock_verify_title),
                   message = stringResource(R.string.app_lock_change_verify_hint),

@@ -222,6 +222,7 @@
   <string name="subtitle_restore_cancel">Cancel</string>
   <string name="subtitle_restore_result">Restored %1$d, failed %2$d</string>
   <string name="subtitle_restore_empty">Nothing to restore: the manifest is empty, or the files it lists no longer exist</string>
+  <string name="subtitle_restore_unlisted">%1$d subtitle files in the save folder are not in the manifest and cannot be mapped by it; import them per title from Subtitle Lab</string>
   <string name="pref_subtitles_autoload_title">Automatically load subtitles</string>
   <string name="pref_subtitles_autoload_summary">Automatically load external subtitles with the same name.</string>
   <string name="pref_audio">Audio</string>
@@ -345,6 +346,8 @@
   <string name="player_sheets_emby_subs_off">Turn off</string>
   <string name="pref_subtitles_emby_auto_title">Auto-load Emby subtitles</string>
   <string name="pref_subtitles_emby_auto_summary">Pick the subtitle Emby already knows about by your language preference. Files are kept in the app’s private storage.</string>
+  <string name="pref_subtitles_online_auto_title">Auto-fetch online subtitles</string>
+  <string name="pref_subtitles_online_auto_summary">Download and mount a subtitle when neither the server nor local storage has one.</string>
   <string name="pref_subtitles_emby_default_title">Follow Emby default subtitle</string>
   <string name="pref_subtitles_emby_default_summary">Use the track Emby flags as default when no preferred language matches, and load it directly when the source only has one subtitle language; when off, subtitles stay disabled.</string>
   <string name="pref_subtitles_emby_allowed_title">Also allow these languages</string>
@@ -1106,6 +1109,19 @@
   <string name="app_lock_auto_unlock_hint">Auto-unlock is on — unlocks as soon as it matches</string>
   <string name="app_lock_auto_unlock_badge">auto-unlock</string>
   <string name="app_lock_summary_on_format">On · %1$s</string>
+  <string name="app_lock_method_hit_mole">Whack-a-mole</string>
+  <string name="app_lock_method_hit_mole_desc">Tap a set number of moles to unlock; no credential</string>
+  <string name="app_lock_hit_mole_confirm_title">Unlock with whack-a-mole</string>
+  <string name="app_lock_hit_mole_confirm_message">This method sets no password. The unlock condition is a set number of taps. Anyone holding the device can get through, so it provides no access control.</string>
+  <string name="app_lock_hit_mole_confirm_note">You can turn it off at any time in App lock and switch to a PIN or pattern.</string>
+  <string name="app_lock_hit_mole_target_title">Moles to hit</string>
+  <string name="app_lock_hit_mole_target_value">%1$d</string>
+  <string name="app_lock_hit_mole_start">Start</string>
+  <string name="app_lock_hit_mole_unlock_title">Hit %1$d moles to unlock</string>
+  <string name="app_lock_hit_mole_hint">No credential is checked; anyone holding the device can finish this</string>
+  <string name="app_lock_manage_message_hit_mole">App lock is on. Adjust the number of moles, or play one round to turn it off</string>
+  <string name="app_lock_hit_mole_disable_title">Play one round to turn off</string>
+  <string name="app_lock_hit_mole_disable_message">Finishing one round turns App lock off. This method checks no credential.</string>
 
   <!-- 直播电视节目单（a2 + c1） -->
   <string name="livetv_now_playing">On now: %s</string>

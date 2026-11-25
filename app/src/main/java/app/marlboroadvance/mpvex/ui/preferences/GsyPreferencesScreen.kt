@@ -208,10 +208,10 @@ object GsyPreferencesScreen : Screen {
                       if (longPressReverse) {
                         val base = if (playbackEngine == "GSY") "GSYVideoPlayer" else "mpv"
                         val other = if (playbackEngine == "GSY") "mpv" else "GSYVideoPlayer"
-                        "当前默认 $base，所以长按视频会用 $other 打开。" +
-                          "自建：某片在 mpv 里播不动时，长按即可换一套解码链路，不用改默认设置"
+                        "当前默认 $base，长按视频将使用 $other 打开。" +
+                          "用于单文件解码异常时切换内核，无需修改默认设置"
                       } else {
-                        "关闭后长按与单击一致，都用上面选的默认内核"
+                        "关闭后长按与单击行为一致，均使用上方选定的默认内核"
                       },
                     color = MaterialTheme.colorScheme.outline,
                   )
@@ -338,8 +338,8 @@ object GsyPreferencesScreen : Screen {
                 valueToText = { AnnotatedString(it.title) },
                 summary = {
                   Text(
-                    text = "官方 GSYVideoType.setRenderType（全局，起播前生效）。" +
-                      "要用「滤镜」必须先选 GLSurfaceView；列表 / 弹窗场景保持 TextureView 最稳",
+                    text = "对应 GSYVideoType.setRenderType（全局，起播前生效）。" +
+                      "使用「滤镜」需选择 GLSurfaceView；列表与弹窗场景建议保持 TextureView",
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },
@@ -655,7 +655,7 @@ object GsyPreferencesScreen : Screen {
                 title = { Text("移动网络提示", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 summary = {
                   Text(
-                    text = "官方 setNeedShowWifiTip：用流量播放前先问一句",
+                    text = "对应 setNeedShowWifiTip：使用移动数据播放前弹出确认",
                     color = MaterialTheme.colorScheme.outline,
                   )
                 },

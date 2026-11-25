@@ -18,6 +18,14 @@ enum class OnlineSubtitleSource(
 ) {
   THUNDER("thunder", "迅雷"),
   SUBTITLE_CAT("subtitle_cat", "SubtitleCat"),
+
+  /**
+   * 从用户「字幕保存目录」导入的文件（旧版下载或手工拷入，清单里没有登记）。
+   *
+   * 不是网络来源，不参与搜索（见 [DEFAULT_ENABLED]）；只用来把这类文件归因清楚 ——
+   * 界面上它既不该显示成某个站点，也不该显示成「未知」。
+   */
+  LOCAL("local", "本地目录"),
   ;
 
   companion object {

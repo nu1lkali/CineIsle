@@ -35,8 +35,8 @@
   <string name="pref_appearance_auto_scroll_title">自动滚动到上次播放</string>
   <string name="pref_appearance_auto_scroll_summary">打开视频列表时自动滚动到上次播放的视频</string>
   <string name="pref_appearance_side_scrollbar_title">侧边滚动条</string>
-  <string name="pref_appearance_side_scrollbar_summary_on">网络浏览、Emby 媒体库等长列表右侧显示可拖动滚动条，按住滑块可快速定位</string>
-  <string name="pref_appearance_side_scrollbar_summary_off">所有列表均不显示侧边滚动条，只靠普通手势滚动</string>
+  <string name="pref_appearance_side_scrollbar_summary_on">长列表右侧显示可拖动滚动条，拖动滑块快速定位</string>
+  <string name="pref_appearance_side_scrollbar_summary_off">所有列表不显示侧边滚动条，仅靠手势滚动</string>
   <string name="pref_appearance_watched_threshold_title">已观看阈值</string>
   <string name="pref_appearance_watched_threshold_summary">播放进度达到 %d%% 时标记为已观看</string>
   <string name="video_label_new">新</string>
@@ -101,7 +101,7 @@
   <string name="pref_clear_config_cache_title">清除配置缓存</string>
   <string name="pref_clear_config_cache_summary">清除已缓存的 mpv.conf 设置</string>
   <string name="pref_clear_thumbnail_cache_title">清除缩略图缓存</string>
-  <string name="pref_clear_thumbnail_cache_summary">删除所有已缓存的视频缩略图（浏览文件夹时会重新生成）</string>
+  <string name="pref_clear_thumbnail_cache_summary">删除已缓存的视频缩略图，浏览时重新生成</string>
   <string name="pref_layout_title">播放器布局</string>
   <string name="pref_layout_summary">自定义播放器按钮布局</string>
   <string name="pref_layout_reset_default">恢复默认</string>
@@ -131,7 +131,7 @@
   <string name="pref_player_close_after_eof">播放结束后关闭</string>
   <string name="pref_player_remember_brightness">记住屏幕亮度</string>
   <string name="pref_player_remember_series_brightness">按剧记住亮度</string>
-  <string name="pref_player_remember_series_brightness_summary">每部剧恢复各自上次的亮度，而不是共用一个值</string>
+  <string name="pref_player_remember_series_brightness_summary">按剧集分别记忆亮度</string>
   <string name="pref_player_gestures">手势</string>
   <string name="pref_player_gestures_brightness">亮度手势</string>
   <string name="pref_player_gestures_volume">音量手势</string>
@@ -173,7 +173,7 @@
   <string name="pref_gesture_media_next">下一个</string>
   <string name="pref_gesture_media_custom_info">可以在 input.conf 中用以下按键码为媒体控制绑定自定义操作：\n\n上一个：PREV\n播放 / 暂停：PLAYPAUSE\n下一个：NEXT</string>
   <string name="pref_gesture_tap_thumbnail_to_select_title">点击缩略图进入选择</string>
-  <string name="pref_gesture_tap_thumbnail_to_select_summary">开启后点击缩略图进入多选模式；关闭后点击缩略图直接播放视频</string>
+  <string name="pref_gesture_tap_thumbnail_to_select_summary">关闭后点击缩略图直接播放</string>
   <string name="pref_decoder">解码器</string>
   <string name="pref_decoder_summary">硬解、像素格式、去色带</string>
   <string name="pref_decoder_profile_title">MPV 配置档</string>
@@ -182,24 +182,24 @@
   <string name="pref_decoder_default_auto_hwplus">自动检测（硬件解码+优先）</string>
   <string name="pref_decoder_default_hw">硬件解码</string>
   <string name="pref_decoder_default_hwplus">硬件解码+</string>
-  <string name="pref_decoder_zero_copy_cost">零拷贝硬解，省掉每帧的整帧回拷，4K、高帧率片源最流畅。此模式下不显示字幕，画质滤镜、着色器与截图均不可用；重新进入播放器后生效。</string>
+  <string name="pref_decoder_zero_copy_cost">零拷贝硬解，省去整帧回拷，4K 与高帧率片源更流畅。该模式不显示字幕，画质滤镜、着色器与截图不可用；重新进入播放器后生效</string>
   <string name="pref_decoder_detect_hw_found">已检测到 %1$d 个硬件解码器</string>
   <string name="pref_decoder_detect_none">未检测到硬件解码器，将使用软件解码</string>
   <string name="pref_decoder_detect_pending">正在检测设备解码能力…</string>
   <string name="pref_decoder_default_sw">软件解码</string>
-  <string name="player_direct_output_failed">零拷贝直出未生效（复制到反馈里即可）</string>
-  <string name="player_direct_output_ok">零拷贝直出已生效（复制到反馈里即可）</string>
+  <string name="player_direct_output_failed">零拷贝直出未生效（可复制用于反馈）</string>
+  <string name="player_direct_output_ok">零拷贝直出已生效（可复制用于反馈）</string>
   <string name="pref_decoder_gpu_next_title">使用 gpu-next</string>
   <string name="pref_decoder_gpu_next_summary">全新的渲染后端</string>
   <string name="pref_decoder_hdr_title">HDR 输出</string>
-  <string name="pref_decoder_hdr_summary">播放 HDR 片源时让屏幕切入系统 HDR 显示模式，其他片源恢复 SDR；若 HDR 画面偏暗或发灰可关闭。需设备支持 HDR。</string>
+  <string name="pref_decoder_hdr_summary">需设备支持 HDR</string>
   <string name="pref_decoder_hdr_no_device_support">此设备未报告 HDR 显示能力，开启后不会生效</string>
   <string name="pref_decoder_dv_p5_title">杜比视界颜色修正</string>
-  <string name="pref_decoder_dv_p5_summary">修正杜比视界 Profile 5 的紫绿偏色：仅这一类片源自动改用软解，由 gpu-next 按 DV 元数据重塑色彩，其他片源继续硬解。需开启 gpu-next，且默认解码器不能走零拷贝。</string>
-  <string name="pref_decoder_dv_p5_needs_gpu_next">需开启 gpu-next，且不用零拷贝</string>
+  <string name="pref_decoder_dv_p5_summary">仅 Profile 5 转软解，需 gpu-next</string>
+  <string name="pref_decoder_dv_p5_needs_gpu_next">需开启 gpu-next，且关闭零拷贝</string>
   <string name="pref_decoder_gpu_next_enable_title">启用 gpu-next？</string>
   <string name="pref_decoder_gpu_next_warning">在部分设备上启用 gpu-next 可能导致播放时出现紫屏</string>
-  <string name="pref_decoder_gpu_next_purple_screen_fix">若出现紫屏，请尝试在高级设置（mpv.conf）中关闭 opengl-pbo：</string>
+  <string name="pref_decoder_gpu_next_purple_screen_fix">紫屏时可在高级设置（mpv.conf）中关闭 opengl-pbo：</string>
   <string name="pref_decoder_gpu_next_enable_anyway">仍然启用</string>
   <string name="pref_decoder_debanding_title">去色带</string>
   <string name="pref_decoder_vulkan_title">使用 Vulkan</string>
@@ -214,15 +214,16 @@
   <string name="pref_preferred_languages">首选语言</string>
   <string name="pref_subtitles_fonts_dir">字体目录</string>
   <string name="pref_subtitles_save_dir">字幕保存目录</string>
-  <string name="pref_subtitles_save_dir_summary">下载时另存一份副本到该目录；重装后由该目录恢复本地字幕库</string>
+  <string name="pref_subtitles_save_dir_summary">另存副本，重装后由此恢复</string>
   <string name="not_set_subtitle_save_dir">未设置（副本仅存于应用内部目录）</string>
   <string name="clear_subtitle_save_dir">清除字幕保存目录</string>
   <string name="subtitle_restore_title">恢复本地字幕库</string>
-  <string name="subtitle_restore_message">保存目录清单：可恢复 %1$d 条（约 %2$s），已在本地 %3$d 条。恢复将把文件写入应用私有目录并重建索引，完成后出现在已下载列表与字幕实验室。</string>
+  <string name="subtitle_restore_message">保存目录清单：可恢复 %1$d 条（约 %2$s），本地已有 %3$d 条。恢复后写入应用私有目录并重建索引，随后出现在已下载列表与字幕实验室</string>
   <string name="subtitle_restore_confirm">恢复</string>
   <string name="subtitle_restore_cancel">取消</string>
   <string name="subtitle_restore_result">已恢复 %1$d 条，失败 %2$d 条</string>
   <string name="subtitle_restore_empty">无可恢复字幕：清单为空，或清单中的文件已不存在</string>
+  <string name="subtitle_restore_unlisted">保存目录中有 %1$d 条字幕未纳入清单，无法按清单归属；可在字幕实验室中选择影片后从该目录导入</string>
   <string name="pref_subtitles_autoload_title">自动加载字幕</string>
   <string name="pref_subtitles_autoload_summary">自动加载同名的外挂字幕</string>
   <string name="pref_audio">音频</string>
@@ -238,14 +239,14 @@
   <string name="pref_auto_crop_black_bars_title">自动裁切黑边</string>
   <string name="pref_auto_crop_black_bars_summary">每部新视频自动探测并裁掉四周黑边</string>
   <string name="player_toggle_auto_crop_on">已开启 —— 每部视频自动探测</string>
-  <string name="player_toggle_auto_crop_off">已关闭 —— 可在快捷功能里手动探测</string>
+  <string name="player_toggle_auto_crop_off">已关闭，可在快捷功能中手动探测</string>
   <string name="player_action_auto_crop">自动裁黑边</string>
   <string name="player_crop_applied">已裁掉黑边</string>
   <string name="player_crop_failed">未识别到黑边</string>
   <string name="player_crop_off">已还原画面</string>
   <string name="player_gif_action">录制 GIF</string>
   <string name="player_gif_title">录制 GIF 片段</string>
-  <string name="player_gif_hint">从当前位置开始录制（暂停中会自动继续播放），保存到相册的 Pictures/CineIsle 目录；清晰度越高文件越大</string>
+  <string name="player_gif_hint">从当前位置录制，保存至相册 Pictures/CineIsle；清晰度越高文件越大</string>
   <string name="player_gif_seconds">%1$d 秒</string>
   <string name="player_gif_start">开始录制</string>
   <string name="player_gif_recording">正在录制…（已自动继续播放）</string>
@@ -285,7 +286,7 @@
   <string name="pref_anime4k_title">Anime4K 超分（实验性）</string>
   <string name="pref_anime4k_summary">启用 Anime4K 超分滤镜</string>
   <string name="pref_anime4k_incompatibility">Anime4K 不兼容</string>
-  <string name="pref_anime4k_gpu_next_error">gpu-next 与 Anime4K 着色器不兼容。启用 Anime4K 后，应用将自动改用旧版 gpu 后端以保证着色器兼容。</string>
+  <string name="pref_anime4k_gpu_next_error">gpu-next 与 Anime4K 着色器不兼容，启用 Anime4K 后将自动切换至旧版 gpu 后端</string>
   <string name="pref_anime4k_cannot_use_with_gpu_next">启用 gpu-next 时无法使用 Anime4K</string>
   <string name="anime4k_mode_title">Anime4K 预设</string>
   <string name="anime4k_mode_toast">Anime4K：预设 %1$s</string>
@@ -340,11 +341,13 @@
   <string name="player_sheets_emby_subs_auto">自动选择</string>
   <string name="player_sheets_emby_subs_off">关闭字幕</string>
   <string name="pref_subtitles_emby_auto_title">自动挂载 Emby 字幕</string>
-  <string name="pref_subtitles_emby_auto_summary">播放 Emby 媒体时，用服务端已识别的字幕按语言偏好自动选择（字幕文件保存在应用私有目录）</string>
+  <string name="pref_subtitles_emby_auto_summary">按语言偏好自动选择</string>
+  <string name="pref_subtitles_online_auto_title">自动检索网络字幕</string>
+  <string name="pref_subtitles_online_auto_summary">服务端与本地均无字幕时，按匹配度自动下载并挂载</string>
   <string name="pref_subtitles_emby_default_title">跟随 Emby 默认字幕</string>
-  <string name="pref_subtitles_emby_default_summary">没有首选语言的候选时，采用 Emby 标为「默认」的字幕；片源只有一种字幕时也直接加载。关掉则保持关闭</string>
+  <string name="pref_subtitles_emby_default_summary">无首选语言候选时采用默认字幕</string>
   <string name="pref_subtitles_emby_allowed_title">还允许这些语言</string>
-  <string name="pref_subtitles_emby_allowed_summary">只在没有首选语言字幕时兜底（例如只有繁体就填 zh-TW）。留空 = 不限制</string>
+  <string name="pref_subtitles_emby_allowed_summary">无首选语言时兜底，留空不限制</string>
   <string name="pref_subtitles_emby_allowed_empty">未限制</string>
   <string name="file_picker_filter_hint">按文件名或番号筛选</string>
   <string name="file_picker_filter_clear">清除筛选</string>
@@ -370,7 +373,7 @@
   <string name="player_sheets_sub_override_ass">覆盖 ASS/SSA 字幕样式</string>
   <string name="player_sheets_sub_override_ass_subtitle">强制覆盖 ASS/SSA 字幕的样式</string>
   <string name="player_sheets_sub_follow_picture">字幕跟随画面缩放</string>
-  <string name="player_sheets_sub_follow_picture_summary">字幕大小随画面等比缩放，横竖屏观感一致；关闭则随窗口大小</string>
+  <string name="player_sheets_sub_follow_picture_summary">随画面缩放，横竖屏一致</string>
   <string name="player_sheets_sub_scale">缩放</string>
   <string name="player_sheets_sub_position">位置</string>
   <string name="player_sheets_sub_typography_card_title">字体排版</string>
@@ -425,13 +428,13 @@
   <string name="player_aspect_crop">裁剪</string>
   <string name="player_aspect_stretch">拉伸</string>
   <string name="crash_screen_title">出错了</string>
-  <string name="crash_screen_subtitle">%s 遇到了意外错误。可以考虑把崩溃日志分享到 GitHub issue。</string>
+  <string name="crash_screen_subtitle">%s 发生意外错误，可将崩溃日志提交至 GitHub Issue</string>
   <string name="crash_screen_logs_title">崩溃日志：</string>
   <string name="crash_screen_share">分享崩溃日志</string>
   <string name="crash_screen_restart">重启应用</string>
   <string name="crash_screen_fix_crash">修复崩溃（删除数据库）</string>
   <string name="crash_screen_database_deleted">数据库已删除，请重启应用</string>
-  <string name="crash_screen_database_hint">这次崩溃可能与数据库有关，可以尝试删除数据库来修复</string>
+  <string name="crash_screen_database_hint">崩溃可能与数据库相关，删除数据库后重试</string>
   <string name="timer_picker_enter_timer">输入时间</string>
   <string name="timer_picker_pick_time">选择时间</string>
   <string name="timer_title">睡眠定时</string>
@@ -484,23 +487,23 @@
   <string name="notification_playing">正在播放</string>
   <string name="pref_player_use_precise_seeking">使用精确跳转</string>
   <string name="pref_player_disk_cache">边看边缓存到本地</string>
-  <string name="pref_player_disk_cache_summary">看过的网络流留在本地，重看同一部不用重新下载</string>
+  <string name="pref_player_disk_cache_summary">网络流缓存至本地，重复播放无需重新下载</string>
   <string name="pref_player_disk_cache_size">缓存上限</string>
   <string name="pref_player_disk_cache_size_summary">单条影片</string>
   <string name="pref_player_clear_disk_cache">清除播放缓存</string>
-  <string name="pref_player_clear_disk_cache_summary">删除已缓存的网络流数据，不影响已下载到本地的文件</string>
+  <string name="pref_player_clear_disk_cache_summary">删除已缓存的网络流数据，不影响本地下载文件</string>
   <!-- 文件夹偏好 -->
   <string name="pref_folders_title">文件夹</string>
   <string name="pref_folders_summary">管理文件夹黑名单</string>
   <string name="pref_folders_empty_title">暂无黑名单文件夹</string>
-  <string name="pref_folders_empty_message">点击下方按钮，添加你不想在文件夹列表中看到的目录</string>
+  <string name="pref_folders_empty_message">添加需在文件夹列表中隐藏的目录</string>
   <string name="pref_folders_add_folder">添加文件夹到黑名单</string>
   <string name="pref_folders_select_folders">选择文件夹</string>
   <string name="pref_folders_loading">正在加载文件夹…</string>
   <string name="pref_folders_no_folders">未找到文件夹</string>
   <string name="pref_folders_clear_all">清空所有黑名单文件夹</string>
   <string name="pref_folders_clear_all_confirm_title">清空所有黑名单文件夹？</string>
-  <string name="pref_folders_clear_all_confirm_message">这将移除黑名单中的所有文件夹，之后仍可重新添加。</string>
+  <string name="pref_folders_clear_all_confirm_message">移除黑名单中的全部文件夹，之后可重新添加</string>
   <string name="pref_folders_blacklist">黑名单</string>
   <string name="pref_folders_blacklisted">已加入黑名单</string>
   <string name="pref_subtitles_searching">搜索中…</string>
@@ -623,7 +626,7 @@
   <string name="player_control_forward_10s">前进 %1$d 秒</string>
   <string name="player_battery_percent">%1$d%%</string>
   <string name="pref_seek_step_title">快进/快退时长</string>
-  <string name="pref_seek_step_summary">控制条上两个箭头的单次跳转时长，前进与后退可分别设置</string>
+  <string name="pref_seek_step_summary">控制条箭头的单次跳转时长，前进与后退分别设置</string>
   <string name="pref_seek_forward_title">前进时长</string>
   <string name="pref_seek_backward_title">后退时长</string>
   <string name="pref_seek_seconds">%1$d 秒</string>
@@ -633,9 +636,9 @@
   <string name="pref_show_player_battery_title">显示电量</string>
   <string name="pref_show_player_battery_summary">在控制栏显示电池图标与电量百分比（低于 15%% 时标红）</string>
   <string name="pref_show_player_net_speed_title">显示网络速度</string>
-  <string name="pref_show_player_net_speed_summary">在控制栏的时钟、电量旁显示当前网络加载速度。仅网络片源有读数。</string>
+  <string name="pref_show_player_net_speed_summary">仅网络片源有读数</string>
   <string name="pref_media_source_pref_title">多版本优先选择</string>
-  <string name="pref_media_source_pref_summary">同一个影片有多个版本时，播放时自动按此规则挑选</string>
+  <string name="pref_media_source_pref_summary">同一影片存在多个版本时按此规则自动选择</string>
   <string name="media_source_pref_default">跟随服务器默认版本</string>
   <string name="media_source_pref_highest_resolution">分辨率越高越好</string>
   <string name="media_source_pref_lowest_resolution">分辨率越低越省流量</string>
@@ -693,7 +696,7 @@
   <string name="gsy_audio_unsupported">切换音轨需要 IJK 内核（当前：%1$s）</string>
   <string name="gsy_audio_empty">没有找到可选音轨</string>
 
-  <string name="gsy_track_unsupported">切换%1$s需要 IJK 内核（当前：%2$s）</string>
+  <string name="gsy_track_unsupported">切换%1$s需 IJK 内核（当前：%2$s）</string>
   <string name="gsy_track_empty">没有找到可选%1$s</string>
   <string name="gsy_track_off">关闭</string>
   <string name="gsy_subtitle_track_title">字幕轨</string>
@@ -739,7 +742,7 @@
   <string name="gsy_cast_no_source">没有可投屏的播放地址</string>
 
   <string name="gsy_pref_rotate_with_system">跟随系统「自动旋转」</string>
-  <string name="gsy_pref_rotate_with_system_summary">关闭（默认）：播放页内始终响应重力感应。开启：系统「自动旋转」关掉后，播放页也不再随重力旋转。</string>
+  <string name="gsy_pref_rotate_with_system_summary">关闭时始终响应重力感应</string>
 
   <!-- ===== GSY 播放器独立设置页（与 mpv 的配置完全隔离） ===== -->
   <string name="pref_gsy_player">GSY 播放器</string>
@@ -785,8 +788,8 @@
   <string name="i18n_add_m3u_playlist">添加 M3U 播放列表</string>
   <string name="i18n_add_m3u_from_url">从网址导入 M3U 播放列表</string>
   <string name="i18n_add_network_connection">添加网络连接</string>
-  <string name="i18n_network_empty_hint">添加 SMB、FTP、WebDAV 或 AList 连接，即可浏览网络文件</string>
-  <string name="i18n_network_alist_hint">AList 走的是它自己的 API（不是 WebDAV）。填 AList 的账号密码；两个都留空则是访客访问。</string>
+  <string name="i18n_network_empty_hint">添加 SMB、FTP、WebDAV 或 AList 连接后浏览网络文件</string>
+  <string name="i18n_network_alist_hint">AList 使用独立 API（非 WebDAV）；账号密码留空为访客访问</string>
   <string name="i18n_confirm">确定</string>
   <string name="i18n_rename">重命名</string>
   <string name="i18n_delete">删除</string>
@@ -814,9 +817,9 @@
   <string name="i18n_create_new_playlist">新建播放列表</string>
   <string name="i18n_create_blank_playlist_hint">创建一个新的空白播放列表</string>
   <string name="i18n_create_folder">新建文件夹</string>
-  <string name="i18n_create_first_playlist">在上方创建你的第一个播放列表</string>
+  <string name="i18n_create_first_playlist">在上方创建播放列表</string>
   <string name="i18n_decrease_zoom">缩小</string>
-  <string name="i18n_clear_thumb_cache_hint">删除所有已缓存的视频缩略图（浏览文件夹时会重新生成）</string>
+  <string name="i18n_clear_thumb_cache_hint">删除已缓存的视频缩略图，浏览时重新生成</string>
   <string name="i18n_device_info">设备信息</string>
   <string name="i18n_done_reordering">完成排序</string>
   <string name="i18n_double_tap_area_width">双击快进区域宽度</string>
@@ -845,7 +848,7 @@
   <string name="i18n_invalid_url_protocol">网址协议不受支持</string>
   <string name="i18n_network_locations">网络位置</string>
   <string name="i18n_logcat">日志：</string>
-  <string name="i18n_layout_help">长按可拖动排序，点击“-”图标移除。</string>
+  <string name="i18n_layout_help">长按拖动排序，点击减号移除</string>
   <string name="i18n_media_info">媒体信息</string>
   <string name="i18n_moved_private_space">已移入隐私空间</string>
   <string name="i18n_no_network_connections">暂无网络连接</string>
@@ -945,32 +948,32 @@
   <string name="i18n_project_name_en" translatable="false">CineIsle</string>
   <string name="i18n_ack_title">致谢</string>
   <string name="i18n_ack_tap_to_open">打开项目主页</string>
-  <string name="i18n_ack_mpvex_summary">直接的上游项目，本项目基于它二次开发。</string>
+  <string name="i18n_ack_mpvex_summary">上游项目，本项目基于其二次开发</string>
   <string name="i18n_ack_mpv_android_summary">mpv 绑定与 libmpv 集成 —— 主播放内核。</string>
-  <string name="i18n_ack_gsy_summary">第二个播放内核，以及它自带的 IJK（FFmpeg）引擎。</string>
-  <string name="i18n_ack_media3_summary">AndroidX Media3 / ExoPlayer —— 视界流用的多实例播放。</string>
-  <string name="i18n_ack_danmaku_summary">弹幕渲染引擎 —— 已源码内置，并修复了滚动寿命与计时器相关问题。</string>
-  <string name="i18n_ack_emby_summary">Emby 官方 Java SDK —— 客户端的接口层基于它实现。</string>
+  <string name="i18n_ack_gsy_summary">第二播放内核，含自带 IJK（FFmpeg）引擎</string>
+  <string name="i18n_ack_media3_summary">AndroidX Media3 / ExoPlayer —— 视界流多实例播放</string>
+  <string name="i18n_ack_danmaku_summary">弹幕渲染引擎 —— 已内置源码，并修复滚动寿命与计时器问题</string>
+  <string name="i18n_ack_emby_summary">Emby 官方 Java SDK —— 客户端接口层</string>
   <string name="i18n_ack_upnpcast_summary">DLNA 投屏 —— 设备发现与播放控制。</string>
   <string name="i18n_ack_aboutlibraries_summary">生成本页里的开源许可清单。</string>
-  <string name="i18n_ack_network_summary">网络存储与本地服务 —— SMB、WebDAV、FTP、内嵌 HTTP 服务。</string>
+  <string name="i18n_ack_network_summary">网络存储与本地服务 —— SMB、WebDAV、FTP、内嵌 HTTP 服务</string>
   <string name="i18n_ack_telephoto_summary">照片浏览器的捏合缩放 / 平移 / 双击放大手势。</string>
   <string name="i18n_ack_coil_summary">照片浏览器与照片网格的图片加载、采样与缓存层。</string>
   <string name="i18n_preload_next_video">视频预加载</string>
-  <string name="i18n_preload_next_video_summary">当前视频播放 2 秒后，后台预取下一个视频开头一段数据，切换更流畅</string>
+  <string name="i18n_preload_next_video_summary">当前视频播放 2 秒后预取下一视频开头数据，提升切换速度</string>
   <string name="pref_remember_subtitle_track_title">记住每部剧选择的字幕轨</string>
   <string name="pref_remember_subtitle_track_summary_on">按「语言+编码」匹配，下一集自动选中同一条字幕轨</string>
   <string name="pref_remember_subtitle_track_summary_off">每集都按默认语言规则选字幕</string>
   <string name="pref_remember_global_speed_title">全局倍速记忆</string>
-  <string name="pref_remember_global_speed_summary_on">下一次播放沿用上次调过的倍速（每部剧的记忆优先）</string>
+  <string name="pref_remember_global_speed_summary_on">沿用上次倍速设置，剧集级记忆优先</string>
   <string name="pref_remember_global_speed_summary_off">每次播放都用默认倍速</string>
   <string name="pref_auto_skip_intro_title">自动跳过片头</string>
-  <string name="pref_auto_skip_intro_summary_on">有服务端片头标记时按标记跳；没有就按固定时长，起播后自动跳过开头一段</string>
-  <string name="pref_auto_skip_intro_summary_off">播放头在片头区间时显示可点的「跳过片头」</string>
+  <string name="pref_auto_skip_intro_summary_on">有片头标记时按标记跳转，否则起播后按固定时长跳过开头</string>
+  <string name="pref_auto_skip_intro_summary_off">播放位置进入片头区间时显示「跳过片头」</string>
   <string name="pref_auto_skip_outro_title">自动跳过片尾</string>
-  <string name="pref_auto_skip_outro_summary_on">有服务端片尾标记时按标记跳；没有就按固定时长跳到结尾（相当于触发连播）</string>
-  <string name="pref_auto_skip_outro_summary_off">播放头在片尾区间时显示可点的「跳过片尾」</string>
-  <string name="pref_gsy_dual_track_summary">倍速、字幕排版、手势、滤镜这些项在两个内核下各有一套：本页管 GSY，「播放与控件 → 播放器」管 mpv，改一边不会影响另一边。少数项是两边共用的：自动连播下一集（一个开关同时管两个内核）。播放记忆（倍速 / 音轨 / 字幕轨 / 片头片尾跳过）目前只对 mpv 播放页生效。</string>
+  <string name="pref_auto_skip_outro_summary_on">有片尾标记时按标记跳转，否则按固定时长跳至结尾（触发连播）</string>
+  <string name="pref_auto_skip_outro_summary_off">播放位置进入片尾区间时显示「跳过片尾」</string>
+  <string name="pref_gsy_dual_track_summary">本页仅作用于 GSY 内核</string>
   <string name="i18n_seekbar_standard">标准</string>
   <string name="i18n_seekbar_wavy">波浪</string>
   <string name="i18n_seekbar_thick">粗条</string>
@@ -1018,7 +1021,7 @@
   <string name="gsy_dislike_reason_save_and_mark">保存并标记</string>
 
   <string name="pref_dislike_title">不喜欢视频管理</string>
-  <string name="pref_dislike_summary">设置「不喜欢」按钮在哪些地方显示，并管理已标记的列表</string>
+  <string name="pref_dislike_summary">设置「不喜欢」入口的显示位置，并管理已标记列表</string>
   <string name="btn_label_dislike">不喜欢</string>
 
   <!-- 弹幕 -->
@@ -1029,11 +1032,11 @@
   <string name="danmaku_settings_summary">开关、弹幕源与凭证、自动匹配</string>
   <string name="danmaku_source_title">弹幕源</string>
   <string name="danmaku_match_title">匹配方式</string>
-  <string name="danmaku_host_hint">留空则用官方源。自建弹幕服务填自己的地址。</string>
-  <string name="danmaku_render_hint">字号、速度、透明度、屏蔽词等更多参数，在播放页「更多 → 弹幕」里调，改动同样即时生效。</string>
+  <string name="danmaku_host_hint">留空使用官方源，自建服务填写地址</string>
+  <string name="danmaku_render_hint">字号、速度、透明度、屏蔽词等参数见播放页「更多 → 弹幕」，改动即时生效</string>
   <string name="danmaku_not_matched">还没有匹配到弹幕</string>
   <string name="danmaku_matched_count">%1$s · %2$d 条</string>
-  <string name="danmaku_off_hint">打开后会联网搜索并加载弹幕。弹幕来自弹幕服务器，需要网络。</string>
+  <string name="danmaku_off_hint">开启后联网检索并加载弹幕</string>
   <string name="danmaku_matching">正在匹配片名并加载弹幕…</string>
   <string name="danmaku_font_size">字号</string>
   <string name="danmaku_speed">速度</string>
@@ -1045,7 +1048,7 @@
   <string name="danmaku_density_dense">密集</string>
   <string name="danmaku_block_words">屏蔽词（用逗号分隔）</string>
   <string name="danmaku_prevent_overlapping">防止弹幕重叠</string>
-  <string name="danmaku_prevent_overlapping_summary">弹幕会追上前面一条时自动换一条轨道，而不是压在一起；关掉能多挤几条但会叠字</string>
+  <string name="danmaku_prevent_overlapping_summary">自动换轨避免叠字</string>
   <string name="danmaku_auto_match">自动匹配</string>
   <string name="danmaku_auto_match_summary">按当前这一集的片名自动搜索对应弹幕</string>
   <string name="danmaku_manual_search">手动搜索</string>
@@ -1058,33 +1061,33 @@
   <string name="danmaku_remember_selection">记住手动选择</string>
   <string name="danmaku_remember_selection_summary">手动选过番剧后，切集沿用同一部番，不再按片名重新匹配</string>
   <string name="danmaku_with_related">合并关联剧集弹幕</string>
-  <string name="danmaku_with_related_summary">把同一集的其它版本、SP、OVA 弹幕一并拉进来，弹幕更密；若混进其它剪辑版的时间偏差可关掉</string>
+  <string name="danmaku_with_related_summary">同时拉取同集其它版本与 SP 的弹幕</string>
   <string name="danmaku_time_offset">时间轴偏移</string>
-  <string name="danmaku_time_offset_hint">弹幕比画面早出现就调正、晚出现就调负。按本剧记住，换片不会串。</string>
+  <string name="danmaku_time_offset_hint">弹幕早于画面调正值，晚于画面调负值；按剧集独立记忆</string>
   <string name="danmaku_time_offset_saved">已按本剧记住这个偏移</string>
   <string name="danmaku_time_offset_clear">跟随全局</string>
   <string name="danmaku_host">弹幕源地址</string>
   <string name="danmaku_app_id">AppId</string>
   <string name="danmaku_app_secret">应用密钥</string>
-  <string name="danmaku_credential_hint">留空则不使用弹弹play官方数据（适用于自建弹幕服务）。填写后需在开放平台提交应用并审核通过。</string>
+  <string name="danmaku_credential_hint">留空则不使用弹弹play官方数据（适用自建服务）；填写需在开放平台提交应用并通过审核</string>
 
   <!-- 应用锁（b7） -->
   <string name="app_lock_title">应用锁</string>
   <string name="app_lock_summary_off">未开启</string>
   <string name="app_lock_summary_on">已开启</string>
   <string name="app_lock_unlock_title">输入 PIN 码解锁</string>
-  <string name="app_lock_cooldown">尝试次数过多，请 %1$d 秒后再试</string>
+  <string name="app_lock_cooldown">尝试次数过多，%1$d 秒后重试</string>
   <string name="app_lock_wrong_pin">PIN 码不正确</string>
   <string name="app_lock_key_delete">删除</string>
   <string name="app_lock_pin_setup_title">设置 PIN 码</string>
   <string name="app_lock_pin_confirm_title">确认 PIN 码</string>
-  <string name="app_lock_pin_setup_hint">输入 4~6 位数字作为 PIN 码</string>
+  <string name="app_lock_pin_setup_hint">输入 4~6 位 PIN 码</string>
   <string name="app_lock_pin_confirm_hint">再输入一遍以确认</string>
   <string name="app_lock_pin_mismatch">两次输入不一致，请重新设置</string>
   <string name="app_lock_pin_too_short">PIN 码至少需要 4 位</string>
   <string name="app_lock_verify_title">验证 PIN 码</string>
   <string name="app_lock_change_verify_hint">请输入当前 PIN 码以继续</string>
-  <string name="app_lock_manage_message">应用锁已开启。可以修改凭证、开关自动解锁，或验证后关闭。</string>
+  <string name="app_lock_manage_message">应用锁已开启，可修改凭证、切换自动解锁或验证后关闭</string>
   <string name="app_lock_change_pin">修改 PIN 码</string>
   <string name="app_lock_disable">关闭应用锁</string>
   <string name="app_lock_method_title">选择解锁方式</string>
@@ -1102,10 +1105,23 @@
   <string name="app_lock_wrong_pattern">图案不正确</string>
   <string name="app_lock_change_pattern">修改图案</string>
   <string name="app_lock_auto_unlock_title">密码正确自动解锁</string>
-  <string name="app_lock_auto_unlock_summary">PIN 输对即自动解锁，无需按确定键；图案松手即验证。</string>
+  <string name="app_lock_auto_unlock_summary">输对即解锁，无需确认</string>
   <string name="app_lock_auto_unlock_hint">已开启自动解锁：输对即进</string>
   <string name="app_lock_auto_unlock_badge">自动解锁</string>
   <string name="app_lock_summary_on_format">已开启 · %1$s</string>
+  <string name="app_lock_method_hit_mole">打地鼠</string>
+  <string name="app_lock_method_hit_mole_desc">完成指定次数点击后解锁，不校验凭证</string>
+  <string name="app_lock_hit_mole_confirm_title">使用打地鼠解锁</string>
+  <string name="app_lock_hit_mole_confirm_message">该方式不设置密码，解锁条件为完成指定次数的点击。任何持有设备的人均可通过，不具备访问控制作用。</string>
+  <string name="app_lock_hit_mole_confirm_note">可随时在「应用锁」中关闭并改用数字 PIN 或九宫格图案。</string>
+  <string name="app_lock_hit_mole_target_title">需要敲中的次数</string>
+  <string name="app_lock_hit_mole_target_value">%1$d 次</string>
+  <string name="app_lock_hit_mole_start">开始</string>
+  <string name="app_lock_hit_mole_unlock_title">敲中 %1$d 只地鼠解锁</string>
+  <string name="app_lock_hit_mole_hint">不校验凭证，任何持有设备的人均可完成</string>
+  <string name="app_lock_manage_message_hit_mole">应用锁已开启，可调整敲中次数，或玩一局后关闭</string>
+  <string name="app_lock_hit_mole_disable_title">玩一局关闭应用锁</string>
+  <string name="app_lock_hit_mole_disable_message">通过一局即关闭应用锁。该方式不校验凭证。</string>
 
   <!-- 直播电视节目单（a2 + c1） -->
   <string name="livetv_now_playing">正在播出：%s</string>
@@ -1120,13 +1136,13 @@
   <!-- 外观深度定制 -->
   <string name="appearance_deep_title">外观定制</string>
   <string name="appearance_icon_title">桌面图标</string>
-  <string name="appearance_icon_summary">切换图标会重启应用。桌面图标只能来自安装包内置的资源，所以只能提供内置的几套。</string>
+  <string name="appearance_icon_summary">切换后重启应用</string>
   <string name="appearance_icon_already">已经是这套图标了</string>
   <string name="appearance_icon_failed">切换失败：安装包里缺少 %s</string>
   <string name="appearance_loading_anim_title">加载动画</string>
   <string name="appearance_loading_anim_summary">整屏加载时显示的动画</string>
   <string name="appearance_loading_anim_size_title">大小</string>
-  <string name="appearance_loading_anim_size_summary">拖动缩放所有加载动画（列表、播放器、弹窗统一生效）</string>
+  <string name="appearance_loading_anim_size_summary">缩放所有加载动画（列表、播放器、弹窗统一生效）</string>
   <string name="app_icon_default">默认</string>
   <string name="app_icon_deepsea">深海</string>
   <string name="app_icon_midnight">暗夜</string>
@@ -1157,9 +1173,9 @@
   <string name="pref_appearance_category_ui_style">界面风格</string>
   <string name="pref_appearance_ui_style_classic">经典</string>
   <string name="pref_appearance_ui_style_cine">Cine</string>
-  <string name="pref_appearance_ui_style_summary">Cine 使用新的图像优先首页（大图 Hero + 分区横滑）；收藏、历史、本地、网络四个页面暂时沿用经典布局，可随时切回。</string>
+  <string name="pref_appearance_ui_style_summary">部分页面使用新版布局</string>
   <string name="pref_appearance_hide_nav_labels_title">隐藏导航栏标题</string>
-  <string name="pref_appearance_hide_nav_labels_summary">底部导航只显示图标，不显示「首页」「收藏」「历史」这些文字。两种界面风格都生效。</string>
+  <string name="pref_appearance_hide_nav_labels_summary">底部导航只显示图标</string>
 
   <!-- Cine 界面文案 -->
   <string name="cine_nav_home">首页</string>
@@ -1197,7 +1213,7 @@
   <string name="cine_search_see_all">查看全部</string>
   <string name="cine_search_retry">重试</string>
   <string name="cine_search_recommend_empty_title">暂无推荐内容</string>
-  <string name="cine_search_recommend_empty_desc">推荐取自服务端的收藏、最近添加与评分数据。</string>
+  <string name="cine_search_recommend_empty_desc">推荐来自服务端收藏、最近添加与评分数据</string>
   <string name="cine_search_recommend_end">已显示全部 %1$d 条推荐</string>
   <string name="cine_search_recommend_shuffle">换一批</string>
   <string name="cine_section_libraries">媒体库</string>
@@ -1210,7 +1226,7 @@
   <string name="cine_action_resume">继续观看</string>
   <string name="cine_action_detail">详情</string>
   <string name="cine_state_no_server_title">还没有连接服务器</string>
-  <string name="cine_state_no_server_desc">添加一台 Emby 服务器，即可开始浏览你的媒体库</string>
+  <string name="cine_state_no_server_desc">添加 Emby 服务器后浏览媒体库</string>
   <string name="cine_state_no_server_action">添加服务器</string>
   <string name="cine_state_empty_title">这里还没有内容</string>
   <string name="cine_state_empty_desc">服务器上还没有扫描到媒体</string>
@@ -1316,7 +1332,7 @@
   <string name="cine_action_edit_images">编辑图片</string>
   <string name="cine_action_delete">删除</string>
   <string name="cine_action_delete_title">删除媒体</string>
-  <string name="cine_action_delete_message">确定删除「%1$s」吗？文件会从文件系统和媒体库中一并删除，且不可撤销。</string>
+  <string name="cine_action_delete_message">删除「%1$s」？文件将从文件系统与媒体库中移除，不可恢复</string>
   <string name="cine_action_cancel">取消</string>
   <string name="cine_action_more_from">更多 %1$s 出演的作品</string>
   <string name="cine_action_more_from_unknown">更多该演员的作品</string>

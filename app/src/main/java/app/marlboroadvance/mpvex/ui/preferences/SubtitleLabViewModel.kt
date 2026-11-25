@@ -12,11 +12,14 @@ import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTimeline
 import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleDownloader
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
+import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveImport
 import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitlePersist
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleTarget
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
+import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleScanner
 import app.marlboroadvance.mpvex.ui.player.subtitle.SubtitleBindings
+import app.marlboroadvance.mpvex.ui.player.subtitle.smart.SmartSubtitleMatcher
 import app.marlboroadvance.mpvex.ui.subtitle.lab.LabPreviewSource
 import app.marlboroadvance.mpvex.ui.subtitle.lab.LabPreviewSubtitle
 import app.marlboroadvance.mpvex.ui.subtitle.lab.LabSeekRequest
@@ -86,6 +89,8 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
     val redownloading: String? = null,
     /** 重新下载进度 0..1；null = 总量未知 */
     val redownloadProgress: Float? = null,
+    /** 正在从「字幕保存目录」导入（界面据此禁用按钮） */
+    val importingFromSaveDir: Boolean = false,
     // ── 字幕时间线（用户反馈 9：要能看到字幕内容与时间点，并能跳转）──
     /** 时间线属于哪条记录；null = 还没选 */
     val timelineRecordId: String? = null,
@@ -366,6 +371,81 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
   }
 
   /**
+   * 从「设置 → 字幕 → 字幕保存目录」导入与当前影片匹配的字幕。
+   *
+   * ## 解决什么
+   *
+   * 旧版本下载的、或用户手工拷进目录的字幕不在 `_cineisle_subtitles.tsv` 里，
+   * 重装后的恢复流程覆盖不到它们 —— 「已下载」列表里永远看不到，只能在播放时靠
+   * 目录扫描偶尔命中。
+   *
+   * ## 为什么必须由用户先选影片
+   *
+   * 目录里的文件名只有「标题.online.格式」，不含 `serverKey` / `itemId` / `originId`，
+   * 反推索引只能靠猜。归属由当前选中的影片给出，主键才是准确的，写进清单也才安全。
+   *
+   * 匹配沿用播放侧同一套判分（[LocalSubtitleScanner] + [SmartSubtitleMatcher]），
+   * 不另写一份规则。
+   */
+  fun importFromSaveDir() {
+    val state = _state.value
+    val server = state.selectedServer
+    val item = state.selectedItem
+    if (server == null || item == null) {
+      _state.update { it.copy(message = "请先选择目标影片") }
+      return
+    }
+    if (state.importingFromSaveDir) return
+    val title = item.Name.orEmpty().ifBlank { item.Id.orEmpty() }
+    val dirPath = preferences.subtitleSaveDirPath.get()
+    val legacy = preferences.subtitleSaveFolder.get()
+    if (dirPath.isBlank() && legacy.isBlank()) {
+      _state.update { it.copy(message = "未设置字幕保存目录") }
+      return
+    }
+    viewModelScope.launch {
+      _state.update { it.copy(importingFromSaveDir = true, message = null) }
+      val outcome =
+        withContext(Dispatchers.IO) {
+          val scan =
+            LocalSubtitleScanner.scan(
+              context = getApplication<Application>(),
+              saveDirPath = dirPath,
+              legacyTreeUri = legacy,
+              query = SmartSubtitleMatcher.prepare(title),
+            )
+          if (!scan.attempted || scan.hits.isEmpty()) {
+            null
+          } else {
+            SubtitleSaveImport.importCandidates(
+              context = getApplication<Application>(),
+              library = library,
+              serverKey = server.id.toString(),
+              itemId = item.Id.orEmpty(),
+              mediaTitle = title,
+              saveDirPath = dirPath,
+              legacyTreeUri = legacy,
+              candidates = scan.hits,
+            )
+          }
+        }
+      _state.update {
+        it.copy(
+          importingFromSaveDir = false,
+          message =
+            when {
+              outcome == null -> "保存目录中未找到与「$title」匹配的字幕"
+              outcome.imported == 0 -> "导入失败：${outcome.failed} 条"
+              outcome.failed > 0 -> "已导入 ${outcome.imported} 条，失败 ${outcome.failed} 条"
+              else -> "已导入 ${outcome.imported} 条"
+            },
+        )
+      }
+      if (outcome != null && outcome.imported > 0) refreshLibrary()
+    }
+  }
+
+  /**
    * 清理「磁盘上有、索引里没有」的字幕文件。
    *
    * 这一类残留不会自己消失也不会显示在列表里：索引被清空过、下载过程异常退出、
@@ -618,7 +698,7 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
               when {
                 !file.isFile -> "字幕文件已丢失，请重新下载"
                 cues == null -> "时间线解析失败"
-                cues.isEmpty() -> "这个文件里没有可识别的时间轴（格式可能不受支持）"
+                cues.isEmpty() -> "该文件无可识别时间轴（格式可能不受支持）"
                 else -> null
               },
           )

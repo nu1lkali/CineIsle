@@ -30,7 +30,9 @@ import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleInfo
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSourceType
 import app.marlboroadvance.mpvex.domain.subtitle.SubtitleFileNormalizer
 import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
+import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleAutoFetch
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
+import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleTarget
 import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore
 import app.marlboroadvance.mpvex.ui.player.subtitle.ExternalSubtitleArchive
 import app.marlboroadvance.mpvex.ui.player.subtitle.SubtitleBindings
@@ -1180,6 +1182,86 @@ class PlayerViewModel(
       }
       mounted > 0
     }
+  }
+
+  /**
+   * 起播兜底：本次没有任何可用字幕时，按设置检索网络字幕并挂载。
+   *
+   * ## 闸门（缺一不可）
+   *
+   * · 设置里开启了 [SubtitlesPreferences.onlineAutoFetch]；
+   * · 本次没有手动绑定 / 已下载网络字幕（[boundSubtitleApplied]）；
+   * · Emby 自动策略也没选出结果（[embySubtitleApplied]）；
+   * · 当前画面上 `sid <= 0`（一条字幕都没在显示）。
+   *
+   * 任一条不成立都直接返回 [OnlineSubtitleAutoFetch.Result.Status.DISABLED] ——
+   * 兜底不能顶掉用户已有的选择。
+   *
+   * 匹配低于阈值、检索无结果、下载失败都返回对应状态但**不弹提示**，
+   * 由调用方按 `message` 是否为空决定要不要说话。
+   */
+  suspend fun autoFetchOnlineSubtitle(
+    server: EmbyServer,
+    itemId: String,
+    mediaSourceId: String?,
+  ): OnlineSubtitleAutoFetch.Result {
+    if (!subtitlesPreferences.onlineAutoFetch.get()) {
+      return OnlineSubtitleAutoFetch.Result(OnlineSubtitleAutoFetch.Result.Status.DISABLED)
+    }
+    if (boundSubtitleApplied || embySubtitleApplied || embyAutoSuppressed) {
+      Log.i("PlayerViewModel", "skip online auto fetch: 已有字幕来源")
+      return OnlineSubtitleAutoFetch.Result(OnlineSubtitleAutoFetch.Result.Status.DISABLED)
+    }
+
+    val title = currentMediaTitle
+    val target =
+      OnlineSubtitleTarget(
+        serverKey = server.id.toString(),
+        itemId = itemId,
+        // 匹配器按文件名口径解析番号；播放页的 media-title 就是当前文件 / 显示标题
+        mediaTitle = title,
+        embyTitle = title.takeIf { it.isNotBlank() },
+        mediaSourceId = mediaSourceId,
+      )
+    val threshold = subtitlesPreferences.onlineAutoFetchThreshold.get().coerceIn(0, 100)
+    val result =
+      OnlineSubtitleAutoFetch.run(
+        context = host.context.applicationContext,
+        library = onlineSubtitleLibrary,
+        preferences = subtitlesPreferences,
+        target = target,
+        threshold = threshold,
+        saveFolderUri = subtitlesPreferences.subtitleSaveFolder.get(),
+      )
+
+    val record = result.record
+    if (result.status != OnlineSubtitleAutoFetch.Result.Status.SAVED || record == null) {
+      return result
+    }
+
+    // 落盘成功后挂载并选中：与「面板里点使用」走同一条 loadSubtitle 路径，
+    // 但这里必须等轨道真的进 track-list 再置标记，避免「报成功、画面没字幕」。
+    val file = onlineSubtitleLibrary.fileOf(record)
+    if (!file.isFile) return result
+    val uri = Uri.fromFile(file)
+    if (currentMediaTitle != title) return result
+
+    withContext(Dispatchers.Main) {
+      loadSubtitle(uri, select = true, silent = true, title = record.title.take(60))
+      var waited = 0L
+      while (waited < 1_500L && findSubtitleTrackIdOf(uri.toString()) == null) {
+        delay(80)
+        waited += 80
+      }
+      if (findSubtitleTrackIdOf(uri.toString()) != null) {
+        boundSubtitleApplied = true
+        Log.i("PlayerViewModel", "online subtitle auto-fetched: item=$itemId title=${record.title}")
+      } else {
+        Log.w("PlayerViewModel", "online subtitle auto-fetch mounted but track missing: ${record.title}")
+      }
+      _onlineSubtitles.value = onlineSubtitleLibrary.forMedia(server.id.toString(), itemId)
+    }
+    return result
   }
 
   // ==================== Emby 字幕（服务端已识别的字幕） ====================

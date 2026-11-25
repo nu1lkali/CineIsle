@@ -140,8 +140,8 @@ fun CineServerManageScreen(modifier: Modifier = Modifier) {
     if (servers.isEmpty()) {
       CineStatePanel(
         icon = Icons.Filled.Dns,
-        title = "还没有添加任何 Emby 服务器",
-        description = "填地址、端口和账号即可接入；登录成功后才保存配置",
+        title = "未添加服务器",
+        description = "登录成功后保存配置",
         primaryLabel = "添加服务器",
         onPrimary = { showAdd = true },
         modifier = Modifier.weight(1f),

@@ -628,6 +628,8 @@ object EmbyItemsApi {
     term: String,
     includeItemTypes: List<String>? = null,
     limit: Int = 60,
+    /** 分页起点。聚合检索翻页时按上一页返回的原始条数推进 */
+    startIndex: Int = 0,
     /**
      * 排序方式。默认 SortName（按名称），与改造前行为一致。
      *
@@ -662,7 +664,7 @@ object EmbyItemsApi {
     sortOrder = sortOrder,
     includeItemTypes = includeItemTypes,
     searchTerm = term,
-    startIndex = 0,
+    startIndex = startIndex,
     limit = limit,
     recursive = recursive,
     fields = fields,

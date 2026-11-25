@@ -793,7 +793,7 @@ private fun NoConnectionHint() {
       Text(text = "还没有 AList 连接", style = MaterialTheme.typography.labelLarge)
       Spacer(Modifier.height(4.dp))
       Text(
-        text = "上传需要一台 AList 服务器（只有它的 API 有写接口）。请先在「网络」里添加并测试通过，再回来分享。",
+        text = "上传需要 AList 服务器（仅其 API 提供写接口）。请在「网络」中添加并测试通过后再分享。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )

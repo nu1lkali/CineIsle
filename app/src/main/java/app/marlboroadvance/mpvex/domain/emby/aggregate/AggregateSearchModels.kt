@@ -74,6 +74,22 @@ data class ServerHit(
    */
   val playedPositionMs: Long
     get() = (item.UserData?.PlaybackPositionTicks ?: 0L) / 10_000L
+
+  /**
+   * 观看进度比例（0..1）。
+   *
+   * 用**比例**而不是绝对位置：同一部片在不同服务器的版本时长可能不同
+   * （导演剪辑版 / 重新封装），按绝对位置比会把「看到 40 分钟的长版本」判成
+   * 比「看到 35 分钟的短版本」更靠后。
+   * 位置或总时长任一缺失都返回 0 —— 「不知道进度」不该参与比较。
+   */
+  val playedRatio: Float
+    get() {
+      val pos = item.UserData?.PlaybackPositionTicks ?: 0L
+      val total = item.RunTimeTicks ?: 0L
+      if (pos <= 0 || total <= 0) return 0f
+      return (pos.toDouble() / total).toFloat().coerceIn(0f, 1f)
+    }
 }
 
 /**
@@ -159,6 +175,17 @@ data class ServerBatch(
   val elapsedMs: Long = 0,
   /** true = 没发请求（未登录等），用于区分 Failed 与 Skipped */
   val skipped: Boolean = false,
+  /** 本页在服务端分页窗口里的起点（只对媒体流有意义，演员结果只在首页取） */
+  val startIndex: Int = 0,
+  /**
+   * 媒体流的下一页起点。
+   *
+   * ⚠️ 不等于 `startIndex + items.size`：`items` 里还混着演员结果，
+   * 两条流在服务端是两个独立的分页窗口，用总数推进会跳过条目。
+   */
+  val nextStartIndex: Int = 0,
+  /** 该台的媒体结果已到底（返回不满一页，或已到服务端 TotalRecordCount） */
+  val exhausted: Boolean = false,
 )
 
 /** 结果的组织方式。 */
@@ -194,11 +221,19 @@ data class AggregateSnapshot(
 
 /** 聚合搜索的几个上限。集中在这里，便于与方案文档对齐。 */
 object AggregateSearchLimits {
-  /** 每台取多少条。与库内搜索默认值一致 */
+  /** 每台每页取多少条。既是首屏条数，也是翻页时单页步长 */
   const val PER_SERVER = 60
 
-  /** 合并后最多渲染多少条（分组视图按段截断，总量同口径） */
-  const val MAX_ENTRIES = 300
+  /**
+   * 合并后最多渲染多少条 —— **安全上限，不是首屏预算**。
+   *
+   * 首屏只加载每台一页；此后由用户滚动触底逐页追加，累积到这里为止，
+   * 避免「一直翻下去把内存和无障碍树撑爆」。到达后由界面提示已达上限。
+   */
+  const val MAX_ENTRIES = 1200
+
+  /** 单台最多翻多少页（`PER_SERVER × 该值` 即单台可取的条数上限） */
+  const val MAX_PAGES_PER_SERVER = 20
 
   /** 同时打几台。弱网下 8 台并发反而整体更慢，且可能触发服务端限流 */
   const val MAX_CONCURRENCY = 4

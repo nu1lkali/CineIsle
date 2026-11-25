@@ -125,7 +125,7 @@ object EmbyCollectionScreen : Screen {
               singleLine = true,
             )
             Text(
-              text = "建好后进去可以往里加影片。合集里的同一部片子不能重复添加。",
+              text = "建好后可添加影片，同一部影片不能重复添加",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -492,7 +492,7 @@ private fun CollectionPickerDialog(
     title = { Text("添加影片") },
     text = {
       if (candidates.isEmpty()) {
-        Text("最近没有可添加的内容。合集里的影片不能重复添加。")
+        Text("暂无可添加的内容")
       } else {
         Column(
           modifier = Modifier.fillMaxWidth(),

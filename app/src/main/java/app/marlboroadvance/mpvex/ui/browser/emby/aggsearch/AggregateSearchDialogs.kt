@@ -64,11 +64,6 @@ fun AggregateCopySheet(
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
         )
-        Text(
-          text = "该条目在 ${entry.serverCount} 台服务器上可播放，默认打开首行",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
       }
 
       Spacer(Modifier.size(10.dp))
@@ -170,7 +165,10 @@ private fun hitMeta(hit: ServerHit): String {
   val playedMs = hit.playedPositionMs
   if (playedMs > 0) {
     val minutes = (playedMs / 60_000L).coerceAtLeast(1L)
-    parts += "已看 $minutes 分钟"
+    val percent = (hit.playedRatio * 100).toInt()
+    // 进度比例只在「看过但没看完」时有信息量：0% 与 100% 都不写，免得两行看着一样
+    parts +=
+      if (percent in 1..99) "已看 $minutes 分钟（$percent%）" else "已看 $minutes 分钟"
   }
   if (parts.isEmpty()) parts += (hit.item.Type ?: "条目")
   return parts.joinToString(" · ")

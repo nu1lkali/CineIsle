@@ -104,7 +104,7 @@ class DlnaCastManager(private val context: Application) {
   fun connectAndCast(device: DLNACast.Device) {
     val payload = pendingPayload
     if (payload == null) {
-      _uiState.value = UiState.Error("没有可投屏的媒体，请先打开要投屏的视频。")
+      _uiState.value = UiState.Error("无可投屏的媒体，请先打开目标视频。")
       return
     }
     _uiState.value = UiState.Connecting(device)

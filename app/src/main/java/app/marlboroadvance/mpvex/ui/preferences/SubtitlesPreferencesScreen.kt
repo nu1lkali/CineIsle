@@ -274,6 +274,36 @@ object SubtitlesPreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              // 网络字幕兜底：与前两个开关串成三级 —— 同名文件 → 服务端字幕 → 网络检索
+              val onlineAuto by preferences.onlineAutoFetch.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.Language,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = onlineAuto,
+                onValueChange = { preferences.onlineAutoFetch.set(it) },
+                modifier = Modifier.settingsAnchor(R.string.pref_subtitles_online_auto_title),
+                title = {
+                  Text(
+                    stringResource(R.string.pref_subtitles_online_auto_title),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                },
+                summary = {
+                  Text(
+                    stringResource(R.string.pref_subtitles_online_auto_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
               val embyFollowDefault by preferences.embyFollowDefault.collectAsState()
               SwitchPreference(
                 icon = {
@@ -568,6 +598,10 @@ private fun SubtitleSaveFolderPreference(
       busy = false
       when {
         !plan.isEmpty -> pending = plan
+        // 清单缺失 / 未覆盖：告知这些文件不能按清单归属，而不是静默当作「没有字幕」
+        plan.unlistedFiles > 0 ->
+          resultText =
+            context.getString(R.string.subtitle_restore_unlisted, plan.unlistedFiles)
         showWhenEmpty -> resultText = context.getString(R.string.subtitle_restore_empty)
         else -> Unit
       }

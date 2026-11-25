@@ -770,12 +770,12 @@ private fun EmptyHint(
   val text =
     when {
       query.isNotEmpty() -> "没有台词包含「$query」"
-      !hasTracks -> "当前没有字幕轨道。先在字幕面板里挂一条外挂字幕，这里才有时间轴可读。"
-      !hasViewable -> "正在用的字幕内嵌在视频里，读不到时间轴。外挂字幕（srt / ass / vtt）才支持按台词跳转。"
+      !hasTracks -> "无字幕轨道，挂载外挂字幕后可读取时间轴"
+      !hasViewable -> "当前字幕内嵌于视频，无法读取时间轴；按台词跳转仅支持外挂字幕（srt / ass / vtt）"
       load is CueLoad.Loading -> null
       load is CueLoad.Failed -> load.reason
       load == null -> "正在准备字幕…"
-      else -> "这条字幕里没有可读的台词"
+      else -> "该字幕无台词数据"
     }
 
   Box(

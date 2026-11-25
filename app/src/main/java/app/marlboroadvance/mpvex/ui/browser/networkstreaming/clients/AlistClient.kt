@@ -850,7 +850,7 @@ class AlistClient(private val connection: NetworkConnection) : NetworkClient {
     if (expected <= 0) return UploadVerify.Unverified
     val actual =
       runCatching { getFileMeta(fullPath).size }.getOrElse { e ->
-        Log.w(TAG, "上传后回查失败（照常算成功，但不允许删本地）: $fullPath", e)
+        Log.w(TAG, "上传后回查失败（按成功处理，但禁止删除本地副本）: $fullPath", e)
         return UploadVerify.Unverified
       }
     if (actual != expected) {

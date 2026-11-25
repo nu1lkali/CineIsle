@@ -945,7 +945,7 @@ class GsyPlayerActivity : ComponentActivity() {
           onRecreateNeeded = { message ->
             if (view.isIfCurrentIsFullscreen) {
               // 全屏实例是 GSY 克隆出来的另一棵树，重建会让全屏状态错乱 —— 让用户先退全屏
-              Toast.makeText(this, "$message（请先退出全屏再切换）", Toast.LENGTH_LONG).show()
+              Toast.makeText(this, "$message（需退出全屏后切换）", Toast.LENGTH_LONG).show()
             } else {
               Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
               recreateKeepingPosition()

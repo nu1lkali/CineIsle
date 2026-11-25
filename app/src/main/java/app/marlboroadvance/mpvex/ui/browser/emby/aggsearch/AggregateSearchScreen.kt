@@ -114,6 +114,9 @@ object AggregateSearchScreen : Screen {
     val outcomes by vm.outcomes.collectAsState()
     val snapshot by vm.snapshot.collectAsState()
     val running by vm.running.collectAsState()
+    val loadingMore by vm.loadingMore.collectAsState()
+    val hasMore by vm.hasMore.collectAsState()
+    val atLimit by vm.atLimit.collectAsState()
     val mergeMode by vm.mergeMode.collectAsState()
     val sort by vm.sort.collectAsState()
     val drawerEntry by vm.drawerEntry.collectAsState()
@@ -227,7 +230,6 @@ object AggregateSearchScreen : Screen {
         if (term.isBlank()) {
           AggregateLanding(
             serversCount = servers.size,
-            selectedCount = selectedCount,
             history = history,
             onPickHistory = vm::pickHistory,
             onRemoveHistory = vm::removeHistory,
@@ -348,6 +350,18 @@ object AggregateSearchScreen : Screen {
                     }
                   }
                 }
+
+                // 翻页脚注：进入视野即自动补一页，也留一个手动入口。
+                // 只在有参与台尚未到底（或已达上限）时有内容，空态走不到这里。
+                item(key = "aggregate-load-more", span = { GridItemSpan(maxLineSpan) }) {
+                  AggregateLoadMoreFooter(
+                    hasMore = hasMore,
+                    loading = loadingMore,
+                    atLimit = atLimit,
+                    loadedCount = snapshot.rawCount,
+                    onLoad = vm::loadMore,
+                  )
+                }
               }
           }
         }
@@ -370,6 +384,55 @@ object AggregateSearchScreen : Screen {
 }
 
 // ==================== 局部组件 ====================
+
+/**
+ * 翻页脚注。
+ *
+ * 进入视野即自动补页（`LaunchedEffect` 在脚注首次组合时执行），同时保留手动入口 ——
+ * 弱网下自动补页失败时，用户仍能重试而不必整页下拉刷新。
+ */
+@Composable
+private fun AggregateLoadMoreFooter(
+  hasMore: Boolean,
+  loading: Boolean,
+  atLimit: Boolean,
+  loadedCount: Int,
+  onLoad: () -> Unit,
+) {
+  LaunchedEffect(hasMore, loading) {
+    if (hasMore && !loading) onLoad()
+  }
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
+    horizontalArrangement = Arrangement.Center,
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    when {
+      loading -> {
+        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 1.6.dp)
+        Spacer(Modifier.width(8.dp))
+        Text(
+          text = "正在加载下一页",
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      atLimit ->
+        Text(
+          text = "已加载 $loadedCount 条，达到单次浏览上限",
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      hasMore -> TextButton(onClick = onLoad) { Text("加载更多") }
+      else ->
+        Text(
+          text = "已全部加载（$loadedCount 条）",
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+  }
+}
 
 @Composable
 private fun AggregateToolbar(
@@ -656,7 +719,6 @@ private fun AggregateCard(
 @Composable
 private fun AggregateLanding(
   serversCount: Int,
-  selectedCount: Int,
   history: List<String>,
   onPickHistory: (String) -> Unit,
   onRemoveHistory: (String) -> Unit,
@@ -674,22 +736,15 @@ private fun AggregateLanding(
       style = MaterialTheme.typography.titleSmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    Text(
-      text =
-        if (serversCount >= 2) {
-          "先在上方「参与范围」选定本次检索的服务器，再输入关键词；" +
-            "未参与的服务器不会收到请求。当前将查询 $selectedCount 台，" +
-            "同一部影片多台都有时合并为一条，长按卡片可查看逐台副本。"
-        } else {
-          "当前仅配置了 $serversCount 台服务器。聚合检索需要两台以上；单台检索请使用首页搜索。"
-        },
-      style = MaterialTheme.typography.bodySmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
 
     if (serversCount < 2) {
+      Text(
+        text = "需要两台以上服务器",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
       TextButton(onClick = onOpenServerManage, contentPadding = PaddingValues(0.dp)) {
-        Text("打开服务器管理")
+        Text("服务器管理")
       }
       return@Column
     }
@@ -707,7 +762,7 @@ private fun AggregateLanding(
           modifier = Modifier.size(15.dp),
         )
         Text(
-          text = "暂无检索记录，输入关键词开始",
+          text = "输入关键词开始检索",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
         )
@@ -847,7 +902,7 @@ private fun emptyReason(outcomes: List<ServerOutcome>): String {
   if (skipped.isNotEmpty()) {
     return "「${skipped.first().name}」未发送请求：${skipped.first().message ?: "需重新登录"}"
   }
-  return "参与检索的服务器均未命中该关键词"
+  return "参与服务器均未命中该关键词"
 }
 
 /** 卡片副标题：年份 · 画质；两样都没有时退回类型名，不写占位词 */

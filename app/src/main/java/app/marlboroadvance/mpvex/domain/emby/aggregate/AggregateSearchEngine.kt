@@ -46,6 +46,7 @@ class AggregateSearchEngine(private val repository: EmbyRepository) {
     servers: List<EmbyServer>,
     term: String,
     itemTypes: List<String>?,
+    startIndex: Int = 0,
   ): Flow<ServerBatch> = channelFlow {
     // 并发上限：弱网下多台并发反而整体更慢，且可能触发服务端限流
     val permits = Semaphore(AggregateSearchLimits.MAX_CONCURRENCY)
@@ -53,7 +54,7 @@ class AggregateSearchEngine(private val repository: EmbyRepository) {
       launch(Dispatchers.IO) {
         // 用户改词 / 退出页面时，外层 flow 被取消 ⇒ 这里也跟着结束
         permits.withPermit {
-          send(queryOne(server, index, term, itemTypes))
+          send(queryOne(server, index, term, itemTypes, startIndex))
         }
       }
     }
@@ -62,12 +63,15 @@ class AggregateSearchEngine(private val repository: EmbyRepository) {
   /**
    * 查一台。**永不抛异常**：失败与「没发请求」都折成 [ServerBatch]，
    * 由 UI 决定怎么标（一台失败不能影响其余）。
+   *
+   * @param startIndex 服务端分页起点。首页传 0；翻页时传上一页的 [ServerBatch.nextStartIndex]
    */
   suspend fun queryOne(
     server: EmbyServer,
     serverOrder: Int,
     term: String,
     itemTypes: List<String>?,
+    startIndex: Int = 0,
   ): ServerBatch {
     val startedAt = System.currentTimeMillis()
     fun elapsed() = System.currentTimeMillis() - startedAt
@@ -85,15 +89,18 @@ class AggregateSearchEngine(private val repository: EmbyRepository) {
         )
 
     return try {
-      val items =
+      val page =
         withTimeout(AggregateSearchLimits.PER_SERVER_TIMEOUT_MS) {
-          fetch(ready, term, itemTypes)
+          fetch(ready, term, itemTypes, startIndex)
         }
       ServerBatch(
         server = ready,
         serverOrder = serverOrder,
-        items = items,
+        items = page.items,
         elapsedMs = elapsed(),
+        startIndex = startIndex,
+        nextStartIndex = page.nextStartIndex,
+        exhausted = page.exhausted,
       )
     } catch (e: TimeoutCancellationException) {
       // 外层被取消（改词 / 退出）时也会抛这个异常 —— 先确认仍在活动状态，
@@ -192,15 +199,38 @@ class AggregateSearchEngine(private val repository: EmbyRepository) {
 
   // ─── 取数 ───
 
+  /** 一页取数的结果 + 该台的分页状态。 */
+  private class Fetched(
+    val items: List<EmbyItem>,
+    val nextStartIndex: Int,
+    val exhausted: Boolean,
+  )
+
+  /**
+   * 取一页。
+   *
+   * ## 两条流的分页口径
+   *
+   * 演员走 `/Persons`、媒体走 `/Items`，服务端是**两个独立的分页窗口**，
+   * 不能把两边的条数加起来当游标推进（会跳过条目）。这里只对媒体流翻页：
+   * 演员结果只在首页取一页（`startIndex == 0`），翻页时不再重复请求 ——
+   * 否则每翻一页都要白拉 60 个演员，且它们在合并视图里早已被上一页覆盖。
+   *
+   * ## 失败为什么算「到底」
+   *
+   * 单页取数失败被 `runCatching` 吞成空列表（既有行为：这台显示「无结果」而不是红 chip）。
+   * 若此时把 `exhausted` 留成 false，界面会在触底时无限重试同一页。
+   */
   private suspend fun fetch(
     server: EmbyServer,
     term: String,
     itemTypes: List<String>?,
-  ): List<EmbyItem> {
+    startIndex: Int,
+  ): Fetched {
     // 演员走 /Persons，与媒体是两条独立流（`/Items` 那条端点搜不出人）
     val wantsPerson = itemTypes == null || itemTypes.any { it.equals(PERSON_TYPE, true) }
     val persons =
-      if (wantsPerson) {
+      if (wantsPerson && startIndex == 0) {
         runCatching {
           repository.searchPersons(server, term, null, AggregateSearchLimits.PER_SERVER)
         }.getOrDefault(emptyList())
@@ -212,22 +242,33 @@ class AggregateSearchEngine(private val repository: EmbyRepository) {
       itemTypes?.filterNot { it.equals(PERSON_TYPE, true) }?.takeIf { it.isNotEmpty() }
         ?: DEFAULT_MEDIA_TYPES.takeIf { itemTypes == null }
 
+    if (mediaTypes.isNullOrEmpty()) return Fetched(persons, startIndex, exhausted = true)
+
+    var nextStart = startIndex
+    var exhausted = true
     val media =
-      if (mediaTypes.isNullOrEmpty()) {
-        emptyList()
-      } else {
-        runCatching {
-          repository.searchItems(
-            server = server,
-            term = term,
-            includeItemTypes = mediaTypes,
-            limit = AggregateSearchLimits.PER_SERVER,
-            // CORE 不含 ProviderIds，跨服务器去重必须显式索取
-            fields = MEDIA_FIELDS,
-          ).Items
-        }.getOrDefault(emptyList())
-      }
-    return persons + media
+      runCatching {
+          val page =
+            repository.searchItems(
+              server = server,
+              term = term,
+              includeItemTypes = mediaTypes,
+              limit = AggregateSearchLimits.PER_SERVER,
+              startIndex = startIndex,
+              // CORE 不含 ProviderIds，跨服务器去重必须显式索取；
+              // 排序键（年份 / 首播）也一并要回来，否则合并行的年份比较恒为 null
+              fields = MEDIA_FIELDS,
+            )
+          nextStart = startIndex + page.Items.size
+          // 不满一页即到底；服务端给了总数时再按总数收一次口（防止末页刚好整页）
+          exhausted =
+            page.Items.size < AggregateSearchLimits.PER_SERVER ||
+              (page.TotalRecordCount > 0 && nextStart >= page.TotalRecordCount)
+          page.Items
+        }
+        .getOrDefault(emptyList())
+
+    return Fetched(persons + media, nextStart, exhausted)
   }
 
   /**
@@ -266,7 +307,11 @@ class AggregateSearchEngine(private val repository: EmbyRepository) {
     private val DEFAULT_MEDIA_TYPES =
       listOf("Movie", "Series", "Episode", "Video", "MusicVideo")
 
-    /** 搜索用的字段清单：CORE + 去重必需的 ProviderIds */
-    private val MEDIA_FIELDS = "${EmbyItemFields.CORE},ProviderIds"
+    /**
+     * 搜索用的字段清单：`CORE` + 排序键（年份 / 首播 / 评分）+ 去重必需的 `ProviderIds`。
+     *
+     * 年份不主动索取时恒为 null，「多台都有时按进度 / 年份挑源」会整体退化成原序。
+     */
+    private val MEDIA_FIELDS = "${EmbyItemFields.WITH_SORT_KEYS},ProviderIds"
   }
 }

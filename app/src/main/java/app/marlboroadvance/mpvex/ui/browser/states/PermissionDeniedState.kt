@@ -265,7 +265,7 @@ fun PermissionDeniedState(
           if (isPlayStoreBuild) {
             // Play Store build explanation
             Text(
-              text = "本应用需要读取你的视频文件，这是媒体播放器提供核心功能的前提。",
+              text = "本应用需要读取设备上的视频文件，这是提供媒体播放功能的前提。",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -288,33 +288,33 @@ fun PermissionDeniedState(
             )
 
             Text(
-              text = "• 发现并展示你的视频文件\n• 播放媒体内容\n• 加载字幕文件",
+              text = "• 发现并展示视频文件\n• 播放媒体内容\n• 加载字幕文件",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           } else {
             // Standard build explanation
             Text(
-              text = "本应用一直需要存储访问权限：只有拿到它，才能找到设备上的全部媒体与字幕文件，包括系统本身不支持的那些格式。",
+              text = "本应用始终需要存储访问权限：该权限用于发现设备上的全部媒体与字幕文件，含系统本身不支持的格式。",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Text(
-              text = "但由于安全策略调整，Android 11 及以上系统的应用需要额外授权才能继续这样做。",
+              text = "受 Android 11 及以上系统安全策略限制，应用需额外授权才能继续此行为。",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Text(
-              text = "请放心，这项权限只用于自动发现设备上的媒体 / 字幕文件，不会以任何方式读取其他应用存放的私有数据。",
+              text = "该权限仅用于自动发现设备上的媒体与字幕文件，不会读取其他应用的私有数据。",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
 
           Text(
-            text = "本应用是完全开源的项目。你可以访问我们的 GitHub 仓库，核对源码与权限的实际用途：",
+            text = "本应用为完全开源项目，可访问 GitHub 仓库核对源码与权限用途：",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -356,7 +356,7 @@ fun PermissionDeniedState(
           )
 
           Text(
-            text = "请放心，你的隐私是我们的最高优先级：我们不会为其他目的访问你的文件，也不会上传或存储到我们的服务器 —— 文件始终留在你自己的设备上。",
+            text = "文件不会被用于其他目的，也不会上传至任何服务器；始终保留在本地设备。",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.Medium,

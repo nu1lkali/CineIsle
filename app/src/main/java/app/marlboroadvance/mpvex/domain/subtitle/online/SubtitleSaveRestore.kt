@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.domain.subtitle.online
 import android.content.Context
 import android.util.Log
 import app.marlboroadvance.mpvex.domain.subtitle.SubtitleEncoding
+import app.marlboroadvance.mpvex.utils.media.SubtitleFileTypes
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -42,12 +43,15 @@ object SubtitleSaveRestore {
    * @property bytes 可恢复项合计字节
    * @property alreadyPresent 本机索引里已有、无需恢复的条数
    * @property missingFiles 清单里有、但文件已不存在的条数
+   * @property unlistedFiles 目录里存在、但清单未登记的字幕文件数（旧版下载或手工拷入）。
+   *   这些文件不含 `serverKey` / `itemId`，无法按清单精确归属，只能按影片在字幕实验室里导入
    */
   data class Plan(
     val items: List<Item> = emptyList(),
     val bytes: Long = 0L,
     val alreadyPresent: Int = 0,
     val missingFiles: Int = 0,
+    val unlistedFiles: Int = 0,
   ) {
     val restorable: Int get() = items.size
     val isEmpty: Boolean get() = items.isEmpty()
@@ -80,7 +84,13 @@ object SubtitleSaveRestore {
           SubtitleSaveStore.open(context, saveDirPath, legacyTreeUri)
             ?: return@runCatching Plan()
         val entries = SubtitleSaveManifest.read(root)
-        if (entries.isEmpty()) return@runCatching Plan()
+        // 清单缺失（旧版本下载、手工拷入）时不能直接返回空计划：仍要统计目录里有多少
+        // 字幕未被覆盖，UI 才能据此提示「这些文件只能按影片在字幕实验室里导入」。
+        val unlisted = countUnlisted(root, entries)
+
+        if (entries.isEmpty()) {
+          return@runCatching Plan(unlistedFiles = unlisted)
+        }
 
         val existing = library.all().mapTo(HashSet()) { it.id }
         // 目录查询是跨进程调用，同一个子目录只查一次
@@ -113,9 +123,58 @@ object SubtitleSaveRestore {
           bytes = items.sumOf { it.file.size },
           alreadyPresent = alreadyPresent,
           missingFiles = missingFiles,
+          unlistedFiles = unlisted,
         )
       }.onFailure { Log.w(TAG, "plan failed: ${it.message}") }.getOrDefault(Plan())
     }
+
+  // ──────────────────────────── 未登记文件的探测 ────────────────────────────
+
+  /** 探测预算：只走前两层、最多这么多个文件。清单缺失时也要秒出结果。 */
+  private const val UNLISTED_MAX_DEPTH = 3
+  private const val UNLISTED_MAX_FILES = 800
+
+  /**
+   * 统计目录里存在、但清单没有登记的字幕文件。
+   *
+   * 这类文件（旧版下载的、用户手工拷进来的）文件名只有「标题.online.格式」，
+   * 不含 `serverKey` / `itemId` / `originId` —— **无法反推出索引主键**。
+   * 所以这里只统计数量供 UI 提示，不做任何猜测性归属：一次性写错 tsv 会让重装恢复
+   * 把 A 片的字幕挂到 B 片上，比「不在已下载列表里」更糟。
+   *
+   * 阻塞 IO，调用方在 [plan] 的 IO 上下文里执行。
+   */
+  private fun countUnlisted(
+    root: SaveNode,
+    entries: List<SubtitleSaveManifest.Entry>,
+  ): Int {
+    val known = HashSet<String>(entries.size * 2)
+    entries.forEach { entry ->
+      known += if (entry.dirName.isBlank()) entry.fileName else "${entry.dirName}/${entry.fileName}"
+    }
+    var unlisted = 0
+    var visited = 0
+
+    fun walk(dir: SaveNode, prefix: String, depth: Int) {
+      if (depth > UNLISTED_MAX_DEPTH || visited >= UNLISTED_MAX_FILES) return
+      val children = runCatching { dir.children() }.getOrNull() ?: return
+      children.forEach { child ->
+        if (visited >= UNLISTED_MAX_FILES) return@forEach
+        val name = child.name
+        if (name.isBlank() || name.startsWith(".")) return@forEach
+        if (child.isDirectory) {
+          walk(child, "$prefix$name/", depth + 1)
+          return@forEach
+        }
+        if (!SubtitleFileTypes.isSubtitle(name)) return@forEach
+        visited++
+        if ("$prefix$name" !in known) unlisted++
+      }
+    }
+
+    walk(root, "", 1)
+    return unlisted
+  }
 
   /**
    * 执行恢复。传 [items] 时只恢复指定的这些（界面已经算过 [plan]，不必重算一遍）。

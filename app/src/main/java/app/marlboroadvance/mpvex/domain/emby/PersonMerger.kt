@@ -536,7 +536,7 @@ class PersonMerger(private val journal: PersonMergeJournal) {
     }
     if (otherSameName) sb.append("；演员表里出现了与保留项同名但 Id 不同的条目（服务器把引用解析到了另一条同名人上）")
     if ((item["LockData"] as? JsonPrimitive)?.booleanOrNull == true) {
-      sb.append("；注意：这部作品的元数据处于「已锁定」状态，锁定会阻止修改，请先在 Emby 里解锁再试")
+      sb.append("；该作品元数据处于「已锁定」状态，锁定会阻止修改，需在 Emby 中解锁后重试")
     }
     sb.append("。演员表前几人（格式：名字[ID末4位]）：").append(
       objs.take(4).joinToString("、") { o ->

@@ -189,7 +189,7 @@ internal fun SmartMergeManualSearchDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
               Text(
                 if (ui.tray.isEmpty()) {
-                  "待处理清单为空：先把需要的条目加入，至少 2 项才能组合。"
+                  "待处理清单为空，至少 2 项才能组合"
                 } else {
                   "待处理 ${ui.tray.size} 项" +
                     if (ui.tray.size < 2) "（还差 ${2 - ui.tray.size} 项）" else ""

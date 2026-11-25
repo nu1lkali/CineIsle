@@ -373,9 +373,9 @@ fun RenameRulePane(
     Text(
       text =
         when {
-          ruleCount == 0 -> "先添加一条规则，才能进入确认清单"
-          step == RenameStep.PREVIEW -> "确认无误后生成正式清单；AList 没有回收站，确认执行后不可撤销"
-          else -> "已设 $ruleCount 条规则 · 按顺序依次作用在当前目录这一层"
+          ruleCount == 0 -> "需至少添加一条规则才能进入确认清单"
+          step == RenameStep.PREVIEW -> "确认无误后生成正式清单；AList 无回收站，确认执行后不可撤销"
+          else -> "已设置 $ruleCount 条规则 · 按顺序作用于当前目录层级"
         },
       style = MaterialTheme.typography.labelSmall,
       color =

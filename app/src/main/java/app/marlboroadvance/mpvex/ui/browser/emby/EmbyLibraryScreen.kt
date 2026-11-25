@@ -1972,7 +1972,7 @@ data class EmbyLibraryScreen(
         context,
         when (operation.status) {
           OP_DONE -> "已合并 ${removedIds.size} 个条目，列表已就地更新"
-          else -> "已提交合并；结果暂未确认，已先保留所选主项目，稍后可下拉刷新核对"
+          else -> "合并请求已提交；结果尚未确认，已保留所选主项目，可下拉刷新核对"
         },
         Toast.LENGTH_LONG,
       ).show()
@@ -3868,7 +3868,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
             if (candidate == null) {
               Toast.makeText(
                 context,
-                "无法生成合并候选：这些条目缺少可识别的番号",
+                "无法生成合并候选：条目缺少可识别番号",
                 Toast.LENGTH_LONG,
               ).show()
             } else {

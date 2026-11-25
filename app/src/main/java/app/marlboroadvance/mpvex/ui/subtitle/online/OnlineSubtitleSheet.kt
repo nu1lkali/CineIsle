@@ -173,7 +173,7 @@ fun OnlineSubtitleSheet(
           }
 
         !state.searched ->
-          item(key = "hint") { Hint("填入番号后点「搜索」。两个来源会同时检索。") }
+          item(key = "hint") { Hint("输入番号后搜索") }
 
         state.items.isEmpty() ->
           item(key = "empty") {
@@ -319,7 +319,7 @@ private fun OnlineSubtitleHeader(
       supportingText = {
         if (keywordOrigin.isNotBlank() && keywordOrigin != "手动输入") {
           Text(
-            text = "自动提取：$keywordOrigin" + if (keywordWasFallback) "（未识别到编号）" else "",
+            text = "自动提取：$keywordOrigin" + if (keywordWasFallback) "（未识别编号）" else "",
             style = MaterialTheme.typography.labelSmall,
           )
         }

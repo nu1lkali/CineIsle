@@ -1188,6 +1188,8 @@ class EmbyRepository(
     term: String,
     includeItemTypes: List<String>? = null,
     limit: Int = 60,
+    /** 分页起点。聚合检索翻页时按上一页的原始条数推进；既有调用不传，行为不变 */
+    startIndex: Int = 0,
     sortBy: String? = "SortName",
     sortOrder: String? = null,
     /** 搜索范围：null = 全服；非 null + [recursive] = false 即「仅本目录」 */
@@ -1206,6 +1208,7 @@ class EmbyRepository(
       term = term,
       includeItemTypes = includeItemTypes,
       limit = limit,
+      startIndex = startIndex,
       sortBy = sortBy,
       sortOrder = sortOrder,
       parentId = parentId,

@@ -170,6 +170,8 @@ object EmbyHttp {
    * - 连接失败 / 超时（`IOException`）：退避 0.5s → 1s 重试；
    * - 5xx、429：退避重试（服务端临时过载 / 限流）；
    * - **401**：先给 [onUnauthorized] 一次重登机会，重登后重放**一次**原请求。
+   *   仅当请求头里的凭据等于当前服务器的 token 时才走这条路 —— 多服务器并发时
+   *   别台的 401 不能用全局 token 重放（那等于串台）。
    *
    * ⚠️ 401 只重试一次 —— 重登还没成功就别无限循环了，那只会把服务器打挂。
    * ⚠️ 请求体能否重放取决于能不能重读，所以 body 非空时**不再重试**
@@ -185,16 +187,22 @@ object EmbyHttp {
         try {
           val resp = chain.proceed(req)
           if (resp.code == 401 && attempt == 0) {
+            val relogin = onUnauthorized
+            // ⚠️ 只有「发出去的就是当前服务器的凭据」才值得重登重放。
+            // 聚合检索会并发请求多台服务器，请求头里带的是各自 server.apiToken；
+            // 若沿用全局 currentToken() 重放，等于把 A 台的 token 送给 B 台 ——
+            // 现场表现为「某台偶尔搜不出来，换个词又好了」。
+            // 凭据归属不明时原样返回 401，由调用方按「该台失败」收口。
+            val sent = req.header(TOKEN_HEADER)
+            if (relogin == null || sent.isNullOrEmpty() || sent != currentToken()) {
+              return@Interceptor resp
+            }
             // token 过期：先收掉这次响应（不关会泄漏连接），再试着重登
             resp.close()
-            val relogin = onUnauthorized
-            if (relogin != null) {
-              Log.i(TAG, "收到 401，尝试自动重登后重放请求：${req.url.encodedPath}")
-              relogin()
-              val retryReq = req.newBuilder().header("X-Emby-Token", currentToken()).build()
-              return@Interceptor chain.proceed(retryReq)
-            }
-            return@Interceptor chain.proceed(req)
+            Log.i(TAG, "收到 401，尝试自动重登后重放请求：${req.url.encodedPath}")
+            relogin()
+            val retryReq = req.newBuilder().header(TOKEN_HEADER, currentToken()).build()
+            return@Interceptor chain.proceed(retryReq)
           }
           if (shouldRetryCode(resp.code) && attempt < MAX_ATTEMPTS - 1) {
             resp.close()
@@ -219,6 +227,9 @@ object EmbyHttp {
 
   /** 退避基数（毫秒）：0.5s → 1s → … */
   private const val BACKOFF_BASE_MS = 500L
+
+  /** Emby 的鉴权头。401 重放要先比对「发出去的是不是当前服务器的凭据」 */
+  private const val TOKEN_HEADER = "X-Emby-Token"
 
   /** 最多尝试次数（含首次） */
   private const val MAX_ATTEMPTS = 3

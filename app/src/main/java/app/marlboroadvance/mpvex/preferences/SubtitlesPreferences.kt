@@ -137,6 +137,17 @@ class SubtitlesPreferences(
   val onlineSubtitleLibrary = preferenceStore.getString("sub_online_library", "")
 
   /**
+   * 服务端与本地都没有可用字幕时，自动检索网络字幕并按匹配度阈值挂载。
+   *
+   * 默认**关闭**：会向外站发请求并占用移动流量，必须由用户显式开启。
+   * 只在「本次播放既没有手动绑定、也没有已下载网络字幕、Emby 也没选出一条」时触发。
+   */
+  val onlineAutoFetch = preferenceStore.getBoolean("sub_online_auto_fetch", false)
+
+  /** 自动检索的匹配度阈值（0–100）。低于该分数不下载、不挂载 */
+  val onlineAutoFetchThreshold = preferenceStore.getInt("sub_online_auto_threshold", 85)
+
+  /**
    * 字幕编码归一化迁移的版本号（一次性）。
    *
    * 旧版本下载字幕时按字节原样落盘，本地库里因此混着 GBK / Big5 / UTF-16 的文件 ——

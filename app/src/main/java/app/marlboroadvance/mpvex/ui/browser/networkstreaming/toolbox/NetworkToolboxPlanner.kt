@@ -108,7 +108,7 @@ object NetworkToolboxPlanner {
 
     val summary = buildList {
       if (book.rules.isEmpty()) {
-        add("还没有添加任何规则 —— 请先在「批量重命名」面板里添加规则")
+        add("尚未添加规则，请在「批量重命名」面板中添加")
       } else {
         add("规则链（${book.rules.size} 条，按列表顺序依次生效）：")
         book.rules.forEachIndexed { i, rule -> add("  ${i + 1}. ${rule.describe()}") }

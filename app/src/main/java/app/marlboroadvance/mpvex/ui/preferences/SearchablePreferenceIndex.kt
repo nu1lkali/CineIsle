@@ -133,19 +133,19 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
     ))
     add(SearchablePreference(
         title = "连播列表每行数量",
-        summary = "「猜你喜欢」页里「连播列表」那一块，一行放几张海报，当前 \$mixColumns 个。",
+        summary = "「猜你喜欢」页「连播列表」每行海报数",
         category = "Emby 推荐与首页",
         screen = PreferencesScreen,
     ))
     add(SearchablePreference(
         title = "预解析直链（302）",
-        summary = "播放前先取出跳转后的真实地址。用于网盘 / STRM 这类带 302 跳转、",
+        summary = "播放前取出跳转后的真实地址，适用于网盘 / STRM 等带 302 跳转的源",
         category = "Emby 播放与数据同步",
         screen = PreferencesScreen,
     ))
     add(SearchablePreference(
         title = "STRM 直链播放",
-        summary = "仅对 .strm 条目生效：优先播放 strm 文件里的远端直链，不再经服务器中转。",
+        summary = "仅对 .strm 条目生效：优先播放 strm 文件中的远端直链，不经服务器中转",
         category = "Emby 播放与数据同步",
         keywords = listOf("strm", "直链", "direct", "url"),
         screen = PreferencesScreen,
@@ -850,7 +850,7 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
     ))
     add(SearchablePreference(
         title = "移动网络提示",
-        summary = "官方 setNeedShowWifiTip：用流量播放前先问一句",
+        summary = "对应 setNeedShowWifiTip：使用移动数据播放前弹出确认",
         category = "手势",
         screen = GsyPreferencesScreen,
     ))
