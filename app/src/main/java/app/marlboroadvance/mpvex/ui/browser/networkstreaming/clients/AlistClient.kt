@@ -12,8 +12,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import okhttp3.MediaType
@@ -27,8 +30,6 @@ import okhttp3.Response
 import okio.BufferedSink
 import java.io.IOException
 import java.io.InputStream
-import java.io.InterruptedIOException
-import java.net.SocketTimeoutException
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -100,6 +101,9 @@ class AlistClient(
 
     /** 搜索结果最多拉几页：防止宽泛关键词把索引翻到底 */
     private const val SEARCH_MAX_PAGES = 10
+
+    /** `public/settings` 里标识搜索索引开关的字段：`none` 表示关闭 */
+    private const val JSON_SEARCH_INDEX = "search_index"
 
     /**
      * `fs/list` 每页条数 —— **必须是显式正数**，别写 0。
@@ -542,12 +546,17 @@ class AlistClient(
   /**
    * 探测服务端是否开了搜索索引。
    *
-   * 手段是**空关键词探针**：`POST /api/fs/search` 带 `keywords = ""`。开了索引返回
-   * `code = 200`，没开则报错——这是唯一权威判据（版本号、公开设置接口都不可靠，
-   * 索引是运行期配置）。
+   * ⚠️ 判据是 **`GET /api/public/settings` 的 `search_index` 字段**，与 AlistClientN
+   *（`lib/util/user_controller.dart#loadSettings`）完全一致：`none`（或缺失）＝关闭，
+   * 其它值（`database` / `bleve` / `meilisearch`）＝开启。
+   *
+   * 为什么不用「空关键词探针」：AList 的 `fs/search` 对 `keywords = ""` 会按业务错误
+   * 返回（关键词为空），并不代表索引没开；拿它当判据会把「开了索引」误判成
+   * `Unavailable` —— 症状就是入口死活不出、真机上怎么搜都没结果。public/settings
+   * 是公开接口（无需登录），且是索引开关的**唯一权威来源**。
    *
    * 结论在 [searchCapability] 里缓存到本次会话结束：
-   * - `Available` / `Unavailable` 会缓存，避免每敲一个字都发一次探针；
+   * - `Available` / `Unavailable` 会缓存，避免每进一层目录都发一次；
    * - `Unknown`（网络异常 / 超时）**不缓存**，下次仍可重试，也符合「管理员随时可能
    *   打开索引，下次连接必须重新问」的要求（断连时字段会被清空）。
    */
@@ -559,13 +568,26 @@ class AlistClient(
       }
       val outcome =
         runCatching {
-          val parsed = postSearch(keyword = "", page = 1, perPage = 1)
-          if (parsed.code == CODE_OK) {
-            SearchCapability.Available
+          val raw = getText("public/settings", withAuth = false)
+          // 手动取字段而不是反序列化成 DTO：public/settings 有几十个字段，
+          // 任何一个类型对不上都会让整个 DTO 解析失败，而这里只关心 search_index 一个。
+          val root = json.parseToJsonElement(raw).jsonObject
+          // 兼容两种形态：AList 直接返回扁平设置对象；个别反代/新版包在 {code,data} 里。
+          val indexElem =
+            root[JSON_SEARCH_INDEX]
+              ?: root["data"]?.jsonObject?.get(JSON_SEARCH_INDEX)
+          val index = indexElem?.takeIf { it is JsonPrimitive }?.jsonPrimitive?.content
+          if (index.isNullOrBlank() || index.equals("none", ignoreCase = true)) {
+            // 只有明确读到「关」才下 Unavailable 结论（会被缓存）。
+            SearchCapability.Unavailable(SearchUnavailableReason.INDEX_DISABLED)
           } else {
-            SearchCapability.Unavailable(classifySearchFailure(parsed.code, parsed.message))
+            SearchCapability.Available
           }
-        }.getOrElse { e -> classifySearchException(e) }
+        }.getOrElse {
+          // ⚠️ 探测异常一律 Unknown（不缓存、下次可重试）。这里若把网络抖动也算成
+          // Unavailable，结论会被会话缓存，本次连接内再也不会重试 —— 入口就永久消失。
+          SearchCapability.Unknown
+        }
 
       // 只对「问清楚了」的结论做会话内缓存；网络类 Unknown 留给下次重试
       if (outcome is SearchCapability.Available || outcome is SearchCapability.Unavailable) {
@@ -592,9 +614,9 @@ class AlistClient(
       runCatching {
         val parsed = postSearch(keyword, page, perPage)
         if (parsed.code != CODE_OK) {
-          // 索引被关 / 检索权限变了：把能力降级，UI 的入口随之消失
-          searchCapability =
-            SearchCapability.Unavailable(classifySearchFailure(parsed.code, parsed.message))
+          // 只把错误抛给 UI 显示，不动 searchCapability —— 「服务端是否开了索引」
+          // 由 public/settings 唯一判定，一次搜索失败（关键词问题 / 网络抖动 /
+          // 索引临时重建）不代表索引被关。若在 Here 降级并缓存，入口会永久消失。
           throw AlistApiException(parsed.code, parsed.message.ifBlank { "搜索失败" })
         }
         val data = parsed.data
@@ -606,10 +628,6 @@ class AlistClient(
           page = page,
           hasMore = page < SEARCH_MAX_PAGES && items.size >= perPage,
         )
-      }.onFailure { e ->
-        // 401 / 业务错误同样可能意味着能力变了，回填让下次探测拿到最新结论
-        val cap = classifySearchException(e)
-        if (cap is SearchCapability.Unavailable) searchCapability = cap
       }
     }
 
@@ -685,34 +703,6 @@ class AlistClient(
       parentLabel = if (relParent.isEmpty()) "/" else "/$relParent",
     )
   }
-
-  /** 把业务码 + message 翻成「为什么不可用」。索引未启用是最常见的一档。 */
-  private fun classifySearchFailure(
-    code: Int,
-    message: String,
-  ): SearchUnavailableReason {
-    val msg = message.lowercase()
-    val indexOff = listOf("index", "索引", "not enabled", "未启用", "not support", "不支持", "search is not")
-    return when {
-      code == 401 || code == 403 -> SearchUnavailableReason.UNAUTHORIZED
-      indexOff.any { msg.contains(it) } -> SearchUnavailableReason.INDEX_DISABLED
-      else -> SearchUnavailableReason.SERVER_ERROR
-    }
-  }
-
-  /**
-   * 把异常翻成能力结论：网络抖一下 / 超时一律 [SearchCapability.Unknown]（不下结论、
-   * 不缓存、可重试）；只有明确的鉴权 / 业务错误才判 Unavailable。
-   */
-  private fun classifySearchException(e: Throwable): SearchCapability =
-    when {
-      e is SocketTimeoutException || e is InterruptedIOException -> SearchCapability.Unknown
-      e is AlistApiException && (e.code == 401 || e.code == 403) ->
-        SearchCapability.Unavailable(SearchUnavailableReason.UNAUTHORIZED)
-      e is AlistApiException ->
-        SearchCapability.Unavailable(classifySearchFailure(e.code, e.message.orEmpty()))
-      else -> SearchCapability.Unknown
-    }
 
   // ── 写操作（AList 官方 API） ──
   // 契约实证自 `D:\project\AlistClientN` 的请求实体：
@@ -1257,6 +1247,27 @@ class AlistClient(
       throw AlistApiException(code, "AList HTTP $code")
     }
     return response
+  }
+
+  /**
+   * GET 一个接口，返回原始响应体字符串。
+   *
+   * 目前只用于 `public/settings`（读搜索索引开关）。该接口是**公开的**，
+   * 带不带 `Authorization` 都能读，这里默认不带，避免游客态为了探测先登录。
+   */
+  private fun getText(
+    endpoint: String,
+    withAuth: Boolean,
+  ): String {
+    val request =
+      Request.Builder()
+        .url(api(endpoint))
+        .get()
+        .apply { if (withAuth) authHeader()?.let { header("Authorization", it) } }
+        .build()
+    execute(request).use { response ->
+      return response.body?.string() ?: throw IOException("AList 返回空响应体: $endpoint")
+    }
   }
 
   /**

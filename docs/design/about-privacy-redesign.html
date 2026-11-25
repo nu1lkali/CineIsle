@@ -311,13 +311,14 @@
   </div>
 
   <div class="note">
-    <b>本次改版（关于页设备信息面板 + 图标）</b>
+    <b>本次改版（关于页主卡固定绿系 + 设备面板 + 图标）</b>
     <ul>
+      <li><b>关于页主卡是全 App 唯一刻意不跟随 MaterialTheme 的界面。</b>设计稿给的是一套自洽绿系（中心亮黄绿 <code>#D7E3B4</code> → 中段 <code>#CFE0CB</code> → 边缘薄荷 <code>#CFE6DA</code>，深墨绿字 <code>#0D2A22</code>）；早先改成读 <code>colorScheme.primaryContainer/tertiaryContainer</code>，默认紫色主题下容器色被冲淡、渐变色差几乎为零，真机就成一块素卡 —— 这正是「设计图漂亮、实际很丑」的根因。现按设计稿固定色板绘制，深浅两套各自保证对比度（浅底深字 &gt;12:1，深底浅字 &gt;7:1），跟随 App 深浅模式设定但不跟随主题色。</li>
+      <li>移除了压住渐变的文字护罩（scrim）与过强的顶部高光：渐变主体直接可见，只保留很弱的一层高光与 1dp 玻璃内描边提供质感。</li>
       <li>设备面板不再是「浅蓝实心卡」：改成<b>浮在主卡渐变之上、共用同一呼吸相位的玻璃层</b>——极淡磨砂 + 随 5s 相位游走的柔光 + 顶部高光 + 上亮下暗的玻璃内描边，底下那片彩色渐变照旧透出来，因此有渐变、会呼吸、有质感，也不闷。</li>
-      <li>层次靠「分组主色引导条 + 图标 + 三级排版」建立，而不是靠一整块底色或一堆分隔线，既避开浅蓝也避开单调。</li>
-      <li>按钮 / 状态行 / 面板标题 / 分组标题 / 复制胶囊全部配对应图标。GitHub 按钮用<b>官方猫头标</b>（单色 vector drawable，随 tint 适配主题），其余取自 <code>material-icons-extended</code>，逐个核对 AAR 存在性。</li>
-      <li>落代码：<code>AboutGlassButton</code> / <code>AboutActionRow</code> 新增 <code>icon</code> 参数；<code>DeviceInfoPanel</code> 新增 <code>breath</code> 参数，由主卡的 <code>fraction</code> 传入，<code>drawWithCache</code> 内自绘玻璃与呼吸光斑。</li>
-      <li>内容色仍一律取自 <code>MaterialTheme.colorScheme.onPrimaryContainer</code>，玻璃高光用白色透明度，深浅主题自动适配，无硬编码 UI 色。</li>
+      <li>层次靠「分组主色引导条 + 图标 + 三级排版」建立，而不是靠一整块底色或一堆分隔线，既避开浅蓝也避开单调。全部文字 / 描边 / 引导条取固定色板的 <code>ink</code> / <code>accent</code>，保证在绿底上的对比度。</li>
+      <li>按钮 / 状态行 / 面板标题 / 分组标题 / 复制胶囊全部配<b>线性（outlined）图标</b>，与设计稿的 stroke 风格一致；GitHub 按钮用<b>官方猫头标</b>（单色 vector drawable，随 tint 适配），其余取自 <code>material-icons-extended</code>，逐个核对 AAR 存在性。</li>
+      <li>落代码：<code>AboutPalette</code> 深浅两套固定色板 + <code>aboutPalette()</code> 按明暗选板；<code>AboutGlassButton</code> / <code>AboutActionRow</code> 带图标；<code>DeviceInfoPanel</code> 的 <code>breath</code> 由主卡 <code>fraction</code> 传入，<code>drawWithCache</code> 内自绘玻璃与呼吸光斑。</li>
     </ul>
   </div>
 </body>

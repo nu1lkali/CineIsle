@@ -29,16 +29,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.Article
-import androidx.compose.material.icons.filled.AccountBalance
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.CurrencyRupee
-import androidx.compose.material.icons.filled.Devices
-import androidx.compose.material.icons.filled.Mail
-import androidx.compose.material.icons.filled.MonetizationOn
-import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.Update
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.Mail
+import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.PhoneAndroid
+import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -61,7 +58,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -88,13 +85,50 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.Serializable
 
 /**
- * 卡片光斑中段（55% 半径处）的颜色：tertiary 容器色按这个比例混进基色。
+ * 关于页主卡的**固定品牌色板**。
  *
- * 0 = 纯基色（最清晰、也最平），1 = 原样 tertiary（最好看、文字最危险）。
- * 鲜色本身交给 [0f] 那一档（直接用 `tertiaryContainer`），这里只负责中段的过渡，
- * 所以可以给到 0.45 而不是把整块压成基色 —— KPI 是「文字区靠护罩保读、色彩区照旧艳」。
+ * ⚠️ 这是全 App 唯一刻意不跟随 MaterialTheme 的界面：设计稿 `about-privacy-redesign.html`
+ * 给的是一套自洽的绿系视觉（中心亮黄绿 → 边缘薄荷绿 + 深墨绿字），它的漂亮恰恰来自
+ * 这组固定色。之前把色值改成读 `colorScheme.primaryContainer/tertiaryContainer`，
+ * 默认主题是紫（#794F81），容器色又被冲淡，渐变色差几乎为零 —— 真机就成了一块素卡，
+ * 这正是「设计图漂亮、实际很丑」的根因。品牌展示卡用固定色是合理例外，与全局主题不冲突。
+ *
+ * 深浅两套各自保证对比度：浅色卡亮绿底 + 深墨绿字（>12:1），深色卡深绿底 + 浅薄荷字（>7:1）。
+ * [accent] 是分组引导条的颜色（对应设计稿的 `--primary`）。
  */
-private const val ABOUT_CARD_SPOT_MIX = 0.45f
+private data class AboutPalette(
+  val spot: Color,
+  val mid: Color,
+  val edge: Color,
+  val ink: Color,
+  val accent: Color,
+  val isDark: Boolean,
+)
+
+private val ABOUT_PALETTE_LIGHT =
+  AboutPalette(
+    spot = Color(0xFFD7E3B4),
+    mid = Color(0xFFCFE0CB),
+    edge = Color(0xFFCFE6DA),
+    ink = Color(0xFF0D2A22),
+    accent = Color(0xFF2F5F4F),
+    isDark = false,
+  )
+
+private val ABOUT_PALETTE_DARK =
+  AboutPalette(
+    spot = Color(0xFF3F735D),
+    mid = Color(0xFF2E5847),
+    edge = Color(0xFF203E33),
+    ink = Color(0xFFE8F3EC),
+    accent = Color(0xFFA9D6BC),
+    isDark = true,
+  )
+
+/** 按当前主题的明暗选色板。用 `onBackground` 亮度判定，跟随 App 的深度模式设定（含 AMOLED）。 */
+@Composable
+private fun aboutPalette(): AboutPalette =
+  if (MaterialTheme.colorScheme.onBackground.luminance() < 0.5f) ABOUT_PALETTE_LIGHT else ABOUT_PALETTE_DARK
 
 @Serializable
 object AboutScreen : Screen {
@@ -158,18 +192,9 @@ object AboutScreen : Screen {
         )
       },
     ) { paddingValues ->
-      val cs = MaterialTheme.colorScheme
-      // ── 这张卡片的「底色 / 文字」口径 ──
-      // 底色是 tertiaryContainer → primaryContainer 的径向渐变，文字一律 onPrimaryContainer。
-      // 「on 色」只保证在**自己的**容器色上够对比，所以光斑扫到文字上时对比度就会掉 ——
-      // 但反过来说，把光斑整块压成基色又会变成一块素色（看着就廉价）。
-      // 现在的分工是：
-      //   · 色彩：光斑中心直接用 tertiaryContainer（不掺水），覆盖右上→右下的大半张卡；
-      //   · 可读：文字区单独垫一层基色柔光（[AboutCardScrim]），把字底拉回主色域；
-      //   · 质感：顶部柔光 + 1dp 上亮下暗的内描边（玻璃边），由 drawWithCache 里两层叠出来。
-      // 三者叠起来才是「有颜色、有光、有边」的一张卡，而不是一块平涂。
-      val baseColor = cs.primaryContainer
-      val spotColor = lerp(baseColor, cs.tertiaryContainer, ABOUT_CARD_SPOT_MIX)
+      // 主卡用 [aboutPalette] 的固定品牌绿，刻意不跟随 MaterialTheme —— 原因见 AboutPalette 注释。
+      // 光斑在三色之间缓慢摆动，中心亮点始终在文字「背后」流动，而不是从字上扫过去。
+      val palette = aboutPalette()
       val transition = rememberInfiniteTransition()
       val fraction by transition.animateFloat(
         initialValue = 0f,
@@ -205,37 +230,35 @@ object AboutScreen : Screen {
               .fillMaxWidth()
               .padding(horizontal = 16.dp, vertical = 8.dp)
               .clip(RoundedCornerShape(cornerRadius))
-              // 底色必须在渐变之下：圆角抗锯齿那半个像素需要它垫着，
-              // 否则边缘会露出背景色、显得毛躁。
-              .background(cs.surfaceContainer)
+              // 底色垫在渐变之下：圆角抗锯齿那半个像素需要它，否则边缘露出背景色、显得毛躁。
+              // 用 edge 色而不是 surfaceContainer，描边处才是渐变的自然延续。
+              .background(palette.edge)
               .drawWithCache {
-                // 光斑只在中右 / 下半区摆动：文字在左上，让色彩始终在它「背后流」，
-                // 而不是从它身上扫过去 —— 扫过去的那几帧正是对比度最差的时刻。
+                // 光斑只在中右 / 下半区摆动：文字在左上，让色彩始终在它「背后流」。
                 val cx = size.width * (0.98f - 0.38f * fraction)
                 val cy = size.height * (0.06f + 0.86f * fraction)
-                // 半径跟着卡片尺寸走：原来写死 800px，同一套色在不同密度 / 屏宽上分布
-                // 完全不同（低密度屏几乎糊成纯色，高密度屏只剩一小块亮斑）。
+                // 半径跟着卡片尺寸走：同一套色在不同密度 / 屏宽上才有相近的分布。
                 val radius = size.maxDimension * 1.05f
 
-                // ① 主体：鲜 → 过渡 → 稳
+                // ① 主体：设计稿固定绿 —— 中心亮黄绿 → 中段薄荷绿 → 边缘深一档。
+                //    这是全 App 唯一刻意不跟随主题的卡，色值见 AboutPalette。
                 val body =
                   Brush.radialGradient(
-                    0f to cs.tertiaryContainer,
-                    0.55f to spotColor,
-                    1f to baseColor,
+                    0f to palette.spot,
+                    0.55f to palette.mid,
+                    1f to palette.edge,
                     center = Offset(cx, cy),
                     radius = radius,
                   )
-                // ② 顶部柔光：像一片光从上沿打下来 —— 玻璃质感主要靠这一层，
-                //    纯渐变是「色块」，加了高光才是「材质」。
+                // ② 顶部柔光：很弱的一层，只提供玻璃质感，不再像以前那样把渐变整块冲淡
+                //    （那层 scrim 是「设计图漂亮、真机发灰」的直接原因，已移除）。
                 val sheen =
                   Brush.verticalGradient(
-                    colors = listOf(Color.White.copy(alpha = 0.16f), Color.Transparent),
+                    colors = listOf(Color.White.copy(alpha = 0.10f), Color.Transparent),
                     startY = 0f,
-                    endY = size.height * 0.55f,
+                    endY = size.height * 0.5f,
                   )
-                // ③ 1dp 内描边：上亮下暗的细边，把卡片从背景里「托」起来。
-                //    不能用 Box 的 border（那是画在外沿），这里跟圆角完全对齐。
+                // ③ 1dp 内描边：上亮下暗的细边，把卡片从背景里「托」起来，与圆角完全对齐。
                 val edge =
                   Brush.verticalGradient(
                     colors =
@@ -244,21 +267,9 @@ object AboutScreen : Screen {
                         Color.White.copy(alpha = 0.02f),
                       ),
                   )
-                // ④ 文字护罩：把左上（标题 / 版本 / 设备信息所在）的底色拉回 primaryContainer，
-                //    让 onPrimaryContainer 的对比度重新有效；右下那片鲜色照旧流动。
-                //    原来它是画在内容区（比卡片四周各小 16dp 内边距）的一个子 Box 上，
-                //    中心与半径都跟着偏 —— 现在跟卡片同尺寸，位置才是设计意图里的那个点。
-                val scrim =
-                  Brush.radialGradient(
-                    0f to baseColor.copy(alpha = 0.62f),
-                    1f to Color.Transparent,
-                    center = Offset(size.width * 0.28f, size.height * 0.24f),
-                    radius = size.maxDimension * 0.95f,
-                  )
                 val cr = CornerRadius(cornerRadius.toPx())
                 onDrawBehind {
                   drawRoundRect(brush = body, cornerRadius = cr)
-                  drawRoundRect(brush = scrim, cornerRadius = cr)
                   drawRoundRect(brush = sheen, cornerRadius = cr)
                   drawRoundRect(brush = edge, cornerRadius = cr, style = Stroke(1.dp.toPx()))
                 }
@@ -285,7 +296,7 @@ object AboutScreen : Screen {
                     text = stringResource(id = R.string.app_name),
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
-                    color = cs.onPrimaryContainer,
+                    color = palette.ink,
                   )
                   Text(
                     text = stringResource(id = R.string.i18n_project_name_en),
@@ -294,13 +305,13 @@ object AboutScreen : Screen {
                     // 层级本身就是质感：标题 100%、英文名 88%、版本 82%、
                     // 设备信息 85%（字号最小，反而要比版本行实一点）。全部拉成
                     // 同一个「实」度会显得像一块印刷品，没有主次。
-                    color = cs.onPrimaryContainer.copy(alpha = 0.88f),
+                    color = palette.ink.copy(alpha = 0.88f),
                   )
                   Spacer(Modifier.height(4.dp))
                   Text(
                     text = "v$versionName $buildType",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = cs.onPrimaryContainer.copy(alpha = 0.82f),
+                    color = palette.ink.copy(alpha = 0.82f),
                   )
                 }
               }
@@ -352,10 +363,10 @@ object AboutScreen : Screen {
               Spacer(modifier = Modifier.height(16.dp))
 
               if (BuildConfig.ENABLE_UPDATE_FEATURE && updateViewModel != null) {
-                HorizontalDivider(color = cs.onPrimaryContainer.copy(alpha = 0.12f))
+                HorizontalDivider(color = palette.ink.copy(alpha = 0.12f))
                 AboutActionRow(
                   label = "检查更新",
-                  icon = Icons.Filled.Update,
+                  icon = Icons.Outlined.Update,
                   value = if (checking) "正在检查…" else "当前 v$versionName",
                   enabled = !checking,
                   onClick = { updateViewModel.checkForUpdate(manual = true) },
@@ -365,10 +376,10 @@ object AboutScreen : Screen {
               // 联系开发者：隐私政策与用户协议里承诺的反馈渠道，必须在应用内可点，
               // 否则「有问题联系这个邮箱」就是一句空话。
               // 只唤起邮件客户端（ACTION_SENDTO），不申请任何权限。
-              HorizontalDivider(color = cs.onPrimaryContainer.copy(alpha = 0.12f))
+              HorizontalDivider(color = palette.ink.copy(alpha = 0.12f))
               AboutActionRow(
                 label = stringResource(id = R.string.i18n_about_contact_developer),
-                icon = Icons.Filled.Mail,
+                icon = Icons.Outlined.Mail,
                 value = DEVELOPER_EMAIL,
                 onClick = {
                   runCatching {
@@ -586,7 +597,7 @@ private fun AcknowledgmentRow(
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Icon(
-      imageVector = Icons.Filled.Code,
+      imageVector = Icons.Outlined.Code,
       contentDescription = null,
       modifier = Modifier.size(24.dp),
       tint = MaterialTheme.colorScheme.primary,
@@ -655,7 +666,7 @@ private fun deviceInfoGroups(raw: String): List<DeviceInfoGroup> {
     listOf(
       DeviceInfoGroup(
         title = "应用与设备",
-        icon = Icons.Filled.PhoneAndroid,
+        icon = Icons.Outlined.PhoneAndroid,
         rows =
           listOf(
             DeviceInfoRow("版本", valueOf("App version")),
@@ -667,7 +678,7 @@ private fun deviceInfoGroups(raw: String): List<DeviceInfoGroup> {
       ),
       DeviceInfoGroup(
         title = "播放内核",
-        icon = Icons.Filled.Movie,
+        icon = Icons.Outlined.Movie,
         rows =
           listOf(
             DeviceInfoRow("mpv", valueOf("MPV version")),
@@ -700,7 +711,7 @@ private fun DeviceInfoPanel(
   breath: Float,
   onCopy: () -> Unit,
 ) {
-  val cs = MaterialTheme.colorScheme
+  val palette = aboutPalette()
   val groups = remember(raw) { deviceInfoGroups(raw) }
   val shape = RoundedCornerShape(20.dp)
 
@@ -756,17 +767,17 @@ private fun DeviceInfoPanel(
     Column {
       Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
-          imageVector = Icons.Filled.Devices,
+          imageVector = Icons.Outlined.Devices,
           contentDescription = null,
           modifier = Modifier.size(20.dp),
-          tint = cs.onPrimaryContainer.copy(alpha = 0.9f),
+          tint = palette.ink.copy(alpha = 0.9f),
         )
         Spacer(modifier = Modifier.width(10.dp))
         Text(
           text = stringResource(R.string.i18n_device_info),
           style = MaterialTheme.typography.titleSmall,
           fontWeight = FontWeight.SemiBold,
-          color = cs.onPrimaryContainer.copy(alpha = 0.95f),
+          color = palette.ink.copy(alpha = 0.95f),
           modifier = Modifier.weight(1f),
         )
         Row(
@@ -780,17 +791,17 @@ private fun DeviceInfoPanel(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Icon(
-            imageVector = Icons.Filled.ContentCopy,
+            imageVector = Icons.Outlined.ContentCopy,
             contentDescription = null,
             modifier = Modifier.size(14.dp),
-            tint = cs.onPrimaryContainer.copy(alpha = 0.85f),
+            tint = palette.ink.copy(alpha = 0.85f),
           )
           Spacer(modifier = Modifier.width(6.dp))
           Text(
             text = "复制",
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Medium,
-            color = cs.onPrimaryContainer.copy(alpha = 0.9f),
+            color = palette.ink.copy(alpha = 0.9f),
           )
         }
       }
@@ -801,16 +812,17 @@ private fun DeviceInfoPanel(
         Text(
           text = raw,
           style = MaterialTheme.typography.bodySmall,
-          color = cs.onPrimaryContainer.copy(alpha = 0.85f),
+          color = palette.ink.copy(alpha = 0.85f),
         )
       } else {
         groups.forEachIndexed { groupIndex, group ->
           if (groupIndex > 0) {
             Spacer(modifier = Modifier.height(12.dp))
-            HorizontalDivider(color = Color.White.copy(alpha = 0.30f))
+            // 浅色卡上深墨绿的细分隔线比白线更清楚；深色卡上反过来用浅薄荷。
+            HorizontalDivider(color = palette.ink.copy(alpha = 0.16f))
           }
           Spacer(modifier = Modifier.height(14.dp))
-          // 分组标题：左侧一根主色引导条 + 图标，是整块玻璃里唯一的有色点缀，
+          // 分组标题：左侧一根品牌色引导条 + 图标，是整块玻璃里唯一的有色点缀，
           // 让「分组」被一眼读出来，而不是靠一堆分隔线硬切。
           Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -819,14 +831,14 @@ private fun DeviceInfoPanel(
                   .width(3.dp)
                   .height(14.dp)
                   .clip(RoundedCornerShape(2.dp))
-                  .background(cs.primary),
+                  .background(palette.accent),
             )
             Spacer(modifier = Modifier.width(8.dp))
             Icon(
               imageVector = group.icon,
               contentDescription = null,
               modifier = Modifier.size(15.dp),
-              tint = cs.onPrimaryContainer.copy(alpha = 0.72f),
+              tint = palette.ink.copy(alpha = 0.72f),
             )
             Spacer(modifier = Modifier.width(7.dp))
             Text(
@@ -834,7 +846,7 @@ private fun DeviceInfoPanel(
               style = MaterialTheme.typography.labelMedium,
               fontWeight = FontWeight.SemiBold,
               letterSpacing = 0.08.sp,
-              color = cs.onPrimaryContainer.copy(alpha = 0.72f),
+              color = palette.ink.copy(alpha = 0.72f),
             )
           }
           Spacer(modifier = Modifier.height(6.dp))
@@ -846,14 +858,14 @@ private fun DeviceInfoPanel(
               Text(
                 text = row.label,
                 style = MaterialTheme.typography.labelMedium,
-                color = cs.onPrimaryContainer.copy(alpha = 0.55f),
+                color = palette.ink.copy(alpha = 0.55f),
                 modifier = Modifier.width(88.dp),
               )
               Text(
                 text = row.value,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
-                color = cs.onPrimaryContainer.copy(alpha = 0.96f),
+                color = palette.ink.copy(alpha = 0.96f),
                 modifier = Modifier.weight(1f),
               )
             }
@@ -883,16 +895,16 @@ private fun AboutGlassButton(
   iconPainter: Painter? = null,
   onClick: () -> Unit,
 ) {
-  val cs = MaterialTheme.colorScheme
+  val palette = aboutPalette()
   val shape = RoundedCornerShape(14.dp)
-  val iconTint = cs.onPrimaryContainer.copy(alpha = 0.9f)
+  val iconTint = palette.ink.copy(alpha = 0.9f)
   Box(
     modifier =
       modifier
         .height(48.dp)
         .clip(shape)
-        .background(cs.onPrimaryContainer.copy(alpha = 0.12f))
-        .border(1.dp, cs.onPrimaryContainer.copy(alpha = 0.16f), shape)
+        .background(palette.ink.copy(alpha = 0.12f))
+        .border(1.dp, palette.ink.copy(alpha = 0.16f), shape)
         .clickable(onClick = onClick),
     contentAlignment = Alignment.Center,
   ) {
@@ -918,7 +930,7 @@ private fun AboutGlassButton(
         text = text,
         style = MaterialTheme.typography.titleSmall,
         fontWeight = FontWeight.SemiBold,
-        color = cs.onPrimaryContainer,
+        color = palette.ink,
       )
     }
   }
@@ -939,7 +951,7 @@ private fun AboutActionRow(
   enabled: Boolean = true,
   onClick: () -> Unit,
 ) {
-  val cs = MaterialTheme.colorScheme
+  val palette = aboutPalette()
   Row(
     modifier =
       Modifier
@@ -953,19 +965,19 @@ private fun AboutActionRow(
       imageVector = icon,
       contentDescription = null,
       modifier = Modifier.size(20.dp),
-      tint = cs.onPrimaryContainer.copy(alpha = if (enabled) 0.7f else 0.4f),
+      tint = palette.ink.copy(alpha = if (enabled) 0.7f else 0.4f),
     )
     Spacer(modifier = Modifier.width(14.dp))
     Text(
       text = label,
       style = MaterialTheme.typography.bodyMedium,
-      color = cs.onPrimaryContainer.copy(alpha = if (enabled) 0.92f else 0.5f),
+      color = palette.ink.copy(alpha = if (enabled) 0.92f else 0.5f),
     )
     Spacer(modifier = Modifier.weight(1f))
     Text(
       text = value,
       style = MaterialTheme.typography.bodySmall,
-      color = cs.onPrimaryContainer.copy(alpha = if (enabled) 0.62f else 0.38f),
+      color = palette.ink.copy(alpha = if (enabled) 0.62f else 0.38f),
     )
   }
 }
