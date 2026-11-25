@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>中文字幕丝带角标 · 效果预览</title>
+<style>
+  :root{
+    --bg:#F7F6F3; --card:#FFFFFF; --ink:#2C2C2A; --ink2:#5F5E5A; --line:#E4E1D9;
+    --ribbon:#D32F2F; --corner:19px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 28px 56px;background:var(--bg);color:var(--ink);
+    font:400 15px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  h1{font-size:18px;font-weight:500;margin:0 0 6px}
+  .sub{color:var(--ink2);font-size:13px;margin:0 0 28px}
+  h2{font-size:14px;font-weight:500;margin:32px 0 12px;color:var(--ink2)}
+  .row{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+  .slide{width:106px}
+  .cover{position:relative;overflow:hidden;border-radius:var(--corner);background:#B5D4F4}
+  .cover.g{background:#C0DD97}.cover.a{background:#FAC775}.cover.p{background:#CECBF6}
+  .rb{position:absolute;background:var(--ribbon);color:#fff;text-align:center;
+    font:500 10px/1.35 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    letter-spacing:1px}
+  .t{font-size:13px;font-weight:500;margin:7px 0 0}
+  .s{font-size:12px;color:var(--ink2);margin:2px 0 0}
+  .fav{position:absolute;right:6px;top:6px;width:16px;height:16px;border-radius:50%;background:rgba(0,0,0,.32)}
+  .pick{position:absolute;left:6px;top:6px;width:18px;height:18px;border-radius:50%;background:#534AB7}
+  .pick::after{content:"";position:absolute;left:5px;top:4px;width:8px;height:5px;
+    border-left:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(-45deg)}
+  .note{max-width:760px;border:1px solid var(--line);background:var(--card);border-radius:12px;
+    padding:16px 18px;margin-top:34px;font-size:13px;color:var(--ink2)}
+  .note b{color:var(--ink);font-weight:500}
+  .note code{font:12px/1.5 ui-monospace,Consolas,monospace;background:#F1EFE8;padding:1px 5px;border-radius:4px}
+  .dark{background:#161217;border-radius:12px;padding:20px;margin-top:14px}
+  .dark .t{color:#EDEBE6}.dark .s{color:#B4B2A9}
+</style>
+</head>
+<body>
+
+<h1>媒体库卡片「中文字幕」丝带角标</h1>
+<p class="sub">按实际 Compose 实现的比例出图：丝带 −45°，带宽固定 16dp，离角距离随卡片短边在 20–34dp 之间换算。</p>
+
+<h2>海报 3:4 · 一行三张</h2>
+<div class="row">
+  <div class="slide">
+    <div class="cover" style="width:106px;height:141px;">
+      <div class="rb" style="left:-21.5px;top:8.5px;width:76px;transform:rotate(-45deg);padding:2px 0;">中文字幕</div>
+      <div class="fav"></div>
+    </div>
+    <p class="t">Night Train</p><p class="s">2024</p>
+  </div>
+  <div class="slide">
+    <div class="cover g" style="width:106px;height:141px;"><div class="fav"></div></div>
+    <p class="t">Harbour Lights</p><p class="s">2023</p>
+  </div>
+  <div class="slide">
+    <div class="cover p" style="width:106px;height:141px;">
+      <div class="rb" style="left:-21.5px;top:8.5px;width:76px;transform:rotate(-45deg);padding:2px 0;">中文字幕</div>
+    </div>
+    <p class="t">Autumn Field</p><p class="s">2022</p>
+  </div>
+</div>
+
+<h2>背景图 16:9 · 横幅 2.9</h2>
+<div class="row">
+  <div style="width:168px;">
+    <div class="cover a" style="width:168px;height:95px;">
+      <div class="rb" style="left:-19.9px;top:6.8px;width:70px;transform:rotate(-45deg);padding:2px 0;">中文字幕</div>
+      <div class="fav"></div>
+    </div>
+    <p class="t">Blue Hour</p><p class="s">2025 · 背景图</p>
+  </div>
+  <div style="width:220px;">
+    <div class="cover" style="width:220px;height:76px;">
+      <div class="rb" style="left:-19.2px;top:6.1px;width:67px;transform:rotate(-45deg);padding:2px 0;">中文字幕</div>
+      <div class="fav"></div>
+    </div>
+    <p class="t">Station Nine</p><p class="s">2021 · 横幅</p>
+  </div>
+</div>
+
+<h2>多选态 · 左上角归对勾</h2>
+<div class="row">
+  <div class="slide">
+    <div class="cover g" style="width:106px;height:141px;"><div class="pick"></div></div>
+    <p class="t">Night Train</p><p class="s">已选择</p>
+  </div>
+  <div class="slide">
+    <div class="cover p" style="width:106px;height:141px;">
+      <div class="rb" style="left:-21.5px;top:8.5px;width:76px;transform:rotate(-45deg);padding:2px 0;">中文字幕</div>
+    </div>
+    <p class="t">Autumn Field</p><p class="s">未选择</p>
+  </div>
+</div>
+
+<h2>深色主题</h2>
+<div class="dark">
+  <div class="row">
+    <div class="slide">
+      <div class="cover" style="width:106px;height:141px;">
+        <div class="rb" style="left:-21.5px;top:8.5px;width:76px;transform:rotate(-45deg);padding:2px 0;">中文字幕</div>
+        <div class="fav"></div>
+      </div>
+      <p class="t">Night Train</p><p class="s">2024</p>
+    </div>
+    <div class="slide">
+      <div class="cover g" style="width:106px;height:141px;"></div>
+      <p class="t">Harbour Lights</p><p class="s">2023</p>
+    </div>
+    <div style="width:168px;">
+      <div class="cover a" style="width:168px;height:95px;">
+        <div class="rb" style="left:-19.9px;top:6.8px;width:70px;transform:rotate(-45deg);padding:2px 0;">中文字幕</div>
+        <div class="fav"></div>
+      </div>
+      <p class="t">Blue Hour</p><p class="s">2025</p>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <p style="margin:0 0 8px;"><b>几何关系</b>　丝带中心到左上角的垂直距离 <code>distance</code>；两端必须越过卡片的上边与左边，
+  否则端头会留在封面中间。由 <code>L/2 × cos45° ≥ distance</code> 得 <code>length ≥ 2.83 × distance</code>，
+  实现里再加 10dp 余量。</p>
+  <p style="margin:0 0 8px;"><b>自适应</b>　<code>distance = 短边 × 0.22</code>，夹在 20–34dp；带宽固定 16dp（要装下一行 10sp）；
+  字号固定 10sp。因此最矮的横幅上丝带只占角落约 40dp，不会横穿画面。</p>
+  <p style="margin:0;"><b>避让</b>　右上角是收藏心形，左下角是文件夹图标与状态角标，底部整条是进度条 —— 丝带只碰左上角，
+  且在多选态让位给对勾。</p>
+</div>
+
+</body>
+</html>

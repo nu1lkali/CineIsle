@@ -119,6 +119,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import app.marlboroadvance.mpvex.domain.dislike.DislikeKey
 import app.marlboroadvance.mpvex.domain.dislike.DislikeRepository
+import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleFilter
 import app.marlboroadvance.mpvex.domain.emby.EmbyDownloadStatus
 import app.marlboroadvance.mpvex.domain.emby.EmbyEnqueueResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
@@ -1777,9 +1778,32 @@ private fun DetailBody(
       emptyList<app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle>(),
     )
   }
-  LaunchedEffect(item.Id, server?.id, webSubtitleSheetOpen) {
+  // 查询键必须和卡片上那份字幕清单是**同一个条目**。
+  // 剧集详情页的字幕卡查的是「这次会播的那一集」（`subtitle.targetItemId`），
+  // 这里若仍按 `item.Id`（剧集 Id）查，播放页给那一集下的字幕就永远对不上号 ——
+  // 表现是「明明有字幕，卡片上的已关联数一直是 0」。
+  val localSubtitleMediaId = subtitle?.targetItemId?.takeIf { it.isNotBlank() } ?: item.Id
+  /**
+   * 从播放器返回时强制重读一次的计数器。
+   *
+   * 网络字幕的**自动下载发生在播放页**（`PlayerActivity.maybeAutoFetchOnlineSubtitle`），
+   * 而本页组合在播放期间并未销毁（播放器是另一个 Activity）⇒ 回到本页时
+   * `item.Id` / `server` / 抽屉开关这些键一个都没变，[LaunchedEffect] 不会重跑，
+   * 卡片就一直停在进去之前那几条，「已关联」数不更新。
+   * 这里用 ON_RESUME 自增一次把它撞醒；只读本地索引，代价可以忽略。
+   */
+  var localSubtitleReloadKey by remember(item.Id) { mutableStateOf(0) }
+  val localSubtitleLifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current
+  androidx.compose.runtime.DisposableEffect(localSubtitleLifecycle, item.Id) {
+    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+      if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) localSubtitleReloadKey++
+    }
+    localSubtitleLifecycle.lifecycle.addObserver(observer)
+    onDispose { localSubtitleLifecycle.lifecycle.removeObserver(observer) }
+  }
+  LaunchedEffect(localSubtitleMediaId, server?.id, webSubtitleSheetOpen, localSubtitleReloadKey) {
     val serverId = server?.id ?: return@LaunchedEffect
-    val itemId = item.Id ?: return@LaunchedEffect
+    val itemId = localSubtitleMediaId ?: return@LaunchedEffect
     localSubtitleRecords =
       withContext(Dispatchers.IO) {
         runCatching {
@@ -2386,6 +2410,15 @@ private fun mixColor(base: Color, accent: Color, weight: Float): Color {
   )
 }
 
+/**
+ * 「中文字幕」角标的底色。
+ *
+ * 与媒体库卡片丝带用同一个红（`EmbyMediaCard.CHINESE_RIBBON_BG` = `0xFFD32F2F`）——
+ * 两处是同一个信号，配色不一致会让人以为是两种不同的标记。
+ * 这里压到 92% 不透明度：剧照偏亮时纯色块略跳，留一点底色能贴回去。
+ */
+private val CHINESE_TAG_BG = Color(0xFFD32F2F).copy(alpha = 0.92f)
+
 @Composable
 private fun BackdropHeader(
   item: EmbyItem,
@@ -2506,8 +2539,16 @@ private fun BackdropHeader(
       Spacer(modifier = Modifier.height(6.dp))
       // 年份 / 时长 / 评分 / 分级：包成圆角角标，压在剧照上也看得清。
       // 用 FlowRow 而不是 Row —— 片名长、角标多的时候会自动换行，不会把角标挤出屏幕边缘。
+      // 「中文字幕」也走这一行（排在最右）：它和年份/时长属于同一类**只读信息**，
+      // 塞进下面「类型 / 标签 / 工作室」那组会让人以为点一下能筛 —— 那组的 chip 全都能跳转。
+      // 判据与媒体库卡片左上角那条丝带完全一致（`ChineseSubtitleFilter`），
+      // 保证「列表里有丝带 ↔ 详情页有标签」不会互相打架。
+      // 详情条目的 `Fields` 本来就带 `Path` / `MediaSources`
+      // （`ITEM_FIELDS_WITH_EXTERNAL_URLS` ⊃ `ITEM_FIELDS_CORE`）⇒ 不额外发请求。
+      // `remember(item)`：头部随折叠/视差每帧重排，没必要每帧再跑一遍路径匹配。
+      val chineseSubtitle = remember(item) { ChineseSubtitleFilter.hitOf(item) != null }
       val chips = metaChips(item)
-      if (chips.isNotEmpty()) {
+      if (chips.isNotEmpty() || chineseSubtitle) {
         FlowRow(
           horizontalArrangement = Arrangement.spacedBy(6.dp),
           verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -2520,6 +2561,22 @@ private fun BackdropHeader(
             ) {
               Text(
                 text = chip,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+              )
+            }
+          }
+          if (chineseSubtitle) {
+            // 这一行里唯一有底色倾向的一个：红底白字，与卡片丝带同色（`0xFFD32F2F`），
+            // 扫一眼就能和「年份 / 时长 / 评分」这些中性角标分开。
+            // 不可点 —— 它是分类标识而不是筛选项，能点却点不出东西就是死项。
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = CHINESE_TAG_BG,
+              contentColor = Color.White,
+            ) {
+              Text(
+                text = "中文字幕",
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
               )

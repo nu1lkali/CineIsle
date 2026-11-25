@@ -3922,8 +3922,37 @@ android {
     //    该方法真实语义是「该不该锁」，漏判的现场表现是开关打开但完全不锁且无报错。
     //    旧版本读到未知值走 `else` 分支不锁，方向安全（不锁 > 锁死）。
     //  · 【关闭流程】关闭应用锁改为完成一局即关闭，不要求输入凭证。
-    versionCode = 334
-    versionName = "1.6.82"
+    // ── v335（功能轮，versionName 涨到 1.6.83）：媒体库卡片「中文字幕」斜丝带角标 ──
+    //  · 【判定沿用】仍只走 `ChineseSubtitleFilter`（按 Path / 每个 MediaSources[].Path
+    //    上的标记判定，规则见 `ChineseSubtitleMarks`：拉丁两侧边界、多字汉字子串、
+    //    单字汉字独立成段）。不新增第二套判据 —— 筛选与角标必须同一个结论。
+    //  · 【数据层标注】新增 `annotateChineseSubtitles(items)`：拉页时在 Default 线程
+    //    把整页扫一遍，产出 `itemId → hit` 落进 `chineseHits`。三个入口接上：
+    //    普通分页（reset 整批替换 / 续页合并）、全库扫描（原先不筛时填 null）、
+    //    搜索结果快照回放（原先直接清空 ⇒ 从详情页退回时角标整片消失）。
+    //    `Path` / `MediaSources` 本来就在 `ITEM_FIELDS`（CORE）里 ⇒ **零额外请求**。
+    //    命中表随 `EmbyLibraryCache` 一起缓存，返回列表不重算。
+    //  · 【卡片】`EmbyMediaCard` 新增 `chineseSubtitle`，在左上角画 −45° 丝带：
+    //    带宽固定 16dp、字号固定 10sp，只有「离角距离」随卡片短边换算
+    //    （`短边 × 0.22`，夹 20–34dp）。长度按 `L ≥ 2√2 × distance` 推导，
+    //    否则端头会留在封面中间。避让右上心形 / 左下角标 / 底部进度条；
+    //    多选态不画（左上角归对勾）。
+    //  · 【容器不打】文件夹 / 合集不出丝带：目录里中字与非中字可能混装，
+    //    在目录卡上标「中文字幕」是误导，结论要等点进去那一层才成立。
+    //  · 【文案】`emby_card_chinese_subtitle`：zh「中文字幕」，en `CHS`（长串会溢出带外）。
+    //  · 【顺带修崩溃】`maybeAutoFetchOnlineSubtitle()` 里的兜底 Toast 原先直接在调用方
+    //    线程上弹 —— 队列连播那条路径从 `Dispatchers.IO` 进来，IO 线程没有 Looper，
+    //    `Toast.makeText` 抛 `NPE: Can't toast on a thread that has not called
+    //    Looper.prepare()`，起播阶段就崩（1.6.82 线上栈）。改为
+    //    `withContext(Dispatchers.Main.immediate)`。其余 Toast 点核对过调用线程均在主线程，
+    //    不代改。
+    //  · 【详情页标签】`BackdropHeader` 的圆角角标行（年份 / 时长 / 评分 / 分级）末尾补一个
+    //    「中文字幕」红底胶囊。判据仍是 `ChineseSubtitleFilter.hitOf(item)`，与卡片丝带同一份
+    //    结论；详情条目的 `Fields`（`ITEM_FIELDS_WITH_EXTERNAL_URLS` ⊃ CORE）本来就带
+    //    `Path` / `MediaSources` ⇒ 不发额外请求。`remember(item)` 缓存，头部每帧重排不重算。
+    //    不可点：它是分类标识，不是筛选项（放进「类型/标签」那组会让人误以为能跳转）。
+    versionCode = 336
+    versionName = "1.6.84"
 
     vectorDrawables {
       useSupportLibrary = true
