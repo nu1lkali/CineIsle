@@ -43,6 +43,7 @@ import app.marlboroadvance.mpvex.privacy.PrivacyGateManager
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
 import kotlinx.serialization.Serializable
 import me.zhanghai.compose.preference.Preference
+import me.zhanghai.compose.preference.ProvidePreferenceLocals
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -110,115 +111,122 @@ object LegalPrivacyScreen : Screen {
         )
       },
     ) { padding ->
-      Column(
-        modifier =
-          Modifier
-            .fillMaxSize()
-            .padding(padding)
-            .verticalScroll(rememberScrollState()),
-      ) {
-        PreferenceSectionHeader(title = "协议正文")
+      // ⚠️ `ProvidePreferenceLocals` 不能漏：Preference / PreferenceCard 组合时会读
+      //   `LocalPreferenceTheme`，缺了这一层会在**进入页面那一刻**抛
+      //   `IllegalStateException: CompositionLocal LocalPreferenceTheme not present`。
+      //   栈顶落在 Icons.noLocalProvidedFor 上，看着像库内部问题，实际是调用方少提供一层。
+      //   项目里所有设置页都有这层（对齐 AudioPreferencesScreen / DislikePreferencesScreen）。
+      ProvidePreferenceLocals {
+        Column(
+          modifier =
+            Modifier
+              .fillMaxSize()
+              .padding(padding)
+              .verticalScroll(rememberScrollState()),
+        ) {
+          PreferenceSectionHeader(title = "协议正文")
 
-        PreferenceCard {
-          DocumentRow(
-            icon = Icons.Outlined.Gavel,
-            title = "用户服务协议",
-            summary = "使用规则、责任边界与争议解决",
-          ) { openedDocument = LegalDocument.USER_AGREEMENT }
+          PreferenceCard {
+            DocumentRow(
+              icon = Icons.Outlined.Gavel,
+              title = "用户服务协议",
+              summary = "使用规则、责任边界与争议解决",
+            ) { openedDocument = LegalDocument.USER_AGREEMENT }
 
-          PreferenceDivider()
+            PreferenceDivider()
 
-          DocumentRow(
-            icon = Icons.Outlined.Policy,
-            title = "隐私政策",
-            summary = "信息处理清单、第三方服务与您的权利",
-          ) { openedDocument = LegalDocument.PRIVACY_POLICY }
-        }
+            DocumentRow(
+              icon = Icons.Outlined.Policy,
+              title = "隐私政策",
+              summary = "信息处理清单、第三方服务与您的权利",
+            ) { openedDocument = LegalDocument.PRIVACY_POLICY }
+          }
 
-        PreferenceSectionHeader(title = "协议版本")
+          PreferenceSectionHeader(title = "协议版本")
 
-        PreferenceCard {
-          InfoRow(
-            title = "用户服务协议版本",
-            value = record.userAgreementVersion.ifBlank { "—" },
-            currentValue = PrivacyGateManager.USER_AGREEMENT_VERSION,
-          )
-
-          PreferenceDivider()
-
-          InfoRow(
-            title = "隐私政策版本",
-            value = record.privacyPolicyVersion.ifBlank { "—" },
-            currentValue = PrivacyGateManager.PRIVACY_POLICY_VERSION,
-          )
-
-          PreferenceDivider()
-
-          Preference(
-            title = { Text(text = "同意时间", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            summary = {
-              Text(
-                text = formatAgreedAt(record),
-                color = MaterialTheme.colorScheme.outline,
-              )
-            },
-            icon = {
-              Icon(
-                imageVector = Icons.Outlined.Description,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-              )
-            },
-          )
-        }
-
-        PreferenceSectionHeader(title = "隐私相关说明")
-
-        PreferenceCard {
-          Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)) {
-            Text(
-              text = "本应用没有自建后台，不会把您的账号或媒体内容上传到开发者服务器。",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurface,
-              lineHeight = 22.sp,
+          PreferenceCard {
+            InfoRow(
+              title = "用户服务协议版本",
+              value = record.userAgreementVersion.ifBlank { "—" },
+              currentValue = PrivacyGateManager.USER_AGREEMENT_VERSION,
             )
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-              text = "· 服务器地址、账号与播放记录：仅保存在本机；凭据以系统密钥库加密。\n" +
-                "· 播放进度与收藏：开启同步时才写回您自己的 Emby 服务器。\n" +
-                "· 网络字幕与弹幕：会向对应第三方站点发送影片名构造的搜索关键词。\n" +
-                "· 崩溃上报：仅在您同意后初始化；F-Droid 版本不含该 SDK。\n" +
-                "· 本地媒体扫描：仅在您同意后随启动执行。",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              lineHeight = 21.sp,
+
+            PreferenceDivider()
+
+            InfoRow(
+              title = "隐私政策版本",
+              value = record.privacyPolicyVersion.ifBlank { "—" },
+              currentValue = PrivacyGateManager.PRIVACY_POLICY_VERSION,
+            )
+
+            PreferenceDivider()
+
+            Preference(
+              title = { Text(text = "同意时间", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+              summary = {
+                Text(
+                  text = formatAgreedAt(record),
+                  color = MaterialTheme.colorScheme.outline,
+                )
+              },
+              icon = {
+                Icon(
+                  imageVector = Icons.Outlined.Description,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                )
+              },
             )
           }
-        }
 
-        PreferenceSectionHeader(title = "授权管理")
+          PreferenceSectionHeader(title = "隐私相关说明")
 
-        PreferenceCard {
-          Preference(
-            title = { Text(text = "撤回隐私授权") },
-            summary = {
+          PreferenceCard {
+            Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)) {
               Text(
-                text = "撤回后返回确认页；崩溃上报、自动连接与媒体扫描停止执行。已保存的服务器配置与播放记录不会删除。",
-                color = MaterialTheme.colorScheme.outline,
+                text = "本应用没有自建后台，不会把您的账号或媒体内容上传到开发者服务器。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                lineHeight = 22.sp,
               )
-            },
-            icon = {
-              Icon(
-                imageVector = Icons.Outlined.Restore,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+              Spacer(modifier = Modifier.height(10.dp))
+              Text(
+                text = "· 服务器地址、账号与播放记录：仅保存在本机；凭据以系统密钥库加密。\n" +
+                  "· 播放进度与收藏：开启同步时才写回您自己的 Emby 服务器。\n" +
+                  "· 网络字幕与弹幕：会向对应第三方站点发送影片名构造的搜索关键词。\n" +
+                  "· 崩溃上报：仅在您同意后初始化；F-Droid 版本不含该 SDK。\n" +
+                  "· 本地媒体扫描：仅在您同意后随启动执行。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 21.sp,
               )
-            },
-            onClick = { showRevokeConfirm = true },
-          )
-        }
+            }
+          }
 
-        Spacer(modifier = Modifier.height(32.dp))
+          PreferenceSectionHeader(title = "授权管理")
+
+          PreferenceCard {
+            Preference(
+              title = { Text(text = "撤回隐私授权") },
+              summary = {
+                Text(
+                  text = "撤回后返回确认页；崩溃上报、自动连接与媒体扫描停止执行。已保存的服务器配置与播放记录不会删除。",
+                  color = MaterialTheme.colorScheme.outline,
+                )
+              },
+              icon = {
+                Icon(
+                  imageVector = Icons.Outlined.Restore,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                )
+              },
+              onClick = { showRevokeConfirm = true },
+            )
+          }
+
+          Spacer(modifier = Modifier.height(32.dp))
+        }
       }
     }
 
