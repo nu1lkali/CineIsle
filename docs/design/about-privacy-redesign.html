@@ -9,7 +9,7 @@
     --bg:#eef1f6; --card-surface:#f6f4ef; --ink:#1b1c1e; --ink2:#4a4d52; --ink3:#7b7f86;
     --line:rgba(27,28,30,.12); --glass:rgba(27,28,30,.12); --glass-line:rgba(27,28,30,.16);
     --primary:#2f5f4f; --primary-container:#cfe6da; --on-primary-container:#0d2a22;
-    --tertiary:#c9d8a6; --device:#2a2c30; --white:#fff;
+    --tertiary:#c9d8a6; --white:#fff;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{
@@ -32,20 +32,26 @@
   .phone header .back{font-size:16px;line-height:1;opacity:.9}
   .body{padding:4px 16px 18px}
   .caption{text-align:center;font-size:12px;color:var(--ink3);margin-top:12px}
+  .ic{width:16px;height:16px;flex:0 0 auto;display:inline-block;vertical-align:middle}
 
-  /* ── 关于页主卡 ── */
+  /* ── 关于页主卡：一张会呼吸的渐变玻璃卡 ── */
   .about-card{
     position:relative;border-radius:28px;padding:16px;overflow:hidden;
     background:
       radial-gradient(120% 110% at 92% 8%, #d7e3b4 0%, #cfe0cb 42%, var(--primary-container) 100%);
     color:var(--on-primary-container);
+    animation:cardbreathe 5s ease-in-out infinite alternate;
   }
   .about-card::after{
     content:"";position:absolute;inset:0;border-radius:28px;pointer-events:none;
     border:1px solid rgba(255,255,255,.35);
     background:linear-gradient(180deg,rgba(255,255,255,.22),rgba(255,255,255,0) 34%);
   }
-  .brand{display:flex;align-items:center;gap:14px}
+  @keyframes cardbreathe{
+    0%{background-position:0% 0%}
+    100%{background-position:100% 100%}
+  }
+  .brand{display:flex;align-items:center;gap:14px;position:relative;z-index:1}
   .appicon{
     width:60px;height:60px;border-radius:16px;flex:0 0 auto;
     background:linear-gradient(145deg,#3b6f5c,#1f4438);
@@ -56,34 +62,55 @@
   .brand .en{font-size:13.5px;font-weight:600;opacity:.88;margin-top:1px}
   .brand .ver{font-size:11.5px;opacity:.8;margin-top:3px}
 
-  .actions{display:flex;gap:12px;margin-top:22px}
+  .actions{display:flex;gap:12px;margin-top:22px;position:relative;z-index:1}
   .glass{
-    flex:1;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;
+    flex:1;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;gap:8px;
     background:var(--glass);border:1px solid var(--glass-line);
     font-size:13.5px;font-weight:600;color:var(--on-primary-container);
   }
-  .rows{margin-top:16px;border-top:1px solid var(--line)}
+  .glass .ic{opacity:.9}
+  .rows{margin-top:16px;border-top:1px solid var(--line);position:relative;z-index:1}
   .row{
-    display:flex;align-items:center;justify-content:space-between;padding:13px 2px;
+    display:flex;align-items:center;gap:14px;padding:13px 2px;
     font-size:13px;
   }
   .row + .row{border-top:1px solid var(--line)}
-  .row .label{opacity:.92}
+  .row .ic{opacity:.7}
+  .row .label{opacity:.92;flex:1}
   .row .value{font-size:12px;opacity:.62}
 
-  /* ── 设备信息面板 ── */
+  /* ── 设备信息面板：浮在主卡渐变之上、共用呼吸相位的玻璃层 ── */
   .panel{
-    margin-top:22px;border-radius:18px;padding:16px 18px 14px;
-    background:rgba(13,42,34,.05);border:1px solid rgba(13,42,34,.10);
+    position:relative;margin-top:22px;border-radius:20px;padding:16px 18px 14px;overflow:hidden;
+    background:rgba(255,255,255,.09);
+    border:1px solid rgba(255,255,255,.5);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.35);
+    z-index:1;
   }
-  .panel-head{display:flex;align-items:center;justify-content:space-between}
-  .panel-head .t{font-size:13px;font-weight:600;opacity:.95}
+  .panel::before{
+    content:"";position:absolute;inset:-40%;pointer-events:none;
+    background:radial-gradient(circle at 32% 26%,rgba(255,255,255,.5),rgba(255,255,255,.08) 42%,transparent 62%);
+    animation:panelbreathe 5s ease-in-out infinite alternate;
+  }
+  @keyframes panelbreathe{
+    0%{transform:translate(-8%,-6%) scale(1)}
+    100%{transform:translate(14%,12%) scale(1.2)}
+  }
+  .panel > *{position:relative;z-index:1}
+  .panel-head{display:flex;align-items:center;gap:10px}
+  .panel-head .ic{opacity:.9}
+  .panel-head .t{font-size:13px;font-weight:600;opacity:.95;flex:1}
   .chip{
-    font-size:11.5px;font-weight:500;padding:6px 12px;border-radius:999px;
-    background:rgba(13,42,34,.08);opacity:.85;
+    display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:500;padding:6px 12px;border-radius:999px;
+    background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.28);color:var(--on-primary-container);
   }
-  .group{margin-top:16px}
-  .group .gt{font-size:11.5px;font-weight:600;letter-spacing:.08em;opacity:.62}
+  .chip .ic{width:13px;height:13px;opacity:.85}
+  .group{margin-top:14px}
+  .group + .group{border-top:1px solid rgba(255,255,255,.30);padding-top:12px}
+  .gt{display:flex;align-items:center;gap:8px}
+  .accent{width:3px;height:14px;border-radius:2px;background:var(--primary);flex:0 0 auto}
+  .gt .ic{width:15px;height:15px;opacity:.72}
+  .gt .txt{font-size:11.5px;font-weight:600;letter-spacing:.08em;opacity:.72}
   .kv{display:flex;gap:10px;padding:4px 0}
   .kv .k{width:88px;flex:0 0 88px;font-size:11.5px;opacity:.55}
   .kv .v{font-size:13px;font-weight:500;opacity:.96;line-height:1.35;word-break:break-all}
@@ -153,8 +180,24 @@
 </style>
 </head>
 <body>
+  <!-- 线性图标集（stroke 风格），供各处 <use> 复用 -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <g id="s" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></g>
+    </defs>
+    <symbol id="i-article" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9M14 3l4 4M14 3v4h4M8 12h5M8 16h5M8 8h2"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 8-4 4 4 4m8-8 4 4-4 4m-3-11-2 14"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24"><path fill="currentColor" d="M12,0.297C5.37,0.297 0,5.67 0,12.297C0,17.6 3.438,22.097 8.205,23.682C8.805,23.795 9.025,23.424 9.025,23.105C9.025,22.82 9.015,22.065 9.01,21.065C5.672,21.789 4.968,19.455 4.968,19.455C4.422,18.07 3.633,17.7 3.633,17.7C2.546,16.956 3.717,16.971 3.717,16.971C4.922,17.055 5.555,18.207 5.555,18.207C6.625,20.042 8.364,19.512 9.05,19.208C9.158,18.432 9.467,17.903 9.81,17.603C7.145,17.303 4.344,15.935 4.344,11.373C4.344,10.063 4.809,9.003 5.579,8.153C5.444,7.85 5.039,6.63 5.684,4.977C5.684,4.977 6.689,4.655 8.984,6.207C9.944,5.94 10.964,5.808 11.984,5.802C13.004,5.808 14.024,5.94 14.984,6.207C17.264,4.655 18.269,4.977 18.269,4.977C18.914,6.63 18.509,7.85 18.389,8.153C19.154,9.003 19.619,10.063 19.619,11.373C19.619,15.948 16.809,17.293 14.139,17.603C14.559,17.963 14.949,18.699 14.949,19.823C14.949,21.429 14.934,22.713 14.934,23.111C14.934,23.421 15.144,23.801 15.764,23.677C20.565,22.092 24,17.6 24,12.297C24,5.67 18.63,0.297 12,0.297Z"/></symbol>
+    <symbol id="i-update" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 1 0-2.3 6M20 4v7h-7"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m3 7 9 6 9-6"/></symbol>
+    <symbol id="i-devices" viewBox="0 0 24 24"><rect x="2" y="4" width="14" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M2 18h14M7 21h4"/><rect x="17" y="9" width="5" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M11 18h2"/></symbol>
+    <symbol id="i-movie" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4M10 9l4 3-4 3z"/></symbol>
+  </svg>
+
   <h1>关于页 · 隐私确认页 版式稿</h1>
-  <div class="sub">左：设置 → 关于（浅色）　右：首次启动隐私确认（浅色）</div>
+  <div class="sub">左：设置 → 关于（浅色）　右：首次启动隐私确认（浅色）　·　设备面板为「渐变呼吸玻璃卡」，请留意它的缓慢流动</div>
 
   <div class="stage">
     <!-- 关于页 -->
@@ -173,23 +216,24 @@
             </div>
 
             <div class="actions">
-              <div class="glass">开源许可</div>
-              <div class="glass">GitHub</div>
+              <div class="glass"><svg class="ic"><use href="#i-article"/></svg>开源许可</div>
+              <div class="glass"><svg class="ic"><use href="#i-github"/></svg>GitHub</div>
             </div>
 
             <div class="rows">
-              <div class="row"><span class="label">检查更新</span><span class="value">当前 v1.6.84</span></div>
-              <div class="row"><span class="label">联系开发者</span><span class="value">i@pwnhub.net</span></div>
+              <div class="row"><svg class="ic"><use href="#i-update"/></svg><span class="label">检查更新</span><span class="value">当前 v1.6.84</span></div>
+              <div class="row"><svg class="ic"><use href="#i-mail"/></svg><span class="label">联系开发者</span><span class="value">i@pwnhub.net</span></div>
             </div>
 
             <div class="panel">
               <div class="panel-head">
+                <svg class="ic" style="width:19px;height:19px"><use href="#i-devices"/></svg>
                 <span class="t">设备信息</span>
-                <span class="chip">复制</span>
+                <span class="chip"><svg class="ic"><use href="#i-copy"/></svg>复制</span>
               </div>
 
               <div class="group">
-                <div class="gt">应用与设备</div>
+                <div class="gt"><span class="accent"></span><svg class="ic"><use href="#i-phone"/></svg><span class="txt">应用与设备</span></div>
                 <div class="kv"><span class="k">版本</span><span class="v">1.6.84 (ad9a59c)</span></div>
                 <div class="kv"><span class="k">Android</span><span class="v">17 (37)</span></div>
                 <div class="kv"><span class="k">品牌</span><span class="v">samsung</span></div>
@@ -198,7 +242,7 @@
               </div>
 
               <div class="group">
-                <div class="gt">播放内核</div>
+                <div class="gt"><span class="accent"></span><svg class="ic"><use href="#i-movie"/></svg><span class="txt">播放内核</span></div>
                 <div class="kv"><span class="k">mpv</span><span class="v">v0.41.0-1072-g2a4eb8067</span></div>
                 <div class="kv"><span class="k">ffmpeg</span><span class="v">28ab05da84</span></div>
                 <div class="kv"><span class="k">libplacebo</span><span class="v">v7.372.0 (v7.360.0-132)</span></div>
@@ -207,7 +251,7 @@
           </div>
         </div>
       </div>
-      <div class="caption">主卡：图标 → 两颗玻璃按钮 → 两条状态行 → 设备面板</div>
+      <div class="caption">主卡：图标 → 两颗玻璃按钮（带图标）→ 两条状态行（带图标）→ 设备玻璃呼吸卡</div>
     </div>
 
     <!-- 隐私确认页 -->
@@ -267,12 +311,13 @@
   </div>
 
   <div class="note">
-    <b>落进代码的对应关系</b>
+    <b>本次改版（关于页设备信息面板 + 图标）</b>
     <ul>
-      <li>关于页主卡：<code>AboutScreen</code> → <code>AboutGlassButton</code>（48dp / 12% 同色底 + 16% 描边）与 <code>AboutActionRow</code>（左标签 / 右当前值）。</li>
-      <li>设备面板：<code>DeviceInfoPanel</code>，内容由 <code>collectDeviceInfo()</code> 原文解析分组，复制出的仍是原文诊断串。</li>
-      <li>隐私页：<code>PrivacyConsentScreen</code>，<code>ConsentPoint</code> 三条承诺、<code>DocumentLink</code> 标题 + 说明 + 查看，底部勾选与主按钮固定。</li>
-      <li>所有颜色取自 <code>MaterialTheme.colorScheme</code>（onPrimaryContainer 透明度叠层），深浅色主题自动适配，无硬编码色值。</li>
+      <li>设备面板不再是「浅蓝实心卡」：改成<b>浮在主卡渐变之上、共用同一呼吸相位的玻璃层</b>——极淡磨砂 + 随 5s 相位游走的柔光 + 顶部高光 + 上亮下暗的玻璃内描边，底下那片彩色渐变照旧透出来，因此有渐变、会呼吸、有质感，也不闷。</li>
+      <li>层次靠「分组主色引导条 + 图标 + 三级排版」建立，而不是靠一整块底色或一堆分隔线，既避开浅蓝也避开单调。</li>
+      <li>按钮 / 状态行 / 面板标题 / 分组标题 / 复制胶囊全部配对应图标。GitHub 按钮用<b>官方猫头标</b>（单色 vector drawable，随 tint 适配主题），其余取自 <code>material-icons-extended</code>，逐个核对 AAR 存在性。</li>
+      <li>落代码：<code>AboutGlassButton</code> / <code>AboutActionRow</code> 新增 <code>icon</code> 参数；<code>DeviceInfoPanel</code> 新增 <code>breath</code> 参数，由主卡的 <code>fraction</code> 传入，<code>drawWithCache</code> 内自绘玻璃与呼吸光斑。</li>
+      <li>内容色仍一律取自 <code>MaterialTheme.colorScheme.onPrimaryContainer</code>，玻璃高光用白色透明度，深浅主题自动适配，无硬编码 UI 色。</li>
     </ul>
   </div>
 </body>

@@ -4,7 +4,6 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
@@ -142,6 +141,8 @@ import app.marlboroadvance.mpvex.ui.browser.cards.NetworkPhotoRow
 import app.marlboroadvance.mpvex.ui.browser.cards.NetworkVideoCard
 import app.marlboroadvance.mpvex.ui.browser.components.BrowserTopBar
 import app.marlboroadvance.mpvex.ui.browser.selection.SelectionState
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.SearchCapability
+import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.SearchHit
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkFolderPickerSheet
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkOpProgressDialog
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.ops.NetworkTransferMode
@@ -254,6 +255,15 @@ data class NetworkBrowserScreen(
     val toolProgress by viewModel.toolProgress.collectAsState()
     // 批量重命名的规则链：挂在 ViewModel 上，抽屉关掉再开 / 换目录 / 重启都还在
     val renameBook by viewModel.renameBook.collectAsState()
+
+    // ── 服务端全库搜索（AList 索引）──
+    // 与本地搜索是两条独立链路：本地只过滤当前目录、零请求；这条发 /api/fs/search。
+    // 只有能力探测为 Available 才给入口，其余协议 / 未开索引保持原界面完全不变。
+    val searchCapability by viewModel.searchCapability.collectAsState()
+    val serverSearchState by viewModel.serverSearch.collectAsState()
+    // 是否处在「全库搜索结果态」。true 时整块内容区换成 ServerSearchResults，
+    // 常规浏览（筛选 / 排序 / 双栏 / 多选 / 卡片长按）一律不参与，避免任何回归。
+    var serverSearchActive by remember { mutableStateOf(false) }
 
     // 视图模式：与本地文件夹浏览共用同一偏好（AlbumView=网格 / FileManager=列表）
     val browserPreferences = koinInject<BrowserPreferences>()
@@ -658,9 +668,70 @@ data class NetworkBrowserScreen(
       // parentIndex == backstack.lastIndex 表示父级就是当前栈顶（理论上不该出现），不做动作
     }
 
+    /**
+     * 打开一条全库搜索结果。
+     *
+     * 结果项的 [NetworkFile.path] 已由 AlistClient 归一成项目内部相对路径，
+     * 与列目录产出的 folder.path 同口径 —— 所以文件夹直接拿它当 currentPath 压栈，
+     * 播放也直接交给既有的起播链（sign 为空时由 fs/get 回落换签名）。
+     *
+     * ⚠️ 跳目录前**必须退出结果态**：结果区盖住了常规浏览，留着它用户按返回
+     *    会先撞见一份旧搜索结果，而不是新目录的父级。
+     */
+    fun openServerSearchHit(hit: SearchHit) {
+      val file = hit.file
+      when {
+        file.isDirectory -> {
+          serverSearchActive = false
+          searchActive = false
+          searchQuery = ""
+          searchIsHint = false
+          viewModel.clearServerSearch()
+          beginOpening()
+          backstack.add(
+            NetworkBrowserScreen(
+              connectionId = connectionId,
+              connectionName = connectionName,
+              currentPath = file.path,
+            ),
+          )
+        }
+
+        file.isVideoFile() -> {
+          beginOpening()
+          // 单条起播：队列就是它自己。搜索结果没有 sign，起播链会走 fs/get 换签名
+          viewModel.playVideos(listOf(file), 0, onFinished = { opening = false })
+        }
+
+        file.isPhoto() -> {
+          val photos =
+            (serverSearchState as? ServerSearchUiState.Content)
+              ?.hits
+              ?.map { it.file }
+              ?.filter { it.isPhoto() }
+              .orEmpty()
+          beginOpening()
+          backstack.add(
+            NetworkPhotoViewerScreen(
+              connectionId = connectionId,
+              connectionName = connectionName,
+              dirPath = "",
+              photos = photos,
+              initialIndex = photos.indexOfFirst { it.path == file.path }.coerceAtLeast(0),
+              title = "搜索结果",
+            ),
+          )
+        }
+
+        else -> toast("该类型文件暂不支持从搜索结果直接打开")
+      }
+    }
+
     // Load files when connectionId or currentPath changes
     LaunchedEffect(connectionId, currentPath) {
       viewModel.loadFiles()
+      // 能力是连接级配置：进这一层顺手问一次（AlistClient 会话内缓存，不会重复发探针）
+      viewModel.probeServerSearch()
     }
 
     // 上传成功 → 重新列一次当前目录。
@@ -681,6 +752,14 @@ data class NetworkBrowserScreen(
         viewModel.cancelDirSize()
       } else if (selectionMode) {
         exitSelection()
+      } else if (serverSearchActive) {
+        // 全库搜索结果态：按返回先退回常规浏览（收起搜索框 + 清结果），
+        // 再按一次才走本地搜索态 / 退目录 —— 与「搜索是一层」的直觉一致
+        serverSearchActive = false
+        searchActive = false
+        searchQuery = ""
+        searchIsHint = false
+        viewModel.clearServerSearch()
       } else if (searchActive) {
         searchActive = false
         searchQuery = ""
@@ -773,7 +852,7 @@ data class NetworkBrowserScreen(
           // 点标题 → 打开「跳转到」导航弹窗（列出全部层级，直达任意一层）。
           // 在连接根目录没有可跳的层级，就不接管点击（回落到默认的「切换深浅色」），
           // 也不显示下拉箭头 —— 不给「点了没反应」的死入口。
-          onTitleClick = if (atConnectionRoot || selectionMode) null else ({ showPathNavigator = true }),
+          onTitleClick = if (atConnectionRoot || selectionMode || serverSearchActive) null else ({ showPathNavigator = true }),
           // ── 多选态 ──
           // 顶栏整套换成 [SelectionTopBar]：左边的 ✕ 退出、标题变成「已选择 x / y」并
           // 点开「全选 / 反选 / 取消全选」，右边是复制 / 移动 / 删除。与 Emby 媒体库、
@@ -1242,6 +1321,8 @@ data class NetworkBrowserScreen(
         if (searchActive) {
           NetworkSearchField(
             query = searchQuery,
+            placeholder =
+              if (serverSearchActive) "在服务器所有目录中搜索…" else "搜索当前目录…",
             // 输入即落盘（按 连接 + 目录）：下次进这一层点放大镜就能带出来。
             // 清空也写空串 —— 用户主动删掉就是「这个词我不要了」，
             // 与「网络位置」列表页的搜索词同一口径。
@@ -1250,8 +1331,22 @@ data class NetworkBrowserScreen(
               searchQuery = it
               searchIsHint = false
               searchPref.set(it)
+              if (serverSearchActive) {
+                // 结果态：改词走 debounce 重搜；迟到响应由 VM 的 sessionSeq 作废。
+                // 词清空则直接退回常规浏览，别留一块空白结果区。
+                if (it.isBlank()) {
+                  serverSearchActive = false
+                  viewModel.clearServerSearch()
+                } else {
+                  viewModel.onServerSearchQueryChange(it)
+                }
+              }
             },
             onClose = {
+              if (serverSearchActive) {
+                serverSearchActive = false
+                viewModel.clearServerSearch()
+              }
               searchActive = false
               searchQuery = ""
               searchIsHint = false
@@ -1259,13 +1354,30 @@ data class NetworkBrowserScreen(
             // 自动带出的上次搜索词用灰字（只是观感；过滤照常生效）
             queryIsHint = searchIsHint,
           )
+
+          // ── 服务端全库搜索入口 ──
+          // 只在能力可用时出现；本地过滤链（visibleFiles）完全不动。
+          // 本地 0 命中时副标题改成「试试跨目录检索」，顺手把空态也接上这个出口。
+          if (!serverSearchActive && !selectionMode) {
+            ServerSearchEntryRow(
+              capability = searchCapability,
+              keyword = searchQuery,
+              localMatchCount = visibleFiles.size,
+              onEnter = {
+                exitSelection()
+                serverSearchActive = true
+                viewModel.submitServerSearch(searchQuery)
+              },
+            )
+          }
         }
 
         // ── 类型筛选 + 排序控制条 ──
         // 有内容才显示：空目录 / 首屏加载中 / 出错时下面就是空态或错误页，
         // 摆一排控件在上面只会让人对着空气点。
         // 两个紧凑按钮一排放下（筛选 + 排序），不再横滚、不抢顶栏位置。
-        if (files.isNotEmpty() && error == null) {
+        // ⚠️ 全库搜索结果态不显示：这两组控件作用于当前目录，对结果列表没有意义。
+        if (!serverSearchActive && files.isNotEmpty() && error == null) {
           Row(
             modifier = Modifier
               .fillMaxWidth()
@@ -1294,7 +1406,23 @@ data class NetworkBrowserScreen(
           }
         }
 
-        // ── 主体：单栏 / 双栏 ──
+        // ── 主体：全库搜索结果 / 常规浏览 ──
+        // 结果态是一整块独立分支：常规浏览的筛选 / 排序 / 双栏 / 多选 / 卡片长按
+        // 一个都不参与，改造前的行为逐项保留。
+        if (serverSearchActive) {
+          ServerSearchResults(
+            state = serverSearchState,
+            onOpenHit = { hit -> openServerSearchHit(hit) },
+            onLoadMore = viewModel::loadMoreServerSearch,
+            onRetry = viewModel::retryServerSearch,
+            onFallbackLocal = {
+              // 退回本地搜索：保留搜索框与关键词，词不用重打，过滤链原地生效
+              serverSearchActive = false
+              viewModel.clearServerSearch()
+            },
+            modifier = Modifier.weight(1f),
+          )
+        } else {
         // 双栏只在**宽屏且不在根目录**时出现（见上面 dualPane）。左栏固定 240dp，
         // 右栏吃掉剩下的宽度 —— 两个面板在同一个 Row 里各占各的宽度，
         // 所以无论哪种形态都不会互相压盖。
@@ -1401,6 +1529,7 @@ data class NetworkBrowserScreen(
             modifier = Modifier.weight(1f),
           )
         }
+        } // 关闭 else：serverSearchActive == false 的常规浏览分支
       }
 
       // ── 长按条目的操作菜单（重命名 / 删除）──
