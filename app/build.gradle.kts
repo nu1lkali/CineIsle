@@ -3962,7 +3962,21 @@ android {
     //  · 【面板去重】清单升格为「副本身份证」：`SubtitleSaveManifest.onlineCopyPaths()` 返回
     //    dirName/fileName 集合，与扫描候选 relativePath 同构；面板与起播两处扫描在入列前过滤，
     //    命中副本不再询问 / 重复挂载；清单不可读退化为现状，不误伤用户自己的字幕。
-    versionCode = 337
+    // ── v338（修复轮，versionCode +1，versionName 不变）：抽屉手势隔离 + 搜索态菜单时序 ──
+    //  · 【路径导航抽屉】`NetworkBrowserScreen.PathNavigatorSheet` 与
+    //    `EmbyLibraryScreen.EmbyPathNavigatorSheet` 原来用默认的
+    //    `rememberModalBottomSheetState()`：内容过半屏时会多出一个 PartiallyExpanded 锚点，
+    //    内层 `verticalScroll` 滚到边界后余量交给抽屉的 nestedScroll 连接 / anchoredDraggable
+    //    ⇒ 滚内容把整个抽屉一起上下拉动。改为 `skipPartiallyExpanded = true`（单锚点），
+    //    并在滚动容器**外层**挂 `rememberSheetContentScrollGuard()`（新增
+    //    `ui/browser/components/SheetScrollGuard.kt`）：空实现 draggable 吃掉边界拖拽，
+    //    onPostScroll 把余量全吞，抽屉不再跟着动。仍可拖手柄 / 点 scrim / 返回键关闭。
+    //  · 【搜索态「更多」菜单】原先 `clearFocus()` 与 `showOverflowMenu = true` 同帧执行：
+    //    键盘还在时 `DropdownMenuPositionProvider` 按被压矮的 `windowSize.height` 摆位，
+    //    键盘收完窗口变高 → 菜单重新定位，肉眼看到「闪一下 / 跳一下」。改为先把菜单挂进
+    //    `pendingOverflowMenu`，用 `snapshotFlow` 等 ime inset 归零（窗口尺寸定稿）再展开，
+    //    并带 600ms 兜底；非搜索态（无键盘）仍即时打开。
+    versionCode = 338
     versionName = "1.6.85"
 
     vectorDrawables {

@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -133,6 +135,7 @@ import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefresh
 import app.marlboroadvance.mpvex.repository.NetworkRepository
 import app.marlboroadvance.mpvex.ui.browser.LocalNavigationBarHeight
 import app.marlboroadvance.mpvex.ui.browser.components.NetworkSearchField
+import app.marlboroadvance.mpvex.ui.browser.components.rememberSheetContentScrollGuard
 import app.marlboroadvance.mpvex.ui.browser.states.BrowserSkeletonGrid
 import app.marlboroadvance.mpvex.ui.browser.states.BrowserSkeletonRows
 import app.marlboroadvance.mpvex.ui.browser.cards.NetworkFolderCard
@@ -166,6 +169,7 @@ import app.marlboroadvance.mpvex.ui.utils.ScrollToTopOnOrderChange
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import org.koin.compose.koinInject
 import kotlin.math.roundToInt
@@ -381,6 +385,25 @@ data class NetworkBrowserScreen(
     // 随机播放下拉菜单（视频 / 图片）
     // 顶栏竖三点「更多」菜单：收藏 / 随机播放 / 视图切换 全收在这里（见下方 additionalActions）
     var showOverflowMenu by remember { mutableStateOf(false) }
+    // 「等键盘收完再开菜单」的挂起标记（见 additionalActions 里 IconButton 的 onClick）。
+    // 搜索态点「更多」时键盘还在，这时直接开菜单会先按「被键盘压矮的窗口」摆一次位，
+    // 键盘收起的瞬间窗口恢复 → 菜单被重新定位 ⇒ 肉眼看到就是「闪一下 / 跳一下」。
+    var pendingOverflowMenu by remember { mutableStateOf(false) }
+    val imeInsets = WindowInsets.ime
+    val density = LocalDensity.current
+    LaunchedEffect(imeInsets, density, pendingOverflowMenu) {
+      if (!pendingOverflowMenu) return@LaunchedEffect
+      // IME 收干净的这一刻窗口尺寸才是最终值：此时创建菜单，Popup 只摆一次位，不会再跳。
+      // 用 snapshotFlow 观测而不是在组合里直接读 inset —— 键盘动画每帧都会推一次 inset，
+      // 在组合里读等于整页（含网格）逐帧重组。
+      withTimeoutOrNull(600) {
+        snapshotFlow { imeInsets.getBottom(density) }.first { it == 0 }
+      }
+      // 兜底：极少数 ROM 的 IME inset 动画停下后不归零，不能把菜单永久挂住。
+      // 600ms ≈ 键盘收起动画（约 200~300ms）的两倍，正常路径由上面的 first 先返回。
+      pendingOverflowMenu = false
+      showOverflowMenu = true
+    }
     // 长按条目：当前协议支持写操作（AList）时才会有值。
     // actionMenuAnchor = 长按那一刻的**手指坐标（root）**，菜单据此锚定
     // （Emby 媒体库同一手法：气泡菜单出现在手指旁边，而不是屏幕中间的对话框）。
@@ -936,13 +959,25 @@ data class NetworkBrowserScreen(
               // 而本 Activity 未设 adjustResize（全项目都没设），键盘浮在窗口之上、
               // 不压缩窗口高度。DropdownMenu 是独立 Popup 窗口，按整屏高度定位并从顶栏
               // 向下展开，下半截正好落在键盘底下 —— 表现就是「菜单只显示上半部分」。
-              // clearFocus 让键盘落下、窗口恢复，菜单即可完整显示；搜索框清焦点不会退出
-              // 搜索态（没有失焦退出逻辑），关掉菜单后点一下输入框即可继续打字。
+              //
+              // ⚠️⚠️ 收键盘和开菜单**不能同一帧**：`DropdownMenuPositionProvider` 是按
+              //    `windowSize.height` 做「放得下就贴锚点下方、放不下就往窗口顶/居中退」的
+              //    候选筛选（见 material3 `internal/MenuPosition.kt`）。键盘还在时窗口矮，
+              //    高菜单只能退到窗口顶部；键盘收完窗口变高，菜单再跳到锚点下方 ——
+              //    这就是「点一下闪/跳一下」。所以这里只清焦点，菜单交给屏幕级
+              //    `pendingOverflowMenu`，等 ime inset 归零（窗口尺寸定稿）再展开。
               val focusManager = LocalFocusManager.current
               IconButton(
                 onClick = {
                   focusManager.clearFocus()
-                  showOverflowMenu = true
+                  // 这里读一次当前 inset 决定「立即开」还是「等键盘收完再开」。
+                  // 非组合上下文读取不会登记观察者，不会引起重组。
+                  if (imeInsets.getBottom(density) > 0) {
+                    pendingOverflowMenu = true
+                  } else {
+                    // 没有键盘（非搜索态）就是原来的即时行为，不额外等
+                    showOverflowMenu = true
+                  }
                 },
               ) {
                 Icon(
@@ -2178,7 +2213,10 @@ private fun PathNavigatorSheet(
   /** 选中某一层（传该层的完整路径） */
   onSelect: (String) -> Unit,
 ) {
-  val sheetState = rememberModalBottomSheetState()
+  // ⚠️ 必须跳过「半屏」锚点：层级深时内容会过半屏，默认会多出 PartiallyExpanded，
+  //    滚到底/滚回顶就在「半屏 ↔ 全屏」之间来回弹，看起来正是「滚内容把抽屉拽动了」。
+  //    只有一个 Expanded 锚点，内容有多长就撑多高（上限由下面 heightIn 兜住）。
+  val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
   // 尾斜杠归一化：只用于判「这一行是不是我当前所在的那层」
   fun normalize(path: String) = path.trimEnd('/').ifEmpty { "/" }
@@ -2207,11 +2245,15 @@ private fun PathNavigatorSheet(
 
       // 层级一般不多（几层到十几层），用普通 Column + 纵向滚动即可；
       // 给个最大高度上限，免得深目录把整屏铺满。
+      // ⚠️ 手势隔离层必须挂在 `verticalScroll` **外层**（见 rememberSheetContentScrollGuard）：
+      //    没有它，滚到头以后余下的拖拽/位移会交给抽屉的 anchoredDraggable 与 nestedScroll
+      //    连接 ⇒ 内层滚动带着整个抽屉上下跑。
       Column(
         modifier =
           Modifier
             .fillMaxWidth()
             .heightIn(max = 420.dp)
+            .then(rememberSheetContentScrollGuard())
             .verticalScroll(rememberScrollState())
             .padding(vertical = 4.dp),
       ) {

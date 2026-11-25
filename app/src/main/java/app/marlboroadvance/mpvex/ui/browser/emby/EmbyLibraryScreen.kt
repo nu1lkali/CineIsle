@@ -153,6 +153,7 @@ import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.preferences.shouldResynthesizeCover
 import app.marlboroadvance.mpvex.presentation.Screen
 import app.marlboroadvance.mpvex.presentation.components.pullrefresh.PullRefreshGridBox
+import app.marlboroadvance.mpvex.ui.browser.components.rememberSheetContentScrollGuard
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyCardStyle
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyFavoriteRandomIcon
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyGachaDrawDialog
@@ -5036,7 +5037,9 @@ private fun EmbyPathNavigatorSheet(
   onGoHome: () -> Unit,
   libraryNames: Map<String, String> = emptyMap(),
 ) {
-  val sheetState = rememberModalBottomSheetState()
+  // ⚠️ 与网络位置那版同一决定：跳过「半屏」锚点。祖先链较长时内容会过半屏，
+  //    默认多出的 PartiallyExpanded 会让「滚到底弹全屏 / 滚回顶缩半屏」跟着手指一起动。
+  val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
   ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
     Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
@@ -5090,11 +5093,15 @@ private fun EmbyPathNavigatorSheet(
       } else {
         // 层级一般不多（几层到十几层），普通 Column + 纵向滚动即可；
         // 给个最大高度上限，免得深目录把整屏铺满。
+        // ⚠️ 手势隔离层必须在 `verticalScroll` **外层**（见 rememberSheetContentScrollGuard）：
+        //    祖先链一长就会滚到头，没有它，余下的拖拽/位移会被抽屉的 anchoredDraggable 与
+        //    nestedScroll 连接接走 ⇒ 滚内容把抽屉一起拉动。
         Column(
           modifier =
             Modifier
               .fillMaxWidth()
               .heightIn(max = 420.dp)
+              .then(rememberSheetContentScrollGuard())
               .verticalScroll(rememberScrollState())
               .padding(vertical = 4.dp),
         ) {
