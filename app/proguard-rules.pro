@@ -119,3 +119,14 @@
 -keepclassmembers class org.videolan.libvlc.** {
     native <methods>;
 }
+
+# ── Bugly 崩溃上报 ──
+# 只打进 standard / playstore 两个风味（fdroid 没有这个包，-dontwarn 兜住 R8 的缺类告警）。
+# 保留整包的理由有三条：
+#  1. 初始化走反射（presentation/crash/CrashReporter.kt），R8 看不到静态引用，
+#     不 keep 就会把整个包当成无用代码删掉，反射直接 ClassNotFound；
+#  2. 原生崩溃模块由 .so 通过 JNI 按类名 / 方法名回调，混淆或裁剪都会断链；
+#  3. SDK 内部大量用反射读 strategy 的 getter，名字必须原样。
+-keep class com.tencent.bugly.** { *; }
+-keepclassmembers class com.tencent.bugly.** { *; }
+-dontwarn com.tencent.bugly.**

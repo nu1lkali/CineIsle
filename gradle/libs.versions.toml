@@ -1,5 +1,9 @@
 [versions]
 agp = "9.4.0"
+# Bugly 崩溃上报。4.0.0 起 jar 与 so 合并发布，只引 crashreport 一个坐标即可
+# （4.0.0 之前还要额外引 com.tencent.rqd:nativecrashreport）。
+# 4.1.9.7 与官方控制台下载包 crashreport-4.1.9.7.aar 同一版本。
+bugly = "4.1.9.7"
 commonsNet = "3.13.0"
 smbj = "0.14.0"
 kotlin = "2.3.20"
@@ -78,6 +82,8 @@ coil = "3.6.3"
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 commons-net = { module = "commons-net:commons-net", version.ref = "commonsNet" }
+# 崩溃上报：Maven Central 上的官方坐标，AAR 内含 classes.jar + 5 个 ABI 的 libBugly_Native.so
+bugly-crashreport = { module = "com.tencent.bugly:crashreport", version.ref = "bugly" }
 smbj = { module = "com.hierynomus:smbj", version.ref = "smbj" }
 lazycolumnscrollbar = { module = "com.github.nanihadesuka:LazyColumnScrollbar", version.ref = "lazycolumnscrollbar" }
 nanohttpd = { module = "org.nanohttpd:nanohttpd", version.ref = "nanohttpd" }

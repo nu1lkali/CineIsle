@@ -11,6 +11,8 @@ import android.content.ServiceConnection
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import androidx.compose.runtime.Composable
+import app.marlboroadvance.mpvex.MainActivity
+import app.marlboroadvance.mpvex.privacy.AppStartupCoordinator
 import app.marlboroadvance.mpvex.ui.player.danmaku.DanmakuOverlay
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -545,6 +547,21 @@ open class PlayerActivity :
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+
+    // ── 隐私门禁（直达入口）──
+    // 本页在 Manifest 里是 exported + VIEW/SEND filter：其他应用「用…打开」
+    // 或桌面快捷方式可以**不经过 MainActivity** 直接拉起它。门禁只在主界面
+    // 生效的话，这条路就是绕道 —— 未授权时用户会看到一个能放片的播放器。
+    //
+    // 处理方式不是弹窗（播放页没有合适的承载面），而是把用户送回主界面：
+    // 那里会渲染隐私确认页，确认后他要看的内容还在。
+    // ⚠️ 必须排在 redirectToPreferredEngine() 与 setContentView 之前：
+    //    后者会让 SurfaceView 立刻 attachSurface，那时再退出已经太晚。
+    if (!AppStartupCoordinator.isGranted()) {
+      startActivity(Intent(this, MainActivity::class.java))
+      finish()
+      return
+    }
 
     // ── 默认播放内核是 GSY 时，把这次播放整体转交给 GSY 播放页 ──
     // 必须在任何 mpv 初始化之前判断，转交时连画面都还没建起来，观感上就是直接进 GSY。

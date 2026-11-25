@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>隐私政策 · 影屿 CineIsle</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #f6f7f9;
+    --border: #e3e5e9;
+    --text: #1c1d21;
+    --text-soft: #5b5f68;
+    --text-faint: #8a8f99;
+    --accent: #b3261e;
+    --accent-soft: #fdeceb;
+    --link: #0b57d0;
+  }
+  :root[data-theme="dark"] {
+    --bg: #121316;
+    --surface: #1b1d21;
+    --border: #2c2f35;
+    --text: #e8e9ec;
+    --text-soft: #a9adb6;
+    --text-faint: #7d828c;
+    --accent: #ff8a80;
+    --accent-soft: #2a1a19;
+    --link: #8ab4f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      --bg: #121316;
+      --surface: #1b1d21;
+      --border: #2c2f35;
+      --text: #e8e9ec;
+      --text-soft: #a9adb6;
+      --text-faint: #7d828c;
+      --accent: #ff8a80;
+      --accent-soft: #2a1a19;
+      --link: #8ab4f8;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    padding: 0 20px 56px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.75;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+
+  header {
+    padding: 32px 0 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  h1 {
+    margin: 0 0 10px;
+    font-size: 25px;
+    line-height: 1.35;
+    letter-spacing: -0.2px;
+  }
+  .meta {
+    color: var(--text-faint);
+    font-size: 13px;
+    line-height: 1.9;
+  }
+  .meta b { color: var(--text-soft); font-weight: 600; }
+
+  section { margin-top: 30px; }
+  h2 {
+    margin: 0 0 10px;
+    font-size: 17px;
+    line-height: 1.5;
+    padding-left: 11px;
+    border-left: 3px solid var(--accent);
+  }
+  h3 {
+    margin: 18px 0 6px;
+    font-size: 15px;
+    color: var(--text);
+  }
+  p { margin: 9px 0; }
+  ul, ol { margin: 9px 0; padding-left: 22px; }
+  li { margin: 5px 0; }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    word-break: break-all;
+  }
+  a { color: var(--link); text-decoration: none; }
+  a:active { text-decoration: underline; }
+
+  .lead {
+    margin-top: 22px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text-soft);
+    font-size: 14px;
+  }
+  .note {
+    margin: 14px 0;
+    padding: 12px 14px;
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .note strong { color: var(--accent); }
+
+  table {
+    width: 100%;
+    margin: 14px 0;
+    border-collapse: collapse;
+    font-size: 13.5px;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--surface); font-weight: 600; color: var(--text-soft); }
+  td { color: var(--text); }
+
+  .kv { margin: 12px 0; }
+  .kv div {
+    display: flex;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .kv div:last-child { border-bottom: none; }
+  .kv .k { flex: 0 0 96px; color: var(--text-faint); font-size: 13.5px; }
+  .kv .v { flex: 1; }
+
+  footer {
+    margin-top: 44px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 13px;
+  }
+  @media (max-width: 360px) {
+    body { padding: 0 14px 44px; font-size: 14.5px; }
+    h1 { font-size: 22px; }
+    .kv .k { flex-basis: 78px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>隐私政策</h1>
+  <div class="meta">
+    <div><b>适用应用</b>　影屿（CineIsle）</div>
+    <div><b>版本</b>　1.0　·　<b>生效日期</b>　2026 年 11 月 25 日</div>
+    <div><b>最近更新</b>　2026 年 11 月 25 日</div>
+  </div>
+</header>
+
+<div class="lead">
+  影屿是一款第三方 Emby 与本地媒体播放器。它不提供云端账号，不自建后台，也不把您的媒体内容或账号信息上传到开发者服务器。
+  本政策逐项说明应用在实际功能中读取、使用、保存与向外发送的信息，以及您可以如何控制这些信息。
+</div>
+
+<section>
+  <h2>一、引言与适用范围</h2>
+  <p>本政策适用于影屿 Android 客户端（下称「本应用」）的全部功能，包括 Emby 媒体库浏览与播放、本地文件浏览与播放、网络位置（SMB / FTP / WebDAV / AList）浏览、字幕检索与挂载、弹幕、投屏与应用内更新。</p>
+  <p>本政策不适用于您自行搭建或使用的 Emby 服务器、文件服务器以及第三方字幕、弹幕服务。这些服务由您或相应运营方独立控制，其数据处理行为适用各自的政策。</p>
+  <p>本应用在首次启动时会展示本政策与《用户服务协议》。在您主动勾选并确认之前，本应用不会执行非必要的网络请求、媒体扫描或第三方 SDK 初始化。</p>
+</section>
+
+<section>
+  <h2>二、开发者与应用基本信息</h2>
+  <div class="kv">
+    <div><span class="k">应用名称</span><span class="v">影屿（CineIsle）</span></div>
+    <div><span class="k">应用包名</span><span class="v"><code>app.cineisle.player</code></span></div>
+    <div><span class="k">服务性质</span><span class="v">本地与局域网工具类播放器，无自建账号体系与云端后台</span></div>
+    <div><span class="k">联系邮箱</span><span class="v"><a href="mailto:i@pwnhub.net">i@pwnhub.net</a></span></div>
+    <div><span class="k">项目地址</span><span class="v"><a href="https://github.com/nu1lkali/CineIsle">github.com/nu1lkali/CineIsle</a></span></div>
+  </div>
+  <p>本应用不是 Emby、Jellyfin、Plex 或任何媒体服务器平台的官方客户端，与上述平台不存在隶属、代理或授权关系。</p>
+</section>
+
+<section>
+  <h2>三、我们如何收集和使用信息</h2>
+  <p>本应用没有开发者自有服务器，因此不存在「上传到我们后台」这一环节。信息分为三类处理方式：</p>
+  <table>
+    <thead>
+      <tr><th>处理方式</th><th>含义</th><th>典型数据</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>仅本机处理</td><td>只写入本应用私有存储，不离开设备</td><td>播放进度、偏好设置、搜索历史、本地缓存</td></tr>
+      <tr><td>发送至您配置的服务器</td><td>由您填写的地址与凭据决定去向</td><td>登录凭据、播放进度、收藏状态、媒体请求</td></tr>
+      <tr><td>发送至第三方服务</td><td>由具体功能触发，发送范围有限</td><td>字幕搜索关键词、弹幕搜索关键词、崩溃信息</td></tr>
+    </tbody>
+  </table>
+  <p>本应用不会收集您的通讯录、短信、通话记录、精确定位、相册图片内容或应用安装列表。</p>
+</section>
+
+<section>
+  <h2>四、账号登录与媒体服务器连接</h2>
+  <p>您在「添加服务器」中填写的 Emby 服务器地址、端口、用户名与密码，仅用于向该服务器发起登录与后续 API 请求。登录成功后，服务器返回的访问令牌（AccessToken）、用户 ID 与服务器标识会一并保存在本机，以便下次免登录。</p>
+  <ul>
+    <li>这些信息保存在本机数据库 <code>emby_servers</code> 表中，不发送给开发者或任何第三方。</li>
+    <li>密码与访问令牌在保存时使用 Android Keystore 派生的密钥进行加密；旧版本遗留的明文记录会在应用启动后自动加密替换。</li>
+    <li>您可以添加多个服务器。应用内「聚合检索」功能会向您已启用的每个服务器分别发起搜索请求；点开其他服务器的结果时，应用会明确提示当前切换到的服务器。</li>
+    <li>删除某个服务器条目会同时移除本机保存的该服务器凭据与相关缓存；不会影响服务器端的数据。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>五、本地媒体文件访问</h2>
+  <p>当您使用「本地媒体库」或「网络位置」功能时，本应用会读取您授权范围内的文件列表、文件名、大小、时长与编码信息，用于展示与播放。这些读取全部在本机完成。</p>
+  <ul>
+    <li>在 Android 13 及以上，本应用申请视频类媒体读取权限；在更低版本申请外部存储读取权限。</li>
+    <li>「所有文件访问权限」用于浏览任意目录下的媒体文件。该权限只能由您在系统设置中手动开启，本应用不会也无法静默获取；不开启时仅影响目录浏览范围。</li>
+    <li>通过系统文件选择器（SAF）选中的目录，本应用只获得该系统授权范围内的访问能力。</li>
+    <li>应用启动时可能触发一次系统媒体库扫描，用于发现您在应用外新增的视频。该行为只读取文件元数据，不上传文件内容。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>六、播放记录与偏好设置</h2>
+  <p>为了在下次打开时继续播放，本应用会在本机保存以下内容：</p>
+  <ul>
+    <li>播放位置、播放速度、音轨与字幕轨选择、字幕延迟与缩放；</li>
+    <li>最近播放列表、收藏时间、标记为「不喜欢」的条目及原因；</li>
+    <li>搜索历史（按服务器与用户分别隔离，每个服务器约保留 20 条）；</li>
+    <li>外观、手势、解码、字幕、弹幕等设置项。</li>
+  </ul>
+  <p>其中「播放进度」与「收藏状态」在您开启相应同步开关时，会通过 Emby 接口写回您自己的服务器，以便多端一致。除该场景外，上述记录不离开本机。</p>
+</section>
+
+<section>
+  <h2>七、字幕检索、下载与挂载</h2>
+  <p>本应用的字幕功能分为本地与在线两部分。</p>
+  <h3>本地部分</h3>
+  <p>字幕文件的扫描、文件名匹配、编码识别与时间轴校准全部在本机完成。下载的字幕保存在应用私有目录，您也可以另存一份到自选目录。</p>
+  <h3>在线部分</h3>
+  <p>当您主动搜索网络字幕，或在设置中开启「缺字幕时自动检索」时，本应用会向以下服务发送<b>由影片名或文件名构造的关键词</b>：</p>
+  <table>
+    <thead>
+      <tr><th>服务</th><th>地址</th><th>发送内容</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>迅雷字幕</td><td><code>api-shoulei-ssl.xunlei.com</code></td><td>搜索关键词</td></tr>
+      <tr><td>SubtitleCat</td><td><code>subtitlecat.com</code></td><td>搜索关键词</td></tr>
+    </tbody>
+  </table>
+  <p>请求过程不携带您的 Emby 凭据、账号、设备标识或文件本体。本应用当前<b>不提供</b>字幕机器翻译、字幕内容上传或 OCR 识别功能。</p>
+  <div class="note">
+    <strong>提示：</strong>搜索关键词包含影片名称。若您不希望影片名称被第三方获知，请在设置中关闭网络字幕的自动检索，并仅在需要时手动搜索。
+  </div>
+</section>
+
+<section>
+  <h2>八、网络请求与第三方服务</h2>
+  <p>除您配置的服务器外，本应用会与下列第三方服务通信：</p>
+  <table>
+    <thead>
+      <tr><th>功能</th><th>目标</th><th>触发条件</th><th>发送内容</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>弹幕</td>
+        <td><code>api.dandanplay.net</code>（可在设置中改为自建地址）</td>
+        <td>播放时开启弹幕</td>
+        <td>影片搜索关键词、应用标识签名；回传弹幕文本</td>
+      </tr>
+      <tr>
+        <td>在线字幕</td>
+        <td>见上一节</td>
+        <td>用户搜索或开启自动检索</td>
+        <td>搜索关键词</td>
+      </tr>
+      <tr>
+        <td>更新检测</td>
+        <td><code>api.github.com</code></td>
+        <td>应用内「检查更新」或更新功能开启时进入主界面</td>
+        <td>仅 HTTPS 请求本身，不含设备或账号标识</td>
+      </tr>
+      <tr>
+        <td>投屏</td>
+        <td>局域网内 DLNA 设备</td>
+        <td>用户主动发起投屏</td>
+        <td>本机局域网地址、投屏指令、媒体地址</td>
+      </tr>
+      <tr>
+        <td>崩溃上报</td>
+        <td>腾讯 Bugly</td>
+        <td>发生未捕获异常</td>
+        <td>崩溃堆栈与运行环境信息，详见下一节</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>本应用不接入广告平台、社交分享统计或用户画像服务。</p>
+</section>
+
+<section>
+  <h2>九、第三方 SDK</h2>
+  <table>
+    <thead>
+      <tr><th>SDK</th><th>提供方</th><th>用途</th><th>初始化时机</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Bugly 崩溃上报</td>
+        <td>腾讯</td>
+        <td>收集崩溃堆栈用于定位与修复问题</td>
+        <td>仅在您同意本政策之后</td>
+      </tr>
+      <tr>
+        <td>mpv / GSY / libVLC</td>
+        <td>开源项目</td>
+        <td>视频解码与渲染</td>
+        <td>用户进入播放页或首次需要时</td>
+      </tr>
+      <tr>
+        <td>Coil、OkHttp</td>
+        <td>开源项目</td>
+        <td>图片加载与网络请求</td>
+        <td>首次实际请求时</td>
+      </tr>
+      <tr>
+        <td>smbj、commons-net、sardine</td>
+        <td>开源项目</td>
+        <td>SMB / FTP / WebDAV 访问</td>
+        <td>用户首次连接对应网络位置时</td>
+      </tr>
+      <tr>
+        <td>DanmakuFlameMaster</td>
+        <td>开源项目</td>
+        <td>弹幕渲染</td>
+        <td>播放页开启弹幕时</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>F-Droid 分发版本不包含崩溃上报 SDK。</p>
+  <div class="note">
+    <strong>关于崩溃上报：</strong>该 SDK 由腾讯提供，应用仅传入应用标识与版本信息。
+    按该 SDK 的公开说明，其上报内容为崩溃堆栈、应用版本与包名，以及设备运行环境（机型、系统版本、CPU 架构、可用内存与存储、网络类型）。
+    完整的收集字段以腾讯 Bugly 官方文档为准（<a href="https://bugly.qq.com/docs/">bugly.qq.com/docs</a>）。
+    若您不希望参与，可在「设置 → 法律与隐私」中撤回授权，撤回后崩溃上报不再初始化。
+  </div>
+</section>
+
+<section>
+  <h2>十、本地数据存储与安全</h2>
+  <ul>
+    <li><b>数据库</b>：应用私有目录下的 SQLite 数据库，保存服务器配置、播放进度、播放列表、收藏与缓存索引。</li>
+    <li><b>偏好文件</b>：应用私有的键值存储，保存各项设置与授权状态。</li>
+    <li><b>字幕与封面缓存</b>：应用私有目录；封面缓存按 7 天有效期与 256 MB 上限自动清理。</li>
+    <li><b>启动与崩溃记录</b>：应用外部私有目录下的文本文件，仅记录时间戳、启动阶段与崩溃堆栈，卸载应用时一并删除。</li>
+    <li><b>已下载媒体</b>：保存在您指定的下载目录。</li>
+  </ul>
+  <p>账号密码与访问令牌使用 Android Keystore 加密存储。应用私有目录受 Android 沙箱保护，其他应用无法直接读取。</p>
+</section>
+
+<section>
+  <h2>十一、Android 系统权限使用说明</h2>
+  <table>
+    <thead>
+      <tr><th>权限</th><th>用途</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>网络访问 / 网络状态</td><td>连接您配置的服务器与第三方服务；判断当前网络是否可用</td></tr>
+      <tr><td>Wi-Fi 状态与组播</td><td>在局域网内发现可投屏的 DLNA 设备</td></tr>
+      <tr><td>读取视频类媒体 / 读取外部存储</td><td>枚举本地视频文件以展示与播放</td></tr>
+      <tr><td>写入外部存储（旧系统）</td><td>保存字幕与下载文件</td></tr>
+      <tr><td>所有文件访问</td><td>浏览任意目录下的媒体文件。需您在系统设置中手动开启</td></tr>
+      <tr><td>前台服务（媒体播放 / 数据同步）</td><td>后台继续播放、后台上传大文件</td></tr>
+      <tr><td>通知</td><td>展示播放与上传进度</td></tr>
+      <tr><td>安装应用</td><td>安装应用内下载的新版本</td></tr>
+    </tbody>
+  </table>
+  <p>本应用不申请相机、麦克风、通讯录、短信、通话记录与位置权限。</p>
+</section>
+
+<section>
+  <h2>十二、信息共享、转让与公开披露</h2>
+  <p>本应用不会出售您的个人信息，也不会与开发者以外的第三方共享，除非属于以下情形：</p>
+  <ul>
+    <li>为完成您主动请求的功能，向您配置的服务器或上文列明的第三方服务发送必要数据；</li>
+    <li>发生未捕获异常时，向崩溃上报服务发送崩溃信息；</li>
+    <li>依据法律法规、司法或行政机关的强制要求。</li>
+  </ul>
+  <p>本应用不含用户账号体系，不存在因合并、收购而转让用户信息的情形。</p>
+</section>
+
+<section>
+  <h2>十三、个人信息保存期限</h2>
+  <ul>
+    <li>服务器配置、播放进度、收藏与播放列表：保存至您在应用内删除、清除应用数据或卸载应用。</li>
+    <li>搜索历史：按服务器分别保留最近约 20 条，超出后自动淘汰。</li>
+    <li>封面与图片缓存：按有效期与容量上限自动清理。</li>
+    <li>启动与崩溃记录：由后续启动覆盖写入；卸载应用时删除。</li>
+    <li>崩溃上报数据：保存期限由服务提供方按其政策决定。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>十四、您的个人信息权利</h2>
+  <p>您可以随时通过应用内功能行使以下权利：</p>
+  <ul>
+    <li><b>查阅与更正</b>：在服务器管理、网络位置、播放设置中查看并修改已保存的信息。</li>
+    <li><b>删除</b>：删除单个服务器或网络位置条目；在「数据与缓存」中清除各类缓存；清除搜索历史；移除已下载字幕与媒体。</li>
+    <li><b>撤回授权</b>：在「设置 → 法律与隐私」中撤回隐私授权，详见下一节。</li>
+    <li><b>导出限制</b>：本应用不提供批量导出功能，相关数据仅存于本机。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>十五、如何撤回授权</h2>
+  <p>进入「设置 → 法律与隐私 → 撤回隐私授权」即可撤回。撤回后：</p>
+  <ul>
+    <li>应用立即停止后续需要授权的处理，并返回隐私确认界面；</li>
+    <li>崩溃上报、自动连接网络位置、媒体扫描、网络字幕检索不再执行；</li>
+    <li>主界面与播放功能在未重新同意前不可使用；</li>
+    <li>部分在本次运行中已加载的组件需在重启应用后完全停止。</li>
+  </ul>
+  <p>撤回授权不会删除您已保存的服务器配置、播放记录或媒体文件。若需一并删除，请使用「清除应用数据」或卸载应用。</p>
+</section>
+
+<section>
+  <h2>十六、如何删除本地数据</h2>
+  <ul>
+    <li><b>在应用内</b>：删除服务器 / 网络位置条目；在「数据与缓存」中清理图片与播放缓存；在字幕管理中删除已下载字幕。</li>
+    <li><b>彻底清除</b>：在系统「应用信息」中选择「清除数据」，或在「存储」中清除存储空间。此操作会移除全部本机数据，且不可恢复。</li>
+    <li><b>卸载应用</b>：卸载会删除应用私有目录内的全部数据。您保存在公共下载目录的媒体与另存的字幕不会被删除，需自行清理。</li>
+  </ul>
+  <p>删除本机数据不会影响您媒体服务器上的任何内容。</p>
+</section>
+
+<section>
+  <h2>十七、未成年人保护</h2>
+  <p>本应用是媒体播放工具，不面向未成年人单独设计，也不主动收集未成年人的个人信息。未成年人应在监护人指导下使用本应用，并由监护人负责所访问媒体内容的合法性。</p>
+  <p>若监护人发现未成年人在未经同意的情况下使用了本应用，可通过第十六节的方式清除本机数据。</p>
+</section>
+
+<section>
+  <h2>十八、隐私政策更新机制</h2>
+  <p>当应用功能发生变化、引入新的第三方服务，或法律法规提出新要求时，本政策会相应更新，并提升版本号。</p>
+  <ul>
+    <li>协议版本提升后，应用会在下次启动时重新展示确认界面，请您重新阅读并确认。</li>
+    <li>仅应用版本升级、协议内容未变时，不会重复要求确认。</li>
+    <li>本政策与《用户服务协议》的版本相互独立，可分别更新。</li>
+    <li>当前版本号与您的同意时间可在「设置 → 法律与隐私」中查看。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>十九、联系方式与投诉渠道</h2>
+  <p>如对本政策有疑问、意见或投诉，可通过以下方式联系：</p>
+  <ul>
+    <li>电子邮箱：<a href="mailto:i@pwnhub.net">i@pwnhub.net</a></li>
+    <li>项目问题反馈页面：<a href="https://github.com/nu1lkali/CineIsle">github.com/nu1lkali/CineIsle</a></li>
+  </ul>
+  <p>我们会在收到反馈后尽快处理。若您认为个人信息权益受到侵害，也可向有关监管部门投诉举报。</p>
+</section>
+
+<footer>
+  本政策自 2026 年 11 月 25 日起生效，版本 1.0。
+</footer>
+
+</div>
+</body>
+</html>

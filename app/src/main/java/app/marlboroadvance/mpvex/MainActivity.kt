@@ -76,6 +76,8 @@ import androidx.navigation3.ui.NavDisplay
 import app.marlboroadvance.mpvex.preferences.AppearancePreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.presentation.Screen
+import app.marlboroadvance.mpvex.privacy.AppStartupCoordinator
+import app.marlboroadvance.mpvex.privacy.PrivacyConsentScreen
 import app.marlboroadvance.mpvex.repository.NetworkRepository
 import app.marlboroadvance.mpvex.utils.update.UpdateDialog
 import app.marlboroadvance.mpvex.utils.update.UpdateViewModel
@@ -248,59 +250,78 @@ class MainActivity : ComponentActivity() {
         ) { isDarkMode },
       )
 
-      // Auto-connect to saved network connections
-      LaunchedEffect(Unit) {
-        autoConnectToNetworks()
-      }
+      // 隐私门禁：判定结果在 Application.onCreate 里就已经落定（同步读 prefs），
+      // 这里只是订阅它的变化 —— 用户点「同意并继续」或「撤回授权」会切换这个值，
+      // 主界面因此原地进出，不需要重启 Activity。
+      val gateState by AppStartupCoordinator.gateState.collectAsState()
 
       MpvexTheme {
         Surface {
-          // 启动页盖在主界面之上：背后 Navigator 已经完成首帧布局，
-          // 淡出后直接是可用界面，避免「先白屏、再跳一下」的观感。
-          //
-          // ⚠️ 初值读进程级标记，不用恒 true：转屏会重建 Activity，
-          //   `remember` 跟着重置 ⇒ 每转一次屏就重播一次启动动画。
-          var showSplash by remember { mutableStateOf(!SplashGate.shownThisProcess) }
+          if (gateState == AppStartupCoordinator.GateState.GRANTED) {
+            // Auto-connect to saved network connections。
+            // ⚠️ 必须在授权之后：它会读取已保存的账号密码并发起连接。
+            LaunchedEffect(Unit) {
+              autoConnectToNetworks()
+            }
 
-          // 主界面在启动页背后就开始「拉近」（0.98 → 1）。
-          // 与启动页淡出同一时长 ⇒ 观感是主界面接住 logo，而不是启动页消失后再出现。
-          val contentScale by
-            animateFloatAsState(
-              targetValue = if (showSplash) 0.98f else 1f,
-              animationSpec =
-                tween(durationMillis = SPLASH_EXIT_MS.toInt(), easing = FastOutSlowInEasing),
-              label = "splashContentScale",
-            )
+            // 启动页盖在主界面之上：背后 Navigator 已经完成首帧布局，
+            // 淡出后直接是可用界面，避免「先白屏、再跳一下」的观感。
+            //
+            // ⚠️ 初值读进程级标记，不用恒 true：转屏会重建 Activity，
+            //   `remember` 跟着重置 ⇒ 每转一次屏就重播一次启动动画。
+            var showSplash by remember { mutableStateOf(!SplashGate.shownThisProcess) }
 
-          // 应用锁（b7）：锁着时 Navigator 和启动页整块不组合，只显示解锁页；
-          // 未设 PIN 或没开锁时等于不存在，内容原样渲染。
-          AppLockGate {
-            Box(modifier = Modifier.fillMaxSize()) {
-              Box(
-                modifier =
-                  Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                      scaleX = contentScale
-                      scaleY = contentScale
+            // 主界面在启动页背后就开始「拉近」（0.98 → 1）。
+            // 与启动页淡出同一时长 ⇒ 观感是主界面接住 logo，而不是启动页消失后再出现。
+            val contentScale by
+              animateFloatAsState(
+                targetValue = if (showSplash) 0.98f else 1f,
+                animationSpec =
+                  tween(durationMillis = SPLASH_EXIT_MS.toInt(), easing = FastOutSlowInEasing),
+                label = "splashContentScale",
+              )
+
+            // 应用锁（b7）：锁着时 Navigator 和启动页整块不组合，只显示解锁页；
+            // 未设 PIN 或没开锁时等于不存在，内容原样渲染。
+            AppLockGate {
+              Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                  modifier =
+                    Modifier
+                      .fillMaxSize()
+                      .graphicsLayer {
+                        scaleX = contentScale
+                        scaleY = contentScale
+                      },
+                ) {
+                  Navigator()
+                }
+
+                if (showSplash) {
+                  AppSplashScreen(
+                    onFinished = {
+                      SplashGate.shownThisProcess = true
+                      showSplash = false
                     },
-              ) {
-                Navigator()
-              }
-
-              if (showSplash) {
-                AppSplashScreen(
-                  onFinished = {
-                    SplashGate.shownThisProcess = true
-                    showSplash = false
-                  },
-                )
+                  )
+                }
               }
             }
+          } else {
+            // 未授权 / 协议已更新：只渲染确认页。
+            // Navigator、应用锁、启动页、更新检测全部不组合 —— 它们的初始化
+            // 与首屏请求都因此不会发生，这是「架构级门禁」而不是弹一层对话框。
+            PrivacyConsentScreen(
+              onAgree = { AppStartupCoordinator.onConsentGranted() },
+              onExit = { finishAffinity() },
+            )
           }
         }
 
         // 首帧成功渲染即标记 boot_ok，清除「上次启动卡在 Application 阶段」的疑似状态。
+        // ⚠️ 放在门禁之外：确认页也是一次成功的首帧，不标记的话，用户停在
+        //   确认页期间被杀进程，下次启动会被误判成「上次在 Application 阶段崩了」
+        //   并进安全模式跳过 FastThumbnails。
         LaunchedEffect(Unit) {
           App.markBootOk()
         }

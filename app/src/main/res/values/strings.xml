@@ -961,6 +961,7 @@
   <string name="i18n_mpv_low_latency">Low Latency</string>
   <string name="i18n_mpv_sw_fast">SW Fast</string>
   <string name="i18n_project_name_en" translatable="false">CineIsle</string>
+  <string name="i18n_about_contact_developer">Contact Developer</string>
   <string name="i18n_ack_title">Acknowledgments</string>
   <string name="i18n_ack_tap_to_open">Open the project page</string>
   <string name="i18n_ack_mpvex_summary">Direct upstream — this project is a secondary development built on it.</string>

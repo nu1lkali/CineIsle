@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.Policy
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.ThumbDown
@@ -242,6 +243,24 @@ internal object SettingsRegistry {
       keywords = listOf("advanced", "debug", "log"),
     )
 
+  /**
+   * 法律与隐私。
+   *
+   * 与「关于」分开：这一页是**有行为**的（撤回授权会让主界面立刻退出），
+   * 塞进 AboutScreen 会和「版本号 / 开源许可 / 捐赠」混在一起，
+   * 用户找「我的数据在哪」时不会想到去「关于」里翻。
+   */
+  val legalPrivacy =
+    SettingsDestination(
+      id = "legal_privacy",
+      section = "高级与关于",
+      titleText = "法律与隐私",
+      summaryText = "用户服务协议 · 隐私政策 · 协议版本与同意时间 · 撤回授权",
+      icon = Icons.Outlined.Policy,
+      screen = LegalPrivacyScreen,
+      keywords = listOf("privacy", "policy", "agreement", "consent", "隐私", "协议", "授权", "撤回"),
+    )
+
   val about =
     SettingsDestination(
       id = "about",
@@ -271,6 +290,7 @@ internal object SettingsRegistry {
       personMerge,
       smartMerge,
       advanced,
+      legalPrivacy,
       about,
     )
 }

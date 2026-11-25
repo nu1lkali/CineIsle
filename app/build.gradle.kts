@@ -3968,8 +3968,20 @@ android {
     //   local.properties 已被 .gitignore 忽略，仓库里永远不会出现密钥。
     // 没配 local.properties 也能编：两个字段为空串 ⇒ 运行时不下发签名头，
     // 弹幕只对「自建服务端 / 未开认证的兼容服务端」可用（这本身就是一条有效路径）。
-    buildConfigField("String", "DANDAN_APP_ID", "\"${localDanmakuAppId}\"")
-    buildConfigField("String", "DANDAN_APP_SECRET", "\"${localDanmakuAppSecret}\"")
+    // ⚠️ 这里**直接调函数**，不经过文件末尾的顶层 `val`：
+    //    Kotlin 脚本的顶层属性按声明顺序初始化，而 `android {}` 在本脚本里排在那些
+    //    val **之前**执行 —— 模板里读到的会是未初始化的 null，最终在 BuildConfig 里
+    //    生成字面量字符串 "null"（v336 之前 dandan 的两个字段正是这样，一直在发
+    //    `appId=null` 的签名头）。函数没有这个顺序问题。
+    buildConfigField("String", "DANDAN_APP_ID", "\"${localSecret("dandan.appId")}\"")
+    buildConfigField("String", "DANDAN_APP_SECRET", "\"${localSecret("dandan.appSecret")}\"")
+
+    // ── Bugly 崩溃上报的 App ID（可选，同样刻意不硬编码）──
+    // 从 local.properties 读（.gitignore 已忽略），仓库与 APK 都不会出现写死的凭据。
+    // 没配也能编也能跑：字段为空串 ⇒ 运行时整块跳过初始化，崩溃上报自然不工作。
+    // App Key 刻意不进 BuildConfig：Android 端 SDK 只认 App ID，Key 是符号表上传
+    // 等离线环节用的，塞进包只会多一处能被反编译读到的位置（详见 CrashReporter.kt）。
+    buildConfigField("String", "BUGLY_APP_ID", "\"${localSecret("bugly.appId")}\"")
   }
 
   flavorDimensions += "distribution"
@@ -3980,6 +3992,8 @@ android {
       isDefault = true
       buildConfigField("boolean", "ENABLE_UPDATE_FEATURE", "true")
       buildConfigField("boolean", "SCOPED_STORAGE_ONLY", "false")
+      // Bugly：自有渠道的分发包含崩溃上报（见文件末尾的风味专属依赖）
+      buildConfigField("boolean", "ENABLE_BUGLY", "true")
     }
 
     create("playstore") {
@@ -3987,6 +4001,7 @@ android {
       versionNameSuffix = "-playstore"
       buildConfigField("boolean", "ENABLE_UPDATE_FEATURE", "false")
       buildConfigField("boolean", "SCOPED_STORAGE_ONLY", "true")
+      buildConfigField("boolean", "ENABLE_BUGLY", "true")
     }
 
     create("fdroid") {
@@ -3994,6 +4009,9 @@ android {
       versionNameSuffix = "-fdroid"
       buildConfigField("boolean", "ENABLE_UPDATE_FEATURE", "false")
       buildConfigField("boolean", "SCOPED_STORAGE_ONLY", "false")
+      // ⚠️ F-Droid 的分发要求不含第三方上报 / 追踪 SDK，这个风味**不打包** Bugly：
+      //    依赖是风味专属的（没有 crashreport.aar），代码侧走反射调用 ⇒ 缺类即空转。
+      buildConfigField("boolean", "ENABLE_BUGLY", "false")
 
       ndk {
         // 与 splits 的 ABI 过滤互斥：单包模式（-Pabi / -Parm64Only）下必须留空，否则 AGP 直接报配置冲突
@@ -4372,6 +4390,18 @@ dependencies {
     androidTestImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.truth)
     androidTestImplementation(libs.room.testing)
+
+    // ── Bugly 崩溃上报（**风味专属**，只进 standard / playstore）──
+    // 走 Maven Central 官方坐标（`com.tencent.bugly:crashreport`）：4.0.0 起 jar 与 so
+    // 合并发布，一个依赖就带齐 Java/Native 两条上报链路，不必再单独引 nativecrashreport。
+    // 版本钉在 4.1.9.7（与官方控制台下载包同版本），不用 `latest.release`——
+    // 那种写法让构建结果随仓库状态漂移，出问题无法回溯。
+    // 为什么用 `标准Implementation` 而不是 `implementation`：fdroid 风味按 F-Droid 的
+    // 分发要求不能带第三方上报 SDK，写成全局会让 fdroid 包也被塞进 libBugly_Native.so。
+    // 代码侧因此走反射调用（`CrashReporter`），缺类即空转 —— 编译期不依赖本坐标。
+    // SO 架构由本项目的 abiFilters / splits 决定（单包模式只打 arm64-v8a），无需另配。
+    "standardImplementation"(libs.bugly.crashreport)
+    "playstoreImplementation"(libs.bugly.crashreport)
 }
 
 /*
@@ -4440,15 +4470,20 @@ fun localSecret(key: String): String {
       ?.substringAfter('=')
       ?.trim()
       .orEmpty()
-    // 只放行字母数字与下划线：AppId/AppSecret 本来就只由这些字符组成。
-    if (line.isNotEmpty() && line.all { it.isLetterOrDigit() || it == '_' }) line else ""
+    // 只放行字母数字、下划线与连字符：AppId / AppKey 本来就只由这些字符组成
+    // （Bugly 的 App Key 形如 `060e3085-b529-41c0-8413-e725147dc261`，带连字符）。
+    // 这几种字符在 Java 字符串字面量里都不需要转义，所以放行它们是安全的。
+    if (line.isNotEmpty() && line.all { it.isLetterOrDigit() || it == '_' || it == '-' }) line else ""
   } catch (e: Exception) {
     ""
   }
 }
 
-val localDanmakuAppId: String = localSecret("dandan.appId")
-val localDanmakuAppSecret: String = localSecret("dandan.appSecret")
+/**
+ * 凭据都在 `defaultConfig` 里**直接**调 [localSecret] 取值，不在这里缓存成顶层 val ——
+ * 脚本顶层属性按声明顺序初始化，而 `android {}` 段执行得更早，缓存成 val 会让模板读到
+ * 未初始化的 null（字面量 "null" 就这样进了 BuildConfig，v336 之前 dandan 那两处即是）。
+ */
 
 /**
  * 用 providers.exec 而不是 ProcessBuilder 起 git。

@@ -1721,6 +1721,13 @@ object PreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              // 法律与隐私：协议正文、版本、同意时间与撤回授权。
+              // 放在「高级」与「关于」之间 —— 它既是常驻可查的文档入口，
+              // 也带着「撤回授权」这种会改变启动流程的动作，不适合并入关于页。
+              SettingsDestinationRow(SettingsRegistry.legalPrivacy) { backstack.add(it) }
+
+              PreferenceDivider()
+
               SettingsDestinationRow(SettingsRegistry.about) { backstack.add(it) }
             }
           }

@@ -16,6 +16,12 @@
 .gradle-user-home/
 .kotlin/
 build/
+#  清理构建目录时不用删除（本机删除走回收站，同盘不释放空间），而是改名成
+#  build.zero-<时间> / locks.stale-<时间> 让 Gradle 重建 ⇒ 这些名字也要挡住，
+#  否则每次清一次缓存，git status 就多一个 1.5GB 的未跟踪目录。
+build.zero-*/
+build.stale-*/
+locks.stale-*/
 /captures
 .externalNativeBuild/
 .cxx/

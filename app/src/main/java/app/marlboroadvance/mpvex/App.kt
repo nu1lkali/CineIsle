@@ -8,7 +8,9 @@ import app.marlboroadvance.mpvex.di.FileManagerModule
 import app.marlboroadvance.mpvex.di.PreferencesModule
 import app.marlboroadvance.mpvex.domain.network.FOLDER_COVER_CACHE_VERSION
 import app.marlboroadvance.mpvex.presentation.crash.CrashActivity
+import app.marlboroadvance.mpvex.presentation.crash.CrashReporter
 import app.marlboroadvance.mpvex.presentation.crash.GlobalExceptionHandler
+import app.marlboroadvance.mpvex.privacy.AppStartupCoordinator
 import app.marlboroadvance.mpvex.utils.media.MediaLibraryEvents
 import `is`.xyz.mpv.FastThumbnails
 import kotlinx.coroutines.CoroutineScope
@@ -104,6 +106,46 @@ class App : Application() {
 
     Thread.setDefaultUncaughtExceptionHandler(GlobalExceptionHandler(applicationContext, CrashActivity::class.java))
     trace("uncaught handler set")
+
+    // ── 隐私门禁 ──
+    // 从这里往后的一切（崩溃上报、原生库、媒体扫描、凭据升级、字幕迁移…）都
+    // **不再是启动必做项**：它们要么联网、要么读用户文件、要么初始化第三方 SDK。
+    // 交给 AppStartupCoordinator 托管后，只有授权有效时才会执行一次；
+    // 未授权时主界面换成确认页，这段代码在用户点「同意并继续」之后才跑。
+    //
+    // ⚠️ 上面那两段（Koin 容器、崩溃页处理器）刻意留在门禁之前：
+    //    Koin 只是进程内的依赖容器，处理器只把崩溃写到本机文件再拉起崩溃页，
+    //    两者都不收集也不外发信息。少了它们，未授权时一旦崩溃就没有兜底页面。
+    AppStartupCoordinator.start(this) { runConsentedStartup(lastBootStuck) }
+    trace("privacy gate evaluated; App.onCreate done")
+  }
+
+  /**
+   * 用户同意隐私政策之后的初始化。
+   *
+   * ## 为什么整段搬而不是逐条判断
+   *
+   * 这一段原本是 `onCreate` 的连续几十行，每条都带「失败也不能砸死启动」的
+   * runCatching。逐条加 `if (granted)` 会让「哪些属于个人信息处理」变得不可读，
+   * 将来新增一条也容易漏判。整体搬进一个方法之后，判据只剩一处：
+   * **这个方法被不被调用**。
+   *
+   * ## 顺序仍然有讲究
+   *
+   * - [CrashReporter.init] 必须排在上面的 `setDefaultUncaughtExceptionHandler` 之后，
+   *   否则 Bugly 会把自己挂成默认处理器，把本项目的崩溃页顶掉。
+   * - FastThumbnails 的原生初始化仍然保留「安全模式」闸门（[lastBootStuck]），
+   *   逻辑一字未改，只是执行时机从「开机」变成「同意后」。
+   *
+   * @param lastBootStuck 上次启动是否卡在 Application 阶段（原生崩溃疑似）
+   */
+  private fun runConsentedStartup(lastBootStuck: Boolean) {
+    trace("consented startup begin")
+
+    // ── 崩溃上报（Bugly）──
+    // 内部已 runCatching、未配 App ID 或风味不含 SDK 时静默跳过，不会拖住启动。
+    CrashReporter.init(this)
+    trace("crash reporter init done")
 
     // Emby 封面图的磁盘缓存层（TTL 7 天 / 上限 256MB，设置页可查看占用与清除）
     app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader.init(this)
@@ -205,7 +247,7 @@ class App : Application() {
       runCatching { migrateSubtitleEncoding() }
         .onFailure { trace("subtitle encoding migration failed: ${it.stackTraceToString()}") }
     }
-    trace("App.onCreate done")
+    trace("consented startup done")
   }
 
   /**
