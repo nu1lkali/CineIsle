@@ -57,13 +57,25 @@ import java.util.TimeZone
 
 // --- Data Models ---
 
+/**
+ * 更新检查的目标仓库。
+ *
+ * ⚠️ 必须是**本应用自己的仓库**（与「关于」页 GitHub 按钮、隐私政策里写的地址一致）。
+ * 早前这里指向上游 mpvEx 仓库，结果是「检查更新永远查不到本应用的新版本」——
+ * 功能看着在、实际没有任何用。
+ */
+private const val LATEST_RELEASE_URL =
+    "https://api.github.com/repos/nu1lkali/CineIsle/releases/latest"
+
 @Serializable
 data class Release(
     @SerialName("tag_name") val tagName: String,
-    @SerialName("name") val name: String,
-    @SerialName("body") val body: String,
-    @SerialName("published_at") val publishedAt: String,
-    @SerialName("assets") val assets: List<Asset>
+    // name / body 在 GitHub 上都允许为 null（草稿转正式、只有 tag 没有正文时很常见），
+    // 给默认值是为了让反序列化不至于因为一处空值把整次检查判成失败。
+    @SerialName("name") val name: String = "",
+    @SerialName("body") val body: String = "",
+    @SerialName("published_at") val publishedAt: String = "",
+    @SerialName("assets") val assets: List<Asset> = emptyList()
 )
 
 @Serializable
@@ -88,7 +100,7 @@ class UpdateManager(
             return null
         }
         
-        val release = getLatestRelease("https://api.github.com/repos/marlboro-advance/mpvEx/releases/latest")
+        val release = getLatestRelease(LATEST_RELEASE_URL) ?: return null
         val currentVersion = BuildConfig.VERSION_NAME.replace("-dev", "")
         val remoteVersion = release.tagName.removePrefix("v")
         val prefs = context.getSharedPreferences("mpvEx_prefs", Context.MODE_PRIVATE)
@@ -118,14 +130,27 @@ class UpdateManager(
             .apply()
     }
 
-    private suspend fun getLatestRelease(url: String): Release = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url(url).build()
-        val response = client.newCall(request).execute()
-        if (!response.isSuccessful) throw IOException("Unexpected code $response")
+    /**
+     * 拉取最新 release。
+     *
+     * @return 仓库还没有发布任何 release 时返回 null（404）。这条分支是**常态而不是错误**：
+     *   新仓库在打第一个 tag 之前，`/releases/latest` 一律 404，早前这里会抛
+     *   IOException，用户点「检查更新」看到的是「检查失败」——网络明明没问题。
+     */
+    private suspend fun getLatestRelease(url: String): Release? = withContext(Dispatchers.IO) {
+        val request =
+            Request.Builder()
+                .url(url)
+                .header("Accept", "application/vnd.github+json")
+                .build()
+        client.newCall(request).execute().use { response ->
+            if (response.code == 404) return@withContext null
+            if (!response.isSuccessful) throw IOException("Unexpected code $response")
 
-        val responseBody = response.body.string()
-        if (responseBody.isEmpty()) throw IOException("Empty body")
-        json.decodeFromString<Release>(responseBody)
+            val responseBody = response.body.string()
+            if (responseBody.isEmpty()) throw IOException("Empty body")
+            json.decodeFromString<Release>(responseBody)
+        }
     }
 
     private fun isNewerVersion(remote: String, current: String): Boolean {
@@ -306,6 +331,11 @@ class UpdateViewModel(application: Application) : AndroidViewModel(application) 
 
     fun dismissNoUpdate() {
         _updateState.value = UpdateState.Idle
+    }
+
+    /** 手动检查失败、提示过一次之后复位，避免每次进入关于页都重复弹同一条。 */
+    fun dismissError() {
+        if (_updateState.value is UpdateState.Error) _updateState.value = UpdateState.Idle
     }
 
     fun checkForUpdate(manual: Boolean = false) {

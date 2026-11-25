@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>用户服务协议 · 影屿 CineIsle</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #f6f7f9;
+    --border: #e3e5e9;
+    --text: #1c1d21;
+    --text-soft: #5b5f68;
+    --text-faint: #8a8f99;
+    --accent: #b3261e;
+    --accent-soft: #fdeceb;
+    --link: #0b57d0;
+  }
+  :root[data-theme="dark"] {
+    --bg: #121316;
+    --surface: #1b1d21;
+    --border: #2c2f35;
+    --text: #e8e9ec;
+    --text-soft: #a9adb6;
+    --text-faint: #7d828c;
+    --accent: #ff8a80;
+    --accent-soft: #2a1a19;
+    --link: #8ab4f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      --bg: #121316;
+      --surface: #1b1d21;
+      --border: #2c2f35;
+      --text: #e8e9ec;
+      --text-soft: #a9adb6;
+      --text-faint: #7d828c;
+      --accent: #ff8a80;
+      --accent-soft: #2a1a19;
+      --link: #8ab4f8;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    padding: 0 20px 56px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.75;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+
+  header {
+    padding: 32px 0 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  h1 {
+    margin: 0 0 10px;
+    font-size: 25px;
+    line-height: 1.35;
+    letter-spacing: -0.2px;
+  }
+  .meta {
+    color: var(--text-faint);
+    font-size: 13px;
+    line-height: 1.9;
+  }
+  .meta b { color: var(--text-soft); font-weight: 600; }
+
+  section { margin-top: 30px; }
+  h2 {
+    margin: 0 0 10px;
+    font-size: 17px;
+    line-height: 1.5;
+    padding-left: 11px;
+    border-left: 3px solid var(--accent);
+  }
+  h3 {
+    margin: 18px 0 6px;
+    font-size: 15px;
+    color: var(--text);
+  }
+  p { margin: 9px 0; }
+  ul, ol { margin: 9px 0; padding-left: 22px; }
+  li { margin: 5px 0; }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    word-break: break-all;
+  }
+  a { color: var(--link); text-decoration: none; }
+  a:active { text-decoration: underline; }
+
+  .lead {
+    margin-top: 22px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text-soft);
+    font-size: 14px;
+  }
+  .note {
+    margin: 14px 0;
+    padding: 12px 14px;
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .note strong { color: var(--accent); }
+
+  .kv { margin: 12px 0; }
+  .kv div {
+    display: flex;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .kv div:last-child { border-bottom: none; }
+  .kv .k { flex: 0 0 96px; color: var(--text-faint); font-size: 13.5px; }
+  .kv .v { flex: 1; }
+
+  footer {
+    margin-top: 44px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 13px;
+  }
+  @media (max-width: 360px) {
+    body { padding: 0 14px 44px; font-size: 14.5px; }
+    h1 { font-size: 22px; }
+    .kv .k { flex-basis: 78px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>用户服务协议</h1>
+  <div class="meta">
+    <div><b>适用应用</b>　影屿（CineIsle）</div>
+    <div><b>版本</b>　1.0　·　<b>生效日期</b>　2026 年 11 月 25 日</div>
+    <div><b>最近更新</b>　2026 年 11 月 25 日</div>
+  </div>
+</header>
+
+<div class="lead">
+  本协议是您与影屿（CineIsle）开发者之间关于使用本应用的约定。请在首次启动时完整阅读。您勾选同意并继续使用，即表示已理解并接受本协议全部条款；若不同意，请停止使用并退出应用。
+</div>
+
+<section>
+  <h2>一、协议适用范围</h2>
+  <p>本协议适用于影屿 Android 客户端的下载、安装与使用全过程，包括后续版本更新。本协议与《隐私政策》共同构成完整约定：前者约定使用规则，后者约定信息处理方式。</p>
+  <p>本应用为第三方工具软件，不是 Emby、Jellyfin、Plex 或其他媒体服务器平台的官方客户端，与上述平台不存在隶属、代理、合作或授权关系。</p>
+</section>
+
+<section>
+  <h2>二、应用服务内容</h2>
+  <p>本应用提供以下本地与局域网范围内的工具能力：</p>
+  <ul>
+    <li>连接并浏览您自行提供的 Emby 服务器媒体库，支持多服务器与聚合检索；</li>
+    <li>浏览与播放本机媒体文件、网络位置（SMB / FTP / WebDAV / AList）中的媒体；</li>
+    <li>字幕的本地匹配、在线检索、下载、编码处理与时间轴校准；</li>
+    <li>弹幕检索与渲染、局域网投屏、播放进度与偏好记录；</li>
+    <li>应用内更新检测与安装。</li>
+  </ul>
+  <p>本应用不提供任何媒体内容。所有可播放内容均来自您自行配置的服务器或您本机存储的文件。</p>
+</section>
+
+<section>
+  <h2>三、软件使用规范</h2>
+  <p>您在使用本应用时应遵守法律法规与公序良俗，不得实施下列行为：</p>
+  <ul>
+    <li>利用本应用访问、传播违反法律法规的内容；</li>
+    <li>破解、反编译、修改本应用，或以非官方渠道重新打包分发；</li>
+    <li>移除或遮蔽应用内的版权声明、开源许可声明；</li>
+    <li>利用本应用对第三方服务器实施攻击、扫描、越权访问或其他危害行为；</li>
+    <li>将本应用用于商业性转售、代运营或未经许可的规模化分发。</li>
+  </ul>
+  <p>本应用包含若干开源组件，其使用受各自许可证约束，完整清单可在「关于 → 开源许可」中查看。</p>
+</section>
+
+<section>
+  <h2>四、用户账号及服务器配置责任</h2>
+  <p>本应用没有自有账号体系。您在应用中填写的 Emby 服务器地址、账号与密码，以及网络位置的主机与凭据，均由您自行提供并自行保管。</p>
+  <ul>
+    <li>您应确保对所连接的服务器拥有合法访问权限；</li>
+    <li>凭据保存在本机并加密存储，您应妥善保管设备，避免他人未经许可使用您的账号；</li>
+    <li>因凭据泄露、服务器配置错误或服务器运营方行为导致的损失，由您与相应运营方自行处理；</li>
+    <li>本应用不会代您注册账号，也不会向任何平台申请或购买访问权限。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>五、用户本地媒体内容的合法性责任</h2>
+  <p>您通过本应用播放、下载、上传或投屏的全部媒体内容，其来源合法性与权利状态由您自行负责。</p>
+  <div class="note">
+    <strong>请注意：</strong>本应用仅提供播放与文件管理工具，不提供、不检索、不分发任何影视资源。您因使用未经授权的内容而产生的法律责任，与本应用开发者无关。
+  </div>
+  <p>对于通过「上传到网络位置」功能传输的文件，您应确认拥有相应权利，且目标存储空间的使用符合其服务条款。</p>
+</section>
+
+<section>
+  <h2>六、第三方媒体服务器及外部服务说明</h2>
+  <p>本应用的多数功能依赖您自建或第三方提供的服务，包括但不限于 Emby 服务器、SMB / FTP / WebDAV / AList 存储、字幕检索站点、弹幕服务与局域网投屏设备。</p>
+  <ul>
+    <li>上述服务的可用性、准确性、内容合法性与数据处理行为，由相应运营方负责；</li>
+    <li>本应用按其公开接口发起请求，不控制其返回内容；</li>
+    <li>第三方服务可能变更接口、限制访问或停止服务，本应用不因此承担违约责任；</li>
+    <li>您与第三方服务之间的权利义务，适用该第三方的服务条款。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>七、网络服务及兼容性说明</h2>
+  <p>本应用的在线功能需要网络连接。实际体验受以下因素影响，本应用无法保证在任何环境下均达到预期效果：</p>
+  <ul>
+    <li>服务器带宽、并发限制与转码策略；</li>
+    <li>您所在网络的稳定性、运营商策略与代理设置；</li>
+    <li>设备芯片的解码能力与系统版本；</li>
+    <li>媒体文件的封装格式、编码参数与字幕编码。</li>
+  </ul>
+  <p>应用提供 mpv、GSY、libVLC 三种播放内核，用于在不同设备与文件上取得更好的兼容性。切换内核后表现可能存在差异，属预期行为。</p>
+</section>
+
+<section>
+  <h2>八、知识产权声明</h2>
+  <p>本应用的界面设计、图标、文案与自行开发的代码，其权利归开发者所有。未经许可，不得用于商业用途或二次分发。</p>
+  <p>本应用使用的开源组件（包括 mpv、GSYVideoPlayer、libVLC、Media3、DanmakuFlameMaster 等）权利人为其各自作者，遵循相应开源许可证。本应用不主张对上述组件享有权利。</p>
+  <p>Emby、Jellyfin、Plex 等名称与标识为其各自权利人的商标。本应用仅在描述兼容性时提及，不表示任何授权或背书关系。</p>
+</section>
+
+<section>
+  <h2>九、软件更新与维护</h2>
+  <p>开发者会不定期发布新版本，用于修复缺陷、适配系统变化或增加功能。更新可能通过应用内下载安装，或由您自行从发布渠道获取。</p>
+  <ul>
+    <li>新版本可能调整界面、修改默认设置或移除某些功能；</li>
+    <li>协议版本发生变化时，应用会要求您重新确认；</li>
+    <li>开发者没有义务为旧版本持续提供支持，但会尽量在更新说明中标注不兼容变更。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>十、服务中断及免责声明</h2>
+  <p>本应用按「现状」提供。在法律允许的范围内，开发者不对以下情形承担责任：</p>
+  <ul>
+    <li>因您配置的服务器故障、账号失效或网络中断导致的功能不可用；</li>
+    <li>因设备兼容性、系统限制或第三方组件缺陷导致的播放异常；</li>
+    <li>因您误操作（包括删除数据、清除缓存、卸载应用）造成的记录丢失；</li>
+    <li>因不可抗力、法律法规变化或平台政策调整导致的服务变更。</li>
+  </ul>
+  <p>上述约定不排除或限制依法应由开发者承担的责任，包括因故意或重大过失造成的损害。</p>
+</section>
+
+<section>
+  <h2>十一、用户违规使用的处理方式</h2>
+  <p>若您违反本协议，开发者可采取以下措施：</p>
+  <ul>
+    <li>在更新说明或发布渠道中提示风险并要求停止相关行为；</li>
+    <li>停止向特定分发渠道提供支持或更新；</li>
+    <li>对涉嫌违法的行为，依法向有关机关报告。</li>
+  </ul>
+  <p>由于本应用不含账号体系，开发者无法远程停用您的客户端；相应后果由您自行承担。</p>
+</section>
+
+<section>
+  <h2>十二、协议变更机制</h2>
+  <p>本协议可能因功能调整、法律要求或运营需要而更新。</p>
+  <ul>
+    <li>协议更新后会提升版本号，并在应用启动时重新展示确认界面；</li>
+    <li>若您不同意更新后的协议，可停止使用并卸载应用；</li>
+    <li>本协议与《隐私政策》的版本相互独立，可分别更新；</li>
+    <li>当前版本号与您的同意时间可在「设置 → 法律与隐私」中查看。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>十三、争议解决方式</h2>
+  <p>本协议的订立、履行与解释适用中华人民共和国法律（不含冲突规范）。</p>
+  <p>因本协议产生的争议，双方应先行协商解决；协商不成的，可向有管辖权的人民法院提起诉讼。您也可向消费者权益保护组织或有关监管部门投诉。</p>
+</section>
+
+<section>
+  <h2>十四、联系方式</h2>
+  <div class="kv">
+    <div><span class="k">应用名称</span><span class="v">影屿（CineIsle）</span></div>
+    <div><span class="k">应用包名</span><span class="v"><code>app.cineisle.player</code></span></div>
+    <div><span class="k">联系邮箱</span><span class="v"><a href="mailto:i@pwnhub.net">i@pwnhub.net</a></span></div>
+    <div><span class="k">反馈渠道</span><span class="v"><a href="https://github.com/nu1lkali/CineIsle">github.com/nu1lkali/CineIsle</a></span></div>
+  </div>
+  <p>提交反馈时，请说明应用版本、设备型号与问题现象。请勿在公开渠道发布您的服务器地址、账号或密码。</p>
+</section>
+
+<footer>
+  本协议自 2026 年 11 月 25 日起生效，版本 1.0。
+</footer>
+
+</div>
+</body>
+</html>

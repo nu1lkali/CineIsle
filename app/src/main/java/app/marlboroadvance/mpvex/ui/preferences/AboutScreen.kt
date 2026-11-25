@@ -110,9 +110,18 @@ object AboutScreen : Screen {
 
     // Show toast when no update is available after manual check (only if update feature is enabled)
     LaunchedEffect(updateState) {
-        if (BuildConfig.ENABLE_UPDATE_FEATURE && updateViewModel != null && updateState is UpdateViewModel.UpdateState.NoUpdate) {
-            Toast.makeText(context, "已是最新版本", Toast.LENGTH_SHORT).show()
-            updateViewModel.dismissNoUpdate()
+        if (BuildConfig.ENABLE_UPDATE_FEATURE && updateViewModel != null) {
+            when (updateState) {
+                is UpdateViewModel.UpdateState.NoUpdate -> {
+                    Toast.makeText(context, "已是最新版本", Toast.LENGTH_SHORT).show()
+                    updateViewModel.dismissNoUpdate()
+                }
+                is UpdateViewModel.UpdateState.Error -> {
+                    Toast.makeText(context, "检查更新失败，请检查网络后重试", Toast.LENGTH_SHORT).show()
+                    updateViewModel.dismissError()
+                }
+                else -> Unit
+            }
         }
     }
 
@@ -342,6 +351,77 @@ object AboutScreen : Screen {
                 }
               }
 
+              // 「检查更新」入口。此前更新检查只有一套「自动检查」开关，而那个开关
+              // 默认关、界面上也没有开关项 ⇒ 用户点遍整个应用都触发不到，
+              // 表现就是「根本没有检测更新这功能」。这里补一个显式入口：
+              // 走同一套 UpdateViewModel，检查结果由 Navigator 里的对话框承接。
+              if (BuildConfig.ENABLE_UPDATE_FEATURE && updateViewModel != null) {
+                val checking = updateState is UpdateViewModel.UpdateState.Loading
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                  onClick = { updateViewModel.checkForUpdate(manual = true) },
+                  enabled = !checking,
+                  modifier =
+                    Modifier
+                      .fillMaxWidth()
+                      .height(52.dp),
+                  shape = RoundedCornerShape(16.dp),
+                  colors =
+                    ButtonDefaults.buttonColors(
+                      // 与上面两个主按钮区分层级：同一个底色的第三颗按钮会读成并列选项，
+                      // 而「检查更新」是次要动作。
+                      containerColor = cs.onPrimaryContainer.copy(alpha = 0.12f),
+                      contentColor = cs.onPrimaryContainer,
+                      disabledContainerColor = cs.onPrimaryContainer.copy(alpha = 0.08f),
+                      disabledContentColor = cs.onPrimaryContainer.copy(alpha = 0.55f),
+                    ),
+                ) {
+                  Text(
+                    text = if (checking) "正在检查更新…" else "检查更新",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                  )
+                }
+              }
+
+              Spacer(modifier = Modifier.height(8.dp))
+
+              // 联系开发者：隐私政策与用户协议里承诺的反馈渠道，必须在应用内可点，
+              // 否则「有问题联系这个邮箱」就是一句空话。
+              // 只唤起邮件客户端（ACTION_SENDTO），不申请任何权限；设备上没有邮件
+              // 客户端时 startActivity 会抛 ActivityNotFoundException，静默吞掉。
+              // 邮箱是固定地址（专有名词），与 ACKNOWLEDGMENTS 里的仓库地址同理，不进资源表。
+              Row(
+                modifier =
+                  Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(cs.onPrimaryContainer.copy(alpha = 0.06f))
+                    .clickable {
+                      runCatching {
+                        context.startActivity(
+                          Intent(Intent.ACTION_SENDTO, "mailto:$DEVELOPER_EMAIL".toUri()),
+                        )
+                      }
+                    }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Text(
+                  text = stringResource(id = R.string.i18n_about_contact_developer),
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = cs.onPrimaryContainer.copy(alpha = 0.86f),
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                  text = DEVELOPER_EMAIL,
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = cs.onPrimaryContainer,
+                )
+              }
+
               Spacer(modifier = Modifier.height(20.dp))
 
               Column(
@@ -459,6 +539,14 @@ object LibrariesScreen : Screen {
     }
   }
 }
+
+/**
+ * 开发者联系邮箱。
+ *
+ * 与 `assets/legal/privacy_policy.html`、`user_agreement.html` 里写的必须是同一个地址 ——
+ * 用户读到「可以发邮件反馈」时，应用内得有个真的能点的地方。
+ */
+private const val DEVELOPER_EMAIL = "i@pwnhub.net"
 
 /* ---------------- 致谢 ---------------- */
 
