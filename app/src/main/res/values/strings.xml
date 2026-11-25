@@ -1345,4 +1345,6 @@
   <string name="emby_action_refresh_batch">Shuffle</string>
   <string name="emby_action_more">More</string>
   <string name="emby_search_scope_here">This folder</string>
+  <!-- 「中文字幕」丝带角标。英文用 CHS 而不是 Chinese subs：丝带按固定长度裁，长串会溢出带外 -->
+  <string name="emby_card_chinese_subtitle">CHS</string>
 </resources>

@@ -3244,7 +3244,16 @@ private fun cancelAutoplayCountdown() {
         .onFailure { Log.w(TAG, "online subtitle auto fetch failed: item=$itemId", it) }
         .getOrNull() ?: return
     if (result.message.isNotBlank()) {
-      android.widget.Toast.makeText(this, result.message, android.widget.Toast.LENGTH_SHORT).show()
+      // ⚠️ 必须切主线程：本函数是 suspend，调用方可能在 `Dispatchers.IO` 上（队列连播那条
+      //    路径就是），而 `Toast.makeText` 要求当前线程有 Looper，IO 线程没有 ⇒
+      //    `NullPointerException: Can't toast on a thread that has not called Looper.prepare()`
+      //    直接崩在起播阶段（1.6.82 的线上栈：PlayerActivity.maybeAutoFetchOnlineSubtitle）。
+      //    不能改成 `viewModel.showToast`：它内部同样是裸 Toast，只是假设调用方在主线程。
+      withContext(Dispatchers.Main.immediate) {
+        android.widget.Toast
+          .makeText(this@PlayerActivity, result.message, android.widget.Toast.LENGTH_SHORT)
+          .show()
+      }
     }
   }
 

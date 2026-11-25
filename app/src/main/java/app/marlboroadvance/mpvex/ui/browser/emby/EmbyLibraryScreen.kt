@@ -1284,7 +1284,9 @@ data class EmbyLibraryScreen(
         val matched: List<Pair<EmbyItem, ChineseSubtitleHit?>> = if (chineseSubsOnly) {
           ChineseSubtitleFilter.filter(byGenreTag)
         } else {
-          byGenreTag.map { it to null }
+          // 不筛，只标注：这条扫描路径还会因为「类型 / 标签」筛选而走，
+          // 那时 items 是全量回来的，但卡片照样要能打出中文字幕丝带
+          byGenreTag.map { it to ChineseSubtitleFilter.hitOf(it) }
         }
         val fresh = matched.filter { (item, _) -> item.Id?.let { seen.add(it) } == true }
         withContext(Dispatchers.Main) {
@@ -1501,6 +1503,14 @@ data class EmbyLibraryScreen(
             val seen = items.mapTo(HashSet()) { it.Id ?: it.Name ?: "" }
             items + page.items.filter { seen.add(it.Id ?: it.Name ?: "") }
           }
+          // ── 分类标注（不筛）──
+          // 服务端已经随这一页把 Path / MediaSources 给回来了，这里只是在后台线程
+          // 拿现成字段扫一遍标记，不发请求、不动 items，只往 chineseHits 里记 itemId。
+          // reset 时整批替换（换了库 / 排序 / 筛选就是另一批结果），续页时合并。
+          val pageHits = withContext(Dispatchers.Default) {
+            annotateChineseSubtitles(page.items)
+          }
+          chineseHits = if (reset) pageHits else chineseHits + pageHits
           // 游标按**服务端给了多少**推进，与本地去重结果无关
           if (reset) consumedCount = page.items.size else consumedCount += page.items.size
           totalCount = page.totalCount
@@ -3047,7 +3057,12 @@ data class EmbyLibraryScreen(
               totalCount = snap.totalCount
               // 续页游标一起还原：少了它，返回后继续下滑会把第一页再拉一遍
               consumedCount = snap.consumedCount
-              chineseHits = emptyMap()
+              // 快照只拍了 items、没拍命中表，这里按同一套规则补算一次。
+              // 不补的话，「从详情页退回搜索结果」这一趟丝带会整片消失，
+              // 与「结果原样回放」的预期不符（同一条片子一进一出标记就没了）。
+              chineseHits = withContext(Dispatchers.Default) {
+                annotateChineseSubtitles(snap.items)
+              }
               isLoading = false
               gridState.scrollToItem(snap.scrollIndex, snap.scrollOffset)
               return@LaunchedEffect
@@ -3522,6 +3537,8 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
       server = s,
       viewModel = viewModel,
       cardStyle = cardStyle,
+          // 丝带判据：这一条在拉页时被标成了「中文字幕」
+          chineseHit = item.Id?.let { chineseHits[it] },
           folderCovers = folderCovers,
           folderRandomCover = folderRandomCover,
           folderCoverBatchReady = folderCoverBatchReady,
@@ -3566,6 +3583,8 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                       server = s,
                       viewModel = viewModel,
                       cardStyle = cardStyle,
+                      // 丝带判据：这一条在拉页时被标成了「中文字幕」
+                      chineseHit = item.Id?.let { chineseHits[it] },
                       folderCovers = folderCovers,
                       folderRandomCover = folderRandomCover,
                       folderCoverBatchReady = folderCoverBatchReady,
@@ -4337,6 +4356,13 @@ private fun EmbyLibraryMediaCell(
   server: EmbyServer,
   viewModel: EmbyViewModel,
   cardStyle: EmbyCardStyle,
+  /**
+   * 这一条命中的「中文字幕」标记；null = 未命中（左上角不打丝带）。
+   *
+   * 数据来自 [annotateChineseSubtitles] 在拉页时算出的 `chineseHits`，
+   * 与「只显示中文字幕」筛选共用同一份 —— 两处判定不会出现不一致。
+   */
+  chineseHit: ChineseSubtitleHit?,
   folderCovers: MutableMap<String, List<String>>,
   /** 文件夹宫格封面是否随机合成：影响取图顺序，也参与缓存键 */
   folderRandomCover: Boolean,
@@ -4404,6 +4430,9 @@ private fun EmbyLibraryMediaCell(
     null
   }
 
+  // 文件夹类型图标：与宫格封面 / 「点进去还是播放」共用 isFolderLike 这一个判定，
+  // 避免卡片与批量逻辑各写一份、改一处漏一处（见 needsFolderMosaic 的 KDoc）。
+  val folderLike = isFolderLike(item)
   EmbyMediaCard(
     title = viewModel.displayTitle(item),
     subtitle = itemSubtitle(item),
@@ -4422,9 +4451,11 @@ private fun EmbyLibraryMediaCell(
     onLongClick = onLongClick,
     onToggleFavorite = onToggleFavorite,
     titleMaxLines = titleMaxLines,
-    // 文件夹类型图标：与宫格封面 / 「点进去还是播放」共用 isFolderLike 这一个判定，
-    // 避免卡片与批量逻辑各写一份、改一处漏一处（见 needsFolderMosaic 的 KDoc）。
-    isFolder = isFolderLike(item),
+    isFolder = folderLike,
+    // 左上角「中文字幕」丝带：判定结果由数据层传进来，卡片只负责画。
+    // ⚠️ 容器（文件夹 / 合集）不打：一个目录里可能中字与非中字混装，
+    //    在目录卡上标「中文字幕」是误导 —— 这一层的结论要等点进去才成立。
+    chineseSubtitle = chineseHit != null && !folderLike,
     modifier = modifier,
   )
 }
@@ -6217,6 +6248,28 @@ private fun mediaTypesFor(collectionType: String?, includeItemTypes: List<String
   }
 }
 
+/**
+ * 给一批条目补「中文字幕」命中标记 —— **只标注，不筛除**。
+ *
+ * 为什么放在数据层而不是卡片里：
+ * 1. 判定要看 `Path` / `MediaSources[].Path`，这两个字段本来就在 [EmbyItemFields.CORE]
+ *    里随 /Items 一起返回，所以这一步是**零额外请求**的纯本地计算；
+ * 2. 一次回来是一整页（100 条），在后台线程整页扫一遍，比让每个卡片自己去扫便宜；
+ * 3. 结果按 itemId 落进 `chineseHits`，与「中文字幕」筛选、进程内缓存共用同一份 ——
+ *    用户打开筛选时不用再算第二遍，卡片丝带和筛选命中也永远一致。
+ *
+ * ⚠️ 调用方必须在 IO / Default 线程上调用（正则扫描是纯 CPU 活）。
+ * 返回值只包含命中的条目；未命中的不占 key，渲染侧用 `chineseHits[item.Id]` 取即可。
+ */
+private fun annotateChineseSubtitles(items: List<EmbyItem>): Map<String, ChineseSubtitleHit> {
+  val out = HashMap<String, ChineseSubtitleHit>(items.size / 4 + 1)
+  for (item in items) {
+    val id = item.Id ?: continue
+    ChineseSubtitleFilter.hitOf(item)?.let { out[id] = it }
+  }
+  return out
+}
+
 private fun itemSubtitle(item: EmbyItem): String? {
   val year = item.ProductionYear
   val count = item.ChildCount
@@ -6267,7 +6320,12 @@ internal object EmbyLibraryCache {
     var totalCount: Int = 0
     var scrollIndex: Int = 0
     var scrollOffset: Int = 0
-    /** itemId → 「中文字幕」命中标记（客户端筛选时才有） */
+    /**
+     * itemId → 「中文字幕」命中标记。
+     *
+     * 拉页时对**每一页**都算（不只是开筛选的时候）—— 卡片左上角的丝带靠它，
+     * 缓存里一起存下来，从详情页返回时不用重算。
+     */
     var hits: Map<String, ChineseSubtitleHit> = emptyMap()
     /** 全量扫描已扫过的条目数（普通分页时不用） */
     var scannedCount: Int = 0

@@ -5,6 +5,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -48,12 +50,17 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import app.marlboroadvance.mpvex.R
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.LaunchedEffect
@@ -393,6 +400,20 @@ fun EmbyMediaCard(
    * 保持默认 1 行不变。
    */
   titleMaxLines: Int = 1,
+  /**
+   * 是否在封面**左上角**打一条「中文字幕」斜丝带。
+   *
+   * 判定由调用方给出（媒体库用 `ChineseSubtitleFilter.hitOf(item)`，按资源路径上的
+   * 标记命中，见 domain/emby/ChineseSubtitleFilter.kt），卡片自己不看路径 ——
+   * 卡片拿不到 Path / MediaSources 的稳定生命周期，也不该承担一次正则扫描。
+   *
+   * 与 [badgeText] 的分工：badgeText 是「这一条的状态数字」（作品数 / 剩余时长，
+   * 可被「显示封面角标」开关关掉）；丝带是**分类标识** —— 关掉状态角标之后，
+   * 「这条有没有中字」仍然要看得出来，所以它不跟那个开关联动。
+   *
+   * 多选态（[selected]）下不画：左上角那个位置由对勾占着，两个都画会互相压。
+   */
+  chineseSubtitle: Boolean = false,
 ) {
   Column(modifier = if (fillWidth) modifier.fillMaxWidth() else modifier.width(style.width)) {
     Card(
@@ -417,6 +438,12 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
             contentScale = ContentScale.Crop,
             placeholder = placeholder,
           )
+        }
+
+        // 中文字幕丝带：**先画**，于是后面声明的收藏心形 / 多选对勾都压在它上面。
+        // 位置是固定的左上角，与右上角心形天然不打架；左下角是文件夹图标 + 状态角标。
+        if (chineseSubtitle && !selected) {
+          ChineseSubtitleRibbon()
         }
 
         if (onToggleFavorite != null) {
@@ -583,6 +610,68 @@ Modifier.tapAndLongPress(onClick = onClick, onLongClick = onLongClick)
           overflow = TextOverflow.Ellipsis,
         )
       }
+    }
+  }
+}
+
+/**
+ * 封面左上角的「中文字幕」斜丝带。
+ *
+ * ## 为什么是斜丝带
+ *
+ * 四个角的占用情况已经固定：右上角是收藏心形、左下角是文件夹图标 + 状态角标、
+ * 底部整条是播放进度条。正方形/圆角矩形的普通角标塞进左上角会和「多选对勾」抢位置，
+ * 也容易被误读成又一个状态图标。斜丝带横跨整个角，形状本身就与这些方块角标区分开，
+ * 不需要额外说明。
+ *
+ * ## 几何（改尺寸前先读）
+ *
+ * 丝带沿 -45°（左下 → 右上）铺开，中心线到卡片左上角的**垂直距离** = `distance`。
+ *
+ * 两端必须**越过**卡片的上边与左边，否则端头会留在封面中间，看着像一根断掉的木条。
+ * 沿丝带走 `L/2` 时，垂直方向前进 `L/2 × cos45°`，要盖过边界就得：
+ * `L/2 × 0.707 ≥ distance` ⇒ `L ≥ 2√2 × distance ≈ 2.83 × distance`。
+ * 这里再留 10dp 余量，所以 `length = distance × 2.83 + 10dp`。
+ *
+ * ## 只缩放「离角的距离」，文字与带宽固定
+ *
+ * 三种卡片样式（3:4 海报 / 16:9 背景图 / 2.9 横幅）短边从 76dp 到 400dp 不等。
+ * 只让 `distance` 随短边换算（夹在 20~34dp）：
+ *  - 带宽固定 16dp —— 它要装一行 10sp，缩到 12dp 就开始裁字；
+ *  - 字号固定 10sp —— 再缩读数困难，再放大会让平板上的丝带粗得盖住封面主体。
+ *
+ * 这样最矮的横幅（短边 ~76dp）上，丝带也只占角落约 40dp，不会横穿整张卡。
+ */
+@Composable
+private fun ChineseSubtitleRibbon() {
+  BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    val driven = minOf(maxWidth, maxHeight)
+    val distance = (driven * 0.22f).coerceIn(20.dp, 34.dp)
+    // 2.83 ≈ 2√2：见上面的「几何」段，少这一点端头会留在封面里
+    val length = distance * 2.83f + 10.dp
+    Box(
+      modifier = Modifier
+        // 先按中心点算偏移（中心落在左上角对角线上 distance 处），再绕自身中心转 -45°
+        .offset(
+          x = distance * RIBBON_COS_45 - length / 2,
+          y = distance * RIBBON_COS_45 - RIBBON_THICKNESS / 2,
+        )
+        .rotate(-45f)
+        .size(width = length, height = RIBBON_THICKNESS)
+        .background(CHINESE_RIBBON_BG),
+      contentAlignment = Alignment.Center,
+    ) {
+      Text(
+        text = stringResource(R.string.emby_card_chinese_subtitle),
+        style = MaterialTheme.typography.labelSmall,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 1.sp,
+        color = Color.White,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Visible,
+      )
     }
   }
 }
@@ -899,6 +988,31 @@ private val LIBRARY_CARD_HEIGHT = 90.dp
  * 半透明是为了让底下的封面还能透出一点点，不至于像贴了张死色纸。
  */
 internal val MEDIA_BADGE_BG = Color(0xFF262229).copy(alpha = 0.85f)
+
+/**
+ * 「中文字幕」丝带的底色。
+ *
+ * 用红而不是主题色：主题色随动态取色会变成紫 / 青 / 绿，和「黄色 = 继续播放」
+ * 「绿色 = 已看」这类既有语义混在一起。红在暖色与冷色封面上都够跳，
+ * 且与白字的对比度约 5:1（AA 正文标准），小字也读得清。
+ */
+private val CHINESE_RIBBON_BG = Color(0xFFD32F2F)
+
+/**
+ * 丝带带宽。
+ *
+ * 固定 16dp 而不是跟着卡片缩放：它要完整装下一行 10sp 的字（约 13dp 行高），
+ * 再窄就会裁掉上下半个字 —— 而「中文字幕」这四个字是这条丝带唯一的表意部分。
+ */
+private val RIBBON_THICKNESS = 16.dp
+
+/**
+ * cos 45°。
+ *
+ * 丝带中心落在「左上角 → 右下」的对角线上，所以到两边的分量都是 `distance × 0.7071`；
+ * 写成常量是为了让「长度 ≥ 2√2 × distance」这条几何关系在代码里一眼对得上。
+ */
+private const val RIBBON_COS_45 = 0.70710678f
 
 /**
  * 「蓝色文件夹图标」用的蓝。
