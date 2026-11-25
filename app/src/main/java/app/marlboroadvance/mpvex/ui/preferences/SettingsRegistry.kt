@@ -12,6 +12,7 @@ import androidx.compose.material.icons.outlined.Gesture
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.PlayCircle
@@ -92,6 +93,23 @@ internal object SettingsRegistry {
       icon = Icons.AutoMirrored.Outlined.ViewQuilt,
       screen = PlayerControlsPreferencesScreen,
       keywords = listOf("layout", "controls", "buttons"),
+    )
+
+  /**
+   * 视界流（竖屏连播）工具栏的位置与透明度。
+   *
+   * 与 [layout]（横屏主播放器控件布局）分开：视界流是另一套播放页
+   * （`FeedScreen`），控件锚点和透明度都独立，不共用主播放器的布局配置。
+   */
+  val feedToolbar =
+    SettingsDestination(
+      id = "feed_toolbar",
+      section = "播放与控件",
+      titleText = "视界流工具栏",
+      summaryText = "按钮位置 · 控件透明度",
+      icon = Icons.Outlined.Movie,
+      screen = FeedToolbarPreferencesScreen,
+      keywords = listOf("视界流", "feed", "工具栏", "toolbar", "左下角", "透明度", "alpha"),
     )
 
   val gesture =
@@ -277,6 +295,7 @@ internal object SettingsRegistry {
       appearance,
       player,
       layout,
+      feedToolbar,
       gesture,
       gsy,
       playerEngine,

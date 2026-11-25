@@ -104,6 +104,8 @@ internal fun FeedScreen(
   vm: FeedViewModel,
   controller: FeedPlayerController,
   gestureUi: FeedGestureUi,
+  toolbarBottomLeft: Boolean = false,
+  toolbarAlphaPercent: Int = 100,
 ) {
   val item = vm.current
   val controlsAlpha by animateFloatAsState(
@@ -111,6 +113,9 @@ internal fun FeedScreen(
     animationSpec = tween(220),
     label = "controls",
   )
+  // 工具栏透明度 = 控制条显隐系数 × 用户常驻档位。两层独立：控制条淡出时整列照样消失，
+  // 常驻时按设置调淡（30%~100%），减少对画面的遮挡。
+  val toolbarAlpha = controlsAlpha * (toolbarAlphaPercent.coerceIn(30, 100) / 100f)
   // 长按「不喜欢」弹备注。放在这里而不是按钮内部，是因为弹层要用满屏宽度 ——
   // 右侧那一列只有 48dp 宽，塞不下输入框。
   var showDislikeRemark by remember { mutableStateOf(false) }
@@ -163,15 +168,13 @@ internal fun FeedScreen(
       }
     }
 
-    // ── 右侧工具栏：收藏 / 截图 / 翻转 / 重载 ──
-    Column(
-      modifier = Modifier
-        .align(Alignment.CenterEnd)
-        .padding(end = 8.dp)
-        .alpha(controlsAlpha),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
+    // ── 侧边工具栏：收藏 / 不喜欢 / 截图 / 翻转 / 重载 ──
+    // 形态与锚点由设置决定：
+    // · 默认（toolbarBottomLeft = false）右侧中部**竖排** —— 改造前的行为；
+    // · 打开后左下角**横排** —— 更靠近拇指，且不挡画面右侧。
+    // 两种形态只是容器不同，按钮顺序 / 尺寸 / 点击语义完全一致（共用 toolbarButtons）。
+    // 左下横排时底部留 72dp：让开底部的进度条 + 系统手势条，别压在时间显示上。
+    val toolbarButtons: @Composable () -> Unit = {
       // 收藏：动效与 Emby 详情页是同一个组件（弹跳 → 红心径向渐变 + 外发光 →
       // 一圈红色光环 + 8 颗金色四角星扩散淡出）。它是**状态驱动**的，所以
       // toggleFavorite 的乐观更新一翻转，动效立刻开始，不用等服务器回包。
@@ -221,6 +224,27 @@ internal fun FeedScreen(
         icon = { Icon(Icons.Filled.Refresh, contentDescription = "重载", tint = Color.White, modifier = Modifier.size(26.dp)) },
         onClick = { vm.requestReload() },
       )
+    }
+    if (toolbarBottomLeft) {
+      Row(
+        modifier = Modifier
+          .align(Alignment.BottomStart)
+          .padding(start = 8.dp)
+          .navigationBarsPadding()
+          .padding(bottom = 72.dp)
+          .alpha(toolbarAlpha),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) { toolbarButtons() }
+    } else {
+      Column(
+        modifier = Modifier
+          .align(Alignment.CenterEnd)
+          .padding(end = 8.dp)
+          .alpha(toolbarAlpha),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) { toolbarButtons() }
     }
 
     // ── 底部：进度条 + 标题 ──

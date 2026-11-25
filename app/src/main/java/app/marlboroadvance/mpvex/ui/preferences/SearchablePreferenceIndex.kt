@@ -42,6 +42,25 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
         screen = PreferencesScreen,
     ))
     add(SearchablePreference(
+        title = "视界流工具栏",
+        summary = "按钮位置 · 控件透明度",
+        screenKeywords = listOf("视界流", "feed", "工具栏", "toolbar", "左下角", "透明度", "alpha"),
+        category = "播放与控件",
+        screen = FeedToolbarPreferencesScreen,
+    ))
+    add(SearchablePreference(
+        title = "左下角横排",
+        summary = "关闭时位于右侧竖排",
+        category = "播放与控件",
+        screen = FeedToolbarPreferencesScreen,
+    ))
+    add(SearchablePreference(
+        title = "控件透明度",
+        summary = "30%~100%，数值越低越透明",
+        category = "播放与控件",
+        screen = FeedToolbarPreferencesScreen,
+    ))
+    add(SearchablePreference(
         titleRes = R.string.pref_gesture,
         summaryRes = R.string.pref_gesture_summary,
         category = "播放与控件",
@@ -1032,6 +1051,13 @@ internal val generatedSearchablePreferences: List<SearchablePreference> = buildL
         titleRes = R.string.pref_subtitles_save_dir,
         summaryRes = R.string.pref_subtitles_save_dir_summary,
         screenKeywords = listOf("字幕", "subtitle", "目录", "folder", "保存", "恢复", "备份"),
+        category = "general",
+        screen = SubtitlesPreferencesScreen,
+    ))
+    add(SearchablePreference(
+        title = "中文字幕版本跳过网络字幕",
+        summary = "只影响自动下载，手动搜索不受限",
+        screenKeywords = listOf("中文字幕", "中字", "网络字幕", "跳过", "自动下载", "chinese", "subtitle"),
         category = "general",
         screen = SubtitlesPreferencesScreen,
     ))

@@ -307,18 +307,23 @@ fun PlayerSheets(
           }
         },
         onPickLocalSubtitle = { candidate ->
-          // 记住这次的选择：下次打开面板时它排第一（用户自己验证过的那条，比任何猜测都准）
-          app.marlboroadvance.mpvex.ui.player.subtitle.SubtitlePickMemory.remember(
-            app.marlboroadvance.mpvex.ui.player.subtitle.SubtitlePickMemory.keyOf(localQuery),
-            candidate.uri,
-          )
-          // 同一条关系也落进持久账本：进程被杀重进时自动挂回去。
-          // 这里直接调 bindManualSubtitle + loadSubtitle 而不是 addManualSubtitle ——
-          // 候选的 Uri 已经是 mpv 可直接用的形式，不需要走 onAddSubtitle 的即发即忘版本。
-          val picked = Uri.parse(candidate.uri)
-          bindManualSubtitle(picked)
-          subtitleScope.launch {
-            viewModel.loadSubtitle(picked, select = true, silent = false)
+          run {
+            // 防御：清单在手扫与点击之间变化时，这条候选可能已被登记为网络字幕副本 ——
+            // 再挂一次就是同一份内容重复挂载。正常流程已在扫描阶段过滤，这里是兜底 no-op。
+            if (candidate.relativePath in localScan.onlineCopyPaths) return@run
+            // 记住这次的选择：下次打开面板时它排第一（用户自己验证过的那条，比任何猜测都准）
+            app.marlboroadvance.mpvex.ui.player.subtitle.SubtitlePickMemory.remember(
+              app.marlboroadvance.mpvex.ui.player.subtitle.SubtitlePickMemory.keyOf(localQuery),
+              candidate.uri,
+            )
+            // 同一条关系也落进持久账本：进程被杀重进时自动挂回去。
+            // 这里直接调 bindManualSubtitle + loadSubtitle 而不是 addManualSubtitle ——
+            // 候选的 Uri 已经是 mpv 可直接用的形式，不需要走 onAddSubtitle 的即发即忘版本。
+            val picked = Uri.parse(candidate.uri)
+            bindManualSubtitle(picked)
+            subtitleScope.launch {
+              viewModel.loadSubtitle(picked, select = true, silent = false)
+            }
           }
         },
         // ── Emby 服务端已识别的字幕 ──

@@ -144,6 +144,19 @@ class SubtitlesPreferences(
    */
   val onlineAutoFetch = preferenceStore.getBoolean("sub_online_auto_fetch", false)
 
+  /**
+   * 「中文字幕版本」跳过网络字幕自动下载与挂载。
+   *
+   * 中文字幕版本（文件名 / 路径带中字标记，见 `ChineseSubtitleMarks`）本身就带中文字幕，
+   * 再挂一条网络字幕会画面叠两层字。开启后，自动兜底前按路径判一次，命中就跳过下载。
+   *
+   * 默认**开启**：这是避免重复挂载的修复，符合大多数用户的预期；
+   * 关掉则恢复「一律走网络兜底」的旧行为（例如内嵌中字质量差、想用网络字幕替代时）。
+   * 只影响**自动**下载，用户在字幕面板手动搜索不受此开关约束。
+   */
+  val skipOnlineFetchForChineseVersion =
+    preferenceStore.getBoolean("sub_skip_online_for_chinese_version", true)
+
   /** 自动检索的匹配度阈值（0–100）。低于该分数不下载、不挂载 */
   val onlineAutoFetchThreshold = preferenceStore.getInt("sub_online_auto_threshold", 85)
 

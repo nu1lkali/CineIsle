@@ -304,6 +304,33 @@ object SubtitlesPreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              // 中字版本跳过网络字幕：避免内嵌已有中字又叠一条网络字幕。
+              // 放在「网络字幕兜底」正下方，两者是同一条下载链路的前后闸门。
+              val skipForChinese by preferences.skipOnlineFetchForChineseVersion.collectAsState()
+              SwitchPreference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.ClosedCaption,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                value = skipForChinese,
+                onValueChange = { preferences.skipOnlineFetchForChineseVersion.set(it) },
+                modifier = Modifier.settingsAnchor("中文字幕版本跳过网络字幕"),
+                title = {
+                  Text("中文字幕版本跳过网络字幕", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                },
+                summary = {
+                  Text(
+                    "只影响自动下载，手动搜索不受限",
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
               val embyFollowDefault by preferences.embyFollowDefault.collectAsState()
               SwitchPreference(
                 icon = {

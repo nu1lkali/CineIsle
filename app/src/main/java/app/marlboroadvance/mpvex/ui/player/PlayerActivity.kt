@@ -62,6 +62,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import app.marlboroadvance.mpvex.database.entities.PlaybackStateEntity
 import app.marlboroadvance.mpvex.databinding.PlayerLayoutBinding
+import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleFilter
+import app.marlboroadvance.mpvex.domain.emby.ChineseSubtitleMarks
 import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.StreamProbe
@@ -3256,6 +3258,10 @@ private fun cancelAutoplayCountdown() {
     if (!subtitlesPreferences.onlineAutoFetch.get()) return
     // 画面上已经有字幕就不再兜底（服务端自动挂上 / 用户本集开过）
     if ((PlayerLib.getPropertyInt("sid") ?: -1) > 0) return
+    // 中文字幕版本（文件名 / 路径带中字标记）本身就带字，别再去网络下载重复挂载。
+    // 受「跳过中字版本网络字幕」开关控制；取 item 失败 / 无 Path 一律按「不是中字版」
+    // 放行，不让网络抖动改变原有行为。
+    if (isChineseSubtitleVersion(server, itemId, mediaSourceId)) return
     val result =
       runCatching { viewModel.autoFetchOnlineSubtitle(server, itemId, mediaSourceId) }
         .onFailure { Log.w(TAG, "online subtitle auto fetch failed: item=$itemId", it) }
@@ -3272,6 +3278,51 @@ private fun cancelAutoplayCountdown() {
           .show()
       }
     }
+  }
+
+  /**
+   * 当前播放项是不是「中文字幕版本」—— 用于网络字幕自动兜底前的一道闸。
+   *
+   * ## 为什么要加这道闸
+   *
+   * 媒体库页已经按 [ChineseSubtitleFilter] 给中字版本挂了丝带，那个判定只影响展示；
+   * 但自动下载字幕走的是另一条链路，不看这个标记 —— 于是「文件名带 -C / 中字」的
+   * 片子本身就带中文字幕，起播却还会去网络搜一条挂上来，画面叠两层字。
+   * 这里复用**同一套**判定口径（同一配置、同一过滤器），命中就跳过自动兜底。
+   *
+   * ## 为什么只按当前播放版本的 Path 判
+   *
+   * 多版本条目（同一部片 1080p / 4K 两条源）的中字标记可能只写在其中一条上。
+   * 只判 [mediaSourceId] 对应的那条源，避免「另一条源带中字、当前这条不带」时误跳过。
+   * 定位不到那条源时退回顶层 Path（与媒体库口径一致）。
+   *
+   * ## 失败一律放行
+   *
+   * 取 item / 取路径失败、偏好为空、网络抖动 —— 全部返回 false（按「不是中字版」
+   * 继续走原有兜底）。自动下载是可用性的锦上添花，不能因为这道探测把原功能弄丢。
+   */
+  private suspend fun isChineseSubtitleVersion(
+    server: EmbyServer,
+    itemId: String,
+    mediaSourceId: String?,
+  ): Boolean {
+    // 开关关闭 ⇒ 不做这道判定，恢复「一律走网络兜底」的旧行为。
+    if (!subtitlesPreferences.skipOnlineFetchForChineseVersion.get()) return false
+    val marksRaw = browserPreferences.embyChineseSubtitleMarks.get()
+    ChineseSubtitleFilter.configure(ChineseSubtitleMarks.fromJson(marksRaw))
+    val item = runCatching { embyRepository.getItem(server, itemId) }.getOrNull() ?: return false
+    val currentPath =
+      if (!mediaSourceId.isNullOrBlank()) {
+        item.MediaSources?.firstOrNull { it.Id == mediaSourceId }?.Path
+          ?: item.Path
+      } else {
+        item.Path
+      }
+    val hit = ChineseSubtitleFilter.hitOfPath(currentPath)
+    if (hit != null) {
+      Log.i(TAG, "skip online subtitle auto fetch: Chinese subtitle version item=$itemId marker=${hit.marker}")
+    }
+    return hit != null
   }
 
   /**

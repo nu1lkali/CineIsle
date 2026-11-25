@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import app.marlboroadvance.mpvex.domain.subtitle.online.SaveNode
+import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveManifest
 import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore
 import app.marlboroadvance.mpvex.ui.player.subtitle.smart.ConfidenceLevel
 import app.marlboroadvance.mpvex.ui.player.subtitle.smart.MatchLogger
@@ -59,6 +60,12 @@ data class LocalSubtitleScan(
   val attempted: Boolean = false,
   val hits: List<LocalSubtitleCandidate> = emptyList(),
   val queryCodeText: String? = null,
+  /**
+   * 扫描当刻清单登记的网络字幕副本路径。hits 已按它过滤过；UI 在点选本地候选时
+   * 再拿它做一次防御性 no-op，避免清单在手扫与点击之间变化时重复挂载同一份内容。
+   * 只读快照，不触发额外 IO。
+   */
+  val onlineCopyPaths: Set<String> = emptySet(),
 )
 
 /**
@@ -124,6 +131,11 @@ object LocalSubtitleScanner {
           return@withContext LocalSubtitleScan()
         }
 
+        // 网络字幕在用户目录里的副本不能当独立本地字幕列出：否则面板会拿它重复询问、
+        // 用户一点就把同一份内容以第二个 Uri 再挂一次。清单是副本身份的权威依据；
+        // 读不到清单时返回空集，退化为现状，绝不误伤用户自己的字幕。
+        val onlineCopies = SubtitleSaveManifest.onlineCopyPaths(root)
+
         val found = mutableListOf<Entry>()
         val queue = ArrayDeque<DirNode>()
         queue.addLast(DirNode(root, 0, ""))
@@ -159,21 +171,31 @@ object LocalSubtitleScanner {
 
             if (!isSubtitleFile(name)) continue
             files++
+            val relativePath = node.prefix + name
+            // 清单登记的网络字幕副本：跳过，不进候选（询问/重复挂载从源头杜绝）
+            if (relativePath in onlineCopies) {
+              Log.d(TAG, "skip online-subtitle mirror in local scan: $relativePath")
+              continue
+            }
             found +=
               Entry(
                 name = name,
-                relativePath = node.prefix + name,
+                relativePath = relativePath,
                 uri = child.uri.toString(),
                 sizeBytes = child.size,
               )
           }
         }
 
-        if (found.isEmpty()) return@withContext LocalSubtitleScan(attempted = true)
+        if (found.isEmpty()) {
+          return@withContext LocalSubtitleScan(attempted = true, onlineCopyPaths = onlineCopies)
+        }
 
         val results = SmartSubtitleMatcher.match(query, found.map { it.relativePath })
         Log.d(TAG, MatchLogger.describe(query.label.orEmpty(), query.facts, results, MATCH_CONFIG))
-        if (results.isEmpty()) return@withContext LocalSubtitleScan(attempted = true)
+        if (results.isEmpty()) {
+          return@withContext LocalSubtitleScan(attempted = true, onlineCopyPaths = onlineCopies)
+        }
 
         val byPath = found.associateBy { it.relativePath }
         val preferred = SubtitlePickMemory.recall(SubtitlePickMemory.keyOf(query))
@@ -195,6 +217,7 @@ object LocalSubtitleScanner {
           attempted = true,
           hits = verifyTiming(context, candidates, durationMs),
           queryCodeText = query.facts.identifiers.firstOrNull()?.raw,
+          onlineCopyPaths = onlineCopies,
         )
       } catch (t: Throwable) {
         Log.w(TAG, "scan failed: ${t.message}")

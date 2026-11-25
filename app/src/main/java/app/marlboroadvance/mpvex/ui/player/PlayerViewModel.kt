@@ -33,6 +33,7 @@ import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleAutoFetch
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleTarget
+import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveManifest
 import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore
 import app.marlboroadvance.mpvex.ui.player.subtitle.ExternalSubtitleArchive
 import app.marlboroadvance.mpvex.ui.player.subtitle.SubtitleBindings
@@ -1043,11 +1044,17 @@ class PlayerViewModel(
         val parentDir =
           SubtitleSaveStore.open(host.context, saveDirPath, legacyTreeUri) ?: return@launch
 
+        // 网络字幕在用户目录的副本由权威副本那条轨道代表，不能再作为独立外挂加一次。
+        // 清单是副本身份的权威依据；读不到时为空集，退化为现状。
+        val onlineCopies = SubtitleSaveManifest.onlineCopyPaths(parentDir)
+
         // Scan potential folder names for compatibility: checksum, full, and sanitized
         listOf(checksumTitle, fullTitle, sanitizedTitle).distinct().forEach { folderName ->
           val movieDir = parentDir.child(folderName)?.takeIf { it.isDirectory } ?: return@forEach
           movieDir.children().forEach { file ->
             if (file.isFile && isValidSubtitleFile(file.name)) {
+              // relativePath 口径与清单一致：dirName/fileName
+              if ("$folderName/${file.name}" in onlineCopies) return@forEach
               withContext(Dispatchers.Main) {
                 // Don't auto-select during scan, just make available
                 addSubtitle(file.uri, select = false, silent = true)

@@ -10,6 +10,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.subtitle.SubtitleCue
 import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTimeline
 import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
+import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleCleanup
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleDownloader
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
 import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveImport
@@ -634,7 +635,14 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
 
   fun delete(record: DownloadedSubtitle) {
     viewModelScope.launch {
-      withContext(Dispatchers.IO) { library.delete(record.id) }
+      // 统一编排：权威副本 + 用户目录副本 + 清单行一起清（SAF 删除失败只聚合进结果）
+      val result =
+        OnlineSubtitleCleanup.delete(
+          context = getApplication(),
+          library = library,
+          preferences = preferences,
+          record = record,
+        )
       // 绑定若仍指向这个文件，「开播自动挂」就会挂到不存在的路径上，顺手解掉
       if (record.mediaTitle.isNotBlank()) {
         runCatching { SubtitleBindings.unbind(preferences, record.mediaTitle) }
@@ -649,7 +657,16 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
         )
       }
       refreshLibrary()
-      _state.update { it.copy(message = "已删除：${record.title}") }
+      _state.update {
+        it.copy(
+          message =
+            if (result.mirrorFailed) {
+              "已删除字幕，但字幕目录里的副本清理失败，请手动删除"
+            } else {
+              "已删除：${record.title}"
+            },
+        )
+      }
     }
   }
 

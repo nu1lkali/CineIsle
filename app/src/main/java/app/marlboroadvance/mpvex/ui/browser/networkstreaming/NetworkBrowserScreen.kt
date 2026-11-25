@@ -101,6 +101,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -931,7 +932,19 @@ data class NetworkBrowserScreen(
                 } else {
                   DpOffset.Zero
                 }
-              IconButton(onClick = { showOverflowMenu = true }) {
+              // ⚠️ 点「更多」前必须先收起键盘：搜索态下搜索框自动聚焦、软键盘弹起，
+              // 而本 Activity 未设 adjustResize（全项目都没设），键盘浮在窗口之上、
+              // 不压缩窗口高度。DropdownMenu 是独立 Popup 窗口，按整屏高度定位并从顶栏
+              // 向下展开，下半截正好落在键盘底下 —— 表现就是「菜单只显示上半部分」。
+              // clearFocus 让键盘落下、窗口恢复，菜单即可完整显示；搜索框清焦点不会退出
+              // 搜索态（没有失焦退出逻辑），关掉菜单后点一下输入框即可继续打字。
+              val focusManager = LocalFocusManager.current
+              IconButton(
+                onClick = {
+                  focusManager.clearFocus()
+                  showOverflowMenu = true
+                },
+              ) {
                 Icon(
                   imageVector = Icons.Default.MoreVert,
                   contentDescription = "更多操作",

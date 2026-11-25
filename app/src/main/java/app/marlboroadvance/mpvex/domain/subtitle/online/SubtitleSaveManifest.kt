@@ -21,11 +21,16 @@ package app.marlboroadvance.mpvex.domain.subtitle.online
  * 两侧要同步删，容易留残。单文件清单只在下载时追加/覆盖一行，代价是每次多一次
  * 「读小文件 + 写小文件」—— 下载本身是网络请求，这点 IO 可以忽略。
  *
- * ## 陈旧行不是问题
+ * ## 一份清单，两个职责
  *
- * 用户删掉某条字幕时这里不会跟着删（删除路径分散在本地库与实验室两处，逐个改容易漏）。
- * 清单行指向的文件不存在时，恢复流程直接跳过 —— 宁可有冗余行，也不要有「删了索引还在」
- * 这类半更新状态。
+ * 1. **重装恢复**：按 `serverKey + itemId + originId` 精确还原索引（最初的唯一用途）；
+ * 2. **副本身份**：清单里的 `dirName/fileName` 是「用户目录里哪份字幕是网络字幕生成的副本」
+ *    的权威名单。面板扫描与起播扫描都用它把副本挡在候选之外，避免同一份内容被当成
+ *    真本地字幕重复询问 / 重复挂载（见 [onlineCopyPaths]）。
+ *
+ * 删除网络字幕时，[remove] 会同步移除清单行 —— 行没了，副本就不再被识别为网络副本，
+ * 但文件本体是否删掉由 `OnlineSubtitleCleanup` 负责（失败也不回滚清单，避免恢复流程
+ * 把已删记录当成可恢复项）。清单行指向的文件已不存在时，恢复流程照常跳过。
  *
  * ⚠️ 文件用 `.tsv` 扩展名：播放侧只认字幕扩展名（srt / ass / vtt …），这份清单不会被
  * 误当成字幕候选扫进来。
@@ -90,6 +95,47 @@ object SubtitleSaveManifest {
   fun replace(root: SaveNode?, entries: List<Entry>): Boolean {
     if (root == null) return false
     return write(root, entries)
+  }
+
+  /**
+   * 用户目录里所有「网络字幕生成的本地副本」的相对路径集合。
+   *
+   * 路径口径与面板扫描的 `candidate.relativePath` 完全一致：`dirName + "/" + fileName`
+   * （`dirName` 为空时就是文件名）。扫描阶段用它把副本挡在候选之外，是区分
+   * 「网络副本」与「用户自己的本地字幕」的唯一权威依据。
+   *
+   * 清单读不到 / 目录未配置 / 文件损坏 ⇒ 返回空集 ⇒ 调用方退化为现状，
+   * 绝不误伤真本地字幕。
+   */
+  fun onlineCopyPaths(root: SaveNode?): Set<String> =
+    read(root)
+      .asSequence()
+      .map { entry ->
+        if (entry.dirName.isBlank()) entry.fileName else "${entry.dirName}/${entry.fileName}"
+      }
+      .toSet()
+
+  /**
+   * 按记录 id 找它在用户目录里的副本位置：`Pair(dirName, fileName)`。
+   *
+   * `dirName` 可能为空（副本直接放根目录），调用方需兼容。找不到 / 目录未配置返回 null。
+   */
+  fun findPathFor(root: SaveNode?, id: String): Pair<String, String>? =
+    read(root)
+      .firstOrNull { it.id == id }
+      ?.let { it.dirName to it.fileName }
+
+  /**
+   * 从清单里移除一条记录（按 [Entry.id]）。
+   *
+   * @return true 表示清单已落盘；目录未配置或写入失败返回 false。
+   *   删除流程里即使副本文件删除失败，也会调本方法移除清单行 —— 防止恢复流程把它当可恢复项。
+   */
+  fun remove(root: SaveNode?, id: String): Boolean {
+    if (root == null) return false
+    val current = read(root)
+    if (current.none { it.id == id }) return true
+    return write(root, current.filterNot { it.id == id })
   }
 
   private fun write(root: SaveNode, entries: List<Entry>): Boolean {
