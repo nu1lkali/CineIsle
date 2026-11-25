@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CineIsle · 关于页 / 隐私确认页 版式稿</title>
+<style>
+  :root{
+    --bg:#eef1f6; --card-surface:#f6f4ef; --ink:#1b1c1e; --ink2:#4a4d52; --ink3:#7b7f86;
+    --line:rgba(27,28,30,.12); --glass:rgba(27,28,30,.12); --glass-line:rgba(27,28,30,.16);
+    --primary:#2f5f4f; --primary-container:#cfe6da; --on-primary-container:#0d2a22;
+    --tertiary:#c9d8a6; --device:#2a2c30; --white:#fff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg); color:var(--ink); padding:28px 20px 48px;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1{font-size:19px;font-weight:700;letter-spacing:-.01em;text-align:center}
+  .sub{text-align:center;color:var(--ink3);font-size:12.5px;margin-top:6px;line-height:1.6}
+  .stage{display:flex;gap:34px;justify-content:center;align-items:flex-start;flex-wrap:wrap;margin-top:30px}
+  .phone{
+    width:330px;background:var(--card-surface);border-radius:30px;padding:0;overflow:hidden;
+    box-shadow:0 1px 2px rgba(0,0,0,.05),0 18px 42px -18px rgba(20,30,50,.35);
+    border:1px solid rgba(0,0,0,.06);
+  }
+  .phone header{
+    display:flex;align-items:center;gap:10px;padding:14px 16px 10px;color:var(--primary);
+    font-size:13.5px;font-weight:700;
+  }
+  .phone header .back{font-size:16px;line-height:1;opacity:.9}
+  .body{padding:4px 16px 18px}
+  .caption{text-align:center;font-size:12px;color:var(--ink3);margin-top:12px}
+
+  /* ── 关于页主卡 ── */
+  .about-card{
+    position:relative;border-radius:28px;padding:16px;overflow:hidden;
+    background:
+      radial-gradient(120% 110% at 92% 8%, #d7e3b4 0%, #cfe0cb 42%, var(--primary-container) 100%);
+    color:var(--on-primary-container);
+  }
+  .about-card::after{
+    content:"";position:absolute;inset:0;border-radius:28px;pointer-events:none;
+    border:1px solid rgba(255,255,255,.35);
+    background:linear-gradient(180deg,rgba(255,255,255,.22),rgba(255,255,255,0) 34%);
+  }
+  .brand{display:flex;align-items:center;gap:14px}
+  .appicon{
+    width:60px;height:60px;border-radius:16px;flex:0 0 auto;
+    background:linear-gradient(145deg,#3b6f5c,#1f4438);
+    display:flex;align-items:center;justify-content:center;color:#e7f2ec;font-weight:800;font-size:22px;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.28),0 6px 14px -8px rgba(0,0,0,.5);
+  }
+  .brand h2{font-size:23px;font-weight:800;letter-spacing:-.02em}
+  .brand .en{font-size:13.5px;font-weight:600;opacity:.88;margin-top:1px}
+  .brand .ver{font-size:11.5px;opacity:.8;margin-top:3px}
+
+  .actions{display:flex;gap:12px;margin-top:22px}
+  .glass{
+    flex:1;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;
+    background:var(--glass);border:1px solid var(--glass-line);
+    font-size:13.5px;font-weight:600;color:var(--on-primary-container);
+  }
+  .rows{margin-top:16px;border-top:1px solid var(--line)}
+  .row{
+    display:flex;align-items:center;justify-content:space-between;padding:13px 2px;
+    font-size:13px;
+  }
+  .row + .row{border-top:1px solid var(--line)}
+  .row .label{opacity:.92}
+  .row .value{font-size:12px;opacity:.62}
+
+  /* ── 设备信息面板 ── */
+  .panel{
+    margin-top:22px;border-radius:18px;padding:16px 18px 14px;
+    background:rgba(13,42,34,.05);border:1px solid rgba(13,42,34,.10);
+  }
+  .panel-head{display:flex;align-items:center;justify-content:space-between}
+  .panel-head .t{font-size:13px;font-weight:600;opacity:.95}
+  .chip{
+    font-size:11.5px;font-weight:500;padding:6px 12px;border-radius:999px;
+    background:rgba(13,42,34,.08);opacity:.85;
+  }
+  .group{margin-top:16px}
+  .group .gt{font-size:11.5px;font-weight:600;letter-spacing:.08em;opacity:.62}
+  .kv{display:flex;gap:10px;padding:4px 0}
+  .kv .k{width:88px;flex:0 0 88px;font-size:11.5px;opacity:.55}
+  .kv .v{font-size:13px;font-weight:500;opacity:.96;line-height:1.35;word-break:break-all}
+
+  /* ── 隐私确认页 ── */
+  .consent{display:flex;flex-direction:column;height:640px}
+  .consent .scroll{flex:1;overflow:hidden;padding:18px 20px 0}
+  .hero{display:flex;align-items:center;gap:14px}
+  .hero .icon{
+    width:56px;height:56px;border-radius:16px;background:var(--primary-container);
+    display:flex;align-items:center;justify-content:center;
+  }
+  .hero .icon span{
+    width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(145deg,#3b6f5c,#1f4438);color:#e7f2ec;font-weight:800;font-size:14px;
+  }
+  .hero .name{font-size:17px;font-weight:700}
+  .hero .ver{font-size:11.5px;color:var(--ink3);margin-top:2px}
+
+  .c-title{margin-top:26px;font-size:15px;font-weight:600}
+  .c-body{margin-top:10px;font-size:13px;line-height:1.75;color:var(--ink2)}
+
+  .points{margin-top:18px;border-radius:16px;background:rgba(47,95,79,.06);padding:14px 16px}
+  .point{display:flex;gap:10px;align-items:flex-start}
+  .point + .point{margin-top:10px}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--primary);opacity:.75;margin-top:7px;flex:0 0 6px}
+  .point span{font-size:12.5px;line-height:1.6;color:var(--ink2)}
+
+  .doc{
+    margin-top:8px;border-radius:16px;background:rgba(47,95,79,.06);padding:14px 16px;
+    display:flex;align-items:center;justify-content:space-between;
+  }
+  .doc:first-of-type{margin-top:16px}
+  .doc .dt{font-size:13.5px;font-weight:600}
+  .doc .ds{font-size:11.5px;color:var(--ink3);margin-top:2px}
+  .doc .go{font-size:12.5px;font-weight:600;color:var(--primary)}
+
+  .tiny{margin-top:16px;font-size:11.5px;line-height:1.7;color:var(--ink3)}
+
+  .bottom{border-top:1px solid var(--line);padding:12px 20px 14px}
+  .agree{display:flex;align-items:flex-start;gap:8px;padding:4px 0}
+  .box{
+    width:18px;height:18px;border-radius:4px;border:2px solid var(--ink3);flex:0 0 18px;margin-top:1px;
+    position:relative;
+  }
+  .box.on{background:var(--primary);border-color:var(--primary)}
+  .box.on::after{
+    content:"";position:absolute;left:4px;top:1px;width:6px;height:10px;
+    border-right:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(42deg);
+  }
+  .agree span{font-size:11.5px;line-height:1.6;color:var(--ink2)}
+  .cta{
+    margin-top:10px;height:52px;border-radius:16px;display:flex;align-items:center;justify-content:center;
+    background:var(--primary);color:#fff;font-size:14.5px;font-weight:600;
+  }
+  .cta.off{background:rgba(47,95,79,.22);color:rgba(255,255,255,.85)}
+  .ghost{
+    height:46px;display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--ink3);
+  }
+  .note{
+    max-width:760px;margin:34px auto 0;font-size:12.5px;line-height:1.85;color:#5b5f66;
+    background:#fff;border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:16px 18px;
+  }
+  .note b{color:#22252a}
+  .note ul{margin:8px 0 0 18px}
+  .note li{margin-top:4px}
+</style>
+</head>
+<body>
+  <h1>关于页 · 隐私确认页 版式稿</h1>
+  <div class="sub">左：设置 → 关于（浅色）　右：首次启动隐私确认（浅色）</div>
+
+  <div class="stage">
+    <!-- 关于页 -->
+    <div>
+      <div class="phone">
+        <header><span class="back">‹</span><span>关于</span></header>
+        <div class="body">
+          <div class="about-card">
+            <div class="brand">
+              <div class="appicon">屿</div>
+              <div>
+                <h2>影屿</h2>
+                <div class="en">CineIsle</div>
+                <div class="ver">v1.6.84 release</div>
+              </div>
+            </div>
+
+            <div class="actions">
+              <div class="glass">开源许可</div>
+              <div class="glass">GitHub</div>
+            </div>
+
+            <div class="rows">
+              <div class="row"><span class="label">检查更新</span><span class="value">当前 v1.6.84</span></div>
+              <div class="row"><span class="label">联系开发者</span><span class="value">i@pwnhub.net</span></div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head">
+                <span class="t">设备信息</span>
+                <span class="chip">复制</span>
+              </div>
+
+              <div class="group">
+                <div class="gt">应用与设备</div>
+                <div class="kv"><span class="k">版本</span><span class="v">1.6.84 (ad9a59c)</span></div>
+                <div class="kv"><span class="k">Android</span><span class="v">17 (37)</span></div>
+                <div class="kv"><span class="k">品牌</span><span class="v">samsung</span></div>
+                <div class="kv"><span class="k">厂商</span><span class="v">samsung</span></div>
+                <div class="kv"><span class="k">型号</span><span class="v">SM-S9380 (pa3q)</span></div>
+              </div>
+
+              <div class="group">
+                <div class="gt">播放内核</div>
+                <div class="kv"><span class="k">mpv</span><span class="v">v0.41.0-1072-g2a4eb8067</span></div>
+                <div class="kv"><span class="k">ffmpeg</span><span class="v">28ab05da84</span></div>
+                <div class="kv"><span class="k">libplacebo</span><span class="v">v7.372.0 (v7.360.0-132)</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption">主卡：图标 → 两颗玻璃按钮 → 两条状态行 → 设备面板</div>
+    </div>
+
+    <!-- 隐私确认页 -->
+    <div>
+      <div class="phone consent">
+        <div class="scroll">
+          <div class="hero">
+            <div class="icon"><span>屿</span></div>
+            <div>
+              <div class="name">影屿</div>
+              <div class="ver">v1.6.84</div>
+            </div>
+          </div>
+
+          <div class="c-title">在使用前，请阅读并同意以下条款</div>
+          <div class="c-body">
+            为了保障您的个人信息安全，请阅读并了解《用户服务协议》与《隐私政策》。
+            我们将按照相关法律法规及协议约定处理相关信息。
+          </div>
+
+          <div class="points">
+            <div class="point"><span class="dot"></span><span>服务器地址、账号与播放记录仅保存在本机</span></div>
+            <div class="point"><span class="dot"></span><span>没有自建后台，媒体内容不会上传到开发者服务器</span></div>
+            <div class="point"><span class="dot"></span><span>崩溃上报与媒体扫描在您同意后才初始化</span></div>
+          </div>
+
+          <div class="doc">
+            <div>
+              <div class="dt">《用户服务协议》</div>
+              <div class="ds">使用规则、责任边界与争议解决</div>
+            </div>
+            <span class="go">查看</span>
+          </div>
+
+          <div class="doc">
+            <div>
+              <div class="dt">《隐私政策》</div>
+              <div class="ds">信息处理清单、第三方服务与您的权利</div>
+            </div>
+            <span class="go">查看</span>
+          </div>
+
+          <div class="tiny">同意后可随时在「设置 → 法律与隐私」重新阅读、查看版本与同意时间，或撤回授权。</div>
+        </div>
+
+        <div class="bottom">
+          <div class="agree">
+            <div class="box"></div>
+            <span>我已阅读并同意《用户服务协议》和《隐私政策》</span>
+          </div>
+          <div class="cta off">同意并继续</div>
+          <div class="ghost">暂不同意</div>
+        </div>
+      </div>
+      <div class="caption">门禁页：可滚动上半区 + 固定动作区（未勾选时按钮置灰）</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>落进代码的对应关系</b>
+    <ul>
+      <li>关于页主卡：<code>AboutScreen</code> → <code>AboutGlassButton</code>（48dp / 12% 同色底 + 16% 描边）与 <code>AboutActionRow</code>（左标签 / 右当前值）。</li>
+      <li>设备面板：<code>DeviceInfoPanel</code>，内容由 <code>collectDeviceInfo()</code> 原文解析分组，复制出的仍是原文诊断串。</li>
+      <li>隐私页：<code>PrivacyConsentScreen</code>，<code>ConsentPoint</code> 三条承诺、<code>DocumentLink</code> 标题 + 说明 + 查看，底部勾选与主按钮固定。</li>
+      <li>所有颜色取自 <code>MaterialTheme.colorScheme</code>（onPrimaryContainer 透明度叠层），深浅色主题自动适配，无硬编码色值。</li>
+    </ul>
+  </div>
+</body>
+</html>
