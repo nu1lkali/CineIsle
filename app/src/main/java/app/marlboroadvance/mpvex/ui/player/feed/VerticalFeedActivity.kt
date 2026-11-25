@@ -437,7 +437,15 @@ class VerticalFeedActivity : ComponentActivity(), FeedPlayerController, FeedGest
             )
           }
 
-          FeedScreen(vm = viewModel, controller = this@VerticalFeedActivity, gestureUi = gestureUi)
+          FeedScreen(
+            vm = viewModel,
+            controller = this@VerticalFeedActivity,
+            gestureUi = gestureUi,
+            // 进入视界流时读这两个设置：工具栏位置（右侧竖排 / 左下横排）与常驻透明度。
+            // 设置在别的页面改，改动后下次进视界流生效，不需要在播放中动态跟随。
+            toolbarBottomLeft = playerPreferences.feedToolbarBottomLeft.get(),
+            toolbarAlphaPercent = playerPreferences.feedToolbarAlpha.get(),
+          )
         }
       }
     }

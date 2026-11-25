@@ -229,6 +229,12 @@ object PreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              // 视界流（竖屏连播）工具栏：位置与透明度都是独立的一套，
+              // 与主播放器的横屏控件布局无关，所以单开一页。
+              SettingsDestinationRow(SettingsRegistry.feedToolbar) { backstack.add(it) }
+
+              PreferenceDivider()
+
               SettingsDestinationRow(SettingsRegistry.gesture) { backstack.add(it) }
 
               PreferenceDivider()

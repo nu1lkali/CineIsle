@@ -11,6 +11,7 @@ import app.marlboroadvance.mpvex.domain.subtitle.SubtitleCue
 import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTimeline
 import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitle
+import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleCleanup
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleDownloader
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitlePersist
@@ -452,13 +453,23 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
 
   fun delete(record: DownloadedSubtitle) {
     viewModelScope.launch {
-      withContext(Dispatchers.IO) { library.delete(record.id) }
+      // 统一编排：权威副本 + 用户目录副本 + 清单行一起清，失败聚合在结果里
+      val result =
+        OnlineSubtitleCleanup.delete(
+          context = getApplication(),
+          library = library,
+          preferences = preferences,
+          record = record,
+        )
       // 绑定还指着已删除的文件时会「开播挂不上」，顺手解掉
       val title = record.mediaTitle
       if (title.isNotBlank()) {
         runCatching { SubtitleBindings.unbind(preferences, title) }
       }
       refreshLibrary()
+      if (result.mirrorFailed) {
+        _state.update { it.copy(notice = "已删除字幕，但字幕目录里的副本清理失败，请手动删除") }
+      }
     }
   }
 
@@ -474,7 +485,12 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
   suspend fun allDownloaded(): List<DownloadedSubtitle> = withContext(Dispatchers.IO) { library.all() }
 
   suspend fun deleteGlobal(record: DownloadedSubtitle) {
-    withContext(Dispatchers.IO) { library.delete(record.id) }
+    OnlineSubtitleCleanup.delete(
+      context = getApplication(),
+      library = library,
+      preferences = preferences,
+      record = record,
+    )
     val title = record.mediaTitle
     if (title.isNotBlank()) runCatching { SubtitleBindings.unbind(preferences, title) }
   }

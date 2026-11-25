@@ -29,6 +29,17 @@ val SEEK_STEP_RANGE = SEEK_STEP_MIN_SECONDS..SEEK_STEP_MAX_SECONDS
 fun coerceSeekStepSeconds(value: Int): Int =
   value.coerceIn(SEEK_STEP_MIN_SECONDS, SEEK_STEP_MAX_SECONDS)
 
+/** 视界流工具栏透明度的取值范围（百分比）。下限 30% 保证按钮还看得清，100% 即完全不透明。 */
+const val FEED_TOOLBAR_ALPHA_MIN = 30
+const val FEED_TOOLBAR_ALPHA_MAX = 100
+const val FEED_TOOLBAR_ALPHA_DEFAULT = 100
+
+val FEED_TOOLBAR_ALPHA_RANGE = FEED_TOOLBAR_ALPHA_MIN..FEED_TOOLBAR_ALPHA_MAX
+
+/** 偏好可能被手改 xml / 旧版本遗留写进越界值，读出来先夹一遍再用于绘制。 */
+fun coerceFeedToolbarAlpha(value: Int): Int =
+  value.coerceIn(FEED_TOOLBAR_ALPHA_MIN, FEED_TOOLBAR_ALPHA_MAX)
+
 class PlayerPreferences(
   preferenceStore: PreferenceStore,
 ) {
@@ -48,6 +59,21 @@ class PlayerPreferences(
    */
   val showFloatingPlaylistSwitcher = preferenceStore.getBoolean("show_floating_playlist_switcher", true)
   val usePreciseSeeking = preferenceStore.getBoolean("use_precise_seeking", false)
+
+  /**
+   * 视界流（竖屏连播）工具栏的位置：true = 左下角横排，false = 右侧中部竖排（默认，改造前的行为）。
+   *
+   * 只改 `FeedScreen` 里那组按钮的容器与对齐锚点，按钮顺序、内容、点击语义都不变。
+   */
+  val feedToolbarBottomLeft = preferenceStore.getBoolean("feed_toolbar_bottom_left", false)
+
+  /**
+   * 视界流工具栏的常驻透明度（百分比，30~100；默认 100）。
+   *
+   * 它与「控制条显隐」是两层独立系数：最终 alpha = controlsAlpha × 本值 / 100。
+   * 控制条淡出时整列照样消失；常驻时则按这里调淡，用来减少对画面的遮挡。
+   */
+  val feedToolbarAlpha = preferenceStore.getInt("feed_toolbar_alpha", FEED_TOOLBAR_ALPHA_DEFAULT)
 
   val brightnessGesture = preferenceStore.getBoolean("gestures_brightness", true)
   val volumeGesture = preferenceStore.getBoolean("volume_brightness", true)

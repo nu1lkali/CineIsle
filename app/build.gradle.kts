@@ -3951,8 +3951,19 @@ android {
     //    结论；详情条目的 `Fields`（`ITEM_FIELDS_WITH_EXTERNAL_URLS` ⊃ CORE）本来就带
     //    `Path` / `MediaSources` ⇒ 不发额外请求。`remember(item)` 缓存，头部每帧重排不重算。
     //    不可点：它是分类标识，不是筛选项（放进「类型/标签」那组会让人误以为能跳转）。
-    versionCode = 336
-    versionName = "1.6.84"
+    // ── v337（功能轮，versionName 涨到 1.6.85）：网络字幕中字版本跳过 + 副本清理去重 ──
+    //  · 【中字跳过】`SubtitlesPreferences.skipOnlineFetchForChineseVersion`（默认开）：
+    //    `PlayerActivity.maybeAutoFetchOnlineSubtitle()` 起播前复用 `ChineseSubtitleFilter`
+    //    按当前 MediaSource 的 Path 判定中字版本，命中跳过自动下载，避免内嵌中字又外挂网络字幕；
+    //    只影响自动下载，手动搜索不受限。设置 → 字幕提供开关。
+    //  · 【副本清理】新增 `OnlineSubtitleCleanup` 统一删除编排：权威副本 → 用户目录副本 → 清单行，
+    //    三处删除入口（面板 / 实验室 / 全局）全部收口；文件不存在视为完成、SAF 失败只记日志仍删清单、
+    //    同路径被其它记录引用只删本行、全程幂等。
+    //  · 【面板去重】清单升格为「副本身份证」：`SubtitleSaveManifest.onlineCopyPaths()` 返回
+    //    dirName/fileName 集合，与扫描候选 relativePath 同构；面板与起播两处扫描在入列前过滤，
+    //    命中副本不再询问 / 重复挂载；清单不可读退化为现状，不误伤用户自己的字幕。
+    versionCode = 337
+    versionName = "1.6.85"
 
     vectorDrawables {
       useSupportLibrary = true
