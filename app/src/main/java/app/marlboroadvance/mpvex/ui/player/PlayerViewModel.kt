@@ -24,7 +24,6 @@ import app.marlboroadvance.mpvex.preferences.AudioPreferences
 import app.marlboroadvance.mpvex.preferences.GesturePreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
-import app.marlboroadvance.mpvex.domain.emby.EmbyPaths
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleLanguage
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleInfo
@@ -2917,7 +2916,7 @@ class PlayerViewModel(
     val builder =
       uri
         .buildUpon()
-        .path(EmbyPaths.PREFIX + EmbyPaths.itemImage(itemId, "Backdrop"))
+        .path("/emby/Items/$itemId/Images/Backdrop")
         .query(null)
         .appendQueryParameter("maxWidth", "512")
         .appendQueryParameter("quality", "90")

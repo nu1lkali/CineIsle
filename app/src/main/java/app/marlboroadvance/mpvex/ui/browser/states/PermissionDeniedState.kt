@@ -236,9 +236,7 @@ fun PermissionDeniedState(
   // Explanation Dialog
   if (showExplanationDialog) {
     val uriHandler = LocalUriHandler.current
-    // 仓库地址只认资源（与关于页、检查更新同源）。这里以前写死上游仓库，
-    // 用户点「查看说明」进的是别人的项目。
-    val githubUrl = stringResource(R.string.github_repo_url)
+    val githubUrl = "https://github.com/marlboro-advance/mpvex"
 
     AlertDialog(
       onDismissRequest = { showExplanationDialog = false },

@@ -2,7 +2,6 @@ package app.marlboroadvance.mpvex.domain.iso
 
 import android.os.SystemClock
 import android.util.Log
-import app.marlboroadvance.mpvex.utils.net.HttpClients
 import fi.iki.elonen.NanoHTTPD
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -10,6 +9,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.SequenceInputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 /**
  * 远程 ISO 的**本地 Range 中转代理**（纯客户端解码路线的一环）。
@@ -83,13 +83,13 @@ internal class IsoRangeProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
    * 连接池必须复用 —— 拖进度条会高频发 Range，每次新建连接池会拖垮播放。
    */
   private val client: OkHttpClient by lazy {
-    HttpClients.build(
-      name = "iso-range",
-      connectTimeoutSeconds = 15,
+    OkHttpClient.Builder()
+      .connectTimeout(15, TimeUnit.SECONDS)
       // ⚠️ readTimeout 要给足：某些 CDN 在 Range 请求建立后很久才吐第一个字节，
       // 给太短会出现「刚开始播就 IOException」，看起来像源坏了。
-      readTimeoutSeconds = 60,
-    )
+      .readTimeout(60, TimeUnit.SECONDS)
+      .retryOnConnectionFailure(true)
+      .build()
   }
 
   companion object {

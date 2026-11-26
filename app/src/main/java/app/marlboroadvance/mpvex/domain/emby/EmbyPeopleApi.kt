@@ -25,7 +25,7 @@ object EmbyPeopleApi {
     personTypes: List<String> = listOf("Actor", "Director", "Writer"),
   ): List<EmbyIdName> = EmbyItemsApi.idNameList(
     server,
-    EmbyPaths.PERSONS,
+    "/Persons",
     parentId,
     mapOf("PersonTypes" to personTypes.joinToString("|")),
   )
@@ -59,7 +59,7 @@ object EmbyPeopleApi {
       q["EnableUserData"] = "true"
       q["EnableImages"] = "true"
       q["ImageTypeLimit"] = "1"
-      EmbyHttpCore.getJson<EmbyItemsResult>(server, EmbyPaths.PERSONS, q)
+      EmbyHttpCore.getJson<EmbyItemsResult>(server, "/Persons", q)
         .Items
         .mapNotNull { item ->
           val id = item.Id ?: return@mapNotNull null
@@ -104,7 +104,7 @@ object EmbyPeopleApi {
       q["ImageTypeLimit"] = "1"
       q["StartIndex"] = start.toString()
       q["Limit"] = EmbyClient.PERSON_PAGE_SIZE.toString()
-      val page = EmbyHttpCore.getJson<EmbyItemsResult>(server, EmbyPaths.PERSONS, q)
+      val page = EmbyHttpCore.getJson<EmbyItemsResult>(server, "/Persons", q)
       if (page.Items.isEmpty()) break
       var fresh = 0
       page.Items.forEach { item ->
@@ -194,7 +194,7 @@ object EmbyPeopleApi {
       q["EnableUserData"] = "true"
       q["EnableImages"] = "true"
       q["ImageTypeLimit"] = "1"
-      EmbyHttpCore.getJson<EmbyItemsResult>(server, EmbyPaths.PERSONS, q)
+      EmbyHttpCore.getJson<EmbyItemsResult>(server, "/Persons", q)
         .Items
         .firstOrNull { it.Id == personId }
         ?.copy(Type = "Person")
@@ -206,7 +206,7 @@ object EmbyPeopleApi {
     runCatching {
       EmbyHttpCore.getJson<EmbyItem>(
         server,
-        EmbyPaths.userItem(server.userId, personId),
+        "/Users/${server.userId}/Items/$personId",
         mapOf(
           "EnableUserData" to "true",
           "Fields" to "BasicSyncInfo,CanDelete,CanDownload,PrimaryImageAspectRatio",
@@ -267,7 +267,7 @@ object EmbyPeopleApi {
     return runCatching {
       EmbyHttpCore.getJson<EmbyItem>(
         server,
-        EmbyPaths.userItem(server.userId, personId),
+        "/Users/${server.userId}/Items/$personId",
         mapOf("EnableUserData" to "true"),
       )
         .takeIf { it.Id == personId }
@@ -301,7 +301,7 @@ object EmbyPeopleApi {
         q["EnableTotalRecordCount"] = "true"
         q["StartIndex"] = start.toString()
         q["Limit"] = limit.toString()
-        val page = EmbyHttpCore.getJson<EmbyItemsResult>(server, EmbyPaths.PERSONS, q)
+        val page = EmbyHttpCore.getJson<EmbyItemsResult>(server, "/Persons", q)
         favTotal = page.TotalRecordCount
         found = page.Items.firstOrNull { it.Id == personId }
         if (found == null) {
@@ -350,7 +350,7 @@ object EmbyPeopleApi {
     q["EnableTotalRecordCount"] = "true"
     q["Limit"] = "1"
     val allTotal = runCatching {
-      EmbyHttpCore.getJson<EmbyItemsResult>(server, EmbyPaths.PERSONS, q).TotalRecordCount
+      EmbyHttpCore.getJson<EmbyItemsResult>(server, "/Persons", q).TotalRecordCount
     }.getOrNull() ?: return false
     return allTotal > favTotal
   }
@@ -490,7 +490,7 @@ object EmbyPeopleApi {
       q["Fields"] = "ChildCount"
       q["EnableImages"] = "true"
       q["ImageTypeLimit"] = "1"
-      EmbyHttpCore.getJson<EmbyItemsResult>(server, EmbyPaths.PERSONS, q)
+      EmbyHttpCore.getJson<EmbyItemsResult>(server, "/Persons", q)
         .Items
         .mapNotNull { item ->
           val id = item.Id ?: return@mapNotNull null

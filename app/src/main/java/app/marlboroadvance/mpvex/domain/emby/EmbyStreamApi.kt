@@ -50,7 +50,7 @@ object EmbyStreamApi {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
     }
-    return EmbyHttpCore.absolute(server, EmbyPaths.videoStream(itemId)) + "?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Videos/$itemId/stream?$qs"
   }
 
   /**
@@ -94,7 +94,7 @@ object EmbyStreamApi {
 
     val info = runCatching {
       EmbyHttpCore.execJson<PlaybackInfoResult>(
-        EmbyHttpCore.authedRequest(server, EmbyPaths.playbackInfo(itemId))
+        EmbyHttpCore.authedRequest(server, "/Items/$itemId/PlaybackInfo")
           .post(payload.toRequestBody(EmbyHttpCore.jsonMedia))
           .build(),
       )
@@ -119,7 +119,7 @@ object EmbyStreamApi {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v ?: "", "UTF-8")}"
     }
-    return EmbyHttpCore.absolute(server, EmbyPaths.videoStream(itemId)) + "?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Videos/$itemId/stream?$qs"
   }
 
   /** 服务器给的 `DirectStreamUrl` 未必带 `api_key`（取决于 `AddApiKeyToDirectStreamUrl`），补上更稳。 */
@@ -190,7 +190,7 @@ object EmbyStreamApi {
 
     val info =
       EmbyHttpCore.execJson<PlaybackInfoResult>(
-        EmbyHttpCore.authedRequest(server, EmbyPaths.playbackInfo(itemId))
+        EmbyHttpCore.authedRequest(server, "/Items/$itemId/PlaybackInfo")
           .post(payload.toRequestBody(EmbyHttpCore.jsonMedia))
           .build(),
       )
@@ -221,7 +221,7 @@ object EmbyStreamApi {
     val qs = q.entries.filter { it.value != null }.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v!!, "UTF-8")}"
     }
-    return EmbyHttpCore.absolute(server, EmbyPaths.videoStream(itemId)) + "?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Videos/$itemId/stream?$qs"
   }
 
   /**
@@ -234,7 +234,7 @@ object EmbyStreamApi {
   private fun absolutize(server: EmbyServer, url: String): String {
     if (url.startsWith("http://") || url.startsWith("https://")) return url
     val path = if (url.startsWith("/")) url else "/$url"
-    return EmbyHttpCore.absolute(server, path)
+    return EmbyEndpoints.hostUrl(server) + "/emby" + path
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -404,7 +404,7 @@ object EmbyStreamApi {
         ),
       ).toString()
 
-    val request = EmbyHttpCore.authedRequest(server, EmbyPaths.playbackInfo(itemId))
+    val request = EmbyHttpCore.authedRequest(server, "/Items/$itemId/PlaybackInfo")
       .post(payload.toRequestBody(EmbyHttpCore.jsonMedia))
       .build()
 

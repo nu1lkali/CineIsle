@@ -256,11 +256,10 @@ object EmbyHttp {
    * 拿它们当判据会让好好的主服务器被误判成挂了。
    */
   private fun isServerHealthEvidence(path: String): Boolean {
-    val prefix = EmbyPaths.PREFIX
-    if (!path.startsWith("$prefix/")) return false
+    if (!path.startsWith("/emby/")) return false
     if (path.contains("/Images/")) return false
-    if (path.startsWith("$prefix/Videos/")) return false
-    if (path.startsWith("$prefix/Audio/")) return false
+    if (path.startsWith("/emby/Videos/")) return false
+    if (path.startsWith("/emby/Audio/")) return false
     return true
   }
 

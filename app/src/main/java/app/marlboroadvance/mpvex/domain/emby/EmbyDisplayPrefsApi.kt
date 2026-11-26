@@ -39,7 +39,7 @@ object EmbyDisplayPrefsApi {
     client: String,
   ): EmbyDisplayPreferences? = EmbyHttpCore.getJson(
     server,
-    EmbyPaths.displayPreferences(displayPreferencesId),
+    "/DisplayPreferences/$displayPreferencesId",
     mapOf(
       "UserId" to server.userId,
       "Client" to client,
@@ -63,7 +63,7 @@ object EmbyDisplayPrefsApi {
     val body = EmbyHttpCore.json.encodeToString(preferences)
     val req = EmbyHttpCore.authedRequest(
       server,
-      EmbyPaths.displayPreferences(displayPreferencesId),
+      "/DisplayPreferences/$displayPreferencesId",
       mapOf("UserId" to server.userId),
     )
       .post(body.toRequestBody(EmbyHttpCore.jsonMedia))

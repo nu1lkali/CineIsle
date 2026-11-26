@@ -258,7 +258,8 @@ object EmbyClient {
     val deviceId = androidDeviceId(server.host)
     val authHeader =
       """MediaBrowser Client="mpvEx", Device="Android", DeviceId="$deviceId", Version="1.0.0""""
-    val req = EmbyHttpCore.unauthRequest(server, EmbyPaths.AUTHENTICATE_BY_NAME)
+    val req = Request.Builder()
+      .url("${EmbyEndpoints.hostUrl(server)}/emby/Users/AuthenticateByName")
       .header("X-Emby-Authorization", authHeader)
       .post(body.toRequestBody(jsonMedia))
       .build()
@@ -266,8 +267,7 @@ object EmbyClient {
   }
 
   /** 拉取服务器公开信息（无需登录）。 */
-  fun getPublicSystemInfo(server: EmbyServer): EmbySystemInfo =
-    getJson(server, EmbyPaths.SYSTEM_INFO_PUBLIC)
+  fun getPublicSystemInfo(server: EmbyServer): EmbySystemInfo = getJson(server, "/System/Info/Public")
 
   /**
    * 探活：这台服务器此刻通不通。
@@ -283,7 +283,7 @@ object EmbyClient {
    */
   fun probeAlive(server: EmbyServer): Boolean =
     runCatching {
-      val req = authedRequest(server, EmbyPaths.SYSTEM_INFO_PUBLIC).get().build()
+      val req = authedRequest(server, "/System/Info/Public").get().build()
       EmbyHttp.health.newCall(req).execute().use { it.code in 200..399 }
     }.getOrDefault(false)
 
@@ -299,11 +299,11 @@ object EmbyClient {
   fun probeAlive(endpoint: EmbyEndpoint, token: String): Boolean =
     runCatching {
       val req =
-        EmbyHttpCore.requestFor(
-          baseUrl = endpoint.baseUrl,
-          path = EmbyPaths.SYSTEM_INFO_PUBLIC,
-          token = token,
-        ).get().build()
+        Request.Builder()
+          .url("${endpoint.baseUrl}/emby/System/Info/Public")
+          .apply { if (token.isNotEmpty()) header("X-Emby-Token", token) }
+          .get()
+          .build()
       EmbyHttp.probe.newCall(req).execute().use { it.code in 200..399 }
     }.getOrDefault(false)
 
@@ -318,7 +318,7 @@ object EmbyClient {
    * 返回电影、剧集、音乐等顶层库，而不是把所有根级 Item 平铺。
    */
   fun getVirtualFolders(server: EmbyServer): EmbyItemsResult {
-    val result: EmbyItemsResult = getJson(server, EmbyPaths.userViews(server.userId))
+    val result: EmbyItemsResult = getJson(server, "/Users/${server.userId}/Views")
     // 顺手登记权威库名：目录导航要按 Id 查「这个库到底叫什么」，
     // 而祖先链给的是磁盘目录名，不是库名。所有调用方自动受益，不用各自记一遍。
     cacheLibraryCatalog(server, result.Items)
@@ -842,11 +842,11 @@ object EmbyClient {
    * 加入 / 取消收藏。返回服务器回传的 UserData（含 IsFavorite），用来确认真实状态。
    */
   fun setFavorite(server: EmbyServer, itemId: String, favorite: Boolean): EmbyUserData? =
-    toggleUserState(server, EmbyPaths.favoriteItem(server.userId, itemId), favorite)
+    toggleUserState(server, "/Users/${server.userId}/FavoriteItems/$itemId", favorite)
 
   /** 标记已看 / 未看。返回服务器回传的 UserData（含 Played）。 */
   fun setPlayed(server: EmbyServer, itemId: String, played: Boolean): EmbyUserData? =
-    toggleUserState(server, EmbyPaths.playedItem(server.userId, itemId), played)
+    toggleUserState(server, "/Users/${server.userId}/PlayedItems/$itemId", played)
 
   /**
    * a8：**一次写多项** UserData —— 标记已看 / 未看的同时把播放进度归零。
@@ -870,7 +870,7 @@ object EmbyClient {
     itemId: String,
     played: Boolean,
   ): EmbyUserData? {
-    val path = EmbyPaths.userItemUserData(server.userId, itemId)
+    val path = "/Users/${server.userId}/Items/$itemId/UserData"
     val body = """{"Played":$played,"PlaybackPositionTicks":0}"""
     val response =
       runCatching {
@@ -949,7 +949,7 @@ object EmbyClient {
    * 不在这里抛异常：发不出去也要让调用方走「回读判真值」的流程，避免把软失败误报成硬失败。
    */
   fun unfavoriteHard(server: EmbyServer, itemId: String): EmbyUserData? {
-    val base = EmbyPaths.favoriteItem(server.userId, itemId)
+    val base = "/Users/${server.userId}/FavoriteItems/$itemId"
     // 客户端标识 + token 一起进 query（同 [toggleUserState]，对齐 Emby Web）
     val clientQuery: Map<String, String?> = buildMap {
       put("X-Emby-Token", server.apiToken.takeIf { it.isNotEmpty() })
@@ -1001,7 +1001,7 @@ object EmbyClient {
    *   **不要**把它当"操作成功"来展示。
    */
   fun deleteItem(server: EmbyServer, itemId: String) {
-    val req = authedRequest(server, EmbyPaths.item(itemId)).delete().build()
+    val req = authedRequest(server, "/Items/$itemId").delete().build()
     execString(req)
   }
 
@@ -1021,7 +1021,7 @@ object EmbyClient {
    * 并发几十条很容易触发它的写锁竞争，串行慢一点但结果可信。
    */
   fun setFavoriteMany(server: EmbyServer, itemIds: List<String>, favorite: Boolean): EmbyBatchResult =
-    runBatch(itemIds) { id -> toggleUserState(server, EmbyPaths.favoriteItem(server.userId, id), favorite) }
+    runBatch(itemIds) { id -> toggleUserState(server, "/Users/${server.userId}/FavoriteItems/$id", favorite) }
 
   /**
    * 批量标记已看 / 未看。
@@ -1029,7 +1029,7 @@ object EmbyClient {
    * 与 [setFavoriteMany] 同构：走单条 `PlayedItems` 端点、客户端汇总。
    */
   fun setPlayedMany(server: EmbyServer, itemIds: List<String>, played: Boolean): EmbyBatchResult =
-    runBatch(itemIds) { id -> toggleUserState(server, EmbyPaths.playedItem(server.userId, id), played) }
+    runBatch(itemIds) { id -> toggleUserState(server, "/Users/${server.userId}/PlayedItems/$id", played) }
 
   /**
    * 批量执行的公共壳：逐条跑 [action]，把「抛了异常」或「回传状态与预期不符」计入失败。
@@ -1074,7 +1074,7 @@ object EmbyClient {
    * 仍然做本地乐观移除，不依赖这里做二次回读。
    */
   fun hideFromResume(server: EmbyServer, itemId: String): Boolean {
-    val path = EmbyPaths.userItemHideFromResume(server.userId, itemId)
+    val path = "/Users/${server.userId}/Items/$itemId/HideFromResume"
     runCatching {
       execString(authedRequest(server, path).post("""{"Hide":true}""".toRequestBody(jsonMedia)).build())
     }.onSuccess { return true }
@@ -1082,7 +1082,7 @@ object EmbyClient {
       execString(authedRequest(server, path).post(EMPTY_JSON_BODY.toRequestBody(jsonMedia)).build())
     }.onSuccess { return true }
     return runCatching {
-      execString(authedRequest(server, EmbyPaths.legacyUserItemUserData(itemId)).delete().build())
+      execString(authedRequest(server, "/UserItems/$itemId/UserData").delete().build())
     }.isSuccess
   }
 
@@ -1099,7 +1099,7 @@ object EmbyClient {
    * 两者都失败返回 false —— 调用方静默忽略，下载本身早已成功，不该因此报错。
    */
   fun clearPlaybackPosition(server: EmbyServer, itemId: String): Boolean {
-    val path = EmbyPaths.userItemUserData(server.userId, itemId)
+    val path = "/Users/${server.userId}/Items/$itemId/UserData"
     runCatching {
       execString(
         authedRequest(server, path)
@@ -1108,7 +1108,7 @@ object EmbyClient {
       )
     }.onSuccess { return true }
     return runCatching {
-      execString(authedRequest(server, EmbyPaths.legacyUserItemUserData(itemId)).delete().build())
+      execString(authedRequest(server, "/UserItems/$itemId/UserData").delete().build())
     }.isSuccess
   }
 
@@ -1172,7 +1172,7 @@ object EmbyClient {
   ) {
     val req = authedRequest(
       server,
-      EmbyPaths.itemRefresh(itemId),
+      "/Items/$itemId/Refresh",
       mapOf(
         "MetadataRefreshMode" to mode,
         "Recursive" to "true",
@@ -1191,7 +1191,7 @@ object EmbyClient {
 
   /** 条目当前挂着的图片清单（GET /Items/{Id}/Images） */
   fun getItemImages(server: EmbyServer, itemId: String): List<EmbyImageInfo> =
-    execJson(authedRequest(server, EmbyPaths.itemImages(itemId)).build())
+    execJson(authedRequest(server, "/Items/$itemId/Images").build())
 
   /** 删除一张图片（封面 / 徽标 / 艺术图 …） */
   fun deleteItemImage(
@@ -1200,7 +1200,7 @@ object EmbyClient {
     imageType: String,
     index: Int = 0,
   ) {
-    val base = EmbyPaths.itemImageAt(itemId, imageType, index)
+    val base = "/Items/$itemId/Images/$imageType/$index"
     runCatching {
       // Emby 4.9 起改成了 POST …/{Index}/Delete
       execString(
@@ -1231,7 +1231,7 @@ object EmbyClient {
     val mediaType = mime.toMediaType()
     val rawError = runCatching {
       execString(
-        authedRequest(server, EmbyPaths.itemImage(itemId, imageType))
+        authedRequest(server, "/Items/$itemId/Images/$imageType")
           .post(bytes.toRequestBody(mediaType))
           .build(),
       )
@@ -1241,7 +1241,7 @@ object EmbyClient {
     val base64 = java.util.Base64.getEncoder().encodeToString(bytes)
     runCatching {
       execString(
-        authedRequest(server, EmbyPaths.itemImage(itemId, imageType))
+        authedRequest(server, "/Items/$itemId/Images/$imageType")
           .post(base64.toByteArray().toRequestBody(mediaType))
           .build(),
       )
@@ -1252,7 +1252,7 @@ object EmbyClient {
 
   /** 可用的远程图源（GET /Items/{Id}/RemoteImages/Providers） */
   fun getRemoteImageProviders(server: EmbyServer, itemId: String): List<EmbyImageProviderInfo> =
-    execJson(authedRequest(server, EmbyPaths.itemRemoteImageProviders(itemId)).build())
+    execJson(authedRequest(server, "/Items/$itemId/RemoteImages/Providers").build())
 
   /** 从远程图源搜某类图片（GET /Items/{Id}/RemoteImages） */
   fun searchRemoteImages(
@@ -1265,7 +1265,7 @@ object EmbyClient {
     execJson<EmbyRemoteImageResult>(
       authedRequest(
         server,
-        EmbyPaths.itemRemoteImages(itemId),
+        "/Items/$itemId/RemoteImages",
         mapOf(
           "Type" to imageType,
           "ProviderName" to providerName,
@@ -1286,7 +1286,7 @@ object EmbyClient {
   ) {
     val req = authedRequest(
       server,
-      EmbyPaths.itemRemoteImageDownload(itemId),
+      "/Items/$itemId/RemoteImages/Download",
       mapOf(
         // 4.9 起参数名叫 Type，老版本叫 ImageType —— 两个都带上，各自忽略不认识的那个
         "Type" to imageType,
@@ -1306,7 +1306,7 @@ object EmbyClient {
 
   /** 条目已绑定的外部 ID（GET /Items/{Id}/ExternalIdInfos），用于预填识别对话框 */
   fun getExternalIdInfos(server: EmbyServer, itemId: String): List<EmbyExternalIdInfo> =
-    execJson(authedRequest(server, EmbyPaths.itemExternalIds(itemId)).build())
+    execJson(authedRequest(server, "/Items/$itemId/ExternalIdInfos").build())
 
   /**
    * 按条件远程检索元数据（POST /Items/RemoteSearch/{Type}）。
@@ -1324,7 +1324,7 @@ object EmbyClient {
     lookup: EmbyItemLookupInfo,
     itemId: String? = null,
   ): List<EmbyRemoteSearchResult> {
-    val path = EmbyPaths.remoteSearch(searchType)
+    val path = "/Items/RemoteSearch/$searchType"
     // 主请求：ItemId 按字符串发
     val body = json.encodeToString(EmbyRemoteSearchQuery(SearchInfo = lookup, ItemId = itemId))
     val first = runCatching { postJson<List<EmbyRemoteSearchResult>>(server, path, body) }
@@ -1354,7 +1354,7 @@ object EmbyClient {
   ) {
     val req = authedRequest(
       server,
-      EmbyPaths.remoteSearchApply(itemId),
+      "/Items/RemoteSearch/Apply/$itemId",
       mapOf("ReplaceAllImages" to replaceAllImages.toString()),
     ).post(json.encodeToString(result).toRequestBody(jsonMedia)).build()
     execString(req)
@@ -1366,10 +1366,7 @@ object EmbyClient {
    */
   fun updateItem(server: EmbyServer, item: EmbyItem) {
     val body = json.encodeToString(item)
-    // ⚠️ `EmbyItem.Id` 可空。以前用 `"/Items/${item.Id}"` 会把 null 拼成字面量
-    // 「null」，请求打到 /Items/null 再收 404；现在显式判空，错误信息直接指向调用方。
-    val itemId = requireNotNull(item.Id) { "updateItem 需要带 Id 的条目" }
-    val req = authedRequest(server, EmbyPaths.item(itemId))
+    val req = authedRequest(server, "/Items/${item.Id}")
       .put(body.toRequestBody(jsonMedia))
       .build()
     execString(req)
@@ -1398,7 +1395,7 @@ object EmbyClient {
     execString(
       authedRequest(
         server,
-        EmbyPaths.userItem(server.userId, itemId),
+        "/Users/${server.userId}/Items/$itemId",
         mapOf("Fields" to RAW_ITEM_FIELDS),
       ).get().build(),
     )
@@ -1420,7 +1417,7 @@ object EmbyClient {
     preferPut: Boolean = false,
   ): String {
     val buildRequest = { verb: String ->
-      val builder = authedRequest(server, EmbyPaths.item(itemId))
+      val builder = authedRequest(server, "/Items/$itemId")
       val body = rawJson.toRequestBody(jsonMedia)
       (if (verb == "PUT") builder.put(body) else builder.post(body)).build()
     }
@@ -1445,7 +1442,7 @@ object EmbyClient {
    */
   fun fetchIsAdmin(server: EmbyServer): Boolean =
     runCatching {
-      getJson<EmbyUserDetailDto>(server, EmbyPaths.user(server.userId)).Policy?.IsAdministrator == true
+      getJson<EmbyUserDetailDto>(server, "/Users/${server.userId}").Policy?.IsAdministrator == true
     }.onFailure {
       EmbyLog.warn("fetchIsAdmin 失败：${it.message} —— 保守当作无权限（写作能力会被禁掉）", it)
     }.getOrDefault(false)
@@ -1459,7 +1456,7 @@ object EmbyClient {
    */
   fun measureLatency(server: EmbyServer, samples: Int = 3): EmbySpeedTestResult {
     val count = samples.coerceIn(1, 5)
-    val warmup = runCatching { getJson<EmbyUserDetailDto>(server, EmbyPaths.user(server.userId)) }
+    val warmup = runCatching { getJson<EmbyUserDetailDto>(server, "/Users/${server.userId}") }
     warmup.exceptionOrNull()?.let { error ->
       return EmbySpeedTestResult(
         averageMs = 0,
@@ -1472,7 +1469,7 @@ object EmbyClient {
     val measured = mutableListOf<Long>()
     repeat(count) {
       val started = System.nanoTime()
-      val outcome = runCatching { getJson<EmbyUserDetailDto>(server, EmbyPaths.user(server.userId)) }
+      val outcome = runCatching { getJson<EmbyUserDetailDto>(server, "/Users/${server.userId}") }
       outcome.exceptionOrNull()?.let { error ->
         return EmbySpeedTestResult(
           averageMs = 0,
@@ -1505,7 +1502,7 @@ object EmbyClient {
     val request =
       authedRequest(
         server,
-        EmbyPaths.VIDEOS_MERGE_VERSIONS,
+        "/Videos/MergeVersions",
         mapOf("Ids" to ids.distinct().joinToString(",")),
       ).post("".toRequestBody(null)).build()
     execString(request)
@@ -1519,13 +1516,13 @@ object EmbyClient {
    */
   fun removeAlternateSources(server: EmbyServer, itemId: String) {
     val request =
-      authedRequest(server, EmbyPaths.videoAlternateSources(itemId)).delete().build()
+      authedRequest(server, "/Videos/$itemId/AlternateSources").delete().build()
     execString(request)
   }
 
   /** 服务端定时任务清单（找「刷新人员」用） */
   fun getScheduledTasks(server: EmbyServer): List<EmbyScheduledTask> =
-    runCatching { getJson<List<EmbyScheduledTask>>(server, EmbyPaths.SCHEDULED_TASKS) }
+    runCatching { getJson<List<EmbyScheduledTask>>(server, "/ScheduledTasks") }
       .onFailure { EmbyLog.warn("getScheduledTasks 失败：${it.message}", it) }
       .getOrDefault(emptyList())
 
@@ -1539,7 +1536,7 @@ object EmbyClient {
    */
   fun runScheduledTask(server: EmbyServer, taskId: String): Boolean = runCatching {
     execString(
-      authedRequest(server, EmbyPaths.scheduledTaskRunning(taskId))
+      authedRequest(server, "/ScheduledTasks/Running/$taskId")
         .post(EMPTY_JSON_BODY.toRequestBody(jsonMedia))
         .build(),
     )
@@ -1645,7 +1642,7 @@ object EmbyClient {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
     }
-    return "${EmbyHttpCore.absolute(server, EmbyPaths.itemImage(itemId, imageType))}?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Items/$itemId/Images/$imageType?$qs"
   }
 
   /**
@@ -1679,7 +1676,7 @@ object EmbyClient {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
     }
-    return "${EmbyHttpCore.absolute(server, EmbyPaths.itemImage(itemId, "Primary"))}?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Items/$itemId/Images/Primary?$qs"
   }
 
   /**
@@ -1699,7 +1696,7 @@ object EmbyClient {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
     }
-    return "${EmbyHttpCore.absolute(server, EmbyPaths.itemDownload(itemId))}?$qs"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Items/$itemId/Download?$qs"
   }
 
   /**
@@ -1762,7 +1759,7 @@ object EmbyClient {
    */
   fun itemDownloadUrl(server: EmbyServer, itemId: String): String {
     val q = if (server.apiToken.isNotEmpty()) "?api_key=${server.apiToken}" else ""
-    return "${EmbyHttpCore.absolute(server, EmbyPaths.itemDownload(itemId))}$q"
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Items/$itemId/Download$q"
   }
 
   /**
@@ -1777,10 +1774,7 @@ object EmbyClient {
     format: String = "srt",
   ): String {
     val q = if (server.apiToken.isNotEmpty()) "?api_key=${server.apiToken}" else ""
-    return EmbyHttpCore.absolute(
-      server,
-      EmbyPaths.videoSubtitleStream(itemId, mediaSourceId, subtitleIndex.toString(), format),
-    ) + q
+    return "${EmbyEndpoints.hostUrl(server)}/emby/Videos/$itemId/$mediaSourceId/Subtitles/$subtitleIndex/Stream.$format$q"
   }
 
   // ════════════════════════════════════════════════════════════════════════

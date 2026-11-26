@@ -5,7 +5,6 @@ import android.util.Log
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.domain.network.guessNetworkMimeType
-import app.marlboroadvance.mpvex.utils.net.HttpClients
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -35,6 +34,7 @@ import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 /**
  * AList 原生 API 客户端（[app.marlboroadvance.mpvex.domain.network.NetworkProtocol.ALIST]）。
@@ -163,13 +163,14 @@ class AlistClient(
      */
     internal fun http(): OkHttpClient =
       sharedHttp ?: synchronized(this) {
-        sharedHttp ?: HttpClients.build(
-          name = "alist",
-          connectTimeoutSeconds = 15,
+        sharedHttp ?: OkHttpClient.Builder()
+          .connectTimeout(15, TimeUnit.SECONDS)
           // 读超时是「两次读到字节之间」的上限，不是整段下载的上限；
           // 大图 / 大文件下载走的是这个流，给足 60s
-          readTimeoutSeconds = 60,
-        ).also { sharedHttp = it }
+          .readTimeout(60, TimeUnit.SECONDS)
+          .retryOnConnectionFailure(true)
+          .build()
+          .also { sharedHttp = it }
       }
   }
 

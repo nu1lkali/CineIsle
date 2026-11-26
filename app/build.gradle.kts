@@ -3976,22 +3976,21 @@ android {
     //    键盘收完窗口变高 → 菜单重新定位，肉眼看到「闪一下 / 跳一下」。改为先把菜单挂进
     //    `pendingOverflowMenu`，用 `snapshotFlow` 等 ime inset 归零（窗口尺寸定稿）再展开，
     //    并带 600ms 兜底；非搜索态（无键盘）仍即时打开。
-    // ── v339（重构轮，versionCode +1，versionName 不变）：API 调用收口 ──
-    //  · 【端点注册表】新增 `domain/emby/EmbyPaths.kt`：90 余处散在 11 个文件里的 Emby
-    //    路径字面量收敛为函数/常量，`PlaybackInfo`（被手抄 5 遍）等重复端点合一。
-    //  · 【前缀收口】`EmbyHttpCore.absolute/absoluteBase/requestFor/unauthRequest`：
-    //    全 App 只剩一处拼 `/emby` 前缀、一处做 query 编码；登录与探活两处手拼 URL 收编。
-    //  · 【第三方地址】新增 `utils/net/RemoteEndpoints.kt`：GitHub releases / 迅雷字幕 /
-    //    SubtitleCat / dandanplay 的地址与路径集中；更新检查的仓库地址改由
-    //    `R.string.github_repo_url` 派生（不再与字符串资源双份真相）。
-    //  · 【客户端工厂】新增 `utils/net/HttpClients.kt`：8 个非 Emby 客户端的
-    //    `OkHttpClient.Builder()` 全部收成一处构造，各自仍保留独立连接池；
-    //    UA 统一取 `BuildConfig.VERSION_NAME`（弹幕 UA 里写死的 1.2.5 一并修掉）。
-    //  · 【播放预热】`PlayerActivity.warmUpNextEpisode` 不再每次新建客户端，
-    //    复用 `preloadHttpClient` —— 新建等于把预热成果丢给一个随即被丢弃的连接池。
-    //  · 【文案/链接】`PermissionDeniedState` 的仓库链接改走 `R.string.github_repo_url`
-    //    （原硬编码上游仓库，点进去是别人的项目）。
-    versionCode = 339
+    // ── v340（验证轮，versionCode +1，versionName 不变）：回滚 v339 的 API 收口 ──
+    //  · 【回滚范围】`a1d8b43`（v339，API 地址与 HTTP 客户端收口到三处）整体撤销：
+    //    `EmbyPaths` / `HttpClients` / `RemoteEndpoints` 三个新类移除，24 个文件的
+    //    端点字面量与 `OkHttpClient` 构造回到 v338 的写法。
+    //  · 【目的】用户报「播放视频直接闪退」。日志定位到的直接原因不是本仓改动（见下），
+    //    但仍需要一个「代码回到 v339 之前、versionCode 更高所以能正常覆盖安装」的包
+    //    做 A/B 验证，避免继续在降级安装上耗时间。
+    //  · 【日志结论，供下次排查】`/emby/Videos/{id}/stream?static=true` 在服务端恒返回
+    //    HTTP 500（5 个不同条目全中），mpv 序列恒为 start-file → end-file，从未 file-loaded；
+    //    同进程内 `Items` / `PlaybackInfo` 均为 200 ⇒ 元数据可用、只有吐流失败。
+    //    紧随 curl 报错 3ms 的是 `fdsan: failed to exchange ownership of file descriptor`
+    //    → SIGABRT（11-23/11-24 也有同族崩溃）⇒ 属 native 层，回滚不能解决。
+    //  · ⚠️ 本次不带 v339 的两处顺带修复（预热客户端复用、权限页仓库链接取字符串资源），
+    //    验证完若要恢复，把本版改动整体反向即可。
+    versionCode = 340
     versionName = "1.6.85"
 
     vectorDrawables {

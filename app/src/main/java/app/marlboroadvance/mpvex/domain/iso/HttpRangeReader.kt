@@ -1,9 +1,9 @@
 package app.marlboroadvance.mpvex.domain.iso
 
-import app.marlboroadvance.mpvex.utils.net.HttpClients
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /**
  * 用 HTTP Range 实现 [RemoteIsoParser.RangeReader]，把 CDN 直链接给ISO 解析器。
@@ -115,10 +115,10 @@ internal class HttpRangeReader(
      * 播放是「长时间大流量，绝不能因为慢就断」。混用会让播放因探测策略被误伤。
      */
     fun defaultClient(): OkHttpClient =
-      HttpClients.build(
-        name = "http-range-probe",
-        connectTimeoutSeconds = 15,
-        readTimeoutSeconds = 30,
-      )
+      OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
   }
 }

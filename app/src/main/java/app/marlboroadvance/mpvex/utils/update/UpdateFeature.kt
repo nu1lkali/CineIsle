@@ -3,7 +3,6 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,8 +33,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.BuildConfig
-import app.marlboroadvance.mpvex.utils.net.HttpClients
-import app.marlboroadvance.mpvex.utils.net.RemoteEndpoints
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,6 +56,16 @@ import java.util.Locale
 import java.util.TimeZone
 
 // --- Data Models ---
+
+/**
+ * 更新检查的目标仓库。
+ *
+ * ⚠️ 必须是**本应用自己的仓库**（与「关于」页 GitHub 按钮、隐私政策里写的地址一致）。
+ * 早前这里指向上游 mpvEx 仓库，结果是「检查更新永远查不到本应用的新版本」——
+ * 功能看着在、实际没有任何用。
+ */
+private const val LATEST_RELEASE_URL =
+    "https://api.github.com/repos/nu1lkali/CineIsle/releases/latest"
 
 @Serializable
 data class Release(
@@ -84,20 +91,7 @@ data class Asset(
 class UpdateManager(
     private val context: Context
 ) {
-    /**
-     * 检查更新用的客户端。
-     *
-     * 显式给出与 OkHttp 默认值一致的 10s 超时（而不是依赖默认值），是为了让
-     * 「这个客户端什么策略」在本文件里可读 —— 以前是裸 `OkHttpClient()`，
-     * 看不出超时、也没有 UA，与全 App 其余 7 个客户端不一致。
-     */
-    private val client =
-        HttpClients.build(
-            name = "update-check",
-            connectTimeoutSeconds = 10,
-            readTimeoutSeconds = 10,
-            userAgent = HttpClients.appUserAgent,
-        )
+    private val client = OkHttpClient()
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun checkForUpdate(forceShow: Boolean = false): Release? {
@@ -105,16 +99,8 @@ class UpdateManager(
         if (!BuildConfig.ENABLE_UPDATE_FEATURE) {
             return null
         }
-
-        // 仓库地址只有一处真相：R.string.github_repo_url（关于页、隐私政策同源）。
-        // 解析不出来说明资源被改坏了 —— 按「没有更新」处理，不要弹错误打扰用户。
-        val releaseUrl =
-            RemoteEndpoints.githubLatestRelease(context.getString(R.string.github_repo_url))
-                ?: run {
-                    Log.w("UpdateManager", "github_repo_url 不是 owner/repo 形态，跳过更新检查")
-                    return null
-                }
-        val release = getLatestRelease(releaseUrl) ?: return null
+        
+        val release = getLatestRelease(LATEST_RELEASE_URL) ?: return null
         val currentVersion = BuildConfig.VERSION_NAME.replace("-dev", "")
         val remoteVersion = release.tagName.removePrefix("v")
         val prefs = context.getSharedPreferences("mpvEx_prefs", Context.MODE_PRIVATE)

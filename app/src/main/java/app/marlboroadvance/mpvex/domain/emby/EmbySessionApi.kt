@@ -61,7 +61,7 @@ object EmbySessionApi {
       ).toString()
     val info = runCatching {
       EmbyHttpCore.execJson<PlaybackInfoResult>(
-        EmbyHttpCore.authedRequest(server, EmbyPaths.playbackInfo(itemId))
+        EmbyHttpCore.authedRequest(server, "/Items/$itemId/PlaybackInfo")
           .post(payload.toRequestBody(EmbyHttpCore.jsonMedia))
           .build(),
       )
@@ -102,7 +102,7 @@ object EmbySessionApi {
       put("IsPaused", false)
     }
     val body = EmbyHttpCore.json.encodeToString(JsonObject.serializer(), jsonObjectOf(obj))
-    val req = EmbyHttpCore.authedRequest(server, EmbyPaths.SESSIONS_PLAYING)
+    val req = EmbyHttpCore.authedRequest(server, "/Sessions/Playing")
       .post(body.toRequestBody(EmbyHttpCore.jsonMedia))
       .build()
     val resp = EmbyHttpCore.execString(req)
@@ -148,7 +148,7 @@ object EmbySessionApi {
       mediaSourceId?.let { put("MediaSourceId", it) }
     }
     val body = EmbyHttpCore.json.encodeToString(JsonObject.serializer(), jsonObjectOf(obj))
-    val req = EmbyHttpCore.authedRequest(server, EmbyPaths.SESSIONS_PLAYING_PROGRESS)
+    val req = EmbyHttpCore.authedRequest(server, "/Sessions/Playing/Progress")
       .post(body.toRequestBody(EmbyHttpCore.jsonMedia))
       .build()
     EmbyHttpCore.execString(req)
@@ -169,7 +169,7 @@ object EmbySessionApi {
       mediaSourceId?.let { put("MediaSourceId", it) }
     }
     val body = EmbyHttpCore.json.encodeToString(JsonObject.serializer(), jsonObjectOf(obj))
-    val req = EmbyHttpCore.authedRequest(server, EmbyPaths.SESSIONS_PLAYING_STOPPED)
+    val req = EmbyHttpCore.authedRequest(server, "/Sessions/Playing/Stopped")
       .post(body.toRequestBody(EmbyHttpCore.jsonMedia))
       .build()
     EmbyHttpCore.execString(req)

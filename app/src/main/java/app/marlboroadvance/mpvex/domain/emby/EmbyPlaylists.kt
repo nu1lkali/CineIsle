@@ -79,7 +79,7 @@ object EmbyPlaylists {
     // 有期望类型兜着。现在多了一步 `val raw = ...`，赋值语句右侧没有期望类型，
     // 不写就报「Cannot infer type for type parameter 'T'」。
     val raw: EmbyItemsResult =
-      EmbyClient.getJson(server, EmbyPaths.userItems(server.userId), params)
+      EmbyClient.getJson(server, "/Users/${server.userId}/Items", params)
 
     val kept = filterPlaylists(raw.Items)
     if (kept.isNotEmpty()) {
@@ -95,7 +95,7 @@ object EmbyPlaylists {
     val fallback: EmbyItemsResult =
       EmbyClient.getJson(
         server,
-        EmbyPaths.userItems(server.userId),
+        "/Users/${server.userId}/Items",
         params + mapOf(
           "IncludeItemTypes" to "",
           "ExcludeItemTypes" to NON_MEDIA_EXCLUDE,
@@ -153,7 +153,7 @@ object EmbyPlaylists {
     limit: Int = 100,
   ): EmbyItemsResult = EmbyClient.getJson(
     server,
-    EmbyPaths.playlistItems(playlistId),
+    "/Playlists/$playlistId/Items",
     mapOf(
       "UserId" to server.userId,
       "StartIndex" to startIndex.toString(),
@@ -188,7 +188,7 @@ object EmbyPlaylists {
   ): EmbyPlaylistCreationResult {
     val req = EmbyClient.authedRequest(
       server,
-      EmbyPaths.PLAYLISTS,
+      "/Playlists",
       mapOf(
         "name" to name,
         "ids" to itemIds.takeIf { it.isNotEmpty() }?.joinToString(","),
@@ -210,7 +210,7 @@ object EmbyPlaylists {
     if (itemIds.isEmpty()) return EmbyPlaylistAddResult(playlistId, 0)
     val req = EmbyClient.authedRequest(
       server,
-      EmbyPaths.playlistItems(playlistId),
+      "/Playlists/$playlistId/Items",
       mapOf("ids" to itemIds.joinToString(","), "userId" to server.userId),
     ).post(ByteArray(0).toRequestBody(null)).build()
     return EmbyClient.execJson(req)
@@ -232,7 +232,7 @@ object EmbyPlaylists {
     if (entryIds.isEmpty()) return
     val req = EmbyClient.authedRequest(
       server,
-      EmbyPaths.playlistItems(playlistId),
+      "/Playlists/$playlistId/Items",
       mapOf("EntryIds" to entryIds.joinToString(",")),
     ).delete().build()
     EmbyClient.execString(req)
@@ -252,7 +252,7 @@ object EmbyPlaylists {
     entryId: String,
     newIndex: Int,
   ) {
-    val req = EmbyClient.authedRequest(server, EmbyPaths.playlistItemMove(playlistId, entryId, newIndex))
+    val req = EmbyClient.authedRequest(server, "/Playlists/$playlistId/Items/$entryId/Move/$newIndex")
       .post(ByteArray(0).toRequestBody(null)).build()
     EmbyClient.execString(req)
   }
@@ -267,7 +267,7 @@ object EmbyPlaylists {
    * 都是连同条目一起消失，且不可恢复。UI 上必须二次确认。
    */
   fun deletePlaylist(server: EmbyServer, playlistId: String) {
-    val req = EmbyClient.authedRequest(server, EmbyPaths.item(playlistId)).delete().build()
+    val req = EmbyClient.authedRequest(server, "/Items/$playlistId").delete().build()
     EmbyClient.execString(req)
   }
 }

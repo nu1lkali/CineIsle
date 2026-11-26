@@ -153,7 +153,7 @@ object EmbySubtitleDiscovery {
       if (mediaSourceId != null) put("MediaSourceId", JsonPrimitive(mediaSourceId))
     }.toString()
 
-    val request = EmbyClient.authedRequest(server, EmbyPaths.playbackInfo(itemId))
+    val request = EmbyClient.authedRequest(server, "/Items/$itemId/PlaybackInfo")
       .post(payload.toRequestBody(JSON_MEDIA))
       .build()
     return EmbyClient.execJson(request)
