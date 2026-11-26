@@ -413,6 +413,9 @@ fun PlayerSheets(
     Sheets.More -> {
       // 「更多」面板里的播放开关只剩：自动下一集、播完退出（都直接读写偏好）。
       // 循环 / 随机不在这里 —— 底部控件条上已有对应按钮，重复出现只会让两边状态对不上。
+      // 画面旋转在宫格里点一下直接转、不弹面板，所以这里要把当前角度传进去
+      // （标签上显示「已转 90°」）；不在这里 collect 是因为它只在 More 分支用到。
+      val rotation by viewModel.rotation.composeCollectAsState()
       MoreSheet(
         remainingTime = sleepTimerTimeRemaining,
         onStartTimer = onStartSleepTimer,
@@ -426,6 +429,10 @@ fun PlayerSheets(
         // 自动裁黑边（cropdetect，仅 mpv）
         onToggleAutoCrop = viewModel::toggleAutoCrop,
         onSetAutoCrop = viewModel::setAutoCrop,
+        // 画面旋转（vf rotate，仅 mpv 且非直出）：宫格点一下转 90°，长按复位
+        rotationDegrees = rotation.degrees,
+        onRotateVideo = viewModel::rotateScreenCw,
+        onResetRotation = { viewModel.resetScreenRotation(showUpdate = true) },
       )
     }
 

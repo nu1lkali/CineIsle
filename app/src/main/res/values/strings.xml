@@ -1016,6 +1016,12 @@
   <string name="btn_label_shuffle">Shuffle</string>
   <string name="btn_label_mirror">Horizontal Flip</string>
   <string name="btn_label_vflip">Vertical Flip</string>
+  <string name="btn_label_rotate_video">Rotate Picture</string>
+  <string name="player_rotate_degrees">Picture rotated %1$d°</string>
+  <string name="player_rotate_degrees_short">Rotated %1$d°</string>
+  <string name="player_rotate_reset">Picture rotation reset</string>
+  <string name="player_rotate_action">Rotate Picture</string>
+  <string name="player_rotate_unavailable_direct">Direct output decoding does not support picture rotation. Please switch the decoder.</string>
   <string name="btn_label_ab_loop">A-B Loop</string>
   <string name="btn_label_custom_skip">Custom Skip</string>
   <string name="btn_label_bg_playback">Background Playback</string>

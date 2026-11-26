@@ -1457,6 +1457,14 @@ open class PlayerActivity :
     // Don't cleanup MPV if we're doing manual background playback
     if (!isFinishing || isManualBackgroundPlayback) return
 
+    // 画面旋转的 vf 滤镜随内核一起销毁，但 ViewModel 的内存状态不会 ——
+    // 后台播放 / 重新绑定窗口时会复用同一个 ViewModel，只清内核会出现
+    // 「按钮显示转了 90°，画面却是正的」。这里把两边一起归零。
+    //
+    // ⚠️ 必须放在上面那句 `return` **之后**：进后台播放时内核不销毁，
+    // 这时清状态就会把用户正在听的片子的画面旋转也一并抹掉。
+    viewModel.resetScreenRotation()
+
     runCatching {
       PlayerLib.removeObserver(playerObserver)
 
@@ -1502,6 +1510,28 @@ open class PlayerActivity :
 
   override fun abandonAudioFocus() {
     audioFocus.abandon()
+  }
+
+  /**
+   * 画面旋转 90° 后回调：**什么都不做**。
+   *
+   * ## 为什么刻意不改屏幕方向
+   *
+   * 「画面旋转」修的是**内容方向**（拍摄时手机拿反了 / 横竖颠倒），
+   * 「屏幕方向」是**设备姿态**。两件事混在一起会互相抵消：
+   * 竖屏 + 横版片 + 转 90°，如果连屏幕也翻成横屏，用户看到的仍是
+   * 「横屏全屏的正常画面」—— 视觉上等于**没转**，用户会以为功能没生效。
+   *
+   * 正确表现是：竖屏不动，画面变成竖条居中、左右留黑边 —— 用户一眼看出
+   * 「内容被我掰正了」。
+   *
+   * 另外 `setOrientation()` 只在「按视频方向」模式下有副作用（内部会把
+   * `videoParamsOrientationHandled` 置真，冻结后续切集的方向变化），
+   * 在旋转路径上碰它就是白引入一类「转完之后切换集方向不再跟随」的边角问题。
+   * 既然没有一处需要它，这里就留空。
+   */
+  override fun onVideoRotationChanged() {
+    // no-op：见上方说明，屏幕方向不随画面旋转变化。
   }
 
   private fun cleanupAudio() {
@@ -2725,9 +2755,14 @@ open class PlayerActivity :
         val aspect = currentVideoAspect()
         Log.d(TAG, "Video dimension changed: $property, aspect: $aspect")
         pipHelper.updatePictureInPictureParams()
+
         // Update orientation when video dimensions change (fixes Video orientation mode)
         // 但仅首帧设一次：之后切集不再调用 setOrientation，避免「按视频方向」模式下
         // 下一集若是竖屏内容被翻成竖屏，违背用户当前方向（最佳体验：切集不改方向）。
+        //
+        // ⚠️ 与「画面旋转」的边界：旋转走的是 `vf rotate`，它改的是
+        // `video-out-params/dw|dh`，**不会**触发这里的 `video-params/w|h`，
+        // 所以这段天然不会因为用户点了旋转而重设方向 —— 「转画面」不等于「转屏幕」。
         if (playerPreferences.orientation.get() == PlayerOrientation.Video && aspect != null) {
           if (!videoParamsOrientationHandled) {
             setOrientation()
@@ -4219,6 +4254,12 @@ private fun cancelAutoplayCountdown() {
     // 黑边自动裁切：开关打开则探测并裁掉四周黑边；关掉的路径也要清一次 ——
     // 裁切是挂在 mpv 的 vf 链上的，不会随换片自动消失，不清就会带着上一条的黑边偏移播。
     viewModel.applyAutoCropPolicy()
+
+    // 画面旋转：不重置（连播沿用）、只在内核与内存状态不一致时以内核为准校正。
+    // ⚠️ 必须放在 `applyAutoCropPolicy` 之后 —— 两者都动 vf 链，而 cropdetect 会
+    // 先 `vf remove` 自己的标签，顺序反过来不会有问题，但「探测类操作在前、
+    // 校正类操作在后」能保证这里读到的 vf 链已经是本条片子稳定后的样子。
+    viewModel.applyRotationPolicy()
 
     viewModel.unpause()
 

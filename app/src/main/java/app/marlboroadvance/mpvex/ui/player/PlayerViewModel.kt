@@ -2,6 +2,8 @@ package app.marlboroadvance.mpvex.ui.player
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 import app.marlboroadvance.mpvex.ui.player.engine.VideoCrop
+import app.marlboroadvance.mpvex.ui.player.engine.RotationState
+import app.marlboroadvance.mpvex.ui.player.engine.VideoRotate
 
 import android.content.Context
 import android.content.Intent
@@ -21,6 +23,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
+import app.marlboroadvance.mpvex.preferences.DecoderPreferences
 import app.marlboroadvance.mpvex.preferences.GesturePreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
@@ -106,6 +109,8 @@ class PlayerViewModel(
   private val audioPreferences: AudioPreferences by inject()
   private val subtitlesPreferences: SubtitlesPreferences by inject()
   private val advancedPreferences: AdvancedPreferences by inject()
+  /** 画面旋转要判断直出模式：直出（mediacodec_embed）没有滤镜链，折不了。 */
+  private val decoderPreferences: DecoderPreferences by inject()
   private val json: Json by inject()
 
   /**
@@ -619,6 +624,24 @@ class PlayerViewModel(
   // Vertical flip state
   private val _isVerticalFlipped = MutableStateFlow(false)
   val isVerticalFlipped: StateFlow<Boolean> = _isVerticalFlipped.asStateFlow()
+
+  // ==================== 画面旋转（顺时针 90° 步进） ====================
+
+  /**
+   * 画面旋转累计状态。
+   *
+   * 与镜像 / 垂直翻转不同，旋转是**四态**（0/90/180/270）而不是二态，
+   * 所以外面存的是 [RotationState] 而不是 Bool —— 按钮要显示当前角度，
+   * 单靠一个布尔值表达不了「转了两次」。
+   */
+  private val _rotation = MutableStateFlow(RotationState.Identity)
+  val rotation: StateFlow<RotationState> = _rotation.asStateFlow()
+
+  /** 便利出口：UI 里最常读的是「有没有转过」。 */
+  val isRotated: StateFlow<Boolean> =
+    _rotation
+      .map { it.isRotated }
+      .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
   init {
     // 预热公共字幕归档的文件名缓存：重装后第一次播放就能按片名找回手动字幕，
@@ -3355,6 +3378,72 @@ class PlayerViewModel(
     }
 
     playerUpdate.value = PlayerUpdates.ShowText(if (newState) "垂直翻转：开" else "垂直翻转：关")
+  }
+
+  // ==================== 画面旋转（顺时针 90° 步进） ====================
+
+  /**
+   * 顺时针转 90°。
+   *
+   * 四次一循环：第 4 次点击回到 0°，此时滤镜被**彻底移除**（而不是挂一条 0° 的空
+   * rotate），所以「转四次」之后画面与初始状态像素级一致。
+   *
+   * 直出模式（`vo=mediacodec_embed`）没有滤镜链：这里**不改状态、只提示**。
+   * 静默失败比一句解释糟得多 —— 用户会以为按钮坏了。
+   */
+  fun rotateScreenCw() {
+    if (decoderPreferences.isDirectOutput()) {
+      playerUpdate.value =
+        PlayerUpdates.ShowText(host.context.getString(R.string.player_rotate_unavailable_direct))
+      return
+    }
+
+    val next = _rotation.value.next()
+    _rotation.value = next
+    VideoRotate.apply(next.quarterTurns)
+    // 宽高互换后，「按视频比例」进入的横/竖屏判断要重算一次（幂等，不触发重建 vo）
+    host.onVideoRotationChanged()
+
+    playerUpdate.value =
+      if (next.isRotated) {
+        PlayerUpdates.ShowText(host.context.getString(R.string.player_rotate_degrees, next.degrees))
+      } else {
+        PlayerUpdates.ShowText(host.context.getString(R.string.player_rotate_reset))
+      }
+  }
+
+  /**
+   * 把画面旋转复位到 0°，并摘掉滤镜。
+   *
+   * 用于「用户主动还原」以及内核 / 播放会话切换前的清理 —— mpv 内核 destroy 时
+   * vf 链会被一起清空，但 ViewModel 属于 Activity，后台播放路径下会被复用，
+   * 只清内核不清内存状态就会出现「按钮显示转了 90°，画面却是正的」。
+   */
+  fun resetScreenRotation(showUpdate: Boolean = false) {
+    _rotation.value = RotationState.Identity
+    VideoRotate.clear()
+    if (showUpdate) {
+      playerUpdate.value =
+        PlayerUpdates.ShowText(host.context.getString(R.string.player_rotate_reset))
+    }
+  }
+
+  /**
+   * 每次 `file-loaded` 后调用（与 [applyAutoCropPolicy] 同位置）。
+   *
+   * 设计取舍：**换片不主动清零**。同一个目录 / 同一部剧的连播里，拍摄方向通常一致，
+   * 每切一集都要重新转三次是灾难。所以这里既不重置、也不重挂滤镜 ——
+   * 只要 mpv 的 vf 链还在（同一内核实例内换片 vf 链是保留的），旋转就继续生效。
+   *
+   * 唯一的动作是**以内核为准校正内存状态**：外部脚本动了 vf 链、或上一次清理被打断时，
+   * 内存与内核会不一致，这时以读回的真实值为准，而不是信内存。
+   */
+  fun applyRotationPolicy() {
+    val actualDegrees = VideoRotate.readAppliedDegrees()
+    if (actualDegrees == _rotation.value.degrees) return
+    // 无论内核里是什么，都以内核为准对齐内存状态。读不到（0°）就归零，
+    // 否则会出现「按钮亮着但画面是正的」这种两边不一致。
+    _rotation.value = RotationState.ofDegrees(actualDegrees)
   }
 
   // ==================== 黑边自动裁切（cropdetect） ====================

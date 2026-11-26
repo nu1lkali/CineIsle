@@ -1001,6 +1001,12 @@
   <string name="btn_label_shuffle">随机播放</string>
   <string name="btn_label_mirror">水平镜像</string>
   <string name="btn_label_vflip">垂直翻转</string>
+  <string name="btn_label_rotate_video">旋转画面</string>
+  <string name="player_rotate_degrees">画面旋转 %1$d°</string>
+  <string name="player_rotate_degrees_short">已转 %1$d°</string>
+  <string name="player_rotate_reset">画面旋转已复位</string>
+  <string name="player_rotate_action">旋转画面</string>
+  <string name="player_rotate_unavailable_direct">直出解码不支持画面旋转，请切换解码器</string>
   <string name="btn_label_ab_loop">A-B 循环</string>
   <string name="btn_label_custom_skip">自定义跳转</string>
   <string name="btn_label_bg_playback">后台播放</string>

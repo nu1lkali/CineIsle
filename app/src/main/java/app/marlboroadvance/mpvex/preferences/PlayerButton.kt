@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.HeartBroken
 import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material.icons.outlined.Flip
 import androidx.compose.material.icons.outlined.Repeat
+import androidx.compose.material.icons.outlined.RotateRight
 import androidx.compose.material.icons.outlined.Autorenew
 import androidx.compose.material.icons.outlined.Segment
 import androidx.compose.material.icons.outlined.ZoomIn
@@ -49,6 +50,17 @@ enum class PlayerButton(
   PLAYBACK_SPEED(Icons.Outlined.Speed),
   DECODER(Icons.Outlined.Memory),
   SCREEN_ROTATION(Icons.Outlined.ScreenRotation),
+  /**
+   * 画面旋转（顺时针 90° 步进），用于修正拍摄方向颠倒 / 侧躺的片子。
+   *
+   * ⚠️ 图标必须与 [SCREEN_ROTATION] 区分：那个是「屏幕方向」（横 / 竖屏），
+   * 这个是「画面本身」。两者都叫「旋转」时并排出现只能靠猜，所以本项用
+   * [Icons.Outlined.RotateRight]（带箭头的顺时针转角），屏幕方向保持 ScreenRotation。
+   *
+   * 位置紧跟在 [SCREEN_ROTATION] 之后、[FRAME_NAVIGATION] 之前，而不是塞到末尾 ——
+   * 数组顺序就是设置页按钮池的展示顺序，同类项挨着才找得到。
+   */
+  VIDEO_ROTATE(Icons.Outlined.RotateRight),
   FRAME_NAVIGATION(Icons.Outlined.Camera),
   VIDEO_ZOOM(Icons.Outlined.ZoomIn),
   PICTURE_IN_PICTURE(Icons.Outlined.PictureInPictureAlt),
@@ -108,6 +120,7 @@ fun getPlayerButtonLabel(button: PlayerButton): String =
     PlayerButton.PLAYBACK_SPEED -> stringResource(R.string.btn_label_speed)
     PlayerButton.DECODER -> stringResource(R.string.btn_label_decoder)
     PlayerButton.SCREEN_ROTATION -> stringResource(R.string.btn_label_rotation)
+    PlayerButton.VIDEO_ROTATE -> stringResource(R.string.btn_label_rotate_video)
     PlayerButton.FRAME_NAVIGATION -> stringResource(R.string.btn_label_frame_nav)
     PlayerButton.VIDEO_ZOOM -> stringResource(R.string.btn_label_zoom)
     PlayerButton.PICTURE_IN_PICTURE -> stringResource(R.string.btn_label_pip)

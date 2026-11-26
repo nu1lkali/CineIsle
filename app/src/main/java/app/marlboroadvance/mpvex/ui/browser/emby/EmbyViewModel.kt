@@ -18,6 +18,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyFilterOptions
 import app.marlboroadvance.mpvex.domain.emby.EmbyImageInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyImageProviderInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
+import app.marlboroadvance.mpvex.domain.emby.EmbyItemFields
 import app.marlboroadvance.mpvex.domain.emby.EmbyItemLookupInfo
 import app.marlboroadvance.mpvex.domain.emby.EmbyItemsResult
 import app.marlboroadvance.mpvex.domain.emby.EmbyMediaSource
@@ -611,6 +612,41 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     )
     return EmbyItemsPage(result.Items, result.TotalRecordCount)
   }
+
+  /**
+   * 取一页**原始**结果（带 `TotalRecordCount`）。
+   *
+   * 与 [loadItems] 的唯一区别是不把分页壳拆掉：需要自己控制翻页终止条件时
+   * （例如「文件夹最新添加时间」要读总数判断是否翻到底）才用这个。
+   * 其余调用点继续用 [loadItems]，免得处处多一层 `EmbyItemsPage` 包装。
+   */
+  suspend fun loadItemsResult(
+    server: EmbyServer,
+    parentId: String?,
+    includeItemTypes: List<String>? = null,
+    sortBy: String? = null,
+    sortOrder: String? = null,
+    startIndex: Int = 0,
+    limit: Int = 100,
+    recursive: Boolean = true,
+    excludeItemTypes: List<String>? = null,
+    mediaTypes: List<String>? = null,
+    isFolder: Boolean? = null,
+    fields: String = EmbyItemFields.CORE,
+  ): EmbyItemsResult = repository.getItems(
+    server = server,
+    parentId = parentId,
+    sortBy = sortBy,
+    sortOrder = sortOrder,
+    includeItemTypes = includeItemTypes,
+    startIndex = startIndex,
+    limit = limit,
+    recursive = recursive,
+    excludeItemTypes = excludeItemTypes,
+    mediaTypes = mediaTypes,
+    isFolder = isFolder,
+    fields = fields,
+  )
 
   /**
    * 全量扫描：客户端筛选（如按路径判断的「中文字幕」）需要遍历整个库时用。

@@ -7,6 +7,7 @@ import android.text.format.DateUtils
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.outlined.Gif
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.PowerSettingsNew
+import androidx.compose.material.icons.outlined.RotateRight
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Subtitles
@@ -104,6 +106,12 @@ fun MoreSheet(
   onToggleAutoCrop: () -> Unit = {},
   /** 「自动裁黑边」开关：写偏好并立即生效（打开即探测，关闭即摘掉已挂的裁切） */
   onSetAutoCrop: (Boolean) -> Unit = {},
+  /** 当前画面旋转角度（0/90/180/270），供宫格标签显示进度 */
+  rotationDegrees: Int = 0,
+  /** 顺时针转 90°（保底入口，与控件条按钮同源） */
+  onRotateVideo: () -> Unit = {},
+  /** 把画面旋转复位到 0° */
+  onResetRotation: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val decoderPreferences = koinInject<DecoderPreferences>()
@@ -318,6 +326,25 @@ val scope = rememberCoroutineScope()
               onDismissRequest()
               onToggleAutoCrop()
             },
+          )
+        }
+        // 画面旋转：与「自动裁黑边」同属 vf 滤镜，Exo 内核下没有滤镜链，
+        // 因此共用 `VIDEO_FILTERS` 的显隐闸门。宫格点一下直接转 90°（不弹面板），
+        // 转过之后标签带角度，再点一次继续转 —— 与控件条上的按钮完全同源。
+        // ⚠️ 直出模式（mediacodec_embed）也是 mpv，但同样没有滤镜链；那种情况下
+        // 这里仍然显示入口，点下去由 ViewModel 明确提示「请切换解码器」，
+        // 而不是让用户对着一个点了没反应的格子猜。
+        if (engineKind.supports(EngineFeature.VIDEO_FILTERS)) {
+          QuickActionItem(
+            icon = Icons.Outlined.RotateRight,
+            label = if (rotationDegrees == 0) {
+              stringResource(R.string.player_rotate_action)
+            } else {
+              stringResource(R.string.player_rotate_degrees_short, rotationDegrees)
+            },
+            onClick = onRotateVideo,
+            // 长按复位：宫格里没有其它手势，长按是唯一不额外占位的方式
+            onLongClick = onResetRotation,
           )
         }
         // 录制 GIF：取帧走 mpv 的 grabThumbnail，Exo 内核没有，入口整体不显示
@@ -643,6 +670,8 @@ private fun QuickActionItem(
   icon: ImageVector,
   label: String,
   onClick: () -> Unit,
+  /** 可选长按动作（目前只有「旋转画面」用：长按复位）。 */
+  onLongClick: (() -> Unit)? = null,
 ) {
   Column(
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -651,7 +680,7 @@ private fun QuickActionItem(
         .width(76.dp)
         .clip(RoundedCornerShape(16.dp))
         .pressDownScale()
-        .clickable(onClick = onClick)
+        .combinedClickable(onClick = onClick, onLongClick = onLongClick)
         .padding(vertical = MaterialTheme.spacing.small),
   ) {
     Surface(

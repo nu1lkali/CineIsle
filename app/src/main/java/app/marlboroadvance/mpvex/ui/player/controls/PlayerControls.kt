@@ -192,6 +192,9 @@ private val PORTRAIT_RIGHT_CLUSTER =
     PlayerButton.VIDEO_ZOOM,
     PlayerButton.ASPECT_RATIO,
     PlayerButton.SCREEN_ROTATION,
+    // 画面旋转同样是「画面类」工具：和缩放 / 比例 / 屏幕旋转排在一起，
+    // 否则它会因为插入位置靠前而跑到播放状态类按钮中间去。
+    PlayerButton.VIDEO_ROTATE,
   )
 
 fun <T> playerControlsExitAnimationSpec(): FiniteAnimationSpec<T> =
@@ -439,19 +442,29 @@ fun PlayerControls(
   // 当前内核：不支持的按钮直接从控件栏移除（而不是「渲染了但点了没反应」）
   val engineKind = PlayerLib.kind
 
+  // 直出模式（vo=mediacodec_embed）没有滤镜链：画面旋转在这里也做不了，
+  // 与 `EngineFeature` 的过滤同一语义 —— 不支持就不渲染按钮。
+  // 读一次偏好即可，切换解码器会重建播放页。
+  val directOutput = koinInject<app.marlboroadvance.mpvex.preferences.DecoderPreferences>().isDirectOutput()
+  val supportedHere: (app.marlboroadvance.mpvex.preferences.PlayerButton) -> Boolean = { button ->
+    engineKind.supportsButton(button) &&
+      !(button == app.marlboroadvance.mpvex.preferences.PlayerButton.VIDEO_ROTATE && directOutput)
+  }
+
   val (topRightButtons, bottomRightButtons, bottomLeftButtons) =
     remember(
       topRightControlsPref,
       bottomRightControlsPref,
       bottomLeftControlsPref,
       engineKind,
+      directOutput,
     ) {
       val usedButtons = mutableSetOf<app.marlboroadvance.mpvex.preferences.PlayerButton>()
       val topR = appearancePreferences.parseButtons(topRightControlsPref, usedButtons)
       val bottomR = appearancePreferences.parseButtons(bottomRightControlsPref, usedButtons)
       val bottomL = appearancePreferences.parseButtons(bottomLeftControlsPref, usedButtons)
       listOf(topR, bottomR, bottomL)
-    }.map { buttons -> buttons.filter { engineKind.supportsButton(it) } }
+    }.map { buttons -> buttons.filter(supportedHere) }
 
   // 竖屏控件列表按用途拆开：
   //   ① 顶栏右侧快捷开关：解码器 / 音轨 / 字幕 / 收藏 / 更多；
@@ -465,12 +478,12 @@ fun PlayerControls(
   }
   // 上/下一集固定显示在屏幕正中的播放键两侧，从底部按钮条里剔除，避免重复出现；
   // 同时把「画面类」统一挪到按钮条末尾，保证它们始终在右半边。
-  val portraitBottomButtons = remember(portraitSideButtons, engineKind) {
+  val portraitBottomButtons = remember(portraitSideButtons, engineKind, directOutput) {
     val playState = portraitSideButtons.filter { it !in PORTRAIT_RIGHT_CLUSTER }
     val displayState = portraitSideButtons.filter { it in PORTRAIT_RIGHT_CLUSTER }
     (playState + displayState)
       .filter { it != PlayerButton.PREVIOUS && it != PlayerButton.NEXT }
-      .filter { engineKind.supportsButton(it) }
+      .filter(supportedHere)
   }
 
   var isUnlockSliderDragging by remember { mutableStateOf(false) }

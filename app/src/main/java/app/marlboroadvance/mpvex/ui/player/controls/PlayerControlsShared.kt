@@ -66,6 +66,7 @@ import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.outlined.BlurOn
 import androidx.compose.material.icons.outlined.Autorenew
+import androidx.compose.material.icons.outlined.RotateRight
 import androidx.compose.material.icons.outlined.Cast
 import app.marlboroadvance.mpvex.dlna.CastPayload
 import app.marlboroadvance.mpvex.dlna.DlnaCastManager
@@ -691,6 +692,50 @@ fun RenderPlayerButton(
             CurrentChapter(
               chapter = chapter,
               onClick = { onOpenSheet(Sheets.Chapters) },
+            )
+          }
+        }
+      }
+    }
+
+    PlayerButton.VIDEO_ROTATE -> {
+      // 四态（0/90/180/270）：转过即高亮，并在图标右下角挂一个小角度角标。
+      // 长按直接复位 —— 「转歪了想一键还原」比连点三次的路径顺得多。
+      val rotation by viewModel.rotation.collectAsState()
+      val rotateColor = if (rotation.isRotated) MaterialTheme.colorScheme.primary else controlColor
+      @OptIn(ExperimentalFoundationApi::class)
+      Surface(
+        shape = CircleShape,
+        color = if (hideBackground) Color.Transparent else PlayerControlGlassFill,
+        border = if (hideBackground) null else BorderStroke(1.dp, PlayerControlGlassBorder),
+        modifier = Modifier
+          .size(buttonSize)
+          .clip(CircleShape)
+          .combinedClickable(
+            onClick = viewModel::rotateScreenCw,
+            onLongClick = { viewModel.resetScreenRotation(showUpdate = true) },
+          ),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Outlined.RotateRight,
+            contentDescription = stringResource(R.string.btn_label_rotate_video),
+            tint = rotateColor,
+            modifier = Modifier
+              .padding(MaterialTheme.spacing.small)
+              .size(20.dp),
+          )
+          // 角标只在转过之后出现，且贴在按钮右下角内侧 —— 它是**叠加**在同一个
+          // 按钮里，不占控件条宽度，因此不会引起其它按钮重排（布局跳动）。
+          if (rotation.isRotated) {
+            Text(
+              text = "${rotation.degrees}°",
+              style = MaterialTheme.typography.labelSmall,
+              color = rotateColor,
+              maxLines = 1,
+              modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 2.dp, bottom = 1.dp),
             )
           }
         }

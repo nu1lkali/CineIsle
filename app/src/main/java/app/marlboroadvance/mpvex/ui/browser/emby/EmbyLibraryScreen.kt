@@ -137,6 +137,10 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyLibraryFilterState
 import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.domain.emby.FolderLatestCache
+import app.marlboroadvance.mpvex.domain.emby.FolderLatestOrder
+import app.marlboroadvance.mpvex.domain.emby.applyFolderLatestOrder
+import app.marlboroadvance.mpvex.domain.emby.computeFolderLatestOrder
 import app.marlboroadvance.mpvex.domain.emby.LibraryNameIndex
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.domain.smartmerge.OP_DONE
@@ -518,6 +522,16 @@ data class EmbyLibraryScreen(
     // 没手动切过时跟随该排序项的自然方向：名称 / 年份升序，其余（加入时间、评分…）降序
     val sortOrder = sortOrderOverride.takeIf { it.isNotBlank() }
       ?: if (sortBy == "SortName" || sortBy == "ProductionYear") "Ascending" else "Descending"
+
+    /**
+     * 真正发给服务端的 `SortBy`。
+     *
+     * [FOLDER_LATEST_ADDED_SORT] 是**纯客户端**的排序语义，服务端不认识这个名字：
+     * 直接传过去轻则被忽略、重则某些兼容层直接 400。这里把它换成 `SortName` ——
+     * 服务端给的目录顺序只是兜底（没进排序结论的目录按原样垫在后面，
+     * 见 [applyFolderLatestOrder]），真正的顺序由本地计算决定。
+     */
+    val serverSortBy = if (sortBy == FOLDER_LATEST_ADDED_SORT) "SortName" else sortBy
 
     // ── 分类（全部 / 继续播放 / 合集 / 收藏 / 文件夹）──
     // 和排序、筛选一样**按库持久化**：从库里下钻进一个文件夹再返回时，这一页的组合会被重建，
@@ -1259,7 +1273,8 @@ data class EmbyLibraryScreen(
           // 搜索词交给服务端：扫的是「命中那批」而不是整库，
           // 但扫描照样一页一页翻到底 —— 这才是「筛选有、搜索也有」的关键。
           searchTerm = searchQuery.takeIf { it.isNotBlank() },
-          sortBy = sortBy,
+          // 扫描走服务端分页，排序得用服务端认识的那个值（见 serverSortBy）
+          sortBy = serverSortBy,
           sortOrder = sortOrder,
           // 「仅本目录」= 不递归：只扫这一层的直接子项。浏览态照旧用算出来的 [recursive]。
           recursive = if (searching && searchLocalOnly) false else recursive,
@@ -1395,7 +1410,7 @@ data class EmbyLibraryScreen(
             parentId = libraryId,
             includeItemTypes = effectiveTypes,
             filters = effectiveFilters,
-            sortBy = sortBy,
+            sortBy = serverSortBy,
             sortOrder = sortOrder,
             // 用 consumedCount（服务端实际给过多少条），不用 items.size ——
             // 后者被客户端过滤/去重削过，会让翻页窗口回退、同一页反复拉，
@@ -1438,7 +1453,7 @@ data class EmbyLibraryScreen(
             itemTypes = EmbySearchFilter.toItemTypes(searchFilters),
             // 排序参数照旧传给服务端（它认就更好），但真正决定顺序的是下面的客户端排序：
             // 服务端对 SearchTerm + SortBy 这个组合不保证生效，切了排序顺序不变。
-            sortBy = sortBy,
+            sortBy = serverSortBy,
             sortOrder = sortOrder,
             // 搜索不分页、整批返回，所以把上限提到一页的量，客户端排序才有足够样本
             limit = PAGE_SIZE,
@@ -1890,7 +1905,138 @@ data class EmbyLibraryScreen(
     // 这里原本还叠了一层「本地按 Type 切一刀」的结果分栏，但两行 chip 的标签一模一样
     // （全部 / 电影 / 剧集 / 单集 / 合集 / 演员），用户根本分不清哪个才算数，属于重复入口。
     // 已删掉本地那一层：类型筛选只保留一处，改它就重新查库，语义唯一。
-    val displayItems = visibleItems
+    //
+    // ── 「文件夹最新添加时间」排序（v343）──
+    // 只在「文件夹」这一档生效，而且只在**非搜索**的浏览态：
+    //  · 搜索结果是「命中集」，按命中时间重排会让用户找不到刚搜到的东西；
+    //  · 其他档（全部 / 收藏 / 合集…）摆的不是目录，没有「文件夹内最新时间」可言。
+    val folderLatestActive = sortBy == FOLDER_LATEST_ADDED_SORT &&
+      category == EmbyCategory.FOLDER &&
+      searchQuery.isBlank()
+    // 算出来的顺序（null = 还没算完 / 算失败，此时按原顺序显示）
+    var folderLatestOrder by remember(cacheKey) {
+      mutableStateOf<FolderLatestOrder?>(null)
+    }
+    // 手动重新计算的代际：下拉刷新时 +1，让下面的 LaunchedEffect 重跑一遍。
+    // 不能只靠「清缓存」—— LaunchedEffect 的 key 不变它就不会重跑。
+    var folderLatestGeneration by remember(cacheKey) { mutableIntStateOf(0) }
+    // 这一趟计算要不要**跳过缓存**（下拉刷新的那一趟要）。
+    // 用一个可变标记而不是靠「缓存已清」来推断：清缓存是 suspend 的，
+    // 而下拉刷新的回调不是协程 —— 只能在 LaunchedEffect 里清。
+    var folderLatestForce by remember(cacheKey) { mutableStateOf(false) }
+
+    // 按「文件夹内最新入库时间」重排。
+    //
+    // ⚠️ 重排放在渲染前这一步（而不是去改 `items`），有两个硬理由：
+    //  ① `items` 是分页累积的，扫描途中会变；顺序重排只该作用在「这一屏要显示什么」上。
+    //  ② 重排**不增删元素**（applyFolderLatestOrder 的硬约束），所以数量行、
+    //     空态判断、滚动定位全都仍然成立，不需要跟着改。
+    val folderLatestSorted = remember(visibleItems, folderLatestOrder, sortOrder) {
+      val order = folderLatestOrder
+      if (order == null) {
+        visibleItems
+      } else {
+        // 升序 = 最老的文件夹在前（空目录仍在最后，它们不是「最早」而是「没有信息」）。
+        // 「空目录顺序不受方向影响」是有意的，见 orderIds 的注释。
+        applyFolderLatestOrder(visibleItems, order, ascending = sortOrder == "Ascending") { it.Id }
+      }
+    }
+    val displayItems = if (folderLatestActive) folderLatestSorted else visibleItems
+
+    // ── 算「文件夹最新添加时间」的顺序 ──
+    //
+    // 触发条件（全部满足才发请求）：
+    //  ① 当前排序选中了这一档；
+    //  ② 分类是「文件夹」且不在搜索态（见 [folderLatestActive]）；
+    //  ③ 已拿到当前服务器。
+    //
+    // ⚠️ **不拿 `visibleItems` 当目录来源**。它在「文件夹」档是分页结果（每页 100），
+    //    目录超过一页时要用户滚到底才会补下一页 —— 若拿它算顺序，前 100 个之外
+    //    的目录根本不在结果里，用户滚下去看到的是一段没排过的尾巴，
+    //    而且随着继续翻页整块顺序还会跳。这里改成**独立地一次性拉全这一层目录**
+    //    （只取 Id / Name / Path / DateCreated，一页 500 条，通常一发就完），
+    //    与网格的分页解耦。
+    //
+    // 计算本身走 `computeFolderLatestOrder`：递归一页两百条、按需提前终止，
+    // 结论进 [FolderLatestCache]（半小时 TTL、按 服务器+用户+目录 分桶）。
+    // 页面退出时协程随组合一起取消，不会留着半截请求在后台跑。
+    //
+    // ⚠️ 失败一律**静默退回原顺序**：排序是便利功能，不该因为它拿不到数据
+    //    就让用户看见一个错误页或空列表。
+    LaunchedEffect(folderLatestActive, libraryId, collectionType, server?.id, folderLatestGeneration) {
+      if (!folderLatestActive) {
+        // 换走这一档时把结论清掉：下次切回来要重新确认，而不是拿旧顺序糊上去
+        if (folderLatestOrder != null) folderLatestOrder = null
+        return@LaunchedEffect
+      }
+      val current = server ?: return@LaunchedEffect
+
+      val cacheKeyHere = FolderLatestCache.key(current.id, current.userId, libraryId)
+      // 先读缓存：命中就地生效，不让网格先闪一遍原顺序。
+      // 缓存命中时**连目录列表都不用拉** —— 结论里已经带着全部 Id 顺序,
+      // 网格只要按它重排即可（新出现 / 已消失的目录由 applyFolderLatestOrder 兜住）。
+      //
+      // ⚠️ [folderLatestForce] 为真时（下拉刷新那一趟）**跳过缓存并作废这一条**：
+      //    否则刷完还是同一份结论，用户会以为「刷新没生效」。
+      //    只作废这一条，不动别的目录 / 别的库的结论（那些一点没变）。
+      if (folderLatestForce) {
+        FolderLatestCache.invalidate(cacheKeyHere)
+        folderLatestForce = false
+      } else {
+        val cached = FolderLatestCache.get(cacheKeyHere)
+        if (cached != null) {
+          folderLatestOrder = cached
+          return@LaunchedEffect
+        }
+      }
+
+      // 这一层的直接子目录全集。类型取与浏览一致的「文件夹」白名单。
+      // 不递归：要的是**这一层**摆出来的那些目录。
+      val folders = runCatching {
+        viewModel.loadItemsResult(
+          server = current,
+          parentId = libraryId,
+          includeItemTypes = EmbyCategory.FOLDER.itemTypes,
+          startIndex = 0,
+          limit = FOLDER_LAYER_PAGE_SIZE,
+          recursive = false,
+          fields = FOLDER_LAYER_FIELDS,
+        )
+      }.getOrNull()?.Items.orEmpty().filter { isFolderLike(it) }
+      if (folders.isEmpty()) return@LaunchedEffect
+
+      // 递归查询要纳入的条目类型：按库类型推（电影库只要 Movie，剧集库只要 Series）。
+      // 刻意不复用 `effectiveTypes` —— 它在「文件夹」档是 Folder 白名单，
+      // 递归拉只会拿回目录。空 = 该库不限类型（混合 / 家庭视频库）：Emby 把这类
+      // 库的内容存成 Movie / Episode，这时只能靠 isFolder=false 挡住容器。
+      val mediaTypes = allItemTypesFor(collectionType)
+        .orEmpty()
+        .filterNot { it in FOLDER_TYPES }
+
+      val order = computeFolderLatestOrder(
+        parentId = libraryId,
+        children = folders,
+        includeTypes = mediaTypes,
+      ) { parentId, startIndex, limit, types ->
+        viewModel.loadItemsResult(
+          server = current,
+          parentId = parentId,
+          includeItemTypes = types.takeIf { it.isNotEmpty() },
+          sortBy = "DateCreated",
+          sortOrder = "Descending",
+          startIndex = startIndex,
+          limit = limit,
+          recursive = true,
+          // 只要媒体本体：目录 / 季 / 合集这些容器自己没有入库时间可言，
+          // 拉回来只会白占页容量，还会把「第一页」挤满容器导致提前终止失效。
+          isFolder = false,
+          fields = FOLDER_LATEST_FIELDS,
+        )
+      } ?: return@LaunchedEffect
+
+      folderLatestOrder = order
+      FolderLatestCache.put(cacheKeyHere, order)
+    }
 
     /**
      * 当前列表里与 [target] 同番号的条目。
@@ -2916,7 +3062,7 @@ data class EmbyLibraryScreen(
         }
       }
       // 同一套右滑出面板，按当前模式换选项与回调：
-      //  · 媒体：11 项服务端 / 本地排序，后端全量排序（口径不变）；
+      //  · 媒体：服务端排序 + 一档纯客户端的「文件夹最新添加时间」；
       //  · 演员：只有 名称 / 作品数量 / 随机 三档（本地排），「随机」没有方向，再点一次换一批。
       SortMenu(
         expanded = sortMenuExpanded,
@@ -2948,6 +3094,21 @@ data class EmbyLibraryScreen(
             browserPreferences.embyLibrarySortBy.set(newSort)
             // 换排序项就丢掉手动方向，回到该排序项的自然方向
             browserPreferences.embyLibrarySortOrder.set("")
+            // 「文件夹最新添加」只在「文件夹」档有语义 —— 在「全部 / 收藏 / 合集…」
+            // 这些档里选它就等于什么都没发生，用户会以为功能坏了。
+            // 所以选中它时顺手把档位切到「文件夹」：这既是这一档唯一成立的场景，
+            // 也正是用户选它时想看的东西。
+            if (newSort == FOLDER_LATEST_ADDED_SORT && category != EmbyCategory.FOLDER) {
+              category = EmbyCategory.FOLDER
+              // 主动切档 = 用户表过态了，不再是「继承来的」
+              categoryInherited = false
+              // 与 CategoryChips 的 onSelect 同一口径：立刻落盘，
+              // 否则从文件夹返回 / 重启 App 后档位被打回「全部」，而排序还停在这一档，
+              // 于是「选了排序却看不出任何效果」——正是这次要避免的那种困惑。
+              browserPreferences.embyLibraryCategory(libraryId).set(EmbyCategory.FOLDER.name)
+              // 顺序整批变了，回到顶部（与换排序项同一处理，见上面演员分支的说明）
+              gridState.scrollToTop()
+            }
           }
         },
         onOrderChange = { newOrder ->
@@ -3231,6 +3392,13 @@ data class EmbyLibraryScreen(
               browserPreferences.embyFolderCoverLastSynthAt.set(System.currentTimeMillis())
             }
             pendingScrollTop = true
+            // 「文件夹最新添加时间」这一档：下拉刷新也要把顺序重算一遍，
+            // 否则用户刚往某个目录里放的新片，刷新后那个目录还停在老位置。
+            // 只在当前确实用着这一档时才触发 —— 别的档位去作废它没有意义。
+            if (folderLatestActive) {
+              folderLatestForce = true
+              folderLatestGeneration++
+            }
             load(reset = true)
           }
         },
@@ -5853,10 +6021,25 @@ private fun SortMenu(
   }
 }
 
+/**
+ * 「文件夹最新添加时间」的排序值。
+ *
+ * ⚠️ 它**不是** Emby 的 `SortBy` 取值 —— 刻意用一个服务端绝不会有的名字，
+ * 这样万一它被误传给 `/Items`（例如新加的调用点忘了分流），服务端要么报错、
+ * 要么忽略后按默认排序返回，都不会悄悄返回一批「看起来对其实不对」的数据。
+ *
+ * 语义只在「文件夹分类」这一档成立：按每个子目录**内部最新入库的媒体时间**
+ * 排子目录。算法见 `domain/emby/FolderLatestAdded.kt`。
+ */
+internal const val FOLDER_LATEST_ADDED_SORT = "FolderLatestAdded"
+
 /** 排序方式：值与 Emby /Items 的 SortBy 参数一致 */
 private val SORT_OPTIONS = listOf(
   "SortName" to "名称",
   "DateCreated" to "加入时间",
+  // 位置紧跟在「加入时间」后面：两者语义相邻（一个是条目自己的入库时间，
+  // 一个是文件夹内媒体的入库时间），用户找它时会先看这一片。
+  FOLDER_LATEST_ADDED_SORT to "文件夹最新添加",
   "DatePlayed" to "播放时间",
   "ProductionYear" to "发行年份",
   "PremiereDate" to "首播日期",
@@ -5935,6 +6118,11 @@ private const val GACHA_POSTER_WIDTH = 320
  * 这比「排了个寂寞」更难排查，所以宁可不排。
  *
  * [sortBy] 为 `Random` 时直接洗牌，对应排序菜单里的「随机」。
+ *
+ * [sortBy] 为 [FOLDER_LATEST_ADDED_SORT] 时**原样返回**：这一档的顺序由
+ * 「文件夹内最新入库时间」决定（见 `FolderLatestAdded`），是整层级别的重排，
+ * 不是逐条比较能算出来的。此处不认它，搜索路径就自然退回服务端顺序 ——
+ * 好过拿一个不存在的键名去猜一个比较器。
  */
 private fun applyClientSort(
   items: List<EmbyItem>,
@@ -5942,6 +6130,7 @@ private fun applyClientSort(
   sortOrder: String,
 ): List<EmbyItem> {
   if (sortBy == "Random") return items.shuffled()
+  if (sortBy == FOLDER_LATEST_ADDED_SORT) return items
   val comparator: Comparator<EmbyItem> =
     when (sortBy) {
       // 名称统一用 SortName（Emby 内部排序名，能正确处理「第 2 季」这类），取不到再退回 Name
@@ -6303,6 +6492,41 @@ private fun itemSubtitleWithMark(
 }
 
 private const val PAGE_SIZE = 100
+
+/**
+ * 「文件夹最新添加时间」递归扫描要的字段。
+ *
+ * 只要三样：**属于哪个目录**（`Path` 优先、`ParentId` 兜底）和**什么时候入库**
+ * （`DateCreated`）。刻意不用 [app.marlboroadvance.mpvex.domain.emby.EmbyItemFields.CORE] —— 它带着 `MediaSources` /
+ * `People` / `Overview`，一页两百条时响应体能大出十倍，而这三样一个字都用不上。
+ *
+ * ⚠️ `Path` 必须显式索取：Emby 不带 Fields 时默认不返回它，
+ * 缺了它归因就只剩下 `ParentId` 这条只能认直接子项的路。
+ */
+private const val FOLDER_LATEST_FIELDS = "DateCreated,Path,ParentId"
+
+/**
+ * 「文件夹最新添加时间」排序时，一次性拉全「这一层的直接子目录」的每页条数。
+ *
+ * 与网格分页的 [PAGE_SIZE] 是两码事：那边 100 是为了滚动体验（首屏要快），
+ * 这边只是要一份 Id 清单，一页多点反而更省事 —— 几百个目录的库一发就拉完，
+ * 不必跟着网格一页页滚。
+ *
+ * ⚠️ 这不是「上限」而是「目标」：超过这么多目录的极端库会只拿到前 N 个。
+ * 这时**不会退化成一片乱序** —— `applyFolderLatestOrder` 把没进清单的目录
+ * 按原顺序垫在后面，拿到清单的那部分仍然是排好的（见其 KDoc）。
+ */
+private const val FOLDER_LAYER_PAGE_SIZE = 500
+
+/**
+ * 拉子目录清单时要的字段。
+ *
+ * 只要三样：**Id**（排序结论按 Id 记）、**Path**（把媒体归到它名下）、
+ * **Name / Type**（`isFolderLike` 判容器、网格 key 兜底）。与
+ * [FOLDER_LATEST_FIELDS] 分开写是因为这里**绝不能**要 `DateCreated`：
+ * 目录自己的入库时间是「这个目录被扫描到的时刻」，拿它排序就是本功能要解决的误解。
+ */
+private const val FOLDER_LAYER_FIELDS = "SortName,Path"
 
 /** 枚举名 → [EmbyCardStyle]，取值异常时回退到海报样式 */
 private fun embyCardStyleFromName(name: String): EmbyCardStyle =

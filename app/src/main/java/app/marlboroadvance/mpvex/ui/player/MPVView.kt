@@ -47,9 +47,10 @@ class MPVView(
   var isExiting = false
 
   fun getVideoOutAspect(): Double? {
-    // Try to get aspect from video-params/aspect first
     val rawAspect = MPVLib.getPropertyDouble("video-params/aspect")
-    val rotate = MPVLib.getPropertyInt("video-params/rotate") ?: 0
+    // 容器自带的旋转（手机竖拍常见 90）。`video-params/aspect` 已按它修正过，
+    // 这里只在「aspect 缺失、退化成 w/h 现算」的分支里需要它。
+    val containerRotate = MPVLib.getPropertyInt("video-params/rotate") ?: 0
 
     // If aspect is not available or 0, calculate from width and height
     val finalAspect = if (rawAspect == null || rawAspect < 0.001) {
@@ -62,7 +63,9 @@ class MPVView(
       }.getOrDefault(0)
 
       if (width > 0 && height > 0) {
-        width.toDouble() / height.toDouble()
+        val wOverH = width.toDouble() / height.toDouble()
+        // 原始 w/h 是**未旋转**的，先按容器 rotate 修正，后面才只叠加滤镜角度
+        if (containerRotate % 180 == 90) 1.0 / wOverH else wOverH
       } else {
         null
       }
@@ -74,7 +77,12 @@ class MPVView(
       if (aspect <= 0.001) {
         return null
       }
-      val isRotated = (rotate % 180 == 90)
+      // ⚠️ `video-params/aspect` 是**已含容器 rotate 修正后**的比例，
+      // 所以这里只需再叠加**我们自己**的 rotate 滤镜角度做一次反转，
+      // 不能再把容器 rotate 算第二遍 —— 那会把竖拍片子的比例算错。
+      // `vf rotate` 不会回写 `video-params/rotate`，这也是必须单独读滤镜状态的原因。
+      val userRotate = app.marlboroadvance.mpvex.ui.player.engine.VideoRotate.readAppliedDegrees()
+      val isRotated = (userRotate % 180 == 90)
       val correctedAspect = if (isRotated) 1.0 / aspect else aspect
       correctedAspect
     }

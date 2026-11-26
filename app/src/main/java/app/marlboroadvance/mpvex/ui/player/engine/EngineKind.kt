@@ -161,6 +161,18 @@ enum class EngineFeature {
   /** 镜像 / 垂直翻转 */
   MIRROR_FLIP,
 
+  /**
+   * 画面旋转（顺时针 90° 步进）。
+   *
+   * ⚠️ **刻意不复用 [MIRROR_FLIP]**：两者都是 `vf` 滤镜，但 GSY 侧一条都没有实现，
+   * 若合并成同一项，将来任何一边补了实现都会让另一边冒出「按钮能点、点了没反应」。
+   * 独立一项的代价只是一行枚举，换来的是能力边界可以精确标注。
+   *
+   * 另一个隐含边界：mpv 直出模式（`vo=mediacodec_embed`）没有滤镜链，
+   * 即便内核是 mpv 也折不了。这一层由调用方按 `isDirectOutput()` 再拦一次。
+   */
+  VIDEO_ROTATE,
+
   /** 后台播放（音频继续） */
   BACKGROUND_PLAYBACK,
 
@@ -238,6 +250,7 @@ fun PlayerButton.requiredFeature(): EngineFeature? =
     PlayerButton.BACKGROUND_PLAYBACK -> EngineFeature.BACKGROUND_PLAYBACK
     PlayerButton.AB_LOOP -> EngineFeature.AB_LOOP
     PlayerButton.MIRROR, PlayerButton.VERTICAL_FLIP -> EngineFeature.MIRROR_FLIP
+    PlayerButton.VIDEO_ROTATE -> EngineFeature.VIDEO_ROTATE
     PlayerButton.CURRENT_CHAPTER, PlayerButton.BOOKMARKS_CHAPTERS -> EngineFeature.CHAPTERS
     PlayerButton.PICTURE_IN_PICTURE -> EngineFeature.PICTURE_IN_PICTURE
     else -> null
