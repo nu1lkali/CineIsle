@@ -81,6 +81,7 @@ import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import app.marlboroadvance.mpvex.utils.history.RecentlyPlayedOps
 import app.marlboroadvance.mpvex.utils.media.HttpUtils
 import app.marlboroadvance.mpvex.utils.media.SubtitleOps
+import app.marlboroadvance.mpvex.utils.net.HttpClients
 import app.marlboroadvance.mpvex.utils.storage.FileTypeUtils
 import app.marlboroadvance.mpvex.utils.storage.FileFilterUtils
 import com.github.k1rakishou.fsaf.FileManager
@@ -406,10 +407,11 @@ open class PlayerActivity :
    * 把正在播的正片挤掉。独立的短超时客户端反而是这个场景的正确选择。
    */
   private val preloadHttpClient: OkHttpClient by lazy {
-    OkHttpClient.Builder()
-      .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-      .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-      .build()
+    HttpClients.build(
+      name = "player-preload",
+      connectTimeoutSeconds = 5,
+      readTimeoutSeconds = 10,
+    )
   }
 
   /**
@@ -2942,15 +2944,15 @@ private fun warmUpNextEpisode(index: Int) {
   val url = networkFilePaths.getOrNull(index)?.takeIf { it.startsWith("http") } ?: return
   lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
     runCatching {
-      val client = okhttp3.OkHttpClient.Builder()
-        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-        .build()
+      // ⚠️ 复用 [preloadHttpClient]，**不要**在这里新建客户端：
+      // 预热的全部价值就在于「把 DNS / TCP / TLS 以及 keep-alive 连接留在池子里，
+      // 切集时直接命中」。新建一个客户端等于每次都往一个随即被丢弃的池子里
+      // 建立连接 —— 预热白做，还多烧一次握手。
       val req = okhttp3.Request.Builder()
         .url(url)
         .header("Range", "bytes=0-65535")
         .build()
-      client.newCall(req).execute().use { it.body?.close() }
+      preloadHttpClient.newCall(req).execute().use { it.body?.close() }
     }
   }
 }

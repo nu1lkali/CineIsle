@@ -51,7 +51,7 @@ object EmbySubtitles {
     isHearingImpaired: Boolean? = null,
   ): List<EmbyRemoteSubtitle> {
     // language 走 path 段，必须编码（虽然三字母码实际都是 ASCII，但别赌）
-    val path = "/Items/$itemId/RemoteSearch/Subtitles/${java.net.URLEncoder.encode(language, "UTF-8")}"
+    val path = EmbyPaths.remoteSubtitles(itemId, java.net.URLEncoder.encode(language, "UTF-8"))
     return EmbyClient.getJson(
       server = server,
       path = path,
@@ -83,7 +83,7 @@ object EmbySubtitles {
   ): EmbySubtitleDownloadResult =
     EmbyClient.postJson(
       server = server,
-      path = "/Items/$itemId/RemoteSearch/Subtitles/$subtitleId",
+      path = EmbyPaths.remoteSubtitleById(itemId, subtitleId),
       bodyJson = "",
       query = buildMap { put("MediaSourceId", mediaSourceId) },
     )
@@ -108,7 +108,7 @@ object EmbySubtitles {
   ): ByteArray {
     val req = EmbyClient.authedRequest(
       server,
-      "/Items/$itemId/$mediaSourceId/Subtitles/$subtitleIndex/Stream.$format",
+      EmbyPaths.itemSubtitleStream(itemId, mediaSourceId, subtitleIndex, format),
     ).get().build()
     EmbyClient.httpClient.newCall(req).execute().use { resp ->
       val bytes = resp.body.bytes()

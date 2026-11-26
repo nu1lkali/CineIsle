@@ -40,7 +40,7 @@ object EmbyItemsApi {
     parentId: String? = null,
   ): EmbyItemsResult = EmbyHttpCore.getJson(
     server,
-    "/Users/${server.userId}/Items/Resume",
+    EmbyPaths.userResume(server.userId),
     mapOf(
       "startIndex" to startIndex.toString(),
       "limit" to limit.toString(),
@@ -72,7 +72,7 @@ object EmbyItemsApi {
     if (ids.isEmpty()) return EmbyItemsResult()
     return EmbyHttpCore.getJson(
       server,
-      "/Users/${server.userId}/Items",
+      EmbyPaths.userItems(server.userId),
       mapOf(
         "Ids" to ids.joinToString(","),
         "Recursive" to "true",
@@ -97,7 +97,7 @@ object EmbyItemsApi {
     includeItemTypes: List<String>? = listOf("Movie", "Series"),
   ): List<EmbyItem> = EmbyHttpCore.getJson<List<EmbyItem>>(
     server,
-    "/Users/${server.userId}/Items/Latest",
+    EmbyPaths.userLatest(server.userId),
     mapOf(
       "limit" to limit.toString(),
       "ParentId" to parentId,
@@ -251,7 +251,7 @@ object EmbyItemsApi {
     q["EnableImages"] = "true"
     q["EnableUserData"] = "true"
     q["ImageTypeLimit"] = "1"
-    return EmbyHttpCore.getJson(server, "/Users/${server.userId}/Items", q)
+    return EmbyHttpCore.getJson(server, EmbyPaths.userItems(server.userId), q)
   }
 
   /**
@@ -338,7 +338,7 @@ object EmbyItemsApi {
 
   /** 某媒体库下出现过的全部类型名 */
   fun getGenres(server: EmbyServer, parentId: String? = null): List<String> =
-    nameList(server, "/Genres", parentId)
+    nameList(server, EmbyPaths.GENRES, parentId)
 
   /**
    * 按名字查「类型」（Genre）条目的 Id。
@@ -365,7 +365,7 @@ object EmbyItemsApi {
   fun getGenreIdByName(server: EmbyServer, name: String): String? {
     if (name.isBlank()) return null
     // 主路：官方聚合端点
-    idNameList(server, "/Genres", parentId = null)
+    idNameList(server, EmbyPaths.GENRES, parentId = null)
       .let { candidates ->
         candidates.firstOrNull { it.name.equals(name, ignoreCase = true) }
           ?: candidates.firstOrNull { it.name.contains(name, ignoreCase = true) }
@@ -398,7 +398,7 @@ object EmbyItemsApi {
     runCatching {
       val q = LinkedHashMap<String, String?>()
       q["UserId"] = server.userId
-      EmbyHttpCore.getJson<EmbyItemsResult>(server, "/LiveTv/Channels", q).Items
+      EmbyHttpCore.getJson<EmbyItemsResult>(server, EmbyPaths.LIVE_TV_CHANNELS, q).Items
     }.onFailure {
       EmbyLog.warn("getLiveTvChannels 失败：${it.message} —— 该服务器可能未启用直播电视", it)
     }.getOrDefault(emptyList())
@@ -437,7 +437,7 @@ object EmbyItemsApi {
       q["Limit"] = limit.toString()
       // Overview 是节目简介，Emby 对该端点默认不回，得显式要
       q["Fields"] = "Overview"
-      EmbyHttpCore.getJson<EmbyItemsResult>(server, "/LiveTv/Programs", q).Items
+      EmbyHttpCore.getJson<EmbyItemsResult>(server, EmbyPaths.LIVE_TV_PROGRAMS, q).Items
     }.onFailure {
       EmbyLog.warn("getLiveTvPrograms 失败：${it.message} —— 该服务器可能没有节目单数据", it)
     }.getOrDefault(emptyList())
@@ -473,7 +473,7 @@ object EmbyItemsApi {
 
   /** 某媒体库里出现过的工作室（出品方） */
   fun getStudios(server: EmbyServer, parentId: String? = null): List<EmbyIdName> =
-    idNameList(server, "/Studios", parentId)
+    idNameList(server, EmbyPaths.STUDIOS, parentId)
 
   /**
    * 一次拿齐筛选面板需要的全部可选项。
@@ -485,18 +485,18 @@ object EmbyItemsApi {
   fun getFilterOptions(server: EmbyServer, parentId: String? = null): EmbyFilterOptions {
     // /Genres、/Tags 的返回体里 Items[] 同时带 Id 和 Name，一次请求拿两样
     // （名字给 UI，Id 给「按 Id 筛」的 GenreIds / TagIds 用）。
-    val genreItems = idNameList(server, "/Genres", parentId)
-    val tagItems = idNameList(server, "/Tags", parentId)
+    val genreItems = idNameList(server, EmbyPaths.GENRES, parentId)
+    val tagItems = idNameList(server, EmbyPaths.TAGS, parentId)
     return EmbyFilterOptions(
       genres = genreItems.map { it.name },
       tags = tagItems.map { it.name },
       genreItems = genreItems,
       tagItems = tagItems,
-      years = nameList(server, "/Years", parentId)
+      years = nameList(server, EmbyPaths.YEARS, parentId)
         .mapNotNull { it.toIntOrNull() }
         .sortedDescending()
         .takeIf { it.isNotEmpty() } ?: fallbackYears(),
-      officialRatings = nameList(server, "/OfficialRatings", parentId),
+      officialRatings = nameList(server, EmbyPaths.OFFICIAL_RATINGS, parentId),
       persons = EmbyClient.getPersons(server, parentId),
       studios = getStudios(server, parentId),
     )
@@ -521,7 +521,7 @@ object EmbyItemsApi {
    * 「优先 TagItems、为空再退回 Tags」的写法，两边都索取就是白搭风险。
    */
   fun getItem(server: EmbyServer, itemId: String): EmbyItem {
-    val path = "/Users/${server.userId}/Items/$itemId"
+    val path = EmbyPaths.userItem(server.userId, itemId)
     // 先按「带 ExternalUrls」的清单要一次，失败再退回不带它的（原因见 [EmbyItemFields.ITEM_FIELDS_WITH_EXTERNAL_URLS]）。
     // ⚠️ 必须显式写 `<EmbyItem>`：runCatching 里推断不出 reified 类型参数。
     val withExternalUrls = runCatching {
@@ -577,7 +577,7 @@ object EmbyItemsApi {
     // 各容器只有最基本的几个字段，名字相关的那几项（`SortName` 等）一律为空。
     // 于是导航里显示的就不是「用户起的那个名字」，而是别的来源的短名 ——
     // 症状是「某一层显示的名字和它真实叫法对不上」（往往只剩数字后缀之类）。
-    return EmbyHttpCore.getJson(server, "/Items/$itemId/Ancestors", mapOf("fields" to EmbyItemFields.ANCESTOR_FIELDS))
+    return EmbyHttpCore.getJson(server, EmbyPaths.itemAncestors(itemId), mapOf("fields" to EmbyItemFields.ANCESTOR_FIELDS))
   }
 
   /**
@@ -601,7 +601,7 @@ object EmbyItemsApi {
    * 这种情况在 UI 上按「第 N 章 / 时间」兜底展示（见 `GsyChapterSheet`）。
    */
   fun getItemChapters(server: EmbyServer, itemId: String): List<EmbyChapter> =
-    EmbyHttpCore.getJson(server, "/Items/$itemId/Chapters")
+    EmbyHttpCore.getJson(server, EmbyPaths.itemChapters(itemId))
 
   /**
    * 拉取条目的片头 / 片尾分段（Emby 4.7+ 原生 Intro Skip）。
@@ -615,7 +615,7 @@ object EmbyItemsApi {
    * 调用方（播放页）拿空结果时退到「固定时长兜底」，见 `PlayerPreferences.autoSkipIntro`。
    */
   fun getItemIntros(server: EmbyServer, itemId: String): EmbyIntrosResult =
-    EmbyHttpCore.getJson(server, "/Users/${server.userId}/Items/$itemId/Intros")
+    EmbyHttpCore.getJson(server, EmbyPaths.userItemIntros(server.userId, itemId))
 
   /**
    * 关键词搜索。
@@ -684,7 +684,7 @@ object EmbyItemsApi {
     limit: Int? = null,
   ): EmbyItemsResult = EmbyHttpCore.getJson(
     server,
-    "/Shows/$seriesId/Seasons",
+    EmbyPaths.showSeasons(seriesId),
     mapOf(
       "UserId" to server.userId,
       "StartIndex" to startIndex.toString(),
@@ -708,7 +708,7 @@ object EmbyItemsApi {
     limit: Int? = null,
   ): EmbyItemsResult = EmbyHttpCore.getJson(
     server,
-    "/Shows/$seriesId/Episodes",
+    EmbyPaths.showEpisodes(seriesId),
     mapOf(
       "UserId" to server.userId,
       "SeasonId" to seasonId,
@@ -867,7 +867,7 @@ object EmbyItemsApi {
     excludeIdList: List<String>? = null,
   ): EmbyItemsResult = EmbyHttpCore.getJson(
     server,
-    "/Items/$itemId/Similar",
+    EmbyPaths.itemSimilar(itemId),
     mapOf(
       "UserId" to server.userId,
       "Limit" to limit.toString(),
@@ -900,7 +900,7 @@ object EmbyItemsApi {
     filters: List<String>? = null,
   ): EmbyItemsResult = EmbyHttpCore.getJson(
     server,
-    "/Items/$itemId/InstantMix",
+    EmbyPaths.itemInstantMix(itemId),
     mapOf(
       "UserId" to server.userId,
       "Limit" to limit.toString(),
@@ -932,7 +932,7 @@ object EmbyItemsApi {
     seriesId: String? = null,
   ): EmbyItemsResult = EmbyHttpCore.getJson(
     server,
-    "/Shows/NextUp",
+    EmbyPaths.SHOWS_NEXT_UP,
     mapOf(
       "UserId" to server.userId,
       "Limit" to limit.toString(),
