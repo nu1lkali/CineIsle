@@ -81,6 +81,7 @@ import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import app.marlboroadvance.mpvex.utils.history.RecentlyPlayedOps
 import app.marlboroadvance.mpvex.utils.media.HttpUtils
 import app.marlboroadvance.mpvex.utils.media.SubtitleOps
+import app.marlboroadvance.mpvex.utils.net.HttpClients
 import app.marlboroadvance.mpvex.utils.storage.FileTypeUtils
 import app.marlboroadvance.mpvex.utils.storage.FileFilterUtils
 import com.github.k1rakishou.fsaf.FileManager
@@ -406,10 +407,11 @@ open class PlayerActivity :
    * 把正在播的正片挤掉。独立的短超时客户端反而是这个场景的正确选择。
    */
   private val preloadHttpClient: OkHttpClient by lazy {
-    OkHttpClient.Builder()
-      .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-      .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-      .build()
+    HttpClients.build(
+      name = "player-preload",
+      connectTimeoutSeconds = 5,
+      readTimeoutSeconds = 10,
+    )
   }
 
   /**
@@ -481,6 +483,13 @@ open class PlayerActivity :
   /** 卡死看门狗：解码器「出一两秒后停住」时自动切软解 / 关闭 dr。 */
   private var stallWatchJob: Job? = null
   private var stallRecoveryAttempts = 0
+  /**
+   * 起播看门狗：网络地址交出去之后迟迟没有 `file-loaded` ⇒ 提示「连不上视频源」。
+   *
+   * 与 [stallWatchJob] 分工不同：那个管「已经出画面、后来卡住」，这个只管
+   * 「连文件都没打开」。两者都只在 mpv 内核下运行。
+   */
+  private var startupWatchJob: Job? = null
   private var isUserFinishing = false
   private var isManualBackgroundPlayback = false // Track manual background playback trigger
   private var mpvInitialized = false // Track MPV initialization state
@@ -807,7 +816,65 @@ open class PlayerActivity :
    * 探测能力没有丢，只是挪到了「重试」—— 见 [retryPlayback]。
    */
   private fun startPlayback(uri: String) {
-    player.playFile(uri)
+    startStartupWatchdog(uri)
+    // mpv 的 JNI 门面在极端情况下会直接抛（初始化竞态、Surface 已销毁、地址格式非法…）。
+    // 网络层的失败不会走到这里 —— 那是 `end-file` 事件，见 [handleEndFileWithError]；
+    // 但真抛出来时也不该让播放页跟着崩，拦下来转成同一张错误卡片即可。
+    runCatching { player.playFile(uri) }.onFailure { error ->
+      startupWatchJob?.cancel()
+      dipLog(
+        "start-playback-failed",
+        "uri=${uri.take(160)} err=${error.javaClass.simpleName}: ${error.message}",
+      )
+      viewModel.showPlaybackError(
+        "播放内核没能接收这个地址（${error.javaClass.simpleName}）。\n" +
+          "可以重试一次；如果反复出现，返回后换一个内核再试。",
+      )
+    }
+  }
+
+  /**
+   * 起播看门狗：地址交出去之后，[STARTUP_WATCHDOG_MS] 内连 `file-loaded` 都没有 ⇒ 提示。
+   *
+   * ## 它补的是哪一段空白
+   *
+   * 反代 / 上游挂掉时，`/Videos/{id}/stream` 可能既不返回数据、也不立刻报错（服务端还在
+   * 试着连远端源），mpv 就一直停在「打开中」。界面上只有一个永远转的加载圈，用户既不知道
+   * 发生了什么，也没法判断该等还是该退。
+   *
+   * 这里只做一件事：**到点把原因说出来**，并且复用现有的错误卡片（可重试 / 可返回）。
+   * 不 `stop()`、不重发请求、不打断 mpv —— 慢服务端真的要几十秒时，一旦 `file-loaded`
+   * 到来，[handleFileLoaded] 会自己把卡片清掉（那时 `playbackFileGeneration` 已经变了，
+   * 本协程早就收摊了）。所以它不会把「正在慢慢连」误判成「失败了」并夺走用户的选择。
+   *
+   * ## 为什么只盯远端地址
+   *
+   * 本地文件打不开有另一条路（`isLocalFileMissing` 直接 toast 退出）；`127.0.0.1` 是远程
+   * ISO 的本地 Range 代理，它慢是设计的一部分，不能算「连不上服务器」。
+   */
+  private fun startStartupWatchdog(uri: String) {
+    startupWatchJob?.cancel()
+    startupWatchJob = null
+    if (engineKind != EngineKind.MPV) return
+    if (!uri.startsWith("http://") && !uri.startsWith("https://")) return
+    if (uri.contains("127.0.0.1") || uri.contains("localhost")) return
+
+    val generation = playbackFileGeneration
+    startupWatchJob = lifecycleScope.launch {
+      delay(STARTUP_WATCHDOG_MS)
+      if (isFinishing || isDestroyed) return@launch
+      // `FILE_LOADED` 会推进 generation ⇒ 文件已经打开了，这条提示不该出现
+      if (playbackFileGeneration != generation) return@launch
+      if (viewModel.firstFrameRendered.value) return@launch
+      // 已经播完 / 已经由 [handleEndFileWithError] 给出更具体的原因 ⇒ 别覆盖
+      if (PlayerLib.getPropertyBoolean("eof-reached") == true) return@launch
+      if (viewModel.playbackError.value != null) return@launch
+
+      viewModel.showPlaybackError(
+        "等了 ${STARTUP_WATCHDOG_MS / 1000} 秒还没从服务器取到视频数据。\n" +
+          "服务器或反代可能不可达；可以继续等，也可以点「重试」重新请求一次。",
+      )
+    }
   }
 
   /**
@@ -822,18 +889,19 @@ open class PlayerActivity :
   private fun retryPlayback(uri: String) {
     // 本地文件 / content:// / 本地 ISO 代理（127.0.0.1）：不需要探测，直接播
     if (!uri.startsWith("http://") && !uri.startsWith("https://")) {
-      player.playFile(uri)
+      startPlayback(uri)
       return
     }
     lifecycleScope.launch {
       val probe = withContext(Dispatchers.IO) { EmbyClient.probeStreamUrl(uri) }
       when (probe) {
         // 用探测跟完 302 后的最终地址：省得内核自己再跳一次，也避免「内核不跟 302」
-        is StreamProbe.Ok -> player.playFile(probe.finalUrl)
+        is StreamProbe.Ok -> startPlayback(probe.finalUrl)
         // 明确不可播：不调 playFile ⇒ mpv 不会去碰死链 ⇒ 不会 native 崩溃，
         // 改成界面上的一张错误卡片（用户能看到原因，而不是整个 App 消失）。
         is StreamProbe.Denied -> viewModel.showPlaybackError(probe.message)
-        StreamProbe.Unknown -> player.playFile(uri)
+        // 探不出来照样试：走 [startPlayback] 是为了重新挂上起播看门狗 + JNI 兜底
+        StreamProbe.Unknown -> startPlayback(uri)
       }
     }
   }
@@ -2942,15 +3010,15 @@ private fun warmUpNextEpisode(index: Int) {
   val url = networkFilePaths.getOrNull(index)?.takeIf { it.startsWith("http") } ?: return
   lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
     runCatching {
-      val client = okhttp3.OkHttpClient.Builder()
-        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-        .build()
+      // ⚠️ 复用 [preloadHttpClient]，**不要**在这里新建客户端：
+      // 预热的全部价值就在于「把 DNS / TCP / TLS 以及 keep-alive 连接留在池子里，
+      // 切集时直接命中」。新建一个客户端等于每次都往一个随即被丢弃的池子里
+      // 建立连接 —— 预热白做，还多烧一次握手。
       val req = okhttp3.Request.Builder()
         .url(url)
         .header("Range", "bytes=0-65535")
         .build()
-      client.newCall(req).execute().use { it.body?.close() }
+      preloadHttpClient.newCall(req).execute().use { it.body?.close() }
     }
   }
 }
@@ -3715,6 +3783,9 @@ private fun cancelAutoplayCountdown() {
       MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
         playbackFileGeneration++
         directOutputFallbackApplied = false
+        // 文件已经打开 ⇒ 起播看门狗收摊（它判的就是「到点还没 FILE_LOADED」）
+        startupWatchJob?.cancel()
+        startupWatchJob = null
         stallWatchJob?.cancel()
         stallWatchJob = null
         stallRecoveryAttempts = 0
@@ -3848,10 +3919,38 @@ private fun cancelAutoplayCountdown() {
     if (!failed) return
     if (viewModel.firstFrameRendered.value) return
 
+    // ⚠️ 「打不开」有两种完全不同的原因，给的处置建议也不同（v341）：
+    //   · **文件本身坏了**（容器头能认、读到坏包解不出帧）；
+    //   · **根本没连上**（反代 / 上游挂掉、地址过期、超时）—— 这是远端源最常见的形态。
+    // 判据用 `end-file` 里的 `error` 字符串（libmpv 会带一句 "Failed to open http://…" /
+    // "HTTP error 500" / "Connection timed out" 之类）。读不到就退回「损坏」那套文案 ——
+    // 宁可措辞保守，也不要把「连不上」说成「文件坏了」。
+    val errorText = runCatching { data?.asMap()?.get("error")?.asString() }.getOrNull()
+    val transportHints = listOf(
+      "http error",
+      "connection",
+      "timed out",
+      "timeout",
+      "could not resolve",
+      "network is unreachable",
+      "failed to open http",
+    )
+    val looksLikeTransport = errorText != null &&
+      transportHints.any { errorText.contains(it, ignoreCase = true) }
+
+    if (looksLikeTransport) {
+      viewModel.showPlaybackError(
+        "没能从服务器取到这个视频（连接失败或服务端出错）。\n" +
+          "可以重试一次；如果一直这样，请检查服务器 / 反代是否正常。",
+      )
+      return
+    }
+
     viewModel.showPlaybackError(
       "这个文件的内容可能已经损坏：播放内核连一帧画面都没能解出来。\n" +
         "可以重试一次，或者换一份文件；也可以在设置里改用 GSY 内核再试。",
     )
+    return
   }
 
   /**
@@ -6366,6 +6465,16 @@ private fun cancelAutoplayCountdown() {
 
   companion object {
     private const val DIRECT_OUTPUT_CODEC_WATCHDOG_MS = 3_500L
+
+    /**
+     * 起播看门狗的等待上限（毫秒）。到点还没有 `FILE_LOADED` 就提示「连不上视频源」。
+     *
+     * 取 40 秒的理由：正常片源（含 302 + 网盘直链）通常 1～3 秒就 `file-loaded`；
+     * 服务端第一次 probe strm 远端源那种慢路径确实可能十几秒，40 秒能把它们放过去，
+     * 又不会让「反代挂了」这种必然失败的场景把用户永远按在加载圈上。
+     * 注意它**只是提示**，不中断播放 —— 见 [startStartupWatchdog]。
+     */
+    private const val STARTUP_WATCHDOG_MS = 40_000L
     /**
      * Intent action used to return playback result data to the calling activity.
      */

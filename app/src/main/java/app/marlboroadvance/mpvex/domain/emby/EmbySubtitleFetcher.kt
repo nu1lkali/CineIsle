@@ -96,7 +96,7 @@ object EmbySubtitleFetcher {
     var lastReason = "未知错误"
     var lastCode = 0
     formats.forEachIndexed { position, format ->
-      val path = "/Videos/$itemId/$msId/Subtitles/${subtitle.streamIndex}/Stream.$format"
+      val path = EmbyPaths.videoSubtitleStream(itemId, msId, "${subtitle.streamIndex}", format)
       val result = fetchBytesWithToken(server, path)
       when (result) {
         is SubtitleFetchResult.Ok -> {
@@ -194,7 +194,7 @@ object EmbySubtitleFetcher {
     val path = if (url.startsWith("/")) url else "/$url"
     // 与 EmbyClient.authedRequest 同口径：走端点解析器（多地址/故障转移），
     // 服务端返回的相对地址不带 /emby 前缀，这里补上
-    return EmbyEndpoints.hostUrl(server) + "/emby" + path
+    return EmbyHttpCore.absolute(server, path)
   }
 
   /** 从 URL 里取 `api_key`（只用于补 header，**不用于打日志**）。 */

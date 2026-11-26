@@ -5,6 +5,7 @@ import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.NetworkClient
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.clients.NetworkClientFactory
 import app.marlboroadvance.mpvex.ui.player.PlayerDiagLog
+import app.marlboroadvance.mpvex.utils.net.HttpClients
 import com.hierynomus.msdtyp.AccessMask
 import com.hierynomus.mssmb2.SMB2CreateDisposition
 import com.hierynomus.mssmb2.SMB2ShareAccess
@@ -44,11 +45,11 @@ class NetworkStreamingProxy private constructor() : NanoHTTPD("127.0.0.1", 0) {
    * 鉴权是 Basic 且服务器来源跟 Emby 无关。
    */
   private val webDavRangeClient: OkHttpClient by lazy {
-    OkHttpClient.Builder()
-      .connectTimeout(15, TimeUnit.SECONDS)
-      .readTimeout(30, TimeUnit.SECONDS)
-      .retryOnConnectionFailure(true)
-      .build()
+    HttpClients.build(
+      name = "webdav-range",
+      connectTimeoutSeconds = 15,
+      readTimeoutSeconds = 30,
+    )
   }
 
 companion object {

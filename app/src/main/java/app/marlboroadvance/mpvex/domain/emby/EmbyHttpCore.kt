@@ -81,12 +81,22 @@ object EmbyHttpCore {
    */
   private const val SLOW_REQUEST_MS = 1_500L
 
-  internal fun authedRequest(
-    server: EmbyServer,
+  /**
+   * 构造器的**唯一实现**：URL 拼装 + query 编码 + 可选 token 头。
+   *
+   * 另外两个入口（[authedRequest] / [unauthRequest]）都只是它的薄包装 ——
+   * 之前是两份各自拼 URL 的代码，改一处忘了另一处就会「登录能过、请求带不上 token」。
+   *
+   * @param baseUrl 已含 scheme 与端口，如 `http://host:8096`
+   * @param token null / 空串 = 不加鉴权头
+   */
+  internal fun requestFor(
+    baseUrl: String,
     path: String,
+    token: String? = null,
     extraQuery: Map<String, String?> = emptyMap(),
   ): Request.Builder {
-    val sb = StringBuilder("${EmbyEndpoints.hostUrl(server)}/emby$path")
+    val sb = StringBuilder(absoluteBase(baseUrl, path))
     if (extraQuery.isNotEmpty()) {
       sb.append('?')
       extraQuery.entries.filter { it.value != null }.joinTo(sb, "&") { (k, v) ->
@@ -94,12 +104,61 @@ object EmbyHttpCore {
       }
     }
     val b = Request.Builder().url(sb.toString())
-    if (server.apiToken.isNotEmpty()) {
+    if (!token.isNullOrEmpty()) {
       // 已登录：用 X-Emby-Token header（也可用 ?api_key=，二选一即可）
-      b.header("X-Emby-Token", server.apiToken)
+      b.header("X-Emby-Token", token)
     }
     return b
   }
+
+  /** 带当前服务器 token 的请求构造器（绝大多数接口都该用它）。 */
+  internal fun authedRequest(
+    server: EmbyServer,
+    path: String,
+    extraQuery: Map<String, String?> = emptyMap(),
+  ): Request.Builder = requestFor(EmbyEndpoints.hostUrl(server), path, server.apiToken, extraQuery)
+
+  /**
+   * 拼出**完整绝对地址**：`{当前可用 host}/emby{path}`。
+   *
+   * 存在的意义只有一条：`/emby` 这个前缀以前在 4 个文件里各写一遍
+   * （本文件、`EmbyClient`、`EmbyStreamApi`、`EmbySubtitleFetcher`），
+   * 任何一处漏写都表现为 404 且极难从堆栈里看出来。收在这里之后，
+   * 需要「拼一条完整 URL 交给播放器 / 图片组件」的场合也调它，别再自己拼。
+   *
+   * host 走 [EmbyEndpoints.hostUrl]（含内网/公网故障转移），不是 `server.hostUrl`。
+   *
+   * @param path 必须是 [EmbyPaths] 给出的、以 `/` 开头的 path
+   */
+  fun absolute(server: EmbyServer, path: String): String =
+    absoluteBase(EmbyEndpoints.hostUrl(server), path)
+
+  /**
+   * 同 [absolute]，但 host 由调用方给。
+   *
+   * 只有「显式指定入口」的场景需要它 —— 地址竞速时要并发探两个 baseUrl
+   * （`EmbyClient.probeAlive(endpoint, token)`），此时用不了解析器的当前值。
+   * 除此之外一律用 [absolute]。
+   */
+  internal fun absoluteBase(baseUrl: String, path: String): String =
+    baseUrl + EmbyPaths.PREFIX + path
+
+  /**
+   * **不带任何凭据**的请求构造器。
+   *
+   * 目前只有两个合法用途：
+   * · `POST /Users/AuthenticateByName`（登录前本来就没有 token，带了是脏值）；
+   * · 未登录状态下读 `GET /System/Info/Public`。
+   *
+   * 之所以要单独开一个入口而不是叫调用方自己 `Request.Builder().url(...)`：
+   * 那样 `"/emby"` 前缀和 host 解析会泄漏到业务代码里 —— 之前就是这么漏的
+   * （`EmbyClient` 里两处手拼，与 [authedRequest] 形成两套并行实现）。
+   */
+  internal fun unauthRequest(
+    server: EmbyServer,
+    path: String,
+    extraQuery: Map<String, String?> = emptyMap(),
+  ): Request.Builder = requestFor(EmbyEndpoints.hostUrl(server), path, null, extraQuery)
 
   internal fun authedRequestWithApiKey(
     server: EmbyServer,

@@ -50,7 +50,7 @@ object EmbyStreamApi {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
     }
-    return "${EmbyEndpoints.hostUrl(server)}/emby/Videos/$itemId/stream?$qs"
+    return EmbyHttpCore.absolute(server, EmbyPaths.videoStream(itemId)) + "?$qs"
   }
 
   /**
@@ -94,7 +94,7 @@ object EmbyStreamApi {
 
     val info = runCatching {
       EmbyHttpCore.execJson<PlaybackInfoResult>(
-        EmbyHttpCore.authedRequest(server, "/Items/$itemId/PlaybackInfo")
+        EmbyHttpCore.authedRequest(server, EmbyPaths.playbackInfo(itemId))
           .post(payload.toRequestBody(EmbyHttpCore.jsonMedia))
           .build(),
       )
@@ -119,7 +119,7 @@ object EmbyStreamApi {
     val qs = q.entries.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v ?: "", "UTF-8")}"
     }
-    return "${EmbyEndpoints.hostUrl(server)}/emby/Videos/$itemId/stream?$qs"
+    return EmbyHttpCore.absolute(server, EmbyPaths.videoStream(itemId)) + "?$qs"
   }
 
   /** 服务器给的 `DirectStreamUrl` 未必带 `api_key`（取决于 `AddApiKeyToDirectStreamUrl`），补上更稳。 */
@@ -190,7 +190,7 @@ object EmbyStreamApi {
 
     val info =
       EmbyHttpCore.execJson<PlaybackInfoResult>(
-        EmbyHttpCore.authedRequest(server, "/Items/$itemId/PlaybackInfo")
+        EmbyHttpCore.authedRequest(server, EmbyPaths.playbackInfo(itemId))
           .post(payload.toRequestBody(EmbyHttpCore.jsonMedia))
           .build(),
       )
@@ -221,7 +221,7 @@ object EmbyStreamApi {
     val qs = q.entries.filter { it.value != null }.joinToString("&") { (k, v) ->
       "$k=${java.net.URLEncoder.encode(v!!, "UTF-8")}"
     }
-    return "${EmbyEndpoints.hostUrl(server)}/emby/Videos/$itemId/stream?$qs"
+    return EmbyHttpCore.absolute(server, EmbyPaths.videoStream(itemId)) + "?$qs"
   }
 
   /**
@@ -234,7 +234,7 @@ object EmbyStreamApi {
   private fun absolutize(server: EmbyServer, url: String): String {
     if (url.startsWith("http://") || url.startsWith("https://")) return url
     val path = if (url.startsWith("/")) url else "/$url"
-    return EmbyEndpoints.hostUrl(server) + "/emby" + path
+    return EmbyHttpCore.absolute(server, path)
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -281,11 +281,21 @@ object EmbyStreamApi {
    * ## 判定口径
    *
    * · 2xx → [StreamProbe.Ok]，`finalUrl` 是跟完跳转后的地址（没跳转就是原地址）；
-   * · 401 / 403 / 404 / 410 → [StreamProbe.Denied]，**立即返回不再重试**
+   * · 401 / 403 / 404 / 410 / **5xx** → [StreamProbe.Denied]，**立即返回不再重试**
    *   （这些码重试没有意义，每多试一次就多打一次 CDN —— 网盘/CDN 会记风控）；
-   * · 5xx / 416 / 400 / 405 之类 → [StreamProbe.Unknown]，不下死结论
-   *   （服务端临时抽风或对 Range 处理特殊，交给调用方回退原始地址，别误拦用户）；
+   * · 416 / 400 / 405 之类 → [StreamProbe.Unknown]，不下死结论
+   *   （服务端对 Range 处理特殊，交给调用方回退原始地址，别误拦用户）；
    * · 网络异常 / 超时 → [StreamProbe.Unknown]，按可播处理。
+   *
+   * ## 5xx 为什么从「未知」改成「判死」（v341）
+   *
+   * 5xx 原来落在 [StreamProbe.Unknown]：地址照旧交给 mpv，理由是「服务端临时抽风」。
+   * 真机上这不是抽风 —— 反代 / 上游挂掉时 `/Videos/{id}/stream` 稳定回 500 / 502 / 503，
+   * 而 mpv 拿到的是一条**永远打不开的地址**：界面停在加载层，进程还会在 native 侧
+   * （`fdsan` / `Fatal signal 6`）中止，用户看到的就是「点播放直接闪退」。
+   *
+   * 判死之后这条地址**根本不会交给内核**，播放页显示的是可重试的错误卡片；
+   * 而且因为结论是明确的，`repeat(attempts)` 立刻收摊 —— 请求数反而从 2 次降到 1 次。
    *
    * @return [StreamProbe.Ok] 可播（含最终直链）；[StreamProbe.Denied] 明确不可播；
    *         [StreamProbe.Unknown] 探不出来，调用方回退原始地址
@@ -339,7 +349,7 @@ object EmbyStreamApi {
                   ?: original
               )
             }
-            resp.code in DENIED_STREAM_CODES -> {
+            resp.code in DENIED_STREAM_CODES || resp.code in 500..599 -> {
               // 日志 tag 刻意保持 "EmbyClient"：现有排障都是按这个 tag 过滤 logcat 的
               android.util.Log.w(
                 "EmbyClient",
@@ -366,7 +376,13 @@ object EmbyStreamApi {
     return StreamProbe.Unknown
   }
 
-  /** 能把一条流地址判死的 HTTP 状态码（见 [resolveStreamUrl] 的判定口径）。 */
+  /**
+   * 能把一条流地址判死的 HTTP 状态码（见 [resolveStreamUrl] 的判定口径）。
+   *
+   * 5xx 不在这个集合里、而是由调用点按 `in 500..599` 补判：两者语义不同 ——
+   * 4xx 是「这条链接不行」，5xx 是「服务端 / 反代现在不行」，但对「别交给内核」
+   * 这个结论是一样的（见 [resolveStreamUrl] 里的 v341 说明）。
+   */
   private val DENIED_STREAM_CODES = setOf(401, 403, 404, 410)
 
   /**
@@ -404,7 +420,7 @@ object EmbyStreamApi {
         ),
       ).toString()
 
-    val request = EmbyHttpCore.authedRequest(server, "/Items/$itemId/PlaybackInfo")
+    val request = EmbyHttpCore.authedRequest(server, EmbyPaths.playbackInfo(itemId))
       .post(payload.toRequestBody(EmbyHttpCore.jsonMedia))
       .build()
 
@@ -434,8 +450,13 @@ object EmbyStreamApi {
    * 起播前用 `Range: bytes=0-0` 轻探一次（带服务器声明的请求头），
    * 探不通就返回 null，让调用方回退正常的 Emby 流地址。
    *
-   * 判定口径偏保守：只有 401/403/404/410 判死；其余 4xx/5xx 视为「主机可达、
-   * 只是不接受这次 Range」，仍交给播放器尝试。
+   * 判定口径：401/403/404/410 判死（链接本身不可用）；**5xx 同样判死**（v341）——
+   * 反代 / 上游挂掉时 strm 里的地址稳定回 5xx，交给播放器只会得到一条永远打不开的
+   * 流。判死后调用方回退到正常流地址（`/Videos/{id}/stream` 由 Emby 自己中转），
+   * 至少给用户留一条能走的路。其余 4xx 视为「主机可达、只是不接受这次 Range」。
+   *
+   * ⚠️ 这次请求**本来就要发**（见 [strmDirectPlayInfo] 的取舍），收紧判定不增加任何
+   * 请求次数 —— 与「不做主动探活」的约束不冲突。
    */
   private fun probeStrmDirect(info: StrmDirectPlayInfo): Boolean = runCatching {
     val builder = Request.Builder()
@@ -454,6 +475,8 @@ object EmbyStreamApi {
     call.execute().use { response ->
       when (response.code) {
         401, 403, 404, 410 -> false
+        // 反代 / 上游不可用：这条直链现在打不开，回退正常流地址去试
+        in 500..599 -> false
         else -> true
       }
     }

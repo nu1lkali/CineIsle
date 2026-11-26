@@ -1,8 +1,9 @@
 package app.marlboroadvance.mpvex.domain.subtitle.online
 
+import app.marlboroadvance.mpvex.utils.net.HttpClients
+import app.marlboroadvance.mpvex.utils.net.RemoteEndpoints
 import java.net.URLEncoder
 import java.security.MessageDigest
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -46,26 +47,22 @@ internal object SubtitleHttp {
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
   val client: OkHttpClient by lazy {
-    OkHttpClient
-      .Builder()
-      .connectTimeout(12, TimeUnit.SECONDS)
-      .readTimeout(20, TimeUnit.SECONDS)
-      .writeTimeout(20, TimeUnit.SECONDS)
+    HttpClients.build(
+      name = "subtitle-search",
+      connectTimeoutSeconds = 12,
+      readTimeoutSeconds = 20,
       // 搜索是「等一下就好」的操作，不允许无限重试把面板卡住
-      .retryOnConnectionFailure(false)
-      .followRedirects(true)
-      .build()
+      retryOnConnectionFailure = false,
+    )
   }
 
   /** 下载客户端：字幕只有几十 KB，但站点偶尔限速，读超时给宽松一点。 */
   val downloadClient: OkHttpClient by lazy {
-    OkHttpClient
-      .Builder()
-      .connectTimeout(15, TimeUnit.SECONDS)
-      .readTimeout(45, TimeUnit.SECONDS)
-      .retryOnConnectionFailure(true)
-      .followRedirects(true)
-      .build()
+    HttpClients.build(
+      name = "subtitle-download",
+      connectTimeoutSeconds = 15,
+      readTimeoutSeconds = 45,
+    )
   }
 
   fun get(url: String): Request =
@@ -201,7 +198,7 @@ class ThunderSubtitleProvider : SubtitleProvider {
   }
 
   companion object {
-    private const val API = "https://api-shoulei-ssl.xunlei.com/oracle/subtitle"
+    private const val API = RemoteEndpoints.XUNLEI_SUBTITLE_ENDPOINT
 
     /** 只认这几种；别的（`sub` / `idx` / 空）一律当「未知格式」，交给内容嗅探。 */
     private val KNOWN = setOf("srt", "ass", "ssa", "vtt", "txt")
@@ -237,7 +234,7 @@ class SubtitleCatProvider : SubtitleProvider {
 
   override suspend fun search(keyword: String): List<OnlineSubtitle> =
     withContext(Dispatchers.IO) {
-      val searchUrl = "$BASE/index.php?search=${URLEncoder.encode(keyword, "UTF-8")}"
+      val searchUrl = RemoteEndpoints.subtitleCatSearch(URLEncoder.encode(keyword, "UTF-8"))
       val html =
         runCatching {
           SubtitleHttp.client.newCall(SubtitleHttp.get(searchUrl)).execute().use { response ->
@@ -349,8 +346,8 @@ class SubtitleCatProvider : SubtitleProvider {
   }
 
   companion object {
-    private const val BASE = "https://subtitlecat.com"
-    private const val HOST = "subtitlecat.com"
+    private const val BASE = RemoteEndpoints.SUBTITLE_CAT_BASE
+    private const val HOST = RemoteEndpoints.SUBTITLE_CAT_HOST
 
     /** 详情页抓取上限：每页一次请求，多了搜索会变成「等十几秒」。 */
     private const val MAX_DETAIL_PAGES = 8

@@ -4,10 +4,11 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import app.marlboroadvance.mpvex.utils.net.HttpClients
+import app.marlboroadvance.mpvex.utils.net.RemoteEndpoints
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.util.concurrent.TimeUnit
 
 /**
  * dandanplay 弹幕源。
@@ -32,7 +33,7 @@ object DanmakuClient {
   private const val TAG = "DanmakuClient"
 
   /** 官方 host。设置项默认值与之保持一致。 */
-  const val DEFAULT_HOST = "https://api.dandanplay.net"
+  const val DEFAULT_HOST = RemoteEndpoints.DANDANPLAY_HOST
 
   private val json = Json {
     ignoreUnknownKeys = true
@@ -47,12 +48,12 @@ object DanmakuClient {
    * 弹幕是**锦上添花**功能，卡住 25 秒比直接失败糟糕得多。
    */
   private val http: OkHttpClient by lazy {
-    OkHttpClient.Builder()
-      .connectTimeout(8, TimeUnit.SECONDS)
-      .readTimeout(15, TimeUnit.SECONDS)
-      .callTimeout(25, TimeUnit.SECONDS)
-      .retryOnConnectionFailure(true)
-      .build()
+    HttpClients.build(
+      name = "danmaku",
+      connectTimeoutSeconds = 8,
+      readTimeoutSeconds = 15,
+      callTimeoutSeconds = 25,
+    )
   }
 
   /** 凭证：留空 = 不签名（自建服务端 / 还没申请到 AppId）。 */
@@ -84,7 +85,7 @@ object DanmakuClient {
         val ts = System.currentTimeMillis() / 1000
         val builder = Request.Builder()
           .url(url)
-          .header("User-Agent", "CineIsle/1.2.5 (Android)")
+          .header("User-Agent", HttpClients.appUserAgent)
           .header("Accept", "application/json")
         if (credentials.isConfigured) {
           // ⚠️ 签名必须对**去掉 query 后的路径**计算（见 DanmakuSignature.pathOf）。
@@ -149,7 +150,7 @@ object DanmakuClient {
   suspend fun searchAnime(host: String, keyword: String, credentials: Credentials): List<DandanAnime> {
     val q = keyword.trim()
     if (q.isEmpty()) return emptyList()
-    val path = "/api/v2/search/anime?keyword=" + java.net.URLEncoder.encode(q, "UTF-8")
+    val path = RemoteEndpoints.dandanSearchAnime(java.net.URLEncoder.encode(q, "UTF-8"))
     val body = getText(host, path, credentials) ?: return emptyList()
     val parsed = runCatching { json.decodeFromString<DandanSearchResponse>(body) }
       .onFailure { lastError = "搜索响应格式不对"; Log.w(TAG, "搜索响应解析失败", it) }
@@ -169,7 +170,9 @@ object DanmakuClient {
 
   /** 拿一部番的分集列表。 */
   suspend fun getEpisodes(host: String, animeId: Long, credentials: Credentials): List<DandanEpisode> {
-    val body = getText(host, "/api/v2/bangumi/$animeId", credentials) ?: return emptyList()
+    val body =
+      getText(host, RemoteEndpoints.dandanBangumi(animeId.toString()), credentials)
+        ?: return emptyList()
     return runCatching { json.decodeFromString<DandanBangumiResponse>(body).bangumi?.episodes }
       .onFailure { lastError = "番剧响应格式不对"; Log.w(TAG, "番剧响应解析失败", it) }
       .getOrNull()
@@ -196,7 +199,7 @@ object DanmakuClient {
     withRelated: Boolean = false,
   ): List<DandanComment> {
     // ⚠️ 参数顺序固定：`withRelated` 在前、`chConvert` 在后（服务端按名解析，但保持一致更稳）
-    val path = "/api/v2/comment/$episodeId?withRelated=$withRelated&chConvert=0"
+    val path = RemoteEndpoints.dandanComments(episodeId.toString(), withRelated)
     val body = getText(host, path, credentials) ?: return emptyList()
     return runCatching { json.decodeFromString<DandanCommentResponse>(body).comments }
       .onFailure { lastError = "弹幕响应格式不对"; Log.w(TAG, "弹幕响应解析失败", it) }

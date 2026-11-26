@@ -30,7 +30,7 @@ object EmbyCollectionsApi {
     limit: Int = 100,
   ): EmbyItemsResult = EmbyHttpCore.getJson(
     server,
-    "/Users/${server.userId}/Items",
+    EmbyPaths.userItems(server.userId),
     mapOf(
       "StartIndex" to startIndex.toString(),
       "Limit" to limit.toString(),
@@ -59,7 +59,7 @@ object EmbyCollectionsApi {
     limit: Int = 100,
   ): EmbyItemsResult = EmbyHttpCore.getJson(
     server,
-    "/Collections/$collectionId/Items",
+    EmbyPaths.collectionItems(collectionId),
     mapOf(
       "UserId" to server.userId,
       "StartIndex" to startIndex.toString(),
@@ -89,7 +89,7 @@ object EmbyCollectionsApi {
     parentId: String? = null,
   ): EmbyCollectionCreationResult = EmbyHttpCore.postJson<EmbyCollectionCreationResult>(
     server = server,
-    path = "/Collections",
+    path = EmbyPaths.COLLECTIONS,
     bodyJson = "{}",
     query = buildMap {
       put("Name", name)
@@ -114,7 +114,7 @@ object EmbyCollectionsApi {
     if (itemIds.isEmpty()) return true
     val req = EmbyHttpCore.authedRequest(
       server,
-      "/Collections/$collectionId/Items",
+      EmbyPaths.collectionItems(collectionId),
       mapOf("Ids" to itemIds.joinToString(","), "UserId" to server.userId),
     ).post("{}".toRequestBody(EmbyHttpCore.jsonMedia)).build()
     EmbyHttpCore.httpClient.newCall(req).execute().use { resp ->
@@ -142,7 +142,7 @@ object EmbyCollectionsApi {
     if (itemIds.isEmpty()) return true
     val req = EmbyHttpCore.authedRequest(
       server,
-      "/Collections/$collectionId/Items",
+      EmbyPaths.collectionItems(collectionId),
       mapOf("Ids" to itemIds.joinToString(","))
         .plus("UserId" to server.userId),
     ).delete().build()

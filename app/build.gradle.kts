@@ -3976,21 +3976,44 @@ android {
     //    键盘收完窗口变高 → 菜单重新定位，肉眼看到「闪一下 / 跳一下」。改为先把菜单挂进
     //    `pendingOverflowMenu`，用 `snapshotFlow` 等 ime inset 归零（窗口尺寸定稿）再展开，
     //    并带 600ms 兜底；非搜索态（无键盘）仍即时打开。
-    // ── v340（验证轮，versionCode +1，versionName 不变）：回滚 v339 的 API 收口 ──
-    //  · 【回滚范围】`a1d8b43`（v339，API 地址与 HTTP 客户端收口到三处）整体撤销：
-    //    `EmbyPaths` / `HttpClients` / `RemoteEndpoints` 三个新类移除，24 个文件的
-    //    端点字面量与 `OkHttpClient` 构造回到 v338 的写法。
-    //  · 【目的】用户报「播放视频直接闪退」。日志定位到的直接原因不是本仓改动（见下），
-    //    但仍需要一个「代码回到 v339 之前、versionCode 更高所以能正常覆盖安装」的包
-    //    做 A/B 验证，避免继续在降级安装上耗时间。
-    //  · 【日志结论，供下次排查】`/emby/Videos/{id}/stream?static=true` 在服务端恒返回
-    //    HTTP 500（5 个不同条目全中），mpv 序列恒为 start-file → end-file，从未 file-loaded；
-    //    同进程内 `Items` / `PlaybackInfo` 均为 200 ⇒ 元数据可用、只有吐流失败。
-    //    紧随 curl 报错 3ms 的是 `fdsan: failed to exchange ownership of file descriptor`
-    //    → SIGABRT（11-23/11-24 也有同族崩溃）⇒ 属 native 层，回滚不能解决。
-    //  · ⚠️ 本次不带 v339 的两处顺带修复（预热客户端复用、权限页仓库链接取字符串资源），
-    //    验证完若要恢复，把本版改动整体反向即可。
-    versionCode = 340
+    // ── v339（重构轮，versionCode +1，versionName 不变）：API 调用收口 ──
+    //  · 【端点注册表】新增 `domain/emby/EmbyPaths.kt`：90 余处散在 11 个文件里的 Emby
+    //    路径字面量收敛为函数/常量，`PlaybackInfo`（被手抄 5 遍）等重复端点合一。
+    //  · 【前缀收口】`EmbyHttpCore.absolute/absoluteBase/requestFor/unauthRequest`：
+    //    全 App 只剩一处拼 `/emby` 前缀、一处做 query 编码；登录与探活两处手拼 URL 收编。
+    //  · 【第三方地址】新增 `utils/net/RemoteEndpoints.kt`：GitHub releases / 迅雷字幕 /
+    //    SubtitleCat / dandanplay 的地址与路径集中；更新检查的仓库地址改由
+    //    `R.string.github_repo_url` 派生（不再与字符串资源双份真相）。
+    //  · 【客户端工厂】新增 `utils/net/HttpClients.kt`：8 个非 Emby 客户端的
+    //    `OkHttpClient.Builder()` 全部收成一处构造，各自仍保留独立连接池；
+    //    UA 统一取 `BuildConfig.VERSION_NAME`（弹幕 UA 里写死的 1.2.5 一并修掉）。
+    //  · 【播放预热】`PlayerActivity.warmUpNextEpisode` 不再每次新建客户端，
+    //    复用 `preloadHttpClient` —— 新建等于把预热成果丢给一个随即被丢弃的连接池。
+    //  · 【文案/链接】`PermissionDeniedState` 的仓库链接改走 `R.string.github_repo_url`
+    //    （原硬编码上游仓库，点进去是别人的项目）。
+    // ── v340（回滚验证包，versionCode +1）：整仓按文件回退到 v338，只涨号 ──
+    //  · 用途：确认「播放闪退」是否由 v339 的 API 收口引入。结论：不是 —— 回退后现象
+    //    照旧（远端源 / 反代不可达时，坏地址仍被交给 mpv）。
+    //  · 该版不含 v339 的收口、也不含任何修复，已被 v341 整体取代。
+    // ── v341（修复轮，versionCode +1，versionName 不变）：恢复 API 收口 + 播放地址失败优雅降级 ──
+    //  · 【恢复 v339】`EmbyPaths` / `RemoteEndpoints` / `HttpClients` / `EmbyHttpCore`
+    //    四处收口按 v339 原样写回（逐文件取 blob，不做整体 revert）。
+    //  · 【5xx 判死】`EmbyStreamApi.resolveStreamUrl` 把 5xx 从 Unknown 改为 Denied：
+    //    反代 / 上游挂掉时 `/Videos/{id}/stream` 稳定回 500 / 502 / 503，原来照样交给
+    //    mpv ⇒ 界面停在加载层、进程在 native 侧中止。判死后地址不进内核，播放页出错误
+    //    卡片；且明确结论不再重试，请求数从 2 次降到 1 次。
+    //  · 【队列分支补齐】多版本队列 / 剧集连播两条路径原先只取 `urlOrNull`，`Denied`
+    //    被静默丢成空 map ⇒ 坏地址照旧进播放器。现与单片分支同口径，拦在起播之前。
+    //  · 【STRM 直链预检】`probeStrmDirect` 的 5xx 一并判死（该预检本来就是既有请求，
+    //    不新增请求），失效直链回退正常流地址。
+    //  · 【起播看门狗】`PlayerActivity.startStartupWatchdog`：40 秒仍无 `FILE_LOADED`
+    //    ⇒ 错误卡片说明「取不到视频数据」，可继续等 / 可重试；不发请求、不中断播放，
+    //    `handleFileLoaded` 一到就自动清卡片。
+    //  · 【end-file 分类】`handleEndFileWithError` 读 `end-file.error` 区分「连不上」
+    //    与「文件损坏」，前者给服务器 / 反代排查建议。
+    //  · 【JNI 兜底】`startPlayback` 用 `runCatching` 兜住 `playFile` 抛出的异常。
+    //  · 约束：全程不向 CDN / 网盘增加任何主动性探活；预解析开关关闭时仍是零请求。
+    versionCode = 341
     versionName = "1.6.85"
 
     vectorDrawables {

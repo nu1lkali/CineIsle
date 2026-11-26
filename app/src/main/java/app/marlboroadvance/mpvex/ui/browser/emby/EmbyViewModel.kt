@@ -1430,15 +1430,29 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       val first = versionQueue.first()
       val firstId = first.item.Id.orEmpty()
       val strmDirect = resolveStrmDirectIfEnabled(server, first.item, first.mediaSourceId)
+      // 首条能不能播，决定了整条队列有没有意义：第一条就是死链 / 反代 5xx 时，
+      // 后面即使切过去也全是同一条失效链路。所以与单片分支同口径 —— 拦在起播之前，
+      // 用播放页的错误卡片把原因说出来（v341）。
+      val firstProbe = strmDirect?.let { StreamProbe.Ok(it.url) }
+        ?: resolveIfEnabled(server, firstId, first.mediaSourceId)
+      (firstProbe as? StreamProbe.Denied)?.let { denial ->
+        launchSingle(
+          server = server,
+          item = first.item,
+          resumeSeconds = effectiveResume,
+          engine = engine,
+          mediaSourceId = first.mediaSourceId,
+          mediaSourceLabel = first.mediaSourceLabel,
+          playbackError = denial.message,
+        )
+        return
+      }
       val directUrls: Map<String, String> = if (strmDirect != null) {
         // ⚠️ 键必须用 playbackKey（itemId#sourceId），不能用 itemId：
         //    多版本队列里所有条目的 itemId 相同，按 itemId 命中会让**每个版本都拿到首条的直链**。
         mapOf(first.playbackKey to strmDirect.url)
       } else {
-        resolveIfEnabled(server, firstId, first.mediaSourceId)
-          ?.urlOrNull
-          ?.let { mapOf(first.playbackKey to it) }
-          ?: emptyMap()
+        firstProbe?.urlOrNull?.let { mapOf(first.playbackKey to it) } ?: emptyMap()
       }
       val directHeaders = strmDirect?.let {
         StrmDirectLink.headerArray(it.requiredHeaders, EmbyClient.STREAM_USER_AGENT)
@@ -1471,13 +1485,27 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       // 版本选择本来就只作用于「用户当前点播的这一集」，所以这里只传这一条。
       // STRM 直链（显式开关）优先：拿到远端地址就不必再走 302 预解析。
       val strmDirect = resolveStrmDirectIfEnabled(server, playItem, mediaSourceId)
+      // 用户马上要播的这一集就是死链 / 反代 5xx ⇒ 不进连播队列，直接给错误卡片。
+      // 队列路径原来只用 `urlOrNull` 取地址，`Denied` 落到空 map 里被静默丢掉，
+      // 结果是「照样把坏地址交给 mpv」—— 正是要拦的那种情况（v341）。
+      val firstProbe = strmDirect?.let { StreamProbe.Ok(it.url) }
+        ?: resolveIfEnabled(server, itemIdToPlay, mediaSourceId)
+      (firstProbe as? StreamProbe.Denied)?.let { denial ->
+        launchSingle(
+          server = server,
+          item = playItem,
+          resumeSeconds = effectiveResume,
+          engine = engine,
+          mediaSourceId = mediaSourceId,
+          mediaSourceLabel = mediaSourceLabel,
+          playbackError = denial.message,
+        )
+        return
+      }
       val directUrls: Map<String, String> = if (strmDirect != null) {
         mapOf(itemIdToPlay to strmDirect.url)
       } else {
-        resolveIfEnabled(server, itemIdToPlay, mediaSourceId)
-          ?.urlOrNull
-          ?.let { mapOf(itemIdToPlay to it) }
-          ?: emptyMap()
+        firstProbe?.urlOrNull?.let { mapOf(itemIdToPlay to it) } ?: emptyMap()
       }
       val directHeaders = strmDirect?.let {
         StrmDirectLink.headerArray(it.requiredHeaders, EmbyClient.STREAM_USER_AGENT)
@@ -1521,7 +1549,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         ?: versionUrl?.let { StreamProbe.Ok(it) }
         ?: resolveIfEnabled(server, itemIdToPlay, mediaSourceId)
 
-      // 明确被拒（401 / 403 / 404 / 410）⇒ 起播前就拦下，改成播放页里的错误卡片。
+      // 明确被拒（401 / 403 / 404 / 410，以及反代挂掉时的 5xx）⇒ 起播前就拦下，
+      // 改成播放页里的错误卡片。
       // 把死链交给 mpv 会让 libmpv 在 native 层崩掉（整个 App 消失、Java 层拦不到），
       // 而这次判定没有额外打 CDN —— 请求是「预解析」本来就有的那一次。
       (directProbe as? StreamProbe.Denied)?.let { denial ->
