@@ -1,91 +1,78 @@
 package app.marlboroadvance.mpvex.ui.player.engine
 
 /**
- * 画面旋转（顺时针 90° 步进）的纯逻辑与 mpv 滤镜封装。
+ * 画面旋转（顺时针 90° 步进）的纯逻辑与 mpv 属性封装。
  *
- * ## 为什么走 `vf` 而不是 `--video-rotate`
+ * ## 为什么用 `video-rotate` 而不是 `vf rotate`
  *
- * `video-rotate` 是**启动选项语义**的属性，且与容器自带的旋转矩阵共用一个值 ——
- * 手机竖拍的片子本身就带 `rotate=90`，硬写进去会把它**覆盖**掉，之后再想还原就得
- * 自己记账原始值，边界很脏。挂在 `vf` 链上则是可热插拔、可按标签幂等移除，
- * 且不动容器元数据，与 [VideoCrop] / 镜像 / 垂直翻转完全同构。
+ * 旧实现走 `vf add @mpvex_rotate:rotate=90:ow=rotw(90):oh=roth(90)`，在当前内核
+ * （libmpv v0.41.0）上画面是**斜的**。根因是单位错配：
  *
- * ## `ow` / `oh` 不能省
+ * - mpv v0.41 已无内置 `rotate` 滤镜，`vf=rotate=…` 经 lavfi-bridge 转给
+ *   libavfilter 的 `rotate` 滤镜；
+ * - libavfilter `rotate` 的角度单位是**弧度**，`rotate=90` 被当成 90 弧度，
+ *   归一化后约 116.7°，于是画面明显倾斜；`rotw(90)/roth(90)` 同样按弧度算，
+ *   输出尺寸也错。
  *
- * 只写 `rotate=90` 的话滤镜只做仿射变换、**不重建输出尺寸** —— 结果是被裁掉一半
- * 或整体拉伸。必须显式给出 `ow=rotw(<deg>):oh=roth(<deg>)`，下游（以及
- * `video-out-params/dw|dh`）才能拿到一个真正「竖过来」的帧。
+ * `video-rotate` 是 mpv 原生属性，规避了整类单位问题：
  *
- * ## 与其它 vf 的关系
+ * - 角度单位是**度**，90° 步进精确；
+ * - mpv 手册明确「该值**叠加**到容器旋转元数据之上」，`0` 即按容器元数据显示
+ *   —— 不会覆盖手机竖拍自带的 `rotate=90`（旧设计担心的覆盖问题在 v0.41 上不成立）；
+ * - mpv 自带菜单「Rotate clockwise」走的就是 `cycle-values video-rotate 90 180 270 0`。
  *
- * 用独立标签 [LABEL]，与 `mpe_cropdetect` / `mpe_crop` / `mpvex_hflip` /
- * `mpvex_vflip` 互不干扰；[apply] 会先移除旧标签再加，所以连点是幂等的。
+ * ## 换片行为
  *
- * ⚠️ 直出模式（`vo=mediacodec_embed`）**根本没有滤镜链**，调用方必须先判断
- * [isAvailable]，否则 mpv 会报「该 vo 不支持滤镜」并把整条播放链推翻（黑屏）。
+ * `video-rotate` 是全局属性，同内核换片会保留，符合连播场景「拍摄方向通常一致、
+ * 不必每集重转」的既有取舍。`applyRotationPolicy()` 在 `file-loaded` 以它为准
+ * 校正内存状态；清理时写回 0。
+ *
+ * ## 宽高比
+ *
+ * `video-params/aspect` 只含容器旋转、**不含**用户的 `video-rotate`，所以
+ * [MPVView.getVideoOutAspect] 仍需按本类的角度自行取倒数，不能算两遍容器旋转。
+ *
+ * ⚠️ 直出模式（`vo=mediacodec_embed`）下沿用原有 UI 限制：按钮不渲染、宫格入口
+ * 明示拒绝。虽然 mpv 手册称 90° 步进在无 copy-back 的硬解上也能工作，但这里
+ * 不扩大适用范围，避免把未验证的路径放给用户。
  */
 object VideoRotate {
-  /**
-   * 滤镜标签。
-   *
-   * ⚠️ 不要以 `@` 开头 —— `vf add` 的标签参数里 `@` 是分隔符，传 `"@x:rotate=…"`
-   * 时 mpv 自己会补上，标签名带 `@` 会变成 `@@x` 之类读不回来的怪名字。
-   */
-  const val LABEL: String = "mpvex_rotate"
+  /** mpv 原生旋转属性（度，叠加在容器旋转元数据之上）。 */
+  const val PROPERTY: String = "video-rotate"
 
-  /** 直出模式（零拷贝解码直出 Surface）下没有滤镜链，旋转折不了。 */
+  /** 直出模式（零拷贝解码直出 Surface）下不开放旋转入口。 */
   fun isAvailable(directOutput: Boolean): Boolean = !directOutput
 
   /**
-   * 把累计圈数折算成 mpv 滤镜参数。
+   * 把累计圈数折算成写入 `video-rotate` 的角度（度）。
    *
-   * @return 形如 `rotate=90:ow=rotw(90):oh=roth(90)`；0° 返回 null（调用方应改为移除滤镜）。
+   * 恒落在 `0/90/180/270`；**直接写度数**，不要做任何弧度换算 —— 这正是旧版
+   * `vf rotate` 倾斜的根因。
    */
-  fun filterArg(quarterTurns: Int): String? {
-    val degrees = degreesOf(quarterTurns)
-    if (degrees == 0) return null
-    return "rotate=$degrees:ow=rotw($degrees):oh=roth($degrees)"
-  }
-
-  /** 圈数 → 角度，恒落在 `0/90/180/270`（负数也归一）。 */
   fun degreesOf(quarterTurns: Int): Int = (((quarterTurns % 4) + 4) % 4) * 90
 
   /** 角度 → 圈数，用于从 mpv 读回真实值后对齐内存状态。 */
   fun quarterTurnsOf(degrees: Int): Int = (((degrees % 360) + 360) % 360) / 90
 
-  /**
-   * 应用某个角度。
-   *
-   * 幂等：先按标签移除（移除不存在的标签是无害的），再按需添加。
-   * 0° 时只移除，不会留下一个空转的滤镜。
-   */
+  /** 应用某个角度。0° 写 0（等价于摘掉旋转），不留任何滤镜。 */
   fun apply(quarterTurns: Int) {
-    PlayerLib.command("vf", "remove", "@$LABEL")
-    filterArg(quarterTurns)?.let { PlayerLib.command("vf", "add", "@$LABEL:$it") }
+    PlayerLib.setPropertyInt(PROPERTY, degreesOf(quarterTurns))
   }
 
-  /** 摘掉旋转滤镜。可在任意时刻重复调用。 */
+  /** 旋转复位到 0°。可在任意时刻重复调用。 */
   fun clear() {
-    PlayerLib.command("vf", "remove", "@$LABEL")
+    PlayerLib.setPropertyInt(PROPERTY, 0)
   }
 
   /**
-   * 读 mpv 当前实际挂着的旋转角度（度）；读不到返回 0。
+   * 读 mpv 当前实际生效的旋转角度（度）；读不到返回 0。
    *
-   * 用途只有一个：**校正内存状态**。内存状态与内核实际状态不一致时（退出/换内核
-   * 后被复用、外部脚本动了 vf 链），以这里读到的为准。轮询 `vf-metadata` 拿到的是
-   * 滤镜参数表，`rotate` 键即为当前角度。
+   * 只用于**校正内存状态**：内核被复用、外部脚本改过属性时，以这里读到的为准。
+   * 归一化到 `0..359`（属性理论范围就是 0-359，防御性处理越界值）。
    */
   fun readAppliedDegrees(): Int {
-    val keys = listOf("vf-metadata/$LABEL/rotate", "vf-metadata/@$LABEL/rotate")
-    for (key in keys) {
-      val raw = PlayerLib.getPropertyString(key)?.trim().orEmpty()
-      if (raw.isEmpty()) continue
-      // 可能是 "90" 也可能是 "90.000000"，统一按 Double 解析再取整
-      val value = raw.toDoubleOrNull() ?: continue
-      return ((value.toInt() % 360) + 360) % 360
-    }
-    return 0
+    val raw = PlayerLib.getPropertyInt(PROPERTY) ?: return 0
+    return ((raw % 360) + 360) % 360
   }
 }
 
@@ -94,7 +81,7 @@ object VideoRotate {
  *
  * 语义是「顺时针步进 / 到 360° 归零」，不是有符号偏移 —— 用户心智里
  * 「转四次就转回来了」比「-90°」自然，也让 4 次点击后的画面与初始**像素级一致**
- * （滤镜被彻底移除，而不是挂一个 0° 的空 rotate）。
+ * （属性写回 0，而不是留一个 360° 的等价旋转）。
  */
 data class RotationState(
   val quarterTurns: Int = 0,

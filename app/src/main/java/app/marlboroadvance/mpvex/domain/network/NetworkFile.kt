@@ -11,7 +11,14 @@ data class NetworkFile(
   val path: String,
   val size: Long,
   val isDirectory: Boolean,
+  /** 修改时间（mtime，epoch 毫秒）。服务端不给就 0 */
   val lastModified: Long = 0,
+  /**
+   * 创建时间（ctime，epoch 毫秒）。**目前只有 AList 会填** ——
+   * `fs/list` 的 `created` 字段是可选的，WebDAV/SMB/FTP 的库都不暴露 ctime，
+   * 因此其余协议恒为 0，按「创建时间」排序时它们会统一垫底。
+   */
+  val createdAt: Long = 0,
   val mimeType: String? = null,
   /**
    * AList 的签名（`fs/list`、`fs/get` 返回的 `sign`），其余协议恒为 null。
@@ -161,3 +168,50 @@ fun NetworkFile.isPhoto(): Boolean = type() == NetworkFileType.PHOTO
 
 /** 是否可播放 */
 fun NetworkFile.isVideoFile(): Boolean = type() == NetworkFileType.VIDEO
+
+/**
+ * 「最近添加时间」（epoch 毫秒），没有可用的时间信号时返回 0。
+ *
+ * 没有任何协议会返回真正的「入库时间」（SMB/WebDAV/FTP 只有 mtime，AList 多一个 ctime），
+ * 所以这里取一个**最接近「这条是最近才出现的」**的近似：
+ * - **文件**：`max(修改时间, 创建时间)` —— 回填/改名的老文件 mtime 会变新，
+ *   刚拷进来的新文件 ctime 就是当下，两者取大都能被最近的排序浮到前面；
+ * - **目录**：只用 `lastModified` —— 多数服务端在目录内容变动时会 bump 目录的 mtime
+ *   （AList 的目录 ctime 往往就是建目录那一刻，拿来当「最近添加」会永远垫底、
+ *   反而把刚塞满新素材的目录压到最下面）。目录 ctime 不可靠，就不参与。
+ *
+ * 两个值都为 0（服务端没给）⇒ 返回 0，排序时统一垫底，不会冒充「1970 年最新」。
+ */
+val NetworkFile.recentlyAddedAt: Long
+  get() =
+    if (isDirectory) {
+      lastModified
+    } else {
+      maxOf(lastModified, createdAt)
+    }
+
+/**
+ * 「文件类型」排序键：文件夹 → 视频 → 图片 → 其他，与列表视图的 section 顺序一致。
+ *
+ * ⚠️ 真正比的是**扩展名**（同类型内部再按扩展名自然序细排），
+ *    不只看这个大档位 —— 否则一堆 mkv/mp4 会全部同键、只能靠名称兜底。
+ */
+fun NetworkFile.typeSortKey(): TypeSortKey =
+  TypeSortKey(
+    rank =
+      when (type()) {
+        NetworkFileType.FOLDER -> 0
+        NetworkFileType.VIDEO -> 1
+        NetworkFileType.PHOTO -> 2
+        NetworkFileType.OTHER -> 3
+      },
+    extension = if (isDirectory) "" else name.fileExtension(),
+  )
+
+/** 文件类型排序的两段键：先大档位，再扩展名（两者都比自然序更适合字符串字典序） */
+data class TypeSortKey(
+  /** 0=文件夹 1=视频 2=图片 3=其他 */
+  val rank: Int,
+  /** 小写扩展名，无扩展名为空串（排序时自然浮到该档位最前） */
+  val extension: String,
+)

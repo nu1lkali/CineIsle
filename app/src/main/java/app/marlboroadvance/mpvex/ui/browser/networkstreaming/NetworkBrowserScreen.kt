@@ -247,8 +247,10 @@ data class NetworkBrowserScreen(
     val sortOrder by viewModel.sortOrder.collectAsState()
     val groupMode by viewModel.groupMode.collectAsState()
     val typeGrouped by viewModel.typeGrouping.collectAsState()
-    // 时间桶的先后：只有「用户明确选了时间升序」才翻成旧→新。
-    // 其余情况（含按名字/大小排序时仍开着分组）桶一律新→旧 —— 见 groupNetworkFilesByPeriod
+    // 时间桶的先后：只有「用户明确选了修改时间升序」才翻成旧→新。
+    // 桶本身是按 lastModified（修改时间）切的（见 groupNetworkFilesByPeriod），
+    // 所以判据只认 Date（修改时间）这一档 —— 选创建时间/最近添加时间时，
+    // 桶的时间轴仍是 mtime，翻桶方向会与「按什么排」对不上，故保持新→旧。
     val bucketAscending = sortType == NetworkSortType.Date && sortOrder.isAscending
     // 「动过排序」的计数（每次有效排序操作 +1，含随机换种子那种值不变的）
     val sortChangeTick by viewModel.sortChangeTick.collectAsState()
@@ -2982,7 +2984,7 @@ private fun NetworkBrowserList(
   //
   // ⚠️ 这里只重排「段」，段内一律沿用传进来的顺序 —— 也就是用户的排序键 + 方向，
   //    所以「各类型内部各自排序、互不影响」在两种口径下都成立。
-  // ⚠️ 与「按类型排序」这个排序维度无关（那是 typeRank，顺序是 文件夹→图片→视频→其他）。
+  // ⚠️ 与「按文件类型排序」这个排序维度无关（那是 typeSortKey，顺序是 文件夹→视频→图片→其他）。
   val sections =
     remember(folders, photos, videos, others, photoGroups, videoGroups, otherGroups, typeGrouped) {
       fun section(

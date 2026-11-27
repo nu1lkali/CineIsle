@@ -1171,7 +1171,9 @@ class AlistClient(
               path = if (parent.isEmpty()) name else "$parent/$name",
               size = item.size,
               isDirectory = item.isDir,
-              lastModified = parseModified(item.modified),
+              lastModified = parseAlistTime(item.modified),
+              // created 是老版本 / 部分驱动就不给的字段，解不出来是 0 ⇒ 该维度排序垫底
+              createdAt = parseAlistTime(item.created),
               mimeType = if (item.isDir) null else guessNetworkMimeType(name),
               sign = item.sign.takeIf { it.isNotBlank() },
               thumb = item.thumb.takeIf { it.isNotBlank() }?.let { resolveThumb(it) },
@@ -1336,10 +1338,13 @@ class AlistClient(
     }
 
   /**
-   * AList 的 modified 是 RFC3339（可能不带时区），解不出来就当 0 ——
-   * 最坏结果只是列表里这一行不显示时间，不值得为它抛异常。
+   * AList 的时间字段（`modified` / `created`）都是 RFC3339（可能不带时区），
+   * 解不出来就当 0 —— 最坏结果只是这一行不显示时间，不值得为它抛异常。
+   *
+   * 注意 `created` 是 **可选字段**：老版本 AList 与部分存储驱动不返回，
+   * 传进来就是空串，这里自然落到 0。
    */
-  private fun parseModified(raw: String): Long {
+  private fun parseAlistTime(raw: String): Long {
     if (raw.isBlank()) return 0L
     runCatching { OffsetDateTime.parse(raw).toInstant().toEpochMilli() }.getOrNull()?.let { return it }
     // 没有时区后缀的按 UTC 处理（LocalDateTime 要先补时区才能转时间戳）
@@ -1368,7 +1373,13 @@ private data class AlistFsItem(
   val name: String = "",
   val size: Long = 0,
   @SerialName("is_dir") val isDir: Boolean = false,
+  /** 修改时间（RFC3339，必返） */
   val modified: String = "",
+  /**
+   * 创建时间（RFC3339）。**可选字段**：官方文档标 `string,false`，
+   * 老版本 / 部分驱动不给 ⇒ 反序列化成空串，由 parseAlistTime 归到 0。
+   */
+  val created: String = "",
   val sign: String = "",
   val thumb: String = "",
   val type: Int = 0,

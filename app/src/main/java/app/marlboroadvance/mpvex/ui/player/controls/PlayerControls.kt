@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.player.controls
 
 import android.widget.Toast
+import app.marlboroadvance.mpvex.ui.player.engine.PlaybackSpeed
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.activity.compose.LocalActivity
@@ -754,8 +755,8 @@ fun PlayerControls(
                   SpeedControlSlider(
                     currentSpeed = currentSpeed,
                     onSpeedChange = { raw ->
-                      // 外部传入的已经是 0.05 的整数倍，这里再兜一次防止浮点累积误差
-                      val snapped = Math.round(raw * 20) / 20f
+                      // 统一经 PlaybackSpeed 量化：0.1 精度、0.1~6.0，防浮点累积误差。
+                      val snapped = PlaybackSpeed.quantize(raw)
                       PlayerLib.setPropertyFloat("speed", snapped)
                       PlaybackMemory.saveSpeed(playerPreferences, viewModel.seriesKey, snapped)
                     },

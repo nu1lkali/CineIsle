@@ -4062,8 +4062,37 @@ android {
     //  · 【验证】`FolderLatestAddedTest` 19 项（盘符保留、`/A` 与 `/AB` 不串、深埋归因、
     //    ParentId 兜底、取最新不覆盖、空目录垫底、同时间保持原序、提前终止、升序翻转、
     //    未知条目不丢）。
-    versionCode = 343
-    versionName = "1.6.87"
+    // ── v344（功能轮，versionCode +1，versionName 涨到 1.6.88）：旋转角度修复 + 网络字幕媒体库排除 ──
+    //  · 【画面旋转角度修复】旧实现走 `vf add @mpvex_rotate:rotate=<deg>`，当前内核
+    //    （libmpv v0.41.0）已无内置 rotate 滤镜，`vf=rotate=…` 经 lavfi 桥接给
+    //    libavfilter，其角度单位是**弧度**：`rotate=90` 被当成 90 弧度 ≈ 116.7°，画面是斜的。
+    //    改用 mpv 原生属性 `video-rotate`（度、叠加在容器旋转元数据之上，mpv 自带菜单同款），
+    //    90° 步进精确，根除单位错配；`ow/oh`、`rotw/roth` 一并移除。
+    //  · 【网络字幕媒体库排除】网络字幕自动下载新增「排除媒体库」配置，设置 → 字幕页入口。
+    //    默认全库生效；被排除库中的视频起播不再向字幕源发检索请求（省流量 / 免风控）。
+    //    排除项按 `serverId:userId|libraryId` 三元组绑定，跨服务器 / 跨账号不串台；
+    //    只影响自动下载，手动搜索不受限；认不出库时放行，不让配置把功能弄丢。
+    //  · 【验证】VideoRotateTest 11 项（含「写度数非弧度」回归）、
+    //    OnlineSubtitleLibraryScopeTest 5 项（跨服 / 跨账号不串台）；整模块 debug 编译通过。
+    // ── v345（修复轮，versionCode +1，versionName 仍为 1.6.88）：字幕排除设置 UI 两处打磨 ──
+    //  · 【摘要文案】默认由「全部媒体库」改为「未排除任何媒体库」，避免被理解成「默认排除全部」。
+    //  · 【弹窗跳动】点开「网络字幕排除媒体库」改为先加载服务器/媒体库、完成后再显示弹窗，
+    //    去掉先显示 loading 小圈再换成列表的尺寸突变，弹窗不再从偏右下跳到正中。
+    // ── v346（功能轮不涨名，versionCode +1，versionName 仍为 1.6.88）：排除弹窗批量操作 ──
+    //  · 【全选 / 取消全选 / 反选】弹窗列表上方加一行批量按钮，按勾选=排除语义批量勾选。
+    //    批量操作只动当前服务器/账号可见的库（visibleKeys），保留其它账号的排除项，不串台。
+    // ── v347（功能轮，versionCode +1，versionName 涨到 1.6.89）：倍速精度与上限扩展 ──
+    //  · 【单一真源】新增 `ui/player/engine/PlaybackSpeed.kt` 收口范围 0.1~6.0、精度 0.1、
+    //    横滑线性映射 `fromSwipe`、量化 `quantize`、显示 `display`；所有倍速入口只认这一份口径，
+    //    根除旧版「GestureHandler preset 跳档 / Slider 0.05 / Sheet 0.05 / 兜底 ×20」四套口径并存。
+    //  · 【横滑】长按后横滑由 preset 索引跳档改为数值线性映射，步长恒定 0.1、上限到 6.0；
+    //    震动按每 0.5x 跨档触发一次，不再每 0.1 都震。
+    //  · 【UI】动态倍速浮层改数值线性刻度尺（0.1/1/2/3/4/5/6 七个刻度），当前值大号一位小数，
+    //    ± 走 0.1；「更多 → 倍速」面板 Slider 0.1~6.0、snap 0.1，预设补 4.5/5.0/5.5/6.0；
+    //    VLC 内核倍速同步放开到 0.1~6.0（rate 是否接受 6x 需真机确认）。
+    //  · 【验证】PlaybackSpeedTest 10 项（范围/精度/线性映射/边界/显示）。
+    versionCode = 347
+    versionName = "1.6.89"
 
     vectorDrawables {
       useSupportLibrary = true

@@ -11,8 +11,14 @@ package app.marlboroadvance.mpvex.domain.emby
 // 这样纯逻辑能进 JVM 单测（本机跑不了 androidUnitTest），而网络部分
 // 只在真正的页面里跑，出问题一眼能看出是哪一层。
 
+import app.marlboroadvance.mpvex.domain.emby.isFolderLikeForScan
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 
 /**
  * 拉取策略。
@@ -42,10 +48,43 @@ internal object FolderLatestPolicy {
    * 连续两页都没贡献，说明剩下那些目录在可预见的范围内也不会有 —— 停。
    */
   const val MAX_IDLE_PAGES = 2
+
+  /**
+   * 同时计算多少个目录。
+   *
+   * 为什么需要并发：一次对**整个库**做递归查询，库有几千条时首屏要等好几秒，
+   * 而且服务端要遍历全部条目；改成「每个一级子目录各查一次」之后，单个请求的
+   * 结果集小得多、能走服务端的目录索引，整体反而更快，但串行发 N 个请求又会
+   * 把时间累加起来。4 路并发是与聚合检索（`Semaphore(4)`）一致的取值，
+   * 对家用 Emby 的并发承受能力比较友好。
+   */
+  const val CONCURRENCY = 4
+
+  /**
+   * 最多往下钻几层。
+   *
+   * 第一层（库根的直接子目录）是必须的；再往下钻是为了「一级目录下面只是
+   * 一堆子目录、真正的片在第二层」这种常见布局（`电影/2024/…`）。
+   * 两层通常足够，再多收益随深度快速衰减，而请求数是指数增长的。
+   */
+  const val MAX_DEPTH = 3
 }
 
 /**
  * 算一层目录的「最新入库时间」顺序。
+ *
+ * ## 为什么要分目录去查（v344 重构）
+ * 旧实现对整个库发**一条**递归查询。问题有三：
+ *  1. 首屏延迟与库大小线性相关 —— 几千条时用户要干等好几秒；
+ *  2. 只能靠「连续两页没贡献」猜着停，容易在真正的老目录上翻空几十页；
+ *  3. 结果只能一次性给出，中途没有任何反馈。
+ * 现在改成按一级子目录拆开、各自有限深度递归，并**边算边回调**
+ * （[onPartial]），用户能立刻看到顺序开始变化。
+ *
+ * ## 归因仍然以 Path 为准
+ * 每个子任务只负责「这个一级子目录内部」，命中即记在它名下 —— 不需要再猜
+ * 更深层归属（那是 [matchChildFolder] 在扁平结果集里干的事）。但**同一个子目录
+ * 内部**仍取最新一条，与扁平版本语义一致。
  *
  * 供页面在后台协程里调用。所有异常都**不往外抛**：
  * 拿不到就返回 null，调用方退回「原始顺序」—— 排序失败不该让整页打不开。
@@ -54,12 +93,16 @@ internal object FolderLatestPolicy {
  * @param children 这一层的直接子目录（按当前网格里的原顺序）
  * @param includeTypes 递归查询时要纳入的**媒体类型**。必须与用户当前视图
  *   「能看到的媒体」一致，否则「文件夹里有片、却算不出时间」。
+ * @param onPartial 每算完一批子目录就回调一次「目前已知的 目录Id → 最新时间」。
+ *   在调用方的协程上下文里执行（页面里就是主线程），可以直接更新 UI 状态。
+ *   可能被调用多次；最终结论仍以返回值为准。
  * @return 顺序结果；一页都没拉到（网络错 / 服务端 500）时返回 null
  */
 internal suspend fun computeFolderLatestOrder(
   parentId: String,
   children: List<EmbyItem>,
   includeTypes: List<String>,
+  onPartial: suspend (Map<String, String>) -> Unit = {},
   fetchPage: suspend (
     parentId: String,
     startIndex: Int,
@@ -84,34 +127,90 @@ internal suspend fun computeFolderLatestOrder(
     .toMap()
 
   val scan = FolderLatestScan(childIdsInOriginalOrder, childPathById)
-
-  var startIndex = 0
-  var page = 0
-  var idlePages = 0
+  val mergedMutex = Mutex()
+  val gate = Semaphore(FolderLatestPolicy.CONCURRENCY)
+  /** 已算出的「一级子目录 → 最新时间」，并发写入受 [mergedMutex] 保护 */
+  val latestById = LinkedHashMap<String, String>()
   var gotAnyPage = false
-  while (page < FolderLatestPolicy.MAX_PAGES) {
-    // 「所有目录都算出时间了」是最理想的情况：这一层的目录全都有新片，
-    // 通常第一页的第一批就填满了，一次请求收工。
-    if (scan.isComplete) break
-    val result = runCatching {
-      fetchPage(parentId, startIndex, FolderLatestPolicy.PAGE_SIZE, includeTypes)
-    }.getOrNull() ?: break
-    gotAnyPage = true
-    val items = result.Items
-    if (items.isEmpty()) break
 
-    val filled = scan.feed(items)
-    idlePages = if (filled == 0) idlePages + 1 else 0
+  /**
+   * 递归算 [folderId] 这个目录（最多下钻到 [FolderLatestPolicy.MAX_DEPTH] 层）
+   * 里最新的 media 时间。
+   *
+   * @return 这个目录下能找到的最新 `DateCreated`，找不到返回 null
+   */
+  suspend fun scanFolder(
+    folderId: String,
+    depth: Int,
+  ): String? {
+    var newest: String? = null
+    var startIndex = 0
+    var page = 0
+    var idlePages = 0
+    while (page < FolderLatestPolicy.MAX_PAGES) {
+      val result = gate.withPermit {
+        runCatching { fetchPage(folderId, startIndex, FolderLatestPolicy.PAGE_SIZE, includeTypes) }
+          .getOrNull()
+      } ?: break
+      mergedMutex.withLock { gotAnyPage = true }
+      val items = result.Items
+      if (items.isEmpty()) break
 
-    // 已经翻到底了（服务端给的这批不足一页，或者游标追上了总数）
-    startIndex += items.size
-    if (items.size < FolderLatestPolicy.PAGE_SIZE) break
-    if (result.TotalRecordCount in 1..startIndex) break
-    if (idlePages >= FolderLatestPolicy.MAX_IDLE_PAGES) break
-    page++
+      var contributed = false
+      for (item in items) {
+        // 目录类条目：它自己的 DateCreated 不代表「里面有新东西」
+        // （见 FOLDER_LATEST_CONTAINER_TYPES）。深度还有余量时继续往下钻 ——
+        // `电影/2024/…` 这类「一级目录只有子目录」的布局靠这一步才算出时间。
+        if (isFolderLikeForScan(item)) {
+          val childId = item.Id?.takeIf { it.isNotBlank() }
+          if (childId != null && depth < FolderLatestPolicy.MAX_DEPTH) {
+            val deep = scanFolder(childId, depth + 1)
+            if (deep != null && (newest == null || deep > newest!!)) {
+              newest = deep
+              contributed = true
+            }
+          }
+          continue
+        }
+        val created = item.DateCreated?.takeIf { it.isNotBlank() } ?: continue
+        val current = newest
+        if (current == null || created > current) {
+          newest = created
+          contributed = true
+        }
+      }
+      idlePages = if (contributed) 0 else idlePages + 1
+
+      startIndex += items.size
+      if (items.size < FolderLatestPolicy.PAGE_SIZE) break
+      if (result.TotalRecordCount in 1..startIndex) break
+      // 已经有结果、且连续两页没有更晚的贡献 ⇒ 后面不会更新了
+      if (newest != null && idlePages >= FolderLatestPolicy.MAX_IDLE_PAGES) break
+      page++
+    }
+    return newest
+  }
+
+  // 一级子目录并发处理；每算完一个就并进合并表并回调，
+  // 让调用方可以「边算边显示」而不是等全部算完。
+  coroutineScope {
+    childIdsInOriginalOrder.map { childId ->
+      async {
+        val newest = scanFolder(childId, depth = 1) ?: return@async
+        val snapshot =
+          mergedMutex.withLock {
+            scan.record(childId, newest)
+            latestById[childId] = newest
+            HashMap(latestById)
+          }
+        // 回调在父协程的上下文里跑（页面里即主线程），可直接更新 UI 状态
+        onPartial(snapshot)
+      }
+    }.awaitAll()
   }
 
   if (!gotAnyPage) return null
+  // 最终顺序仍由 scan 产出：它负责「有时间的在前、空目录垫后、同时间保原序」
   return scan.toOrder()
 }
 

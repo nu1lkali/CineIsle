@@ -14,8 +14,8 @@ import java.time.ZoneId
  * 需求指定：文件夹恒在最顶层，其下 视频 → 图片 → 其他文件。
  *
  * ⚠️ 与 `NetworkSortType.Type` 的排序权重**不是同一套**：那个是「按类型排序」这个
- *    排序维度用的字典序（文件夹 → 图片 → 视频 → 其他，见 `NetworkBrowserViewModel.typeRank`），
- *    这里只服务「强制类型分组」。两者不要合并 —— 合并会顺手改掉「按类型排序」的老行为。
+ *    排序维度用的字典序（文件夹 → 视频 → 图片 → 其他，见 `NetworkFile.typeSortKey`），
+ *    这里只服务「强制类型分组」。两者不要合并 —— 合并会顺手改掉「按类型分组」的段头文案。
  */
 internal val NETWORK_TYPE_GROUP_ORDER: List<Pair<NetworkFileType, String>> =
   listOf(

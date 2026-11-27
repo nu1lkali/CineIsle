@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls
+import app.marlboroadvance.mpvex.ui.player.engine.PlaybackSpeed
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.compose.animation.core.Animatable
@@ -388,7 +389,7 @@ fun GestureHandler(
                 originalSpeed = playbackSpeed ?: 1f
                 // Ramp speed up incrementally to avoid audio filter stutter
                 val startSpeed = originalSpeed
-                val targetSpeed = multipleSpeedGesture
+                val targetSpeed = PlaybackSpeed.quantize(multipleSpeedGesture)
                 val steps = 5
                 val stepDelay = 16L // ~one frame per step
                 for (i in 1..steps) {
@@ -399,12 +400,14 @@ fun GestureHandler(
                 }
 
                 if (showDynamicSpeedOverlay) {
+                  // 起点统一量化到 0.1 / 0.1~6.0，避免偏好里 2.04 这类脏值带进横滑。
+                  val quantizedStart = PlaybackSpeed.quantize(multipleSpeedGesture)
                   isDynamicSpeedControlActive = true
                   hasSwipedEnough = false
                   dynamicSpeedStartX = startPosition.x
-                  dynamicSpeedStartValue = multipleSpeedGesture
-                  lastAppliedSpeed = multipleSpeedGesture
-                  viewModel.playerUpdate.update { PlayerUpdates.DynamicSpeedControl(multipleSpeedGesture, false) }
+                  dynamicSpeedStartValue = quantizedStart
+                  lastAppliedSpeed = quantizedStart
+                  viewModel.playerUpdate.update { PlayerUpdates.DynamicSpeedControl(quantizedStart, false) }
                 } else {
                   viewModel.playerUpdate.update { PlayerUpdates.MultipleSpeed }
                 }
@@ -447,7 +450,10 @@ fun GestureHandler(
                     when (gestureType) {
                       "speed_control" -> {
                         dynamicSpeedStartX = currentPosition.x
-                        dynamicSpeedStartValue = PlayerLib.getPropertyFloat("speed") ?: multipleSpeedGesture
+                        // 长按住后手指才水平移动、还没到真正的横滑阈值时，起点取 mpv 当前值。
+                        dynamicSpeedStartValue = PlaybackSpeed.quantize(
+                          PlayerLib.getPropertyFloat("speed") ?: multipleSpeedGesture,
+                        )
                       }
                       "vertical" -> {
                         if ((brightnessGesture || volumeGesture) && !isLongPressing) {
@@ -472,9 +478,7 @@ fun GestureHandler(
                       if (isLongPressing && isDynamicSpeedControlActive && paused == false) {
                         change.consume()
 
-                        val speedPresets = listOf(0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f)
                         val screenWidth = size.width.toFloat()
-
                         val deltaX = currentPosition.x - dynamicSpeedStartX
                         val swipeDetectionThreshold = 10.dp.toPx()
 
@@ -484,18 +488,18 @@ fun GestureHandler(
                         }
 
                         if (hasSwipedEnough) {
-                          val presetsRange = speedPresets.size - 1
-                          val indexDelta = (deltaX / screenWidth) * presetsRange * 3.5f
+                          // 连续线性映射：0.1 精度、0.1~6.0 全量程，不再按 preset 索引跳档。
+                          val newSpeed = PlaybackSpeed.fromSwipe(
+                            startSpeed = dynamicSpeedStartValue,
+                            deltaX = deltaX,
+                            screenWidth = screenWidth,
+                          )
 
-                          val startIndex = speedPresets.indexOfFirst {
-                            abs(it - dynamicSpeedStartValue) < 0.01f
-                          }.takeIf { it >= 0 } ?: 4
-
-                          val newIndex = (startIndex + indexDelta.toInt()).coerceIn(0, speedPresets.size - 1)
-                          val newSpeed = speedPresets[newIndex]
-
-                          if (abs(lastAppliedSpeed - newSpeed) > 0.01f) {
-                            if (hapticFeedbackEnabled) {
+                          if (abs(lastAppliedSpeed - newSpeed) > 0.001f) {
+                            // 震动按每 0.5x 跨档触发一次（不再每次 0.1 变化都震，手感更稳）。
+                            if (hapticFeedbackEnabled &&
+                              (lastAppliedSpeed / 0.5f).toInt() != (newSpeed / 0.5f).toInt()
+                            ) {
                               haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             }
                             lastAppliedSpeed = newSpeed

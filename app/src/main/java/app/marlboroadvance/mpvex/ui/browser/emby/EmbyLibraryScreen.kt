@@ -141,6 +141,7 @@ import app.marlboroadvance.mpvex.domain.emby.FolderLatestCache
 import app.marlboroadvance.mpvex.domain.emby.FolderLatestOrder
 import app.marlboroadvance.mpvex.domain.emby.applyFolderLatestOrder
 import app.marlboroadvance.mpvex.domain.emby.computeFolderLatestOrder
+import app.marlboroadvance.mpvex.domain.emby.orderIds
 import app.marlboroadvance.mpvex.domain.emby.LibraryNameIndex
 import app.marlboroadvance.mpvex.domain.emby.EmbyUserData
 import app.marlboroadvance.mpvex.domain.smartmerge.OP_DONE
@@ -2005,19 +2006,55 @@ data class EmbyLibraryScreen(
       }.getOrNull()?.Items.orEmpty().filter { isFolderLike(it) }
       if (folders.isEmpty()) return@LaunchedEffect
 
-      // 递归查询要纳入的条目类型：按库类型推（电影库只要 Movie，剧集库只要 Series）。
-      // 刻意不复用 `effectiveTypes` —— 它在「文件夹」档是 Folder 白名单，
-      // 递归拉只会拿回目录。空 = 该库不限类型（混合 / 家庭视频库）：Emby 把这类
-      // 库的内容存成 Movie / Episode，这时只能靠 isFolder=false 挡住容器。
-      val mediaTypes = allItemTypesFor(collectionType)
-        .orEmpty()
-        .filterNot { it in FOLDER_TYPES }
+      // 递归查询要纳入的条目类型：**不看库类型，把「能算出时间的媒体」全拉回来**。
+      //
+      // ⚠️ 这里曾经用 `allItemTypesFor(collectionType)`（movies→Movie、tvshows→Series），
+      //    实测是错的：
+      //      · 剧集库里一整个剧 = 一个 Series，它的 `DateCreated` 是**这部剧入库的时刻**；
+      //        之后往某一季里加新集，Series 的 DateCreated 纹丝不动 ⇒ 整个目录的时间永远
+      //        是建库那天的，越加新片越靠后，正是用户反馈的「没有按最新添加排」。
+      //        真正随新集变动的是 **Episode** —— 旧实现从没拉过它。
+      //      · movies→Movie 只认顶层条目，漏掉同一目录里的 Episode / Video（花絮、
+      //        自制视频），那些目录算不出时间，会被当成「空目录」垫到最后。
+      //      · boxsets / books 同理，容器自己的时间不代表里面有新东西。
+      //    类型白名单由 [FOLDER_LATEST_MEDIA_TYPES] 统一定义（见其 KDoc）。
+      //
+      // ── 增量应用（v344）──
+      // 目录一多，一次算完要好几秒，期间网格停在原顺序、看起来像「没生效」。
+      // 所以每算完一层就地应用一次结果（部分结果也用：已算出时间的目录排在正确的
+      // 位置，其余的仍按原顺序垫后），用户能立刻看到顺序开始变化，而不是干等。
+      // 全部算完才写缓存，避免把半截结论固化三十分钟。
+      val merged = HashMap<String, String>()
+      var lastApplied = 0L
+      fun publish(final: Boolean) {
+        // 同步时不刷得太勤：每层都重组一次网格会让滚动发涩。
+        // 400ms 节流 + 最终一次必刷（final 时跳过节流）。
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!final && now - lastApplied < FOLDER_LATEST_PUBLISH_INTERVAL_MS) return
+        lastApplied = now
+        folderLatestOrder = FolderLatestOrder(
+          orderedIds = orderIds(
+            idsInOriginalOrder = folders.mapNotNull { it.Id },
+            newestByFolderId = merged,
+          ),
+          newestByFolderId = merged.toMap(),
+          complete = final,
+        )
+      }
 
       val order = computeFolderLatestOrder(
         parentId = libraryId,
         children = folders,
-        includeTypes = mediaTypes,
+        includeTypes = FOLDER_LATEST_MEDIA_TYPES,
+        onPartial = { newest ->
+          merged.putAll(newest)
+          publish(final = false)
+        },
       ) { parentId, startIndex, limit, types ->
+        // 进度按「最新入库」降序、是否提前终止由 computeFolderLatestOrder 判。
+        // 拉回来的是媒体本体 + 顶层容器（Series / Season / BoxSet），
+        // 具体归到哪个子目录由 Path 前缀决定，容器自带的时间是否可用由
+        // `FolderLatestAdded.resolveFolderId` 的类型闸统一把关。
         viewModel.loadItemsResult(
           server = current,
           parentId = parentId,
@@ -2027,9 +2064,11 @@ data class EmbyLibraryScreen(
           startIndex = startIndex,
           limit = limit,
           recursive = true,
-          // 只要媒体本体：目录 / 季 / 合集这些容器自己没有入库时间可言，
-          // 拉回来只会白占页容量，还会把「第一页」挤满容器导致提前终止失效。
-          isFolder = false,
+          // ⚠️ 这里**不能传 `isFolder = false`**：Emby 的 `IsFolder=false` 是按
+          //    `BaseItemDto.IsFolder` 过滤，会把 Series / Season / BoxSet 这些容器
+          //    一并挡掉；而这些容器恰恰是「某一季刚加了新集」时唯一会刷新的
+          //    `DateCreated` 来源，滤掉它们等于把整部剧的时间戳一起丢掉。
+          //    目录类条目自己不会被误算 —— `resolveFolderId` 里有一道类型闸。
           fields = FOLDER_LATEST_FIELDS,
         )
       } ?: return@LaunchedEffect
@@ -6506,6 +6545,36 @@ private const val PAGE_SIZE = 100
 private const val FOLDER_LATEST_FIELDS = "DateCreated,Path,ParentId"
 
 /**
+ * 「文件夹最新添加时间」递归扫描要拉回来的**条目类型**。
+ *
+ * 为什么是一份固定的宽口径，而不是按媒体库类型收窄（`allItemTypesFor`）：
+ *  · 剧集库里「一部剧」是 `Series`，它的 `DateCreated` 只在**首次入库**时写一次，
+ *    之后往某一季里加新集完全不变 ⇒ 拿 Series 算时间，永远是建库那天，
+ *    越加新片越沉底。真正随「加片」变动的是 `Episode`。
+ *  · 电影库只认 `Movie` 会漏掉同目录下的自制视频 / 花絮（`Video` / `Episode`），
+ *    那些目录会被算成「没有时间」而垫到最后。
+ *  · 合集（`BoxSet`）与音乐专辑（`MusicAlbum`）自己也是容器，但它们的
+ *    `DateCreated` 在有新成员进入时会更新，属于有效的「最近有新增」信号。
+ *
+ * `Photo` / `PhotoAlbum` 不在这里：照片库的目录顺序语义与视频不同，
+ * 而且照片条目数量级极大，拉全会让提前终止彻底失效。
+ *
+ * 容器条目（`Series` / `Season` / `BoxSet`）的 `Path` 恒等于它自己的目录路径，
+ * 按 [isUnderPath] 的「不含自己」判定不会归进任何子目录，因此混在结果里无害。
+ */
+private val FOLDER_LATEST_MEDIA_TYPES =
+  listOf(
+    "Movie",
+    "Episode",
+    "Video",
+    "Series",
+    "Season",
+    "BoxSet",
+    "MusicVideo",
+    "MusicAlbum",
+  )
+
+/**
  * 「文件夹最新添加时间」排序时，一次性拉全「这一层的直接子目录」的每页条数。
  *
  * 与网格分页的 [PAGE_SIZE] 是两码事：那边 100 是为了滚动体验（首屏要快），
@@ -6517,6 +6586,15 @@ private const val FOLDER_LATEST_FIELDS = "DateCreated,Path,ParentId"
  * 按原顺序垫在后面，拿到清单的那部分仍然是排好的（见其 KDoc）。
  */
 private const val FOLDER_LAYER_PAGE_SIZE = 500
+
+/**
+ * 「文件夹最新添加时间」增量结果的刷新间隔。
+ *
+ * 每算完一个子目录就把部分结论推给界面会让网格频繁重组（目录多时几十次），
+ * 滚动会发涩。400ms 一次足够让用户看到顺序在动，又不至于抖。
+ * 最终结论那一次不受此限制（必刷）。
+ */
+private const val FOLDER_LATEST_PUBLISH_INTERVAL_MS = 400L
 
 /**
  * 拉子目录清单时要的字段。

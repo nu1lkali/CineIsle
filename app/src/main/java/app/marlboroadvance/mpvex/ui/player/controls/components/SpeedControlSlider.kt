@@ -51,42 +51,41 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.marlboroadvance.mpvex.R
 import app.marlboroadvance.mpvex.presentation.components.RepeatingIconButton
+import app.marlboroadvance.mpvex.ui.player.engine.PlaybackSpeed
 import app.marlboroadvance.mpvex.ui.theme.spacing
 import kotlinx.coroutines.delay
-
-/** 精细调速的步进与边界。 */
-private const val SPEED_STEP = 0.05f
-private const val MIN_SPEED = 0.05f
-private const val MAX_SPEED = 4.0f
+import kotlin.math.abs
 
 /**
- * A compact speed control display that shows available speed options (0.25x to 4x)
- * with an indicator showing the current speed. Styled to match the zoom overlay.
+ * 动态倍速浮层的展开态：紧凑显示 0.1~6.0 的**数值线性**刻度尺。
  *
- * @param currentSpeed The current playback speed (0.25f to 4.0f)
- * @param modifier Optional modifier for the container
+ * ## 为什么按数值线性而不是按档位等距
+ *
+ * 旧实现把 8 个 preset 当等距刻度画（`0.25/0.5/1/1.5/2/2.5/3/4`），
+ * 档距忽大忽小，精度和上限都上不去。换成线性尺之后，4.0~6.0 只是轨道右侧
+ * 自然的 1/3，标签只放七个整数刻度，不会挤成一团。
+ *
+ * 所有写入值都经过 [PlaybackSpeed.quantize]，与横滑、面板、预设 chip 同口径。
+ *
+ * @param currentSpeed 当前播放速度
+ * @param modifier 容器 modifier
+ * @param onSpeedChange 微调回调（0.1 步进）；传 null 时只展示、不给按钮
  */
 @Composable
 fun SpeedControlSlider(
   currentSpeed: Float,
   modifier: Modifier = Modifier,
-  /**
-   * 精细调速回调（0.05 步进）。传 null 时只展示、不给按钮 —— 
-   * 面板里已有 PlaybackSpeedSheet 提供同样的调节能力。
-   */
   onSpeedChange: ((Float) -> Unit)? = null,
 ) {
-  // Speed presets from 0.25x to 4x
-  val speedPresets = listOf(0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f)
-  
-  // Find the index of current speed in presets
-  val currentIndex = speedPresets.indexOfFirst { 
-    kotlin.math.abs(it - currentSpeed) < 0.05f 
-  }.coerceIn(0, speedPresets.size - 1)
-  
+  val speed = PlaybackSpeed.quantize(currentSpeed)
+  // 只标七个整数刻度；0.1 作为下限单独标出，4.0~6.0 是右侧自然的 1/3。
+  val ticks = listOf(0.1f, 1f, 2f, 3f, 4f, 5f, 6f)
+  val trackWidth = 280.dp
+
   val primaryColor = MaterialTheme.colorScheme.primary
   val onSurfaceColor = MaterialTheme.colorScheme.onSurface
-  // Use a Surface with less rounded corners instead of CircleShape
+  val progress = ((speed - PlaybackSpeed.MIN) / PlaybackSpeed.SPAN).coerceIn(0f, 1f)
+
   Surface(
     shape = RoundedCornerShape(12.dp),
     color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.55f),
@@ -110,73 +109,7 @@ fun SpeedControlSlider(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-            // Speed labels - compact version
-            Row(
-              modifier = Modifier.width(280.dp),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              speedPresets.forEach { speed ->
-                val isCurrentSpeed = kotlin.math.abs(currentSpeed - speed) < 0.05f
-                Text(
-                  text = "${speed.format()}x",
-                  fontSize = if (isCurrentSpeed) 13.sp else 10.sp,
-                  fontWeight = if (isCurrentSpeed) FontWeight.Bold else FontWeight.Normal,
-                  color = if (isCurrentSpeed) {
-                    primaryColor
-                  } else {
-                    onSurfaceColor.copy(alpha = 0.7f)
-                  },
-                )
-              }
-            }
-            
-            // Compact slider track
-            Canvas(
-              modifier = Modifier
-                .width(280.dp)
-                .height(3.dp),
-            ) {
-              val trackWidth = size.width
-              val trackHeight = 3.dp.toPx()
-              val centerY = size.height / 2
-              val segmentWidth = trackWidth / (speedPresets.size - 1)
-              
-              // Background track
-              drawLine(
-                color = onSurfaceColor.copy(alpha = 0.35f),
-                start = Offset(0f, centerY),
-                end = Offset(trackWidth, centerY),
-                strokeWidth = trackHeight,
-                cap = StrokeCap.Round,
-              )
-              
-              // Progress track (filled portion up to current speed)
-              val progressX = currentIndex * segmentWidth
-              drawLine(
-                color = primaryColor,
-                start = Offset(0f, centerY),
-                end = Offset(progressX, centerY),
-                strokeWidth = trackHeight,
-                cap = StrokeCap.Round,
-              )
-              
-              // Draw tick marks for each speed preset
-              speedPresets.forEachIndexed { index, _ ->
-                val tickX = index * segmentWidth
-                drawCircle(
-                  color = if (index <= currentIndex) {
-                    primaryColor
-                  } else {
-                    onSurfaceColor.copy(alpha = 0.7f)
-                  },
-                  radius = 2.5.dp.toPx(),
-                  center = Offset(tickX, centerY),
-                )
-              }
-            }
-        
-        // Current speed display
+        // 当前速度：大号一位小数，不写「倍速播放中」这类重复说明。
         Row(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.Center,
@@ -184,26 +117,77 @@ fun SpeedControlSlider(
           Icon(
             imageVector = Icons.Filled.FastForward,
             contentDescription = null,
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.size(18.dp),
           )
           Text(
-            text = "${currentSpeed.format()}x 倍速播放中",
-            fontSize = 14.sp,
+            text = "${PlaybackSpeed.display(speed)}x",
+            fontSize = 26.sp,
             fontWeight = FontWeight.Bold,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(start = 4.dp),
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.padding(start = 6.dp),
           )
         }
 
-        // 0.05 步进微调：点一下走一格，**长按连续走**（RepeatingIconButton）。
-        // 预设档只覆盖 0.25/0.5/1/1.5…，想看「1.15x 刚刚好」这类刻度只能靠这个。
+        // 线性尺的刻度标签：0.1 / 1 / 2 / 3 / 4 / 5 / 6
+        Row(
+          modifier = Modifier.width(trackWidth),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          ticks.forEach { tick ->
+            val isCurrent = abs(speed - tick) < 0.05f
+            Text(
+              text = if (tick == PlaybackSpeed.MIN) "0.1" else tick.toInt().toString(),
+              fontSize = if (isCurrent) 13.sp else 10.sp,
+              fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+              color = if (isCurrent) primaryColor else onSurfaceColor.copy(alpha = 0.7f),
+            )
+          }
+        }
+
+        // 线性轨道：填充到 (speed - MIN) / SPAN，刻度按同样比例分布。
+        Canvas(
+          modifier = Modifier
+            .width(trackWidth)
+            .height(3.dp),
+        ) {
+          val w = size.width
+          val centerY = size.height / 2
+          val trackHeight = 3.dp.toPx()
+
+          drawLine(
+            color = onSurfaceColor.copy(alpha = 0.35f),
+            start = Offset(0f, centerY),
+            end = Offset(w, centerY),
+            strokeWidth = trackHeight,
+            cap = StrokeCap.Round,
+          )
+          drawLine(
+            color = primaryColor,
+            start = Offset(0f, centerY),
+            end = Offset(w * progress, centerY),
+            strokeWidth = trackHeight,
+            cap = StrokeCap.Round,
+          )
+          ticks.forEach { tick ->
+            val fraction = ((tick - PlaybackSpeed.MIN) / PlaybackSpeed.SPAN).coerceIn(0f, 1f)
+            val reached = speed + 0.001f >= tick
+            drawCircle(
+              color = if (reached) primaryColor else onSurfaceColor.copy(alpha = 0.7f),
+              radius = 2.5.dp.toPx(),
+              center = Offset(w * fraction, centerY),
+            )
+          }
+        }
+
+        // 0.1 步进微调：点一下走一格，长按连续走（RepeatingIconButton）。
         if (onSpeedChange != null) {
           Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
             RepeatingIconButton(
-              onClick = { onSpeedChange((currentSpeed - SPEED_STEP).coerceAtLeast(MIN_SPEED)) },
+              onClick = { onSpeedChange(PlaybackSpeed.quantize(speed - PlaybackSpeed.STEP)) },
               modifier = Modifier.size(32.dp),
             ) {
               Icon(
@@ -213,14 +197,14 @@ fun SpeedControlSlider(
               )
             }
             Text(
-              text = "${currentSpeed.format()}x",
+              text = "${PlaybackSpeed.display(speed)}x",
               fontSize = 13.sp,
               fontWeight = FontWeight.SemiBold,
               modifier = Modifier.width(56.dp),
               textAlign = TextAlign.Center,
             )
             RepeatingIconButton(
-              onClick = { onSpeedChange((currentSpeed + SPEED_STEP).coerceAtMost(MAX_SPEED)) },
+              onClick = { onSpeedChange(PlaybackSpeed.quantize(speed + PlaybackSpeed.STEP)) },
               modifier = Modifier.size(32.dp),
             ) {
               Icon(
@@ -237,17 +221,14 @@ fun SpeedControlSlider(
 }
 
 /**
- * A compact speed indicator that shows just the icon and speed value.
- * Used when dynamic speed overlay is collapsed or disabled.
- *
- * @param currentSpeed The current playback speed
- * @param modifier Optional modifier for the container
+ * 收起态胶囊：只显示 `x.x x`，不重复控件名。
  */
 @Composable
 fun CompactSpeedIndicator(
   currentSpeed: Float,
   modifier: Modifier = Modifier,
 ) {
+  val speed = PlaybackSpeed.quantize(currentSpeed)
   Row(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.Center,
@@ -266,25 +247,15 @@ fun CompactSpeedIndicator(
       imageVector = Icons.Filled.FastForward,
       contentDescription = null,
       modifier = Modifier.size(16.dp),
-      tint = MaterialTheme.colorScheme.onSurface 
+      tint = MaterialTheme.colorScheme.onSurface
     )
     Text(
-      text = "${currentSpeed.format()}x",
+      text = "${PlaybackSpeed.display(speed)}x",
       fontSize = 14.sp,
       fontWeight = FontWeight.Bold,
       style = MaterialTheme.typography.bodyLarge,
       modifier = Modifier.padding(start = 4.dp),
-      color = MaterialTheme.colorScheme.onSurface // Explicitly set color
+      color = MaterialTheme.colorScheme.onSurface
     )
-  }
-}
-
-/**
- * Format float speed value to display with minimal decimal places
- */
-private fun Float.format(): String {
-  return when {
-    this % 1.0f == 0.0f -> this.toInt().toString()
-    else -> String.format("%.2f", this).trimEnd('0').trimEnd('.')
   }
 }

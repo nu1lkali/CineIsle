@@ -4,16 +4,15 @@ import app.marlboroadvance.mpvex.ui.player.engine.RotationState
 import app.marlboroadvance.mpvex.ui.player.engine.VideoRotate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * 画面旋转的纯逻辑测试。
  *
- * 只覆盖**不碰 native** 的部分（累计状态 / 滤镜参数拼装 / 角度换算）——
- * 真正下发 `vf` 命令要靠真机验证，这里保证的是「转四次回原点」这类
- * 用户可感知的语义不出错。
+ * 只覆盖**不碰 native** 的部分（累计状态 / 角度换算 / 写入值）——
+ * 真正下发属性要靠真机验证，这里保证「转四次回原点」「写度数而非弧度」
+ * 这类用户可感知的语义不出错。
  */
 class VideoRotateTest {
   @Test
@@ -43,28 +42,22 @@ class VideoRotateTest {
   }
 
   @Test
-  fun `filter arg carries the output size so the frame is not cropped`() {
-    assertEquals(
-      "rotate=90:ow=rotw(90):oh=roth(90)",
-      VideoRotate.filterArg(1),
-    )
-    assertEquals(
-      "rotate=180:ow=rotw(180):oh=roth(180)",
-      VideoRotate.filterArg(2),
-    )
-    assertEquals(
-      "rotate=270:ow=rotw(270):oh=roth(270)",
-      VideoRotate.filterArg(3),
-    )
+  fun `property value is exact degrees not radians`() {
+    // 回归：旧版 vf rotate=90 被 libavfilter 当 90 弧度 ≈ 116.7°，画面是斜的。
+    // 写入 video-rotate 的必须是精确的度数，不能有任何弧度换算。
+    assertEquals(90, VideoRotate.degreesOf(1))
+    assertEquals(180, VideoRotate.degreesOf(2))
+    assertEquals(270, VideoRotate.degreesOf(3))
+    assertEquals(0, VideoRotate.degreesOf(0))
   }
 
   @Test
-  fun `zero degrees means no filter at all`() {
-    // 0° 必须返回 null，让调用方走「移除滤镜」而不是挂一个空转的 rotate
-    assertNull(VideoRotate.filterArg(0))
-    // 越界圈数要归一，不能产生 rotate=450 这种参数
-    assertNull(VideoRotate.filterArg(4))
-    assertEquals("rotate=90:ow=rotw(90):oh=roth(90)", VideoRotate.filterArg(5))
+  fun `zero quarter turns means zero property value`() {
+    // 0° 必须写 0（干净的复位），不能产生 360 这类等价旋转。
+    assertEquals(0, VideoRotate.degreesOf(0))
+    assertEquals(0, VideoRotate.degreesOf(4))
+    // 越界圈数要归一，不能产生 450 这种角度。
+    assertEquals(90, VideoRotate.degreesOf(5))
   }
 
   @Test
@@ -96,14 +89,13 @@ class VideoRotateTest {
   }
 
   @Test
-  fun `label must not carry the at sign used by vf add`() {
-    // `vf add @<label>:<filter>` 里的 `@` 是分隔符，标签名自带 `@` 会变成 @@
-    assertFalse(VideoRotate.LABEL.startsWith("@"))
-    assertTrue(VideoRotate.LABEL.isNotBlank())
+  fun `property is the native video rotate`() {
+    // 必须是 mpv 原生属性，叠加在容器旋转之上；不再是自定义 vf 标签。
+    assertEquals("video-rotate", VideoRotate.PROPERTY)
   }
 
   @Test
-  fun `direct output has no filter chain`() {
+  fun `direct output has no rotation entry`() {
     assertFalse(VideoRotate.isAvailable(directOutput = true))
     assertTrue(VideoRotate.isAvailable(directOutput = false))
   }

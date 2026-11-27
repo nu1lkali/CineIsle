@@ -139,6 +139,66 @@ class FolderLatestAddedTest {
     assertTrue(scan.toOrder().newestByFolderId.isEmpty())
   }
 
+  // ── 目录自身的时间绝不能当成「里面最新」 ──
+  //
+  // v343 线上问题的根因之一：Emby 剧集库里，一部剧是一个 Series，它的
+  // DateCreated 只用建库那天写一次，之后加多少集都不变。如果把「容器自己的
+  // 时间」算进归因，整个目录就会永远停在建库时间，越加新片越沉底。
+  @Test
+  fun folderItemItselfNeverContributesTime() {
+    val scan = FolderLatestScan(listOf("A"), mapOf("A" to "/media/A"))
+    // 一条 Type=Folder、Path 确实落在 /media/A 里面。
+    // 若没有「容器类型一律不算」这道闸，它会被当成 A 的最新时间 —— 而它的
+    // DateCreated 只是「这个目录被扫描到的时刻」，正是要避免的那种误解。
+    scan.feed(
+      listOf(
+        EmbyItem(
+          Id = "sub",
+          Type = "Folder",
+          Path = "/media/A/子目录",
+          DateCreated = "2019-01-01T00:00:00Z",
+        ),
+      ),
+    )
+    assertTrue(scan.toOrder().newestByFolderId.isEmpty())
+  }
+
+  @Test
+  fun seriesContainerStillCountsButFolderDoesNot() {
+    val scan = FolderLatestScan(listOf("A"), mapOf("A" to "/media/A"))
+    // Series 本身 Path 指向它自己的目录（`/media/A/某剧`），落在 A 里面 ⇒ 可以算
+    scan.feed(
+      listOf(
+        EmbyItem(
+          Id = "s",
+          Type = "Series",
+          Path = "/media/A/某剧",
+          DateCreated = "2026-06-01T00:00:00Z",
+        ),
+      ),
+    )
+    assertEquals("2026-06-01T00:00:00Z", scan.toOrder().newestByFolderId["A"])
+  }
+
+  /**
+   * 缺 DateCreated 的脏数据混在一批里，不能让同批后面的有效条目被丢掉。
+   *
+   * 服务端在缺字段时会把它们排到结果末尾，但同一页里混着它们并不代表
+   * 后面的都更旧 —— 这里用「无时间 + 有效」同批来钉住「不要 break」。
+   */
+  @Test
+  fun undatedItemDoesNotStopTheRestOfTheBatch() {
+    val scan = FolderLatestScan(listOf("A"), mapOf("A" to "/media/A"))
+    val filled = scan.feed(
+      listOf(
+        item("bad", "/media/A/broken.mkv", null),
+        item("good", "/media/A/good.mkv", "2026-06-01T00:00:00Z"),
+      ),
+    )
+    assertEquals(1, filled)
+    assertEquals("2026-06-01T00:00:00Z", scan.toOrder().newestByFolderId["A"])
+  }
+
   // ── 排序规则 ──
 
   @Test

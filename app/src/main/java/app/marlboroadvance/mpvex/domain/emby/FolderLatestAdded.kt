@@ -97,6 +97,20 @@ internal data class ChildFolder(
 )
 
 /**
+ * 目录类条目（Emby 的 `BaseItemDto.Type`）。
+ *
+ * 这些条目的 `DateCreated` 是「这个目录被扫描到的时刻」，一次性写死、此后不随
+ * 内容变动 —— 拿它当「目录里最新入库时间」正是本功能要解决的误解，所以归因时
+ * 一律排除。⚠️ 必须与 `EmbyLibraryScreen` 的 `FOLDER_TYPES` 保持同一份口径：
+ * 那边的「文件夹」档就是这三种，这边多一个少一个都会导致**屏幕上摆着的目录**
+ * 与**参与归因的目录**不是同一批。
+ *
+ * 【注意】不含 `BoxSet` / `Series` / `Season`：它们是容器，但成员变动时 Emby 会
+ * 刷新它们的 `DateCreated`，属于有效的「最近有新增」信号。
+ */
+internal val FOLDER_LATEST_CONTAINER_TYPES = setOf("Folder", "CollectionFolder", "UserView")
+
+/**
  * 把一条媒体的路径归到「这一层」的某个直接子目录上，找不到返回 null。
  *
  * ## 为什么取**最长**前缀
@@ -158,9 +172,14 @@ internal class FolderLatestScan(
   fun feed(items: List<EmbyItem>): Int {
     var filled = 0
     for (item in items) {
+      // ⚠️ 没有时间戳的条目**必须跳过而不是终止**：服务端降序是按「有时间的那批」
+      //    排序的，缺 DateCreated 的条目（部分驱动 / 手工塞进去的文件）会被排到
+      //    整个结果集的**末尾**，同批里混着它们不代表后面的更旧。以前这里用
+      //    `continue` 是对的，但要确保不要写成 break —— 一条脏数据不该让
+      //    整个目录被判成「没有时间」而垫底。
       val created = item.DateCreated?.takeIf { it.isNotBlank() } ?: continue
       val folderId = resolveFolderId(item) ?: continue
-      // 服务端已降序，第一条就是最新的：已有值说明后面只会更旧，直接跳过
+      // 服务端已降序，第一条就是最新的：已有值说明后面只会更旧，直接跳过。
       if (newestById.containsKey(folderId)) continue
       newestById[folderId] = created
       filled++
@@ -172,12 +191,16 @@ internal class FolderLatestScan(
    * 这条媒体属于哪个直接子目录。
    *
    * 两条路，按可靠性排序：
-   *  1. **Path 前缀**（准）：能认出深埋在子目录里的媒体；
+   *  1. **Path 前缀**（准）：能认出深埋在子目录里的媒体；文件夹本身（Type 是
+   *     Folder / CollectionFolder / UserView）永远不算 —— 它自己的 Path 就是
+   *     它所在的位置，拿它的 DateCreated（= 这个目录被扫描到的时刻）当
+   *     「里面最新入库时间」，正是本功能要避免的那个误解；
    *  2. **ParentId**（兜底）：服务端没给 Path 时，只认「直接子项」。
    *
    * ⚠️ 两条都不能用名字猜 —— 名字里出现目录名纯属巧合的可能性远大于真实对应。
    */
   private fun resolveFolderId(item: EmbyItem): String? {
+    if (item.Type in FOLDER_LATEST_CONTAINER_TYPES) return null
     matchChildFolder(item.Path, pathToId)?.let { return it }
     val parentId = item.ParentId
     // 兜底只看直接父级：`ParentId == 某个子目录` 意味着这条就在它下面一层
@@ -191,7 +214,32 @@ internal class FolderLatestScan(
     newestByFolderId = newestById.toMap(),
     complete = isComplete,
   )
+
+  /**
+   * 直接记一条「这个子目录的最新时间」。
+   *
+   * 供**按目录分治**的扫描路径使用（见 `FolderLatestAddedLoader`）：那条路
+   * 每个子目录独立查一次，命中时已经知道归属，不必再走 [feed] 的路径归因。
+   * 仍然只保留更晚的那条，避免并发把旧值盖掉。
+   */
+  fun record(
+    childId: String,
+    created: String,
+  ) {
+    if (childId !in childIdSet) return
+    val old = newestById[childId]
+    if (old == null || created > old) newestById[childId] = created
+  }
 }
+
+/**
+ * 扫描时「这一条是不是目录」。
+ *
+ * 与 UI 层的 `isFolderLike` 同一批类型，但**多认 `BoxSet`**（UI 也认它的），
+ * 单独导出一份是为了让纯逻辑层不依赖界面包、能进 JVM 单测。
+ */
+internal fun isFolderLikeForScan(item: EmbyItem): Boolean =
+  item.Type in FOLDER_LATEST_CONTAINER_TYPES || item.Type == "BoxSet"
 
 /**
  * 排序规则：**有时间的在前（时间新的在前），没时间的在后且保持原顺序**。

@@ -13,6 +13,8 @@ import app.marlboroadvance.mpvex.domain.network.FolderCoverPick
 import app.marlboroadvance.mpvex.domain.network.NetworkConnection
 import app.marlboroadvance.mpvex.domain.network.NetworkFile
 import app.marlboroadvance.mpvex.domain.network.NetworkFileType
+import app.marlboroadvance.mpvex.domain.network.recentlyAddedAt
+import app.marlboroadvance.mpvex.domain.network.typeSortKey
 import app.marlboroadvance.mpvex.domain.network.NetworkProtocol
 import app.marlboroadvance.mpvex.domain.network.folderCoverChildDirs
 import app.marlboroadvance.mpvex.domain.network.isPhoto
@@ -1454,7 +1456,8 @@ class NetworkBrowserViewModel(
   }
 
   /**
-   * 切排序维度。同时把方向切到该维度的**自然方向**（名称/类型=升序、时间/大小=降序）——
+   * 切排序维度。同时把方向切到该维度的**自然方向**
+   * （名称 / 文件类型 = 升序；修改时间 / 创建时间 / 文件大小 / 最近添加时间 = 降序）——
    * 顶栏排序控件右边的箭头会跟着变，不用用户每换一个维度再手动点一次方向。
    *
    * 重复点「随机」= 换一批顺序（新种子），其他维度重复点无操作。
@@ -1498,9 +1501,13 @@ class NetworkBrowserViewModel(
   /**
    * 切时间分组方式（不分组 / 按年份 / 按年月）。
    *
-   * 选分组时**自动把排序切到「时间降序」**：按年份分组却按名字排，组内顺序与时间轴
+   * 选分组时**自动把排序切到「修改时间降序」**：按年份分组却按名字排，组内顺序与时间轴
    * 无关，几乎不是用户想要的（真实意图通常是「按年倒序看最近的」）。用户之后仍可
    * 手动改排序——桶的先后默认仍是新→旧，见 [groupNetworkFilesByPeriod]。
+   *
+   * 分组本身只认 `lastModified`（见 `NetworkFileGrouping`），所以这里必须显式落到
+   * [NetworkSortType.Date]（修改时间），而不是「随便哪个时间维度」——选「创建时间」
+   * 会让堆内顺序跟桶的时间轴对不上。
    *
    * 分组变化会改变整页布局，所以要 +1 tick 让 UI 回顶；否则停在原来的下标会「跳段」。
    */
@@ -1509,7 +1516,7 @@ class NetworkBrowserViewModel(
     _groupMode.value = mode
     browserPreferences.networkGroupMode.set(mode)
     if (mode.isActive && _sortType.value != NetworkSortType.Random) {
-      // 内部会带上该维度的自然方向（时间 = 降序）并已 +1 tick
+      // 内部会带上该维度的自然方向（修改时间 = 降序）并已 +1 tick
       setSortType(NetworkSortType.Date)
     }
     _sortChangeTick.value += 1
@@ -1831,6 +1838,10 @@ private fun Preference<Int>.randomPlayLimit(): Int = get().coerceIn(1, 500)
  * 各自再按 [type] 的键排。[order] 只作用于排序键，**不翻转「文件夹优先」**——
  * 直接把整个比较器 reversed() 会把文件夹甩到后面去。
  *
+ * ⚠️ 这条「文件夹优先」是**独立于排序维度**的一层：用「最近添加时间」排时，
+ *    刚塞了素材的老目录也不会因为 mtime 新而跑到最前，仍待在文件夹那一段里 ——
+ *    这是与本地文件夹浏览一致的既定行为，不要为此把它去掉。
+ *
  * 同键时按名称**自然序**兜底：排序结果稳定可预期（基准序本身就是名称序，
  * 加了兜底即使基准序变了同键项也仍然 A-Z）。
  *
@@ -1848,10 +1859,19 @@ private fun networkFileComparator(type: NetworkSortType, order: SortOrder): Comp
     // 自然序：把连续数字段按数值比（e102 < e1018）。大小写不敏感 + 跳过空白，
     //    与本地文件夹 / 文件选择器同一份 DEFAULT 实例、同一口径。
     NetworkSortType.Name -> compareBy(SortUtils.NaturalOrderComparator.DEFAULT) { it.name }
+    // 修改时间 = 服务端 mtime
     NetworkSortType.Date -> compareBy { it.lastModified }
+    // 创建时间 = 服务端 ctime。只有 AList 给，其余协议恒 0。
+    //   0 在时间轴上等于「1970」，降序时自然沉到最底、升序时最前 ——
+    //   和「未知时间不冒充最新」的期望一致，无需额外分流。
+    NetworkSortType.CreatedDate -> compareBy { it.createdAt }
     NetworkSortType.Size -> compareBy { it.size }
-    // 类型：与列表视图的 section 顺序一致（文件夹 → 图片 → 视频 → 其他）
-    NetworkSortType.Type -> compareBy { it.type().typeRank() }
+    // 文件类型：文件夹 → 视频 → 图片 → 其他（与列表 section 顺序一致），
+    //   同档位内再按**扩展名**自然序细分，否则一堆 mkv/mp4 会全部同键
+    NetworkSortType.Type -> compareBy<NetworkFile> { it.typeSortKey().rank }
+      .thenBy(SortUtils.NaturalOrderComparator.DEFAULT) { it.typeSortKey().extension }
+    // 最近添加时间：各协议都没有真正的入库时间，取可得信号的近似（见 NetworkFile.recentlyAddedAt）
+    NetworkSortType.RecentlyAdded -> compareBy { it.recentlyAddedAt }
     // 随机不走比较器 —— VM 的 combine 里有单独的洗牌分支（种子进流，重组不换序）
     NetworkSortType.Random -> compareBy { 0 }
   }
@@ -1859,12 +1879,3 @@ private fun networkFileComparator(type: NetworkSortType, order: SortOrder): Comp
   // 兜底也用自然序：否则同日期/同大小的项之间会退回字典序，与「按名称」排序自相矛盾
   return foldersFirst.then(directed).thenBy(SortUtils.NaturalOrderComparator.DEFAULT) { it.name }
 }
-
-/** 类型排序权重：与列表视图 section 顺序（文件夹 / 图片 / 视频 / 其他）一致 */
-private fun NetworkFileType.typeRank(): Int =
-  when (this) {
-    NetworkFileType.FOLDER -> 0
-    NetworkFileType.PHOTO -> 1
-    NetworkFileType.VIDEO -> 2
-    NetworkFileType.OTHER -> 3
-  }

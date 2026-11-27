@@ -1,4 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player.controls.components.sheets
+import app.marlboroadvance.mpvex.ui.player.engine.PlaybackSpeed
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import androidx.compose.foundation.Canvas
@@ -86,44 +87,6 @@ fun PlaybackSpeedSheet(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
       
-      // Slider and +/- Buttons
-
-        
-      // Calculate slider parameters
-      val minSpeed = speedPresets.firstOrNull() ?: 0.25f
-      val maxSpeed = speedPresets.lastOrNull() ?: 4.0f
-      
-      // Helper to map speed to linear slider value (0..presets.size-1)
-      fun speedToSliderProp(speed: Float): Float {
-        if (speedPresets.isEmpty()) return 0f
-        if (speed <= minSpeed) return 0f
-        if (speed >= maxSpeed) return (speedPresets.size - 1).toFloat()
-        
-        for (i in 0 until speedPresets.size - 1) {
-          val p1 = speedPresets[i]
-          val p2 = speedPresets[i + 1]
-          if (speed >= p1 && speed <= p2) {
-            val fraction = (speed - p1) / (p2 - p1)
-            return i + fraction
-          }
-        }
-        return 0f
-      }
-
-      // Helper to map slider value back to speed
-      fun sliderPropToSpeed(prop: Float): Float {
-        if (speedPresets.isEmpty()) return 1f
-        val index = prop.toInt()
-        val fraction = prop - index
-        
-        if (index >= speedPresets.size - 1) return speedPresets.last()
-        if (index < 0) return speedPresets.first()
-        
-        val p1 = speedPresets[index]
-        val p2 = speedPresets[index + 1]
-        return p1 + (p2 - p1) * fraction
-      }
-
       // Speed Label and Value
       Column(
           modifier = Modifier.fillMaxWidth().padding(horizontal = MaterialTheme.spacing.medium),
@@ -131,7 +94,7 @@ fun PlaybackSpeedSheet(
       ) {
           Text(text = stringResource(R.string.player_sheets_speed_slider_label), style = MaterialTheme.typography.bodyMedium)
           Text(
-              text = "${speed.toFixed(2)}x", 
+              text = "${PlaybackSpeed.display(speed)}x",
               style = MaterialTheme.typography.headlineMedium,
               fontWeight = FontWeight.Bold
           )
@@ -147,7 +110,7 @@ fun PlaybackSpeedSheet(
         horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.small),
       ) {
          RepeatingIconButton(
-           onClick = { onSpeedChange((speed - 0.05f).coerceAtLeast(0.05f)) },
+           onClick = { onSpeedChange(PlaybackSpeed.quantize(speed - PlaybackSpeed.STEP)) },
            modifier = Modifier.size(40.dp)
         ) {
            Icon(Icons.Default.Remove, null, modifier = Modifier.size(24.dp))
@@ -155,17 +118,13 @@ fun PlaybackSpeedSheet(
 
           Slider(
             value = speed,
-            onValueChange = {
-                // Snap to nearest 0.05
-               val snapped = (it * 20).roundToInt() / 20f
-               onSpeedChange(snapped)
-            },
-            valueRange = 0.1f..4.0f,
+            onValueChange = { onSpeedChange(PlaybackSpeed.quantize(it)) },
+            valueRange = PlaybackSpeed.MIN..PlaybackSpeed.MAX,
             modifier = Modifier.weight(1f)
           )
           
         RepeatingIconButton(
-           onClick = { onSpeedChange((speed + 0.05f).coerceAtMost(4.0f)) },
+           onClick = { onSpeedChange(PlaybackSpeed.quantize(speed + PlaybackSpeed.STEP)) },
            modifier = Modifier.size(40.dp)
         ) {
            Icon(Icons.Default.Add, null, modifier = Modifier.size(24.dp))
@@ -179,7 +138,10 @@ fun PlaybackSpeedSheet(
           horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.small)
       ) {
           val defaultPresets = remember {
-            listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 3.5f, 4.0f)
+            listOf(
+              0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 3.5f, 4.0f,
+              4.5f, 5.0f, 5.5f, 6.0f,
+            )
           }
 
           LazyRow(

@@ -68,6 +68,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.StreamProbe
 import app.marlboroadvance.mpvex.domain.playbackstate.repository.PlaybackStateRepository
+import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibraryScope
 import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
@@ -3359,6 +3360,9 @@ private fun cancelAutoplayCountdown() {
     mediaSourceId: String?,
   ) {
     if (!subtitlesPreferences.onlineAutoFetch.get()) return
+    // 媒体库排除闸：被排除的库里任何视频都不向字幕源发请求。放在最前面，
+    // 排除集合为空（默认全库生效）时直接放行，连 Ancestors 都不查。
+    if (isLibraryExcludedFromOnlineFetch(server, itemId)) return
     // 画面上已经有字幕就不再兜底（服务端自动挂上 / 用户本集开过）
     if ((PlayerLib.getPropertyInt("sid") ?: -1) > 0) return
     // 中文字幕版本（文件名 / 路径带中字标记）本身就带字，别再去网络下载重复挂载。
@@ -3381,6 +3385,44 @@ private fun cancelAutoplayCountdown() {
           .show()
       }
     }
+  }
+
+  /**
+   * 当前播放项所属媒体库是否被排除出网络字幕自动下载。
+   *
+   * ## 为什么用 Ancestors
+   *
+   * 起播 intent 里只有 `server / itemId / mediaSourceId`，不带库 Id；`EmbyItem.ParentId`
+   * 也只是直接父目录（可能是季 / 合集 / 任意层级）。`/Items/{id}/Ancestors` 由近到远
+   * 返回整条链，链上第一个 `CollectionFolder` / `UserView` 才是用户设置的媒体库。
+   *
+   * ## 什么时候不发请求
+   *
+   * 排除集合为空（默认全库生效）时不查 Ancestors、不发任何请求 —— 默认路径零额外开销。
+   * 取 Ancestors 失败 / 认不出库时也放行，不让一次网络抖动把自动下载弄丢。
+   */
+  private suspend fun isLibraryExcludedFromOnlineFetch(
+    server: EmbyServer,
+    itemId: String,
+  ): Boolean {
+    val excluded = subtitlesPreferences.onlineFetchExcludedLibraries.get()
+    if (excluded.isEmpty()) return false
+    val ancestors =
+      runCatching { embyRepository.getItemAncestors(server, itemId) }
+        .getOrDefault(emptyList())
+    val libraryId =
+      ancestors.firstOrNull { it.Type == "CollectionFolder" || it.Type == "UserView" }?.Id
+        ?: return false
+    val hit = OnlineSubtitleLibraryScope.isExcluded(
+      excludedKeys = excluded,
+      serverId = server.id,
+      userId = server.userId,
+      libraryId = libraryId,
+    )
+    if (hit) {
+      Log.i(TAG, "skip online subtitle auto fetch: library excluded item=$itemId library=$libraryId")
+    }
+    return hit
   }
 
   /**

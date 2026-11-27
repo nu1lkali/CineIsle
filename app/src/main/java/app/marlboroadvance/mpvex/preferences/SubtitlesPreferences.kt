@@ -161,6 +161,18 @@ class SubtitlesPreferences(
   val onlineAutoFetchThreshold = preferenceStore.getInt("sub_online_auto_threshold", 85)
 
   /**
+   * 网络字幕自动下载**排除的媒体库**集合，元素格式见
+   * [app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibraryScope.key]
+   *（`serverId:userId|libraryId`）。
+   *
+   * 默认**空集合**＝全部媒体库生效，与现状一致。被排除库中的视频起播时不再向字幕源
+   * 发检索请求 —— 用于确定没有字幕的库（例如纪录片 / 家庭录像）省掉逐片无效请求。
+   * 只影响**自动**下载；用户在字幕面板手动搜索不受此约束。
+   */
+  val onlineFetchExcludedLibraries =
+    preferenceStore.getStringSet("sub_online_fetch_excluded_libraries", emptySet())
+
+  /**
    * 字幕编码归一化迁移的版本号（一次性）。
    *
    * 旧版本下载字幕时按字节原样落盘，本地库里因此混着 GBK / Big5 / UTF-16 的文件 ——

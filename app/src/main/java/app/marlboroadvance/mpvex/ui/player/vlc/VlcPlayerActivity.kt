@@ -123,6 +123,7 @@ import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.AddTrackRo
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.AudioTrackRow
 import app.marlboroadvance.mpvex.ui.player.controls.components.sheets.SubtitlesSheet
 import app.marlboroadvance.mpvex.ui.player.engine.EngineKind
+import app.marlboroadvance.mpvex.ui.player.engine.PlaybackSpeed
 import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import app.marlboroadvance.mpvex.ui.theme.controlColor
 import kotlinx.collections.immutable.persistentListOf
@@ -1515,22 +1516,22 @@ private fun VlcSpeedSheet(
     ) {
       Text("播放速度", style = MaterialTheme.typography.headlineSmall)
       Text(
-        "%.2fx".format(speed),
+        "${PlaybackSpeed.display(speed)}x",
         style = MaterialTheme.typography.headlineMedium,
         fontWeight = FontWeight.Bold,
         modifier = Modifier.fillMaxWidth(),
         textAlign = TextAlign.Center,
       )
       Slider(
-        value = speed.coerceIn(0.25f, 3f),
-        onValueChange = { onSpeed((it * 20).roundToInt() / 20f) },
-        valueRange = 0.25f..3f,
+        value = PlaybackSpeed.quantize(speed),
+        onValueChange = { onSpeed(PlaybackSpeed.quantize(it)) },
+        valueRange = PlaybackSpeed.MIN..PlaybackSpeed.MAX,
       )
       Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 2.5f, 3f).forEach { preset ->
+        listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 2.5f, 3f, 4f, 5f, 6f).forEach { preset ->
           FilterChip(
             selected = abs(speed - preset) < 0.01f,
             onClick = { onSpeed(preset) },

@@ -14,10 +14,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -48,6 +50,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.marlboroadvance.mpvex.R
+import app.marlboroadvance.mpvex.domain.emby.EmbyItem
+import app.marlboroadvance.mpvex.domain.emby.EmbyServer
+import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
+import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibraryScope
 import app.marlboroadvance.mpvex.ui.browser.dialogs.FolderPickerDialog
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
 import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveRestore
@@ -115,6 +121,14 @@ object SubtitlesPreferencesScreen : Screen {
       },
     ) { padding ->
       ProvidePreferenceLocals {
+        val embyRepository = koinInject<EmbyRepository>()
+        val scopeUi = rememberCoroutineScope()
+        val excludedLibraries by preferences.onlineFetchExcludedLibraries.collectAsState()
+        var showLibraryScopeDialog by remember { mutableStateOf(false) }
+        var scopeServer by remember { mutableStateOf<EmbyServer?>(null) }
+        var scopeLibraries by remember { mutableStateOf<List<EmbyItem>>(emptyList()) }
+        var scopeLoading by remember { mutableStateOf(false) }
+
         val fontsFolder by preferences.fontsFolder.collectAsState()
         var availableFonts by remember { mutableStateOf<List<String>>(emptyList()) }
         var customFontEntries by remember { mutableStateOf<List<CustomFontEntry>>(emptyList()) }
@@ -299,6 +313,62 @@ object SubtitlesPreferencesScreen : Screen {
                     stringResource(R.string.pref_subtitles_online_auto_summary),
                     color = MaterialTheme.colorScheme.outline,
                   )
+                },
+              )
+
+              PreferenceDivider()
+
+              // 网络字幕媒体库排除：默认全库生效，排除确定无字幕的库以省掉逐片请求。
+              Preference(
+                icon = {
+                  Icon(
+                    Icons.Outlined.CloudDownload,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                modifier = Modifier.settingsAnchor("网络字幕排除媒体库"),
+                title = {
+                  Text(
+                    "网络字幕排除媒体库",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                },
+                summary = {
+                  Text(
+                    if (excludedLibraries.isEmpty()) {
+                      "未排除任何媒体库"
+                    } else {
+                      "已排除 ${excludedLibraries.size} 个媒体库"
+                    },
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                onClick = {
+                  // 先加载完媒体库再弹出：避免弹窗先以 loading 小圈尺寸出现、
+                  // 数据到位后换成大列表导致尺寸突变、位置从偏右下跳到正中。
+                  if (!scopeLoading) {
+                    scopeLoading = true
+                    scopeUi.launch {
+                      val server =
+                        runCatching { embyRepository.getServers() }
+                          .getOrDefault(emptyList())
+                          .firstOrNull { it.isLoggedIn }
+                      val libs =
+                        if (server == null) {
+                          emptyList()
+                        } else {
+                          runCatching { embyRepository.getVirtualFolders(server) }
+                            .getOrDefault(emptyList())
+                            .filter { it.Id != null }
+                        }
+                      scopeServer = server
+                      scopeLibraries = libs
+                      scopeLoading = false
+                      showLibraryScopeDialog = true
+                    }
+                  }
                 },
               )
 
@@ -558,8 +628,98 @@ object SubtitlesPreferencesScreen : Screen {
               )
             }
           }
-
         }
+
+        if (showLibraryScopeDialog) {
+          val activeServer = scopeServer
+            AlertDialog(
+              onDismissRequest = { showLibraryScopeDialog = false },
+              title = { Text("排除媒体库") },
+              text = {
+                when {
+                  activeServer == null -> Text("未登录 Emby 服务器")
+                  scopeLibraries.isEmpty() -> Text("没有可用的媒体库")
+                  else -> {
+                    // 批量操作只动当前弹窗可见的库，保留其它服务器 / 账号的排除项（不串台）。
+                    val visibleKeys =
+                      scopeLibraries.mapNotNull { library ->
+                        library.Id?.let { id ->
+                          OnlineSubtitleLibraryScope.key(
+                            serverId = activeServer.id,
+                            userId = activeServer.userId,
+                            libraryId = id,
+                          )
+                        }
+                      }.toSet()
+                    Column {
+                      Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                      ) {
+                        TextButton(
+                          onClick = {
+                            preferences.onlineFetchExcludedLibraries.set(excludedLibraries + visibleKeys)
+                          },
+                        ) {
+                          Text("全选")
+                        }
+                        TextButton(
+                          onClick = {
+                            preferences.onlineFetchExcludedLibraries.set(excludedLibraries - visibleKeys)
+                          },
+                        ) {
+                          Text("取消全选")
+                        }
+                        TextButton(
+                          onClick = {
+                            preferences.onlineFetchExcludedLibraries.set(
+                              (excludedLibraries - visibleKeys) + (visibleKeys - excludedLibraries),
+                            )
+                          },
+                        ) {
+                          Text("反选")
+                        }
+                      }
+                      LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
+                        items(scopeLibraries, key = { it.Id ?: it.Name ?: "" }) { library ->
+                          val libraryId = library.Id ?: return@items
+                          val exclusionKey =
+                            OnlineSubtitleLibraryScope.key(
+                              serverId = activeServer.id,
+                              userId = activeServer.userId,
+                              libraryId = libraryId,
+                            )
+                          Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                              checked = exclusionKey in excludedLibraries,
+                              onCheckedChange = { checked ->
+                                preferences.onlineFetchExcludedLibraries.set(
+                                  if (checked) {
+                                    excludedLibraries + exclusionKey
+                                  } else {
+                                    excludedLibraries - exclusionKey
+                                  },
+                                )
+                              },
+                            )
+                            Text(
+                              library.Name ?: "未命名媒体库",
+                              style = MaterialTheme.typography.bodyLarge,
+                            )
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              confirmButton = {
+                TextButton(onClick = { showLibraryScopeDialog = false }) {
+                  Text("完成")
+                }
+              },
+            )
+          }
       }
     }
   }

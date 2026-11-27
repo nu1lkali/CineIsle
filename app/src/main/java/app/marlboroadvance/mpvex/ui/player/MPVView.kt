@@ -78,9 +78,9 @@ class MPVView(
         return null
       }
       // ⚠️ `video-params/aspect` 是**已含容器 rotate 修正后**的比例，
-      // 所以这里只需再叠加**我们自己**的 rotate 滤镜角度做一次反转，
+      // 所以这里只需再叠加**用户 video-rotate** 的角度做一次反转，
       // 不能再把容器 rotate 算第二遍 —— 那会把竖拍片子的比例算错。
-      // `vf rotate` 不会回写 `video-params/rotate`，这也是必须单独读滤镜状态的原因。
+      // `video-params/aspect` 不含用户的 video-rotate，所以必须单独读属性。
       val userRotate = app.marlboroadvance.mpvex.ui.player.engine.VideoRotate.readAppliedDegrees()
       val isRotated = (userRotate % 180 == 90)
       val correctedAspect = if (isRotated) 1.0 / aspect else aspect

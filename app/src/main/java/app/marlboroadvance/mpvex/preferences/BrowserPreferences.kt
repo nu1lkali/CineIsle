@@ -195,17 +195,18 @@ class BrowserPreferences(
   val networkGridTitleLines = preferenceStore.getEnum("network_grid_title_lines", GridTitleLines.One)
 
   /**
-   * 网络浏览（SMB/WebDAV/FTP）目录内**排序方式**（名称 / 日期 / 大小）。
+   * 网络浏览（SMB/WebDAV/FTP/AList）目录内**排序方式**
+   * （名称 / 修改时间 / 创建时间 / 文件大小 / 文件类型 / 最近添加时间 / 随机）。
    *
    * 与本地文件夹排序（[folderSortType]）分开存：那边的「视频数」在网络目录里
-   * 要额外统计、没有意义；网络这边就三个够用的维度。
+   * 要额外统计、没有意义。
    * 排序在 ViewModel 里应用（目录是一次性拉全量的，本地重排不发请求）。
    */
   val networkSortType = preferenceStore.getEnum("network_sort_type", NetworkSortType.Name)
 
   /**
    * 网络浏览排序方向。**换排序项时会自动切到该项的自然方向**
-   * （名称=升序、日期/大小=降序），见 [NetworkSortType.naturalAscending] ——
+   * （名称/文件类型=升序，三个时间维度/大小=降序），见 [NetworkSortType.naturalAscending] ——
    * 与 Emby 媒体库「空串跟随自然方向」同一思想，省得用户每换一项还要再点一次箭头。
    */
   val networkSortOrder = preferenceStore.getEnum("network_sort_order", SortOrder.Ascending)
@@ -1149,10 +1150,22 @@ enum class GridTitleLines(
  * 网络浏览目录内的排序维度。
  *
  * ⚠️ 存的是**枚举名**（`getEnum`），常量名发布后不能改 —— 改了老用户的排序偏好会失效。
+ * 因此 [Date] 这个常量**名字不动**（它历史上就叫「时间」），只把展示名细化成
+ * 「修改时间」；新增的 [CreatedDate] / [RecentlyAdded] 才用新常量名。
  * `displayName` 同时是排序弹窗与持久化共用的稳定键，同样不能动。
  *
- * 「类型」一档把照片 / 视频 / 其他分开排（顺序与列表视图的 section 一致：
- * 图片在前、视频在后）—— 混合目录里「先看照片再看视频」是常见诉求。
+ * 声明顺序 = 排序菜单里的顺序，用户可感知，调整时注意别打乱既有习惯
+ * （名称打头、随机垫底，中间是大小/类型/时间几个维度）。
+ *
+ * 「文件类型」一档按扩展名分组（文件夹恒在最前，其后视频 → 图片 → 其他），
+ * 混合目录里「先把视频挑出来」是常见诉求。
+ *
+ * 三个时间维度口径不同，别混着用：
+ * - [Date] 修改时间 = 服务端 mtime（`NetworkFile.lastModified`）
+ * - [CreatedDate] 创建时间 = 服务端 ctime，只有 AList 给（其余协议恒 0，排序时垫底）
+ * - [RecentlyAdded] 最近添加时间 = 文件取 `max(mtime, ctime)`，目录取 mtime
+ *   —— 各协议都没有真正的「入库时间」，这是最接近「这条最近才出现」的可得信号
+ *
  * 「随机」没有方向意义，UI 上不显示升降序箭头。
  */
 enum class NetworkSortType(
@@ -1164,9 +1177,15 @@ enum class NetworkSortType(
   val naturalAscending: Boolean,
 ) {
   Name("Name", "名称", true),
-  Date("Date", "时间", false),
-  Size("Size", "大小", false),
-  Type("Type", "类型", true),
+
+  /** 修改时间。常量名沿用历史值 `Date`（持久化兼容），展示名才是「修改时间」 */
+  Date("Date", "修改时间", false),
+  CreatedDate("CreatedDate", "创建时间", false),
+  Size("Size", "文件大小", false),
+
+  /** 文件类型。常量名沿用历史值 `Type`（持久化兼容），展示名是「文件类型」 */
+  Type("Type", "文件类型", true),
+  RecentlyAdded("RecentlyAdded", "最近添加时间", false),
   Random("Random", "随机", true),
   ;
 
