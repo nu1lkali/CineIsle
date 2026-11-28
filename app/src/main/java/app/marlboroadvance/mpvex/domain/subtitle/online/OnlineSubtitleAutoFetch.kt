@@ -111,14 +111,13 @@ object OnlineSubtitleAutoFetch {
         return@withContext Result(Result.Status.DISABLED, keyword = keyword)
       }
 
-      // 同一条已经下过：直接复用，不重复占用磁盘与流量
+      // 同一条已经下过：直接复用，不重复占用磁盘与流量；是否挂载成功由播放器确认
       library.find(target.serverKey, target.itemId, best.id)?.let { existing ->
         return@withContext Result(
           status = Result.Status.SAVED,
           record = existing,
           score = best.matchScore,
           keyword = keyword,
-          message = "已挂载网络字幕：${existing.title}（匹配度 ${best.matchScore}%）",
         )
       }
 
@@ -159,7 +158,6 @@ object OnlineSubtitleAutoFetch {
         record = record,
         score = best.matchScore,
         keyword = keyword,
-        message = "已挂载网络字幕：${record.title}（匹配度 ${best.matchScore}%）",
       )
     }
 

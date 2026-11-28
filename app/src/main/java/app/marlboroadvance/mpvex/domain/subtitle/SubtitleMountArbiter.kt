@@ -7,10 +7,11 @@ enum class SubtitleSource(val priority: Int, val automatic: Boolean) {
   BOUND(80, true),
   SAVED(70, true),
   ONLINE_LIBRARY(60, true),
+  // 网络兜底最后才触发；触发后必须能顶掉普通自动来源留下的未落地占用。
+  ONLINE_AUTO_FETCH(65, true),
   REMEMBERED(55, true),
   AUTOLOAD(50, true),
   EMBY_AUTO(40, true),
-  ONLINE_AUTO_FETCH(30, true),
   SAVED_EXTERNAL(0, true),
   SAVE_DIRECTORY(0, true),
 }
@@ -85,6 +86,10 @@ object SubtitleMountArbiter {
         }
       }
     }
+
+  /** 存档明确为「无字幕」时只清选择权，不当成某个来源占着 sid。 */
+  fun onSelectionCleared(state: SubtitleMountState): SubtitleMountState =
+    state.copy(selectionSource = null)
 
   fun onUserAction(state: SubtitleMountState): SubtitleMountState =
     state.copy(selectionSource = SubtitleSource.MANUAL, userOverride = true)

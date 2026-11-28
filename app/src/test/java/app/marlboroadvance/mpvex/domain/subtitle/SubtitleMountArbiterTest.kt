@@ -98,6 +98,92 @@ class SubtitleMountArbiterTest {
   }
 
   @Test
+  fun `关闭字幕后释放选择权允许网络自动字幕选中`() {
+    var state = SubtitleMountArbiter.startSession(SubtitleMountState(), sessionId = 1)
+    state = SubtitleMountArbiter.onSelectionAccepted(state, SubtitleSource.SAVED)
+    state = SubtitleMountArbiter.onSelectionCleared(state)
+    assertEquals(null, state.selectionSource)
+    assertEquals(
+      SubtitleMountDecision.MountAndSelect,
+      SubtitleMountArbiter.decide(
+        state,
+        SubtitleMountRequest(1, SubtitleSource.ONLINE_AUTO_FETCH, select = true, ignored = false),
+      ),
+    )
+  }
+
+  @Test
+  fun `未落地的自动加载选择释放后网络字幕可选中`() {
+    var state = SubtitleMountArbiter.startSession(SubtitleMountState(), sessionId = 1)
+    state = SubtitleMountArbiter.onSelectionAccepted(state, SubtitleSource.AUTOLOAD)
+    state = SubtitleMountArbiter.onSelectionCleared(state)
+    assertEquals(
+      SubtitleMountDecision.MountAndSelect,
+      SubtitleMountArbiter.decide(
+        state,
+        SubtitleMountRequest(1, SubtitleSource.ONLINE_AUTO_FETCH, select = true, ignored = false),
+      ),
+    )
+  }
+
+  @Test
+  fun `网络兜底可顶掉未落地的普通自动选择`() {
+    listOf(
+      SubtitleSource.ONLINE_LIBRARY,
+      SubtitleSource.REMEMBERED,
+      SubtitleSource.AUTOLOAD,
+      SubtitleSource.EMBY_AUTO,
+    ).forEach { owner ->
+      var state = SubtitleMountArbiter.startSession(SubtitleMountState(), sessionId = 1)
+      state = SubtitleMountArbiter.onSelectionAccepted(state, owner)
+      assertEquals(
+        owner.name,
+        SubtitleMountDecision.MountAndSelect,
+        SubtitleMountArbiter.decide(
+          state,
+          SubtitleMountRequest(1, SubtitleSource.ONLINE_AUTO_FETCH, select = true, ignored = false),
+        ),
+      )
+      state = SubtitleMountArbiter.onSelectionAccepted(state, SubtitleSource.ONLINE_AUTO_FETCH)
+      assertEquals(SubtitleSource.ONLINE_AUTO_FETCH, state.selectionSource)
+    }
+  }
+
+  @Test
+  fun `网络兜底不能越过显式字幕选择`() {
+    listOf(
+      SubtitleSource.SAVED,
+      SubtitleSource.BOUND,
+      SubtitleSource.INTENT,
+    ).forEach { owner ->
+      val state = SubtitleMountArbiter.startSession(SubtitleMountState(), sessionId = 1)
+        .let { SubtitleMountArbiter.onSelectionAccepted(it, owner) }
+      assertEquals(
+        owner.name,
+        SubtitleMountDecision.MountOnly,
+        SubtitleMountArbiter.decide(
+          state,
+          SubtitleMountRequest(1, SubtitleSource.ONLINE_AUTO_FETCH, select = true, ignored = false),
+        ),
+      )
+    }
+  }
+
+  @Test
+  fun `用户手动选择后网络兜底不能抢字幕`() {
+    val state = SubtitleMountArbiter.onUserAction(
+      SubtitleMountArbiter.startSession(SubtitleMountState(), sessionId = 1),
+    )
+    assertEquals(
+      SubtitleMountDecision.MountOnly,
+      SubtitleMountArbiter.decide(
+        state,
+        SubtitleMountRequest(1, SubtitleSource.ONLINE_AUTO_FETCH, select = true, ignored = false),
+      ),
+    )
+  }
+
+  @Test
   fun `换片清空旧选择与手动压制`() {
     val old = SubtitleMountArbiter.onUserAction(
       SubtitleMountArbiter.startSession(SubtitleMountState(), sessionId = 1),

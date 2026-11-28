@@ -3401,6 +3401,7 @@ private fun cancelAutoplayCountdown() {
       runCatching { viewModel.autoFetchOnlineSubtitle(server, itemId, mediaSourceId, sessionId) }
         .onFailure { Log.w(TAG, "online subtitle auto fetch failed: item=$itemId", it) }
         .getOrNull() ?: return
+    if (!viewModel.isSubtitleSessionCurrent(sessionId)) return
     if (result.message.isNotBlank()) {
       // ⚠️ 必须切主线程：本函数是 suspend，调用方可能在 `Dispatchers.IO` 上（队列连播那条
       //    路径就是），而 `Toast.makeText` 要求当前线程有 Looper，IO 线程没有 ⇒
