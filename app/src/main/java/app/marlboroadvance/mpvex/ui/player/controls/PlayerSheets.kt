@@ -41,6 +41,7 @@ import app.marlboroadvance.mpvex.ui.player.subtitle.AliasStore
 import app.marlboroadvance.mpvex.ui.player.subtitle.smart.SmartSubtitleMatcher
 import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleScan
 import app.marlboroadvance.mpvex.ui.player.subtitle.LocalSubtitleScanner
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstoneStore
 import kotlinx.coroutines.launch
 
 @Composable
@@ -137,6 +138,14 @@ fun PlayerSheets(
       // 当名字用会把「匹配钥匙」变成一串 32 位十六进制。
       val saveDirPath by subtitlesPreferences.subtitleSaveDirPath.collectAsState()
       val saveTreeUri by subtitlesPreferences.subtitleSaveFolder.collectAsState()
+      val tombstoneRaw by subtitlesPreferences.subtitleTombstones.collectAsState()
+      val tombstoneStore = remember(subtitlesPreferences) { SubtitleTombstoneStore(subtitlesPreferences) }
+      val isLocalSubtitleIgnored: (Uri) -> Boolean = { uri ->
+        tombstoneStore.isExternalIgnored(
+          uri.path.takeIf { uri.scheme == "file" || uri.scheme.isNullOrBlank() },
+          uri.toString(),
+        )
+      }
       val saveFolderConfigured =
         remember(saveDirPath, saveTreeUri) {
           app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveStore
@@ -160,6 +169,7 @@ fun PlayerSheets(
           saveDirPath,
           saveTreeUri,
           durationMs,
+          tombstoneRaw,
         ) {
           // 目录没配、或一个可用条件都没有 ⇒ 不扫。此时面板与旧版逐行一致。
           if (!saveFolderConfigured || localQuery.isEmpty) {
@@ -174,6 +184,7 @@ fun PlayerSheets(
               saveTreeUri,
               localQuery,
               durationMs,
+              isIgnored = isLocalSubtitleIgnored,
             )
         }
 
@@ -311,6 +322,8 @@ fun PlayerSheets(
             // 防御：清单在手扫与点击之间变化时，这条候选可能已被登记为网络字幕副本 ——
             // 再挂一次就是同一份内容重复挂载。正常流程已在扫描阶段过滤，这里是兜底 no-op。
             if (candidate.relativePath in localScan.onlineCopyPaths) return@run
+            val picked = Uri.parse(candidate.uri)
+            if (isLocalSubtitleIgnored(picked)) return@run
             // 记住这次的选择：下次打开面板时它排第一（用户自己验证过的那条，比任何猜测都准）
             app.marlboroadvance.mpvex.ui.player.subtitle.SubtitlePickMemory.remember(
               app.marlboroadvance.mpvex.ui.player.subtitle.SubtitlePickMemory.keyOf(localQuery),
@@ -319,7 +332,6 @@ fun PlayerSheets(
             // 同一条关系也落进持久账本：进程被杀重进时自动挂回去。
             // 这里直接调 bindManualSubtitle + loadSubtitle 而不是 addManualSubtitle ——
             // 候选的 Uri 已经是 mpv 可直接用的形式，不需要走 onAddSubtitle 的即发即忘版本。
-            val picked = Uri.parse(candidate.uri)
             bindManualSubtitle(picked)
             subtitleScope.launch {
               viewModel.loadSubtitle(picked, select = true, silent = false)

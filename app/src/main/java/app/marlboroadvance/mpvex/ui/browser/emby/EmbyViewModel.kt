@@ -1403,6 +1403,8 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
      * null = 按设置里的默认内核 + [reverseEngine] 规则。
      */
     engineOverride: EngineKind? = null,
+    /** 发起播放时已知的媒体库 Id；未知则不传，由播放器按服务端信息兜底。 */
+    libraryId: String? = null,
   ) {
     val itemId = item.Id ?: return
     val engine = engineOverride ?: resolveEngine(reverseEngine)
@@ -1415,9 +1417,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     // 先取分集列表，优先挑有进度的第一集，其次挑第一集未看的，最后退回首集。
     val playTarget: EmbyItem = if (isContainerOnly(item) && item.Type == "Series") {
       // 同样要先稳定排序再挑：否则「第一集未看的」可能挑到第 8 集（服务端返回乱序）。
-      val episodes = runCatching {
-        withContext(Dispatchers.IO) { repository.getEpisodes(server, itemId, null, 0, null).Items }
-      }.getOrDefault(emptyList()).let { sortEpisodesForQueue(it) }
+      val episodes = loadSeriesEpisodes(server, itemId).let { sortEpisodesForQueue(it) }
       if (fromStart) {
         // 「从头播放」= 第一集开头，哪怕第 1 集早看完了。
         episodes.firstOrNull() ?: return
@@ -1456,7 +1456,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     val versionQueue = if (playItem.Type == "Episode") {
       emptyList()
     } else {
-      buildVersionPlaylist(server, playItem, mediaSourceId, mediaSourceLabel)
+      buildVersionPlaylist(server, playItem, mediaSourceId, mediaSourceLabel, libraryId)
     }
 
     if (versionQueue.size > 1) {
@@ -1479,6 +1479,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
           engine = engine,
           mediaSourceId = first.mediaSourceId,
           mediaSourceLabel = first.mediaSourceLabel,
+          libraryId = first.libraryId,
           playbackError = denial.message,
         )
         return
@@ -1534,6 +1535,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
           engine = engine,
           mediaSourceId = mediaSourceId,
           mediaSourceLabel = mediaSourceLabel,
+          libraryId = libraryId,
           playbackError = denial.message,
         )
         return
@@ -1555,6 +1557,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         directHeaders = directHeaders,
         firstMediaSourceId = mediaSourceId,
         firstMediaSourceName = mediaSourceLabel,
+        libraryId = libraryId,
       )
     } else {
       // 单片播放。
@@ -1597,6 +1600,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
           engine = engine,
           mediaSourceId = mediaSourceId,
           mediaSourceLabel = mediaSourceLabel,
+          libraryId = libraryId,
           playbackError = denial.message,
         )
         return
@@ -1624,6 +1628,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
             engine = engine,
             mediaSourceId = mediaSourceId,
             mediaSourceLabel = mediaSourceLabel,
+            libraryId = libraryId,
             playbackError = denial.message,
           )
           return
@@ -1656,6 +1661,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         overrideHeaders = strmHeaders,
         mediaSourceId = mediaSourceId,
         mediaSourceLabel = mediaSourceLabel,
+        libraryId = libraryId,
       )
     }
 
@@ -1692,6 +1698,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     mediaSourceId: String? = null,
     /** 多版本媒体：版本显示名（播放页顶栏会追加在片名后面） */
     mediaSourceLabel: String? = null,
+    libraryId: String? = null,
   ): Result<Unit> {
     val itemId = item.Id ?: return Result.failure(IllegalArgumentException("缺少媒体 Id"))
     return runCatching {
@@ -1710,6 +1717,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
         overrideUrl = url,
         mediaSourceId = mediaSourceId,
         mediaSourceLabel = mediaSourceLabel,
+        libraryId = libraryId,
       )
     }
   }
@@ -1745,17 +1753,22 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
   /** 上次用过的外部播放器（`包名/Activity名`，空串 = 还没用过） */
   fun lastExternalPlayerKey(): String = browserPreferences.embyExternalPlayer.get()
 
+  private data class ExternalPlaybackTarget(
+    val uri: Uri,
+    val headers: Array<String>?,
+  )
+
   /**
    * 用**指定的外部播放器**打开当前媒体。
    *
    * 与 [play] 的区别：那条走的是 App 自带的两个内核（mpv / GSY），这条把流地址交给
-   * 系统里别的播放器（MX、VLC、各类投屏 App…）。用的是静态直链（`static=true`），
-   * 拿到 URL 的播放器自己拉流，完全不依赖我们的播放页。
+   * 系统里别的播放器（MX、VLC、各类投屏 App…）。STRM 使用 [PlaybackInfo] 中的真实地址，
+   * 普通媒体沿用静态直链（`static=true`），拿到 URL 的播放器自己拉流。
    *
    * 两点取舍：不带续播位置（外部播放器不认我们的 `position` extra，硬塞没用），
    * 这条链路的进度也不会回传到 Emby 服务器。
    */
-  fun playWithExternalPlayer(
+  suspend fun playWithExternalPlayer(
     server: EmbyServer,
     item: EmbyItem,
     player: ExternalPlayerOption,
@@ -1765,11 +1778,13 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     val itemId = item.Id
       ?: return Result.failure(IllegalStateException("这个条目没有可播放的媒体 Id"))
     val app = getApplication<Application>()
+    val target = resolveExternalPlaybackTarget(server, item, itemId, mediaSourceId)
     val intent =
       externalPlayerLaunchIntent(
-        uri = externalStreamUri(server, itemId, mediaSourceId),
+        uri = target.uri,
         option = player,
         title = displayTitle(item),
+        headers = target.headers,
       )
     return runCatching {
       app.startActivity(intent)
@@ -1782,7 +1797,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
    * 兜底：交给系统自己的选择器。候选同样是剔除自家之后的那批，
    * 所以系统选择器里也不会冒出影屿自己。
    */
-  fun playWithExternalPlayerChooser(
+  suspend fun playWithExternalPlayerChooser(
     server: EmbyServer,
     item: EmbyItem,
     /** 多版本媒体要交给外部播放器的版本（`MediaSources[i].Id`）；null = 服务端默认版本 */
@@ -1791,19 +1806,60 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     val itemId = item.Id
       ?: return Result.failure(IllegalStateException("这个条目没有可播放的媒体 Id"))
     val app = getApplication<Application>()
+    val target = resolveExternalPlaybackTarget(server, item, itemId, mediaSourceId)
     val chooser =
       externalPlayerChooserIntent(
         context = app,
-        uri = externalStreamUri(server, itemId, mediaSourceId),
+        uri = target.uri,
         selfPackageName = app.packageName,
         title = displayTitle(item),
+        headers = target.headers,
       )
         ?: return Result.failure(IllegalStateException("手机里没有找到能播放视频的外部播放器"))
     return runCatching { app.startActivity(chooser) }
   }
 
+  private suspend fun resolveExternalPlaybackTarget(
+    server: EmbyServer,
+    item: EmbyItem,
+    itemId: String,
+    mediaSourceId: String?,
+  ): ExternalPlaybackTarget {
+    val source = if (mediaSourceId != null) {
+      item.MediaSources?.firstOrNull { it.Id == mediaSourceId }
+    } else {
+      item.MediaSources?.firstOrNull()
+    }
+    val sourceDirect = StrmDirectLink.directUrl(source?.Path)
+    val isStrm = StrmDirectLink.isStrmMedia(item.Path, source?.Container) ||
+      StrmDirectLink.isStrmPath(source?.Path)
+    val cachedDirect = if (isStrm) {
+      sourceDirect?.let {
+        StrmDirectPlayInfo(url = it, requiredHeaders = source?.RequiredHttpHeaders.orEmpty())
+      }
+    } else {
+      null
+    }
+    val direct = cachedDirect ?: if (isStrm) {
+      withContext(Dispatchers.IO) {
+        runCatching { repository.strmDirectPlayInfo(server, itemId, mediaSourceId, probe = false) }
+          .getOrNull()
+      }
+    } else {
+      null
+    }
+    return if (direct != null) {
+      ExternalPlaybackTarget(
+        uri = Uri.parse(direct.url),
+        headers = StrmDirectLink.headerArray(direct.requiredHeaders, EmbyClient.STREAM_USER_AGENT),
+      )
+    } else {
+      ExternalPlaybackTarget(uri = externalStreamUri(server, itemId, mediaSourceId), headers = null)
+    }
+  }
+
   /**
-   * 交给外部播放器的直链。
+   * 普通媒体交给外部播放器的直链。
    *
    * `static=true` = 服务器原样吐原文件，一个字节都不改 —— 外部播放器自带解码器，
    * 用不着服务器帮它转码。
@@ -1828,12 +1884,16 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     item: EmbyItem,
   ): List<EmbyItem> {
     val seriesId = item.SeriesId ?: return listOf(item)
-    val fetched = runCatching { repository.getEpisodes(server, seriesId, item.SeasonId).Items }
-      .getOrNull()
+    val fetched = runCatching { loadSeriesEpisodes(server, seriesId) }.getOrNull()
       ?: return listOf(item)
-    if (fetched.isEmpty()) return listOf(item)
+    val seasonEpisodes = when {
+      item.ParentIndexNumber != null -> fetched.filter { it.ParentIndexNumber == item.ParentIndexNumber }
+      item.SeasonId != null -> fetched.filter { it.SeasonId == item.SeasonId }
+      else -> fetched
+    }
+    if (seasonEpisodes.isEmpty()) return listOf(item)
 
-    val episodes = sortEpisodesForQueue(fetched)
+    val episodes = sortEpisodesForQueue(seasonEpisodes)
     val index = episodes.indexOfFirst { it.Id == item.Id }
     return if (index >= 0) episodes.subList(index, episodes.size) else listOf(item)
   }
@@ -1865,6 +1925,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
     item: EmbyItem,
     currentSourceId: String?,
     currentSourceLabel: String?,
+    libraryId: String?,
   ): List<EmbyPlaylistEntry> {
     if (!browserPreferences.embyVersionQueueEnabled.get()) return emptyList()
     val itemId = item.Id ?: return emptyList()
@@ -1911,6 +1972,7 @@ class EmbyViewModel(application: Application) : AndroidViewModel(application) {
       EmbyPlaylistEntry(
         item = item,
         mediaSourceId = id,
+        libraryId = libraryId,
         // 首条沿用调用方传进来的标签：详情页下拉写什么，播放页就显示什么
         mediaSourceLabel = if (id == currentSourceId) {
           currentSourceLabel?.takeIf { it.isNotBlank() } ?: label
@@ -2071,6 +2133,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     mediaSourceId: String? = null,
     /** 多版本媒体：本次播放的版本显示名（播放页顶栏会追加在片名后面） */
     mediaSourceLabel: String? = null,
+    libraryId: String? = null,
     /**
      * 起播前就被判定为不可播（死链）的原因。非 null 时播放页**不会调 playFile**，
      * 而是直接把这句话显示成错误卡片 —— 用来替代「把死链交给 mpv → native 崩溃」。
@@ -2104,6 +2167,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
         mediaSourceNames = mediaSourceLabel?.takeIf { it.isNotBlank() }?.let { listOf(it) }
           ?: emptyList(),
         episodeNumbers = listOf(encodeEpisodeNumber(item)),
+        libraryIds = listOf(libraryId.orEmpty()),
       )
       // 「记忆播放设置」的键：剧集用所属剧的 Id（整季共用一份速度 / 音轨），
       // 电影没有 SeriesId，就用它自己的 Id。
@@ -2183,9 +2247,10 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     server: EmbyServer,
     items: List<EmbyItem>,
     engine: EngineKind? = resolveEngine(false),
+    libraryId: String? = null,
   ) {
     if (items.isEmpty()) return
-    viewModelScope.launch { launchRandomPlaybackAwait(server, items, engine) }
+    viewModelScope.launch { launchRandomPlaybackAwait(server, items, engine, libraryId) }
   }
 
   /**
@@ -2205,6 +2270,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     server: EmbyServer,
     items: List<EmbyItem>,
     engine: EngineKind? = resolveEngine(false),
+    libraryId: String? = null,
   ) {
     if (items.isEmpty()) return
     val firstId = items.firstOrNull()?.Id
@@ -2255,6 +2321,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       directHeaders = strmDirect?.let {
         StrmDirectLink.headerArray(it.requiredHeaders, EmbyClient.STREAM_USER_AGENT)
       },
+      libraryId = libraryId,
     )
   }
 
@@ -2270,6 +2337,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     resumeSeconds: Long = 0,
     playFromStartAll: Boolean = false,
     engine: EngineKind? = resolveEngine(false),
+    libraryId: String? = null,
   ) {
     if (items.isEmpty()) return
     val first = items.firstOrNull()
@@ -2289,6 +2357,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       directHeaders = strmDirect?.let {
         StrmDirectLink.headerArray(it.requiredHeaders, EmbyClient.STREAM_USER_AGENT)
       },
+      libraryId = libraryId,
     )
   }
 
@@ -2329,10 +2398,12 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
     firstMediaSourceId: String? = null,
     /** [firstMediaSourceId] 对应的显示名；播放页顶栏据此显示「正在播的是哪个版本」。 */
     firstMediaSourceName: String? = null,
+    /** 整组条目都来自同一个已知媒体库时传入。 */
+    libraryId: String? = null,
   ) {
     launchPlaylistEntries(
       server = server,
-      entries = items.map { EmbyPlaylistEntry(item = it) },
+      entries = items.map { EmbyPlaylistEntry(item = it, libraryId = libraryId) },
       resumeSeconds = resumeSeconds,
       playFromStartAll = playFromStartAll,
       engine = engine,
@@ -2378,6 +2449,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
   ) {
     val uris = ArrayList<android.net.Uri>()
     val ids = ArrayList<String>()
+    val libraryIds = ArrayList<String>()
     // 与 uris 下标一一对应的显示标题。播放器侧切集时用它，避免从
     // `/Videos/{id}/stream` 这种 URL 里猜出统一是 "stream" 的假标题。
     val titles = ArrayList<String>()
@@ -2414,6 +2486,7 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
         ),
       )
       ids.add(id)
+      libraryIds.add(entry.libraryId.orEmpty())
       titles.add(entry.titleOverride?.takeIf { it.isNotBlank() } ?: displayTitle(item))
       seriesKeys.add(item.SeriesId ?: id)
       // ⚠️ 剧名：弹幕自动匹配要搜的是「某科学的超电磁炮」，
@@ -2456,7 +2529,14 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
       putExtra("emby_series_name", first.SeriesName.orEmpty())
       putExtra("playlist_index", 0)
       // 播放列表的 ID 顺序与 uris 一致，切集时据此把"正在播放"同步给服务器
-      putEmbyPlaybackExtras(server, ids, mediaSourceIds, mediaSourceNames, episodeNumbers)
+      putEmbyPlaybackExtras(
+        server = server,
+        itemIds = ids,
+        mediaSourceIds = mediaSourceIds,
+        mediaSourceNames = mediaSourceNames,
+        episodeNumbers = episodeNumbers,
+        libraryIds = libraryIds,
+      )
       putEngine(engine)
       // 列表里只要有用预解析直链换掉的条目，就得同步请求头（理由见 [putStreamHeaders]）。
       // STRM 直链的服务器声明头优先；它不再套默认的「服务器 Referer」——
@@ -2487,16 +2567,115 @@ private fun isLocalIsoProxyUrl(url: String): Boolean =
   /**
    * 详情页的分集列表（电视剧用）。
    *
-   * 一次拉全剧所有集（`SeasonId = null`），因为：
-   *  · 详情页要按季分组显示，逐季发请求会让「第一屏」等 N 次往返；
-   *  · Emby 的 `/Shows/{id}/Episodes` 本来就支持不带 SeasonId 全量返回。
-   *
-   * 失败**不抛**：分集区只是详情页的增强，拿不到就退回「只有播放按钮」的老样子，
-   * 不能让整页变成错误态。
+   * 优先用全剧接口；但部分兼容服务端会只返回某一季，同时又把 TotalRecordCount 报成
+   * 子集数量。因此必须用 `/Shows/{id}/Seasons` 校验季覆盖，缺季时逐季补齐，最后才
+   * 回退通用分页。失败不抛，由详情页显示空态并提供重试。
    */
   suspend fun loadSeriesEpisodes(server: EmbyServer, seriesId: String): List<EmbyItem> =
     withContext(Dispatchers.IO) {
-      runCatching { repository.getEpisodes(server, seriesId, null, 0, null).Items }.getOrDefault(emptyList())
+      suspend fun loadUnder(parentId: String, recursive: Boolean): List<EmbyItem> {
+        val all = ArrayList<EmbyItem>()
+        var startIndex = 0
+        var total = Int.MAX_VALUE
+        while (startIndex < total) {
+          val page = repository.getItems(
+            server = server,
+            parentId = parentId,
+            includeItemTypes = listOf("Episode"),
+            startIndex = startIndex,
+            limit = EPISODE_PAGE_SIZE,
+            recursive = recursive,
+            isFolder = false,
+            fields = "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources",
+          )
+          total = page.TotalRecordCount
+          val before = all.size
+          all.addAll(page.Items)
+          if (all.size == before || page.Items.isEmpty()) break
+          startIndex += page.Items.size
+        }
+        return all.distinctBy { it.Id ?: it.Name.orEmpty() }
+      }
+
+      suspend fun loadSeasons(): List<EmbyItem> {
+        val all = ArrayList<EmbyItem>()
+        var startIndex = 0
+        var total = Int.MAX_VALUE
+        while (startIndex < total) {
+          val page = repository.getSeasons(server, seriesId, startIndex, EPISODE_PAGE_SIZE)
+          total = page.TotalRecordCount
+          val before = all.size
+          all.addAll(page.Items)
+          if (all.size == before || page.Items.isEmpty()) break
+          startIndex += page.Items.size
+        }
+        return all.distinctBy { it.Id ?: it.Name.orEmpty() }
+      }
+
+      val direct = runCatching { repository.getEpisodes(server, seriesId, null, 0, null) }
+      val directResult = direct.getOrNull()
+      val directItems = directResult?.Items.orEmpty()
+      val seasons = runCatching { loadSeasons() }.getOrElse {
+        android.util.Log.w("EmbyViewModel", "剧集季列表获取失败，继续使用分集接口结果", it)
+        emptyList()
+      }
+      val seasonNumberById = seasons.mapNotNull { season ->
+        val id = season.Id ?: return@mapNotNull null
+        val number = season.IndexNumber ?: return@mapNotNull null
+        id to number
+      }.toMap()
+      val seasonIds = seasons.mapNotNull { it.Id }.distinct()
+
+      fun coversAllSeasons(items: List<EmbyItem>): Boolean =
+        seasonIds.isEmpty() || seasonIds.all { seasonId ->
+          val seasonNumber = seasonNumberById[seasonId]
+          items.any { episode ->
+            episode.SeasonId == seasonId ||
+              (seasonNumber != null && episode.ParentIndexNumber == seasonNumber)
+          }
+        }
+
+      fun normalize(items: List<EmbyItem>): List<EmbyItem> =
+        items.map { episode ->
+          val seasonNumber = episode.SeasonId?.let(seasonNumberById::get)
+          if (episode.ParentIndexNumber == null && seasonNumber != null) {
+            episode.copy(ParentIndexNumber = seasonNumber)
+          } else {
+            episode
+          }
+        }.distinctBy { it.Id ?: it.Name.orEmpty() }
+
+      if (directResult != null && directItems.isNotEmpty() &&
+        directResult.TotalRecordCount <= directItems.size && coversAllSeasons(directItems)
+      ) {
+        return@withContext sortEpisodesForQueue(normalize(directItems))
+      }
+      direct.exceptionOrNull()?.let {
+        android.util.Log.w("EmbyViewModel", "全剧分集接口失败，尝试逐季与通用分页兜底", it)
+      }
+
+      val collected = ArrayList(directItems)
+      if (seasonIds.isNotEmpty()) {
+        seasons.forEach { season ->
+          val seasonId = season.Id ?: return@forEach
+          collected.addAll(
+            runCatching { loadUnder(seasonId, recursive = false) }.getOrElse {
+              android.util.Log.w("EmbyViewModel", "第 ${season.IndexNumber} 季分集获取失败，继续合并其它季", it)
+              emptyList()
+            },
+          )
+        }
+        if (collected.isNotEmpty() && coversAllSeasons(collected)) {
+          return@withContext sortEpisodesForQueue(normalize(collected))
+        }
+      }
+
+      val bySeries = runCatching { loadUnder(seriesId, recursive = true) }.getOrElse {
+        android.util.Log.w("EmbyViewModel", "按剧集查询分集失败", it)
+        emptyList()
+      }
+      collected.addAll(bySeries)
+      sortEpisodesForQueue(normalize(collected))
     }
 
   /**

@@ -399,13 +399,15 @@ object EmbyStreamApi {
    *
    * - 只发一次 `PlaybackInfo`，**不跟跳转、不下载媒体**；
    * - 超时 / 不是 http(s) / 服务端没给 Path ⇒ 返回 null，调用方回退正常流地址；
-   * - 只在用户显式打开「STRM 直链播放」时调用（见 `BrowserPreferences.embyStrmDirectPlay`）。
+   * - 内部播放只在用户显式打开「STRM 直链播放」时调用；外部播放器始终解析真实地址，
+   *   但关闭这里的主动探测，避免第三方播放器起播前再多等一次网络往返。
    */
   fun strmDirectPlayInfo(
     server: EmbyServer,
     itemId: String,
     /** 多版本媒体：只取这个版本；null = 服务端默认版本 */
     mediaSourceId: String? = null,
+    probe: Boolean = true,
   ): StrmDirectPlayInfo? {
     val payload =
       jsonObjectOf(
@@ -437,8 +439,8 @@ object EmbyStreamApi {
           info.MediaSources?.firstOrNull() ?: return@use null
         }
         val url = StrmDirectLink.directUrl(source.Path) ?: return@use null
-        StrmDirectPlayInfo(url = url, requiredHeaders = source.RequiredHttpHeaders.orEmpty())
-          .takeIf { probeStrmDirect(it) }
+        val direct = StrmDirectPlayInfo(url = url, requiredHeaders = source.RequiredHttpHeaders.orEmpty())
+        if (probe) direct.takeIf { probeStrmDirect(it) } else direct
       }
     }.getOrNull()
   }

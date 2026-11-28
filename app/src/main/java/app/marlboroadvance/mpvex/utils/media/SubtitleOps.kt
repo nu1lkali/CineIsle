@@ -2,7 +2,6 @@ package app.marlboroadvance.mpvex.utils.media
 import app.marlboroadvance.mpvex.ui.player.engine.PlayerLib
 
 import android.util.Log
-import app.marlboroadvance.mpvex.domain.subtitle.SubtitleFileNormalizer
 import app.marlboroadvance.mpvex.repository.NetworkRepository
 import app.marlboroadvance.mpvex.ui.browser.networkstreaming.proxy.NetworkStreamingProxy
 import `is`.xyz.mpv.MPVLib
@@ -40,15 +39,14 @@ object SubtitleOps : KoinComponent {
    *
    * @param autoSelectFirst 是否自动选中找到的第一条字幕。**恢复上次播放状态时必须传 false**，
    *   否则这里会把用户上次记住的字幕选择抢掉（存档里的选择在恢复流程后面才套）。
-   * @param context 用于把本地字幕归一成 UTF-8（缓存目录要它）。为 null 时跳过归一，
-   *   行为退回旧版 —— 只是为了不破坏没有 Context 的调用方，正式调用点都应传。
+   * @param loadSubtitle 统一挂载入口；返回 false 表示来源已被删除记录过滤或加载失败。
    */
   suspend fun autoloadSubtitles(
     videoFilePath: String,
     videoFileName: String,
     networkConnectionId: Long = -1L,
     autoSelectFirst: Boolean = true,
-    context: android.content.Context? = null,
+    loadSubtitle: suspend (source: String, select: Boolean, title: String?) -> Boolean,
   ) = withContext(Dispatchers.IO) {
     try {
       // Skip file descriptor URIs (these don't have a parent directory concept)
@@ -60,7 +58,7 @@ object SubtitleOps : KoinComponent {
       // Check if this is a network file with connection ID (SMB/FTP/WebDAV via proxy)
       if (networkConnectionId != -1L) {
         // For network files, scan the directory using network client
-        autoloadNetworkFileSubtitles(videoFilePath, videoFileName, networkConnectionId, autoSelectFirst)
+        autoloadNetworkFileSubtitles(videoFilePath, videoFileName, networkConnectionId, autoSelectFirst, loadSubtitle)
         return@withContext
       }
 
@@ -73,10 +71,10 @@ object SubtitleOps : KoinComponent {
           return@withContext
         }
         // For network streams, try to load subtitles with common extensions
-        autoloadNetworkSubtitles(videoFilePath, videoFileName, autoSelectFirst)
+        autoloadNetworkSubtitles(videoFilePath, videoFileName, autoSelectFirst, loadSubtitle)
       } else {
         // For local files, scan the directory
-        autoloadLocalSubtitles(videoFilePath, videoFileName, autoSelectFirst, context)
+        autoloadLocalSubtitles(videoFilePath, videoFileName, autoSelectFirst, loadSubtitle)
       }
     } catch (e: Exception) {
       Log.e(TAG, "Error loading subtitles", e)
@@ -92,6 +90,7 @@ object SubtitleOps : KoinComponent {
     videoFileName: String,
     networkConnectionId: Long,
     autoSelectFirst: Boolean,
+    loadSubtitle: suspend (source: String, select: Boolean, title: String?) -> Boolean,
   ) {
     try {
       Log.d(TAG, "Autoloading subtitles for network file: $videoFilePath")
@@ -141,8 +140,8 @@ object SubtitleOps : KoinComponent {
       // Load subtitles via proxy
       val proxy = NetworkStreamingProxy.getInstance()
       
-      // Keep mpv calls off the main thread for network-backed subtitle sources to avoid ANRs.
-      subtitles.forEachIndexed { index, subtitle ->
+      var selected = false
+      subtitles.forEach { subtitle ->
         try {
           // Extract just the filename without path for display
           // Handle both forward slashes and backslashes
@@ -168,22 +167,10 @@ object SubtitleOps : KoinComponent {
             mimeType = "text/plain",
           )
 
-          // Get current subtitle track count before adding
-          val trackCountBefore = PlayerLib.getPropertyInt("track-list/count") ?: 0
-
-          // Use "select" for the first subtitle, "auto" for others
-          val flag = if (index == 0 && autoSelectFirst) "select" else "auto"
-          PlayerLib.command("sub-add", proxyUrl, flag)
-
-          // Set the title for the newly added subtitle track
-          val trackCountAfter = PlayerLib.getPropertyInt("track-list/count") ?: 0
-          if (trackCountAfter > trackCountBefore) {
-            val newTrackIndex = trackCountAfter - 1
-            PlayerLib.setPropertyString("track-list/$newTrackIndex/title", displayName)
-            Log.d(TAG, "Loaded network subtitle: '$displayName' (track $newTrackIndex) via proxy (flag=$flag)")
-          } else {
-            Log.d(TAG, "Loaded network subtitle: '$displayName' via proxy (flag=$flag)")
-          }
+          val select = !selected && autoSelectFirst
+          val loaded = loadSubtitle(proxyUrl, select, displayName)
+          if (loaded) selected = selected || select
+          Log.d(TAG, "Network subtitle via proxy: '$displayName' (loaded=$loaded, select=$select)")
         } catch (e: Exception) {
           Log.e(TAG, "Failed to load subtitle ${subtitle.name}: ${e.message}", e)
         }
@@ -197,7 +184,7 @@ object SubtitleOps : KoinComponent {
     videoFilePath: String,
     videoFileName: String,
     autoSelectFirst: Boolean,
-    context: android.content.Context?,
+    loadSubtitle: suspend (source: String, select: Boolean, title: String?) -> Boolean,
   ) {
     val videoFile = File(videoFilePath)
     val videoDirectory = videoFile.parentFile ?: return
@@ -210,31 +197,11 @@ object SubtitleOps : KoinComponent {
           file.nameWithoutExtension.startsWith(baseName, ignoreCase = true)
       } ?: emptyList()
 
-    if (subtitles.isNotEmpty()) {
-      // 同目录的字幕是**用户自己的文件**，不能就地改字节 —— 只生成 UTF-8 缓存副本，
-      // 让 mpv 不必自己猜编码（否则 Big5 繁体字幕会被它当 GBK 解，画面上就是乱码）。
-      // 归一化是读盘 + 转码，必须在 IO 上做完再上主线程发命令。
-      val prepared =
-        subtitles.map { file ->
-          val path =
-            context
-              ?.let { ctx ->
-                runCatching { SubtitleFileNormalizer.forPlayback(ctx, file.absolutePath) }
-                  .getOrDefault(file.absolutePath)
-              }
-              ?: file.absolutePath
-          file to path
-        }
-      withContext(Dispatchers.Main) {
-        prepared.forEachIndexed { index, (subtitle, path) ->
-          // MPV command format: sub-add <url> [<flags> [<title>]]
-          // Use "select" for the first autoloaded subtitle so it is enabled by default
-          // （恢复存档时 autoSelectFirst=false：只把字幕挂上去，选哪条由存档说了算）
-          val flag = if (index == 0 && autoSelectFirst) "select" else "auto"
-          PlayerLib.command("sub-add", path, flag, subtitle.name)
-          Log.d(TAG, "Loaded local subtitle: ${subtitle.name} (flag=$flag)")
-        }
-      }
+    var selected = false
+    subtitles.forEach { subtitle ->
+      val select = !selected && autoSelectFirst
+      if (loadSubtitle(subtitle.absolutePath, select, subtitle.name)) selected = selected || select
+      Log.d(TAG, "Autoload local subtitle: ${subtitle.name} (select=$select)")
     }
   }
 
@@ -242,6 +209,7 @@ object SubtitleOps : KoinComponent {
     videoFilePath: String,
     videoFileName: String,
     autoSelectFirst: Boolean,
+    loadSubtitle: suspend (source: String, select: Boolean, title: String?) -> Boolean,
   ) {
     // Get base name without extension
     val baseName = videoFileName.substringBeforeLast('.')
@@ -255,17 +223,14 @@ object SubtitleOps : KoinComponent {
     // Common subtitle extensions to try
     val subtitleExtensions = listOf("srt", "ass", "ssa", "vtt", "sub")
 
-    // Keep mpv calls off the main thread for network URLs to avoid ANRs.
-    // Try each subtitle extension
-    subtitleExtensions.forEachIndexed { index, ext ->
+    var selected = false
+    subtitleExtensions.forEach { ext ->
       val subtitleUrl = "$baseUrl$baseName.$ext"
       try {
         // Try to add the subtitle - MPV will handle if it doesn't exist
-        // Use "auto" flag so MPV doesn't select it if it's not found
-        // Only use "select" for the first one (.srt)
-        val flag = if (index == 0 && autoSelectFirst) "select" else "auto"
-        PlayerLib.command("sub-add", subtitleUrl, flag, "$baseName.$ext")
-        Log.d(TAG, "Attempting to load network subtitle: $subtitleUrl (flag=$flag)")
+        val select = !selected && autoSelectFirst
+        if (loadSubtitle(subtitleUrl, select, "$baseName.$ext")) selected = selected || select
+        Log.d(TAG, "Attempting to load network subtitle: $subtitleUrl (select=$select)")
       } catch (e: Exception) {
         Log.d(TAG, "Could not load network subtitle $subtitleUrl: ${e.message}")
       }

@@ -1026,6 +1026,7 @@ object EmbyPlaybackReporter {
 
   const val EXTRA_SERVER_ID = "emby_server_id"
   const val EXTRA_ITEM_IDS = "emby_item_ids"
+  const val EXTRA_LIBRARY_IDS = "emby_library_ids"
 
   /**
    * 当前播放的媒体源 Id（在线字幕搜索要用）。
@@ -1131,9 +1132,14 @@ internal fun Intent.putEmbyPlaybackExtras(
    * 非剧集（电影 / 本地文件）传空表即可 —— 播放页拿不到就退回队列下标。
    */
   episodeNumbers: List<String> = emptyList(),
+  /** 与 [itemIds] 同序的媒体库 Id；未知项用空串占位。 */
+  libraryIds: List<String> = emptyList(),
 ) {
   putExtra(EmbyPlaybackReporter.EXTRA_SERVER_ID, server.id)
   putStringArrayListExtra(EmbyPlaybackReporter.EXTRA_ITEM_IDS, ArrayList(itemIds))
+  if (libraryIds.isNotEmpty()) {
+    putStringArrayListExtra(EmbyPlaybackReporter.EXTRA_LIBRARY_IDS, ArrayList(libraryIds))
+  }
   if (episodeNumbers.isNotEmpty()) {
     putStringArrayListExtra(EmbyPlaybackReporter.EXTRA_EPISODE_NUMBERS, ArrayList(episodeNumbers))
   }

@@ -15,6 +15,15 @@ interface Preference<T> {
 
   fun set(value: T)
 
+  /**
+   * 同步落盘并返回是否成功。普通设置仍用异步 [set]；删除字幕的 tombstone 必须先
+   * 完成磁盘写入，才能卸载 mpv 轨道，避免进程在 apply 排队期间被杀后字幕复活。
+   */
+  fun setBlocking(value: T): Boolean {
+    set(value)
+    return true
+  }
+
   fun isSet(): Boolean
 
   fun delete()

@@ -37,7 +37,7 @@ class CinePlayController internal constructor(
 
 /** 带「从头播放」能力的播放控制器（详情页用） */
 @Composable
-fun rememberCinePlayController(): CinePlayController {
+fun rememberCinePlayController(libraryId: String? = null): CinePlayController {
   val context = LocalContext.current
   val app = context.applicationContext as Application
   val viewModel: EmbyViewModel = viewModel(factory = EmbyViewModel.factory(app))
@@ -45,13 +45,19 @@ fun rememberCinePlayController(): CinePlayController {
   val scope = rememberCoroutineScope()
   val failedText = stringResource(R.string.cine_play_failed)
 
-  return remember(viewModel, server, context, failedText) {
+  return remember(viewModel, server, context, failedText, libraryId) {
     CinePlayController { item, resumeSeconds, fromStart ->
       val current = server
       if (current != null) {
         scope.launch {
           runCatching {
-            viewModel.play(current, item, resumeSeconds = resumeSeconds, fromStart = fromStart)
+            viewModel.play(
+              current,
+              item,
+              resumeSeconds = resumeSeconds,
+              fromStart = fromStart,
+              libraryId = libraryId,
+            )
           }.onFailure { error ->
             Toast.makeText(context, error.message ?: failedText, Toast.LENGTH_SHORT).show()
           }

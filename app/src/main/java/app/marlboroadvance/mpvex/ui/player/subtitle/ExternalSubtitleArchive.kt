@@ -142,15 +142,19 @@ object ExternalSubtitleArchive {
    * 返回最新的那一份；没有则 null。找不到不代表用户从未加过 —— 可能被用户在
    * 文件管理器里删掉了，此时只能让用户重新选择。
    */
-  fun find(context: Context, mediaTitle: String): Uri? {
+  fun find(
+    context: Context,
+    mediaTitle: String,
+    isIgnored: (Uri) -> Boolean = { false },
+  ): Uri? {
     if (mediaTitle.isBlank()) return null
     val app = context.applicationContext
     val base = fileBase(mediaTitle)
     // 直接目录优先：有「所有文件访问」（本项目的文件浏览器依赖它）时，重装后
     // MediaStore 的归属记录已经没了，但文件本身还在，直接列目录最可靠。
-    findInPublicDir(app, base)?.let { return it }
+    findInPublicDir(app, base, isIgnored)?.let { return it }
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      findViaMediaStore(app, base)
+      findViaMediaStore(app, base, isIgnored)
     } else {
       null
     }
@@ -252,7 +256,11 @@ object ExternalSubtitleArchive {
       null
     }
 
-  private fun findViaMediaStore(context: Context, base: String): Uri? =
+  private fun findViaMediaStore(
+    context: Context,
+    base: String,
+    isIgnored: (Uri) -> Boolean,
+  ): Uri? =
     runCatching {
       val resolver = context.contentResolver
       val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
@@ -267,7 +275,8 @@ object ExternalSubtitleArchive {
         while (cursor.moveToNext() && found == null) {
           val displayName = cursor.getString(1) ?: continue
           if (belongsToArchive(displayName, base)) {
-            found = ContentUris.withAppendedId(collection, cursor.getLong(0))
+            val uri = ContentUris.withAppendedId(collection, cursor.getLong(0))
+            if (!isIgnored(uri)) found = uri
           }
         }
         found
@@ -347,14 +356,13 @@ object ExternalSubtitleArchive {
     }
   }
 
-  private fun findInPublicDir(context: Context, base: String): Uri? {
+  private fun findInPublicDir(context: Context, base: String, isIgnored: (Uri) -> Boolean): Uri? {
     val dir = publicDir()
-    val file =
-      dir.listFiles()
-        ?.filter { it.isFile && belongsToArchive(it.name, base) }
-        ?.maxByOrNull { it.lastModified() }
-        ?: return null
-    return Uri.fromFile(file)
+    return dir.listFiles()
+      ?.filter { it.isFile && belongsToArchive(it.name, base) }
+      ?.sortedByDescending { it.lastModified() }
+      ?.mapNotNull { file -> Uri.fromFile(file).takeUnless(isIgnored) }
+      ?.firstOrNull()
   }
 
   // ──────────────────────────── 通用 ────────────────────────────

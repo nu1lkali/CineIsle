@@ -107,6 +107,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -140,6 +141,7 @@ import app.marlboroadvance.mpvex.domain.emby.defaultCustomOrder
 import app.marlboroadvance.mpvex.domain.emby.effectiveEmbyMediaSourceId
 import app.marlboroadvance.mpvex.domain.emby.encodeCustomVersionOrder
 import app.marlboroadvance.mpvex.domain.emby.parseCustomVersionOrder
+import app.marlboroadvance.mpvex.domain.emby.preferredEpisodeForDetail
 import app.marlboroadvance.mpvex.domain.emby.sortEpisodesForQueue
 import app.marlboroadvance.mpvex.domain.emby.sortVersionEntries
 import app.marlboroadvance.mpvex.domain.emby.versionQueueEntry
@@ -148,6 +150,7 @@ import app.marlboroadvance.mpvex.domain.emby.SubtitleDiscovery
 import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleChoices
 import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleSelector
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSelection
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstones
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import app.marlboroadvance.mpvex.domain.emby.bareFileName
 import app.marlboroadvance.mpvex.domain.emby.embyMediaSourceLabel
@@ -204,6 +207,7 @@ import kotlinx.serialization.Serializable
 data class EmbyDetailScreen(
   val itemId: String,
   val title: String,
+  val libraryId: String? = null,
 ) : Screen {
   @OptIn(ExperimentalMaterial3Api::class)
   @Composable
@@ -359,11 +363,13 @@ data class EmbyDetailScreen(
     // 分集是否已经取过（成功与否都算）：剧集页的「字幕」卡要靠它区分
     // 「还在解析目标集」与「这部剧一集都没有」
     var episodesResolved by remember(itemId) { mutableStateOf(false) }
-    LaunchedEffect(itemId, item?.Type, server?.id) {
+    var episodesReloadKey by remember(itemId) { mutableStateOf(0) }
+    LaunchedEffect(itemId, item?.Type, server?.id, episodesReloadKey) {
       val current = item ?: return@LaunchedEffect
       val currentServer = server ?: return@LaunchedEffect
       if (current.Type != "Series") return@LaunchedEffect
       episodesLoading = true
+      episodesResolved = false
       seriesEpisodes = runCatching {
         viewModel.loadSeriesEpisodes(currentServer, current.Id ?: itemId)
       }.getOrDefault(emptyList())
@@ -387,6 +393,7 @@ data class EmbyDetailScreen(
     val subtitlePreferredRaw by subtitlesPreferences.preferredLanguages.collectAsState()
     val subtitleAllowedRaw by subtitlesPreferences.embyAllowedLanguages.collectAsState()
     val subtitleFollowDefault by subtitlesPreferences.embyFollowDefault.collectAsState()
+    val subtitleTombstonesRaw by subtitlesPreferences.subtitleTombstones.collectAsState()
 
     var subtitleUi by detailState.subtitleState
     // 手动重试 / 下拉刷新：键不变也要重跑一次
@@ -490,6 +497,32 @@ data class EmbyDetailScreen(
       )
     }
 
+    val visibleSubtitles = remember(
+      subtitleUi.subtitles,
+      subtitleUi.targetItemId,
+      subtitleUi.mediaSourceId,
+      server?.id,
+      subtitleTombstonesRaw,
+    ) {
+      val serverId = server?.id?.toString()
+      val targetItemId = subtitleUi.targetItemId
+      if (serverId == null || targetItemId == null) {
+        subtitleUi.subtitles
+      } else {
+        SubtitleTombstones.filterEmby(
+          subtitleUi.subtitles,
+          runCatching { SubtitleTombstones.parse(subtitleTombstonesRaw) }.getOrDefault(emptyList()),
+        ) { subtitle ->
+          SubtitleTombstones.embyKey(
+            serverId = serverId,
+            itemId = targetItemId,
+            mediaSourceId = subtitle.mediaSourceId ?: subtitleUi.mediaSourceId,
+            streamIndex = subtitle.streamIndex,
+          )
+        }
+      }
+    }
+
     // 「会挂哪一条」用**播放器同一个纯函数**算：详情页不写第二套语言匹配逻辑，
     // 否则用户看到「将使用简中」、进播放页却挂的是英文。
     val subtitleLocaleHints = remember(context) {
@@ -503,7 +536,7 @@ data class EmbyDetailScreen(
       }.orEmpty()
     }
     val subtitlePick: SubtitleSelection? = remember(
-      subtitleUi.subtitles,
+      visibleSubtitles,
       subtitleUi.targetItemId,
       subtitleChoicesRaw,
       subtitlePreferredRaw,
@@ -511,11 +544,11 @@ data class EmbyDetailScreen(
       subtitleFollowDefault,
       subtitleLocaleHints,
     ) {
-      if (subtitleUi.subtitles.isEmpty()) {
+      if (visibleSubtitles.isEmpty()) {
         null
       } else {
         EmbySubtitleSelector.select(
-          subtitles = subtitleUi.subtitles,
+          subtitles = visibleSubtitles,
           preferredLanguages = splitSubtitleLanguagePrefs(subtitlePreferredRaw),
           allowedLanguages = splitSubtitleLanguagePrefs(subtitleAllowedRaw),
           rememberedKey = EmbySubtitleChoices.keyOf(subtitleChoicesRaw, subtitleUi.targetItemId),
@@ -526,7 +559,7 @@ data class EmbyDetailScreen(
     }
     // null = 整块不渲染（容器类条目、分集空剧集）
     val subtitleForUi: DetailSubtitleUi? =
-      if (subtitleApplicable) subtitleUi.copy(pick = subtitlePick) else null
+      if (subtitleApplicable) subtitleUi.copy(subtitles = visibleSubtitles, pick = subtitlePick) else null
 
 
     // 从播放器返回时刷新详情：播放器的进度/已看上报是异步落到服务器的，而本页组合
@@ -581,10 +614,8 @@ data class EmbyDetailScreen(
     // ── 单集详情页的「相关分集」──
     // 只有**当前条目是 Episode** 时才需要：这时 `seriesEpisodes` 是空的（只有 Series 才拉全剧），
     // 页面上没有任何入口能切到兄弟集，用户点进第 3 集就困在第 3 集。
-    // 数据分两段、成本差很多：
-    //  ① 同季 + 特别篇：`SiblingIds`（随详情一起回来，零额外往返）→ 一次 `Ids` 批量取内容；
-    //  ② 演员相关：`/Items?PersonIds&IncludeItemTypes=Episode` 再按 SeriesId 过滤。
-    //      这一步要多发请求，所以只取**第一个演员**（`People` 首位），不遍历全阵容。
+    // 同季 + 特别篇来自 `SiblingIds`（随详情返回）→ 一次 `Ids` 批量取内容；
+    // 演员作品推荐走独立的推荐区，不在这里按演员筛选同剧分集。
     var relatedEpisodes by detailState.relatedEpisodesState
     LaunchedEffect(itemId, item?.Id, item?.Type, server?.id, recommendReloadKey) {
       val current = item ?: return@LaunchedEffect
@@ -618,34 +649,6 @@ data class EmbyDetailScreen(
           sameSeason = mains,
           specials = specials,
         )
-
-        // ② 演员相关：只取一个演员（`People` 里 Type == Actor 的第一位）
-        val actor = current.People.orEmpty()
-          .firstOrNull { it.Type == "Actor" && it.Id != null }
-        if (actor?.Id == null) return@withContext
-        val seriesId = current.SeriesId
-        val works = viewModel.loadPersonItems(
-          server = currentServer,
-          personId = actor.Id,
-          limit = 100,
-          includeItemTypes = listOf("Episode"),
-        )
-        val siblings = works
-          .filter { ep ->
-            ep.Id != null && ep.Id != selfId &&
-              // 同一部剧：SeriesId 一致。本地 / 缺字段时退化成按剧名比 —— 否则整区为空。
-              (ep.SeriesId != null && ep.SeriesId == seriesId || ep.SeriesName == current.SeriesName)
-          }
-          .distinctBy { it.Id }
-          .sortedWith(
-            compareBy({ it.ParentIndexNumber ?: Int.MAX_VALUE }, { it.IndexNumber ?: Int.MAX_VALUE }),
-          )
-        if (siblings.isNotEmpty()) {
-          relatedEpisodes = relatedEpisodes.copy(
-            actorEpisodes = siblings,
-            actorName = actor.Name,
-          )
-        }
       }
     }
 
@@ -760,6 +763,7 @@ data class EmbyDetailScreen(
             onRefresh = {
               load()
               recommendReloadKey++
+              episodesReloadKey++
               // 用户在服务端补了字幕，手动下拉就该看到；不递增的话键没变、effect 不会重跑
               subtitleReloadKey++
             },
@@ -847,10 +851,13 @@ data class EmbyDetailScreen(
                       collectionType = collectionType,
                       isFolderDive = true,
                       parentId = folder?.ParentId?.takeIf { it.isNotBlank() },
-                      // 媒体库名称（查不到才退回服务端给的那层名字）
-                      rootTitle = probeRootName ?: folderName,
-                      // 名字属于哪一层：库根 Id；实在定位不到就用直接父目录
-                      rootId = probeRootId ?: parentId,
+                      // 媒体库名称：入口已明确带库 Id 时优先用 /Views 的权威库名
+                      rootTitle = libraryId?.let { EmbyClient.libraryDisplayName(currentServer, it) }
+                        ?: probeRootName
+                        ?: folderName,
+                      // 导航根可兜底猜测；播放器权威归属只由 playbackLibraryId 传递
+                      rootId = libraryId ?: probeRootId ?: parentId,
+                      playbackLibraryId = libraryId,
                     ),
                   )
                 }
@@ -861,7 +868,12 @@ data class EmbyDetailScreen(
               // 所以尺寸必须从源头（这个 URL）给定。
               backdropUrl = viewModel.imageUrl(currentServer, current, "Backdrop", 1080),
               posterUrl = viewModel.imageUrl(currentServer, current, "Primary", 600),
-              onPlay = { resume, engine ->
+              onPlay = onPlay@{ resume, engine ->
+                if (current.Type == "Series" && episodesResolved && seriesEpisodes.isEmpty()) {
+                  Toast.makeText(context, "未获取到分集，正在重试", Toast.LENGTH_SHORT).show()
+                  episodesReloadKey++
+                  return@onPlay
+                }
                 // 长按选内核时给个明确反馈，否则用户不知道这一下到底换了什么
                 engine?.let {
                   Toast.makeText(context, "使用 ${it.label} 内核播放", Toast.LENGTH_SHORT).show()
@@ -878,6 +890,7 @@ data class EmbyDetailScreen(
                         mediaSourceId = playSourceId,
                         mediaSourceLabel = playSourceLabel,
                         engineOverride = engine,
+                        libraryId = libraryId,
                       )
                     } finally {
                       // ⚠️ 只在**没成功拉起播放器**时复位（比如解析失败 / 抛异常），
@@ -890,7 +903,12 @@ data class EmbyDetailScreen(
               },
               playLaunching = playLaunching,
               // 电视剧「从头播放」：走独立的入口，不受大按钮「挑有进度的那集」影响。
-              onPlayFromStart = {
+              onPlayFromStart = onPlayFromStart@{
+                if (current.Type == "Series" && episodesResolved && seriesEpisodes.isEmpty()) {
+                  Toast.makeText(context, "未获取到分集，正在重试", Toast.LENGTH_SHORT).show()
+                  episodesReloadKey++
+                  return@onPlayFromStart
+                }
                 if (!playLaunching) {
                   playLaunching = true
                   scope.launch {
@@ -903,6 +921,7 @@ data class EmbyDetailScreen(
                         playSourceId,
                         mediaSourceLabel = playSourceLabel,
                         fromStart = true,
+                        libraryId = libraryId,
                       )
                     } finally {
                       playLaunching = false
@@ -1082,7 +1101,13 @@ data class EmbyDetailScreen(
                   ?: EmbyTicks.ticksToSeconds(current.UserData?.PlaybackPositionTicks ?: 0L)
                 Toast.makeText(context, "正在请求服务器转码…", Toast.LENGTH_SHORT).show()
                 scope.launch {
-                  viewModel.playTranscoded(currentServer, current, resumeSeconds, mediaSourceId = playSourceId)
+                  viewModel.playTranscoded(
+                    currentServer,
+                    current,
+                    resumeSeconds,
+                    mediaSourceId = playSourceId,
+                    libraryId = libraryId,
+                  )
                     .onFailure { e ->
                       Toast.makeText(
                         context,
@@ -1145,6 +1170,8 @@ data class EmbyDetailScreen(
                 pushChild(EmbyDetailScreen(itemId = id, title = name))
               },
               episodes = seriesEpisodes,
+              episodesLoading = episodesLoading,
+              onRetryEpisodes = { episodesReloadKey++ },
               relatedEpisodes = relatedEpisodes,
               // 点某一集 = 播这一集（并带后续连播）。
               // ⚠️ 这里**不要**再走详情页的 playLaunching 闸门：那个闸门是给
@@ -1160,26 +1187,31 @@ data class EmbyDetailScreen(
                     // - 队列里有兄弟集 ⇒ 片尾能自动连播、切集时标题对得上；
                     // - 队列里每条都带着自己的集号 ⇒ 弹幕按真实集号匹配，
                     //   否则单独播第 5 集时队列只有 1 条，弹幕会取成第 1 集。
-                    val startAt = seriesEpisodes.indexOfFirst { it.Id == episode.Id }
-                      .takeIf { it >= 0 } ?: 0
                     // 单集详情页没有 seriesEpisodes，队列只有这一条 ⇒ 追「同季」的后续：
                     // 否则从第 3 集点进去就再也连播不到第 4 集（片尾只能退出）。
-                    val base = seriesEpisodes.ifEmpty {
-                      relatedEpisodes.sameSeason.ifEmpty { listOf(episode) }
-                    }
-                    val from = base.indexOfFirst { it.Id == episode.Id }.takeIf { it >= 0 } ?: 0
-                    val queue = base.drop(from).ifEmpty { listOf(episode) }
+                    val base = sortEpisodesForQueue(
+                      seriesEpisodes.ifEmpty {
+                        relatedEpisodes.sameSeason.ifEmpty { listOf(episode) }
+                      },
+                    )
+                    val seasonQueue = episode.ParentIndexNumber?.let { season ->
+                      base.filter { it.ParentIndexNumber == season }
+                    } ?: base
+                    val from = seasonQueue.indexOfFirst { it.Id == episode.Id }
+                      .takeIf { it >= 0 } ?: 0
+                    val queue = seasonQueue.drop(from).ifEmpty { listOf(episode) }
                     viewModel.launchPlaylistResolvingStrm(
                       server = currentServer,
                       items = queue,
                       resumeSeconds = resume,
+                      libraryId = libraryId,
                     )
                   }
                 }
               },
               // 长按某一集 = 进这一集的详情页（看简介 / 换版本 / 换音轨）
               onOpenEpisode = { epId, epName ->
-                pushChild(EmbyDetailScreen(itemId = epId, title = epName))
+                pushChild(EmbyDetailScreen(itemId = epId, title = epName, libraryId = libraryId))
               },
               // 分集卡上的「下载这一集」：状态直接从已有的 downloadTasks 里查，
               // 不额外发请求 —— 下载管理页与本页看的是同一份 Flow。
@@ -1249,36 +1281,40 @@ data class EmbyDetailScreen(
         onPick = { player ->
           externalPlayers = null
           if (playerTarget != null && serverTarget != null) {
-            viewModel.playWithExternalPlayer(
-              serverTarget,
-              playerTarget,
-              player,
-              effectiveEmbyMediaSourceId(
+            scope.launch {
+              viewModel.playWithExternalPlayer(
+                serverTarget,
                 playerTarget,
-                selectedMediaSourceId,
-                autoSourcePreference,
-              ),
-            )
-              .onFailure { e ->
-                Toast.makeText(context, e.message ?: "打开外部播放器失败", Toast.LENGTH_LONG).show()
-              }
+                player,
+                effectiveEmbyMediaSourceId(
+                  playerTarget,
+                  selectedMediaSourceId,
+                  autoSourcePreference,
+                ),
+              )
+                .onFailure { e ->
+                  Toast.makeText(context, e.message ?: "打开外部播放器失败", Toast.LENGTH_LONG).show()
+                }
+            }
           }
         },
         onSystemChooser = {
           externalPlayers = null
           if (playerTarget != null && serverTarget != null) {
-            viewModel.playWithExternalPlayerChooser(
-              serverTarget,
-              playerTarget,
-              effectiveEmbyMediaSourceId(
+            scope.launch {
+              viewModel.playWithExternalPlayerChooser(
+                serverTarget,
                 playerTarget,
-                selectedMediaSourceId,
-                autoSourcePreference,
-              ),
-            )
-              .onFailure { e ->
-                Toast.makeText(context, e.message ?: "打开外部播放器失败", Toast.LENGTH_LONG).show()
-              }
+                effectiveEmbyMediaSourceId(
+                  playerTarget,
+                  selectedMediaSourceId,
+                  autoSourcePreference,
+                ),
+              )
+                .onFailure { e ->
+                  Toast.makeText(context, e.message ?: "打开外部播放器失败", Toast.LENGTH_LONG).show()
+                }
+            }
           }
         },
         onDismiss = { externalPlayers = null },
@@ -1710,6 +1746,10 @@ private fun DetailBody(
   onRecommendClick: (String, String) -> Unit,
   /** 全剧分集（非 Series 恒为空）。数据由 [EmbyDetailScreen] 加载，这里只负责画。 */
   episodes: List<EmbyItem> = emptyList(),
+  /** 分集是否正在加载；Series 暂无分集时用于显示加载 / 重试状态。 */
+  episodesLoading: Boolean = false,
+  /** 重新拉取全剧分集。 */
+  onRetryEpisodes: () -> Unit = {},
   /** 点某一集：直接播（resumeSeconds = 那一集自己的续播位置，0 = 从头） */
   onPlayEpisode: (EmbyItem, Long) -> Unit = { _, _ -> },
   /** 长按某一集：进这一集的详情页 */
@@ -1896,14 +1936,32 @@ private fun DetailBody(
       // 紧跟播放区：用户点进一部剧，最先要的就是「从第几集开始」。
       // 放在简介 / 演职员之前，是因为那些是「了解这部剧」，而分集是「开始看」。
       // 点一集 = 直接播（带后续连播）；长按 = 进那一集的详情（换版本 / 看简介）。
+      if (item.Type == "Series" && episodes.isEmpty()) {
+        item {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = if (episodesLoading) "分集加载中…" else "暂无分集",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            if (!episodesLoading) {
+              TextButton(onClick = onRetryEpisodes) {
+                Text("重试")
+              }
+            }
+          }
+        }
+      }
       if (episodes.isNotEmpty()) {
         item {
           EpisodeListSection(
             episodes = episodes,
             // 高亮「上次看到的那一集」，让用户一眼找到该从哪儿继续。
-            currentEpisodeId = episodes
-              .firstOrNull { (it.UserData?.PlaybackPositionTicks ?: 0L) > 0L }
-              ?.Id,
+            currentEpisodeId = preferredEpisodeForDetail(episodes)?.Id,
             onClick = { ep, resume -> onPlayEpisode(ep, resume) },
             onLongClick = { ep -> ep.Id?.let { onOpenEpisode(it, ep.Name ?: "") } },
             downloadStateOf = downloadStateOf,
@@ -1914,7 +1972,7 @@ private fun DetailBody(
       }
 
       // ── 相关分集（单集详情页专用）──
-      // 只有当前条目是 Episode 时非空：同季 / 特别篇 / 演员相关三分区。
+      // 只有当前条目是 Episode 时非空：同季 / 特别篇两个选区。
       // 放在播放区之后、简介之前，和上面的「分集」区同一个位置逻辑（先能开始看）。
       // ⚠️ 点卡片的语义与分集区一致：点 = 直接播这一集，长按 = 进那一集详情。
       if (!relatedEpisodes.isEmpty) {
@@ -2106,16 +2164,21 @@ private fun DetailBody(
                   Text(
                     text = person.Name ?: "",
                     style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
                     maxLines = 2,
                     // 这一栏是「演职员」，混着演员 / 导演 / 编剧，复制提示用中性的「姓名」
-                    modifier = Modifier.longPressToCopy(person.Name, "姓名"),
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .longPressToCopy(person.Name, "姓名"),
                   )
                   person.Role?.let {
                     Text(
                       text = it,
                       style = MaterialTheme.typography.labelSmall,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      textAlign = TextAlign.Center,
                       maxLines = 1,
+                      modifier = Modifier.fillMaxWidth(),
                     )
                   }
                 }

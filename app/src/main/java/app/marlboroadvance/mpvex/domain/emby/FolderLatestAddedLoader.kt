@@ -11,7 +11,9 @@ package app.marlboroadvance.mpvex.domain.emby
 // 这样纯逻辑能进 JVM 单测（本机跑不了 androidUnitTest），而网络部分
 // 只在真正的页面里跑，出问题一眼能看出是哪一层。
 
+import android.content.Context
 import app.marlboroadvance.mpvex.domain.emby.isFolderLikeForScan
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -19,6 +21,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import java.io.File
 
 /**
  * 拉取策略。
@@ -251,7 +257,67 @@ internal object FolderLatestCache {
 
   private const val MAX_ENTRIES = 24
   private val entries = LinkedHashMap<String, Entry>()
-  private val mutex = Mutex()
+
+  /**
+   * 保护 [entries] 的锁。
+   *
+   * ⚠️ 用普通的 `synchronized` 而不是 `Mutex`：这里有两类访问者 ——
+   *    挂起函数（`get`/`put`）与非挂起的 [peek]。若挂起路径用 `Mutex`、
+   *    peek 用别的锁，两者不互斥，`LinkedHashMap` 会被并发改结构（可能死循环）。
+   *    这些临界区极短（只做几次 map 操作），持锁期间不做 IO，所以用同步锁
+   *    不会阻塞调度器；真正的磁盘读写都在锁外进行。
+   */
+  private val lock = Any()
+
+  /** 磁盘落地目录。null = 未初始化（线程内存模式，单测与纯 JVM 场景仍可用）。 */
+  @Volatile
+  private var diskDir: File? = null
+
+  @Volatile
+  private var loadedFromDisk = false
+
+  private val json = Json { ignoreUnknownKeys = true }
+
+  /**
+   * 绑定磁盘目录并读取上次进程留下的结论（v352 预解析）。
+   *
+   * 为什么必须落盘：缓存原本只在内存里，App 被杀掉后重进，记忆仍然停在
+   * 「内容更新时间」这一档，于是每次冷启动都得重算一遍 —— 用户看到的就是
+   * 「进入媒体库先干等重组」。落盘后冷启动直接命中，网格一次成形。
+   *
+   * 幂等：重复调用只做一次读盘。读盘失败一律当作「没有缓存」，不影响排序可用性。
+   */
+  suspend fun attachDir(context: Context) {
+    if (loadedFromDisk) return
+    val dir = File(context.cacheDir, "folder_latest")
+    diskDir = dir
+    val restored = withContext(Dispatchers.IO) {
+      runCatching {
+        if (!dir.isDirectory) return@runCatching emptyList<Pair<String, Entry>>()
+        dir.listFiles()
+          .orEmpty()
+          .filter { it.isFile && it.name.endsWith(".json") }
+          .mapNotNull { file ->
+            runCatching {
+              val stored = json.decodeFromString<StoredOrder>(file.readText())
+              // 超出 TTL 的直接丢掉：那台服务器上的内容很可能已经变了
+              if (System.currentTimeMillis() - stored.at > TTL_MS) {
+                file.delete()
+                null
+              } else {
+                stored.key to Entry(stored.toOrder(), stored.at)
+              }
+            }.getOrNull()
+          }
+      }.getOrDefault(emptyList())
+    }
+    synchronized(lock) {
+      if (!loadedFromDisk) {
+        restored.forEach { (key, entry) -> if (!entries.containsKey(key)) entries[key] = entry }
+        loadedFromDisk = true
+      }
+    }
+  }
 
   fun key(
     serverId: Long,
@@ -262,7 +328,7 @@ internal object FolderLatestCache {
   suspend fun get(
     key: String,
     now: Long = System.currentTimeMillis(),
-  ): FolderLatestOrder? = mutex.withLock {
+  ): FolderLatestOrder? = synchronized(lock) {
     val entry = entries[key] ?: return null
     if (now - entry.at > TTL_MS) {
       entries.remove(key)
@@ -274,24 +340,58 @@ internal object FolderLatestCache {
     entry.order
   }
 
+  /**
+   * 同步只读（v354）：拿一份**当前内存里**仍新鲜的结论，供 Composable 初始化状态用。
+   *
+   * 为什么需要它：`get` 是 suspend 的，不能在 `remember { ... }` 里调用，于是
+   * 页面状态的初始值只能是 null —— 必须先按原顺序渲染一帧，等 effect 跑完才换成
+   * 排好的顺序。这种「先乱后好」在**从子目录返回**时尤其刺眼：返回会把上一层
+   * 的 Composable 销毁重建，`remember` 状态随之丢失，于是用户明明什么都没改，
+   * 却也看见列表重组了一次。
+   *
+   * 换成本方法做初始值后，重建的那一帧就已经是缓存里的顺序，全程零重排。
+   *
+   * ⚠️ 刻意**不做** LRU 重排、不删除过期项（那需要写操作，得持锁且可能要删盘）：
+   *    这里只读，过期的按「没有」返回，真正的清理仍由 [get] 负责。
+   */
+  fun peek(
+    key: String,
+    now: Long = System.currentTimeMillis(),
+  ): FolderLatestOrder? = synchronized(lock) {
+    val entry = entries[key] ?: return null
+    if (now - entry.at > TTL_MS) return null
+    entry.order
+  }
+
   suspend fun put(
     key: String,
     order: FolderLatestOrder,
     now: Long = System.currentTimeMillis(),
   ) {
-    mutex.withLock {
+    val evicted = ArrayList<Pair<String, Entry>>()
+    synchronized(lock) {
       entries.remove(key)
       entries[key] = Entry(order, now)
       while (entries.size > MAX_ENTRIES) {
         val oldest = entries.keys.firstOrNull() ?: break
-        entries.remove(oldest)
+        entries.remove(oldest)?.let { evicted += oldest to it }
       }
     }
+    // 内存里被淘汰的，磁盘上也要删掉，否则盘面文件无界增长
+    if (evicted.isNotEmpty()) {
+      withContext(Dispatchers.IO) {
+        evicted.forEach { (oldKey, _) -> runCatching { fileOf(oldKey)?.delete() } }
+      }
+    }
+    withContext(Dispatchers.IO) { persist(key, order, now) }
   }
 
   /** 整片作废（切服务器 / 用户手动刷新全部时用） */
   suspend fun clear() {
-    mutex.withLock { entries.clear() }
+    synchronized(lock) { entries.clear() }
+    withContext(Dispatchers.IO) {
+      runCatching { diskDir?.listFiles()?.forEach { it.delete() } }
+    }
   }
 
   /**
@@ -301,6 +401,137 @@ internal object FolderLatestCache {
    * （以及别的库）的结论一起丢掉 —— 那些结论一点没变，重算纯属浪费请求。
    */
   suspend fun invalidate(key: String) {
-    mutex.withLock { entries.remove(key) }
+    synchronized(lock) { entries.remove(key) }
+    withContext(Dispatchers.IO) { runCatching { fileOf(key)?.delete() } }
+  }
+
+  // ── 磁盘落地 ──────────────────────────────────────────────────────────
+
+  /**
+   * 结论 → 磁盘。只存 [orderedIds] + [newestByFolderId]：
+   * `complete` 是可重建的派生量（有时间的目录数 == orderedIds 里在 map 里的个数），
+   * 少存一个字段，就少一处可能与事实不一致的地方。
+   */
+  private fun persist(
+    key: String,
+    order: FolderLatestOrder,
+    at: Long,
+  ) {
+    val dir = diskDir ?: return
+    runCatching {
+      if (!dir.isDirectory && !dir.mkdirs()) return
+      val payload = StoredOrder(
+        key = key,
+        at = at,
+        orderedIds = order.orderedIds,
+        newestByFolderId = order.newestByFolderId,
+      )
+      // 临时文件 + rename：写到一半被杀掉也不会留下半截 JSON 让下次解析失败
+      val target = File(dir, fileNameOf(key))
+      val tmp = File(dir, "${fileNameOf(key)}.tmp")
+      tmp.writeText(json.encodeToString(payload))
+      if (!tmp.renameTo(target)) {
+        target.writeText(tmp.readText())
+        tmp.delete()
+      }
+    }
+  }
+
+  private fun fileOf(key: String): File? = diskDir?.let { File(it, fileNameOf(key)) }
+
+  /** key 里含 `|` 和 `/` 等路径敏感字符，统一换成 `_`；解析不依赖文件名，只依赖内容。 */
+  private fun fileNameOf(key: String): String = key.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".json"
+
+  @Serializable
+  private class StoredOrder(
+    val key: String,
+    val at: Long,
+    val orderedIds: List<String>,
+    val newestByFolderId: Map<String, String>,
+  ) {
+    fun toOrder(): FolderLatestOrder = FolderLatestOrder(
+      orderedIds = orderedIds,
+      newestByFolderId = newestByFolderId,
+      // 从磁盘读回来的都是「已跑完一轮」的结论（只有最终结论才写盘），
+      // 是否真的全覆盖由数据本身决定：有时间目录数 == 已排目录数即视为完整。
+      complete = orderedIds.size == newestByFolderId.size,
+    )
+  }
+}
+
+/**
+ * 预解析（v352）：在用户「切到内容更新时间档」之前，就把这一层目录的顺序算好。
+ *
+ * ## 为什么需要
+ * v350 的遮罩只是把「跳到底部 → 重组 → 回顶」藏起来，用户仍然要干等几秒。
+ * 用户真正想要的是「点下去就该是排好的」。既然这一档的记忆使很多用户会反复
+ * 进入同样的库，那就把计算提前到**用户还没点之前**：
+ *  · 冷启动读盘（[FolderLatestCache.attachDir]）—— 上次算的结论直接可用；
+ *  · 进库后先拉这一层的子目录清单，先看缓存；没缓存就在后台算一份存起来。
+ *
+ * ## 边界（不做的事）
+ *  · **不做全库扫描**：只预热「当前这一层的直接子目录」，与进库后真正要显示
+ *    的那一层完全一致。多预热一层等于替用户做了一次他可能根本不去的请求。
+ *  · **不与用户操作抢资源**：预热降级为 1 路串行（正常计算是 4 路并发），
+ *    且同样受 [FolderLatestPolicy.MAX_PAGES] / [MAX_IDLE_PAGES] 约束。
+ *  · **失败静默**：预热是纯优化，任何异常都不上报、不提示、不影响页面。
+ *  · **同一 key 正在预热时不重复发**：页面自己开始真算时会接管。
+ */
+internal object FolderLatestPrewarm {
+  /** 正在预热中的 key，避免「进库一次、列表变一次」重复发同一份请求。 */
+  private val running = HashSet<String>()
+  private val mutex = Mutex()
+
+  /**
+   * 判断这一层要不要预热：缓存里已有新鲜结论就不用。
+   *
+   * 单独抽出来，是为了让调用方能在**发起重量级网络请求之前**先廉价地判一次，
+   * 避免每次都白拉起一个协程。
+   */
+  suspend fun isNeeded(key: String): Boolean =
+    FolderLatestCache.get(key) == null && mutex.withLock { key !in running }
+
+  /**
+   * 在后台把这一层的顺序算好写进缓存。
+   *
+   * @param fetchChildren 拉这一层直接子目录（与页面里 `loadItemsResult` 同一口径）
+   * @param fetchPage 分页递归查询（与页面里传给 `computeFolderLatestOrder` 的一致）
+   */
+  suspend fun warm(
+    parentId: String,
+    key: String,
+    includeTypes: List<String>,
+    children: suspend () -> List<EmbyItem>,
+    fetchPage: suspend (
+      parentId: String,
+      startIndex: Int,
+      limit: Int,
+      includeTypes: List<String>,
+    ) -> EmbyItemsResult,
+  ) {
+    if (!isNeeded(key)) return
+    mutex.withLock {
+      if (key in running) return
+      running += key
+    }
+    try {
+      val folders = runCatching { children() }.getOrNull().orEmpty().filter { isFolderLikeForScan(it) }
+      if (folders.isEmpty()) return
+      // onPartial 传空：预热期间没有 UI 要刷新，逐层回调节省的是内存与线程切换，
+      // 唯一有价值的产出是最终结论。
+      val order = computeFolderLatestOrder(
+        parentId = parentId,
+        children = folders,
+        includeTypes = includeTypes,
+        onPartial = {},
+        fetchPage = fetchPage,
+      ) ?: return
+      // 并发里可能用户已经自己算完并存了一份（更新），不覆盖更晚的那份
+      if (FolderLatestCache.get(key) == null) FolderLatestCache.put(key, order)
+    } catch (_: Throwable) {
+      // 预热失败静默：下次进这一档，页面自己会按正常路径算
+    } finally {
+      mutex.withLock { running -= key }
+    }
   }
 }

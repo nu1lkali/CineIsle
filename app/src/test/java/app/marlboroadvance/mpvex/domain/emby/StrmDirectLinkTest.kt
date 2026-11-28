@@ -27,6 +27,15 @@ class StrmDirectLinkTest {
   }
 
   @Test
+  fun `条目路径或容器都能识别 strm`() {
+    assertTrue(StrmDirectLink.isStrmMedia("/media/movie.strm", "mp4"))
+    assertTrue(StrmDirectLink.isStrmMedia("/media/movie", "STRM"))
+    assertTrue(StrmDirectLink.isStrmMedia(null, " strm "))
+    assertFalse(StrmDirectLink.isStrmMedia("/media/movie.mkv", "mkv"))
+    assertFalse(StrmDirectLink.isStrmMedia(null, null))
+  }
+
+  @Test
   fun `只接受 http 和 https 直链`() {
     assertEquals(
       "https://cdn.example.com/a.mp4",

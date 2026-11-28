@@ -54,7 +54,7 @@ fun CineRoute(
 ) {
   when (route) {
     is EmbyDetailScreen -> CineTheme {
-      CineDetailScreen(itemId = route.itemId, title = route.title)
+      CineDetailScreen(itemId = route.itemId, title = route.title, libraryId = route.libraryId)
     }
 
     is EmbyLibraryScreen -> when {
@@ -76,6 +76,7 @@ fun CineRoute(
           // 库根名随路由继承（首页进库时为空 ⇒ 子页拿本页标题当根名）
           rootTitle = route.rootTitle,
           rootId = route.rootId,
+          playbackLibraryId = route.playbackLibraryId,
         )
       }
     }

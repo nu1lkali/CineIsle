@@ -44,6 +44,9 @@ sealed class AndroidPreference<T>(
     preferences.edit(action = write(key, value))
   }
 
+  override fun setBlocking(value: T): Boolean =
+    preferences.edit().apply(write(key, value)).commit()
+
   override fun isSet(): Boolean = preferences.contains(key)
 
   override fun delete() {

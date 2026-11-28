@@ -87,7 +87,10 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -105,8 +108,10 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image as ComposeImage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -139,6 +144,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyScanQuery
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.FolderLatestCache
 import app.marlboroadvance.mpvex.domain.emby.FolderLatestOrder
+import app.marlboroadvance.mpvex.domain.emby.FolderLatestPrewarm
 import app.marlboroadvance.mpvex.domain.emby.applyFolderLatestOrder
 import app.marlboroadvance.mpvex.domain.emby.computeFolderLatestOrder
 import app.marlboroadvance.mpvex.domain.emby.orderIds
@@ -191,9 +197,11 @@ import app.marlboroadvance.mpvex.ui.player.feed.VerticalFeedActivity
 import app.marlboroadvance.mpvex.ui.player.feed.feedItemOf
 import app.marlboroadvance.mpvex.ui.utils.LazyGridSideScrollbar
 import app.marlboroadvance.mpvex.ui.utils.LocalBackStack
+import app.marlboroadvance.mpvex.ui.utils.BackdropMaterial
 import app.marlboroadvance.mpvex.ui.utils.scrollToTop
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
@@ -344,6 +352,11 @@ data class EmbyLibraryScreen(
    *    （父级 Id / 磁盘目录末段 / 名字分段）才认得出，详见该函数。
    */
   val rootId: String? = null,
+  /**
+   * 起播时已经确认的媒体库 Id；与 [rootId] 分开，后者可能只是目录导航的兜底根。
+   * 历史 / 搜索 / 聚合等无法确认归属的入口保持 null，由播放器再行兜底判断。
+   */
+  val playbackLibraryId: String? = null,
 ) : Screen {
   // ⚠️ ExperimentalFoundationApi 是为了 `LazyGridScope.stickyHeader`（年份吸顶，清单 4.1）。
   // 它在 foundation 1.7 里从 Experimental 升为 Stable 了，但为兼容旧版本仍保留注解写法。
@@ -365,6 +378,7 @@ data class EmbyLibraryScreen(
      *    局部 `val` 与局部 `fun` 一样，先声明后使用。
      */
     val chainRootId: String = rootId?.takeIf { it.isNotBlank() } ?: libraryId
+    val launchLibraryId = playbackLibraryId?.takeIf { it.isNotBlank() }
 
     /**
      * 本页要往下传的「库根名」（见 [rootTitle]）。
@@ -445,6 +459,9 @@ data class EmbyLibraryScreen(
      *    这一档必须跟着会话一起回来（否则返回后结果集会换一批，看着像搜索被重置了）。
      */
     var searchLocalOnly by remember { mutableStateOf(restoredSearch?.localOnly ?: false) }
+    // 全服搜索与中文字幕扫描可能混入多个库；只有浏览态或「仅本目录」才能继承当前库归属。
+    val visibleScopeLibraryId =
+      if (searchQuery.isBlank() || searchLocalOnly) launchLibraryId else null
     // 上一次「由输入触发」的搜索词。用来区分这次重查是打字引起的（要 400ms 防抖），
     // 还是切排序 / 换类型筛选引起的（离散操作，立即重查）。
     var lastTypedQuery by remember { mutableStateOf("") }
@@ -687,6 +704,7 @@ data class EmbyLibraryScreen(
             // 不会因为服务端在祖先链上给了个短名就变样。
             rootTitle = chainRootTitle,
             rootId = chainRootId,
+            playbackLibraryId = launchLibraryId,
           ),
         )
       }
@@ -1914,17 +1932,77 @@ data class EmbyLibraryScreen(
     val folderLatestActive = sortBy == FOLDER_LATEST_ADDED_SORT &&
       category == EmbyCategory.FOLDER &&
       searchQuery.isBlank()
-    // 算出来的顺序（null = 还没算完 / 算失败，此时按原顺序显示）
-    var folderLatestOrder by remember(cacheKey) {
+    // 预解析的资格条件（v352）：比 [folderLatestActive] 宽一档 —— 不看当前是否已
+    // 选中这一档。理由是「用户接下来大概率会切到这一档」（它被记忆着，且很多用户
+    // 就是专门来看这个顺序的），提前算完写缓存，切过去时就是现成的结果。
+    // 搜索结果不预热：命中集与目录树无关，算出来的东西用不上。
+    val isPrewarmEligible = category == EmbyCategory.FOLDER && searchQuery.isBlank()
+    // 算出来的顺序（null = 还没算完 / 算失败，此时按原顺序显示）。
+    //
+    // ⚠️⚠️ 这几个状态**刻意不用 `remember(cacheKey)`**（v348 修复，用户反馈「首次进入
+    //    这一档要先手动下拉刷新一次才重组」）：
+    //    `cacheKey` 里还含 `sortOrder` / 筛选签名 / `categoryInherited` / 搜索词这些
+    //    **不改变 `folderLatestActive`** 的项。用 `remember(cacheKey)` 时，这些项一动
+    //    状态就被重置成 null（order=null ⇒ 退回原顺序），而下面那条 effect 的 key 没变
+    //    （`folderLatestActive` 仍 true）不会重算 ⇒ 排序静默关掉，User 只能靠下拉刷新
+    //    的 `folderLatestGeneration++` 把它重新激活。改为不带 key 的 remember，让状态
+    //    只由那条 effect 的 key 管；这些「无关」项变化时顺序保留，是正确的
+    //    （「最新添加」的结论本来就跟方向 / 筛选无关）。
+    var folderLatestOrder by remember {
       mutableStateOf<FolderLatestOrder?>(null)
+    }
+    // 首帧就用缓存里的顺序（v354）：从子目录返回时，本层的 Composable 会被销毁重建
+    // （`navigateToLibraryLevel` 截断栈 ⇒ 上一层重新进入），`remember` 状态全部丢失。
+    // 若初始值恒为 null，重建后会「先按原顺序画一帧 → effect 命中缓存 → 换成排好的顺序」，
+    // 用户明明没改任何东西，却看见列表重组了一次。
+    // 这里在第一次组合时同步查一次内存缓存（`peek` 是非挂起的），有就直接作为初始值；
+    // 没有（首次进入 / 冷启动未回填）退化为 null，走原有的异步路径。
+    var folderLatestSeedUsed by remember { mutableStateOf(false) }
+    if (!folderLatestSeedUsed) {
+      folderLatestSeedUsed = true
+      val current = server
+      if (current != null) {
+        folderLatestOrder = FolderLatestCache.peek(
+          FolderLatestCache.key(current.id, current.userId, libraryId),
+        )
+      }
     }
     // 手动重新计算的代际：下拉刷新时 +1，让下面的 LaunchedEffect 重跑一遍。
     // 不能只靠「清缓存」—— LaunchedEffect 的 key 不变它就不会重跑。
-    var folderLatestGeneration by remember(cacheKey) { mutableIntStateOf(0) }
+    var folderLatestGeneration by remember { mutableIntStateOf(0) }
     // 这一趟计算要不要**跳过缓存**（下拉刷新的那一趟要）。
     // 用一个可变标记而不是靠「缓存已清」来推断：清缓存是 suspend 的，
     // 而下拉刷新的回调不是协程 —— 只能在 LaunchedEffect 里清。
-    var folderLatestForce by remember(cacheKey) { mutableStateOf(false) }
+    var folderLatestForce by remember { mutableStateOf(false) }
+    // folderLatest 顺序落位后回顶的信号计数。见下面 folderLatestAppliedGeneration 的说明。
+    var folderLatestAppliedGeneration by remember { mutableIntStateOf(0) }
+
+    // ── 「内容更新时间」重排模糊遮罩（v350）──
+    // 这一档的顺序是异步算出来的：首屏按原顺序组合，`onPartial` 又多次改 displayItems，
+    // LazyGrid 按条目 key 重锚 ⇒ 用户能看到「原顺序 → 跳到底部 → 重组 → 回顶」的跳动。
+    // 重排期间盖一张静态模糊快照 + 提示，落位后淡出，把中间态藏起来。模糊算法复用
+    // 媒体实验室小窗预览那套（ui/utils/BackdropBlur.kt），不依赖 RenderEffect，全版本可用。
+    var reorderRunning by remember { mutableStateOf(false) }
+    var showReorderScrim by remember { mutableStateOf(false) }
+    var scrimBackdrop by remember { mutableStateOf<ImageBitmap?>(null) }
+    // 遮罩底图的取色依据（v353）：磨砂材质由主题色程序化生成，跟随深浅色主题。
+    val scheme = MaterialTheme.colorScheme
+    val isDark = scheme.background.luminance() < 0.5f
+
+    // folderLatest 顺序落位后请求回顶一次。
+    // ⚠️ 每次落位都计数（不再只在下拉刷新时）—— 这一档的顺序是异步算出来的：
+    //    首次进入 / 切档时首屏先按原顺序组合，LazyGrid 记下锚点 key，随后重排会按
+    //    key 把该锚点重新定位到它在新顺序里的位置 ⇒ 表现就是「进入库后停在列表底部」
+    //    （用户反馈「正常看东西也不是从最后面看起」）；下拉刷新后不回顶也是同一根因。
+    //    所以只要这一档的顺序落位了（含缓存命中 / 拉不到目录 / 算失败提前返回），
+    //    就计数一次，交给下面那条 effect 在重组完成后统一回顶。
+    //    `onPartial` 增量 publish 不调这里（只认最终结论那一次），避免逐层回顶。
+    fun consumeFolderLatestScrollRequest() {
+      folderLatestAppliedGeneration++
+      // 这一轮顺序已落位（缓存命中 / 拉不到 / 算失败 / 最终成功都算）⇒ 结束遮罩。
+      // 遮罩的最短展示时长与淡出交给下面那条 LaunchedEffect(reorderRunning) 处理。
+      reorderRunning = false
+    }
 
     // 按「文件夹内最新入库时间」重排。
     //
@@ -1964,13 +2042,66 @@ data class EmbyLibraryScreen(
     //
     // ⚠️ 失败一律**静默退回原顺序**：排序是便利功能，不该因为它拿不到数据
     //    就让用户看见一个错误页或空列表。
+    // ── 预解析（v352）：在用户切到这一档之前就把顺序算好 ──
+    //
+    // 用户反馈「切到内容更新时间要干等重组」。既然这一档的选择会被记忆、很多
+    // 用户会反复进同一批库，就可以把计算提前：冷启动已由 [FolderLatestCache.attachDir]
+    // 读盘解决；这里补的是「热路径」——进库后立刻在后台把这一层算好写缓存。
+    //
+    // ⚠️ 三个边界：
+    //  ① 只在「文件夹」分类下预热（其他档这个排序没有语义）；
+    //  ② 不区分当前是否已选中这一档 —— 用户常在两三档之间来回切，提前算好才有意义；
+    //  ③ 缓存已有新鲜结论时 isNeeded 直接返回，不产生任何请求。
+    // 与下面那条「真计算」effect 的 key 刻意不同：它不受 folderLatestGeneration（下拉刷新）影响，
+    // 也不因切档而取消 —— 预热就该在后台安静跑完。
+    LaunchedEffect(libraryId, category, collectionType, server?.id, isPrewarmEligible) {
+      if (!isPrewarmEligible) return@LaunchedEffect
+      val current = server ?: return@LaunchedEffect
+      val warmKey = FolderLatestCache.key(current.id, current.userId, libraryId)
+      // 廉价前置判断，避免每次都白拉起一个协程去请求
+      if (!FolderLatestPrewarm.isNeeded(warmKey)) return@LaunchedEffect
+      FolderLatestPrewarm.warm(
+        parentId = libraryId,
+        key = warmKey,
+        includeTypes = FOLDER_LATEST_MEDIA_TYPES,
+        children = {
+          viewModel.loadItemsResult(
+            server = current,
+            parentId = libraryId,
+            includeItemTypes = EmbyCategory.FOLDER.itemTypes,
+            startIndex = 0,
+            limit = FOLDER_LAYER_PAGE_SIZE,
+            recursive = false,
+            fields = FOLDER_LAYER_FIELDS,
+          ).Items.orEmpty()
+        },
+      ) { parentId, startIndex, limit, types ->
+        viewModel.loadItemsResult(
+          server = current,
+          parentId = parentId,
+          includeItemTypes = types.takeIf { it.isNotEmpty() },
+          sortBy = "DateCreated",
+          sortOrder = "Descending",
+          startIndex = startIndex,
+          limit = limit,
+          recursive = true,
+          fields = FOLDER_LATEST_FIELDS,
+        )
+      }
+    }
+
     LaunchedEffect(folderLatestActive, libraryId, collectionType, server?.id, folderLatestGeneration) {
       if (!folderLatestActive) {
         // 换走这一档时把结论清掉：下次切回来要重新确认，而不是拿旧顺序糊上去
         if (folderLatestOrder != null) folderLatestOrder = null
+        // 若上一轮重排被切档打断，遮罩也必须收掉，不能留在屏幕上。
+        reorderRunning = false
         return@LaunchedEffect
       }
       val current = server ?: return@LaunchedEffect
+      // 遮罩从「进入真计算」这一刻起算：延迟阈值内若已完成（缓存命中 / 空目录）
+      // 就根本不显示，避免快路径闪一下。真正的多轮重排才会盖住中间态。
+      reorderRunning = true
 
       val cacheKeyHere = FolderLatestCache.key(current.id, current.userId, libraryId)
       // 先读缓存：命中就地生效，不让网格先闪一遍原顺序。
@@ -1986,7 +2117,17 @@ data class EmbyLibraryScreen(
       } else {
         val cached = FolderLatestCache.get(cacheKeyHere)
         if (cached != null) {
+          // v354：若初始值已经从缓存种下、且结论完全一致，顺序根本没有变化 ——
+          // 此时不该再发回顶信号。否则从子目录返回（Composable 重建）会平白
+          // 滚一次列表，配合重组看起来就像「又整理了一遍」。
+          val unchanged = folderLatestOrder == cached
           folderLatestOrder = cached
+          if (unchanged) {
+            // 顺序没变：只结束遮罩，不回顶。
+            reorderRunning = false
+          } else {
+            consumeFolderLatestScrollRequest()
+          }
           return@LaunchedEffect
         }
       }
@@ -2004,7 +2145,10 @@ data class EmbyLibraryScreen(
           fields = FOLDER_LAYER_FIELDS,
         )
       }.getOrNull()?.Items.orEmpty().filter { isFolderLike(it) }
-      if (folders.isEmpty()) return@LaunchedEffect
+      if (folders.isEmpty()) {
+        consumeFolderLatestScrollRequest()
+        return@LaunchedEffect
+      }
 
       // 递归查询要纳入的条目类型：**不看库类型，把「能算出时间的媒体」全拉回来**。
       //
@@ -2071,10 +2215,67 @@ data class EmbyLibraryScreen(
           //    目录类条目自己不会被误算 —— `resolveFolderId` 里有一道类型闸。
           fields = FOLDER_LATEST_FIELDS,
         )
-      } ?: return@LaunchedEffect
+      } ?: run {
+        // 算失败退回原顺序：这次刷新请求也要归顶，不能留到下次误触发。
+        consumeFolderLatestScrollRequest()
+        return@LaunchedEffect
+      }
 
       folderLatestOrder = order
       FolderLatestCache.put(cacheKeyHere, order)
+      // 最终顺序落位：若这次重算带着「回顶请求」（下拉刷新），计数 +1，
+      // 交给下面那条 effect 在重组完成后回顶。见 [folderLatestAppliedGeneration]。
+      consumeFolderLatestScrollRequest()
+    }
+
+    // 「内容更新时间」档可靠回顶（v348 建，v349 扩展到首次进入 / 切档）。
+    //
+    // 根因：这一档的顺序是**异步**算出来的 —— 首屏先按原顺序组合，LazyGrid 记下
+    // 锚点 key，随后 `onPartial` / 最终结论改 [displayItems] 时按条目 key 把「首屏
+    // 那条」重新锚定到它在新顺序里的位置 ⇒ 进入库后停在列表底部 / 下拉刷新后不回顶。
+    // 和项目里随机排序刷新回顶是同一类问题（见 ui/utils/ScrollToTop.kt 的 KDoc）。
+    // 最初只在下拉刷新时计数，用户随后反馈「首次进入自动落这一档时也停在底部」，
+    // 遂改为每次落位都计数。
+    //
+    // 修法照项目统一约定：**数据赋值 → 信号计数 +1 → UI 收到信号再回顶**。
+    // 只认「最终结论落位」那一次（不是 `onPartial` 的每一层），且只加一次计数，
+    // 与 LaunchedEffect(cacheKey) 那条「切档即时回顶」不打架：那条太早、会被重排
+    // 抵掉，这一条才是真正生效的归位。
+    LaunchedEffect(folderLatestAppliedGeneration) {
+      if (folderLatestAppliedGeneration > 0) gridState.scrollToTop()
+    }
+
+    // 「内容更新时间」重排模糊遮罩（v350）：
+    //  · 开始重排后延迟 140ms 才显示 —— 缓存命中 / 空目录这类快路径在这期间就落位了，
+    //    reorderRunning 会被翻回 false，遮罩根本不出现，避免闪一下。
+    //  · 真正要跑网络递归的重排才会盖住画面，期间用户看到的是一张静态模糊快照 + 提示，
+    //    看不到「原顺序 → 跳到底部 → 重组 → 回顶」的中间态。
+    //  · 落位后最短展示 280ms 再淡出（防止一闪），淡出动画 220ms 结束后才释放位图。
+    LaunchedEffect(reorderRunning) {
+      if (!reorderRunning) {
+        if (showReorderScrim) {
+          delay(280)
+          showReorderScrim = false
+          delay(240)
+          scrimBackdrop = null
+        }
+        return@LaunchedEffect
+      }
+      delay(140)
+      if (!reorderRunning) return@LaunchedEffect
+      // v353：底图改用与页面状态无关的「磨砂材质」，不再截图。
+      // 截图必然发生在某个不确定的时刻，列表当时可能正在重组 / 惯性滑动，
+      // 于是遮罩会定格一张过渡中的画面 —— 这就是用户连续两次反馈的「中间态」。
+      // 底图由主题色程序化生成（后台算、按主题缓存），与列表内容完全无关。
+      scrimBackdrop = withContext(Dispatchers.Default) {
+        BackdropMaterial.get(
+          primary = scheme.primary,
+          secondary = scheme.secondary,
+          tertiary = scheme.tertiary,
+          dark = isDark,
+        )
+      }
+      showReorderScrim = true
     }
 
     /**
@@ -2402,7 +2603,7 @@ data class EmbyLibraryScreen(
         // 随机列表里可能混着看过的剧，切过去若恢复进度会直接跳到片尾，所以每个视频都从头放。
         // 走 launchRandomPlayback 而不是 launchPlaylist：起播前会用硬预算替首条探一次直链，
         // 否则 strm 条目会在服务端 probe 上干等（见该方法注释）。
-        viewModel.launchRandomPlayback(current, random)
+        viewModel.launchRandomPlayback(current, random, libraryId = visibleScopeLibraryId)
         } finally {
           // 起播探测也在这一层里（launchRandomPlayback 是挂起的），所以转圈一直转到
           // 播放器真要起来为止 —— 动画消失与画面切换是同一瞬间，中间不再有空窗期。
@@ -2422,6 +2623,7 @@ data class EmbyLibraryScreen(
     var gachaOpen by remember { mutableStateOf(false) }
     var gachaCards by remember { mutableStateOf<List<GachaCard>>(emptyList()) }
     var gachaRollId by remember { mutableIntStateOf(0) }
+    var gachaPlaybackLibraryId by remember { mutableStateOf<String?>(null) }
     var gachaRolling by remember { mutableStateOf(false) }
     // 上一批：抽完关掉就再也看不到的那些卡（v202）。
     // ⚠️ 存的是**上一批**，不是当前这一批 —— 当前这一批就在 gachaCards 里，
@@ -2429,6 +2631,7 @@ data class EmbyLibraryScreen(
     //    重抽（rollId 自增）成功后才把它顶掉，仍能按 ← → 来回看。
     var gachaPrevCards by remember { mutableStateOf<List<GachaCard>>(emptyList()) }
     var gachaPrevRollId by remember { mutableIntStateOf(0) }
+    var gachaPrevPlaybackLibraryId by remember { mutableStateOf<String?>(null) }
     /**
      * 滚动卡带的陪跑卡（单抽 + 选了滚动揭晓时才有值）。
      *
@@ -2453,6 +2656,7 @@ data class EmbyLibraryScreen(
     fun rollGacha(excludeId: String? = null) {
       // 取数期间连点没有意义：多打一次网络，还会把刚起的动画重启掉
       if (gachaRolling) return
+      val rollLibraryId = visibleScopeLibraryId
       gachaRolling = true
       // 立刻清空上一批卡 → 界面马上回到「法阵」态。重抽时若等网络回来才动，
       // 那半秒到一秒的空窗看着就像「点了没反应」。
@@ -2550,8 +2754,10 @@ data class EmbyLibraryScreen(
           if (gachaCards.isNotEmpty()) {
             gachaPrevCards = gachaCards
             gachaPrevRollId = gachaRollId
+            gachaPrevPlaybackLibraryId = gachaPlaybackLibraryId
           }
           gachaCards = cards
+          gachaPlaybackLibraryId = rollLibraryId
           gachaRollId++
         } catch (e: CancellationException) {
           throw e
@@ -2590,7 +2796,11 @@ data class EmbyLibraryScreen(
       scope.launch {
         try {
           val current = viewModel.currentServerOrAwait() ?: return@launch
-          viewModel.launchRandomPlaybackAwait(current, batch.map { it.item })
+          viewModel.launchRandomPlaybackAwait(
+            current,
+            batch.map { it.item },
+            libraryId = gachaPlaybackLibraryId,
+          )
         } finally {
           randomLaunching = false
         }
@@ -2848,6 +3058,7 @@ data class EmbyLibraryScreen(
                 val prev = gachaPrevCards
                 if (prev.isEmpty()) return@IconButton
                 gachaCards = prev
+                gachaPlaybackLibraryId = gachaPrevPlaybackLibraryId
                 // ⚠️ rollId 必须换成**那一批自己的**：沿用当前值的话上次动画的
                 //    LaunchedEffect 因为 key 没变而不会重播，画面会停在上一批的终态
                 //    （或者更糟 —— 直接闪成空法阵）。
@@ -3436,6 +3647,8 @@ data class EmbyLibraryScreen(
             // 只在当前确实用着这一档时才触发 —— 别的档位去作废它没有意义。
             if (folderLatestActive) {
               folderLatestForce = true
+              // generation++ 让计算 effect 重跑；顺序落位后会自动计数回顶
+              // （见 folderLatestAppliedGeneration，首次进入 / 切档也走同一条）。
               folderLatestGeneration++
             }
             load(reset = true)
@@ -3565,6 +3778,7 @@ data class EmbyLibraryScreen(
                   // 库根名顺着下钻链传下去
                   libraryRootTitle = chainRootTitle,
                   libraryRootId = chainRootId,
+                  playbackLibraryId = launchLibraryId,
                 )
               }
             },
@@ -3685,6 +3899,7 @@ data class EmbyLibraryScreen(
                         parentLibraryId = libraryId,
                         libraryRootTitle = chainRootTitle,
                         libraryRootId = chainRootId,
+                        playbackLibraryId = visibleScopeLibraryId,
                       )
                     },
                     onLongClick = { offset ->
@@ -3767,6 +3982,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
               parentLibraryId = libraryId,
               libraryRootTitle = chainRootTitle,
               libraryRootId = chainRootId,
+              playbackLibraryId = visibleScopeLibraryId,
             )
           },
     onLongClick = { offset ->
@@ -3813,6 +4029,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
                           parentLibraryId = libraryId,
                           libraryRootTitle = chainRootTitle,
                           libraryRootId = chainRootId,
+                          playbackLibraryId = visibleScopeLibraryId,
                         )
                       },
                       onLongClick = { offset ->
@@ -3932,6 +4149,40 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
         )
       }
 
+      // ── 「内容更新时间」重排模糊遮罩（v350）──
+      // 盖住「原顺序 → 跳到底部 → 重组 → 回顶」的中间态，落位后淡出。
+      // 与随机抽卡 / 长按菜单同处 content 的 BoxScope，叠在网格之上但不盖顶栏。
+      AnimatedVisibility(
+        visible = showReorderScrim,
+        modifier = Modifier.fillMaxSize(),
+        enter = fadeIn(tween(180)),
+        exit = fadeOut(tween(220)),
+      ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+          scrimBackdrop?.let { image ->
+            ComposeImage(
+              bitmap = image,
+              contentDescription = null,
+              modifier = Modifier.fillMaxSize(),
+              contentScale = ContentScale.Crop,
+            )
+          }
+          Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)))
+          Column(
+            modifier = Modifier.align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally,
+          ) {
+            CircularProgressIndicator(color = Color.White)
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+              "正在整理内容更新时间…",
+              style = MaterialTheme.typography.bodyMedium,
+              color = Color.White,
+            )
+          }
+        }
+      }
+
       // ── 随机抽卡：全屏揭晓层（v194，v197 起支持多抽）──
       // 用 Dialog（而不是在本页里叠一层 Box）是为了天然盖住顶栏 / 工具行 / 网格，
       // 返回键也天然走 onDismiss。取数中 cards 为空，那一层自己播「准备中」的法阵。
@@ -3955,6 +4206,7 @@ if (viewMode == EmbyLibraryViewMode.YEAR) {
             if (gachaCards.isNotEmpty()) {
               gachaPrevCards = gachaCards
               gachaPrevRollId = gachaRollId
+              gachaPrevPlaybackLibraryId = gachaPlaybackLibraryId
             }
           },
           // 多抽点开某一张时才补简介：10 条详情 = 10 次 /Items，不该在揭晓前打。
@@ -5454,7 +5706,7 @@ private fun embyContainerTypeLabel(type: String): String? = when (type) {
 /**
  * 单击媒体项：容器类继续下钻，其余打开详情页。
  *
- * - 影视剧（Series）→ 季列表
+ * - 影视剧（Series）→ 剧集详情页，直接按季选集
  * - 季（Season）→ 该季的剧集列表
  * - 其它（电影 / 单集 / 视频）→ 详情页，播放由详情页发起
  *
@@ -5505,6 +5757,8 @@ private fun openItem(
   libraryRootTitle: String? = null,
   /** 与 [libraryRootTitle] 成对：那个名字属于哪一层（库根 Id） */
   libraryRootId: String? = null,
+  /** 已确认的媒体库归属；不拿导航根 Id 猜测 */
+  playbackLibraryId: String? = null,
 ) {
   val id = item.Id
   if (id.isNullOrBlank() || id.contains("://")) {
@@ -5514,14 +5768,10 @@ private fun openItem(
   runCatching {
     when (item.Type) {
       "Series" -> backStack.add(
-        EmbyLibraryScreen(
-          libraryId = id,
+        EmbyDetailScreen(
+          itemId = id,
           title = item.Name ?: "",
-          collectionType = item.CollectionType,
-          includeItemTypes = listOf("Season"),
-          // 剧集 / 季也在同一个库里，根名照传（层级导航即便当前档位不显示，后续切过来也对）
-          rootTitle = libraryRootTitle,
-          rootId = libraryRootId,
+          libraryId = playbackLibraryId,
         ),
       )
 
@@ -5532,6 +5782,7 @@ private fun openItem(
           includeItemTypes = listOf("Episode"),
           rootTitle = libraryRootTitle,
           rootId = libraryRootId,
+          playbackLibraryId = playbackLibraryId,
         ),
       )
 
@@ -5566,6 +5817,7 @@ private fun openItem(
           // 库根名继续往下传：反正是同一个库，根名不该在中途换一个说法
           rootTitle = libraryRootTitle,
           rootId = libraryRootId,
+          playbackLibraryId = playbackLibraryId,
         ),
       )
 
@@ -5583,6 +5835,7 @@ private fun openItem(
           // 同样是同一个库里的容器（合集 / 顶层视图），根名照传
           rootTitle = libraryRootTitle,
           rootId = libraryRootId,
+          playbackLibraryId = playbackLibraryId,
         ),
       )
 
@@ -5606,7 +5859,9 @@ private fun openItem(
         ),
       )
 
-      else -> backStack.add(EmbyDetailScreen(itemId = id, title = item.Name ?: ""))
+      else -> backStack.add(
+        EmbyDetailScreen(itemId = id, title = item.Name ?: "", libraryId = playbackLibraryId),
+      )
     }
   }.onFailure {
     Toast.makeText(
@@ -6078,7 +6333,7 @@ private val SORT_OPTIONS = listOf(
   "DateCreated" to "加入时间",
   // 位置紧跟在「加入时间」后面：两者语义相邻（一个是条目自己的入库时间，
   // 一个是文件夹内媒体的入库时间），用户找它时会先看这一片。
-  FOLDER_LATEST_ADDED_SORT to "文件夹最新添加",
+  FOLDER_LATEST_ADDED_SORT to "内容更新时间",
   "DatePlayed" to "播放时间",
   "ProductionYear" to "发行年份",
   "PremiereDate" to "首播日期",

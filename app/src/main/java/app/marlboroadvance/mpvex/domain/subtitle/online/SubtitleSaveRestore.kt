@@ -86,7 +86,7 @@ object SubtitleSaveRestore {
         val entries = SubtitleSaveManifest.read(root)
         // 清单缺失（旧版本下载、手工拷入）时不能直接返回空计划：仍要统计目录里有多少
         // 字幕未被覆盖，UI 才能据此提示「这些文件只能按影片在字幕实验室里导入」。
-        val unlisted = countUnlisted(root, entries)
+        val unlisted = countUnlisted(root, entries, library)
 
         if (entries.isEmpty()) {
           return@runCatching Plan(unlistedFiles = unlisted)
@@ -99,6 +99,9 @@ object SubtitleSaveRestore {
         var missingFiles = 0
         val items = ArrayList<Item>()
         entries.forEach { entry ->
+          if (library.isIgnored(entry.serverKey, entry.itemId, entry.originId, entry.originUrl, entry.fileName)) {
+            return@forEach
+          }
           if (entry.id in existing) {
             alreadyPresent++
             return@forEach
@@ -147,6 +150,7 @@ object SubtitleSaveRestore {
   private fun countUnlisted(
     root: SaveNode,
     entries: List<SubtitleSaveManifest.Entry>,
+    library: OnlineSubtitleLibrary,
   ): Int {
     val known = HashSet<String>(entries.size * 2)
     entries.forEach { entry ->
@@ -167,6 +171,9 @@ object SubtitleSaveRestore {
           return@forEach
         }
         if (!SubtitleFileTypes.isSubtitle(name)) return@forEach
+        if (library.isExternalIgnored(child.uri.path.takeIf { child.uri.scheme == "file" }, child.uri.toString())) {
+          return@forEach
+        }
         visited++
         if ("$prefix$name" !in known) unlisted++
       }
@@ -194,6 +201,10 @@ object SubtitleSaveRestore {
       var failed = 0
       var bytes = 0L
       targets.forEach { item ->
+        val entry = item.entry
+        if (library.isIgnored(entry.serverKey, entry.itemId, entry.originId, entry.originUrl, entry.fileName)) {
+          return@forEach
+        }
         val written = runCatching { restoreOne(library, item) }.getOrDefault(0L)
         if (written > 0L) {
           restored++

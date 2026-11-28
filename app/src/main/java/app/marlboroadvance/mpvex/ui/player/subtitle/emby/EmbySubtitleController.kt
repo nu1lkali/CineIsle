@@ -11,6 +11,8 @@ import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleChoices
 import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleSelector
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleInfo
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSelection
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstoneStore
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstones
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Emby 字幕的**控制器**：发现 → 选择 → 取字节 → 落缓存。
@@ -52,6 +55,7 @@ class EmbySubtitleController(
 
   data class State(
     val phase: Phase = Phase.IDLE,
+    val serverId: String? = null,
     val itemId: String? = null,
     val mediaSourceId: String? = null,
     /** Emby 认得的字幕（已按服务端顺序） */
@@ -79,19 +83,36 @@ class EmbySubtitleController(
    * 拿到旧令牌的回调**只写日志，不写状态**；已写好的缓存文件照旧留下（按 ItemId 分键，
    * 下次播那一集直接命中，不是浪费）。
    */
-  private var generation = 0
+  private val generation = AtomicInteger(0)
 
   private val cache = EmbySubtitleCache(context)
+  private val tombstones = SubtitleTombstoneStore(subtitlesPreferences)
 
   /** 换片 / 退出时清空。**必须调**，否则上一集的字幕会挂到新一集上。 */
   fun reset() {
-    generation++
+    generation.incrementAndGet()
     _state.value = State()
   }
 
   /** 只在这一轮加载仍然有效时写状态 */
   private inline fun updateIfCurrent(gen: Int, block: (State) -> State) {
-    if (gen == generation) _state.update(block)
+    if (gen == generation.get()) _state.update(block)
+  }
+
+  private inline fun updateIfCurrentTarget(
+    gen: Int,
+    serverId: String,
+    itemId: String,
+    mediaSourceId: String?,
+    block: (State) -> State,
+  ) {
+    updateIfCurrent(gen) { state ->
+      if (state.serverId == serverId && state.itemId == itemId && state.mediaSourceId == mediaSourceId) {
+        block(state)
+      } else {
+        state
+      }
+    }
   }
 
   fun markMounted(key: String?) {
@@ -112,10 +133,11 @@ class EmbySubtitleController(
     itemId: String,
     mediaSourceId: String?,
   ): SubtitleSelection = withContext(Dispatchers.IO) {
-    val gen = generation
+    val gen = generation.get()
     updateIfCurrent(gen) {
       it.copy(
         phase = Phase.DISCOVERING,
+        serverId = server.id.toString(),
         itemId = itemId,
         mediaSourceId = mediaSourceId,
         subtitles = emptyList(),
@@ -139,16 +161,25 @@ class EmbySubtitleController(
 
     logDiscovery(itemId, mediaSourceId, discovery.subtitles, discovery.totalStreams, discovery.error)
 
+    val resolvedMediaSourceId = discovery.mediaSourceId ?: mediaSourceId
+    val serverId = server.id.toString()
+    val visible = SubtitleTombstones.filterEmby(discovery.subtitles, tombstones.snapshot()) { subtitle ->
+      SubtitleTombstones.embyKey(
+        serverId = serverId,
+        itemId = itemId,
+        subtitle = normalizedInfo(resolvedMediaSourceId, subtitle),
+      )
+    }
     val preferred = preferredLanguageList()
     val allowed = allowedLanguageList()
     val localeHints = localeLanguageHints(preferred, allowed)
     // 这条日志是「为什么自动挂了/没挂」的第一现场：语言偏好整条链路只有这里能看到
     Log.i(TAG, "语言偏好：首选=$preferred 允许=$allowed 系统兜底=$localeHints")
     val selection = EmbySubtitleSelector.select(
-      subtitles = discovery.subtitles,
+      subtitles = visible,
       preferredLanguages = preferred,
       allowedLanguages = allowed,
-      rememberedKey = rememberedKey(itemId),
+      rememberedKey = rememberedKey(serverId, itemId, resolvedMediaSourceId),
       allowEmbyDefault = subtitlesPreferences.embyFollowDefault.get(),
       localeLanguages = localeHints,
     )
@@ -156,10 +187,11 @@ class EmbySubtitleController(
 
     updateIfCurrent(gen) {
       it.copy(
-        phase = if (discovery.error != null && discovery.subtitles.isEmpty()) Phase.FAILED else Phase.READY,
+        phase = if (discovery.error != null && visible.isEmpty()) Phase.FAILED else Phase.READY,
+        serverId = serverId,
         itemId = itemId,
-        mediaSourceId = discovery.mediaSourceId ?: mediaSourceId,
-        subtitles = discovery.subtitles,
+        mediaSourceId = resolvedMediaSourceId,
+        subtitles = visible,
         selection = selection,
         error = discovery.error,
       )
@@ -184,8 +216,14 @@ class EmbySubtitleController(
     forceRefresh: Boolean = false,
   ): File? = withContext(Dispatchers.IO) {
     // 这一轮加载的令牌：下载可能跨过一次换集（用户直接点了下一集），回来时状态不能乱写
-    val gen = generation
-    if (subtitle.externalRequestFormats.isEmpty()) {
+    val gen = generation.get()
+    val serverId = server.id.toString()
+    val info = normalizedInfo(mediaSourceId, subtitle)
+    if (isIgnored(serverId, itemId, info)) {
+      Log.i(TAG, "字幕已删除，拒绝再次取字节：${info.describe()}")
+      return@withContext null
+    }
+    if (info.externalRequestFormats.isEmpty()) {
       val reason = subtitle.unsupportedReason ?: "这条字幕没有可下载的格式"
       Log.w(TAG, "字幕不可下载：${subtitle.describe()} —— $reason")
       updateIfCurrent(gen) { it.copy(notice = reason) }
@@ -193,39 +231,50 @@ class EmbySubtitleController(
     }
 
     if (!forceRefresh) {
-      cache.cached(itemId, subtitle)?.let { file ->
-        Log.i(TAG, "字幕缓存命中：${subtitle.describe()} ${file.length()} B")
+      cache.cached(serverId, itemId, info)?.let { file ->
+        Log.i(TAG, "字幕缓存命中：${info.describe()} ${file.length()} B")
         return@withContext file
       }
     }
 
-    updateIfCurrent(gen) { it.copy(phase = Phase.DOWNLOADING, downloadingKey = subtitle.key, notice = null) }
+    updateIfCurrent(gen) { it.copy(phase = Phase.DOWNLOADING, downloadingKey = info.key, notice = null) }
     // ⚠️ 日志只打路径，**绝不打 URL 的 query**（里面有 api_key）
     Log.i(
       TAG,
-      "字幕下载开始：item=$itemId ms=${mediaSourceId ?: subtitle.mediaSourceId} " +
-        "index=${subtitle.streamIndex} 渠道=${subtitle.sourceType} 候选=${subtitle.externalRequestFormats}",
+      "字幕下载开始：item=$itemId ms=${info.mediaSourceId} " +
+        "index=${info.streamIndex} 渠道=${info.sourceType} 候选=${info.externalRequestFormats}",
     )
-    val result = EmbySubtitleFetcher.fetch(server, itemId, mediaSourceId, subtitle)
+    val result = EmbySubtitleFetcher.fetch(server, itemId, mediaSourceId, info)
     updateIfCurrent(gen) { it.copy(downloadingKey = null, phase = Phase.READY) }
 
     when (result) {
       is SubtitleFetchResult.Ok -> {
-        if (subtitle.isTextSubtitle && !EmbySubtitleFetcher.looksLikeText(result.bytes)) {
-          Log.w(TAG, "字幕内容不是文本（含 NUL 字节）：${subtitle.describe()}")
-          cache.invalidate(itemId, subtitle)
+        if (info.isTextSubtitle && !EmbySubtitleFetcher.looksLikeText(result.bytes)) {
+          Log.w(TAG, "字幕内容不是文本（含 NUL 字节）：${info.describe()}")
+          cache.invalidate(serverId, itemId, info)
           updateIfCurrent(gen) { it.copy(notice = "字幕文件内容异常，已忽略") }
           return@withContext null
         }
-        val file = cache.store(itemId, subtitle, result.bytes, result.format)
+        // 下载期间用户可能已经删除：绝不能把刚下载的文件重新塞进缓存 / 挂载流程。
+        if (isIgnored(serverId, itemId, info)) {
+          runCatching { cache.invalidate(serverId, itemId, info) }
+          updateIfCurrent(gen) { it.copy(notice = "这条字幕已被删除") }
+          return@withContext null
+        }
+        val file = cache.store(serverId, itemId, info, result.bytes, result.format)
         Log.i(
           TAG,
-          "字幕下载完成：${subtitle.describe()} 格式=${result.format} " +
+          "字幕下载完成：${info.describe()} 格式=${result.format} " +
             "降级=${result.degraded} 渠道=${if (result.viaDeliveryUrl) "DeliveryUrl" else "Stream"} " +
             "大小=${result.sizeBytes}B 耗时=${result.elapsedMs}ms 落盘=${file?.name ?: "失败"}",
         )
         if (file == null) {
           updateIfCurrent(gen) { it.copy(notice = "字幕缓存写入失败") }
+          return@withContext null
+        }
+        if (isIgnored(serverId, itemId, info)) {
+          runCatching { cache.invalidate(serverId, itemId, info) }
+          updateIfCurrent(gen) { it.copy(notice = "这条字幕已被删除") }
           return@withContext null
         }
         if (result.degraded) {
@@ -235,9 +284,9 @@ class EmbySubtitleController(
         file
       }
       is SubtitleFetchResult.Failed -> {
-        Log.w(TAG, "字幕下载失败：${subtitle.describe()} 原因=${result.reason} code=${result.httpCode}")
+        Log.w(TAG, "字幕下载失败：${info.describe()} 原因=${result.reason} code=${result.httpCode}")
         // 404 = 这条流已经不存在（服务端删了/换源了），旧缓存必须清掉
-        if (result.httpCode == 404) cache.invalidate(itemId, subtitle)
+        if (result.httpCode == 404) cache.invalidate(serverId, itemId, info)
         updateIfCurrent(gen) { it.copy(notice = result.reason) }
         null
       }
@@ -254,18 +303,100 @@ class EmbySubtitleController(
    * 解析 / 拼装都走 [EmbySubtitleChoices]：详情页读的是同一份存储，
    * 两处各写一套格式必然对不上（见那个 object 的注释）。
    */
-  fun rememberChoice(itemId: String, subtitle: SubtitleInfo?) {
+  fun rememberChoice(
+    serverId: String,
+    itemId: String,
+    mediaSourceId: String?,
+    subtitle: SubtitleInfo?,
+  ) {
+    val info = subtitle?.let { normalizedInfo(mediaSourceId, it) }
+    if (info != null && isIgnored(serverId, itemId, info)) return
     val current = subtitlesPreferences.embySubtitleChoices.get()
     subtitlesPreferences.embySubtitleChoices.set(
-      EmbySubtitleChoices.withChoice(current, itemId, subtitle?.key),
+      EmbySubtitleChoices.withChoice(current, itemId, info?.key),
     )
   }
 
-  fun rememberedKey(itemId: String): String? =
-    EmbySubtitleChoices.keyOf(subtitlesPreferences.embySubtitleChoices.get(), itemId)
+  fun rememberedKey(serverId: String, itemId: String, mediaSourceId: String?): String? {
+    val key = EmbySubtitleChoices.keyOf(subtitlesPreferences.embySubtitleChoices.get(), itemId)
+      ?: return null
+    val streamIndex = key.substringAfterLast('#').toIntOrNull() ?: return key
+    val keyMediaSource = key.substringBeforeLast('#').takeIf { it.isNotBlank() } ?: mediaSourceId
+    return key.takeUnless {
+      tombstones.isEmbyIgnored(serverId, itemId, keyMediaSource, streamIndex)
+    }
+  }
 
-  /** 清掉「这部片子记住的字幕」（用户选「自动选择」时） */
-  fun forgetChoice(itemId: String) = rememberChoice(itemId, null)
+  /** 清掉「这部片子记住的字幕」（用户选「自动选择」时）。 */
+  fun forgetChoice(itemId: String) {
+    val current = subtitlesPreferences.embySubtitleChoices.get()
+    subtitlesPreferences.embySubtitleChoices.set(EmbySubtitleChoices.withChoice(current, itemId, null))
+  }
+
+  /**
+   * 删除一条 Emby 字幕：**先同步持久化 tombstone**，再清选择 / 失效缓存 / 更新面板。
+   *
+   * 只操作本地缓存与偏好，绝不请求服务端修改媒体库。即使缓存文件删除失败，tombstone
+   * 仍会让后续发现、选择与缓存读取拒绝它。
+   */
+  suspend fun delete(
+    serverId: String,
+    itemId: String,
+    mediaSourceId: String?,
+    subtitle: SubtitleInfo,
+  ): Boolean {
+    val gen = generation.get()
+    return withContext(Dispatchers.IO) {
+      val info = normalizedInfo(mediaSourceId, subtitle)
+      val persisted = tombstones.rememberEmby(
+        serverId = serverId,
+        itemId = itemId,
+        mediaSourceId = info.mediaSourceId,
+        streamIndex = info.streamIndex,
+      )
+      if (!persisted) {
+        Log.w(TAG, "Emby tombstone persist failed: server=$serverId item=$itemId index=${info.streamIndex}")
+        updateIfCurrentTarget(gen, serverId, itemId, info.mediaSourceId) {
+          it.copy(notice = "删除记录保存失败，字幕仍保留")
+        }
+        return@withContext false
+      }
+
+      // 选择账本保持详情页兼容的旧格式；清写失败也不能让已删除字幕复活，因为选择器还会
+      // 按 tombstone 过滤，这里记录告警并继续完成本地删除。
+      val currentChoice = subtitlesPreferences.embySubtitleChoices.get()
+      val nextChoice = EmbySubtitleChoices.withChoice(currentChoice, itemId, null)
+      val choiceCleared = runCatching {
+        subtitlesPreferences.embySubtitleChoices.setBlocking(nextChoice) &&
+          subtitlesPreferences.embySubtitleChoices.get() == nextChoice
+      }.getOrDefault(false)
+      if (!choiceCleared) Log.w(TAG, "Emby choice clear failed: item=$itemId")
+
+      runCatching { cache.invalidate(serverId, itemId, info) }
+        .onFailure { Log.w(TAG, "Emby cache invalidate failed: item=$itemId index=${info.streamIndex}") }
+
+      val deletedKey = info.key
+      updateIfCurrentTarget(gen, serverId, itemId, info.mediaSourceId) { state ->
+        state.copy(
+          subtitles = state.subtitles.filterNot { normalizedInfo(state.mediaSourceId, it).key == deletedKey },
+          selection = state.selection.takeUnless { it?.chosen?.key == deletedKey },
+          downloadingKey = state.downloadingKey.takeUnless { it == deletedKey },
+          mountedKey = state.mountedKey.takeUnless { it == deletedKey },
+          phase = Phase.READY,
+          notice = "已删除这条 Emby 字幕（服务端媒体库未修改）",
+        )
+      }
+      true
+    }
+  }
+
+  fun isIgnored(serverId: String, itemId: String, subtitle: SubtitleInfo): Boolean {
+    val info = normalizedInfo(subtitle.mediaSourceId, subtitle)
+    return tombstones.isEmbyIgnored(serverId, itemId, info.mediaSourceId, info.streamIndex)
+  }
+
+  private fun normalizedInfo(mediaSourceId: String?, subtitle: SubtitleInfo): SubtitleInfo =
+    if (subtitle.mediaSourceId != null) subtitle else subtitle.copy(mediaSourceId = mediaSourceId)
 
   // ══════════════════════════════════════════════════════════════════════
   // 偏好

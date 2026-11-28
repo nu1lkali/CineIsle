@@ -12,8 +12,9 @@ import java.security.MessageDigest
  *
  * ## 键
  *
- * `ItemId + MediaSourceId + StreamIndex + Format`（需求七），取 SHA-1 当文件名。
- * 四段缺一不可：
+ * `ServerId + ItemId + MediaSourceId + StreamIndex + Format`（需求七），取 SHA-1 当文件名。
+ * 五段缺一不可：
+ * · 少了 `ServerId`，不同服务器上的同名条目会共用缓存，删除一条会误伤另一条；
  * · 少了 `MediaSourceId`，同一部片子的 4K 版字幕会被 1080P 版复用（索引大概率对不上）；
  * · 少了 `StreamIndex`，同一源里简繁两条会互相覆盖；
  * · 少了 `Format`，请求 `ass` 与「回退拿到的 `srt`」会互相覆盖，样式悄悄跑掉。
@@ -43,8 +44,8 @@ class EmbySubtitleCache(private val context: Context) {
     get() = File(context.cacheDir, DIR_NAME).apply { if (!exists()) mkdirs() }
 
   /** 命中的缓存文件；不存在或已过期返回 null。 */
-  fun cached(itemId: String, info: SubtitleInfo): File? {
-    val prefix = hashFor(itemId, info)
+  fun cached(serverId: String, itemId: String, info: SubtitleInfo): File? {
+    val prefix = hashFor(serverId, itemId, info)
     val file = runCatching {
       dir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("$prefix.") }
     }.getOrNull() ?: return null
@@ -59,9 +60,9 @@ class EmbySubtitleCache(private val context: Context) {
   }
 
   /** 写入缓存并返回文件。写失败返回 null（缓存失败不该影响播放）。 */
-  fun store(itemId: String, info: SubtitleInfo, bytes: ByteArray, format: String): File? =
+  fun store(serverId: String, itemId: String, info: SubtitleInfo, bytes: ByteArray, format: String): File? =
     runCatching {
-      val prefix = hashFor(itemId, info)
+      val prefix = hashFor(serverId, itemId, info)
       val ext = EmbySubtitleFormats.fileExtension(format)
       val target = File(dir, "$prefix.$ext")
       // 落盘前归一成 UTF-8：服务端给的可能是 GBK / Big5 / UTF-16，而 `sub-add` 之后
@@ -83,8 +84,8 @@ class EmbySubtitleCache(private val context: Context) {
     }.getOrNull()
 
   /** 让某条缓存失效（下载失败 / 用户要求刷新时调）。 */
-  fun invalidate(itemId: String, info: SubtitleInfo) {
-    val prefix = hashFor(itemId, info)
+  fun invalidate(serverId: String, itemId: String, info: SubtitleInfo) {
+    val prefix = hashFor(serverId, itemId, info)
     runCatching {
       dir.listFiles()?.forEach { if (it.isFile && it.name.startsWith("$prefix.")) it.delete() }
     }
@@ -123,10 +124,10 @@ class EmbySubtitleCache(private val context: Context) {
     return bytes
   }
 
-  /** 哈希键：`ItemId | MediaSourceId | StreamIndex | Format` */
-  private fun hashFor(itemId: String, info: SubtitleInfo): String =
+  /** 哈希键：`ServerId | ItemId | MediaSourceId | StreamIndex | Format` */
+  private fun hashFor(serverId: String, itemId: String, info: SubtitleInfo): String =
     MessageDigest.getInstance("SHA-1")
-      .digest("$itemId|${info.cacheDiscriminator}".toByteArray(Charsets.UTF_8))
+      .digest("$serverId|$itemId|${info.cacheDiscriminator}".toByteArray(Charsets.UTF_8))
       .joinToString("") { "%02x".format(it) }
 
   companion object {

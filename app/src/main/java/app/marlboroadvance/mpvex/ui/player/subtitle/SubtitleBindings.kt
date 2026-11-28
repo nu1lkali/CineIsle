@@ -1,6 +1,8 @@
 package app.marlboroadvance.mpvex.ui.player.subtitle
 
+import android.net.Uri
 import android.util.Log
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstoneStore
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import app.marlboroadvance.mpvex.ui.player.subtitle.smart.SmartSubtitleMatcher
 
@@ -44,12 +46,12 @@ object SubtitleBindings {
   /** 查这部片子绑过哪条字幕；没有则为 null。 */
   fun find(preferences: SubtitlesPreferences, mediaTitle: String): String? {
     if (mediaTitle.isBlank()) return null
-    return read(preferences)[keyOf(mediaTitle)]
+    return read(preferences)[keyOf(mediaTitle)]?.takeUnless { isIgnored(preferences, it) }
   }
 
   /** 记住「这部片子用这条字幕」。同一条媒体重复绑定会覆盖旧值并移到最新位。 */
   fun bind(preferences: SubtitlesPreferences, mediaTitle: String, uri: String) {
-    if (mediaTitle.isBlank() || uri.isBlank()) return
+    if (mediaTitle.isBlank() || uri.isBlank() || isIgnored(preferences, uri)) return
     val key = keyOf(mediaTitle)
     if (key.isBlank()) return
 
@@ -69,6 +71,12 @@ object SubtitleBindings {
     if (mediaTitle.isBlank()) return
     val map = read(preferences)
     if (map.remove(keyOf(mediaTitle)) != null) write(preferences, map)
+  }
+
+  private fun isIgnored(preferences: SubtitlesPreferences, uri: String): Boolean {
+    val parsed = runCatching { Uri.parse(uri) }.getOrNull()
+    val path = parsed?.let { it.path.takeIf { _ -> it.scheme.isNullOrBlank() || it.scheme == "file" } }
+    return SubtitleTombstoneStore(preferences).isExternalIgnored(path, uri)
   }
 
   private fun read(preferences: SubtitlesPreferences): LinkedHashMap<String, String> {

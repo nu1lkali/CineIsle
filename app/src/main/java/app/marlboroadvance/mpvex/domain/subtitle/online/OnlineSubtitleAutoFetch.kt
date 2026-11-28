@@ -105,6 +105,12 @@ object OnlineSubtitleAutoFetch {
         )
       }
 
+      // 用户删过同一条 origin：自动兜底不能重新下载 / 挂载。显式搜索下载是另一条入口，
+      // 但这里必须静默跳过，否则每次起播都会把它捡回来。
+      if (library.isIgnored(target.serverKey, target.itemId, best.id, best.downloadUrl)) {
+        return@withContext Result(Result.Status.DISABLED, keyword = keyword)
+      }
+
       // 同一条已经下过：直接复用，不重复占用磁盘与流量
       library.find(target.serverKey, target.itemId, best.id)?.let { existing ->
         return@withContext Result(
@@ -142,6 +148,11 @@ object OnlineSubtitleAutoFetch {
             Log.w(TAG, "auto fetch save failed: ${it.message}")
             return@withContext Result(Result.Status.FAILED, keyword = keyword)
           }
+
+      // 下载期间用户可能刚好删了同一条；保存成功后再次检查，绝不把 tombstone 绕过。
+      if (library.isIgnored(record)) {
+        return@withContext Result(Result.Status.DISABLED, keyword = keyword)
+      }
 
       Result(
         status = Result.Status.SAVED,

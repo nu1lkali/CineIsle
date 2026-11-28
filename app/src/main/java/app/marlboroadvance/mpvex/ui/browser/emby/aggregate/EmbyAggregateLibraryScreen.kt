@@ -447,12 +447,7 @@ private fun openAggregateItem(
   }
   when (item.Type) {
     "Series" -> backStack.add(
-      EmbyLibraryScreen(
-        libraryId = id,
-        title = item.Name ?: "",
-        collectionType = item.CollectionType,
-        includeItemTypes = listOf("Season"),
-      ),
+      EmbyDetailScreen(itemId = id, title = item.Name ?: ""),
     )
 
     "Season" -> backStack.add(

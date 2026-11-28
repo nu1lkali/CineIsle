@@ -115,6 +115,12 @@ class SubtitlesPreferences(
   val subtitleBindings = preferenceStore.getString("sub_bindings", "")
 
   /**
+   * 已删除字幕的持久忽略账本：外挂文件 / 在线下载 / Emby 流各自使用隔离键。
+   * 只记“不再恢复”，不表示删除用户媒体目录里的文件。格式见 `SubtitleTombstones`。
+   */
+  val subtitleTombstones = preferenceStore.getString("sub_title_tombstones", "")
+
+  /**
    * 用户确认过的番号别名账本：一行一条
    * `canonical<TAB>alias<TAB>source<TAB>createdAt<TAB>confidence`，见
    * [app.marlboroadvance.mpvex.ui.player.subtitle.smart.AliasRecord]。

@@ -36,6 +36,9 @@ object StrmDirectLink {
     return withoutQuery.endsWith(".strm", ignoreCase = true)
   }
 
+  fun isStrmMedia(itemPath: String?, mediaContainer: String?): Boolean =
+    isStrmPath(itemPath) || mediaContainer?.trim()?.equals("strm", ignoreCase = true) == true
+
   /**
    * 从 `PlaybackInfo` 的 `MediaSources[].Path` 取直链。
    *

@@ -1347,14 +1347,16 @@ class EmbyRepository(
   /**
    * 「STRM 直链播放」：取 `.strm` 文件里的远端地址。
    *
-   * 只有用户显式打开「STRM 直链播放」且条目确实是 `.strm` 时才调用；
+   * 内部播放只在用户显式打开开关时调用；外部播放器始终解析真实地址，
+   * 但关闭主动探测，避免第三方播放器起播前再多等一次网络往返。
    * 拿不到返回 null，调用方回退 [videoStreamUrl]。
    */
   suspend fun strmDirectPlayInfo(
     server: EmbyServer,
     itemId: String,
     mediaSourceId: String? = null,
-  ): StrmDirectPlayInfo? = EmbyClient.strmDirectPlayInfo(server, itemId, mediaSourceId)
+    probe: Boolean = true,
+  ): StrmDirectPlayInfo? = EmbyClient.strmDirectPlayInfo(server, itemId, mediaSourceId, probe)
 
   /** 离线下载原始文件的 URL（支持 Range，可断点续传）。 */
   fun itemDownloadUrl(server: EmbyServer, itemId: String): String =

@@ -72,6 +72,7 @@ internal fun groupEpisodesBySeason(episodes: List<EmbyItem>): List<SeasonGroup> 
 
 /**
  * 分集区：季下拉 + 集号胶囊 + 横滑卡。
+ * 点集号或卡片直接播放；长按集号进单集详情，长按卡片切换已看状态。
  *
  * ## 为什么不用竖向长列表（v134 重构）
  * 竖向列表每集占 77dp，376 集就是 29000dp —— 用户从第 1 集滑到第 200 集要滑几十屏，
@@ -96,6 +97,7 @@ internal fun CineEpisodeSection(
   descending: Boolean,
   onToggleSort: () -> Unit,
   onPlayEpisode: (EmbyItem) -> Unit,
+  onOpenEpisode: (EmbyItem) -> Unit,
   onToggleEpisodePlayed: (EmbyItem) -> Unit,
 ) {
   val colors = CineTheme.colors
@@ -159,6 +161,7 @@ internal fun CineEpisodeSection(
           active = index == activeIndex,
           played = episode.UserData?.Played == true,
           onClick = { onPlayEpisode(episode) },
+          onLongClick = { onOpenEpisode(episode) },
         )
       }
     }
@@ -314,6 +317,7 @@ private fun EpisodeNumberPill(
   active: Boolean,
   played: Boolean,
   onClick: () -> Unit,
+  onLongClick: () -> Unit,
 ) {
   val colors = CineTheme.colors
   val shape = remember { RoundedCornerShape(50) }
@@ -327,7 +331,7 @@ private fun EpisodeNumberPill(
         if (active) Modifier else Modifier.border(1.dp, colors.chipBorder.copy(alpha = 0.5f), shape),
       )
       .pressDownScale()
-      .clickable(onClick = onClick)
+      .combinedClickable(onClick = onClick, onLongClick = onLongClick)
       .padding(horizontal = 11.dp),
     contentAlignment = Alignment.Center,
   ) {

@@ -34,7 +34,7 @@ internal class EmbyDetailContentState {
 
   /** 整部剧的分集（仅 Series）。 */
   val seriesEpisodesState = mutableStateOf<List<EmbyItem>>(emptyList())
-  val episodesLoadingState = mutableStateOf(false)
+  val episodesLoadingState = mutableStateOf(true)
 
   /** 两块推荐区。 */
   val recommendItemsState = mutableStateOf<List<EmbyItem>>(emptyList())
@@ -42,7 +42,7 @@ internal class EmbyDetailContentState {
   val genreRecommendItemsState = mutableStateOf<List<EmbyItem>>(emptyList())
   val recommendReloadKeyState = mutableStateOf(0)
 
-  /** 单集详情页的「同季 / 特别篇 / 演员相关」分集。 */
+  /** 单集详情页的「同季 / 特别篇」分集。 */
   val relatedEpisodesState = mutableStateOf(RelatedEpisodes())
 
   /**

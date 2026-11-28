@@ -73,6 +73,8 @@ data class EmbyPlaylistEntry(
   val mediaSourceId: String? = null,
   /** 这一项的版本显示名（播放页的媒体信息 / 队列标题用） */
   val mediaSourceLabel: String? = null,
+  /** 发起播放时已知的媒体库 Id；null = 旧入口未知，由播放器再行兜底判断。 */
+  val libraryId: String? = null,
   /**
    * 队列里显示的标题；null = 用 [item] 的常规标题。
    *
@@ -331,6 +333,20 @@ fun sortEpisodesForQueue(episodes: List<EmbyItem>): List<EmbyItem> {
       if (result != 0) result else a.index.compareTo(b.index)
     }
     .map { it.value }
+}
+
+/** 详情页默认定位：最近播放过的一集优先，否则按季 / 集号找续播或首个未看。 */
+fun preferredEpisodeForDetail(episodes: List<EmbyItem>): EmbyItem? {
+  if (episodes.isEmpty()) return null
+  val ordered = sortEpisodesForQueue(episodes)
+  return ordered
+    .filter { !it.UserData?.LastPlayedDate.isNullOrBlank() }
+    .maxByOrNull { it.UserData?.LastPlayedDate.orEmpty() }
+    ?: ordered.firstOrNull {
+      (it.UserData?.PlaybackPositionTicks ?: 0L) > 0L && it.UserData?.Played != true
+    }
+    ?: ordered.firstOrNull { it.UserData?.Played != true }
+    ?: ordered.firstOrNull()
 }
 
 private fun compareEpisodes(

@@ -130,6 +130,7 @@ fun CineRoot(modifier: Modifier = Modifier) {
           libraryId = id,
           title = library.Name ?: "",
           collectionType = library.CollectionType,
+          playbackLibraryId = id,
         ),
       )
     }

@@ -37,4 +37,53 @@ object OnlineSubtitleLibraryScope {
     if (excludedKeys.isEmpty() || libraryId.isNullOrBlank()) return false
     return key(serverId, userId, libraryId) in excludedKeys
   }
+
+  /** 优先匹配已知库 Id，再退回祖先链中的媒体库容器。 */
+  fun resolveLibraryId(
+    ancestors: List<Anchor>,
+    knownLibraryIds: Set<String> = emptySet(),
+  ): String? {
+    if (ancestors.isEmpty()) return null
+    if (knownLibraryIds.isNotEmpty()) {
+      ancestors.firstOrNull { it.id.isNotBlank() && it.id in knownLibraryIds }?.let {
+        return it.id
+      }
+    }
+    return ancestors.firstOrNull {
+      it.id.isNotBlank() && (it.type == COLLECTION_FOLDER || it.type == USER_VIEW)
+    }?.id
+  }
+
+  /** 用媒体路径与用户可见媒体库根路径匹配，最长根路径优先。 */
+  fun resolveLibraryIdByPath(
+    itemPath: String?,
+    libraries: List<LibraryRoot>,
+  ): String? {
+    val path = normalizePath(itemPath) ?: return null
+    return libraries
+      .mapNotNull { library ->
+        val root = normalizePath(library.path) ?: return@mapNotNull null
+        val ignoreCase = root.startsWith("//") || Regex("^[A-Za-z]:/").containsMatchIn(root)
+        val matches = path == root || path.startsWith("$root/", ignoreCase = ignoreCase)
+        if (matches) library.id.takeIf { it.isNotBlank() } to root.length else null
+      }
+      .maxByOrNull { it.second }
+      ?.first
+  }
+
+  /** [resolveLibraryId] 的最小入参形态：只要 Id 和 Type，免得纯逻辑依赖 `EmbyItem`。 */
+  data class Anchor(val id: String, val type: String?)
+
+  /** 媒体库视图的 Id 与服务端返回的根路径。 */
+  data class LibraryRoot(val id: String, val path: String?)
+
+  private fun normalizePath(path: String?): String? =
+    path
+      ?.trim()
+      ?.replace('\\', '/')
+      ?.trimEnd('/')
+      ?.takeIf { it.isNotBlank() }
+
+  private const val COLLECTION_FOLDER = "CollectionFolder"
+  private const val USER_VIEW = "UserView"
 }

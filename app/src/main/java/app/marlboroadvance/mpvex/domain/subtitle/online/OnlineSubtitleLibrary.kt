@@ -2,6 +2,8 @@ package app.marlboroadvance.mpvex.domain.subtitle.online
 
 import android.content.Context
 import android.util.Log
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstoneStore
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstones
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import java.io.File
 
@@ -65,6 +67,7 @@ class OnlineSubtitleLibrary(
 ) {
   private val appContext = context.applicationContext
   private val lock = Any()
+  private val tombstones = SubtitleTombstoneStore(preferences)
 
   /** 本地库根目录。目录不存在时**不**主动创建（读操作不该有副作用）。 */
   private val root: File
@@ -81,7 +84,52 @@ class OnlineSubtitleLibrary(
         Log.i(TAG, "prune ${records.size - alive.size} missing subtitle file(s)")
         write(alive)
       }
-      alive.sortedByDescending { it.downloadedAt }
+      visible(alive).sortedByDescending { it.downloadedAt }
+    }
+
+  /** 这条记录是否已被用户删除；所有读取入口都必须先过这一层。 */
+  fun isIgnored(record: DownloadedSubtitle): Boolean =
+    tombstones.isOnlineIgnored(
+      serverKey = record.serverKey,
+      itemId = record.itemId,
+      originId = record.originId,
+      originUri = record.originUrl,
+      storagePath = fileOf(record).absolutePath,
+    )
+
+  /** 清单恢复 / 自动下载在真正写盘前也要检查，不能只依赖最终列表过滤。 */
+  fun isIgnored(
+    serverKey: String,
+    itemId: String,
+    originId: String?,
+    originUri: String?,
+    fileName: String? = null,
+  ): Boolean = tombstones.isOnlineIgnored(
+    serverKey = serverKey,
+    itemId = itemId,
+    originId = originId,
+    originUri = originUri,
+    storagePath = fileName?.let { File(mediaDir(serverKey, itemId), it).absolutePath },
+  )
+
+  /** 删除私有文件前判断路径是否仍被另一条 origin 引用，避免路径 tombstone 串台。 */
+  fun hasOtherFileReference(id: String, fileName: String): Boolean =
+    synchronized(lock) {
+      read().any { it.id != id && it.fileName == fileName && !isIgnored(it) }
+    }
+
+  fun isExternalIgnored(path: String?, sourceUri: String?): Boolean =
+    tombstones.isExternalIgnored(path, sourceUri)
+
+  private fun visible(records: List<DownloadedSubtitle>): List<DownloadedSubtitle> =
+    SubtitleTombstones.filterOnline(records, tombstones.snapshot()) { record ->
+      SubtitleTombstones.onlineKey(
+        serverKey = record.serverKey,
+        itemId = record.itemId,
+        originId = record.originId,
+        originUri = record.originUrl,
+        storagePath = fileOf(record).absolutePath,
+      )
     }
 
   /** 某部片子已下载的字幕。 */
@@ -117,7 +165,7 @@ class OnlineSubtitleLibrary(
 
   fun usage(): Usage =
     synchronized(lock) {
-      val records = read()
+      val records = visible(read())
       val referenced = HashSet<String>(records.size * 2)
       var total = 0L
       records.forEach { record ->
@@ -149,7 +197,7 @@ class OnlineSubtitleLibrary(
    */
   fun purgeOrphans(): Usage {
     synchronized(lock) {
-      val records = read()
+      val records = visible(read())
       val referenced = records.map { fileOf(it).absolutePath }.toHashSet()
       candidateFiles().forEach { file ->
         if (file.absolutePath !in referenced) {

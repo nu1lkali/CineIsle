@@ -2,67 +2,54 @@ package app.marlboroadvance.mpvex.domain.subtitle.online
 
 import android.content.Context
 import android.util.Log
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstoneStore
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstones
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * 删除一条网络字幕的**统一编排**（三个入口共用）。
+ * 删除一条网络字幕的**统一编排**（播放器、字幕实验室、全局删除共用）。
  *
- * ## 为什么需要单独一层
+ * 一条网络字幕有两份字节：应用私有目录的权威副本，以及用户字幕目录里的镜像副本。
+ * 本修复只清理应用私有的下载与索引；用户媒体目录里的镜像始终保留，靠 tombstone 阻止
+ * 它被本地扫描、绑定恢复或 TSV 恢复重新挂载。
  *
- * 一条网络字幕有两份字节：应用私有目录的**权威副本**（真正挂载）和用户字幕目录里的
- * **镜像副本**（用户可见 / 重装恢复）。删除时两份都要清，外加清单里那行索引 —— 这件事
- * 原本只有 [OnlineSubtitleLibrary.delete] 在做，且它只删私有那份，用户目录里就留下孤儿。
- * 删除入口有三处（字幕面板、实验室「已下载」页、全局删除），逐个补一遍极易漏，所以收口到
- * 这里：入口只管调一次 [delete]，结果由 [CleanupResult] 聚合上报。
+ * ## 顺序与失败策略
  *
- * ## 删除顺序与失败策略
- *
- * 1. 权威副本：沿用 [OnlineSubtitleLibrary.delete] 自带的引用计数删除（不动它的既有行为）；
- * 2. 用户目录副本：按清单定位，存在才删、删除失败只记日志不阻断；
- * 3. 清单行：无论副本删没删掉都移除，避免重装恢复把已删记录当可恢复项。
- *
- * 任一步失败都不回滚、不抛给调用方 —— 删除是幂等操作，重复点也安全。
- *
- * ## 边界
- *
- * · 副本已不存在 ⇒ 视为完成；
- * · 未配置保存目录 / 清单无此行 ⇒ 跳过副本清理，只删权威副本；
- * · 路径变化（用户改了保存目录）⇒ 只按新根的清单定位，旧根残留不跨根追杀；
- * · 同一路径仍被其它清单记录引用 ⇒ 只移除本行，不删文件；
- * · SAF 授权撤销 / 删除抛异常 ⇒ 记 warn 日志，仍移除清单行。
+ * 1. **先同步落盘 tombstone**：在线 origin、私有文件路径、镜像路径 / 稳定 URI；
+ * 2. 任一必要 tombstone 写失败 ⇒ 不删索引、不删文件、不移除清单行，避免清理后复活；
+ * 3. tombstone 已写 ⇒ 再删私有记录 / 文件、按需处理镜像、移除清单行；
+ * 4. 后续任一步失败都不回滚 tombstone，因此重启后也不会复活。
  *
  * 全部 IO 阻塞，调用方需在 [Dispatchers.IO] 上（[delete] 内部已切换）。
  */
 object OnlineSubtitleCleanup {
-  /**
-   * 删除结果。UI 据此决定要不要给一次性提示（例如副本删除失败时告诉用户手动清理）。
-   *
-   * [privateDeleted] 恒为 true 表示权威副本记录已交给本地库删除（本地库内部可能因为
-   * 引用计数保留文件本体，那是它既有的安全策略，不算失败）。
-   */
   data class CleanupResult(
-    val privateDeleted: Boolean = true,
+    val privateDeleted: Boolean = false,
     val mirrorDeleted: Boolean = false,
     val mirrorSkipped: Boolean = false,
     val mirrorFailed: Boolean = false,
+    val manifestRemoved: Boolean = false,
+    /** 播放器只有在 true 时才允许卸载 mpv 轨道。 */
+    val tombstonePersisted: Boolean = false,
+    /** 残留镜像的稳定身份，供诊断 / 日志使用。 */
+    val mirrorUri: String? = null,
   )
 
   /**
-   * 删除一条已下载字幕的全部副本。
-   *
-   * @param record 要删的记录（id 与 `library` 索引主键同构）
+   * @param deleteMirror 默认 false：保留用户目录字节。只有明确需要物理清理镜像的调用方
+   *   才传 true；即使删除失败，外部路径 tombstone 仍会保留。
    */
   suspend fun delete(
     context: Context,
     library: OnlineSubtitleLibrary,
     preferences: SubtitlesPreferences,
     record: DownloadedSubtitle,
+    deleteMirror: Boolean = false,
   ): CleanupResult =
     withContext(Dispatchers.IO) {
-      // 清单必须在 library.delete 之前读 —— 虽然两者改的是不同存储，但先读能拿到
-      // 「这份副本是否还被别的记录引用」的完整视图。
+      // 清单必须在 library.delete 之前读，才能判断镜像是否仍被其它记录引用。
       val root =
         SubtitleSaveStore.open(
           context = context,
@@ -76,51 +63,79 @@ object OnlineSubtitleCleanup {
       val stillReferenced =
         target != null &&
           entries.any { it.id != record.id && it.dirName == dirName && it.fileName == fileName }
+      val mirror =
+        if (root != null && target != null && fileName.isNotBlank() && !stillReferenced) {
+          if (dirName.isBlank()) root.child(fileName) else root.child(dirName)?.child(fileName)
+        } else {
+          null
+        }
 
-      // 1) 权威副本：沿用既有引用计数删除，不改它的语义
-      library.delete(record.id)
+      val tombstones = SubtitleTombstoneStore(preferences)
+      val privateFile = library.fileOf(record)
+      val privatePathShared = library.hasOtherFileReference(record.id, record.fileName)
 
-      // 2) 用户目录副本
+      // 1) 所有必要 tombstone 必须作为一次同步事务提交，才允许触碰字幕字节 / 索引。
+      val onlineTombstone = SubtitleTombstones.online(
+        serverKey = record.serverKey,
+        itemId = record.itemId,
+        originId = record.originId,
+        originUri = record.originUrl,
+        storagePath = privateFile.absolutePath,
+        createdAt = System.currentTimeMillis(),
+      )
+      val required = buildList {
+        onlineTombstone?.let(::add)
+        if (!privatePathShared) {
+          SubtitleTombstones.external(privateFile.absolutePath, null, System.currentTimeMillis())?.let(::add)
+        }
+        mirror?.let { file ->
+          SubtitleTombstones.external(
+            file.uri.path.takeIf { file.uri.scheme == "file" },
+            file.uri.toString(),
+            System.currentTimeMillis(),
+          )?.let(::add)
+        }
+      }
+      val persisted = onlineTombstone != null && tombstones.rememberAll(required)
+      if (!persisted) {
+        Log.w(TAG, "online subtitle tombstone transaction failed: ${record.id}")
+        return@withContext CleanupResult(mirrorSkipped = true)
+      }
+
+      // 2) 权威副本：沿用既有引用计数删除，不改它的语义。
+      val privateDeleted = runCatching { library.delete(record.id) }.isSuccess
+
+      // 3) 用户目录副本默认只忽略、不删字节。
       var mirrorDeleted = false
       var mirrorSkipped = false
       var mirrorFailed = false
       when {
-        root == null || target == null || fileName.isBlank() ->
-          // 未配置目录 / 清单无此行 ⇒ 无从定位副本，跳过
+        !deleteMirror -> mirrorSkipped = true
+        root == null || target == null || fileName.isBlank() || mirror == null ->
           mirrorSkipped = true
-        stillReferenced ->
-          // 同一路径仍被别的记录引用：只移除本行，文件必须保留
-          mirrorSkipped = true
+        !mirror.isFile -> mirrorDeleted = true
         else -> {
-          val file =
-            if (dirName.isBlank()) root.child(fileName) else root.child(dirName)?.child(fileName)
-          if (file == null || !file.isFile) {
-            // 文件已不存在（可能用户自己删了）⇒ 视为完成，照常移除清单行
-            mirrorDeleted = true
-          } else {
-            mirrorDeleted = runCatching { file.delete() }.getOrDefault(false)
-            if (!mirrorDeleted) {
-              mirrorFailed = true
-              Log.w(TAG, "mirror delete failed: ${record.id} -> $dirName/$fileName")
-            } else if (dirName.isNotBlank()) {
-              // 空目录顺手清掉，避免用户目录里留下成片的空文件夹
-              val parent = root.child(dirName)
-              if (parent != null && parent.children().isEmpty()) {
-                runCatching { parent.delete() }
-              }
-            }
+          mirrorDeleted = runCatching { mirror.delete() }.getOrDefault(false)
+          if (!mirrorDeleted) {
+            mirrorFailed = true
+            Log.w(TAG, "mirror delete failed: ${record.id} -> $dirName/$fileName")
+          } else if (dirName.isNotBlank()) {
+            val parent = root.child(dirName)
+            if (parent != null && parent.children().isEmpty()) runCatching { parent.delete() }
           }
         }
       }
 
-      // 3) 清单行：无论副本删没删掉都移除，防止恢复流程把它当可恢复项
-      SubtitleSaveManifest.remove(root, record.id)
-
+      // 4) 清单行：镜像删除失败也移除，恢复计划还会再按在线 tombstone 过滤一次。
+      val manifestRemoved = SubtitleSaveManifest.remove(root, record.id)
       CleanupResult(
-        privateDeleted = true,
+        privateDeleted = privateDeleted,
         mirrorDeleted = mirrorDeleted,
         mirrorSkipped = mirrorSkipped,
         mirrorFailed = mirrorFailed,
+        manifestRemoved = manifestRemoved,
+        tombstonePersisted = true,
+        mirrorUri = mirror?.uri?.toString(),
       )
     }
 

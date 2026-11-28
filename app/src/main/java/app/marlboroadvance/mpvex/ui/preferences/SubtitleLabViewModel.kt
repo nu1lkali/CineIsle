@@ -9,6 +9,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.subtitle.SubtitleCue
 import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTimeline
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstoneStore
 import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleCleanup
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleDownloader
@@ -54,6 +55,7 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
   private val repository by inject<EmbyRepository>(EmbyRepository::class.java)
   private val preferences by inject<SubtitlesPreferences>(SubtitlesPreferences::class.java)
   private val library = OnlineSubtitleLibrary(application, preferences)
+  private val tombstoneStore = SubtitleTombstoneStore(preferences)
   private val downloader = OnlineSubtitleDownloader()
 
   data class State(
@@ -414,6 +416,12 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
               saveDirPath = dirPath,
               legacyTreeUri = legacy,
               query = SmartSubtitleMatcher.prepare(title),
+              isIgnored = { uri ->
+                tombstoneStore.isExternalIgnored(
+                  uri.path.takeIf { uri.scheme == "file" || uri.scheme.isNullOrBlank() },
+                  uri.toString(),
+                )
+              },
             )
           if (!scan.attempted || scan.hits.isEmpty()) {
             null
@@ -643,6 +651,11 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
           preferences = preferences,
           record = record,
         )
+      refreshLibrary()
+      if (!result.tombstonePersisted) {
+        _state.update { it.copy(message = "删除记录保存失败，字幕仍保留") }
+        return@launch
+      }
       // 绑定若仍指向这个文件，「开播自动挂」就会挂到不存在的路径上，顺手解掉
       if (record.mediaTitle.isNotBlank()) {
         runCatching { SubtitleBindings.unbind(preferences, record.mediaTitle) }
@@ -654,17 +667,7 @@ class SubtitleLabViewModel(application: Application) : AndroidViewModel(applicat
           timelineCues = if (current.timelineRecordId == record.id) emptyList() else current.timelineCues,
           timelineTruncated =
             if (current.timelineRecordId == record.id) false else current.timelineTruncated,
-        )
-      }
-      refreshLibrary()
-      _state.update {
-        it.copy(
-          message =
-            if (result.mirrorFailed) {
-              "已删除字幕，但字幕目录里的副本清理失败，请手动删除"
-            } else {
-              "已删除：${record.title}"
-            },
+          message = "已删除：${record.title}（字幕目录副本已保留并忽略）",
         )
       }
     }

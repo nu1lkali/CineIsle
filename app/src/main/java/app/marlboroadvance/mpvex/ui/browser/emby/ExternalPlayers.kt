@@ -51,6 +51,7 @@ private val KNOWN_EXTERNAL_PLAYERS: Map<String, KnownPlayer> =
   )
 
 const val EXTERNAL_PLAYER_VIDEO_MIME = "video/*"
+private const val EXTERNAL_PLAYER_HEADERS_EXTRA = "headers"
 
 /**
  * 枚举本机能打开这个流地址的播放器。
@@ -115,12 +116,14 @@ fun externalPlayerLaunchIntent(
   uri: Uri,
   option: ExternalPlayerOption,
   title: String,
+  headers: Array<String>? = null,
 ): Intent =
   Intent(Intent.ACTION_VIEW).apply {
     setDataAndType(uri, EXTERNAL_PLAYER_VIDEO_MIME)
     setClassName(option.packageName, option.activityName)
     // 一部分播放器（MX / VLC）会把它显示在标题栏
     putExtra(Intent.EXTRA_TITLE, title)
+    headers?.let { putExtra(EXTERNAL_PLAYER_HEADERS_EXTRA, it) }
     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
   }
@@ -136,11 +139,12 @@ fun externalPlayerChooserIntent(
   uri: Uri,
   selfPackageName: String,
   title: String,
+  headers: Array<String>? = null,
 ): Intent? {
   val all = queryExternalPlayers(context, uri, selfPackageName)
   if (all.isEmpty()) return null
 
-  val intents = all.map { externalPlayerLaunchIntent(uri, it, title) }
+  val intents = all.map { externalPlayerLaunchIntent(uri, it, title, headers) }
   return Intent(Intent.ACTION_CHOOSER).apply {
     putExtra(Intent.EXTRA_INTENT, intents.first())
     putExtra(Intent.EXTRA_INITIAL_INTENTS, intents.drop(1).toTypedArray())

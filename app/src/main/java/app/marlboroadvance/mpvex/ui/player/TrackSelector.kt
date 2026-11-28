@@ -61,7 +61,11 @@ class TrackSelector(
     val image: Boolean
   )
 
-  suspend fun onFileLoaded(hasState: Boolean = false) {
+  suspend fun onFileLoaded(
+    hasState: Boolean = false,
+    selectSubtitle: suspend (Int) -> Boolean,
+    isSubtitleIgnored: (Int) -> Boolean,
+  ) {
     var attempts = 0
     val maxAttempts = 20
     
@@ -84,7 +88,7 @@ class TrackSelector(
     }
   
     ensureAudioTrackSelected(tracks, hasState)
-    ensureSubtitleTrackSelected(tracks, hasState)
+    ensureSubtitleTrackSelected(tracks, hasState, selectSubtitle, isSubtitleIgnored)
   }
 
   private fun readTracks(count: Int): List<Track> {
@@ -216,17 +220,20 @@ class TrackSelector(
   // 2. SUBTITLE SELECTION LOGIC (Multi-Pass Preserved)
   // ==================================================
 
-  private suspend fun ensureSubtitleTrackSelected(tracks: List<Track>, hasState: Boolean) {
+  private suspend fun ensureSubtitleTrackSelected(
+    tracks: List<Track>,
+    hasState: Boolean,
+    selectSubtitle: suspend (Int) -> Boolean,
+    isSubtitleIgnored: (Int) -> Boolean,
+  ) {
     try {
       val currentSid = PlayerLib.getPropertyInt("sid") ?: 0
 
-      // Respect manual "Subtitles Off" state
       if (hasState && currentSid == 0) {
         Log.d(TAG, "Smart Sub: User disabled subtitles manually. Respecting choice.")
         return
       }
-
-      if (hasState && currentSid > 0) return
+      if (hasState && currentSid > 0 && !isSubtitleIgnored(currentSid)) return
 
       val isAnimeContext = detectAnimeContext(tracks)
       Log.d(TAG, "Smart Tracks: Context defined by Internal Auto-Detection -> $isAnimeContext")
@@ -245,17 +252,16 @@ class TrackSelector(
       if (preferredLangs.isEmpty()) preferredLangs = listOf("eng", "en")
 
       val ignoreSubs = listOf("signs", "songs", "lyrics", "forced", "sdh", "colored", "karaoke")
-      val subTracks = tracks.filter { it.type == "sub" }
+      val subTracks = tracks.filter { it.type == "sub" && !isSubtitleIgnored(it.id) }
+      suspend fun apply(track: Track, label: String): Boolean {
+        Log.d(TAG, "Smart Sub: $label (id=${track.id})")
+        return selectSubtitle(track.id)
+      }
 
-      // PASS 00: EXTERNAL TRACK OVERRIDE (Protects manually loaded subtitle files)
+      // PASS 00: EXTERNAL TRACK OVERRIDE
       for (track in subTracks) {
         if (track.external) {
-          if (currentSid == track.id) {
-            Log.d(TAG, "Smart Sub: External Subtitle Detected (id=${track.id}) [Already Active. Skipping Change.]")
-          } else {
-            Log.d(TAG, "Smart Sub: External Subtitle Detected (id=${track.id}) [Applied]")
-            PlayerLib.setPropertyInt("sid", track.id)
-          }
+          apply(track, "External Subtitle Detected")
           return
         }
       }
@@ -263,19 +269,11 @@ class TrackSelector(
       // PASS A0: KEEP FILE'S NATIVE DEFAULT JAPANESE SUBS FOR ANIME
       if (isAnimeContext) {
         val defaultCount = subTracks.count { it.isDefault }
-
         if (defaultCount == 1) {
           for (track in subTracks) {
-            if (track.isDefault) {
-              if (track.lang == "jpn" || track.lang == "ja" || track.lang == "jp") {
-                if (currentSid == track.id) {
-                  Log.d(TAG, "Smart Sub: Native File Default Japanese Sub (id=${track.id}) [Already Active. Skipping Change.]")
-                } else {
-                  Log.d(TAG, "Smart Sub: Native File Default Japanese Sub (id=${track.id}) [Applied]")
-                  PlayerLib.setPropertyInt("sid", track.id)
-                }
-                return
-              }
+            if (track.isDefault && (track.lang == "jpn" || track.lang == "ja" || track.lang == "jp")) {
+              apply(track, "Native File Default Japanese Sub")
+              return
             }
           }
         } else if (defaultCount > 1) {
@@ -287,16 +285,11 @@ class TrackSelector(
       if (isAnimeContext) {
         for (prefLang in preferredLangs) {
           for (track in subTracks) {
-            if (track.lang == prefLang || track.lang.startsWith(prefLang)) {
-              if (track.title.contains("dialogue") || track.title.contains("full") || track.title.contains("script")) {
-                if (currentSid == track.id) {
-                  Log.d(TAG, "Smart Sub: Anime Dialogue matched (id=${track.id}) [Already Active. Skipping Change.]")
-                } else {
-                  Log.d(TAG, "Smart Sub: Anime Dialogue matched (id=${track.id}) [Applied]")
-                  PlayerLib.setPropertyInt("sid", track.id)
-                }
-                return
-              }
+            if ((track.lang == prefLang || track.lang.startsWith(prefLang)) &&
+              (track.title.contains("dialogue") || track.title.contains("full") || track.title.contains("script"))
+            ) {
+              apply(track, "Anime Dialogue matched")
+              return
             }
           }
         }
@@ -305,35 +298,24 @@ class TrackSelector(
       // PASS B: CLEAN LANGUAGE MATCH
       for (prefLang in preferredLangs) {
         for (track in subTracks) {
-          if (track.lang == prefLang || track.lang.startsWith(prefLang)) {
-            if (ignoreSubs.none { track.title.contains(it) } && !track.forced && !track.hearing) {
-              if (currentSid == track.id) {
-                Log.d(TAG, "Smart Sub: Clean Match (id=${track.id}) [Already Active. Skipping Change.]")
-              } else {
-                Log.d(TAG, "Smart Sub: Clean Match (id=${track.id}) [Applied]")
-                PlayerLib.setPropertyInt("sid", track.id)
-              }
-              return
-            }
-          }
-        }
-      }
-      
-      // PASS C: LAST RESORT MATCHING
-      for (prefLang in preferredLangs) {
-        for (track in subTracks) {
-          if (track.lang == prefLang || track.lang.startsWith(prefLang)) {
-            if (currentSid == track.id) {
-              Log.d(TAG, "Smart Sub: Fallback Match (id=${track.id}) [Already Active. Skipping Change.]")
-            } else {
-              Log.d(TAG, "Smart Sub: Fallback Match (id=${track.id}) [Applied]")
-              PlayerLib.setPropertyInt("sid", track.id)
-            }
+          if ((track.lang == prefLang || track.lang.startsWith(prefLang)) &&
+            ignoreSubs.none { track.title.contains(it) } && !track.forced && !track.hearing
+          ) {
+            apply(track, "Clean Match")
             return
           }
         }
       }
 
+      // PASS C: LAST RESORT MATCHING
+      for (prefLang in preferredLangs) {
+        for (track in subTracks) {
+          if (track.lang == prefLang || track.lang.startsWith(prefLang)) {
+            apply(track, "Fallback Match")
+            return
+          }
+        }
+      }
     } catch (e: Exception) {
       Log.e(TAG, "Subtitle selection failed", e)
     }

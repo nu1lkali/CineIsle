@@ -75,6 +75,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -140,6 +141,7 @@ import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import kotlin.math.abs
 
@@ -1778,6 +1780,7 @@ fun PlayerControls(
     // 这里先取一次 Activity：下面传给面板的 lambda 不是 @Composable 上下文，
     // 不能在里面调 LocalActivity.current。
     val hostActivity = LocalActivity.current
+    val subtitleScope = rememberCoroutineScope()
 
     val sheetShown by viewModel.sheetShown.collectAsState()
     val subtitles by viewModel.subtitleTracks.collectAsState(persistentListOf())
@@ -1789,7 +1792,11 @@ fun PlayerControls(
       viewModel = viewModel,
       sheetShown = sheetShown,
       subtitles = subtitles.toImmutableList(),
-      onAddSubtitle = viewModel::addSubtitle,
+      onAddSubtitle = { uri ->
+        subtitleScope.launch {
+          viewModel.loadSubtitle(uri, select = true, silent = false)
+        }
+      },
       onToggleSubtitle = { id ->
         viewModel.toggleSubtitle(id)
         // 记住这条字幕轨（只在选中那一刻记；取消选中不写盘，

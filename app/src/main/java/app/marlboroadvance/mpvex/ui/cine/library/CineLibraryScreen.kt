@@ -118,6 +118,8 @@ fun CineLibraryScreen(
   rootTitle: String? = null,
   /** [rootTitle] 属于哪一层（库根 Id），与它成对继承 */
   rootId: String? = null,
+  /** 已确认的媒体库归属；下钻时原样继承，不与导航根猜测混用 */
+  playbackLibraryId: String? = null,
 ) {
   val context = LocalContext.current
   val app = context.applicationContext as Application
@@ -206,7 +208,8 @@ fun CineLibraryScreen(
     page.items.map { item -> viewModel.toCineMedia(s, item) }
   }
 
-  val playController = rememberCinePlayController()
+  val launchLibraryId = playbackLibraryId?.takeIf { it.isNotBlank() }
+  val playController = rememberCinePlayController(libraryId = launchLibraryId)
 
   /**
    * 点卡片：**一律进详情**（与 Classic 一致），文件夹例外 —— 它是下钻入口。
@@ -235,11 +238,18 @@ fun CineLibraryScreen(
                 ?: title,
             // 那个名字属于哪一层：本页不是根时沿用，否则就是本页自己
             rootId = rootId ?: libraryId,
+            playbackLibraryId = launchLibraryId,
           ),
         )
       }
 
-      else -> backStack.add(EmbyDetailScreen(itemId = item.Id ?: return, title = item.Name ?: ""))
+      else -> backStack.add(
+        EmbyDetailScreen(
+          itemId = item.Id ?: return,
+          title = item.Name ?: "",
+          libraryId = launchLibraryId,
+        ),
+      )
     }
   }
 
@@ -405,7 +415,9 @@ fun CineLibraryScreen(
     viewModel = viewModel,
     playController = playController,
     onOpenDetail = { media ->
-      backStack.add(EmbyDetailScreen(itemId = media.id, title = media.title))
+      backStack.add(
+        EmbyDetailScreen(itemId = media.id, title = media.title, libraryId = launchLibraryId),
+      )
     },
     // 改完重拉当前页：收藏在「只看收藏」分类里会直接决定这条还在不在列表里
     onChanged = { reloadTicket++ },

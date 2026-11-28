@@ -453,7 +453,7 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
 
   fun delete(record: DownloadedSubtitle) {
     viewModelScope.launch {
-      // 统一编排：权威副本 + 用户目录副本 + 清单行一起清，失败聚合在结果里
+      // 统一编排：先同步保存 tombstone，再清权威副本 / 索引 / 清单行。
       val result =
         OnlineSubtitleCleanup.delete(
           context = getApplication(),
@@ -461,14 +461,18 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
           preferences = preferences,
           record = record,
         )
+      refreshLibrary()
+      if (!result.tombstonePersisted) {
+        _state.update { it.copy(notice = "删除记录保存失败，字幕仍保留") }
+        return@launch
+      }
       // 绑定还指着已删除的文件时会「开播挂不上」，顺手解掉
       val title = record.mediaTitle
       if (title.isNotBlank()) {
         runCatching { SubtitleBindings.unbind(preferences, title) }
       }
-      refreshLibrary()
-      if (result.mirrorFailed) {
-        _state.update { it.copy(notice = "已删除字幕，但字幕目录里的副本清理失败，请手动删除") }
+      _state.update {
+        it.copy(notice = "已删除：${record.title}（字幕目录副本已保留并忽略）")
       }
     }
   }
@@ -485,12 +489,13 @@ class OnlineSubtitleViewModel(application: Application) : AndroidViewModel(appli
   suspend fun allDownloaded(): List<DownloadedSubtitle> = withContext(Dispatchers.IO) { library.all() }
 
   suspend fun deleteGlobal(record: DownloadedSubtitle) {
-    OnlineSubtitleCleanup.delete(
+    val result = OnlineSubtitleCleanup.delete(
       context = getApplication(),
       library = library,
       preferences = preferences,
       record = record,
     )
+    if (!result.tombstonePersisted) return
     val title = record.mediaTitle
     if (title.isNotBlank()) runCatching { SubtitleBindings.unbind(preferences, title) }
   }

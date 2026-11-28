@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.player.subtitle
 
 import android.content.Context
+import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
 import app.marlboroadvance.mpvex.domain.subtitle.online.SaveNode
@@ -120,6 +121,7 @@ object LocalSubtitleScanner {
     legacyTreeUri: String,
     query: MediaQuery,
     durationMs: Long? = null,
+    isIgnored: (Uri) -> Boolean = { false },
   ): LocalSubtitleScan {
     if (!SubtitleSaveStore.isConfigured(saveDirPath, legacyTreeUri)) return LocalSubtitleScan()
     if (query.isEmpty) return LocalSubtitleScan()
@@ -175,6 +177,11 @@ object LocalSubtitleScanner {
             // 清单登记的网络字幕副本：跳过，不进候选（询问/重复挂载从源头杜绝）
             if (relativePath in onlineCopies) {
               Log.d(TAG, "skip online-subtitle mirror in local scan: $relativePath")
+              continue
+            }
+            // 清单行可能已因镜像清理失败被移除；持久外部 tombstone 仍要挡住残留文件。
+            if (isIgnored(child.uri)) {
+              Log.d(TAG, "skip tombstoned local subtitle: $relativePath")
               continue
             }
             found +=

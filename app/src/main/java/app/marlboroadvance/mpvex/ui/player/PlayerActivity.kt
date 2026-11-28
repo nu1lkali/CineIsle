@@ -68,6 +68,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyClient
 import app.marlboroadvance.mpvex.domain.emby.EmbyServer
 import app.marlboroadvance.mpvex.domain.emby.StreamProbe
 import app.marlboroadvance.mpvex.domain.playbackstate.repository.PlaybackStateRepository
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleSource
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibraryScope
 import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
@@ -351,6 +352,10 @@ open class PlayerActivity :
    */
   @Volatile
   private var playlistItemIds: List<String> = emptyList()
+
+  /** 与 [playlistItemIds] 同序的媒体库 Id；空串 = 入口未提供明确归属。 */
+  @Volatile
+  private var playlistLibraryIds: List<String> = emptyList()
 
   /**
    * 当前挂着的那一个 Emby 上报观察者。
@@ -708,6 +713,10 @@ open class PlayerActivity :
     playlistItemIds =
       intent.getStringArrayListExtra(
         app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_ITEM_IDS,
+      ) ?: emptyList()
+    playlistLibraryIds =
+      intent.getStringArrayListExtra(
+        app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_LIBRARY_IDS,
       ) ?: emptyList()
     // 网络队列的原始路径表（与 playlist 同序）—— 换片后按 playlistIndex 取当前片的
     // 网络路径算进度键 / 找字幕，避免队列连播时全串到第一片（见 networkFilePaths 注释）
@@ -1827,12 +1836,10 @@ open class PlayerActivity :
   }
 
   /**
-   * Processes intent extras to set initial playback position, subtitles, and HTTP headers.
+   * Processes intent extras to set initial playback position and HTTP headers.
    *
    * This method checks the intent extras for the following keys:
    * - "position": The initial playback position in seconds.
-   * - "subs": A list of subtitle URIs to add.
-   * - "subs.enable": A list of subtitle URIs to enable.
    * - "headers": A list of HTTP headers to set for network playback.
    *
    * @param extras Bundle containing intent extras
@@ -1844,7 +1851,6 @@ open class PlayerActivity :
       PlayerLib.setPropertyInt("time-pos", it / MILLISECONDS_TO_SECONDS)
     }
 
-    addSubtitlesFromExtras(extras)
     setHttpHeadersFromExtras(extras)
   }
 
@@ -1862,21 +1868,20 @@ open class PlayerActivity :
 
     val subList = Utils.getParcelableArray<Uri>(extras, "subs")
     val subsToEnable = Utils.getParcelableArray<Uri>(extras, "subs.enable")
+    val sessionId = viewModel.currentSubtitleSessionId()
 
     lifecycleScope.launch(Dispatchers.Default) {
       for (suburi in subList) {
-        val subfile = suburi.resolveUri(this@PlayerActivity) ?: continue
-        val flag = if (subsToEnable.any { it == suburi }) "select" else "auto"
-
-        Log.v(TAG, "Adding subtitles from intent extras: $subfile")
-        // 归一成 UTF-8 再挂：否则 mpv 会自己猜编码，Big5 繁体字幕被当 GBK 解就是乱码。
-        // 这里已经在 Default 线程，读盘 + 转码不会卡 UI。
-        val mpvSubPath =
-          runCatching {
-            app.marlboroadvance.mpvex.domain.subtitle.SubtitleFileNormalizer
-              .forPlayback(applicationContext, subfile)
-          }.getOrDefault(subfile)
-        PlayerLib.command("sub-add", mpvSubPath, flag)
+        if (!viewModel.isSubtitleSessionCurrent(sessionId)) return@launch
+        val select = subsToEnable.any { it == suburi }
+        Log.v(TAG, "Adding subtitles from intent extras: $suburi")
+        viewModel.loadSubtitle(
+          suburi,
+          select = select,
+          silent = true,
+          source = SubtitleSource.INTENT,
+          sessionId = sessionId,
+        )
       }
     }
   }
@@ -2178,6 +2183,11 @@ open class PlayerActivity :
       i.add(to, i.removeAt(from))
       playlistItemIds = i
     }
+    if (playlistLibraryIds.size == movedItems.size) {
+      val libraries = playlistLibraryIds.toMutableList()
+      libraries.add(to, libraries.removeAt(from))
+      playlistLibraryIds = libraries
+    }
     // 剧集序号也必须跟着换位：弹幕按它匹配集号，错位 = 整场弹幕对不上画面
     if (playlistEpisodeNumbers.size == movedItems.size) {
       val e = playlistEpisodeNumbers.toMutableList()
@@ -2227,6 +2237,9 @@ open class PlayerActivity :
     }
     if (playlistItemIds.size == items.size + 1) {
       playlistItemIds = playlistItemIds.toMutableList().also { it.removeAt(index) }
+    }
+    if (playlistLibraryIds.size == items.size + 1) {
+      playlistLibraryIds = playlistLibraryIds.toMutableList().also { it.removeAt(index) }
     }
     if (playlistEpisodeNumbers.size == items.size + 1) {
       playlistEpisodeNumbers = playlistEpisodeNumbers.toMutableList().also { it.removeAt(index) }
@@ -2317,16 +2330,11 @@ open class PlayerActivity :
             intent
               .getLongExtra(app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_SERVER_ID, -1L)
               .takeIf { it > 0 },
-          embyItemIds =
-            intent.getStringArrayListExtra(
-              app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_ITEM_IDS,
-            ) ?: emptyList(),
+          embyItemIds = playlistItemIds,
+          embyLibraryIds = playlistLibraryIds,
           // 多版本条目：换成 GSY 内核后上报的进度还得记在**同一个版本**上，
           // 缺了这张表服务端只能落到默认版本（与 itemIds 同序，判当前项仍用 index）
-          embyMediaSourceIds =
-            intent.getStringArrayListExtra(
-              app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID,
-            ) ?: emptyList(),
+          embyMediaSourceIds = playlistMediaSourceIds,
           headers = intent.getStringArrayExtra("headers"),
           // 按剧亮度跨内核带过去（GSY 是另一个 Activity 的 window，不带就弹回默认）
           brightness = if (playerPreferences.rememberSeriesBrightness.get()) {
@@ -3239,6 +3247,13 @@ private fun cancelAutoplayCountdown() {
     return playlistItemIds.getOrNull(playlistIndex)?.takeIf { it.isNotBlank() }
   }
 
+  /** 当前项发起播放时携带的媒体库 Id；未知或平行数组错位时返回 null。 */
+  private fun currentEmbyLibraryId(): String? {
+    val expectedSize = if (playlist.isEmpty()) 1 else playlist.size
+    if (playlistLibraryIds.size != expectedSize) return null
+    return playlistLibraryIds.getOrNull(playlistIndex)?.takeIf { it.isNotBlank() }
+  }
+
   /**
    * 当前播放条目**实际在播的那个版本**的媒体源 Id；单版本 / 非 Emby 返回 null。
    *
@@ -3250,6 +3265,14 @@ private fun cancelAutoplayCountdown() {
    * 队列下标是「正在播第几项」的唯一真相（换位 / 删除都同步维护这份平行数组），
    * 所以先按 [playlistIndex] 取，取不到才退回 Map（兼容没有平行数组的旧 intent）。
    */
+  private fun updateEmbySubtitleTrackContext() {
+    viewModel.setEmbySubtitleTrackContext(
+      currentEmbyServerId()?.toString(),
+      currentEmbyItemId(),
+      currentEmbyMediaSourceId(),
+    )
+  }
+
   fun currentEmbyMediaSourceId(): String? =
     // 只在「平行数组与队列等长」时按下标取：单条播放（launchSingle）时数组只有 1 项、
     // 而队列可能是随后自动生成的（N 项），那种情况下按下标取会张冠李戴。
@@ -3328,7 +3351,8 @@ private fun cancelAutoplayCountdown() {
    * [currentEmbyItemId] / [currentEmbyMediaSourceId] 已经处理了「换位 / 随机播放」
    * 造成的下标错位，直接用它们比在这里再推一遍可靠。
    */
-  private suspend fun applyEmbyAutoSubtitle() {
+  private suspend fun applyEmbyAutoSubtitle(sessionId: Long) {
+    if (!viewModel.isSubtitleSessionCurrent(sessionId)) return
     val serverId = currentEmbyServerId() ?: return
     val itemId = currentEmbyItemId() ?: return
     val server =
@@ -3338,11 +3362,13 @@ private fun cancelAutoplayCountdown() {
       }
     val mediaSourceId = currentEmbyMediaSourceId()
     val applied =
-      runCatching { viewModel.autoLoadEmbySubtitle(server, itemId, mediaSourceId) }
+      runCatching { viewModel.autoLoadEmbySubtitle(server, itemId, mediaSourceId, sessionId) }
         .onFailure { Log.e(TAG, "emby subtitle auto load failed: item=$itemId", it) }
         .getOrDefault(false)
     // 服务端没给出任何字幕 ⇒ 走「网络字幕兜底」（设置开启时才动作）
-    if (!applied) maybeAutoFetchOnlineSubtitle(server, itemId, mediaSourceId)
+    if (!applied && viewModel.isSubtitleSessionCurrent(sessionId)) {
+      maybeAutoFetchOnlineSubtitle(server, itemId, mediaSourceId, sessionId)
+    }
   }
 
   /**
@@ -3358,11 +3384,13 @@ private fun cancelAutoplayCountdown() {
     server: EmbyServer,
     itemId: String,
     mediaSourceId: String?,
+    sessionId: Long,
   ) {
+    if (!viewModel.isSubtitleSessionCurrent(sessionId)) return
     if (!subtitlesPreferences.onlineAutoFetch.get()) return
     // 媒体库排除闸：被排除的库里任何视频都不向字幕源发请求。放在最前面，
     // 排除集合为空（默认全库生效）时直接放行，连 Ancestors 都不查。
-    if (isLibraryExcludedFromOnlineFetch(server, itemId)) return
+    if (isLibraryExcludedFromOnlineFetch(server, itemId, mediaSourceId)) return
     // 画面上已经有字幕就不再兜底（服务端自动挂上 / 用户本集开过）
     if ((PlayerLib.getPropertyInt("sid") ?: -1) > 0) return
     // 中文字幕版本（文件名 / 路径带中字标记）本身就带字，别再去网络下载重复挂载。
@@ -3370,7 +3398,7 @@ private fun cancelAutoplayCountdown() {
     // 放行，不让网络抖动改变原有行为。
     if (isChineseSubtitleVersion(server, itemId, mediaSourceId)) return
     val result =
-      runCatching { viewModel.autoFetchOnlineSubtitle(server, itemId, mediaSourceId) }
+      runCatching { viewModel.autoFetchOnlineSubtitle(server, itemId, mediaSourceId, sessionId) }
         .onFailure { Log.w(TAG, "online subtitle auto fetch failed: item=$itemId", it) }
         .getOrNull() ?: return
     if (result.message.isNotBlank()) {
@@ -3387,42 +3415,97 @@ private fun cancelAutoplayCountdown() {
     }
   }
 
-  /**
-   * 当前播放项所属媒体库是否被排除出网络字幕自动下载。
-   *
-   * ## 为什么用 Ancestors
-   *
-   * 起播 intent 里只有 `server / itemId / mediaSourceId`，不带库 Id；`EmbyItem.ParentId`
-   * 也只是直接父目录（可能是季 / 合集 / 任意层级）。`/Items/{id}/Ancestors` 由近到远
-   * 返回整条链，链上第一个 `CollectionFolder` / `UserView` 才是用户设置的媒体库。
-   *
-   * ## 什么时候不发请求
-   *
-   * 排除集合为空（默认全库生效）时不查 Ancestors、不发任何请求 —— 默认路径零额外开销。
-   * 取 Ancestors 失败 / 认不出库时也放行，不让一次网络抖动把自动下载弄丢。
-   */
+  /** 优先用起播上下文里的媒体库 Id；旧入口才回退祖先链与媒体库根路径。 */
   private suspend fun isLibraryExcludedFromOnlineFetch(
     server: EmbyServer,
     itemId: String,
+    mediaSourceId: String?,
   ): Boolean {
     val excluded = subtitlesPreferences.onlineFetchExcludedLibraries.get()
     if (excluded.isEmpty()) return false
-    val ancestors =
-      runCatching { embyRepository.getItemAncestors(server, itemId) }
-        .getOrDefault(emptyList())
-    val libraryId =
-      ancestors.firstOrNull { it.Type == "CollectionFolder" || it.Type == "UserView" }?.Id
-        ?: return false
-    val hit = OnlineSubtitleLibraryScope.isExcluded(
+    val prefix = "${server.id}:${server.userId}|"
+    if (excluded.none { it.startsWith(prefix) }) return false
+
+    val explicitLibraryId = currentEmbyLibraryId()
+    val explicitHit = OnlineSubtitleLibraryScope.isExcluded(
       excludedKeys = excluded,
       serverId = server.id,
       userId = server.userId,
-      libraryId = libraryId,
+      libraryId = explicitLibraryId,
     )
-    if (hit) {
-      Log.i(TAG, "skip online subtitle auto fetch: library excluded item=$itemId library=$libraryId")
+    if (explicitHit) {
+      Log.i(TAG, "library scope: item=$itemId library=$explicitLibraryId excluded=true source=launch")
+      return true
     }
-    return hit
+    if (!explicitLibraryId.isNullOrBlank()) {
+      Log.i(TAG, "library scope: item=$itemId library=$explicitLibraryId excluded=false source=launch")
+      return false
+    }
+
+    val knownIds =
+      excluded.filter { it.startsWith(prefix) }.mapNotNull { key ->
+        key.removePrefix(prefix).takeIf { it.isNotBlank() }
+      }
+    val anchorIds = resolveLibraryAnchorIds(server, itemId)
+    val ancestorLibraryId = OnlineSubtitleLibraryScope.resolveLibraryId(anchorIds, knownIds.toSet())
+    val ancestorHit = OnlineSubtitleLibraryScope.isExcluded(
+      excludedKeys = excluded,
+      serverId = server.id,
+      userId = server.userId,
+      libraryId = ancestorLibraryId,
+    )
+    if (ancestorHit) {
+      Log.i(TAG, "library scope: item=$itemId library=$ancestorLibraryId excluded=true source=ancestor")
+      return true
+    }
+
+    val item = runCatching { embyRepository.getItem(server, itemId) }.getOrNull()
+    val libraries =
+      runCatching { embyRepository.getVirtualFolders(server) }.getOrDefault(emptyList())
+    val itemPath =
+      item?.MediaSources?.firstOrNull { it.Id == mediaSourceId }?.Path
+        ?: item?.Path
+        ?: item?.MediaSources?.firstOrNull()?.Path
+    val pathLibraryId = OnlineSubtitleLibraryScope.resolveLibraryIdByPath(
+      itemPath = itemPath,
+      libraries = libraries.mapNotNull { library ->
+        library.Id?.let { OnlineSubtitleLibraryScope.LibraryRoot(it, library.Path) }
+      },
+    )
+    val pathHit = OnlineSubtitleLibraryScope.isExcluded(
+      excludedKeys = excluded,
+      serverId = server.id,
+      userId = server.userId,
+      libraryId = pathLibraryId,
+    )
+    Log.i(
+      TAG,
+      "library scope: item=$itemId ancestor=$ancestorLibraryId path=$pathLibraryId " +
+        "excluded=$pathHit known=$knownIds ancestors=${anchorIds.map { "${it.type}:${it.id}" }}",
+    )
+    return pathHit
+  }
+
+  /** 祖先链不可用时按 ParentId 上溯，保留普通文件夹节点供已知库 Id 匹配。 */
+  private suspend fun resolveLibraryAnchorIds(
+    server: EmbyServer,
+    itemId: String,
+  ): List<OnlineSubtitleLibraryScope.Anchor> {
+    val ancestors =
+      runCatching { embyRepository.getItemAncestors(server, itemId) }.getOrDefault(emptyList())
+    if (ancestors.isNotEmpty()) {
+      return ancestors.map { OnlineSubtitleLibraryScope.Anchor(id = it.Id.orEmpty(), type = it.Type) }
+    }
+    val chain = ArrayList<OnlineSubtitleLibraryScope.Anchor>()
+    var cursor = runCatching { embyRepository.getItem(server, itemId) }.getOrNull()?.ParentId
+    var guard = 0
+    while (!cursor.isNullOrBlank() && guard < 8) {
+      val parent = runCatching { embyRepository.getItem(server, cursor) }.getOrNull() ?: break
+      chain += OnlineSubtitleLibraryScope.Anchor(id = parent.Id.orEmpty(), type = parent.Type)
+      cursor = parent.ParentId
+      guard++
+    }
+    return chain
   }
 
   /**
@@ -3480,7 +3563,8 @@ private fun cancelAutoplayCountdown() {
    * 选择结果同样会写进 `EmbySubtitleController.state`（面板据此显示「自动会选哪条」），
    * 只是不调用挂载。
    */
-  private suspend fun applyEmbySubtitleDiscoveryOnly() {
+  private suspend fun applyEmbySubtitleDiscoveryOnly(sessionId: Long) {
+    if (!viewModel.isSubtitleSessionCurrent(sessionId)) return
     val serverId = currentEmbyServerId() ?: return
     val itemId = currentEmbyItemId() ?: return
     val server =
@@ -3489,7 +3573,7 @@ private fun cancelAutoplayCountdown() {
         return
       }
     val mediaSourceId = currentEmbyMediaSourceId()
-    runCatching { viewModel.refreshEmbySubtitleList(server, itemId, mediaSourceId) }
+    runCatching { viewModel.refreshEmbySubtitleList(server, itemId, mediaSourceId, sessionId) }
       .onFailure { Log.e(TAG, "emby subtitle discovery failed: item=$itemId", it) }
   }
 
@@ -3499,7 +3583,8 @@ private fun cancelAutoplayCountdown() {
    * 只在开关打开且有记忆键时生效；音轨按指纹匹配（见 [PlaybackMemory]），
    * 匹配不到就什么都不做，交给 TrackSelector 的默认语言逻辑。
    */
-  private fun applyRememberedPlaybackSettings() {
+  private suspend fun applyRememberedPlaybackSettings(sessionId: Long) {
+    if (!viewModel.isSubtitleSessionCurrent(sessionId)) return
     val key = currentSeriesKey()
     viewModel.seriesKey = key
     // b4 全局倍速记忆作为**兜底**：先套全局上次倍速，再让每剧记忆覆盖。
@@ -3536,7 +3621,7 @@ private fun cancelAutoplayCountdown() {
       if (!fingerprint.isNullOrBlank()) {
         val trackId = PlaybackMemory.findSubtitleTrackId(fingerprint)
         if (trackId != null && trackId > 0) {
-          runCatching { PlayerLib.setPropertyInt("sid", trackId) }
+          viewModel.selectSubtitleTrack(trackId, SubtitleSource.REMEMBERED, sessionId)
         }
       }
     }
@@ -4101,6 +4186,8 @@ private fun cancelAutoplayCountdown() {
       runCatching { MpvDiskCache.trimIfNeeded(this@PlayerActivity, diskCacheLimitMb) }
     }
 
+    val subtitleSession = viewModel.beginSubtitleSession()
+    restoredSubtitleSelections.clear()
     setIntentExtras(intent.extras)
 
     // ── 弹幕：文件真正加载完成时补一次「换集」通知 ──
@@ -4129,7 +4216,12 @@ private fun cancelAutoplayCountdown() {
     if (!isCurrentStreamM3U()) {
       PlayerLib.setPropertyString("force-media-title", fileName)
       viewModel.setMediaTitle(fileName)
+      updateEmbySubtitleTrackContext()
+      viewModel.restoreLocalSubtitleSources()
     }
+
+    // 外挂 Intent 会启动异步加载；必须等新媒体会话与标题跟踪表建好后再发。
+    intent.extras?.let(::addSubtitlesFromExtras)
 
     lifecycleScope.launch(Dispatchers.IO) {
       // Load playback state. 这几步的**顺序**是外挂字幕能记住的关键：
@@ -4138,17 +4230,23 @@ private fun cancelAutoplayCountdown() {
       //    不能挡住音轨偏好等其他恢复步骤）；有存档时不抢选择（autoSelectFirst = false）；
       // 3) 等自动加载也挂完，最后才把存档里的字幕选择套一次 —— 此时所有字幕轨都已就位。
       // Load playback state (will skip track restoration if preferred language configured)
-      val hasState = loadVideoPlaybackState(fileName)
+      val hasState = loadVideoPlaybackState(fileName, subtitleSession)
 
-      val autoloadJob = launch { autoloadMatchingSubtitles(autoSelectFirst = !hasState) }
+      val autoloadJob = launch { autoloadMatchingSubtitles(autoSelectFirst = !hasState, subtitleSession) }
 
       // Apply track selection logic (defaults only apply when no saved state)
-      trackSelector.onFileLoaded(hasState)
+      trackSelector.onFileLoaded(
+        hasState = hasState,
+        selectSubtitle = { id ->
+          viewModel.selectSubtitleTrack(id, SubtitleSource.AUTOLOAD, subtitleSession)
+        },
+        isSubtitleIgnored = viewModel::isSubtitleTrackIgnored,
+      )
 
       // 「每部剧记住速度 / 音轨」：必须在 TrackSelector 之后，
       // 否则会被默认语言逻辑覆盖掉用户上次手动选的音轨。
       // （字幕那一项会自己查手动绑定，有绑定时跳过，见 applyRememberedPlaybackSettings）
-      applyRememberedPlaybackSettings()
+      applyRememberedPlaybackSettings(subtitleSession)
 
       // （Emby 字幕的触发点在本块末尾、applyRestoredSubtitleSelection 之后 —— 见那里注释）
 
@@ -4188,7 +4286,7 @@ private fun cancelAutoplayCountdown() {
       // 这里不设死等：网络目录列举可能很慢，最多等 1.2s 就照旧套存档 —— 宁可忽略
       // 一条同名外挂字幕，也不能把「记住的字幕」拖着不显示。
       withTimeoutOrNull(1200) { autoloadJob.join() }
-      applyRestoredSubtitleSelection()
+      applyRestoredSubtitleSelection(subtitleSession)
 
       // ── 客户端网络字幕（详情页 / 字幕实验室下载的）：按 ItemId 挂回来 ──
       //
@@ -4200,6 +4298,8 @@ private fun cancelAutoplayCountdown() {
       // 位置：必须在 applyRestoredSubtitleSelection **之后** —— 存档里「上次选的就是
       // 这条」由它先还原；这里只负责「把库里所有已下载字幕挂成轨道，且在用户没有
       // 明确存档选择时选一条」，不推翻已有选择。
+      val savedSubtitleSelection = restoredSubtitleSelections[subtitleSession]
+        ?: (NO_SAVED_SUBTITLE_SELECTION to NO_SAVED_SUBTITLE_SELECTION)
       val onlineMounted =
         runCatching {
           val embyServerId = currentEmbyServerId()
@@ -4210,7 +4310,8 @@ private fun cancelAutoplayCountdown() {
             viewModel.mountOnlineLibrarySubtitles(
               serverKey = embyServerId.toString(),
               itemId = embyItemId,
-              allowSelect = restoredSubtitleSid <= 0 && !viewModel.boundSubtitleApplied,
+              allowSelect = savedSubtitleSelection.first <= 0 && !viewModel.boundSubtitleApplied,
+              sessionId = subtitleSession,
             )
           }
         }.getOrElse { error ->
@@ -4240,12 +4341,12 @@ private fun cancelAutoplayCountdown() {
         // 用户为这部片子下过网络字幕，且本次已经挂上（可能还选好了）：
         // Emby 的自动策略不再抢选择，但清单仍要拉给面板 —— 用户可能想换成内嵌那条。
         Log.d(TAG, "skip emby subtitle auto: 网络字幕已挂载")
-        launch { applyEmbySubtitleDiscoveryOnly() }
-      } else if (restoredSubtitleSid > 0) {
-        Log.d(TAG, "skip emby subtitle auto: 存档已选定字幕 sid=$restoredSubtitleSid")
-        launch { applyEmbySubtitleDiscoveryOnly() }
+        launch { applyEmbySubtitleDiscoveryOnly(subtitleSession) }
+      } else if (savedSubtitleSelection.first > 0) {
+        Log.d(TAG, "skip emby subtitle auto: 存档已选定字幕 sid=${savedSubtitleSelection.first}")
+        launch { applyEmbySubtitleDiscoveryOnly(subtitleSession) }
       } else {
-        launch { applyEmbyAutoSubtitle() }
+        launch { applyEmbyAutoSubtitle(subtitleSession) }
       }
     }
 
@@ -4474,6 +4575,8 @@ private fun cancelAutoplayCountdown() {
           withContext(Dispatchers.Main) {
             PlayerLib.setPropertyString("force-media-title", fileName)
             viewModel.setMediaTitle(fileName)
+            updateEmbySubtitleTrackContext()
+            viewModel.restoreLocalSubtitleSources()
 
 // Update media session
             val durationMs = (PlayerLib.getPropertyDouble("duration")?.times(1000))?.toLong() ?: 0L
@@ -4778,23 +4881,21 @@ private fun cancelAutoplayCountdown() {
    * @param mediaTitle The title of the media being played
    * @return true if saved state was found and applied, false otherwise
    */
-  private suspend fun loadVideoPlaybackState(mediaTitle: String): Boolean {
+  private suspend fun loadVideoPlaybackState(mediaTitle: String, sessionId: Long): Boolean {
     // 「从头播放」是一次性标记：这里读出后立刻清掉，避免影响后面的剧集。
     // 「整场从头播放」（随机播放入口）是会话级标记：整个会话都不清，切到哪个视频都从头放。
     val playFromStart = playFromStartOnce || playFromStartAllSession
     playFromStartOnce = false
 
-    // 先清掉上一集留下的「待恢复字幕选择」，避免 mediaIdentifier 为空直接 return 时
-    // 把上一集的 sid 误套到本集上（会连累 applyRestoredSubtitleSelection）。
-    restoredSubtitleSid = NO_SAVED_SUBTITLE_SELECTION
-    restoredSecondarySubtitleSid = NO_SAVED_SUBTITLE_SELECTION
-
-    if (mediaIdentifier.isBlank()) return false
+    restoredSubtitleSelections[sessionId] = NO_SAVED_SUBTITLE_SELECTION to NO_SAVED_SUBTITLE_SELECTION
+    if (mediaIdentifier.isBlank() || !viewModel.isSubtitleSessionCurrent(sessionId)) return false
 
     return runCatching {
       val state = playbackStateRepository.getVideoDataByTitle(mediaIdentifier)
+      if (!viewModel.isSubtitleSessionCurrent(sessionId)) return@runCatching false
 
-      applyPlaybackState(state, playFromStart)
+      applyPlaybackState(state, playFromStart, sessionId)
+      if (!viewModel.isSubtitleSessionCurrent(sessionId)) return@runCatching false
       applyDefaultSettings(state)
 
       state != null
@@ -4803,13 +4904,8 @@ private fun cancelAutoplayCountdown() {
     }.getOrDefault(false)
   }
 
-  /**
-   * 本次加载从存档里读到的字幕选择（主 / 副）。哨兵值见 [NO_SAVED_SUBTITLE_SELECTION]。
-   * 先记下来、等所有字幕来源都挂上之后再统一套 —— 见 [applyRestoredSubtitleSelection]。
-   */
-  private var restoredSubtitleSid: Int = NO_SAVED_SUBTITLE_SELECTION
-
-  private var restoredSecondarySubtitleSid: Int = NO_SAVED_SUBTITLE_SELECTION
+  /** 存档字幕选择按播放会话隔离，旧协程不能覆盖新一集的待恢复值。 */
+  private val restoredSubtitleSelections = java.util.concurrent.ConcurrentHashMap<Long, Pair<Int, Int>>()
 
   /**
    * 自动加载与视频同名的外挂字幕（本地同目录 / 同网络路径），受设置开关控制。
@@ -4817,7 +4913,8 @@ private fun cancelAutoplayCountdown() {
    * @param autoSelectFirst 有存档时传 false：只把字幕挂上去、**不选**，选哪条留给存档说了算。
    *   否则这里会把用户上次手动选的那条顶掉，「记住的字幕」看起来就没生效。
    */
-  private suspend fun autoloadMatchingSubtitles(autoSelectFirst: Boolean) {
+  private suspend fun autoloadMatchingSubtitles(autoSelectFirst: Boolean, sessionId: Long) {
+    if (!viewModel.isSubtitleSessionCurrent(sessionId)) return
     if (!subtitlesPreferences.autoloadMatchingSubtitles.get()) return
     runCatching {
       // For network files played via proxy (SMB/WebDAV/FTP), use the original network file path
@@ -4834,7 +4931,9 @@ private fun cancelAutoplayCountdown() {
           videoFileName = fileName,
           networkConnectionId = networkConnectionId,
           autoSelectFirst = autoSelectFirst,
-          context = applicationContext,
+          loadSubtitle = { source, select, title ->
+            viewModel.loadSubtitlePath(source, select, title, SubtitleSource.AUTOLOAD, sessionId)
+          },
         )
       } else {
         // Regular file or direct network stream
@@ -4844,7 +4943,9 @@ private fun cancelAutoplayCountdown() {
             videoFilePath = filePath,
             videoFileName = fileName,
             autoSelectFirst = autoSelectFirst,
-            context = applicationContext,
+            loadSubtitle = { source, select, title ->
+            viewModel.loadSubtitlePath(source, select, title, SubtitleSource.AUTOLOAD, sessionId)
+          },
           )
         }
       }
@@ -4860,7 +4961,7 @@ private fun cancelAutoplayCountdown() {
    *   · 晚一步又会被自动加载的 `select` 抢走。
    * 所以统一收口在这里，一次套准。三种情况：选中某条 / 只选了副字幕 / 上次就没字幕。
    */
-  private fun applyRestoredSubtitleSelection() {
+  private suspend fun applyRestoredSubtitleSelection(sessionId: Long) {
     // 外部应用经 intent 显式指定要启用的字幕（subs.enable）优先级最高 —— 那是用户在
     // 文件管理器里点「用影屿播放 + 带上这条字幕」，不该被存档里的旧选择盖掉。
     if (intent.hasExtra("subs.enable")) return
@@ -4873,38 +4974,11 @@ private fun cancelAutoplayCountdown() {
       return
     }
 
-    val sid = restoredSubtitleSid
-    if (sid == NO_SAVED_SUBTITLE_SELECTION) return
-    val secondarySid = restoredSecondarySubtitleSid
-
-    when {
-      sid > 0 -> {
-        if (player.sid != sid) player.sid = sid
-        if (secondarySid > 0 && secondarySid != sid) {
-          if (player.secondarySid != secondarySid) player.secondarySid = secondarySid
-        } else if (player.secondarySid > 0) {
-          player.secondarySid = -1
-        }
-        Log.d(TAG, "Restored subtitle selection: sid=$sid, secondary=$secondarySid")
-      }
-
-      secondarySid > 0 -> {
-        // 只有副字幕：提到主字幕（单条字幕必须贴底显示）
-        player.secondarySid = -1
-        player.sid = secondarySid
-        Log.d(TAG, "Promoted saved secondary subtitle track $secondarySid to primary (single subtitle must stay at bottom)")
-      }
-
-      else -> {
-        // 上次没有选中任何字幕：保持关闭 —— 否则「同名自动加载」或文件自带的默认轨会把它
-        // 重新打开，用户会以为「我把字幕关了」这个选择没被记住。
-        if (player.sid > 0) {
-          player.sid = -1
-          Log.d(TAG, "Restored 'subtitles off' state from saved state")
-        }
-        if (player.secondarySid > 0) player.secondarySid = -1
-      }
-    }
+    val savedSelection = restoredSubtitleSelections[sessionId] ?: return
+    val savedSid = savedSelection.first
+    if (savedSid == NO_SAVED_SUBTITLE_SELECTION) return
+    viewModel.applySavedSubtitleSelection(savedSid, savedSelection.second, sessionId)
+    Log.d(TAG, "Restored subtitle selection via arbiter: sid=$savedSid, secondary=${savedSelection.second}")
   }
 
   /**
@@ -4921,18 +4995,17 @@ private fun cancelAutoplayCountdown() {
   private suspend fun applyPlaybackState(
     state: PlaybackStateEntity?,
     playFromStart: Boolean = false,
+    sessionId: Long = viewModel.currentSubtitleSessionId(),
   ) {
     if (state == null) {
       // 没有存档：字幕交给 TrackSelector 按偏好决定，这里不记任何「待恢复的选择」
-      restoredSubtitleSid = NO_SAVED_SUBTITLE_SELECTION
-      restoredSecondarySubtitleSid = NO_SAVED_SUBTITLE_SELECTION
+      restoredSubtitleSelections[sessionId] = NO_SAVED_SUBTITLE_SELECTION to NO_SAVED_SUBTITLE_SELECTION
       return
     }
 
     // 先把存档里的字幕选择记下来，等所有字幕来源（存档外挂字幕 / 同名自动加载 /
     // 下载目录扫描）都挂上之后，再由 applyRestoredSubtitleSelection() 统一定夺。
-    restoredSubtitleSid = state.sid
-    restoredSecondarySubtitleSid = state.secondarySid
+    restoredSubtitleSelections[sessionId] = state.sid to state.secondarySid
 
     val subDelay = state.subDelay / DELAY_DIVISOR
     val audioDelay = state.audioDelay / DELAY_DIVISOR
@@ -4953,7 +5026,13 @@ private fun cancelAutoplayCountdown() {
 
       for (subUri in externalSubUris) {
         // 用可挂起的版本：加完再往下，不再即发即忘
-        viewModel.loadSubtitle(Uri.parse(subUri), select = false, silent = true)
+        viewModel.loadSubtitle(
+          Uri.parse(subUri),
+          select = false,
+          silent = true,
+          source = SubtitleSource.SAVED_EXTERNAL,
+          sessionId = sessionId,
+        )
       }
 
       if (pendingCount > 0) {
@@ -5214,6 +5293,10 @@ private fun cancelAutoplayCountdown() {
       playlistItemIds =
         intent.getStringArrayListExtra(
           app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_ITEM_IDS,
+        ) ?: emptyList()
+      playlistLibraryIds =
+        intent.getStringArrayListExtra(
+          app.marlboroadvance.mpvex.ui.browser.emby.EmbyPlaybackReporter.EXTRA_LIBRARY_IDS,
         ) ?: emptyList()
       // 多版本源映射同理：换了队列就重建
       embyMediaSourceByItemId = buildEmbyMediaSourceMap(intent)
@@ -6001,6 +6084,7 @@ private fun cancelAutoplayCountdown() {
     if (!isM3U) {
       PlayerLib.setPropertyString("force-media-title", fileName)
       viewModel.setMediaTitle(fileName)
+      updateEmbySubtitleTrackContext()
     }
 
     // Update media session metadata
@@ -6035,6 +6119,8 @@ private fun cancelAutoplayCountdown() {
    * 也不能删磁盘文件 —— 用户可能还想在 B 里重新选同一条字幕。
    */
   private fun clearSubtitlesBeforePlaylistSwitch() {
+    viewModel.beginSubtitleSession()
+    restoredSubtitleSelections.clear()
     var removed = 0
     runCatching {
       PlayerLib.setPropertyString("secondary-sid", "no")

@@ -1,10 +1,5 @@
 package app.marlboroadvance.mpvex.ui.browser.emby.smartmerge
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
-import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewParent
@@ -41,7 +36,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -62,9 +56,8 @@ import androidx.media3.ui.PlayerView
 import app.marlboroadvance.mpvex.domain.smartmerge.SmartMergeItem
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyVersionOption
 import app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyVersionPickerSheet
+import app.marlboroadvance.mpvex.ui.utils.captureBlurredBackdrop
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /**
  * 小窗预览的会话：候选里的全部条目 + 当前正在看的那个。
@@ -99,18 +92,7 @@ fun SmartMergePreviewDialog(
 
   // 截图必须在主线程；缩放 + 模糊放到后台，避免打开小窗时卡一下。
   LaunchedEffect(Unit) {
-    val activity = context.findActivity() ?: return@LaunchedEffect
-    val captured = runCatching { captureActivityWindow(activity) }.getOrNull()
-      ?: return@LaunchedEffect
-    val blurred = withContext(Dispatchers.Default) {
-      runCatching { downscaleAndBlur(captured) }.getOrNull()
-    }
-    if (blurred != null) {
-      if (blurred !== captured) captured.recycle()
-      backdrop = blurred.asImageBitmap()
-    } else {
-      captured.recycle()
-    }
+    backdrop = captureBlurredBackdrop(context)
   }
 
   val player = remember(request.url) {
@@ -365,105 +347,4 @@ private fun View.findDialogWindow(): Window? {
     parent = parent.parent
   }
   return null
-}
-
-private tailrec fun Context.findActivity(): Activity? = when (this) {
-  is Activity -> this
-  is ContextWrapper -> baseContext.findActivity()
-  else -> null
-}
-
-/** 把 Activity 当前画面画进一张 Bitmap。必须在主线程调用。 */
-private fun captureActivityWindow(activity: Activity): Bitmap? {
-  val view = activity.window?.decorView ?: return null
-  if (view.width <= 0 || view.height <= 0) return null
-  val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-  view.draw(Canvas(bitmap))
-  return bitmap
-}
-
-/**
- * 截图缩小到 1/12，再做两遍半径 2 的盒式模糊。
- *
- * 先缩小再模糊是刻意的：像素少 144 倍，模糊成本可以忽略；放大时双线性过滤
- * 会进一步平滑，最终效果接近高斯模糊，而且不会有 RenderEffect 的机型兼容问题。
- */
-private fun downscaleAndBlur(source: Bitmap): Bitmap {
-  val width = (source.width / 12).coerceIn(24, 240)
-  val height = (source.height / 12).coerceIn(24, 480)
-  var small = Bitmap.createScaledBitmap(source, width, height, true)
-  repeat(2) {
-    val next = boxBlur(small, 2)
-    if (next !== small) small.recycle()
-    small = next
-  }
-  return small
-}
-
-/** 简单的可分离盒式模糊；在小图上跑，成本很低。 */
-private fun boxBlur(source: Bitmap, radius: Int): Bitmap {
-  val width = source.width
-  val height = source.height
-  if (width <= 0 || height <= 0) return source
-  val input = IntArray(width * height)
-  source.getPixels(input, 0, width, 0, 0, width, height)
-  val horizontal = IntArray(width * height)
-  val window = radius * 2 + 1
-
-  for (y in 0 until height) {
-    var a = 0
-    var r = 0
-    var g = 0
-    var b = 0
-    for (i in -radius..radius) {
-      val pixel = input[y * width + i.coerceIn(0, width - 1)]
-      a += pixel ushr 24 and 0xFF
-      r += pixel shr 16 and 0xFF
-      g += pixel shr 8 and 0xFF
-      b += pixel and 0xFF
-    }
-    for (x in 0 until width) {
-      horizontal[y * width + x] =
-        (a / window shl 24) or
-        (r / window shl 16) or
-        (g / window shl 8) or
-        (b / window)
-      val old = input[y * width + (x - radius).coerceIn(0, width - 1)]
-      val new = input[y * width + (x + radius + 1).coerceIn(0, width - 1)]
-      a += (new ushr 24 and 0xFF) - (old ushr 24 and 0xFF)
-      r += (new shr 16 and 0xFF) - (old shr 16 and 0xFF)
-      g += (new shr 8 and 0xFF) - (old shr 8 and 0xFF)
-      b += (new and 0xFF) - (old and 0xFF)
-    }
-  }
-
-  val output = IntArray(width * height)
-  for (x in 0 until width) {
-    var a = 0
-    var r = 0
-    var g = 0
-    var b = 0
-    for (i in -radius..radius) {
-      val pixel = horizontal[i.coerceIn(0, height - 1) * width + x]
-      a += pixel ushr 24 and 0xFF
-      r += pixel shr 16 and 0xFF
-      g += pixel shr 8 and 0xFF
-      b += pixel and 0xFF
-    }
-    for (y in 0 until height) {
-      output[y * width + x] =
-        (a / window shl 24) or
-        (r / window shl 16) or
-        (g / window shl 8) or
-        (b / window)
-      val old = horizontal[(y - radius).coerceIn(0, height - 1) * width + x]
-      val new = horizontal[(y + radius + 1).coerceIn(0, height - 1) * width + x]
-      a += (new ushr 24 and 0xFF) - (old ushr 24 and 0xFF)
-      r += (new shr 16 and 0xFF) - (old shr 16 and 0xFF)
-      g += (new shr 8 and 0xFF) - (old shr 8 and 0xFF)
-      b += (new and 0xFF) - (old and 0xFF)
-    }
-  }
-
-  return Bitmap.createBitmap(output, width, height, Bitmap.Config.ARGB_8888)
 }

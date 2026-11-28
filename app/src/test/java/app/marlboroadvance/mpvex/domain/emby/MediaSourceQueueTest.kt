@@ -258,12 +258,14 @@ class MediaSourceQueueTest {
     season: Int?,
     number: Int?,
     name: String? = null,
+    userData: EmbyUserData? = null,
   ) = EmbyItem(
     Id = id,
     Name = name ?: "第${number ?: "?"}集",
     Type = "Episode",
     ParentIndexNumber = season,
     IndexNumber = number,
+    UserData = userData,
   )
 
   @Test
@@ -349,5 +351,33 @@ class MediaSourceQueueTest {
     val index = sorted.indexOfFirst { it.Id == "e2" }
     val queue = sorted.subList(index, sorted.size)
     assertEquals(listOf("e2", "e3", "e8", "e10"), queue.map { it.Id })
+  }
+
+  @Test
+  fun `detail default follows latest played episode across seasons`() {
+    val episodes = listOf(
+      episode("s1e1", 1, 1, userData = EmbyUserData(LastPlayedDate = "2026-11-27T10:00:00Z")),
+      episode("s2e1", 2, 1, userData = EmbyUserData(LastPlayedDate = "2026-11-28T10:00:00Z")),
+    )
+    assertEquals("s2e1", preferredEpisodeForDetail(episodes)?.Id)
+  }
+
+  @Test
+  fun `detail default falls back to in-progress episode`() {
+    val episodes = listOf(
+      episode("s1e1", 1, 1),
+      episode("s1e2", 1, 2, userData = EmbyUserData(PlaybackPositionTicks = 10_000_000L)),
+    )
+    assertEquals("s1e2", preferredEpisodeForDetail(episodes)?.Id)
+  }
+
+  @Test
+  fun `detail default falls back to first unwatched by season then number`() {
+    val episodes = listOf(
+      episode("s2e1", 2, 1),
+      episode("s1e10", 1, 10),
+      episode("s1e2", 1, 2),
+    )
+    assertEquals("s1e2", preferredEpisodeForDetail(episodes)?.Id)
   }
 }

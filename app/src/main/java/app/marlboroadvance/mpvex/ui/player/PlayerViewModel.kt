@@ -33,8 +33,16 @@ import app.marlboroadvance.mpvex.domain.emby.subtitle.EmbySubtitleLanguage
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleInfo
 import app.marlboroadvance.mpvex.domain.emby.subtitle.SubtitleSourceType
 import app.marlboroadvance.mpvex.domain.subtitle.SubtitleFileNormalizer
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleMountArbiter
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleMountDecision
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleMountRequest
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleMountState
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleSource
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstoneStore
+import app.marlboroadvance.mpvex.domain.subtitle.SubtitleTombstones
 import app.marlboroadvance.mpvex.domain.subtitle.online.DownloadedSubtitle
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleAutoFetch
+import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleCleanup
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleLibrary
 import app.marlboroadvance.mpvex.domain.subtitle.online.OnlineSubtitleTarget
 import app.marlboroadvance.mpvex.domain.subtitle.online.SubtitleSaveManifest
@@ -112,6 +120,7 @@ class PlayerViewModel(
   /** 画面旋转要判断直出模式：直出（mediacodec_embed）没有滤镜链，折不了。 */
   private val decoderPreferences: DecoderPreferences by inject()
   private val json: Json by inject()
+  private val subtitleTombstones = SubtitleTombstoneStore(subtitlesPreferences)
 
   /**
    * 「记住每部剧播放设置」的键：Emby 剧集是 SeriesId，电影是 ItemId，本地播放为 null。
@@ -432,9 +441,10 @@ class PlayerViewModel(
     }
 
   val subtitleTracks: StateFlow<List<TrackNode>> =
-    allTracks
-      .map { list -> list.filter { it.isSubtitle }.toImmutableList() }
-      .stateIn(viewModelScope, SharingStarted.Lazily, persistentListOf())
+    combine(allTracks, subtitlesPreferences.subtitleTombstones.changes()) { list, _ ->
+      // 删除 tombstone 落盘后立即从面板消失，即使 mpv 的 sub-remove 还没回调。
+      list.filter { it.isSubtitle && !isSubtitleTrackIgnored(it) }.toImmutableList()
+    }.stateIn(viewModelScope, SharingStarted.Lazily, persistentListOf())
 
   val audioTracks: StateFlow<List<TrackNode>> =
     allTracks
@@ -576,8 +586,54 @@ class PlayerViewModel(
   val remainingTime: StateFlow<Int> = _remainingTime.asStateFlow()
 
   // Media title for subtitle association
+  @Volatile
   var currentMediaTitle: String = ""
   private var lastAutoSelectedMediaTitle: String? = null
+
+  private val subtitleSessionLock = Any()
+  private var subtitleSessionSerial = 0L
+
+  @Volatile
+  private var subtitleUserActionSerial = 0L
+
+  @Volatile
+  private var subtitleMountState = SubtitleMountState()
+
+  fun beginSubtitleSession(): Long = synchronized(subtitleSessionLock) {
+    subtitleSessionSerial += 1
+    subtitleMountState = SubtitleMountArbiter.startSession(
+      subtitleMountState,
+      sessionId = subtitleSessionSerial,
+    )
+    boundSubtitleApplied = false
+    embySubtitleApplied = false
+    subtitleUserActionSerial = 0L
+    subtitleSessionSerial
+  }
+
+  fun currentSubtitleSessionId(): Long = subtitleMountState.sessionId
+
+  fun isSubtitleSessionCurrent(sessionId: Long): Boolean =
+    subtitleMountState.sessionId == sessionId
+
+  fun canAutomaticallySelectSubtitle(source: SubtitleSource): Boolean =
+    SubtitleMountArbiter.decide(
+      subtitleMountState,
+      SubtitleMountRequest(
+        sessionId = subtitleMountState.sessionId,
+        source = source,
+        select = true,
+        ignored = false,
+      ),
+    ) == SubtitleMountDecision.MountAndSelect
+
+  fun clearAutomaticSubtitleSuppression() {
+    synchronized(subtitleSessionLock) {
+      subtitleUserActionSerial += 1L
+      subtitleMountState = SubtitleMountArbiter.clearUserOverride(subtitleMountState)
+      embyAutoSuppressed = false
+    }
+  }
 
   /**
    * 本次加载中，「这部片子的手动字幕绑定」是否已经接管了字幕选择。
@@ -599,6 +655,22 @@ class PlayerViewModel(
   
   // Mapping from mpv internal path/URI to the original source URI (resolves deletion issues)
   private val mpvPathToUriMap = mutableMapOf<String, String>()
+
+  /** mpv 归一化后的路径 → 在线权威记录；删除时不能只按缓存副本路径猜来源。 */
+  private val mpvPathToOnlineRecordMap = mutableMapOf<String, DownloadedSubtitle>()
+
+  /** mpv 归一化后的路径 → Emby 的完整身份；缓存删除与服务端选择清理都依赖它。 */
+  private val mpvPathToEmbyIdentityMap = mutableMapOf<String, EmbyTrackIdentity>()
+
+  /** sub-add 已预留选择权的路径；用于区分「确认自己的轨道」与「同优先级后来者抢选」。 */
+  private val mpvPathToSelectionSourceMap = mutableMapOf<String, SubtitleSource>()
+
+  private data class EmbyTrackIdentity(
+    val serverId: String,
+    val itemId: String,
+    val mediaSourceId: String?,
+    val subtitle: SubtitleInfo,
+  )
 
   // Repeat and Shuffle state
   private val _repeatMode = MutableStateFlow(RepeatMode.OFF)
@@ -794,13 +866,9 @@ class PlayerViewModel(
   fun resetExternalSubtitles() {
     _externalSubtitles.clear()
     mpvPathToUriMap.clear()
-  }
-
-  /** 用户主动添加外挂字幕（即发即忘）。要「加完再选中」请用 [loadSubtitle]。 */
-  fun addSubtitle(uri: Uri, select: Boolean = true, silent: Boolean = false) {
-    viewModelScope.launch(Dispatchers.IO) {
-      loadSubtitle(uri, select, silent)
-    }
+    mpvPathToOnlineRecordMap.clear()
+    mpvPathToEmbyIdentityMap.clear()
+    mpvPathToSelectionSourceMap.clear()
   }
 
   /**
@@ -812,8 +880,9 @@ class PlayerViewModel(
    */
   fun archiveExternalSubtitle(uri: Uri) {
     val title = currentMediaTitle
-    if (title.isBlank()) return
+    if (title.isBlank() || isExternalSourceIgnored(uri)) return
     viewModelScope.launch(Dispatchers.IO) {
+      if (isExternalSourceIgnored(uri)) return@launch
       val saved = ExternalSubtitleArchive.archive(host.context.applicationContext, title, uri)
       if (saved == null) {
         Log.w("PlayerViewModel", "手动字幕未归档（重装后需重新选择）：$title")
@@ -826,97 +895,158 @@ class PlayerViewModel(
   /**
    * 把外挂字幕真正交给 mpv，**在调用方协程里顺序执行**。
    *
-   * 与 [addSubtitle] 的唯一区别是「这里是挂起函数」：返回时 `sub-add` 命令已经下发。
-   * 恢复播放状态必须用这个版本 —— `addSubtitle` 是即发即忘的，而恢复流程紧接着就要用
+   * 返回时 `sub-add` 命令已经下发。恢复播放状态必须用这个挂起版本 —— 紧接着就要用
    * 存档里的 `sid` 选中字幕，那时轨道还没建出来，mpv 会把这次选择当成「不存在的轨道」
    * 直接丢弃。表现就是「上次加的外挂字幕，重开 app 就没了」。
    *
    * 注意：命令下发 ≠ 轨道已就绪。mpv 挂轨道是异步的，之后还要 [awaitTrackCountAtLeast] 等一拍。
    */
+  suspend fun loadSubtitlePath(
+    source: String,
+    select: Boolean,
+    title: String?,
+    origin: SubtitleSource = SubtitleSource.AUTOLOAD,
+    sessionId: Long = currentSubtitleSessionId(),
+  ): Boolean = loadSubtitle(
+    Uri.parse(source),
+    select = select,
+    silent = true,
+    title = title,
+    source = origin,
+    sessionId = sessionId,
+  ) != null
+
   internal suspend fun loadSubtitle(
     uri: Uri,
     select: Boolean,
     silent: Boolean,
     title: String? = null,
     lang: String? = null,
-  ) {
+    allowManagedPrivate: Boolean = false,
+    source: SubtitleSource = SubtitleSource.MANUAL,
+    sessionId: Long = currentSubtitleSessionId(),
+    sourceIgnored: Boolean = false,
+  ): String? {
     val uriString = uri.toString()
+    if (!isSubtitleSessionCurrent(sessionId)) return null
+    val ignored = sourceIgnored || isExternalSourceIgnored(uri)
+    if (ignored) return null
+    val userActionSerial = if (source == SubtitleSource.MANUAL) {
+      markUserSubtitleAction()
+    } else {
+      subtitleUserActionSerial
+    }
+    val initialDecision = SubtitleMountArbiter.decide(
+      subtitleMountState,
+      SubtitleMountRequest(sessionId, source, select, ignored),
+    )
+    if (initialDecision == SubtitleMountDecision.RejectStale ||
+      initialDecision == SubtitleMountDecision.RejectIgnored ||
+      initialDecision == SubtitleMountDecision.RejectSuppressed ||
+      (source == SubtitleSource.MANUAL && userActionSerial != subtitleUserActionSerial)
+    ) {
+      Log.i("PlayerViewModel", "skip subtitle ($initialDecision): $uriString source=$source session=$sessionId")
+      return null
+    }
+    val sourcePath = localPathOfUri(uri)
+    if (!allowManagedPrivate && sourcePath?.let(::isEmbyCachePath) == true) {
+      // 旧存档可能保存过 Emby 缓存 file:// URI。缓存必须由 Emby 身份重新发现 / 下载，
+      // 不能绕过 tombstone 直接当普通外挂挂回来。
+      Log.i("PlayerViewModel", "skip managed Emby cache restore: $uriString")
+      return null
+    }
     if (_externalSubtitles.contains(uriString)) {
-      // 已经在跟踪表里了 —— 但调用方要的是「选中」，就不能一走了之。
-      // 早先这里直接 return，`select` 被静默丢弃：目录扫描以 `auto` 加进来的字幕、
-      // 或存档恢复先挂后选的那条，都会表现成「字幕在列表里但画面上没有」。
+      if (source == SubtitleSource.MANUAL && userActionSerial != subtitleUserActionSerial) return null
       Log.d("PlayerViewModel", "Subtitle already tracked: $uriString (select=$select)")
       if (select) {
-        findSubtitleTrackIdOf(uriString)?.let { ensureSubtitleSelected(it) }
+        findSubtitleTrackIdOnMain(uriString)?.let {
+          selectSubtitleTrack(it, source, sessionId)
+        }
       }
-      return
+      return mpvPathToUriMap.entries.firstOrNull { it.value == uriString }?.key
     }
 
-    runCatching {
+    val mpvPath = runCatching {
       val fileName = getFileNameFromUri(uri) ?: "subtitle.srt"
-
       if (!isValidSubtitleFile(fileName)) {
-        if (!silent) withContext(Dispatchers.Main) { showToast("字幕格式不支持") }
-        return
+        if (!silent) showToast("字幕格式不支持")
+        return null
       }
 
-      // Take persistent URI permission for content:// URIs
       if (uri.scheme == "content") {
         try {
-          host.context.contentResolver.takePersistableUriPermission(
-            uri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION,
-          )
+          host.context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } catch (e: SecurityException) {
-          // Permission already granted, not available, or not needed (e.g. from tree).
           Log.i("PlayerViewModel", "Persistent permission not taken for $uri (may already have it via tree)")
         }
       }
 
-      val rawPath = uri.resolveUri(host.context) ?: uri.toString()
-
-      // ⚠️⚠️ 挂之前先把字节归一成 UTF-8。
-      //
-      // `sub-add` 之后是 **mpv 自己再判一次编码**，它的判据与时间线预览不同：
-      // 同一份 Big5 繁体字幕，预览按 Big5 解对了，画面上却是 GBK 乱码 ——
-      // 这不是谁判错，而是两套判定各自为政的必然结果。
-      // 归一之后 mpv 不需要再猜，画面与预览读的是同一份文本。
-      //
-      // 只处理真实文件路径：`fd://`（SAF 选的文件）与 `http(s)://`（网络同名字幕）
-      // 没有本地字节可读，硬抄一遍反而多一次 IO 与 fd 开销，留给 mpv 自己处理。
-      val mpvPath =
-        withContext(Dispatchers.IO) {
-          runCatching {
-            SubtitleFileNormalizer.forPlayback(host.context, rawPath)
-          }.getOrDefault(rawPath)
-        }
-
-      // Store mapping for reliable physical deletion later
-      mpvPathToUriMap[mpvPath] = uriString
-
-      // ⚠️ mpv 的 `sub-add <url> [<flags> [<title> [<lang>]]]` 是**位置参数**：
-      //    不给 title 时它拿文件名当轨道名 —— Emby 字幕缓存文件是 `<sha1>.ass`，
-      //    面板上就成了一串「乱码/md5」。title 与 lang 必须一起给（只给 lang 会把
-      //    lang 顶到 title 的位置）。lang 同时让 mpv 自己的 slang / 轨道选择能用上。
-      val readableTitle = title?.trim()?.takeIf { it.isNotEmpty() }
-      val langCode = lang?.trim()?.takeIf { it.isNotEmpty() }
-      if (readableTitle != null && langCode != null) {
-        PlayerLib.command("sub-add", mpvPath, if (select) "select" else "auto", readableTitle, langCode)
-      } else if (readableTitle != null) {
-        PlayerLib.command("sub-add", mpvPath, if (select) "select" else "auto", readableTitle)
-      } else {
-        PlayerLib.command("sub-add", mpvPath, if (select) "select" else "auto")
+      // 解析 / 转码是 IO；mpv 命令与 URI 映射留给主线程，避免后台碰 native。
+      val playbackPath = withContext(Dispatchers.IO) {
+        val rawPath = uri.resolveUri(host.context) ?: uri.toString()
+        runCatching { SubtitleFileNormalizer.forPlayback(host.context, rawPath) }.getOrDefault(rawPath)
       }
 
-      // Track external subtitle URI for persistence
-      if (!_externalSubtitles.contains(uriString)) _externalSubtitles.add(uriString)
+      withContext(Dispatchers.Main) {
+        val finalIgnored = sourceIgnored || isExternalSourceIgnored(uri)
+        val decision = SubtitleMountArbiter.decide(
+          subtitleMountState,
+          SubtitleMountRequest(sessionId, source, select, finalIgnored),
+        )
+        if (decision == SubtitleMountDecision.RejectStale ||
+          decision == SubtitleMountDecision.RejectIgnored ||
+          decision == SubtitleMountDecision.RejectSuppressed ||
+          (source == SubtitleSource.MANUAL && userActionSerial != subtitleUserActionSerial)
+        ) {
+          Log.i("PlayerViewModel", "drop late subtitle ($decision): $uriString source=$source session=$sessionId")
+          return@withContext null
+        }
+        val shouldSelect = decision == SubtitleMountDecision.MountAndSelect
+        val stateBeforeCommand = subtitleMountState
+        if (shouldSelect) {
+          subtitleMountState = SubtitleMountArbiter.onSelectionAccepted(subtitleMountState, source)
+          mpvPathToSelectionSourceMap[playbackPath] = source
+        }
 
-      val shown = readableTitle ?: fileName
-      val displayName = shown.take(30).let { if (shown.length > 30) "$it..." else it }
-      if (!silent) withContext(Dispatchers.Main) { showToast("已添加 $displayName") }
-    }.onFailure {
-      if (!silent) withContext(Dispatchers.Main) { showToast("加载字幕失败") }
+        // 保存原始 URI 映射：归一化可能把路径换成 cacheDir 下的 UTF-8 副本。
+        mpvPathToUriMap[playbackPath] = uriString
+
+        val readableTitle = title?.trim()?.takeIf { it.isNotEmpty() }
+        val langCode = lang?.trim()?.takeIf { it.isNotEmpty() }
+        runCatching {
+          if (readableTitle != null && langCode != null) {
+            PlayerLib.command("sub-add", playbackPath, if (shouldSelect) "select" else "auto", readableTitle, langCode)
+          } else if (readableTitle != null) {
+            PlayerLib.command("sub-add", playbackPath, if (shouldSelect) "select" else "auto", readableTitle)
+          } else {
+            PlayerLib.command("sub-add", playbackPath, if (shouldSelect) "select" else "auto")
+          }
+        }.onFailure {
+          if (shouldSelect) {
+            subtitleMountState = stateBeforeCommand
+            mpvPathToSelectionSourceMap.remove(playbackPath)
+          }
+          throw it
+        }
+        if (shouldSelect) {
+          viewModelScope.launch(Dispatchers.Main) {
+            delay(3_000L)
+            releaseUnmaterializedSubtitleSelection(playbackPath, source, sessionId)
+          }
+        }
+
+        // 应用私有在线库 / Emby 缓存由各自的身份库恢复，不写进 Room 的普通外挂清单。
+        if (!isAppManagedSubtitlePath(playbackPath) && !_externalSubtitles.contains(uriString)) {
+          _externalSubtitles.add(uriString)
+        }
+        playbackPath
+      }
+    }.getOrElse { t ->
+      Log.e("PlayerViewModel", "load subtitle failed: $uriString", t)
+      null
     }
+    if (mpvPath == null && !silent) withContext(Dispatchers.Main) { showToast("加载字幕失败") }
+    return mpvPath
   }
 
   /**
@@ -952,7 +1082,7 @@ class PlayerViewModel(
    *
    * ⚠️ 轮询必须在主线程（`viewModelScope` 默认就是）：从后台线程读 mpv native 属性会崩。
    */
-  private fun restoreBoundSubtitle(mediaTitle: String) {
+  private fun restoreBoundSubtitle(mediaTitle: String, sessionId: Long) {
     val bound = runCatching { SubtitleBindings.find(subtitlesPreferences, mediaTitle) }.getOrNull()
     boundSubtitleApplied = false
     viewModelScope.launch {
@@ -960,21 +1090,30 @@ class PlayerViewModel(
       val archived =
         if (bound.isNullOrBlank()) {
           withContext(Dispatchers.IO) {
-            ExternalSubtitleArchive.find(host.context.applicationContext, mediaTitle)?.toString()
+            ExternalSubtitleArchive.find(
+              host.context.applicationContext,
+              mediaTitle,
+              ::isExternalSourceIgnored,
+            )?.toString()
           }
         } else {
           null
         }
+      if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != mediaTitle) return@launch
       val source = bound?.takeIf { it.isNotBlank() } ?: archived
       if (source.isNullOrBlank()) return@launch
       // 升级前就已经存在的绑定：顺手补一份公共归档，避免用户这次不重新选择、
-      // 下次重装又丢。已有归档则不重复复制（find 走一次轻量查询）。
+      // 下次重装又丢。已有归档则不重复复制，且 tombstone 归档不算「已有」。
       if (!bound.isNullOrBlank() && !ExternalSubtitleArchive.hasKnown(mediaTitle)) {
         withContext(Dispatchers.IO) {
-          if (ExternalSubtitleArchive.find(host.context.applicationContext, mediaTitle) == null) {
-            runCatching { Uri.parse(bound) }
-              .getOrNull()
-              ?.let { ExternalSubtitleArchive.archive(host.context.applicationContext, mediaTitle, it) }
+          if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != mediaTitle) return@withContext
+          val visibleArchive = ExternalSubtitleArchive.find(
+            host.context.applicationContext,
+            mediaTitle,
+            ::isExternalSourceIgnored,
+          )
+          if (visibleArchive == null && !isExternalSourceIgnored(Uri.parse(bound))) {
+            runCatching { ExternalSubtitleArchive.archive(host.context.applicationContext, mediaTitle, Uri.parse(bound)) }
           }
         }
       }
@@ -988,27 +1127,28 @@ class PlayerViewModel(
       while (waited < 8_000L && (PlayerLib.getPropertyInt("track-list/count") ?: 0) <= 0) {
         delay(120)
         waited += 120
-      }
-      // ⚠️ 这 8 秒里用户可能已经切集 / 换片（setMediaTitle 又被调了一次）：
-      // 这时手上的 source 属于上一集，继续挂就是把上一集的字幕挂到新一集上。
-      if (currentMediaTitle != mediaTitle) {
-        Log.d("PlayerViewModel", "bound restore aborted: media changed to $currentMediaTitle")
-        return@launch
+        if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != mediaTitle) return@launch
       }
       // 目录扫描可能已经把它以 `auto` 方式加进轨道（select = false）。那种情况下清单里
       // 已经有这条字幕，只是没选中；此时再走 loadSubtitle 会被「已跟踪」直接挡回去，
       // 表现成「字幕在列表里但画面上没有」。所以先查轨道，能查到就直接选中。
-      val existing = findSubtitleTrackIdOf(source)
+      val existing = findSubtitleTrackIdOnMain(source)
       if (existing != null) {
-        ensureSubtitleSelected(existing)
-        boundSubtitleApplied = true
+        boundSubtitleApplied = selectSubtitleTrack(existing, SubtitleSource.BOUND, sessionId)
       } else {
         val parsed = runCatching { Uri.parse(source) }.getOrNull()
         if (parsed != null) {
-          loadSubtitle(parsed, select = true, silent = true)
-          // 走到这里说明没有现成轨道可选中，字幕是本次新挂上去的 —— 用「轨道里能查到」
-          // 判断是否真的挂成功，而不是无条件置 true（否则加载失败也会挡住存档恢复）。
-          if (findSubtitleTrackIdOf(source) != null) boundSubtitleApplied = true
+          loadSubtitle(
+            parsed,
+            select = true,
+            silent = true,
+            source = SubtitleSource.BOUND,
+            sessionId = sessionId,
+          )
+          val trackId = findSubtitleTrackIdOnMain(source)
+          if (trackId != null) {
+            boundSubtitleApplied = selectSubtitleTrack(trackId, SubtitleSource.BOUND, sessionId)
+          }
         }
       }
       if (boundSubtitleApplied) {
@@ -1020,10 +1160,95 @@ class PlayerViewModel(
   /** 这部片子有没有「用户亲手挑过」的外挂字幕（偏好绑定或公共归档任一存在即可）。 */
   fun hasBoundSubtitle(mediaTitle: String): Boolean {
     if (mediaTitle.isBlank()) return false
-    val bound =
+    val boundSource =
       runCatching { SubtitleBindings.find(subtitlesPreferences, mediaTitle) }.getOrNull()
-        ?.isNotBlank() == true
-    return bound || ExternalSubtitleArchive.hasKnown(mediaTitle)
+    val bound = !boundSource.isNullOrBlank() &&
+      !isExternalSourceIgnored(Uri.parse(boundSource))
+    // hasKnown 只看文件名缓存，无法判断对应 URI 是否已 tombstone；这里必须做一次过滤查询。
+    val archived = runCatching {
+      ExternalSubtitleArchive.find(host.context.applicationContext, mediaTitle, ::isExternalSourceIgnored)
+    }.getOrNull() != null
+    return bound || archived
+  }
+
+  fun isSubtitleTrackIgnored(id: Int): Boolean {
+    allTracks.value.firstOrNull { it.id == id }?.let { return isSubtitleTrackIgnored(it) }
+    return runCatching {
+      val count = PlayerLib.getPropertyInt("track-list/count") ?: return false
+      for (i in 0 until count) {
+        if (PlayerLib.getPropertyInt("track-list/$i/id") != id) continue
+        if (PlayerLib.getPropertyString("track-list/$i/type") != "sub") return false
+        val external = PlayerLib.getPropertyBoolean("track-list/$i/external") == true
+        val path = PlayerLib.getPropertyString("track-list/$i/external-filename")
+        val ffIndex = PlayerLib.getPropertyInt("track-list/$i/ff-index")
+        return if (external) {
+          path != null && isExternalTrackPathIgnored(path)
+        } else {
+          isEmbeddedTrackIndexIgnored(ffIndex)
+        }
+      }
+      false
+    }.getOrDefault(false)
+  }
+
+  private fun isSubtitleTrackIgnored(track: TrackNode): Boolean {
+    if (!track.isSubtitle) return false
+    if (track.external == true) {
+      val path = track.externalFilename ?: return false
+      return isExternalTrackPathIgnored(path)
+    }
+    return isEmbeddedTrackIndexIgnored(track.ffIndex?.toInt())
+  }
+
+  private fun isEmbeddedTrackIndexIgnored(streamIndex: Int?): Boolean {
+    if (streamIndex == null || streamIndex < 0) return false
+    val state = embySubtitleState.value
+    val serverId = state.serverId ?: embyTrackServerId ?: return false
+    val itemId = state.itemId ?: embyTrackItemId ?: return false
+    val mediaSourceId = state.mediaSourceId ?: embyTrackMediaSourceId
+    return subtitleTombstones.isEmbyIgnored(serverId, itemId, mediaSourceId, streamIndex)
+  }
+
+  private fun embyIdentityForEmbeddedTrack(track: TrackNode): EmbyTrackIdentity? {
+    if (track.external == true) return null
+    val streamIndex = track.ffIndex?.toInt()?.takeIf { it >= 0 } ?: return null
+    val state = embySubtitleState.value
+    val serverId = state.serverId ?: embyTrackServerId ?: return null
+    val itemId = state.itemId ?: embyTrackItemId ?: return null
+    val mediaSourceId = state.mediaSourceId ?: embyTrackMediaSourceId
+    val subtitle = state.subtitles.firstOrNull { it.streamIndex == streamIndex } ?: return null
+    return EmbyTrackIdentity(serverId, itemId, mediaSourceId, subtitle)
+  }
+
+  private fun isExternalTrackPathIgnored(path: String): Boolean {
+    mpvPathToOnlineRecordMap[path]?.let { record ->
+      if (onlineSubtitleLibrary.isIgnored(record)) return true
+    }
+    mpvPathToEmbyIdentityMap[path]?.let { identity ->
+      if (embySubtitleController.isIgnored(identity.serverId, identity.itemId, identity.subtitle)) return true
+    }
+    val originalUriString = mpvPathToUriMap[path]
+    val originalPath = originalUriString?.let { localPathOfUri(Uri.parse(it)) }
+    val candidatePath = originalPath ?: SubtitleTombstones.normalizeAbsolutePath(path)
+    return subtitleTombstones.isExternalIgnored(candidatePath, originalUriString ?: path)
+  }
+
+  private fun localPathOfUri(uri: Uri): String? =
+    uri.path.takeIf { uri.scheme.isNullOrBlank() || uri.scheme == "file" }
+
+  private fun isExternalSourceIgnored(uri: Uri): Boolean =
+    subtitleTombstones.isExternalIgnored(localPathOfUri(uri), uri.toString())
+
+  private fun isEmbyCachePath(path: String): Boolean = isUnder(path, File(host.context.cacheDir, "emby_subtitles"))
+
+  private fun isAppManagedSubtitlePath(path: String): Boolean =
+    isEmbyCachePath(path) || isUnder(path, File(host.context.filesDir, "online_subtitles"))
+
+  private fun isUnder(path: String, root: File): Boolean {
+    val normalized = SubtitleTombstones.normalizeAbsolutePath(path) ?: return false
+    val candidate = File(normalized).absoluteFile.normalize().path
+    val parent = root.absoluteFile.normalize().path
+    return candidate == parent || candidate.startsWith(parent + File.separator)
   }
 
   /**
@@ -1039,6 +1264,7 @@ class PlayerViewModel(
       for (i in 0 until count) {
         if (PlayerLib.getPropertyString("track-list/$i/type") != "sub") continue
         val path = PlayerLib.getPropertyString("track-list/$i/external-filename") ?: continue
+        if (isExternalTrackPathIgnored(path)) continue
         if (mpvPathToUriMap[path] == uriString) {
           return@runCatching PlayerLib.getPropertyInt("track-list/$i/id")
         }
@@ -1047,14 +1273,128 @@ class PlayerViewModel(
     }.getOrNull()
 
   /** 把一条已存在的字幕轨道顶成主字幕（bottom），必要时先腾出 secondary 槽位。 */
-  private fun ensureSubtitleSelected(id: Int) {
-    runCatching {
+  private fun ensureSubtitleSelected(id: Int): Boolean {
+    if (isSubtitleTrackIgnored(id)) return false
+    return runCatching {
       if (getSecondarySubtitleId() == id) PlayerLib.setPropertyString("secondary-sid", "no")
       PlayerLib.setPropertyInt("sid", id)
+    }.isSuccess
+  }
+
+  /** 所有自动/恢复来源写 sid 的唯一入口；同来源重复调用用于 sub-add 后的最终确认。 */
+  suspend fun selectSubtitleTrack(
+    id: Int,
+    source: SubtitleSource,
+    sessionId: Long = currentSubtitleSessionId(),
+  ): Boolean = withContext(Dispatchers.Main) {
+    if (isSubtitleTrackIgnored(id)) return@withContext false
+    val state = subtitleMountState
+    val decision = SubtitleMountArbiter.decide(
+      state,
+      SubtitleMountRequest(sessionId, source, select = true, ignored = false),
+    )
+    val finalizingSameSource = canFinalizeSubtitleSelection(id, source, state, decision)
+    if (decision != SubtitleMountDecision.MountAndSelect && !finalizingSameSource) {
+      return@withContext false
+    }
+    val selected = ensureSubtitleSelected(id)
+    if (selected) {
+      subtitleMountState = SubtitleMountArbiter.onSelectionAccepted(state, source)
+    }
+    selected
+  }
+
+  private fun canFinalizeSubtitleSelection(
+    id: Int,
+    source: SubtitleSource,
+    state: SubtitleMountState,
+    decision: SubtitleMountDecision,
+    expectedPath: String? = null,
+  ): Boolean {
+    if (decision != SubtitleMountDecision.MountOnly || state.selectionSource != source) return false
+    val count = PlayerLib.getPropertyInt("track-list/count") ?: return false
+    for (index in 0 until count) {
+      if (PlayerLib.getPropertyInt("track-list/$index/id") != id) continue
+      val path = PlayerLib.getPropertyString("track-list/$index/external-filename") ?: return false
+      val sameRequestedPath = expectedPath == null || path == expectedPath ||
+        path.substringAfterLast('/') == expectedPath.substringAfterLast('/')
+      if (!sameRequestedPath) return false
+      val reservedSource = mpvPathToSelectionSourceMap[path] ?: expectedPath?.let { requested ->
+        mpvPathToSelectionSourceMap.entries.firstOrNull {
+          it.key.substringAfterLast('/') == requested.substringAfterLast('/')
+        }?.value
+      }
+      return reservedSource == source
+    }
+    return false
+  }
+
+  fun releaseSubtitleSelection(source: SubtitleSource, sessionId: Long) {
+    val state = subtitleMountState
+    if (state.sessionId == sessionId && state.selectionSource == source) {
+      subtitleMountState = state.copy(selectionSource = null)
+    }
+    if (state.sessionId == sessionId) {
+      mpvPathToSelectionSourceMap.entries.removeAll { it.value == source }
     }
   }
 
-  private fun scanLocalSubtitles(mediaTitle: String) {
+  private fun releaseUnmaterializedSubtitleSelection(
+    path: String,
+    source: SubtitleSource,
+    sessionId: Long,
+  ) {
+    if (!isSubtitleSessionCurrent(sessionId) || mpvPathToSelectionSourceMap[path] != source) return
+    val count = PlayerLib.getPropertyInt("track-list/count") ?: 0
+    val materialized = (0 until count).any { index ->
+      PlayerLib.getPropertyString("track-list/$index/external-filename") == path
+    }
+    if (materialized) return
+    mpvPathToSelectionSourceMap.remove(path)
+    val state = subtitleMountState
+    if (state.selectionSource == source && mpvPathToSelectionSourceMap.none { it.value == source }) {
+      subtitleMountState = state.copy(selectionSource = null)
+    }
+  }
+
+  /** 存档恢复也走同一仲裁：Intent / 手动绑定不能被旧 sid 或「上次关字幕」覆写。 */
+  suspend fun applySavedSubtitleSelection(
+    savedSid: Int,
+    savedSecondarySid: Int,
+    sessionId: Long = currentSubtitleSessionId(),
+  ) = withContext(Dispatchers.Main) {
+    val state = subtitleMountState
+    if (state.sessionId != sessionId || state.userOverride) return@withContext
+    val owner = state.selectionSource
+    if (owner != null && owner.priority > SubtitleSource.SAVED.priority) return@withContext
+
+    val sid = savedSid.takeIf { it > 0 && !isSubtitleTrackIgnored(it) } ?: 0
+    val secondarySid = savedSecondarySid.takeIf { it > 0 && !isSubtitleTrackIgnored(it) } ?: 0
+    when {
+      sid > 0 -> {
+        if (selectSubtitleTrack(sid, SubtitleSource.SAVED, sessionId)) {
+          if (secondarySid > 0 && secondarySid != sid) {
+            PlayerLib.setPropertyInt("secondary-sid", secondarySid)
+          } else {
+            PlayerLib.setPropertyString("secondary-sid", "no")
+          }
+        }
+      }
+
+      secondarySid > 0 -> {
+        PlayerLib.setPropertyString("secondary-sid", "no")
+        selectSubtitleTrack(secondarySid, SubtitleSource.SAVED, sessionId)
+      }
+
+      else -> {
+        PlayerLib.setPropertyString("secondary-sid", "no")
+        PlayerLib.setPropertyString("sid", "no")
+        subtitleMountState = SubtitleMountArbiter.onSelectionAccepted(state, SubtitleSource.SAVED)
+      }
+    }
+  }
+
+  private fun scanLocalSubtitles(mediaTitle: String, sessionId: Long) {
     viewModelScope.launch(Dispatchers.IO) {
       val legacyTreeUri = subtitlesPreferences.subtitleSaveFolder.get()
       val saveDirPath = subtitlesPreferences.subtitleSaveDirPath.get()
@@ -1074,15 +1414,22 @@ class PlayerViewModel(
 
         // Scan potential folder names for compatibility: checksum, full, and sanitized
         listOf(checksumTitle, fullTitle, sanitizedTitle).distinct().forEach { folderName ->
+          if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != mediaTitle) return@launch
           val movieDir = parentDir.child(folderName)?.takeIf { it.isDirectory } ?: return@forEach
           movieDir.children().forEach { file ->
+            if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != mediaTitle) return@launch
             if (file.isFile && isValidSubtitleFile(file.name)) {
               // relativePath 口径与清单一致：dirName/fileName
               if ("$folderName/${file.name}" in onlineCopies) return@forEach
-              withContext(Dispatchers.Main) {
-                // Don't auto-select during scan, just make available
-                addSubtitle(file.uri, select = false, silent = true)
-              }
+              // TSV 行可能清理失败；残留镜像必须再按外部 tombstone 过滤。
+              if (isExternalSourceIgnored(file.uri)) return@forEach
+              loadSubtitle(
+                file.uri,
+                select = false,
+                silent = true,
+                source = SubtitleSource.SAVE_DIRECTORY,
+                sessionId = sessionId,
+              )
             }
           }
         }
@@ -1130,10 +1477,13 @@ class PlayerViewModel(
     serverKey: String,
     itemId: String,
     allowSelect: Boolean,
+    sessionId: Long = currentSubtitleSessionId(),
   ): Boolean {
     if (serverKey.isBlank() || itemId.isBlank()) return false
+    val titleSnapshot = currentMediaTitle
     // 索引是磁盘 / SharedPreferences 读，放 IO；读完立刻回到主线程做 mpv 交互。
     val records = withContext(Dispatchers.IO) { onlineSubtitleLibrary.forMedia(serverKey, itemId) }
+    if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != titleSnapshot) return false
     _onlineSubtitles.value = records
     Log.i("PlayerViewModel", "online library lookup: server=$serverKey item=$itemId records=${records.size}")
     if (records.isEmpty()) return false
@@ -1143,14 +1493,17 @@ class PlayerViewModel(
       while (waited < 8_000L && (PlayerLib.getPropertyInt("track-list/count") ?: 0) <= 0) {
         delay(120)
         waited += 120
+        if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != titleSnapshot) return@withContext false
       }
       if ((PlayerLib.getPropertyInt("track-list/count") ?: 0) <= 0) return@withContext false
 
-      val titleSnapshot = currentMediaTitle
       var mounted = 0
       // 旧的先挂：mpv 的轨道 id 随挂载顺序递增，按下载时间升序挂上去，
       // 面板里最近下载的那条在最后 —— 与「最新下的最可能是用户想要的」一致。
       records.sortedBy { it.downloadedAt }.forEach { record ->
+        if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != titleSnapshot) return@withContext false
+        // 读取索引后用户可能已删除；挂载前必须再按 origin 身份检查一次。
+        if (onlineSubtitleLibrary.isIgnored(record)) return@forEach
         val file = onlineSubtitleLibrary.fileOf(record)
         if (!file.isFile) {
           Log.w("PlayerViewModel", "online subtitle file missing: ${record.id}")
@@ -1158,7 +1511,17 @@ class PlayerViewModel(
         }
         val uriString = Uri.fromFile(file).toString()
         if (findSubtitleTrackIdOf(uriString) == null) {
-          loadSubtitle(Uri.fromFile(file), select = false, silent = true, title = record.title.take(60))
+          val mpvPath = loadSubtitle(
+            Uri.fromFile(file),
+            select = false,
+            silent = true,
+            title = record.title.take(60),
+            allowManagedPrivate = true,
+            source = SubtitleSource.ONLINE_LIBRARY,
+            sessionId = sessionId,
+            sourceIgnored = onlineSubtitleLibrary.isIgnored(record),
+          )
+          if (mpvPath != null) mpvPathToOnlineRecordMap[mpvPath] = record
           // `sub-add` 是异步的：必须等到轨道真的出现在 track-list 里才算数。
           // 早先这里是无条件置「已挂上」，文件其实没挂上去也报成功 ——
           // 调用方据此跳过 Emby 的自动字幕，结果画面上一条字幕都没有，
@@ -1167,6 +1530,7 @@ class PlayerViewModel(
           while (waitedTrack < 1_000L && findSubtitleTrackIdOf(uriString) == null) {
             delay(80)
             waitedTrack += 80
+            if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != titleSnapshot) return@withContext false
           }
         }
         if (findSubtitleTrackIdOf(uriString) != null) {
@@ -1181,7 +1545,8 @@ class PlayerViewModel(
       }
 
       if (allowSelect && currentMediaTitle == titleSnapshot) {
-        val pick = records.firstOrNull { it.preferred } ?: records.maxByOrNull { it.downloadedAt }
+        val pick = records.firstOrNull { it.preferred && !onlineSubtitleLibrary.isIgnored(it) }
+          ?: records.filterNot { onlineSubtitleLibrary.isIgnored(it) }.maxByOrNull { it.downloadedAt }
         if (pick != null && onlineSubtitleLibrary.fileOf(pick).isFile) {
           val uriString = Uri.fromFile(onlineSubtitleLibrary.fileOf(pick)).toString()
           // `sub-add` 是异步的：轨道还没进 track-list 时设 sid 会被 mpv 丢掉，
@@ -1192,9 +1557,9 @@ class PlayerViewModel(
             delay(60)
             trackId = findSubtitleTrackIdOf(uriString)
             tries++
+            if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != titleSnapshot) return@withContext false
           }
-          if (trackId != null) {
-            ensureSubtitleSelected(trackId)
+          if (trackId != null && selectSubtitleTrack(trackId, SubtitleSource.ONLINE_LIBRARY, sessionId)) {
             boundSubtitleApplied = true
             // 顺手补一条「当前媒体名 → 文件」的绑定：详情页写的那条键对不上播放页，
             // 补上之后 hasBoundSubtitle / restoreBoundSubtitle 也能直接命中。
@@ -1235,6 +1600,7 @@ class PlayerViewModel(
     server: EmbyServer,
     itemId: String,
     mediaSourceId: String?,
+    sessionId: Long = currentSubtitleSessionId(),
   ): OnlineSubtitleAutoFetch.Result {
     if (!subtitlesPreferences.onlineAutoFetch.get()) {
       return OnlineSubtitleAutoFetch.Result(OnlineSubtitleAutoFetch.Result.Status.DISABLED)
@@ -1272,25 +1638,41 @@ class PlayerViewModel(
 
     // 落盘成功后挂载并选中：与「面板里点使用」走同一条 loadSubtitle 路径，
     // 但这里必须等轨道真的进 track-list 再置标记，避免「报成功、画面没字幕」。
+    if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != title) return result
+    if (onlineSubtitleLibrary.isIgnored(record)) return result
     val file = onlineSubtitleLibrary.fileOf(record)
     if (!file.isFile) return result
     val uri = Uri.fromFile(file)
-    if (currentMediaTitle != title) return result
 
     withContext(Dispatchers.Main) {
-      loadSubtitle(uri, select = true, silent = true, title = record.title.take(60))
+      val mpvPath = loadSubtitle(
+        uri,
+        select = true,
+        silent = true,
+        title = record.title.take(60),
+        allowManagedPrivate = true,
+        source = SubtitleSource.ONLINE_AUTO_FETCH,
+        sessionId = sessionId,
+        sourceIgnored = onlineSubtitleLibrary.isIgnored(record),
+      )
+      if (mpvPath != null) mpvPathToOnlineRecordMap[mpvPath] = record
       var waited = 0L
       while (waited < 1_500L && findSubtitleTrackIdOf(uri.toString()) == null) {
         delay(80)
         waited += 80
+        if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != title) return@withContext
       }
-      if (findSubtitleTrackIdOf(uri.toString()) != null) {
+      val trackId = findSubtitleTrackIdOf(uri.toString())
+      if (trackId != null && selectSubtitleTrack(trackId, SubtitleSource.ONLINE_AUTO_FETCH, sessionId)) {
         boundSubtitleApplied = true
         Log.i("PlayerViewModel", "online subtitle auto-fetched: item=$itemId title=${record.title}")
       } else {
+        releaseSubtitleSelection(SubtitleSource.ONLINE_AUTO_FETCH, sessionId)
         Log.w("PlayerViewModel", "online subtitle auto-fetch mounted but track missing: ${record.title}")
       }
-      _onlineSubtitles.value = onlineSubtitleLibrary.forMedia(server.id.toString(), itemId)
+      if (isSubtitleSessionCurrent(sessionId) && currentMediaTitle == title) {
+        _onlineSubtitles.value = onlineSubtitleLibrary.forMedia(server.id.toString(), itemId)
+      }
     }
     return result
   }
@@ -1314,6 +1696,16 @@ class PlayerViewModel(
     EmbySubtitleController(host.context.applicationContext, subtitlesPreferences)
   }
 
+  private var embyTrackServerId: String? = null
+  private var embyTrackItemId: String? = null
+  private var embyTrackMediaSourceId: String? = null
+
+  fun setEmbySubtitleTrackContext(serverId: String?, itemId: String?, mediaSourceId: String?) {
+    embyTrackServerId = serverId
+    embyTrackItemId = itemId
+    embyTrackMediaSourceId = mediaSourceId
+  }
+
   /**
    * 本次加载是否已经由 Emby 自动挂上并选中了字幕。
    *
@@ -1332,17 +1724,21 @@ class PlayerViewModel(
   @Volatile
   private var embyAutoSuppressed: Boolean = false
 
-  /** 用户手动操作字幕时调（关闭 / 换轨 / 删除）：压制本次的自动挂载。 */
-  fun suppressEmbyAutoSubtitle() {
+  /** 用户手动操作字幕时调（关闭 / 换轨 / 删除）：锁定本次自动选择。 */
+  fun markUserSubtitleAction(): Long = synchronized(subtitleSessionLock) {
+    subtitleUserActionSerial += 1L
+    subtitleMountState = SubtitleMountArbiter.onUserAction(subtitleMountState)
     if (!embyAutoSuppressed) {
       embyAutoSuppressed = true
-      Log.d("PlayerViewModel", "emby auto subtitle suppressed by user action")
+      Log.d("PlayerViewModel", "automatic subtitle selection suppressed by user action")
     }
+    subtitleUserActionSerial
   }
 
   /** 换片 / 换集时清空（**必须跟 [resetExternalSubtitles] 一起调**）。 */
   fun resetEmbySubtitleState() {
     embySubtitleController.reset()
+    setEmbySubtitleTrackContext(null, null, null)
     embySubtitleApplied = false
     embyAutoSuppressed = false
   }
@@ -1356,7 +1752,9 @@ class PlayerViewModel(
     server: EmbyServer,
     itemId: String,
     mediaSourceId: String?,
+    sessionId: Long = currentSubtitleSessionId(),
   ): Boolean {
+    if (!isSubtitleSessionCurrent(sessionId)) return false
     if (!embySubtitleController.autoEnabled()) {
       Log.i(EmbySubtitleController.TAG, "自动挂载已关闭（设置 → 字幕）")
       return false
@@ -1378,13 +1776,17 @@ class PlayerViewModel(
 
     val mediaTitleSnapshot = currentMediaTitle
     val selection = embySubtitleController.discoverAndSelect(server, itemId, mediaSourceId)
-    if (currentMediaTitle != mediaTitleSnapshot) {
+    if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != mediaTitleSnapshot) {
       Log.i(EmbySubtitleController.TAG, "字幕发现期间换片，放弃本次挂载")
       return false
     }
-    val chosen = selection.chosen
+    val chosen = selection.chosen?.let { it.copy(mediaSourceId = it.mediaSourceId ?: mediaSourceId) }
     if (chosen == null) {
       Log.i(EmbySubtitleController.TAG, "没有符合条件的字幕：${selection.detail}")
+      return false
+    }
+    if (embySubtitleController.isIgnored(server.id.toString(), itemId, chosen)) {
+      Log.i(EmbySubtitleController.TAG, "自动选中的字幕已被删除，放弃挂载")
       return false
     }
 
@@ -1399,7 +1801,15 @@ class PlayerViewModel(
       return false
     }
 
-    return applyEmbySubtitle(server, itemId, mediaSourceId, chosen, auto = true, mediaTitleSnapshot)
+    return applyEmbySubtitle(
+      server,
+      itemId,
+      mediaSourceId,
+      chosen,
+      auto = true,
+      mediaTitleSnapshot,
+      sessionId,
+    )
   }
 
   /**
@@ -1414,15 +1824,16 @@ class PlayerViewModel(
     server: EmbyServer,
     itemId: String,
     mediaSourceId: String?,
+    sessionId: Long = currentSubtitleSessionId(),
   ): Int {
-    if (!embySubtitleController.autoEnabled()) return 0
+    if (!isSubtitleSessionCurrent(sessionId) || !embySubtitleController.autoEnabled()) return 0
     if (hasBoundSubtitle(currentMediaTitle)) {
       Log.i(EmbySubtitleController.TAG, "存在手动绑定字幕，不刷新 Emby 字幕清单")
       return 0
     }
     val snapshot = currentMediaTitle
     embySubtitleController.discoverAndSelect(server, itemId, mediaSourceId)
-    if (currentMediaTitle != snapshot) return 0
+    if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != snapshot) return 0
     return embySubtitleState.value.subtitles.size
   }
 
@@ -1438,16 +1849,22 @@ class PlayerViewModel(
     mediaSourceId: String?,
     subtitle: SubtitleInfo,
   ): Boolean {
+    val sessionId = currentSubtitleSessionId()
+    val normalized = subtitle.copy(mediaSourceId = subtitle.mediaSourceId ?: mediaSourceId)
+    if (embySubtitleController.isIgnored(server.id.toString(), itemId, normalized)) return false
+    val userActionSerial = markUserSubtitleAction()
     val ok = applyEmbySubtitle(
       server = server,
       itemId = itemId,
       mediaSourceId = mediaSourceId,
-      chosen = subtitle,
+      chosen = normalized,
       auto = false,
       mediaTitleSnapshot = currentMediaTitle,
+      sessionId = sessionId,
+      userActionSerial = userActionSerial,
     )
     if (ok) {
-      embySubtitleController.rememberChoice(itemId, subtitle)
+      embySubtitleController.rememberChoice(server.id.toString(), itemId, mediaSourceId, normalized)
       // Emby 的显式选择压过「本地文件绑定」：用户刚刚亲手指定了另一条，
       // 不解除绑定的话下次开播又会被绑定的文件顶回去，看起来像「选择没生效」。
       if (currentMediaTitle.isNotBlank()) {
@@ -1464,13 +1881,13 @@ class PlayerViewModel(
     mediaSourceId: String?,
   ): Boolean {
     embySubtitleController.forgetChoice(itemId)
-    embyAutoSuppressed = false
+    clearAutomaticSubtitleSuppression()
     return autoLoadEmbySubtitle(server, itemId, mediaSourceId)
   }
 
   /** 「关闭字幕」按钮（面板语义）：关掉当前字幕并压制本次自动挂载。 */
   fun disableSubtitles() {
-    suppressEmbyAutoSubtitle()
+    markUserSubtitleAction()
     runCatching {
       if (getSecondarySubtitleId() > 0) PlayerLib.setPropertyString("secondary-sid", "no")
       PlayerLib.setPropertyString("sid", "no")
@@ -1487,7 +1904,15 @@ class PlayerViewModel(
     chosen: SubtitleInfo,
     auto: Boolean,
     mediaTitleSnapshot: String,
+    sessionId: Long = currentSubtitleSessionId(),
+    userActionSerial: Long? = null,
   ): Boolean {
+    if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != mediaTitleSnapshot) return false
+    if (userActionSerial != null && userActionSerial != subtitleUserActionSerial) return false
+    val serverId = server.id.toString()
+    val source = if (auto) SubtitleSource.EMBY_AUTO else SubtitleSource.MANUAL
+    val normalized = chosen.copy(mediaSourceId = chosen.mediaSourceId ?: mediaSourceId)
+    if (embySubtitleController.isIgnored(serverId, itemId, normalized)) return false
     // ── 内嵌轨：文件里本来就有，不需要下载，只要选中 ──
     // 内嵌图像字幕（PGS / DVD）同样属于「容器里已有」，优先让 mpv 原生渲染；
     // 只有**外挂**图像字幕才需要问服务端要 .sup。误把内嵌 PGS 当外挂下载，
@@ -1496,7 +1921,7 @@ class PlayerViewModel(
       chosen.sourceType == SubtitleSourceType.EMBEDDED ||
         (chosen.sourceType == SubtitleSourceType.IMAGE_BASED && !chosen.isExternal)
     if (isEmbeddedTrack) {
-      val selected = selectEmbeddedTrack(chosen)
+      val selected = selectEmbeddedTrack(chosen, source, sessionId)
       Log.i(
         EmbySubtitleController.TAG,
         "内嵌字幕选中${if (selected) "成功" else "失败（轨道还没出现或语言对不上）"}：${chosen.describe()}",
@@ -1509,17 +1934,23 @@ class PlayerViewModel(
     }
 
     // ── 外挂 / 服务端交付：取字节（缓存优先）→ sub-add → 选中 ──
-    val file = embySubtitleController.localFile(server, itemId, mediaSourceId, chosen) ?: run {
+    val file = embySubtitleController.localFile(server, itemId, mediaSourceId, normalized) ?: run {
       Log.i(EmbySubtitleController.TAG, "字幕未挂载：${chosen.describe()} 取字节失败")
       return false
     }
     // 下载是网络动作，可能耗时几秒 —— 期间用户可能关字幕 / 换片，必须重新校验
-    if (auto && embyAutoSuppressed) {
-      Log.i(EmbySubtitleController.TAG, "下载完成时用户已手动关闭字幕，丢弃本次挂载")
+    if ((auto && embyAutoSuppressed) ||
+      (userActionSerial != null && userActionSerial != subtitleUserActionSerial)
+    ) {
+      Log.i(EmbySubtitleController.TAG, "下载完成时用户已手动操作字幕，丢弃本次挂载")
       return false
     }
-    if (currentMediaTitle != mediaTitleSnapshot) {
+    if (!isSubtitleSessionCurrent(sessionId) || currentMediaTitle != mediaTitleSnapshot) {
       Log.i(EmbySubtitleController.TAG, "下载完成时已换片，丢弃本次挂载")
+      return false
+    }
+    if (embySubtitleController.isIgnored(serverId, itemId, normalized)) {
+      Log.i(EmbySubtitleController.TAG, "下载完成时字幕已被删除，丢弃本次挂载")
       return false
     }
 
@@ -1531,7 +1962,25 @@ class PlayerViewModel(
     val lang = chosen.language?.takeIf { it.isNotBlank() } ?: chosen.languageKey
 
     val beforeIds = subtitleTrackIdsOnMain()
-    loadSubtitle(uri, select = true, silent = true, title = title, lang = lang)
+    var pendingUserActionSerial = userActionSerial
+    val mpvPath = loadSubtitle(
+      uri,
+      select = true,
+      silent = true,
+      title = title,
+      lang = lang,
+      allowManagedPrivate = true,
+      source = source,
+      sessionId = sessionId,
+      sourceIgnored = embySubtitleController.isIgnored(serverId, itemId, normalized),
+    ) ?: return false
+    if (!auto) pendingUserActionSerial = subtitleUserActionSerial
+    mpvPathToEmbyIdentityMap[mpvPath] = EmbyTrackIdentity(
+      serverId = serverId,
+      itemId = itemId,
+      mediaSourceId = normalized.mediaSourceId,
+      subtitle = normalized,
+    )
 
     val trackId = awaitNewSubtitleTrack(
       existingIds = beforeIds,
@@ -1539,16 +1988,22 @@ class PlayerViewModel(
       fileName = file.name,
     )
     if (trackId == null) {
+      releaseSubtitleSelection(source, sessionId)
       Log.w(
         EmbySubtitleController.TAG,
         "字幕挂载失败：sub-add 之后轨道列表里找不到 ${file.name}（格式 ${chosen.format}）",
       )
       return false
     }
+    if (pendingUserActionSerial != null && pendingUserActionSerial != subtitleUserActionSerial) {
+      Log.i(EmbySubtitleController.TAG, "等待轨道期间用户已手动操作字幕，丢弃本次选中")
+      return false
+    }
     // ⚠️ 只靠 `sub-add ... select` 不够稳：命令下发那一刻轨道可能还没建出来，或者被
     //    别处（存档恢复 / 轨道选择器）的 sid 写入盖掉。这里显式选中并**回读校验**，
     //    不一致就再设一次 —— 否则表现就是「字幕进了列表但画面上没有，要手动点」。
-    val selected = selectSubtitleTrack(trackId)
+    val selected = selectSubtitleTrackVerified(trackId, source, sessionId, mpvPath)
+    if (!selected) releaseSubtitleSelection(source, sessionId)
     embySubtitleController.markMounted(chosen.key)
     embySubtitleApplied = selected
     Log.i(
@@ -1572,15 +2027,10 @@ class PlayerViewModel(
   }
 
   /**
-   * 等 newly added 的外挂字幕轨出现，返回它的 mpv 轨道 id。
+   * 等本次 `sub-add` 的外挂字幕轨出现，返回它的 mpv 轨道 id。
    *
-   * 三级判据（前一级优先，越靠前越准确）：
-   * 1. `external-filename` 与本次传入的路径完全相等；
-   * 2. `external-filename` 的 basename 与缓存文件名相同（mpv 可能把路径规整过）；
-   * 3. 本次新增且不在 [existingIds] 里的字幕轨里 id 最大的那条。
-   *
-   * 第 3 级是兜底：前两级都要求 `external-filename` 可读，而它在轨道刚建出来的瞬间
-   * 可能还是空的 —— 早先只做「uri → 路径」映射反查，拿不到就直接放弃选中。
+   * 只接受 `external-filename` 能对应到请求路径的轨道；不能用「最大新 id」兜底，
+   * 否则并发自动来源刚加进来的另一条字幕会被误选。
    */
   private suspend fun awaitNewSubtitleTrack(
     existingIds: Set<Int>,
@@ -1589,41 +2039,25 @@ class PlayerViewModel(
     timeoutMs: Long = 2500,
   ): Int? = withContext(Dispatchers.Main) {
     val deadline = System.currentTimeMillis() + timeoutMs
-    var pendingId: Int? = null
-    var pendingSince = 0L
     while (System.currentTimeMillis() < deadline) {
       val count = PlayerLib.getPropertyInt("track-list/count") ?: 0
       var byFileName: Int? = null
-      var candidate: Int? = null
       for (i in 0 until count) {
         if (PlayerLib.getPropertyString("track-list/$i/type") != "sub") continue
+        if (PlayerLib.getPropertyBoolean("track-list/$i/external") != true) continue
         val id = PlayerLib.getPropertyInt("track-list/$i/id") ?: continue
         val externalPath = PlayerLib.getPropertyString("track-list/$i/external-filename")
-        if (!externalPath.isNullOrBlank()) {
-          if (externalPath == mpvPath) return@withContext id
-          if (byFileName == null && externalPath.substringAfterLast('/') == fileName) byFileName = id
+        if (externalPath == mpvPath) return@withContext id
+        if (id !in existingIds && byFileName == null &&
+          externalPath?.substringAfterLast('/') == fileName
+        ) {
+          byFileName = id
         }
-        if (id !in existingIds && (candidate == null || id > candidate)) candidate = id
       }
       byFileName?.let { return@withContext it }
-      // 第 3 级：确实冒出一条新轨，但 `external-filename` 还没就绪。
-      // ⚠️ 这里**必须真的把它返回**：早先只是「再等一拍」然后就一直循环到超时，
-      //    结果明明有轨道却回 null ⇒ 调用方认为挂载失败 ⇒ 字幕进了列表但没选中，
-      //    表现就是「要手动去面板里勾一下」。稳定出现 250ms 就认它。
-      if (candidate != null) {
-        if (candidate != pendingId) {
-          pendingId = candidate
-          pendingSince = System.currentTimeMillis()
-        } else if (System.currentTimeMillis() - pendingSince >= 250) {
-          return@withContext candidate
-        }
-      } else {
-        pendingId = null
-      }
       delay(40)
     }
-    // 到点了还没有准确路径信息，但有稳定存在的新轨 ⇒ 仍然认它（宁可选中，也别让用户手点）
-    pendingId
+    null
   }
 
   /**
@@ -1631,9 +2065,28 @@ class PlayerViewModel(
    *
    * @return true = mpv 上确实选中了这条
    */
-  private suspend fun selectSubtitleTrack(id: Int): Boolean = withContext(Dispatchers.Main) {
+  private suspend fun selectSubtitleTrackVerified(
+    id: Int,
+    source: SubtitleSource,
+    sessionId: Long,
+    expectedPath: String,
+  ): Boolean = withContext(Dispatchers.Main) {
+    val state = subtitleMountState
+    val allowed = SubtitleMountArbiter.decide(
+      state,
+      SubtitleMountRequest(sessionId, source, select = true, ignored = false),
+    )
+    if (allowed != SubtitleMountDecision.MountAndSelect &&
+      !canFinalizeSubtitleSelection(id, source, state, allowed, expectedPath)
+    ) {
+      return@withContext false
+    }
+    if (isSubtitleTrackIgnored(id)) return@withContext false
     repeat(3) { attempt ->
-      ensureSubtitleSelected(id)
+      val selected = ensureSubtitleSelected(id)
+      if (selected) {
+        subtitleMountState = SubtitleMountArbiter.onSelectionAccepted(subtitleMountState, source)
+      }
       delay(if (attempt == 0) 120L else 220L)
       if (getPrimarySubtitleId() == id) return@withContext true
     }
@@ -1679,7 +2132,11 @@ class PlayerViewModel(
    * 只用 Emby 元数据「找轨道」，选中仍走 [ensureSubtitleSelected]，并且只挑
    * **内嵌**轨 —— 外挂轨由 [applyEmbySubtitle] 的下载路径负责。
    */
-  private suspend fun selectEmbeddedTrack(chosen: SubtitleInfo): Boolean = withContext(Dispatchers.Main) {
+  private suspend fun selectEmbeddedTrack(
+    chosen: SubtitleInfo,
+    source: SubtitleSource,
+    sessionId: Long,
+  ): Boolean = withContext(Dispatchers.Main) {
     val candidates = runCatching {
       val count = PlayerLib.getPropertyInt("track-list/count") ?: 0
       (0 until count).mapNotNull { i ->
@@ -1691,18 +2148,18 @@ class PlayerViewModel(
           lang = PlayerLib.getPropertyString("track-list/$i/lang"),
           title = PlayerLib.getPropertyString("track-list/$i/title"),
         )
-      }
+      }.filterNot { isEmbeddedTrackIndexIgnored(it.ffIndex) }
     }.getOrDefault(emptyList())
     if (candidates.isEmpty()) return@withContext false
 
     // ① ff-index 精确对应（同语言多条时唯一定位）
     candidates.firstOrNull { it.ffIndex != null && it.ffIndex == chosen.streamIndex }?.let { exact ->
-      ensureSubtitleSelected(exact.id)
+      val selected = selectSubtitleTrack(exact.id, source, sessionId)
       Log.i(
         EmbySubtitleController.TAG,
         "内嵌字幕按 ff-index 精确选中：${chosen.describe()} ff-index=${exact.ffIndex}",
       )
-      return@withContext true
+      return@withContext selected
     }
 
     // ② 语言 + 标题线索；③ 仅语言
@@ -1716,12 +2173,12 @@ class PlayerViewModel(
       key == chosen.languageKey
     } ?: matches.firstOrNull()
     picked?.let {
-      ensureSubtitleSelected(it.id)
+      val selected = selectSubtitleTrack(it.id, source, sessionId)
       Log.i(
         EmbySubtitleController.TAG,
         "内嵌字幕按语言选中：${chosen.describe()} trackId=${it.id} ff-index=${it.ffIndex}",
       )
-      return@withContext true
+      return@withContext selected
     }
     false
   }
@@ -1752,10 +2209,6 @@ class PlayerViewModel(
       resetEmbySubtitleState()
       // 网络字幕清单同理：上一部的条目留在界面上会被误当成这一部也下过
       _onlineSubtitles.value = emptyList()
-      // Scan for previously downloaded/added subtitles
-      scanLocalSubtitles(mediaTitle)
-      // 用户上次为这部片子手动挂过的字幕：自动挂回去（进程被杀也不丢）
-      restoreBoundSubtitle(mediaTitle)
 
       // 1. Reset Aspect Ratio to saved preference
       val savedAspect = playerPreferences.defaultVideoAspect.get()
@@ -1820,6 +2273,14 @@ class PlayerViewModel(
     }
   }
 
+  /** 媒体与字幕会话都已建立后，再恢复保存目录和手动绑定，避免 sub-add 落到上一条媒体。 */
+  fun restoreLocalSubtitleSources() {
+    val mediaTitle = currentMediaTitle
+    if (mediaTitle.isBlank()) return
+    val sessionId = currentSubtitleSessionId()
+    scanLocalSubtitles(mediaTitle, sessionId)
+    restoreBoundSubtitle(mediaTitle, sessionId)
+  }
 
   fun getPrimarySubtitleId(): Int =
     PlayerLib.getPropertyString("sid")?.toIntOrNull() ?: 0
@@ -1828,61 +2289,157 @@ class PlayerViewModel(
     PlayerLib.getPropertyString("secondary-sid")?.toIntOrNull() ?: 0
 
   fun removeSubtitle(id: Int) {
-    // 用户亲手删了一条字幕 ⇒ 本次别再自动挂回来（Emby 自动挂载会重新 sub-add）
-    suppressEmbyAutoSubtitle()
-    // ⚠️ mpv 属性只能在主线程读（从后台线程打 native 崩溃且不留日志）：先在主线程取快照。
-    val primarySid = getPrimarySubtitleId()
-    val secondarySid = getSecondarySubtitleId()
-    viewModelScope.launch(Dispatchers.IO) {
-      // If removing the primary subtitle while a secondary subtitle is active,
-      // promote secondary to primary so the remaining subtitle stays at the bottom.
-      // Must clear secondary-sid FIRST so mpv does not reject assigning that track to sid.
-      if (id == primarySid) {
-        if (secondarySid > 0 && secondarySid != id) {
-          PlayerLib.setPropertyString("secondary-sid", "no")
-          PlayerLib.setPropertyInt("sid", secondarySid)
-        } else {
-          PlayerLib.setPropertyString("sid", "no")
-        }
-      } else if (id == secondarySid) {
-        PlayerLib.setPropertyString("secondary-sid", "no")
+    // 用户亲手删了一条字幕 ⇒ 本次别再自动挂回来。
+    markUserSubtitleAction()
+    val sessionId = currentSubtitleSessionId()
+    viewModelScope.launch {
+      // 所有 mpv / 当前轨道快照必须在主线程读；持久化与文件清理再切 IO。
+      val primarySid = getPrimarySubtitleId()
+      val secondarySid = getSecondarySubtitleId()
+      val track = allTracks.value.firstOrNull { it.id == id && it.isSubtitle } ?: return@launch
+      val mpvPath = track.externalFilename
+      val titleSnapshot = currentMediaTitle
+      val originalUriString = mpvPath?.let { mpvPathToUriMap[it] } ?: mpvPath
+      val originalUri = originalUriString?.let { runCatching { Uri.parse(it) }.getOrNull() }
+      val sourcePath = originalUri?.let(::localPathOfUri)
+        ?: mpvPath?.let { SubtitleTombstones.normalizeAbsolutePath(it) }
+      val bound = titleSnapshot.takeIf { it.isNotBlank() }?.let {
+        runCatching { SubtitleBindings.find(subtitlesPreferences, it) }.getOrNull()
       }
-
-      // Find the subtitle track info before removing
-      val tracks = subtitleTracks.value
-      val trackToRemove = tracks.firstOrNull { it.id == id }
-
-      // Removing an external subtitle only detaches it from the player and stops
-      // tracking it. It must NOT delete the underlying file from disk: external
-      // subtitles are user-provided (e.g. downloaded with another app), so
-      // deleting them would cause unexpected data loss.
-      if (trackToRemove?.external == true && trackToRemove.externalFilename != null) {
-        val mpvPath = trackToRemove.externalFilename
-        val originalUriString = mpvPathToUriMap[mpvPath] ?: mpvPath
-        _externalSubtitles.remove(originalUriString)
-        mpvPathToUriMap.remove(mpvPath)
-
-        // 用户主动删掉这条外挂字幕 ⇒ 绑定关系一起解除。
-        // 不解除的话下次开片会照旧自动挂回来，等于「删不掉」。
-        val title = currentMediaTitle
-        if (title.isNotBlank()) {
-          val bound = runCatching { SubtitleBindings.find(subtitlesPreferences, title) }.getOrNull()
-          if (bound != null) {
-            val boundPath =
-              runCatching { Uri.parse(bound).resolveUri(host.context) }.getOrNull() ?: bound
-            if (boundPath == mpvPath) SubtitleBindings.unbind(subtitlesPreferences, title)
+      val onlineRecord = mpvPath?.let { path ->
+        mpvPathToOnlineRecordMap[path] ?: _onlineSubtitles.value.firstOrNull { record ->
+          Uri.fromFile(onlineSubtitleLibrary.fileOf(record)).toString() == originalUriString
+        }
+      }
+      val embyIdentity = if (track.external == true) {
+        mpvPath?.let { path ->
+          mpvPathToEmbyIdentityMap[path] ?: run {
+            val state = embySubtitleState.value
+            val source = sourcePath ?: path
+            if (state.serverId != null && state.itemId != null && state.mountedKey != null &&
+              isEmbyCachePath(source)
+            ) {
+              state.subtitles.firstOrNull { it.key == state.mountedKey }?.let { subtitle ->
+                EmbyTrackIdentity(state.serverId, state.itemId, state.mediaSourceId, subtitle)
+              }
+            } else {
+              null
+            }
           }
         }
+      } else {
+        embyIdentityForEmbeddedTrack(track)
       }
 
-      PlayerLib.command("sub-remove", id.toString())
+      val persisted = if (track.external == true) {
+        withContext(Dispatchers.IO) {
+          when {
+            embyIdentity != null -> {
+              val info = embyIdentity.subtitle.copy(
+                mediaSourceId = embyIdentity.subtitle.mediaSourceId ?: embyIdentity.mediaSourceId,
+              )
+              val now = System.currentTimeMillis()
+              val embyTombstone = SubtitleTombstones.emby(
+                embyIdentity.serverId,
+                embyIdentity.itemId,
+                info.mediaSourceId,
+                info.streamIndex,
+                now,
+              )
+              // 旧 Room 存档可能直接保存了缓存 file:// URI；补一条外部 tombstone，
+              // 让它即使绕过 Emby 发现也不能作为普通外挂复活。
+              val cacheTombstone = SubtitleTombstones.external(sourcePath, originalUriString, now)
+              val atomic = embyTombstone != null && cacheTombstone != null &&
+                subtitleTombstones.rememberAll(listOf(embyTombstone, cacheTombstone))
+              atomic && embySubtitleController.delete(
+                serverId = embyIdentity.serverId,
+                itemId = embyIdentity.itemId,
+                mediaSourceId = embyIdentity.mediaSourceId,
+                subtitle = info,
+              )
+            }
+
+            onlineRecord != null -> OnlineSubtitleCleanup.delete(
+              context = host.context.applicationContext,
+              library = onlineSubtitleLibrary,
+              preferences = subtitlesPreferences,
+              record = onlineRecord,
+              deleteMirror = false,
+            ).tombstonePersisted
+
+            else -> {
+              val now = System.currentTimeMillis()
+              val sourceTombstone = SubtitleTombstones.external(sourcePath, originalUriString, now)
+              val archive = titleSnapshot.takeIf { it.isNotBlank() }?.let { title ->
+                runCatching {
+                  ExternalSubtitleArchive.find(host.context.applicationContext, title)
+                }.getOrNull()
+              }
+              val archiveTombstone = archive?.let {
+                SubtitleTombstones.external(localPathOfUri(it), it.toString(), now)
+              }
+              sourceTombstone != null &&
+                subtitleTombstones.rememberAll(listOfNotNull(sourceTombstone, archiveTombstone))
+            }
+          }
+        }
+      } else {
+        // 内嵌轨不能从媒体文件里抹掉，但可按 Emby 流序号持久忽略，并阻止恢复时再次选中。
+        embyIdentity?.let { identity ->
+          embySubtitleController.delete(
+            serverId = identity.serverId,
+            itemId = identity.itemId,
+            mediaSourceId = identity.mediaSourceId,
+            subtitle = identity.subtitle,
+          )
+        } ?: false
+      }
+
+      if (!persisted) {
+        Log.w(TAG, "subtitle deletion not persisted; keep track $id mounted")
+        showToast("删除记录保存失败，字幕仍保留")
+        return@launch
+      }
+
+      val stillCurrent = isSubtitleSessionCurrent(sessionId) && currentMediaTitle == titleSnapshot
+      // tombstone 已同步落盘才允许卸载；清 secondary 必须先于提升，避免 mpv 拒绝同轨双槽。
+      if (stillCurrent) {
+        if (id == primarySid) {
+          if (secondarySid > 0 && secondarySid != id && !isSubtitleTrackIgnored(secondarySid)) {
+            PlayerLib.setPropertyString("secondary-sid", "no")
+            PlayerLib.setPropertyInt("sid", secondarySid)
+          } else {
+            PlayerLib.setPropertyString("sid", "no")
+          }
+        } else if (id == secondarySid) {
+          PlayerLib.setPropertyString("secondary-sid", "no")
+        }
+        PlayerLib.command("sub-remove", id.toString())
+
+        if (mpvPath != null) {
+          mpvPathToUriMap.remove(mpvPath)
+          mpvPathToOnlineRecordMap.remove(mpvPath)
+          mpvPathToEmbyIdentityMap.remove(mpvPath)
+          mpvPathToSelectionSourceMap.remove(mpvPath)
+        }
+        originalUriString?.let(_externalSubtitles::remove)
+        onlineRecord?.let { removed ->
+          _onlineSubtitles.value = _onlineSubtitles.value.filterNot { it.id == removed.id }
+        }
+        boundSubtitleApplied = false
+        embySubtitleApplied = false
+      }
+      if (bound != null && bound == originalUriString && titleSnapshot.isNotBlank()) {
+        SubtitleBindings.unbind(subtitlesPreferences, titleSnapshot)
+      }
     }
   }
 
   fun toggleSubtitle(id: Int) {
+    if (isSubtitleTrackIgnored(id)) return
     // 用户手动开关字幕 ⇒ 这就是「本次播放的字幕决定」，自动挂载不得再覆盖。
     // 尤其是「关掉主字幕」这一下：不压制的话，晚到的 Emby 下载会把字幕又打开。
-    suppressEmbyAutoSubtitle()
+    markUserSubtitleAction()
     val primarySid = getPrimarySubtitleId()
     val secondarySid = getSecondarySubtitleId()
 
@@ -1891,7 +2448,7 @@ class PlayerViewModel(
         // User disabled the primary subtitle while a secondary subtitle is active:
         // Promote secondary to primary so the single remaining subtitle is positioned at the bottom.
         // MUST clear secondary-sid FIRST so mpv does not reject assigning it to sid.
-        if (secondarySid > 0 && secondarySid != id) {
+        if (secondarySid > 0 && secondarySid != id && !isSubtitleTrackIgnored(secondarySid)) {
           PlayerLib.setPropertyString("secondary-sid", "no")
           PlayerLib.setPropertyInt("sid", secondarySid)
         } else {
@@ -1939,9 +2496,9 @@ class PlayerViewModel(
    * mpv 不允许同一条轨同时占两个槽位，顺序反了会被服务端拒绝（同 [removeSubtitle]）。
    */
   fun setPrimarySubtitle(id: Int) {
-    if (id <= 0) return
+    if (id <= 0 || isSubtitleTrackIgnored(id)) return
     // 用户手动指定 ⇒ 这就是本次播放的字幕决定，自动挂载不得再覆盖
-    suppressEmbyAutoSubtitle()
+    markUserSubtitleAction()
     if (getSecondarySubtitleId() == id) {
       PlayerLib.setPropertyString("secondary-sid", "no")
     }
@@ -1955,7 +2512,7 @@ class PlayerViewModel(
   fun normalizeSubtitles() {
     val primarySid = getPrimarySubtitleId()
     val secondarySid = getSecondarySubtitleId()
-    if (primarySid <= 0 && secondarySid > 0) {
+    if (primarySid <= 0 && secondarySid > 0 && !isSubtitleTrackIgnored(secondarySid)) {
       PlayerLib.setPropertyString("secondary-sid", "no")
       PlayerLib.setPropertyInt("sid", secondarySid)
     }

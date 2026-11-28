@@ -580,6 +580,7 @@ data class EmbyMediaSource(
   val Name: String? = null,
   val Container: String? = null,
   val Path: String? = null,
+  val RequiredHttpHeaders: Map<String, String>? = null,
   // ⚠️ 这里**不要**再加 `DateCreated` / `DateModified`：Emby 的 MediaSourceInfo 没有日期字段
   // （官方文档属性清单 + `embyclient-reference` 生成的模型都确认过），加了服务端也永远返回空，
   // 只会让调用方以为拿到了版本级时间。版本级入库时间服务端不提供，只能显示条目级

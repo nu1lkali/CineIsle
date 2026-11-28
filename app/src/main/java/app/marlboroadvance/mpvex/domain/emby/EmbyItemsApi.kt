@@ -696,9 +696,7 @@ object EmbyItemsApi {
 
   /**
    * 某季（或整部剧集）下的剧集列表。
-   *
-   * ⚠️ 分页参数是后加的（对应清单 1.1）：原先一次拿回全部集，
-   * 长剧（几百集）响应体很大且列表全进内存。现在由详情页按季分页拉。
+   * limit 为空时不发送 Limit，避免兼容服务端把 0 解释成空结果。
    */
   fun getEpisodes(
     server: EmbyServer,
@@ -713,7 +711,7 @@ object EmbyItemsApi {
       "UserId" to server.userId,
       "SeasonId" to seasonId,
       "StartIndex" to startIndex.toString(),
-      "Limit" to (limit ?: 0).toString(),
+      "Limit" to limit?.toString(),
       "Fields" to "BasicSyncInfo,MediaSourceCount,Overview,Genres,People,Studios,Taglines,MediaSources",
       "EnableUserData" to "true",
     ),

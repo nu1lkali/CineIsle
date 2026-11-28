@@ -67,6 +67,7 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyItem
 import app.marlboroadvance.mpvex.domain.emby.EmbyPerson
 import app.marlboroadvance.mpvex.domain.emby.EmbyRepository
 import app.marlboroadvance.mpvex.domain.emby.EmbyTicks
+import app.marlboroadvance.mpvex.domain.emby.preferredEpisodeForDetail
 import app.marlboroadvance.mpvex.preferences.BrowserPreferences
 import app.marlboroadvance.mpvex.preferences.preference.collectAsState
 import app.marlboroadvance.mpvex.ui.browser.emby.EmbyDetailScreen
@@ -127,6 +128,7 @@ fun CineDetailScreen(
   itemId: String,
   title: String,
   modifier: Modifier = Modifier,
+  libraryId: String? = null,
 ) {
   val context = LocalContext.current
   val app = context.applicationContext as Application
@@ -156,6 +158,7 @@ fun CineDetailScreen(
   var episodes by remember(itemId) { mutableStateOf<List<EmbyItem>>(emptyList()) }
   var children by remember(itemId) { mutableStateOf<List<EmbyItem>>(emptyList()) }
   var seasonIndex by remember(itemId) { mutableIntStateOf(0) }
+  var seasonSelectionTouched by remember(itemId) { mutableStateOf(false) }
   // 正序 / 倒序：长篇番剧追更时倒序更实用，且只影响本地展示
   var descending by remember(itemId) { mutableStateOf(false) }
 
@@ -165,7 +168,7 @@ fun CineDetailScreen(
   var overviewExpanded by remember(itemId) { mutableStateOf(false) }
 
   val similar by similarViewModel.similar.collectAsState()
-  val play = rememberCinePlayController()
+  val play = rememberCinePlayController(libraryId = libraryId)
   val failedText = stringResource(R.string.cine_favorite_failed)
 
   // ── 更多菜单（= 完整功能集） ──
@@ -397,22 +400,8 @@ fun CineDetailScreen(
       }
   }
 
-  /**
-   * 集号条要定位到的那一集：优先「有进度且没看完」的最近一集，其次第一个未看的。
-   *
-   * 用 `LastPlayedDate` 排序而不是 `PlaybackPositionTicks` 大小 —— 后者跟「看了多久」
-   * 成正比，会和「最近看的」脱钩（看过一半的第 3 集 vs 刚点开 10 秒的第 9 集）。
-   */
   val activeEpisodeId = remember(episodes) {
-    episodes
-      .filter {
-        (it.UserData?.PlaybackPositionTicks ?: 0L) > 0L && it.UserData?.Played != true
-      }
-      .maxByOrNull { it.UserData?.LastPlayedDate.orEmpty() }
-      ?.Id
-      ?: episodes.filter { it.UserData?.Played != true }
-        .minByOrNull { it.IndexNumber ?: Int.MAX_VALUE }
-        ?.Id
+    preferredEpisodeForDetail(episodes)?.Id
   }
 
   // 染色只作用于详情页这一棵子树。派生规则全在 cineColorsForPoster 里，
@@ -449,6 +438,14 @@ fun CineDetailScreen(
           loaded.People.orEmpty().filter { it.Type == "Actor" && it.Id != null }.take(12)
         }
         val seasonGroups = remember(episodes) { groupEpisodesBySeason(episodes) }
+        val activeSeasonNumber = remember(episodes, activeEpisodeId) {
+          episodes.firstOrNull { it.Id == activeEpisodeId }?.ParentIndexNumber
+        }
+        LaunchedEffect(seasonGroups, activeSeasonNumber) {
+          if (seasonSelectionTouched || seasonGroups.isEmpty()) return@LaunchedEffect
+          val index = seasonGroups.indexOfFirst { it.seasonNumber == activeSeasonNumber }
+          seasonIndex = if (index >= 0) index else 0
+        }
         val castAvatarUrl: (EmbyPerson) -> String? = { person ->
           val current = server
           val personId = person.Id
@@ -552,7 +549,10 @@ fun CineDetailScreen(
               CineEpisodeSection(
                 groups = seasonGroups,
                 selectedIndex = seasonIndex.coerceIn(0, seasonGroups.lastIndex),
-                onSelectSeason = { seasonIndex = it },
+                onSelectSeason = {
+                  seasonSelectionTouched = true
+                  seasonIndex = it
+                },
                 currentEpisodeId = activeEpisodeId,
                 thumbUrl = episodeThumbUrl,
                 descending = descending,
@@ -562,6 +562,17 @@ fun CineDetailScreen(
                     episode,
                     EmbyTicks.ticksToSeconds(episode.UserData?.PlaybackPositionTicks ?: 0L),
                   )
+                },
+                onOpenEpisode = { episode ->
+                  episode.Id?.let { epId ->
+                    backStack.add(
+                      EmbyDetailScreen(
+                        itemId = epId,
+                        title = episode.Name.orEmpty(),
+                        libraryId = libraryId,
+                      ),
+                    )
+                  }
                 },
                 onToggleEpisodePlayed = { episode ->
                   val current = server
@@ -676,27 +687,31 @@ fun CineDetailScreen(
       onPick = { player ->
         externalPlayers = null
         if (playerTarget != null && serverTarget != null) {
-          viewModel.playWithExternalPlayer(serverTarget, playerTarget, player)
-            .onFailure { e ->
-              Toast.makeText(
-                context,
-                e.message ?: context.getString(R.string.cine_action_external_failed),
-                Toast.LENGTH_LONG,
-              ).show()
-            }
+          scope.launch {
+            viewModel.playWithExternalPlayer(serverTarget, playerTarget, player)
+              .onFailure { e ->
+                Toast.makeText(
+                  context,
+                  e.message ?: context.getString(R.string.cine_action_external_failed),
+                  Toast.LENGTH_LONG,
+                ).show()
+              }
+          }
         }
       },
       onSystemChooser = {
         externalPlayers = null
         if (playerTarget != null && serverTarget != null) {
-          viewModel.playWithExternalPlayerChooser(serverTarget, playerTarget)
-            .onFailure { e ->
-              Toast.makeText(
-                context,
-                e.message ?: context.getString(R.string.cine_action_external_failed),
-                Toast.LENGTH_LONG,
-              ).show()
-            }
+          scope.launch {
+            viewModel.playWithExternalPlayerChooser(serverTarget, playerTarget)
+              .onFailure { e ->
+                Toast.makeText(
+                  context,
+                  e.message ?: context.getString(R.string.cine_action_external_failed),
+                  Toast.LENGTH_LONG,
+                ).show()
+              }
+          }
         }
       },
       onDismiss = { externalPlayers = null },

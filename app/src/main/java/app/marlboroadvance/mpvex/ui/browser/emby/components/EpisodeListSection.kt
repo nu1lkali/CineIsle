@@ -4,7 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -27,6 +25,8 @@ import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -62,9 +62,9 @@ import app.marlboroadvance.mpvex.domain.emby.EmbyItem
  * 长剧动辄几十上百集 —— 竖向铺开会把「简介 / 演职员 / 媒体信息」全推到屏幕外几百屏，
  * 详情页就废了。所以规则是：
  *
- *  · **默认收起**，只显示「第 N 集」+ 一句「共 X 集 · 已看 Y 集」；
+ *  · **默认展开**，标题行显示「共 X 集 · 已看 Y 集」；
  *  · 展开后是一次**横向滑动**的分集卡片行（不占竖向空间）；
- *  · 多季剧额外给一排季号 chip，切季只换那一行。
+ *  · 多季剧在标题行放一个明确的「第 N 季」下拉入口，收起时也能切季。
  *
  * ## 交互约定（与媒体库一致）
  *
@@ -99,25 +99,26 @@ fun EpisodeListSection(
 ) {
   if (episodes.isEmpty()) return
 
-  // 按季分组：只有一季（或压根没有季号）时不画季 chip，省掉一行无用控件。
   val seasons = remember(episodes) {
     episodes.mapNotNull { it.ParentIndexNumber }.distinct().sorted()
   }
-  val showSeasonChips = seasons.size > 1
+  val showSeasonPicker = seasons.size > 1
+  val seriesKey = episodes.firstOrNull()?.SeriesId
+    ?: episodes.firstOrNull()?.ParentId
+    ?: episodes.firstOrNull()?.Id.orEmpty()
 
-  // 默认收起。⚠️ 用 rememberSaveable：从播放器返回会重建本页组合，
-  // 用 remember 的话用户刚展开的位置会被弹回收起态。
-  var expanded by rememberSaveable { mutableStateOf(false) }
-  // null = 没手动选季 ⇒ 跟随「当前播放的那一集」或第一季。
-  var pickedSeason by rememberSaveable { mutableStateOf<Int?>(null) }
+  // 状态按剧集隔离，避免从上一部剧带来的第 3 季选择污染下一部。
+  var expanded by rememberSaveable(seriesKey) { mutableStateOf(true) }
+  var pickedSeason by rememberSaveable(seriesKey) { mutableStateOf<Int?>(null) }
 
   val currentSeason = remember(episodes, currentEpisodeId) {
     episodes.firstOrNull { it.Id == currentEpisodeId }?.ParentIndexNumber
   }
-  val activeSeason = pickedSeason ?: currentSeason ?: seasons.firstOrNull()
-  // 单季剧把所有集都当作一季显示。
-  val visible = remember(episodes, activeSeason, showSeasonChips) {
-    if (!showSeasonChips) episodes
+  val activeSeason = pickedSeason?.takeIf { it in seasons }
+    ?: currentSeason?.takeIf { it in seasons }
+    ?: seasons.firstOrNull()
+  val visible = remember(episodes, activeSeason, showSeasonPicker) {
+    if (!showSeasonPicker) episodes
     else episodes.filter { it.ParentIndexNumber == activeSeason }
   }
 
@@ -152,6 +153,15 @@ fun EpisodeListSection(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.weight(1f),
       )
+      if (showSeasonPicker && activeSeason != null) {
+        Spacer(modifier = Modifier.width(8.dp))
+        SeasonPicker(
+          seasons = seasons,
+          activeSeason = activeSeason,
+          onSelect = { pickedSeason = it },
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+      }
       Icon(
         imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
         contentDescription = if (expanded) "收起分集" else "展开分集",
@@ -161,31 +171,10 @@ fun EpisodeListSection(
 
     AnimatedVisibility(visible = expanded) {
       Column {
-        // ── 季选择 ──
-        if (showSeasonChips) {
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .horizontalScroll(rememberScrollState())
-              .padding(horizontal = 16.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            seasons.forEach { season ->
-              SeasonChip(
-                text = if (season == 0) "特别篇" else "第 $season 季",
-                selected = season == activeSeason,
-                onClick = { pickedSeason = season },
-              )
-            }
-          }
-        }
-
         // ── 批量操作行 ──
-        // 「下载本季」单独一行、**左对齐**：和上面季节 chip 行、下面分集行
-        // 的 16dp 起始边距对齐，视觉上是一条竖线。
+        // 「下载本季」单独一行、**左对齐**：和分集行的 16dp 起始边距对齐。
         // 单独成行的理由仍在：它是**作用于当前这一季**的动作，
-        // 若和季 chip 放同一行最右，横向滚到末尾才会看见，长剧里等于藏起来了。
+        // 若和季选择器放同一行最右，横向滚到末尾才会看见，长剧里等于藏起来了。
         // ⚠️ 做成**胶囊按钮**（tonal 底 + 圆角 50% + 下载图标）而不是一段带
         //    clip 的文本：后者看着像正文链接，用户会漏掉这个批量入口。
         Row(
@@ -256,46 +245,22 @@ fun EpisodeListSection(
   }
 }
 
-/**
- * 分集的「三分区」数据（对标 Yamby 的 `siblingEpisodes` / `showingEpisodes` / `personEpisodes`）。
- *
- * ## 为什么需要三个区而不是一个列表
- *
- * 详情页能拿到的分集只有一种来源——「这部剧全部分集」，而它**天然缺两类东西**：
- *
- *  1. **特别篇 / SP / 花絮**：Emby 把它们放在 `Season 0`，或者挂在不同的季下。
- *     按季 chip 切换的话，用户根本不会想到「特别篇在第 0 季」，等于不存在。
- *  2. **演员相关**：某一集里出现的演员，在**同一部剧**里还有哪些集 —— Emby 没有
- *     「本剧内按人筛选」的现成端点，但 `/Items?PersonIds&Recursive&IncludeItemTypes=Episode`
- *     能查出来，再按 `SeriesId` 过滤就得到了。
- *
- * ## 成本
- *
- * - [sameSeason] / [specials] 都来自**已有的那份分集列表**，纯本地分组，零请求；
- * - [actorEpisodes] 需要一次 `/Items` 请求 —— 只在详情页是单集时发（见 `EmbyDetailScreen`），
- *   且复用与「相关推荐」同一批演员，不额外多查。
- */
+/** 单集详情的选集数据：同季正片与特别篇分开，数量均包含当前集。 */
 data class RelatedEpisodes(
-  /** 同季其它集（含当前这一集本身，由组件高亮）。 */
+  /** 同季正片（含当前这一集本身，由组件高亮）。 */
   val sameSeason: List<EmbyItem> = emptyList(),
   /** 特别篇 / SP / OVA / 花絮（已排除正片）。 */
   val specials: List<EmbyItem> = emptyList(),
-  /** 演员在本剧中参演的其它集；[actorName] 是这个区的标题后缀。 */
-  val actorEpisodes: List<EmbyItem> = emptyList(),
-  val actorName: String? = null,
 ) {
   val isEmpty: Boolean
-    get() = sameSeason.isEmpty() && specials.isEmpty() && actorEpisodes.isEmpty()
+    get() = sameSeason.isEmpty() && specials.isEmpty()
 }
 
 /**
- * 详情页的「相关分集」区：**同季 / 特别篇 / 演员相关**三分区，各占一行。
+ * 单集详情的选集区：只回答「这一季还有哪些集」，不混入演员筛选。
  *
- * ⚠️ 只在「当前条目是单集」时用。电视剧详情页走的是 [EpisodeListSection]（全剧 + 季 chip），
- * 那里所有集都在，再摊一个三分区只会重复。
- *
- * 三个区**独立显示**：某一区为空就整块不画，不留一个空标题占位
- * （「特别篇（0）」比不显示更让人困惑）。
+ * ⚠️ 电视剧详情页走 [EpisodeListSection]（全剧 + 季选择器），这里只服务单集详情。
+ * 两个区独立显示：某一区为空就整块不画，不留空标题占位。
  */
 @Composable
 fun RelatedEpisodesSection(
@@ -325,16 +290,6 @@ fun RelatedEpisodesSection(
     RelatedEpisodeRow(
       title = "特别篇",
       episodes = related.specials,
-      currentEpisodeId = currentEpisodeId,
-      isPlayed = isPlayed,
-      progressOf = progressOf,
-      resumeSecondsOf = resumeSecondsOf,
-      onClick = onClick,
-      onLongClick = onLongClick,
-    )
-    RelatedEpisodeRow(
-      title = related.actorName?.let { "同剧中 TA 的其它分集 · $it" } ?: "同剧其它分集",
-      episodes = related.actorEpisodes,
       currentEpisodeId = currentEpisodeId,
       isPlayed = isPlayed,
       progressOf = progressOf,
@@ -379,8 +334,6 @@ private fun RelatedEpisodeRow(
         bottom = 10.dp,
       ),
     ) {
-      // ⚠️ key 用季+集号而不是 Id：同一个 Id 理论上只出现一次，但「同季」与
-      // 「演员相关」两个区会**同时**包含兄弟集；两个 LazyRow 各自独立作用域，不冲突。
       items(episodes, key = { it.Id ?: it.Name.orEmpty() }) { ep ->
         EpisodeCard(
           episode = ep,
@@ -565,24 +518,61 @@ private fun EpisodeCard(
 enum class EpisodeDownloadState { Queued, Done }
 
 @Composable
-private fun SeasonChip(text: String, selected: Boolean, onClick: () -> Unit) {
-  Surface(
-    color = if (selected) MaterialTheme.colorScheme.primary
-    else MaterialTheme.colorScheme.surfaceVariant,
-    shape = RoundedCornerShape(50),
-    modifier = Modifier
-      .clip(RoundedCornerShape(50))
-      .clickable(onClick = onClick),
-  ) {
-    Text(
-      text = text,
-      style = MaterialTheme.typography.labelMedium,
-      color = if (selected) MaterialTheme.colorScheme.onPrimary
-      else MaterialTheme.colorScheme.onSurfaceVariant,
-      modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-    )
+private fun SeasonPicker(
+  seasons: List<Int>,
+  activeSeason: Int?,
+  onSelect: (Int) -> Unit,
+) {
+  var expanded by remember(seasons) { mutableStateOf(false) }
+  Box {
+    Surface(
+      color = MaterialTheme.colorScheme.primary,
+      shape = RoundedCornerShape(50),
+      modifier = Modifier.clickable { expanded = true },
+    ) {
+      Row(
+        modifier = Modifier.padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = seasonLabel(activeSeason),
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onPrimary,
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Icon(
+          imageVector = Icons.Default.KeyboardArrowDown,
+          contentDescription = "切换季",
+          tint = MaterialTheme.colorScheme.onPrimary,
+          modifier = Modifier.size(18.dp),
+        )
+      }
+    }
+    DropdownMenu(
+      expanded = expanded,
+      onDismissRequest = { expanded = false },
+    ) {
+      seasons.forEach { season ->
+        DropdownMenuItem(
+          text = {
+            Text(
+              text = seasonLabel(season),
+              color = if (season == activeSeason) MaterialTheme.colorScheme.primary
+              else MaterialTheme.colorScheme.onSurface,
+            )
+          },
+          onClick = {
+            onSelect(season)
+            expanded = false
+          },
+        )
+      }
+    }
   }
 }
+
+private fun seasonLabel(season: Int?): String =
+  if (season == 0) "特别篇" else if (season == null) "选季" else "第 $season 季"
 
 // ── 小工具 ──
 

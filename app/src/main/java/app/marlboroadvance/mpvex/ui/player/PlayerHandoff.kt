@@ -52,6 +52,8 @@ internal data class PlayerHandoff(
   val embyServerId: Long? = null,
   /** 与 [playlist] 下标一一对应的 Emby ItemId */
   val embyItemIds: List<String> = emptyList(),
+  /** 与 [embyItemIds] 同序的媒体库 Id；空串 = 发起播放时未知。 */
+  val embyLibraryIds: List<String> = emptyList(),
   /**
    * 与 [embyItemIds] **同序同长**的媒体源 Id（多版本条目：4K / 1080P 各一条）。
    *
@@ -123,6 +125,9 @@ internal data class PlayerHandoff(
     if (embyItemIds.isNotEmpty()) {
       putStringArrayListExtra(EmbyPlaybackReporter.EXTRA_ITEM_IDS, ArrayList(embyItemIds))
     }
+    if (embyLibraryIds.isNotEmpty()) {
+      putStringArrayListExtra(EmbyPlaybackReporter.EXTRA_LIBRARY_IDS, ArrayList(embyLibraryIds))
+    }
     if (embyMediaSourceIds.isNotEmpty()) {
       putStringArrayListExtra(
         EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID,
@@ -178,6 +183,8 @@ internal data class PlayerHandoff(
         embyServerId =
           intent.getLongExtra(EmbyPlaybackReporter.EXTRA_SERVER_ID, -1L).takeIf { it > 0 },
         embyItemIds = itemIds,
+        embyLibraryIds =
+          intent.getStringArrayListExtra(EmbyPlaybackReporter.EXTRA_LIBRARY_IDS) ?: emptyList(),
         embyMediaSourceIds =
           intent.getStringArrayListExtra(EmbyPlaybackReporter.EXTRA_MEDIA_SOURCE_ID) ?: emptyList(),
         headers = intent.getStringArrayExtra(EXTRA_HEADERS),

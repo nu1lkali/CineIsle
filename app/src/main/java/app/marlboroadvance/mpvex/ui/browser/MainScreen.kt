@@ -292,6 +292,7 @@ private fun EmbyHomeRoute() {
             libraryId = libraryId,
             title = library.Name ?: "",
             collectionType = library.CollectionType,
+            playbackLibraryId = libraryId,
           ),
         )
       }

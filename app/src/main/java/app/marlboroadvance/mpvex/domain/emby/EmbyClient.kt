@@ -1139,7 +1139,8 @@ object EmbyClient {
     server: EmbyServer,
     itemId: String,
     mediaSourceId: String? = null,
-  ): StrmDirectPlayInfo? = EmbyStreamApi.strmDirectPlayInfo(server, itemId, mediaSourceId)
+    probe: Boolean = true,
+  ): StrmDirectPlayInfo? = EmbyStreamApi.strmDirectPlayInfo(server, itemId, mediaSourceId, probe)
 
   fun warmStream(
     server: EmbyServer,

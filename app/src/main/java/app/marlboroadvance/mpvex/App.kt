@@ -16,6 +16,8 @@ import `is`.xyz.mpv.FastThumbnails
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import org.koin.android.ext.koin.androidContext
@@ -149,6 +151,30 @@ class App : Application() {
 
     // Emby 封面图的磁盘缓存层（TTL 7 天 / 上限 256MB，设置页可查看占用与清除）
     app.marlboroadvance.mpvex.ui.browser.emby.components.EmbyImageLoader.init(this)
+
+    // 「内容更新时间」排序结论的磁盘缓存（v352 预解析）：冷启动读回来，
+    // 让记忆停在这一档的库进页面时顺序一次成形，不必等后台重算。
+    // 放后台线程：读十来个几十 KB 的 JSON，不该占启动关键路径。
+    kotlin.concurrent.thread(name = "folder-latest-cache-load") {
+      kotlinx.coroutines.runBlocking {
+        app.marlboroadvance.mpvex.domain.emby.FolderLatestCache.attachDir(applicationContext)
+      }
+    }
+
+    // 启动即预热（v353）：用户的要求是「打开 App 就开始，而不是进库才开始」。
+    // 等当前服务器就绪后，按偏好里记住的分类把「文件夹」档的库算一遍。
+    // 全部在后台、失败静默、同一目录不重复 —— 它只是替用户先把重活干了。
+    applicationScope.launch {
+      runCatching {
+        val repository: app.marlboroadvance.mpvex.domain.emby.EmbyRepository =
+          org.koin.java.KoinJavaComponent.get(
+            app.marlboroadvance.mpvex.domain.emby.EmbyRepository::class.java,
+          )
+        // 等当前服务器就绪：冷启动时仓库还在读库，这里挂起等第一个非空值
+        val server = repository.currentServer.filterNotNull().first()
+        app.marlboroadvance.mpvex.domain.emby.FolderLatestStartupPrewarm.run(server)
+      }
+    }
 
     // FastThumbnails 会加载 native 库（libmpv 等），在某些设备/ABI 上可能原生崩溃或抛 UnsatisfiedLinkError。
     // 用 try/catch 包住：即便它失败也只是视频缩略图不可用，绝不该把整个启动砸死。

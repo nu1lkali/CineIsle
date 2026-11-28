@@ -218,6 +218,7 @@ class GsyPlayerActivity : ComponentActivity() {
   private var playlistId: Int? = null
   private var embyServerId: Long? = null
   private var embyItemIds: List<String> = emptyList()
+  private var embyLibraryIds: List<String> = emptyList()
 
   /** 与 [embyItemIds] 同序的媒体源 Id（多版本条目上报进度要用）；空 = 单版本 / 不是 Emby */
   private var embyMediaSourceIds: List<String> = emptyList()
@@ -501,6 +502,7 @@ class GsyPlayerActivity : ComponentActivity() {
     playlistId = handoff.playlistId
     embyServerId = handoff.embyServerId
     embyItemIds = handoff.embyItemIds
+    embyLibraryIds = handoff.embyLibraryIds
     embyMediaSourceIds = handoff.embyMediaSourceIds
     headers = handoff.headers
     handoffBrightness = handoff.brightness
@@ -731,6 +733,7 @@ class GsyPlayerActivity : ComponentActivity() {
           seriesKey = seriesKeys.getOrNull(currentIndex),
           embyServerId = embyServerId,
           embyItemIds = embyItemIds,
+          embyLibraryIds = embyLibraryIds,
           // 多版本条目：切回去之后上报的进度也得记在同一个版本上
           embyMediaSourceIds = embyMediaSourceIds,
           headers = headers,
@@ -1102,6 +1105,7 @@ class GsyPlayerActivity : ComponentActivity() {
         seriesKey = seriesKeys.getOrNull(currentIndex),
         embyServerId = embyServerId,
         embyItemIds = embyItemIds,
+        embyLibraryIds = embyLibraryIds,
         embyMediaSourceIds = embyMediaSourceIds,
         headers = headers,
         // 重建是新 Activity，window 亮度会回到系统值 ⇒ 必须把当前亮度带过去
